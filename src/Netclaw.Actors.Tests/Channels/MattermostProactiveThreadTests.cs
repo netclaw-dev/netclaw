@@ -329,6 +329,8 @@ public sealed class MattermostProactiveThreadActorTests(ITestOutputHelper output
             TimeProvider: TimeProvider.System,
             Options: options,
             DefaultChannelId: null,
+            ChannelRegistry: TestChannelRegistries.MattermostWithProcessingRenderer(
+                new UnconfiguredMattermostReplyClient()),
             ReplyClient: new UnconfiguredMattermostReplyClient(),
             ContentScanner: new NullContentScanner(),
             AudienceProfiles: TestMattermostGatewayDeps.DefaultAudienceProfiles,

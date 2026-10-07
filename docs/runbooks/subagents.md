@@ -255,9 +255,12 @@ Counterexample: The parent does not search a global log tree for the child.
 If a subagent hits an approval-gated tool, the prompt is routed through the
 parent session's approval channel and requester context. Human approval time does
 not count as subagent inactivity or parent `spawn_agent` tool inactivity; both
-watchdogs resume after the approval wait settles. If no parent approval bridge or
-requester authority context is available, the gated tool fails closed as a failed
-subagent run and is not executed. Subagent approval waits are live-only: if the
+watchdogs resume after the approval wait settles. If no parent approval bridge
+is available (an unattended parent), the authorizer denies the gated tool with
+`approval_required_unattended`. The tool does not run, and the subagent gets the
+denial as a tool result (decision D2). If the bridge has no requester
+authority context, the gated tool fails closed as a failed subagent run and is
+not executed. Subagent approval waits are live-only: if the
 daemon or parent session restarts before the user responds, the stale prompt is
 expired and the interrupted parent `spawn_agent` call is closed before the next
 turn continues.

@@ -9,6 +9,7 @@ using Netclaw.Actors.Skills;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Security.Skills;
 using Netclaw.Tools;
 using Xunit;
@@ -258,7 +259,8 @@ public class GeneratedToolSchemaMetaTests
             new SkillRegistry(),
             new NetclawPaths(),
             new NoOpSkillContentScanner(),
-            null!);
+            null!,
+            new ToolPathPolicy([]));
 
     private static Dictionary<string, object?> CreateReminderArguments(
         string? deliveryKind,

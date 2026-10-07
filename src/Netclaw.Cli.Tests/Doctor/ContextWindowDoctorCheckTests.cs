@@ -307,13 +307,13 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
             JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
     }
 
-    private static DaemonApi CreateOfflineDaemonApi()
+    private DaemonApi CreateOfflineDaemonApi()
         => CreateDaemonApi(_ => throw new HttpRequestException("daemon offline"));
 
-    private static DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
+    private DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
         var configuration = new ConfigurationBuilder().Build();
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-ctx-test-{Guid.NewGuid():N}"));
+        var paths = new NetclawPaths(Path.Combine(_dir.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
         return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths);
     }

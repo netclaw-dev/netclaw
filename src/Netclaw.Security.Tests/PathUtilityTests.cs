@@ -109,33 +109,6 @@ public sealed class PathUtilityTests
     }
 
     [Fact]
-    public void IsWithinAnyRoot_returns_false_for_empty_roots()
-    {
-        Assert.False(PathUtility.IsWithinAnyRoot("/home/user", Array.Empty<string>()));
-    }
-
-    [Fact]
-    public void IsWithinAnyRoot_returns_true_when_in_first_root()
-    {
-        var roots = new[] { "/home/user", "/var/data" };
-        Assert.True(PathUtility.IsWithinAnyRoot("/home/user/file.txt", roots));
-    }
-
-    [Fact]
-    public void IsWithinAnyRoot_returns_true_when_in_last_root()
-    {
-        var roots = new[] { "/home/user", "/var/data" };
-        Assert.True(PathUtility.IsWithinAnyRoot("/var/data/file.txt", roots));
-    }
-
-    [Fact]
-    public void IsWithinAnyRoot_returns_false_when_in_no_root()
-    {
-        var roots = new[] { "/home/user", "/var/data" };
-        Assert.False(PathUtility.IsWithinAnyRoot("/etc/passwd", roots));
-    }
-
-    [Fact]
     public void ExpandHome_expands_tilde()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);

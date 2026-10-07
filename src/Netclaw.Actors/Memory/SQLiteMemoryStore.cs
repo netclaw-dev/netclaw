@@ -591,7 +591,7 @@ public sealed class SQLiteMemoryStore
         }, ct);
     }
 
-    public async Task<IReadOnlyList<SQLiteMemorySearchResult>> SearchMemoriesAsync(string query, int limit, string boundary, TrustAudience audience = TrustAudience.Public, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SQLiteMemorySearchResult>> SearchMemoriesAsync(string query, int limit, string boundary, TrustAudience audience, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0)
             return [];

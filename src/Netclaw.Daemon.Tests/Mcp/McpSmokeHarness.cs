@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Skills;
@@ -25,15 +26,18 @@ namespace Netclaw.Daemon.Tests.Mcp;
 internal sealed class McpSmokeHarness : IAsyncDisposable
 {
     private readonly McpOAuthFlowBroker _flowBroker;
+    private readonly DisposableTempDir _temp;
 
     private McpSmokeHarness(
         McpClientManager manager,
         McpOAuthFlowBroker flowBroker,
         SkillRegistry skillRegistry,
-        SkillIndexContextLayer skillIndex)
+        SkillIndexContextLayer skillIndex,
+        DisposableTempDir temp)
     {
         Manager = manager;
         _flowBroker = flowBroker;
+        _temp = temp;
         SkillRegistry = skillRegistry;
         SkillIndex = skillIndex;
     }
@@ -68,7 +72,8 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
         ToolRegistry registry,
         ITestOutputHelper? output = null)
     {
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
+        var temp = new DisposableTempDir();
+        var paths = new NetclawPaths(temp.Path);
         paths.EnsureDirectoriesExist();
         var credentials = new McpOAuthCredentialStore(
             paths,
@@ -90,7 +95,8 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             new DaemonConfig(),
             NullNotificationSink.Instance,
             TimeProvider.System,
-            new McpClientRuntime(),
+            new McpClientRuntime(NullLogger<McpClientRuntime>.Instance, TimeProvider.System),
+            dependencies.ArtifactMaterializer,
             // Real logger wired to test output: when a connect fails the manager
             // logs the full exception via ReportConnectionFailure, and NullLogger
             // was discarding it — leaving only the generic status ErrorMessage.
@@ -102,7 +108,8 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             manager,
             flowBroker,
             dependencies.SkillRegistry,
-            dependencies.SkillIndex);
+            dependencies.SkillIndex,
+            temp);
     }
 
     /// <summary>
@@ -138,8 +145,15 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await Manager.StopAsync(CancellationToken.None);
-        Manager.Dispose();
-        _flowBroker.Dispose();
+        try
+        {
+            await Manager.StopAsync(CancellationToken.None);
+            Manager.Dispose();
+            _flowBroker.Dispose();
+        }
+        finally
+        {
+            _temp.Dispose();
+        }
     }
 }

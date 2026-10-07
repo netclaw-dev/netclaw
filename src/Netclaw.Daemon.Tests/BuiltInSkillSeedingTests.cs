@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text.Json;
 using Netclaw.Actors.Skills;
@@ -19,7 +18,11 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
 {
     private readonly DisposableTempDir _directory = new();
 
-    public void Dispose() => _directory.Dispose();
+    public void Dispose()
+    {
+        WindowsJunction.RemoveJunctionsUnder(_directory.Path);
+        _directory.Dispose();
+    }
 
     [Fact]
     public void Restore_writes_the_complete_embedded_tree()
@@ -192,7 +195,8 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         Directory.CreateDirectory(externalDirectory);
         File.WriteAllText(sentinel, "must remain outside the managed tree");
         Directory.Delete(paths.SystemSkillsDirectory);
-        await CreateWindowsJunctionAsync(paths.SystemSkillsDirectory, externalDirectory);
+        await WindowsJunction.CreateAsync(
+            paths.SystemSkillsDirectory, externalDirectory, TestContext.Current.CancellationToken);
 
         var exception = Assert.Throws<InvalidOperationException>(() => EmbeddedSystemSkillRestorer.Restore(paths));
 
@@ -311,29 +315,6 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         var paths = new NetclawPaths(Path.Combine(_directory.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
         return paths;
-    }
-
-    private static async Task CreateWindowsJunctionAsync(string link, string target)
-    {
-        var startInfo = new ProcessStartInfo("cmd.exe")
-        {
-            RedirectStandardError = true,
-            RedirectStandardOutput = true,
-            UseShellExecute = false
-        };
-        startInfo.ArgumentList.Add("/d");
-        startInfo.ArgumentList.Add("/c");
-        startInfo.ArgumentList.Add("mklink");
-        startInfo.ArgumentList.Add("/J");
-        startInfo.ArgumentList.Add(link);
-        startInfo.ArgumentList.Add(target);
-
-        using var process = Process.Start(startInfo);
-        Assert.NotNull(process);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-        var standardOutput = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-        var standardError = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
-        Assert.True(process.ExitCode == 0, $"mklink failed: {standardOutput}{standardError}");
     }
 
     private static string FindSourceDirectory()

@@ -17,6 +17,22 @@ public class AttachFileToolTests : IDisposable
     private readonly DisposableTempDir _dir = new();
     private readonly AttachFileTool _tool = new(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
 
+    // D2: an unattended Personal run has the same reach as a Personal chat, so
+    // the containment tests use a bounded Personal attach profile. It confines
+    // attended and unattended runs alike.
+    private readonly AttachFileTool _boundedTool = new(BoundedAttachConfig(), new NetclawPaths(), new ToolPathPolicy([]));
+
+    private static ToolConfig BoundedAttachConfig()
+    {
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.AttachFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [ToolAudienceProfileDefaults.SessionDirectoryToken]
+        };
+        return config;
+    }
+
     public void Dispose()
     {
         _dir.Dispose();
@@ -60,8 +76,7 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Path_traversal_attempt_is_rejected()
     {
-        // Default Personal file policy is unrestricted only for interactive
-        // sessions. Unattended runs remain confined to trusted roots.
+        // A bounded Personal attach profile confines this unattended run.
         var outsidePath = Path.Combine(Path.GetTempPath(), $"netclaw-outside-{Guid.NewGuid():N}.txt");
         await File.WriteAllTextAsync(outsidePath, "sensitive data", TestContext.Current.CancellationToken);
 
@@ -76,10 +91,10 @@ public class AttachFileToolTests : IDisposable
             });
             var args = ToolInput.Create("Path", outsidePath);
 
-            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+            var result = await _boundedTool.ExecuteAsync(args, context, CancellationToken.None);
 
             Assert.Contains("Error", result);
-            Assert.Contains("trusted roots", result);
+            Assert.Contains("configured roots", result);
         }
         finally
         {
@@ -90,7 +105,7 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Dotdot_traversal_is_rejected()
     {
-        // Unattended Personal: dotdot escape is denied outside trusted roots (#1724).
+        // Bounded Personal profile: a dotdot escape is denied (#1724).
         var context = TestToolExecutionContext.CreateBound("reminder/test-session", _dir.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
@@ -100,10 +115,10 @@ public class AttachFileToolTests : IDisposable
         });
         var args = ToolInput.Create("Path", Path.Combine(_dir.Path, "..", "..", "etc", "passwd"));
 
-        var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+        var result = await _boundedTool.ExecuteAsync(args, context, CancellationToken.None);
 
         Assert.Contains("Error", result);
-        Assert.Contains("trusted roots", result);
+        Assert.Contains("configured roots", result);
     }
 
     [Fact]
@@ -193,33 +208,40 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Prefix_collision_path_is_rejected()
     {
-        // Autonomous Personal: a sibling directory sharing the session dir's
-        // name prefix is outside the zone and denied (#1724).
+        // Bounded Personal profile: a sibling directory that shares the session
+        // directory's name prefix is outside the roots and denied (#1724).
         var outsideDir = _dir.Path + "-outside";
         Directory.CreateDirectory(outsideDir);
-        var outsideFile = Path.Combine(outsideDir, "secret.txt");
-        await File.WriteAllTextAsync(outsideFile, "sensitive", TestContext.Current.CancellationToken);
-
-        var context = TestToolExecutionContext.CreateBound("reminder/test-session", _dir.Path, new TestToolExecutionContextOptions
+        try
         {
-            Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
-            InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false),
-            ChannelType = "reminder"
-        });
-        var args = ToolInput.Create("Path", outsideFile);
+            var outsideFile = Path.Combine(outsideDir, "secret.txt");
+            await File.WriteAllTextAsync(outsideFile, "sensitive", TestContext.Current.CancellationToken);
 
-        var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+            var context = TestToolExecutionContext.CreateBound("reminder/test-session", _dir.Path, new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false),
+                ChannelType = "reminder"
+            });
+            var args = ToolInput.Create("Path", outsideFile);
 
-        Assert.Contains("Error", result);
-        Assert.Contains("trusted roots", result, StringComparison.OrdinalIgnoreCase);
-        Assert.Empty(context.FileAttachments);
+            var result = await _boundedTool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.Contains("Error", result);
+            Assert.Contains("configured roots", result, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(context.FileAttachments);
+        }
+        finally
+        {
+            Directory.Delete(outsideDir, recursive: true);
+        }
     }
 
     [Fact]
     public async Task Symlink_to_outside_file_is_rejected()
     {
-        // Unattended Personal: a link in the session directory that resolves
+        // Bounded Personal profile: a link in the session directory that resolves
         // outside is denied by path access policy (#1724).
         var outsideFile = Path.Combine(Path.GetTempPath(), $"netclaw-outside-{Guid.NewGuid():N}.txt");
         var symlinkPath = Path.Combine(_dir.Path, "linked.txt");
@@ -239,11 +261,11 @@ public class AttachFileToolTests : IDisposable
             });
             var args = ToolInput.Create("Path", symlinkPath);
 
-            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+            var result = await _boundedTool.ExecuteAsync(args, context, CancellationToken.None);
 
             // The shared path decision rejects linked paths outright (#1724).
             Assert.Contains("Error", result);
-            Assert.Contains("links inside trusted roots", result, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("symlinked paths", result, StringComparison.OrdinalIgnoreCase);
             Assert.Empty(context.FileAttachments);
         }
         catch (UnauthorizedAccessException)
@@ -494,7 +516,7 @@ public class AttachFileToolTests : IDisposable
             });
             var args = ToolInput.Create("Path", symlinkPath);
 
-            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+            var result = await _boundedTool.ExecuteAsync(args, context, CancellationToken.None);
 
             Assert.Contains("Error", result);
             Assert.Contains("session", result, StringComparison.OrdinalIgnoreCase);

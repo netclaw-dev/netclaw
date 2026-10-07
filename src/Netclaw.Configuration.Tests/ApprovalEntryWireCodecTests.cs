@@ -39,6 +39,36 @@ public sealed class ApprovalEntryWireCodecTests
     }
 
     [Fact]
+    public void Assignment_qualified_token_prefix_has_exact_wire_form()
+    {
+        var digest = new ApprovalAssignmentDigest($"sha256:{new string('a', 64)}");
+        var entry = ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.Bash,
+            ["inspect"],
+            assignmentDigest: digest);
+
+        var json = WriteEntry(entry);
+        var roundTrip = ReadEntry(json);
+
+        Assert.Equal(
+            $$"""
+            {
+              "shell": "Bash",
+              "match": "TokenPrefix",
+              "verbTokens": [
+                "inspect"
+              ],
+              "assignmentDigest": "{{digest.Value}}",
+              "directory": null,
+              "createdAt": null
+            }
+            """,
+            json);
+        Assert.Equal(digest, roundTrip.AssignmentDigest);
+        Assert.True(ToolApprovalEntryComparer.Equals(entry, roundTrip));
+    }
+
+    [Fact]
     public void Legacy_exact_has_exact_wire_form()
     {
         var entry = ApprovalEntry.CreateLegacyExact(
@@ -118,7 +148,7 @@ public sealed class ApprovalEntryWireCodecTests
             StringComparison.Ordinal);
         Assert.DoesNotContain("\\u002B", json, StringComparison.Ordinal);
         using var document = JsonDocument.Parse(json);
-        var roundTrip = ApprovalStoreCodec.ReadVersion3(document.RootElement, "shell_execute");
+        var roundTrip = ApprovalStoreCodec.ReadVersion3(document.RootElement, "shell_execute", homeDirectory: null);
 
         var actualShellEntries = roundTrip.Audiences["personal"]["shell_execute"];
         Assert.Collection(
@@ -145,6 +175,40 @@ public sealed class ApprovalEntryWireCodecTests
         Assert.Equal("/work/repo", entry.Directory);
     }
 
+    // A quoted program word can contain a space. The token list keeps the word,
+    // and the phrase text quotes it, so it is not the phrase of "/opt/My".
+    [Fact]
+    public void Token_with_a_space_round_trips_with_a_quoted_phrase()
+    {
+        const string Json =
+            """{"shell":"Bash","match":"TokenPrefix","verbTokens":["/opt/My App/bin/tool","run"],"directory":null,"createdAt":null}""";
+
+        var entry = ReadEntry(Json);
+
+        Assert.Equal(["/opt/My App/bin/tool", "run"], entry.VerbTokens);
+        Assert.Equal("'/opt/My App/bin/tool' run", entry.Verb);
+        Assert.False(ToolApprovalEntryComparer.Equals(
+            entry,
+            ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["/opt/My", "App/bin/tool", "run"])));
+    }
+
+    [Fact]
+    public void Repository_grant_round_trips_as_a_distinct_scope()
+    {
+        var entry = ApprovalEntry.CreateRepositoryTokenPrefix(
+            ApprovalShell.Bash,
+            ["./scripts/bump-version.sh"],
+            "/work/main/.git");
+
+        var wire = ReadEntry(WriteEntry(entry));
+
+        Assert.Equal("Bash token-prefix \"./scripts/bump-version.sh\" in repository /work/main/.git", entry.FormatScope());
+        Assert.True(ToolApprovalEntryComparer.Equals(entry, wire));
+        Assert.False(ToolApprovalEntryComparer.Equals(
+            entry,
+            ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["./scripts/bump-version.sh"])));
+    }
+
     [Theory]
     [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":[],"directory":null,"createdAt":null}""")]
     [InlineData("""{"shell":null,"match":"TokenPrefix","verbTokens":["git"],"directory":null,"createdAt":null}""")]
@@ -153,7 +217,8 @@ public sealed class ApprovalEntryWireCodecTests
     [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":[null],"directory":null,"createdAt":null}""")]
     [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git"],"verb":"git","directory":null,"createdAt":null}""")]
     [InlineData("""{"shell":"Bash","match":"Other","verbTokens":["git"],"directory":null,"createdAt":null}""")]
-    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git push"],"directory":null,"createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git\tpush"],"directory":null,"createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git\npush"],"directory":null,"createdAt":null}""")]
     [InlineData("""{"verb":" git","directory":null,"createdAt":null}""")]
     [InlineData("""{"verb":null,"directory":null,"createdAt":null}""")]
     [InlineData("""{"verb":"git","directory":null,"createdAt":42}""")]
@@ -168,6 +233,15 @@ public sealed class ApprovalEntryWireCodecTests
     [InlineData("""{"shell":"PowerShell","match":"TokenPrefix","verbTokens":["git"],"directory":"C:/work/repo","createdAt":null}""")]
     [InlineData("""{"shell":"PowerShell","match":"TokenPrefix","verbTokens":["git"],"directory":"C:\\work\\repo\\","createdAt":null}""")]
     [InlineData("""{"verb":"git","directory":null,"createdAt":null,"extra":true}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git"],"directory":null,"repository":null,"createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git"],"directory":"/work","repository":"/work/.git","createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"LegacyExact","verb":"git","directory":null,"repository":"/work/.git","createdAt":null}""")]
+    [InlineData("""{"verb":"git","directory":null,"repository":"/work/.git","createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git"],"directory":null,"repository":"/work/../repo/.git","createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git"],"assignmentDigest":null,"directory":null,"createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git"],"assignmentDigest":"sha256:ABC","directory":null,"createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"LegacyExact","verb":"git","assignmentDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","directory":null,"createdAt":null}""")]
+    [InlineData("""{"verb":"git","assignmentDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","directory":null,"createdAt":null}""")]
     public void Invalid_closed_form_fails(string json)
     {
         Assert.ThrowsAny<Exception>(() => ReadEntry(json));
@@ -206,7 +280,7 @@ public sealed class ApprovalEntryWireCodecTests
     [Theory]
     [InlineData(ApprovalShell.Bash, ApprovalMatchKind.TokenPrefix, "Bash token-prefix \"git push\" anywhere")]
     [InlineData(ApprovalShell.PowerShell, ApprovalMatchKind.LegacyExact, "PowerShell legacy-exact \"Get-Content\" anywhere")]
-    public void Typed_scope_label_round_trips(
+    public void Typed_scope_label_names_the_shell_match_and_phrase(
         ApprovalShell shell,
         ApprovalMatchKind match,
         string expected)
@@ -215,17 +289,28 @@ public sealed class ApprovalEntryWireCodecTests
             ? ApprovalEntry.CreateTokenPrefix(shell, ["git", "push"])
             : ApprovalEntry.CreateLegacyExact(shell, "Get-Content");
 
-        var label = original.FormatScope();
-        var parsed = ApprovalEntry.TryParseScope(label, out var roundTrip, out var error);
-
-        Assert.Equal(expected, label);
-        Assert.True(parsed, error);
-        Assert.NotNull(roundTrip);
-        Assert.True(ToolApprovalEntryComparer.Equals(original, roundTrip));
+        Assert.Equal(expected, original.FormatScope());
     }
 
     [Fact]
-    public void Typed_folder_scope_round_trips_quoted_phrase()
+    public void Assignment_qualified_scope_label_names_the_digest()
+    {
+        var digest = new ApprovalAssignmentDigest($"sha256:{new string('b', 64)}");
+        var original = ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.PowerShell,
+            ["Get-Item"],
+            assignmentDigest: digest);
+
+        Assert.Equal(
+            $"PowerShell token-prefix \"Get-Item\" with assignment {digest.Value} anywhere",
+            original.FormatScope());
+        Assert.False(ToolApprovalEntryComparer.Equals(
+            original,
+            ApprovalEntry.CreateTokenPrefix(ApprovalShell.PowerShell, ["Get-Item"])));
+    }
+
+    [Fact]
+    public void Typed_folder_scope_label_quotes_the_phrase()
     {
         var directory = Path.Combine(Path.GetTempPath(), "approval in scope");
         var original = ApprovalEntry.CreateLegacyExact(
@@ -233,52 +318,33 @@ public sealed class ApprovalEntryWireCodecTests
             "say-\"hello\"",
             directory);
 
-        var parsed = ApprovalEntry.TryParseScope(
-            original.FormatScope(),
-            out var roundTrip,
-            out var error);
-
-        Assert.True(parsed, error);
-        Assert.NotNull(roundTrip);
-        Assert.True(ToolApprovalEntryComparer.Equals(original, roundTrip));
+        Assert.Equal(
+            $"Bash legacy-exact \"say-\\u0022hello\\u0022\" in {directory}",
+            original.FormatScope());
     }
 
     [Fact]
-    public void Typed_scope_round_trip_preserves_significant_directory_space()
+    public void Typed_scope_label_keeps_significant_directory_space()
     {
         var original = ApprovalEntry.CreateTokenPrefix(
             ApprovalShell.Bash,
             ["git", "status"],
             "/work/repo ");
 
-        var parsed = ApprovalEntry.TryParseScope(
-            original.FormatScope(),
-            out var roundTrip,
-            out var error);
-
-        Assert.True(parsed, error);
-        Assert.NotNull(roundTrip);
-        Assert.Equal("/work/repo ", roundTrip.Directory);
-        Assert.True(ToolApprovalEntryComparer.Equals(original, roundTrip));
+        Assert.Equal("Bash token-prefix \"git status\" in /work/repo ", original.FormatScope());
     }
 
     [Theory]
     [InlineData("tool in mode", "/work/repo", "NonShell exact \"tool in mode\" in /work/repo")]
     [InlineData("status anywhere", null, "NonShell exact \"status anywhere\" anywhere")]
-    public void Non_shell_scope_label_round_trips_ambiguous_separator_text(
+    public void Non_shell_scope_label_quotes_ambiguous_separator_text(
         string verb,
         string? directory,
         string expected)
     {
         var original = ApprovalEntry.CreateNonShell(verb, directory);
 
-        var label = original.FormatScope();
-        var parsed = ApprovalEntry.TryParseScope(label, out var roundTrip, out var error);
-
-        Assert.Equal(expected, label);
-        Assert.True(parsed, error);
-        Assert.NotNull(roundTrip);
-        Assert.True(ToolApprovalEntryComparer.Equals(original, roundTrip));
+        Assert.Equal(expected, original.FormatScope());
     }
 
     private static ApprovalEntry ReadEntry(string json)

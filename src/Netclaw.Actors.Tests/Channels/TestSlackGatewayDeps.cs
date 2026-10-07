@@ -6,6 +6,7 @@
 using Netclaw.Configuration;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels;
+using Netclaw.Tests.Utilities;
 
 namespace Netclaw.Actors.Tests.Channels;
 
@@ -42,10 +43,14 @@ internal static class TestSlackGatewayDeps
     public static IChannelRegistry DefaultChannelRegistry
         => TestChannelRegistries.SlackWithProcessingRenderer(new NoopReplyClient());
 
-    public static NetclawPaths NewTestPaths()
-    {
-        var path = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-slack-test-{Guid.NewGuid():N}"));
-        path.EnsureDirectoriesExist();
-        return path;
-    }
+    /// <summary>
+    /// Creates a unique temp directory (with a full <see cref="NetclawPaths"/>
+    /// tree) for a Slack test. The returned value owns the directory and
+    /// deletes it on disposal — callers must <c>await using</c> it so the
+    /// <c>/tmp/netclaw-slack-test-*</c> tree is not leaked (issue #2266).
+    /// </summary>
+    public static TestSessionTempDirectory NewTestPaths()
+        => TestSessionTempDirectory.Create(
+            prefix: "netclaw-slack-test-",
+            createDirectoryTree: true);
 }

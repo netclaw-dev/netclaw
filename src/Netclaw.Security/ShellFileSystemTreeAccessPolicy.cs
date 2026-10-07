@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Security.Authorization.Filesystem;
 using ShellSyntaxTree;
 
 namespace Netclaw.Security;
@@ -158,14 +159,16 @@ internal static class ShellFileSystemTreeAccessPolicy
         if (separator == 2 && pattern.Length > 1 && pattern[1] == ':')
             coveringSource = pattern[..3];
 
-        return command.WorkingDirectory is ShellValueDomain.Exact cwd
-               && argument.Argument.Resolved is null
-               && argument.AuthoredFileSystemValue is ShellValueDomain.Unknown
-               && ShellPathRules.TryResolve(
-                   coveringSource,
-                   cwd.Value,
-                   ShellPathStyle.Windows,
-               out coveringDirectory);
+        if (command.WorkingDirectory is not ShellValueDomain.Exact cwd
+            || argument.Argument.Resolved is not null
+            || argument.AuthoredFileSystemValue is not ShellValueDomain.Unknown
+            || !CanonicalPath.TryCreate(coveringSource, cwd.Value, ShellPathStyle.Windows, out var covering))
+        {
+            return false;
+        }
+
+        coveringDirectory = covering.Value;
+        return true;
     }
 
     internal static bool IsReusableLeafPattern(string pattern)
@@ -203,12 +206,9 @@ internal static class ShellFileSystemTreeAccessPolicy
     }
 
     private static bool AreEquivalentWindowsPaths(string left, string right)
-        => ShellPathRules.TryNormalize(left, ShellPathStyle.Windows, out var normalizedLeft)
-           && ShellPathRules.TryNormalize(right, ShellPathStyle.Windows, out var normalizedRight)
-           && ShellPathRules.Equals(
-               normalizedLeft,
-               normalizedRight,
-               ShellPathStyle.Windows);
+        => CanonicalPath.TryCreate(left, relativeBase: null, ShellPathStyle.Windows, out var leftPath)
+           && CanonicalPath.TryCreate(right, relativeBase: null, ShellPathStyle.Windows, out var rightPath)
+           && leftPath.IsSamePath(rightPath);
 
     internal static bool IsReusableTraversal(ShellTreeTraversalMode traversal)
         => Enum.IsDefined(traversal)

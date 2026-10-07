@@ -5,8 +5,10 @@
 // -----------------------------------------------------------------------
 using System.ComponentModel;
 using System.Text;
+using Akka.Actor;
 using Netclaw.Configuration;
 using Netclaw.Tools;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Actors.Reminders;
 
@@ -22,8 +24,8 @@ public sealed partial class GetReminderHistoryTool : NetclawTool<GetReminderHist
 {
     private const int MaxRecordsHardCap = 100;
 
-    private readonly ReminderHistoryStore _historyStore;
     private readonly SchedulingConfig _schedulingConfig;
+    private readonly IActorRef _reminderManager;
 
     public record Params(
         [property: Description("The reminder ID to fetch history for (use list_reminders to find IDs).")]
@@ -31,10 +33,18 @@ public sealed partial class GetReminderHistoryTool : NetclawTool<GetReminderHist
         [property: Description("Maximum number of records to return. Defaults to 20, capped at 100.")]
         int? Last = null);
 
-    public GetReminderHistoryTool(ReminderHistoryStore historyStore, SchedulingConfig schedulingConfig)
+    /// <summary>
+    /// Constructs the tool. History always reads through
+    /// <paramref name="reminderManager"/>, the same way the other reminder tools do,
+    /// so the manager's audience check applies here too — history for an id the
+    /// caller cannot see must never be returned.
+    /// </summary>
+    public GetReminderHistoryTool(
+        SchedulingConfig schedulingConfig,
+        IActorRef reminderManager)
     {
-        _historyStore = historyStore;
         _schedulingConfig = schedulingConfig;
+        _reminderManager = reminderManager;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
@@ -48,8 +58,18 @@ public sealed partial class GetReminderHistoryTool : NetclawTool<GetReminderHist
         var id = new ReminderId(args.ReminderId);
         var maxRecords = Math.Clamp(args.Last ?? 20, 1, MaxRecordsHardCap);
 
-        var records = await _historyStore.ReadAsync(id, maxRecords);
+        var response = await _reminderManager.Ask<ReminderHistoryResponse>(
+            new GetReminderHistoryQuery(
+                id,
+                maxRecords,
+                new ReminderAudienceAuthorizationContext(context.Audience, context.SessionId ?? context.ChannelType)),
+            TimeSpan.FromSeconds(10),
+            ct);
 
+        if (!response.Found)
+            return $"No execution history found for reminder '{args.ReminderId}'.";
+
+        var records = response.Records;
         if (records.Count == 0)
             return $"No execution history found for reminder '{args.ReminderId}'.";
 

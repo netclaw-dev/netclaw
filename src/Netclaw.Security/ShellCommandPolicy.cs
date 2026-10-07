@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tools;
+
 namespace Netclaw.Security;
 
 /// <summary>
@@ -103,6 +105,19 @@ public sealed class ShellCommandPolicy
         return _analyzer.Analyze(command, workingDirectory);
     }
 
+    /// <summary>
+    /// Analyzes a command with the launch facts of one call, including the managed
+    /// temporary variables that the launcher sets for <paramref name="temporary"/>.
+    /// </summary>
+    public ShellCommandAnalysis Analyze(
+        string command,
+        string? workingDirectory,
+        ManagedTemporaryLocation? temporary)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return _analyzer.Analyze(command, workingDirectory, temporary);
+    }
+
     private static void TranslateRule(
         HardDenyRule rule,
         List<DenyPattern> structured,
@@ -195,16 +210,123 @@ public sealed class ShellCommandPolicy
             return denyOnlyDecision;
 
         if (analysis.Failure == ShellAnalysisFailure.Unresolved || analysis.Commands.Count == 0)
-            return EvaluateLegacySegments(analysis.Source);
+        {
+            // The raw-text scan decides first, so every denial of the legacy
+            // scan keeps its reason. The parser screen then checks each Bash
+            // list element, which the scan does not split.
+            var legacyDecision = EvaluateLegacySegments(analysis.Source);
+            if (!legacyDecision.Allowed)
+                return legacyDecision;
+
+            return EvaluateClauses(analysis.ScreenClauses);
+        }
 
         foreach (var occurrence in analysis.Commands)
         {
             var decision = EvaluateClause(occurrence.Clause);
             if (!decision.Allowed)
                 return decision;
+
+            if (Environment.Grammar == ShellGrammar.Bash)
+            {
+                decision = EvaluateEffectiveValues(occurrence);
+                if (!decision.Allowed)
+                    return decision;
+            }
         }
 
         return ShellCommandDecision.Allow();
+    }
+
+    // The bound on the value combinations of one command. Two loop variables
+    // with 16 values each fit.
+    private const int MaximumEffectiveTokenLists = 256;
+
+    private const string TooManyValueCombinations =
+        "Too many value combinations to check against the deny list";
+
+    /// <summary>
+    /// Applies the deny list to the values that the parser proves for each word.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: ShellSyntaxTree 0.4.0-beta.17 publishes the effective value of a
+    /// word that reads a binding, so <c>x=/; rm -rf "$x"</c> has the value
+    /// <c>/</c>, and a grant can cover the call. The authored text <c>"$x"</c>
+    /// matches no deny rule, so the screen also checks the proved values. A
+    /// finite set (a loop variable) checks each combination. More combinations
+    /// than the bound deny the call, because the screen cannot check them all.
+    /// </remarks>
+    private ShellCommandDecision EvaluateEffectiveValues(ShellSyntaxTree.CommandOccurrence occurrence)
+    {
+        var choices = new List<IReadOnlyList<string>>();
+        foreach (var arg in occurrence.Clause.Args)
+        {
+            if (!arg.IsCwdAttribution)
+                choices.Add(ProvedValues(occurrence, arg) ?? [arg.Raw]);
+        }
+
+        var combinations = 1L;
+        foreach (var choice in choices)
+        {
+            combinations *= choice.Count;
+            if (combinations > MaximumEffectiveTokenLists)
+                return ShellCommandDecision.Deny(TooManyValueCombinations, DenyCategory.Unknown);
+        }
+
+        var verbTokens = CreateVerbTokens(occurrence.Clause);
+        foreach (var combination in Combine(choices))
+        {
+            var tokens = verbTokens
+                .Concat(combination.Select(static token => DenyToken.Known(token)))
+                .ToList();
+            foreach (var pattern in _denyPatterns)
+            {
+                if (pattern.Matches(tokens))
+                    return ShellCommandDecision.Deny(pattern.Reason, pattern.Category);
+            }
+        }
+
+        return ShellCommandDecision.Allow();
+    }
+
+    // Only an expansion gets a value that its text does not show. The text
+    // check already judges a literal, glob, or tilde word, so its unquoted
+    // value adds nothing, and the punctuation rules of the text check would
+    // misread it ('/;' is a file name, not "/").
+    private static IReadOnlyList<string>? ProvedValues(
+        ShellSyntaxTree.CommandOccurrence occurrence,
+        ShellSyntaxTree.Arg arg)
+    {
+        if (arg.Kind is not (ShellSyntaxTree.ArgKind.EnvVar or ShellSyntaxTree.ArgKind.DynamicSkip))
+            return null;
+
+        foreach (var argument in occurrence.Arguments)
+        {
+            if (!ReferenceEquals(argument.Argument, arg))
+                continue;
+
+            return argument.Value switch
+            {
+                ShellSyntaxTree.ShellValueDomain.Exact exact => [exact.Value],
+                ShellSyntaxTree.ShellValueDomain.FiniteSet finite => finite.Values,
+                _ => null
+            };
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<IReadOnlyList<string>> Combine(IReadOnlyList<IReadOnlyList<string>> choices)
+    {
+        IEnumerable<IReadOnlyList<string>> combinations = [[]];
+        foreach (var choice in choices)
+        {
+            var values = choice;
+            combinations = combinations.SelectMany(
+                prefix => values.Select(value => (IReadOnlyList<string>)[.. prefix, value]));
+        }
+
+        return combinations;
     }
 
     internal ShellCommandDecision EvaluateDenyOnlyClauses(
@@ -220,15 +342,32 @@ public sealed class ShellCommandPolicy
         return ShellCommandDecision.Allow();
     }
 
+    private ShellCommandDecision EvaluateClauses(IReadOnlyList<ShellSyntaxTree.Clause> clauses)
+    {
+        foreach (var clause in clauses)
+        {
+            var decision = EvaluateClause(clause);
+            if (!decision.Allowed)
+                return decision;
+        }
+
+        return ShellCommandDecision.Allow();
+    }
+
     private ShellCommandDecision EvaluateLegacySegments(string command)
     {
         // The approval matcher does not persist unresolved syntax. Keep the
         // legacy scan here so known deny forms still fail at this boundary.
-        foreach (var segment in ShellTokenizer.GetAllCommandSegments(command))
+        foreach (var segment in LegacyShellTextScan.GetAllCommandSegments(command))
         {
-            var decision = EvaluateSegment(segment);
-            if (!decision.Allowed)
-                return decision;
+            var tokens = LegacyShellTextScan.Tokenize(segment)
+                .Select(static token => DenyToken.Known(token))
+                .ToList();
+            foreach (var pattern in _denyPatterns)
+            {
+                if (pattern.Matches(tokens))
+                    return ShellCommandDecision.Deny(pattern.Reason, pattern.Category);
+            }
         }
 
         return ShellCommandDecision.Allow();
@@ -245,27 +384,11 @@ public sealed class ShellCommandPolicy
         return ShellCommandDecision.Allow();
     }
 
-    private ShellCommandDecision EvaluateSegment(string segment)
+    // The program word: the canonical verb when the parser gives one (a path
+    // such as /usr/bin/kill gives kill), then the other verb tokens.
+    private static List<DenyToken> CreateVerbTokens(ShellSyntaxTree.Clause clause)
     {
-        var tokens = ShellTokenizer.Tokenize(segment)
-            .Select(static token => DenyToken.Known(token))
-            .ToList();
-        if (tokens.Count == 0)
-            return ShellCommandDecision.Allow();
-
-        foreach (var pattern in _denyPatterns)
-        {
-            if (pattern.Matches(tokens))
-                return ShellCommandDecision.Deny(pattern.Reason, pattern.Category);
-        }
-
-        return ShellCommandDecision.Allow();
-    }
-
-    private ShellCommandDecision EvaluateClause(ShellSyntaxTree.Clause clause)
-    {
-        var tokens = new List<DenyToken>(
-            clause.Verb.Tokens.Count + clause.Args.Count + clause.Redirects.Count);
+        var tokens = new List<DenyToken>(clause.Verb.Tokens.Count);
         if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
         {
             tokens.Add(DenyToken.Known(canonicalVerb));
@@ -277,6 +400,13 @@ public sealed class ShellCommandPolicy
             tokens.AddRange(clause.Verb.Tokens
                 .Select(static token => DenyToken.Known(token)));
         }
+
+        return tokens;
+    }
+
+    private ShellCommandDecision EvaluateClause(ShellSyntaxTree.Clause clause)
+    {
+        var tokens = CreateVerbTokens(clause);
         if (Environment.Grammar == ShellGrammar.PowerShell
             && clause.Elements.Count > 0)
         {
@@ -312,19 +442,7 @@ public sealed class ShellCommandPolicy
 
     private ShellCommandDecision EvaluateDenyOnlyClause(ShellSyntaxTree.Clause clause)
     {
-        var tokens = new List<DenyToken>(
-            clause.Verb.Tokens.Count + clause.Elements.Count);
-        if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
-        {
-            tokens.Add(DenyToken.Known(canonicalVerb));
-            tokens.AddRange(clause.Verb.Tokens.Skip(1)
-                .Select(static token => DenyToken.Known(token)));
-        }
-        else
-        {
-            tokens.AddRange(clause.Verb.Tokens
-                .Select(static token => DenyToken.Known(token)));
-        }
+        var tokens = CreateVerbTokens(clause);
         tokens.AddRange(clause.Elements
             .Where(static element =>
                 element.Role == ShellSyntaxTree.ClauseElementRole.Argument)
@@ -341,7 +459,7 @@ public sealed class ShellCommandPolicy
 
     private static DenyPattern? ParseDenyPattern(string raw)
     {
-        var tokens = ShellTokenizer.Tokenize(raw).ToList();
+        var tokens = LegacyShellTextScan.Tokenize(raw).ToList();
         if (tokens.Count == 0)
             return null;
 
@@ -358,8 +476,9 @@ public sealed class ShellCommandPolicy
         new VerbChainDenyPattern(["systemctl", "stop", "netclaw"], "Cannot stop the netclaw service", DenyCategory.SelfDestructive),
         new VerbChainDenyPattern(["systemctl", "kill", "netclaw"], "Cannot kill the netclaw service", DenyCategory.SelfDestructive),
 
-        // Process killing patterns targeting netclaw
-        new ProcessKillDenyPattern("Cannot kill processes from within a session", DenyCategory.SelfDestructive),
+        // Owner decision D2: a process kill that names the Netclaw daemon stays
+        // denied. Any other kill is an ordinary command that a grant can cover.
+        new DaemonProcessKillDenyPattern("Cannot kill the Netclaw daemon from within a session", DenyCategory.SelfDestructive),
 
         // Privilege escalation: the agent must never elevate privileges.
         // If it needs elevated access, the daemon should run as a user with those permissions.
@@ -467,7 +586,7 @@ public sealed class ShellCommandPolicy
                 if (!tokens[i].IsKnown)
                     return false;
 
-                var tokenVerb = ShellTokenizer.TrimShellPunctuation(tokens[i].Value);
+                var tokenVerb = LegacyShellTextScan.TrimShellPunctuation(tokens[i].Value);
                 if (!string.Equals(tokenVerb, VerbChain[i], StringComparison.OrdinalIgnoreCase))
                     return false;
             }
@@ -494,7 +613,7 @@ public sealed class ShellCommandPolicy
             {
                 var token = tokens[i];
                 var value = token.IsKnown ? token.Value : token.AuthoredValue;
-                var normalized = ShellTokenizer.TrimShellPunctuation(value);
+                var normalized = LegacyShellTextScan.TrimShellPunctuation(value);
                 if (!string.Equals(
                         normalized,
                         VerbChain[i],
@@ -522,18 +641,28 @@ public sealed class ShellCommandPolicy
             if (tokens.Count == 0 || !tokens[0].IsKnown)
                 return false;
 
-            var verb = ShellTokenizer.TrimShellPunctuation(tokens[0].Value);
+            var verb = LegacyShellTextScan.TrimShellPunctuation(tokens[0].Value);
             return verb.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase);
         }
     }
 
     /// <summary>
-    /// Matches kill/killall/pkill commands. These are categorically denied because
-    /// the agent could target the daemon process or other critical processes.
+    /// Matches a process kill (kill, killall, pkill, Stop-Process) whose operand
+    /// text names the Netclaw daemon, for example <c>pkill netclawd</c>,
+    /// <c>Stop-Process -Name netclaw</c>, or <c>kill $(cat ~/.netclaw/daemon.pid)</c>.
     /// </summary>
-    internal sealed record ProcessKillDenyPattern(string Reason, DenyCategory Category)
+    /// <remarks>
+    /// Owner decision D2: the blanket kill denial blocked test servers that the
+    /// agent started. Any other kill is an ordinary command that a grant can
+    /// cover, and the prompt shows its process ID or name. The verbs and the
+    /// daemon name are policy data; the rule reads no option grammar. An
+    /// operand with an unknown value (<c>kill "$pid"</c>) is not denied here.
+    /// </remarks>
+    internal sealed record DaemonProcessKillDenyPattern(string Reason, DenyCategory Category)
         : DenyPattern(Reason, Category)
     {
+        private const string DaemonName = "netclaw";
+
         private static readonly HashSet<string> KillVerbs = new(StringComparer.OrdinalIgnoreCase)
         {
             "kill", "killall", "pkill", "Stop-Process"
@@ -544,8 +673,10 @@ public sealed class ShellCommandPolicy
             if (tokens.Count == 0 || !tokens[0].IsKnown)
                 return false;
 
-            var verb = ShellTokenizer.TrimShellPunctuation(tokens[0].Value);
-            return KillVerbs.Contains(verb);
+            var verb = LegacyShellTextScan.TrimShellPunctuation(tokens[0].Value);
+            return KillVerbs.Contains(verb)
+                   && tokens.Skip(1).Any(static token =>
+                       token.AuthoredValue.Contains(DaemonName, StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -567,7 +698,7 @@ public sealed class ShellCommandPolicy
             if (tokens.Count == 0 || !tokens[0].IsKnown)
                 return false;
 
-            var verb = ShellTokenizer.TrimShellPunctuation(tokens[0].Value);
+            var verb = LegacyShellTextScan.TrimShellPunctuation(tokens[0].Value);
             if (EscalationVerbs.Contains(verb))
                 return true;
 
@@ -579,7 +710,7 @@ public sealed class ShellCommandPolicy
                 if (!tokens[i].IsKnown)
                     continue;
 
-                var token = ShellTokenizer.TrimShellPunctuation(tokens[i].Value);
+                var token = LegacyShellTextScan.TrimShellPunctuation(tokens[i].Value);
                 if (!TryReadParameter(token, out var parameterName, out var inlineValue)
                     || !IsParameterAbbreviation(parameterName, "Verb"))
                 {
@@ -603,7 +734,7 @@ public sealed class ShellCommandPolicy
 
         private static bool IsRunAsValue(string token)
             => string.Equals(
-                TrimStaticQuotes(ShellTokenizer.TrimShellPunctuation(token)),
+                TrimStaticQuotes(LegacyShellTextScan.TrimShellPunctuation(token)),
                 "RunAs",
                 StringComparison.OrdinalIgnoreCase);
     }
@@ -619,7 +750,7 @@ public sealed class ShellCommandPolicy
             if (tokens.Count < 2 || !tokens[0].IsKnown)
                 return false;
 
-            var verb = ShellTokenizer.TrimShellPunctuation(tokens[0].Value);
+            var verb = LegacyShellTextScan.TrimShellPunctuation(tokens[0].Value);
             var isBashRemove = string.Equals(verb, "rm", StringComparison.OrdinalIgnoreCase);
             var isPowerShellRemove = string.Equals(
                 verb,
@@ -688,7 +819,7 @@ public sealed class ShellCommandPolicy
 
         private static bool IsDangerousRemoveTarget(string token)
         {
-            token = TrimStaticQuotes(ShellTokenizer.TrimShellPunctuation(token));
+            token = TrimStaticQuotes(LegacyShellTextScan.TrimShellPunctuation(token));
             if (TryReadParameter(token, out _, out var inlineValue))
             {
                 if (inlineValue is null)
@@ -719,7 +850,7 @@ public sealed class ShellCommandPolicy
 
         private static bool IsAuthoredHomeVariable(string token)
         {
-            var trimmed = TrimStaticQuotes(ShellTokenizer.TrimShellPunctuation(token))
+            var trimmed = TrimStaticQuotes(LegacyShellTextScan.TrimShellPunctuation(token))
                 .TrimEnd('/', '\\');
             return trimmed is "$HOME" or "${HOME}"
                 or "$env:USERPROFILE" or "${env:USERPROFILE}";
@@ -791,12 +922,12 @@ public sealed class ShellCommandPolicy
     private static bool IsExactlyAuthoredFalse(string value, string authoredValue)
     {
         if (!TryReadParameter(
-                ShellTokenizer.TrimShellPunctuation(value),
+                LegacyShellTextScan.TrimShellPunctuation(value),
                 out _,
                 out var decodedValue)
             || !IsBooleanFalse(decodedValue)
             || !TryReadParameter(
-                ShellTokenizer.TrimShellPunctuation(authoredValue),
+                LegacyShellTextScan.TrimShellPunctuation(authoredValue),
                 out _,
                 out var rawValue))
         {
@@ -847,7 +978,7 @@ public sealed class ShellCommandPolicy
                 if (!tokens[i].IsKnown)
                     return false;
 
-                var tokenVerb = ShellTokenizer.TrimShellPunctuation(tokens[i].Value);
+                var tokenVerb = LegacyShellTextScan.TrimShellPunctuation(tokens[i].Value);
                 if (!string.Equals(tokenVerb, VerbChain[i], StringComparison.OrdinalIgnoreCase))
                     return false;
             }

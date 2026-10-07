@@ -9,80 +9,114 @@ using Akka.Hosting;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Hosting;
-using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Daemon.Gateway;
-using static Netclaw.Actors.Sessions.SessionProtocol;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Daemon.Services;
 
 /// <summary>
-/// Rehydrates the sessions that were active before coordinated restart began.
+/// Registers short-lived reminders for work that a graceful stop interrupted.
 /// </summary>
 public sealed class RestartRecoveryService : IHostedService
 {
-    private const string RestartNotice = "The daemon restarted due to a configuration change. Recovery resumed from the last durable checkpoint.";
+    private static readonly TimeSpan AskTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ReminderStartDelay = TimeSpan.FromMilliseconds(250);
 
     private readonly RestartManifestStore _manifestStore;
-    private readonly IRequiredActor<SessionManagerActorKey> _sessionManagerProvider;
+    private readonly IRequiredActor<ReminderManagerActorKey> _reminderManagerProvider;
     private readonly SessionCatalogService _sessionCatalog;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<RestartRecoveryService> _logger;
 
     public RestartRecoveryService(
         RestartManifestStore manifestStore,
-        IRequiredActor<SessionManagerActorKey> sessionManagerProvider,
+        IRequiredActor<ReminderManagerActorKey> reminderManagerProvider,
         SessionCatalogService sessionCatalog,
+        TimeProvider timeProvider,
         ILogger<RestartRecoveryService> logger)
     {
         _manifestStore = manifestStore;
-        _sessionManagerProvider = sessionManagerProvider;
+        _reminderManagerProvider = reminderManagerProvider;
         _sessionCatalog = sessionCatalog;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        // Reconcile stale 'active' sessions from the previous daemon lifetime.
-        // Must run before reading the manifest so that re-warmed sessions get
-        // a clean 'inactive' → 'active' transition via MarkSessionActive().
+        // The reminder path activates only the sessions that have work to resume.
         _sessionCatalog.ReconcileStaleActiveSessions();
 
         var manifest = await _manifestStore.ReadAsync(cancellationToken);
         if (manifest is null)
             return;
 
-        try
-        {
-            if (manifest.SessionIds.Count == 0)
-                return;
-
-            var sessionManager = await _sessionManagerProvider.GetAsync(cancellationToken);
-            foreach (var sessionIdValue in manifest.SessionIds)
-            {
-                var sessionId = new SessionId(sessionIdValue);
-
-                try
-                {
-                    await sessionManager.Ask<CommandAck>(
-                        new WarmSession(sessionId, RestartNotice),
-                        timeout: TimeSpan.FromSeconds(10),
-                        cancellationToken: cancellationToken);
-
-                    _sessionCatalog.MarkSessionActive(sessionId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to warm session {SessionId} during restart recovery.", sessionIdValue);
-                }
-            }
-
-            _logger.LogInformation(
-                "Restart recovery warmed {SessionCount} session(s); {TimedOutCount} were previously timed out during drain.",
-                manifest.SessionIds.Count,
-                manifest.TimedOutSessionIds.Count);
-        }
-        finally
+        if (manifest.RestartReminders.Count == 0)
         {
             await _manifestStore.DeleteAsync();
+            return;
+        }
+
+        var reminderManager = await _reminderManagerProvider.GetAsync(cancellationToken);
+        var now = _timeProvider.GetUtcNow();
+        var results = await Task.WhenAll(manifest.RestartReminders.Select(
+            reminder => RegisterAsync(reminderManager, reminder, now, cancellationToken)));
+
+        if (results.All(static result => result))
+            await _manifestStore.DeleteAsync();
+
+        _logger.LogInformation(
+            "Restart recovery read {ReminderCount} restart reminder(s).",
+            manifest.RestartReminders.Count);
+    }
+
+    private async Task<bool> RegisterAsync(
+        IActorRef reminderManager,
+        ReminderDefinition stored,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (stored.ExpiresAt is not { } expiresAt || expiresAt <= now + ReminderStartDelay)
+        {
+            _logger.LogWarning(
+                "Restart reminder {ReminderId} expired before startup recovery; the session stays quiet.",
+                stored.Id.Value);
+            return true;
+        }
+
+        var reminder = stored with
+        {
+            Schedule = stored.Schedule with { FireAt = now + ReminderStartDelay }
+        };
+        try
+        {
+            var result = await reminderManager.Ask<ReminderSavedResponse>(
+                new SaveReminderCommand(
+                    reminder,
+                    ReminderWriteMode.CreateOnly,
+                    new ReminderAudienceAuthorizationContext(
+                        reminder.Audience,
+                        "restart manifest")),
+                timeout: AskTimeout,
+                cancellationToken: cancellationToken);
+
+            if (result.Success || result.Error == ReminderSaveError.Conflict)
+                return true;
+
+            _logger.LogWarning(
+                "Restart reminder {ReminderId} could not register: {Reason}",
+                reminder.Id.Value,
+                result.ErrorMessage ?? result.Error.ToString());
+            return false;
+        }
+        catch (AskTimeoutException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Restart reminder {ReminderId} timed out during registration.",
+                reminder.Id.Value);
+            return false;
         }
     }
 

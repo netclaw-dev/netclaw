@@ -1,0 +1,661 @@
+{
+  "changes": [
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-git-ls-tree-external-reuses-canonical-grant",
+      "from": "Allowed",
+      "to": "RequiresApproval",
+      "reason": "A shell grant covers exactly its verb chain (#2306). The parser chain of 'git ls-tree feature' is longer than the 'git ls-tree' grant, so the grant does not cover it.",
+      "negativeControl": "safe-git-ls-tree-external-prompts-with-canonical-verb",
+      "approvedBy": "Aaron Stannard (owner), exact verb-chain decision for #2306, 2026-10-02"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-external-grant-allows",
+      "from": "Allowed",
+      "to": "Denied",
+      "reason": "A shell grant covers exactly its verb chain (#2306). The 'git ls-tree' grant does not cover 'git ls-tree feature', so no grant replaces the trusted-root denial of the unattended call.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), exact verb-chain decision for #2306, 2026-10-02"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "cd-causal-list-diagnostic-reuses-stored-grant",
+      "from": "Allowed",
+      "to": "RequiresAgentCorrection",
+      "reason": "A bare glob in the verb slot gives Unknown command words (#2306), so no grant can cover the call. The model gets a rewrite correction to use a path glob such as ./*; the call does not run.",
+      "negativeControl": "cd-causal-list-folder-grant-outside-target-prompts",
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "local-glob-reuses-project-grant",
+      "from": "Allowed",
+      "to": "RequiresAgentCorrection",
+      "reason": "A bare glob in the verb slot gives Unknown command words (#2306), so no grant can cover the call. The model gets a rewrite correction to use a path glob such as ./*; the call does not run.",
+      "negativeControl": "mutating-command-prompts",
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "powershell51-split-index-join-fallback-reuses-host-grant",
+      "from": "Allowed",
+      "to": "RequiresApproval",
+      "reason": "A PowerShell script block gives Unknown command words (#2306), so no grant can cover ForEach-Object. The call keeps a one-time prompt.",
+      "negativeControl": "powershell7-expression-region-without-grant-prompts-for-host",
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "powershell7-callback-region-reuses-host-and-body-grants",
+      "from": "Allowed",
+      "to": "RequiresApproval",
+      "reason": "A PowerShell script block gives Unknown command words (#2306), so no grant can cover ForEach-Object. The call keeps a one-time prompt.",
+      "negativeControl": "powershell7-expression-region-without-grant-prompts-for-host",
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "powershell7-expression-region-reuses-host-grant",
+      "from": "Allowed",
+      "to": "RequiresApproval",
+      "reason": "A PowerShell script block gives Unknown command words (#2306), so no grant can cover ForEach-Object. The call keeps a one-time prompt.",
+      "negativeControl": "powershell7-expression-region-without-grant-prompts-for-host",
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "powershell7-split-index-join-region-reuses-host-grant",
+      "from": "Allowed",
+      "to": "RequiresApproval",
+      "reason": "A PowerShell script block gives Unknown command words (#2306), so no grant can cover ForEach-Object. The call keeps a one-time prompt.",
+      "negativeControl": "powershell7-expression-region-without-grant-prompts-for-host",
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "native-global-option-identity-gap-currently-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The command words of \"git --no-pager status\" are \"git status\" in every option order (#2306), so the \"git status\" grant covers the call. A different subcommand still prompts.",
+      "negativeControl": "mutating-command-prompts",
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-verb-null-device-redirect-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "A redirect to /dev/null discards output and writes no file. The reviewed catalog now covers \"ls -la 2>/dev/null\". A redirect to a real file still prompts.",
+      "negativeControl": "safe-verb-external-redirect-prompts"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "post-334cb4c-independent-read-batch-remains-complex",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The only uncovered part was a grep with 2>/dev/null. That redirect writes no file, so the reviewed catalog covers the project read. A redirect to a real file still prompts.",
+      "negativeControl": "error-redirect-outside-zone-prompts"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unsafe-catalog-gh-web-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "gh run view only reads. No flag writes data; --web opens a browser. The reviewed catalog now lists it. A mutating command still prompts.",
+      "negativeControl": "mutating-verb-project-prompts"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "powershell7-unsafe-catalog-gh-web-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "gh run view only reads. No flag writes data; --web opens a browser. The Windows reviewed catalog now lists it. A stage outside the catalog still prompts.",
+      "negativeControl": "powershell7-pipeline-prompts-for-unsafe-stage"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "gh-run-diagnostic-exit-status-prompts-without-grant",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "gh run view only reads, and head and echo were already covered. The reviewed catalog now lists gh run view. A mutating command still prompts.",
+      "negativeControl": "mutating-verb-project-prompts"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "cd-current-then-safe-prompts-for-navigation",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "cd only changes the working directory. The reviewed catalog now lists it, and each later command keeps its own check. A cd out of the project still prompts.",
+      "negativeControl": "cd-parent-then-safe-prompts"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-rg-pre-allows",
+      "renamedFrom": "unsafe-catalog-rg-pre-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists rg. The owner accepts a rare flag of a common read command and rejects a list of dangerous flags. rg --pre runs the named program on each file. An rg call outside the project still prompts.",
+      "negativeControl": "workload-search-rg-external-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-sort-output-allows",
+      "renamedFrom": "unsafe-catalog-sort-output-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists sort. The owner accepts a rare flag of a common read command and rejects a list of dangerous flags. The -o file is a path argument and must stay in the trusted roots. A verb off the catalog still prompts.",
+      "negativeControl": "unsafe-catalog-find-exec-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-date-set-allows",
+      "renamedFrom": "unsafe-catalog-date-set-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists date. The owner accepts a rare flag of a common read command and rejects a list of dangerous flags. Only root can set the clock. A verb off the catalog still prompts.",
+      "negativeControl": "unsafe-catalog-find-exec-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-tree-output-allows",
+      "renamedFrom": "unsafe-catalog-tree-output-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists tree. The owner accepts a rare flag of a common read command and rejects a list of dangerous flags. The -o file is a path argument and must stay in the trusted roots. A verb off the catalog still prompts.",
+      "negativeControl": "unsafe-catalog-find-exec-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-uniq-output-allows",
+      "renamedFrom": "unsafe-catalog-uniq-output-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists uniq. The owner accepts a rare flag of a common read command and rejects a list of dangerous flags. The output file is a path argument and must stay in the trusted roots. A verb off the catalog still prompts.",
+      "negativeControl": "unsafe-catalog-awk-system-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "native-project-path-operand-allows",
+      "renamedFrom": "native-project-path-operand-prompts-for-unproved-verb",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists git diff. A project path operand stays in the trusted roots. A path outside the roots still prompts.",
+      "negativeControl": "native-external-path-operand-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "live-read-chain-with-separator-allows",
+      "renamedFrom": "live-read-chain-with-separator-prompts-for-rg",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists rg, and head and echo were already covered. An rg call outside the project still prompts.",
+      "negativeControl": "workload-search-rg-external-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-rg-in-project-allows",
+      "renamedFrom": "workload-search-rg-in-project-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists rg. The search stays in the project. An rg call outside the project still prompts.",
+      "negativeControl": "workload-search-rg-external-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-rg-head-pipeline-allows",
+      "renamedFrom": "workload-search-rg-head-pipeline-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists rg, and head was already covered. An rg call outside the project still prompts.",
+      "negativeControl": "workload-search-rg-external-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-cat-jq-pipeline-allows",
+      "renamedFrom": "workload-search-cat-jq-pipeline-prompts-for-tail",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists jq, and cat was already covered. jq reads JSON and writes no file. sed is not on the catalog and still prompts.",
+      "negativeControl": "workload-search-sed-print-in-project-currently-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-jq-direct-allows",
+      "renamedFrom": "workload-search-jq-direct-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists jq. The input file stays in the project. sed is not on the catalog and still prompts.",
+      "negativeControl": "workload-search-sed-print-in-project-currently-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-gh-run-view-web-allows",
+      "renamedFrom": "unsafe-catalog-gh-web-prompts",
+      "from": "Allowed",
+      "to": "Allowed",
+      "reason": "Rename only. gh run view --web runs with no prompt, so the old ID was wrong."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "powershell7-reviewed-gh-run-view-web-allows",
+      "renamedFrom": "powershell7-unsafe-catalog-gh-web-prompts",
+      "from": "Allowed",
+      "to": "Allowed",
+      "reason": "Rename only. gh run view --web runs with no prompt, so the old ID was wrong."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-git-ls-tree-external-allows-with-canonical-verb",
+      "renamedFrom": "safe-git-ls-tree-external-prompts-with-canonical-verb",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-git-ls-tree-external-reuses-canonical-grant",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-verb-context-project-traversal-allows",
+      "renamedFrom": "safe-verb-context-project-traversal-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-verb-external-allows",
+      "renamedFrom": "safe-verb-external-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-verb-external-path-allows",
+      "renamedFrom": "safe-verb-external-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-verb-quoted-external-path-allows",
+      "renamedFrom": "safe-verb-quoted-external-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-cd-external-allows",
+      "renamedFrom": "reviewed-cd-external-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-backslash-word-external-path-allows",
+      "renamedFrom": "reviewed-backslash-word-external-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-grep-external-option-path-allows",
+      "renamedFrom": "reviewed-grep-external-option-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-wc-external-option-path-allows",
+      "renamedFrom": "reviewed-wc-external-option-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-du-external-option-path-allows",
+      "renamedFrom": "reviewed-du-external-option-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-realpath-external-option-path-allows",
+      "renamedFrom": "reviewed-realpath-external-option-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "post-334cb4c-inline-cd-read-batch-has-scoped-candidates",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "native-external-path-operand-allows",
+      "renamedFrom": "native-external-path-operand-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "directory-listing-glob-external-offers-persistent-grant",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "input-redirect-outside-zone-allows",
+      "renamedFrom": "input-redirect-outside-zone-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "cd-parent-then-safe-allows",
+      "renamedFrom": "cd-parent-then-safe-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "multiple-cd-then-safe-allows",
+      "renamedFrom": "multiple-cd-then-safe-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "cd-alternate-branch-prompts-for-the-other-branch",
+      "from": "RequiresAgentCorrection",
+      "to": "RequiresApproval",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-rg-external-allows",
+      "renamedFrom": "workload-search-rg-external-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-cat-jq-external-stored-tail-allows",
+      "renamedFrom": "workload-search-cat-jq-external-stored-tail-still-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unquoted-status-output-redirect-remains-complex",
+      "from": "RequiresApproval",
+      "to": "RequiresAgentCorrection",
+      "reason": "Each command gets its own decision. A command with unknown command words gets the rewrite correction. The call does not run."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "bash-substitution-quoted-path-operand-allows",
+      "renamedFrom": "bash-substitution-quoted-path-fails-closed",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "Owner decision D1: in an interactive call, a safe phrase or a global grant covers a command whose only unknown part is an operand. Each other command keeps its own decision. An unknown redirect target, a folder grant, and an unattended call keep the prompt or the denial.",
+      "negativeControl": "bash-substitution-redirect-target-fails-closed",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy decision D1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "bash-substitution-multiple-nested-operand-allows",
+      "renamedFrom": "bash-substitution-multiple-nested-fails-closed",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "Owner decision D1: in an interactive call, a safe phrase or a global grant covers a command whose only unknown part is an operand. Each other command keeps its own decision. An unknown redirect target, a folder grant, and an unattended call keep the prompt or the denial.",
+      "negativeControl": "bash-substitution-redirect-target-fails-closed",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy decision D1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "bash-substitution-state-is-isolated",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "Owner decision D1: in an interactive call, a safe phrase or a global grant covers a command whose only unknown part is an operand. Each other command keeps its own decision. An unknown redirect target, a folder grant, and an unattended call keep the prompt or the denial.",
+      "negativeControl": "bash-substitution-redirect-target-fails-closed",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy decision D1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-edit-loop-inherited-state-prompts",
+      "from": "RequiresApproval",
+      "to": "RequiresAgentCorrection",
+      "reason": "Each command gets its own decision. A command with unknown command words gets the rewrite correction. The call does not run."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "control-flow-fails-closed",
+      "from": "RequiresApproval",
+      "to": "RequiresAgentCorrection",
+      "reason": "Each command gets its own decision. A command with unknown command words gets the rewrite correction. The call does not run."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "powershell7-stop-process-uses-grant",
+      "renamedFrom": "powershell7-stop-process-hard-deny",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "Owner decision D2: a kill that does not name the Netclaw daemon is an ordinary command that a grant can cover. A kill that names the daemon stays hard-denied.",
+      "negativeControl": "powershell51-stop-process-hard-deny",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy decision D2, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-external-grant-allows",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the unattended-only trust zone. The Personal profile may read the external folder, so the reviewed phrase covers 'git ls-tree feature', as it does in a chat.",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-external-reviewed-safe-allows",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the unattended-only trust zone. The reviewed phrase covers a path that the Personal profile may read, as in a chat. The old ID said 'denies'.",
+      "renamedFrom": "unattended-external-without-grant-denies",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-external-grant-with-exempt-command-allows",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the unattended-only trust zone. The reviewed phrase and the approval-exempt echo cover the call, as in a chat. The old ID said 'denies'.",
+      "renamedFrom": "unattended-external-grant-with-exempt-command-denies",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-prose-denies",
+      "from": "Denied",
+      "to": "Denied",
+      "reason": "The outcome does not change. Without the unattended-only trust zone, the prose gets the decision of a chat: a quoted program word with spaces is a normal word (#2336), and the call would prompt, so the unattended run denies it with approval_required_unattended.",
+      "renamedFrom": "unattended-prose-outside-path-denies-without-lookup"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unknown-operand-unattended-uses-global-grant",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the attended-only condition of decision D1. A grant for anywhere covers a command whose only unknown part is an operand, as in a chat (see unknown-operand-global-grant-allows).",
+      "renamedFrom": "unknown-operand-unattended-denies",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "noninteractive-unapproved-denies",
+      "from": "RequiresApproval",
+      "to": "Denied",
+      "reason": "D2: the authorizer denies a consent request that nobody can answer (approval_required_unattended). Before, the session denied the same request at run time, so the call never ran in either version.",
+      "renamedFrom": "noninteractive-unapproved-requires-approval",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "glob-that-may-add-option-unattended-uses-global-grant",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the attended-only condition of decision D1. A grant for anywhere covers the glob operand, as in a chat (see glob-that-may-add-option-uses-global-grant).",
+      "renamedFrom": "glob-that-may-add-option-unattended-denies",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unassigned-operand-unattended-uses-global-grant",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the attended-only condition of decision D1. A grant for anywhere covers the unassigned operand, as in a chat (see unassigned-operand-uses-global-grant).",
+      "renamedFrom": "unassigned-operand-unattended-denies",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "echo-substitution-data-allows-reviewed-inner-command",
+      "renamedFrom": "echo-substitution-data-prompts-for-inner-command",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "Approval taxonomy D4 adds git merge-base to the reviewed catalog. It only reads commits and has no write, code, or network mode. An unreviewed command in the substitution still prompts (see echo-substitution-data-prompts-for-unreviewed-inner-command).",
+      "negativeControl": "unsafe-catalog-find-exec-prompts",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy D4 (one reviewed batch of read-only commands, plan page approval-taxonomy.html), 2026-10-05"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-brace-program-word-denies",
+      "renamedFrom": "unattended-brace-program-word-gets-rewrite-advice",
+      "from": "RequiresAgentCorrection",
+      "to": "Denied",
+      "reason": "ShellSyntaxTree 0.4.0-beta.18 rejects a brace word in the command name, because Bash expands it to another program and its operands (#227). The unparsed call is denied in an unattended run. Neither outcome runs the call; the agent no longer gets the rewrite advice.",
+      "approvedBy": "Aaron Stannard (owner), confirmed for #2349, 2026-10-05"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "brace-credential-keys-gets-rewrite-correction",
+      "renamedFrom": "brace-credential-keys-needs-exact-consent",
+      "from": "RequiresApproval",
+      "to": "RequiresAgentCorrection",
+      "reason": "The brace word is the only cause that makes the command exact, so the agent gets the rewrite correction (#2349 review comment 4187346461). Neither outcome runs the call, and no grant covers the candidate."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-brace-credential-keys-gets-rewrite-correction",
+      "renamedFrom": "unattended-brace-credential-keys-denies",
+      "from": "Denied",
+      "to": "RequiresAgentCorrection",
+      "reason": "The brace word is the only cause that makes the command exact, so the agent gets the rewrite correction in place of the unattended denial (#2349 review comment 4187346461). Neither outcome runs the call; the rewritten literal credential paths are denied.",
+      "approvedBy": "Aaron Stannard (owner), confirmed 2026-10-06"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "loop-outside-operand-prompts-with-chat-grant",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "Owner decision F1: each literal twin gets the decision of the typed literal. The twin 'dotnet build ../outside/x.slnx' keeps its path scope, and a chat grant for 'dotnet build' covers the typed literal (literal-outside-operand-uses-chat-grant), so it covers the twin. A folder grant still does not cover the path outside the folder.",
+      "negativeControl": "loop-outside-operand-prompts-with-folder-grant",
+      "approvedBy": "owner (2026-10-06, F1 loop values)"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unquoted-status-output-redirect-remains-complex",
+      "from": "RequiresAgentCorrection",
+      "to": "RequiresApproval",
+      "reason": "Owner rule: send a correction only when a rewrite that the agent can make removes the cause. '$?' has a run-time value, so the agent cannot write the word literally. The call gets the normal prompt for the external redirect. Neither outcome runs the call without consent.",
+      "approvedBy": "owner (2026-10-07, satisfiable corrections only)"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "control-flow-fails-closed",
+      "from": "RequiresAgentCorrection",
+      "to": "RequiresApproval",
+      "reason": "Owner rule: send a correction only when a rewrite that the agent can make removes the cause. A file name from a glob loop is known only at run time, so the agent cannot write it literally. The call gets the normal one-time prompt for 'cat \"$f\"'; the 'cat' grant still does not cover it.",
+      "approvedBy": "owner (2026-10-07, satisfiable corrections only)"
+    }
+  ]
+}

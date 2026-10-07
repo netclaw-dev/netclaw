@@ -26,6 +26,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
 {
     private RecordingSlackReplyClient _replyClient = new();
     private int _actorCounter;
+    private readonly List<Netclaw.Tests.Utilities.TestSessionTempDirectory> _testTempDirs = [];
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
@@ -147,7 +148,9 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         IThreadHistoryFetcher? historyFetcher = null,
         IChannelRegistry? channelRegistry = null)
     {
-        var paths = TestSlackGatewayDeps.NewTestPaths();
+        var testTemp = TestSlackGatewayDeps.NewTestPaths();
+        _testTempDirs.Add(testTemp);
+        var paths = testTemp.Paths;
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
             IngressGate: null,
@@ -676,4 +679,20 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         }
     }
 
+    protected override async Task AfterAllAsync()
+    {
+        try
+        {
+            await base.AfterAllAsync();
+        }
+        finally
+        {
+            // Base teardown can throw (actor-system shutdown). Run temp cleanup
+            // in finally so a failed teardown does not recreate the /tmp leak
+            // (issue #2266).
+            foreach (var dir in _testTempDirs)
+                await dir.DisposeAsync();
+            _testTempDirs.Clear();
+        }
+    }
 }

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 
 using Netclaw.Configuration;
+using Netclaw.Security.Authorization.Filesystem;
 
 namespace Netclaw.Security;
 
@@ -68,31 +69,12 @@ public static class PathUtility
     /// Checks if a candidate path is within or equal to a root directory.
     /// Uses platform-appropriate case sensitivity.
     /// </summary>
+    /// <remarks>
+    /// This is a host-path convenience for code outside tool authorization. It
+    /// uses the one containment rule that the filesystem authority owns.
+    /// </remarks>
     public static bool IsWithinRoot(string candidate, string root)
-        => IsNormalizedWithinRoot(Normalize(candidate), root);
-
-    /// <summary>
-    /// Like <see cref="IsWithinRoot"/> but assumes <paramref name="normalizedCandidate"/>
-    /// has already been canonicalized via <see cref="Normalize"/>. Use on hot
-    /// paths that compare many roots against the same candidate to avoid
-    /// re-running <c>Path.GetFullPath</c> on the candidate per iteration.
-    /// </summary>
-    public static bool IsNormalizedWithinRoot(string normalizedCandidate, string root)
-    {
-        var normalizedRoot = Normalize(root);
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-
-        if (!normalizedCandidate.StartsWith(normalizedRoot, comparison))
-            return false;
-
-        if (normalizedCandidate.Length == normalizedRoot.Length)
-            return true;
-
-        var boundary = normalizedCandidate[normalizedRoot.Length];
-        return boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar;
-    }
+        => CanonicalPath.IsWithin(Normalize(candidate), Normalize(root), CanonicalPath.HostStyle, ignoreCase: false);
 
     /// <summary>
     /// Returns true when <paramref name="a"/> and <paramref name="b"/> resolve
@@ -116,21 +98,6 @@ public static class PathUtility
         {
             return false;
         }
-    }
-
-    /// <summary>
-    /// Checks if a candidate path is within or equal to any of the root directories.
-    /// Uses platform-appropriate case sensitivity.
-    /// </summary>
-    public static bool IsWithinAnyRoot(string candidate, IReadOnlyList<string> roots)
-    {
-        foreach (var root in roots)
-        {
-            if (IsWithinRoot(candidate, root))
-                return true;
-        }
-
-        return false;
     }
 
     /// <summary>
@@ -180,65 +147,23 @@ public static class PathUtility
     }
 
     /// <summary>
-    /// Returns true when any segment of <paramref name="fullPath"/>, walking from
-    /// <paramref name="allowedRoot"/> outward, is a filesystem reparse point
-    /// (symbolic link, junction, or other reparse target). Used by the approval
-    /// gate and file-access policy to refuse to honor a grant when the candidate
-    /// path's resolution depends on a symlink that could redirect the I/O outside
-    /// the granted root.
-    ///
-    /// Errors reading attributes are conservatively treated as a positive
-    /// detection: if we cannot determine whether a segment is a symlink, we
-    /// assume it is. Set <paramref name="includeRoot"/> when the root itself is
-    /// an authority boundary. Leave it false for a root that was already
-    /// resolved from an accepted platform alias.
+    /// Normalizes one shell path value against a working directory. The home
+    /// token expands. An absolute POSIX value keeps its lexical form, and a
+    /// <c>..</c> above the root stays at the root. Other values use the host path API.
     /// </summary>
-    public static bool ContainsSymlinkSegment(
-        string allowedRoot,
-        string fullPath,
-        bool includeRoot = false)
+    internal static string? NormalizeShellPath(string path, string? workingDirectory, ShellPathStyle style)
     {
-        if (includeRoot && IsReparsePointOrUnreadable(allowedRoot))
-            return true;
-
-        var relativePath = Path.GetRelativePath(allowedRoot, fullPath);
-        if (string.IsNullOrWhiteSpace(relativePath) || relativePath == ".")
-            return false;
-
-        var segments = relativePath.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries);
-        var currentPath = allowedRoot;
-
-        foreach (var segment in segments)
+        var expanded = ExpandHome(path);
+        if (style != ShellPathStyle.Posix
+            || expanded.Length == 0
+            || expanded[0] != '/'
+            || expanded.StartsWith("//", StringComparison.Ordinal)
+            || expanded.Contains('\\', StringComparison.Ordinal)
+            || expanded.Contains("://", StringComparison.Ordinal))
         {
-            currentPath = Path.Combine(currentPath, segment);
-            if (!File.Exists(currentPath) && !Directory.Exists(currentPath))
-                continue;
-
-            if (IsReparsePointOrUnreadable(currentPath))
-                return true;
+            return ExpandAndNormalize(expanded, workingDirectory);
         }
 
-        return false;
-    }
-
-    private static bool IsReparsePointOrUnreadable(string path)
-    {
-        if (!File.Exists(path) && !Directory.Exists(path))
-            return false;
-
-        try
-        {
-            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
-        }
-        catch (IOException)
-        {
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return true;
-        }
+        return ShellProgramPath.NormalizeAbsolute(expanded);
     }
 }

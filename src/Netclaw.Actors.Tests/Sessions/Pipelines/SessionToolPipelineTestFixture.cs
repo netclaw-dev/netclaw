@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
@@ -44,8 +45,8 @@ internal sealed class SessionToolPipelineTestFixture(
     private ModelModality _modelInputModalities = ModelModality.Text;
     private IReadOnlyDictionary<string, IReadOnlyList<string>> _oneTimeApprovalPreSeed
         = new Dictionary<string, IReadOnlyList<string>>();
-    private IReadOnlyDictionary<string, ApprovalDecision> _decisionOverrides
-        = new Dictionary<string, ApprovalDecision>();
+    private IReadOnlyDictionary<string, RefusalKind> _decisionOverrides
+        = new Dictionary<string, RefusalKind>();
     private IReadOnlyList<ManagedTemporaryCorrectionKey> _managedTemporaryCorrectionKeys = [];
     private ILoggingAdapter _logger = NoLogger.Instance;
 
@@ -157,7 +158,7 @@ internal sealed class SessionToolPipelineTestFixture(
 
     public SessionToolPipelineTestFixture RedrivingApprovals(
         IReadOnlyDictionary<string, IReadOnlyList<string>> preSeed,
-        IReadOnlyDictionary<string, ApprovalDecision> overrides)
+        IReadOnlyDictionary<string, RefusalKind> overrides)
     {
         _oneTimeApprovalPreSeed = preSeed;
         _decisionOverrides = overrides;

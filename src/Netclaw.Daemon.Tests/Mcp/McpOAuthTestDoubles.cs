@@ -36,13 +36,43 @@ internal static class McpOAuthTestDoubles
 /// Captures both the exceptions and the rendered messages a component logs, so a test can
 /// assert on diagnostics that never surface through a return value.
 /// </summary>
+/// <remarks>
+/// A component can log from a background task while the test reads. A lock guards all
+/// state, and each read returns a snapshot copy.
+/// </remarks>
 internal sealed class RecordingLogger<T> : ILogger<T>
 {
-    public Exception? LastException { get; private set; }
+    private readonly object _gate = new();
+    private readonly List<Exception> _exceptions = [];
+    private readonly List<string> _entries = [];
+    private Exception? _lastException;
 
-    public List<Exception> Exceptions { get; } = [];
+    public Exception? LastException
+    {
+        get
+        {
+            lock (_gate)
+                return _lastException;
+        }
+    }
 
-    public List<string> Entries { get; } = [];
+    public IReadOnlyList<Exception> Exceptions
+    {
+        get
+        {
+            lock (_gate)
+                return [.. _exceptions];
+        }
+    }
+
+    public IReadOnlyList<string> Entries
+    {
+        get
+        {
+            lock (_gate)
+                return [.. _entries];
+        }
+    }
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -55,11 +85,15 @@ internal sealed class RecordingLogger<T> : ILogger<T>
         Exception? exception,
         Func<TState, Exception?, string> formatter)
     {
-        Entries.Add(formatter(state, exception));
-        if (exception is not null)
+        var entry = formatter(state, exception);
+        lock (_gate)
         {
-            LastException = exception;
-            Exceptions.Add(exception);
+            _entries.Add(entry);
+            if (exception is not null)
+            {
+                _lastException = exception;
+                _exceptions.Add(exception);
+            }
         }
     }
 }

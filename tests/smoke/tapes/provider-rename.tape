@@ -22,7 +22,7 @@ Enter
 Wait+Screen@10s /Added provider 'seed-provider'|TAPE\$/
 
 # ─── Launch provider TUI ─────────────────────────────────────────────
-Type "netclaw provider"
+Type "netclaw provider; status=$?; echo PROVIDER_RENAME_EXIT=$status"
 Enter
 
 # Wait for the probe to complete. ActivateSelectedProvider() is a no-op
@@ -56,9 +56,14 @@ Enter
 # ─── Success status ──────────────────────────────────────────────────
 # StatusMessage on the list view: "Renamed 'seed-provider' to
 # 'renamed-provider'. Restart daemon for changes to take effect."
-# The status message and new name both appear on the list view after
-# the rename, so one anchor covering the new name is sufficient.
-Wait+Screen@10s /renamed-provider/
+# Wait for the success status. The name also appears in the input before
+# the Enter event completes, so it cannot prove that the save completed.
+Wait+Screen@10s /Renamed 'seed-provider' to 'renamed-provider'\./
 
 # ─── Exit TUI ────────────────────────────────────────────────────────
 Ctrl+Q
+Wait+Screen@5s /PROVIDER_RENAME_EXIT=0/
+Wait+Screen@10s /TAPE\$/
+
+Type "exit"
+Enter

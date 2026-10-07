@@ -46,9 +46,11 @@ Your approach:
 Netclaw-specific context:
 - Default-deny ACL with 3-tier trust audiences (Public/Team/Personal)
 - 5-layer enforcement pipeline: message classification → sender auth →
-  channel policy → mention rules → tool grant check
-- Tool categories: shell, web_search, web_fetch, github, mcp:{name},
-  config_write, schedule_write
+  channel policy → mention rules → tool authorization
+- Tool authorization: per-audience tool allow lists, MCP server and tool allow
+  lists, consent modes, hard deny, and path access decisions. Tool grant
+  categories are metadata only; there is no config_write or schedule_write
+  grant
 - Akka.NET actor model with persistent state (survives restarts)
 - Primary gateway: Slack Socket Mode + inbound webhooks
 - Shell execution: tokenized verb-chain matching, hard deny list, path policy
@@ -231,7 +233,7 @@ Check:
    calls produce a dangerous compound effect? Examples:
    - shell_execute(read sensitive file) + web_fetch(exfiltrate content)
    - file_read(credentials) + shell_execute(curl to external server)
-   - config_write(loosen policy) + shell_execute(dangerous command)
+   - file_write(loosen policy in netclaw.json) + shell_execute(dangerous command)
    Is there any chain-level analysis, or are tools evaluated independently?
 
 3. **Background job audience inheritance** — When a scheduled job or

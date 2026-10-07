@@ -17,7 +17,7 @@ namespace Netclaw.Actors.Tests.Memory;
 /// </summary>
 public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
 {
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-sqlite-embedding-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-sqlite-embedding-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 

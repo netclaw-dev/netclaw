@@ -6,6 +6,7 @@ Define session browsing, selection, and resumption behavior across TUI and CLI
 entry points. Covers the daemon-side join path, client API surface, and TUI
 session browser.
 ## Requirements
+
 ### Requirement: Session listing via REST API
 
 The system SHALL expose session catalog data through the existing
@@ -143,83 +144,60 @@ call.
 - **THEN** the session injects a transient restart continuity notice into the turn context
 - **AND** the notice explains that recovery resumed from the last durable checkpoint
 
-### Requirement: Outstanding tool approvals restored on session recovery
+### Requirement: Graceful stop of durable approval waits
 
-When a session recovers, it SHALL restore outstanding tool approvals from
-journaled tool-batch and approval events. Snapshots SHALL remain a cache of
-state already implied by earlier journal events; they SHALL NOT be the source of
-truth for in-flight approval state.
+During a graceful daemon stop, a session SHALL finish drain when every unfinished tool call waits on a durable approval. The session SHALL wait for the tool task to stop before it acknowledges drain. The journal SHALL retain approval requests and completed tool results for cold recovery.
 
-#### Scenario: Pending approval restored from journal on recovery
+Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
 
-- **GIVEN** a `ToolApprovalRequested` event was written while a tool-approval prompt was outstanding
-- **WHEN** the session cold-recovers through the journal/snapshot path
-- **THEN** recovery SHALL restore the pending tool interaction from the journal
-- **AND** the session SHALL log the count of recovered pending interactions
+#### Scenario: One durable approval stops promptly
 
-#### Scenario: Restored pending approval superseded by resolution events
+- **GIVEN** a session has one unfinished tool call with a journaled approval request
+- **WHEN** the daemon requests a graceful drain
+- **THEN** the session stops the tool task and acknowledges drain without an approval response
+- **AND** the original requester can approve the call after cold recovery
+- **AND** the recovered turn keeps its original authority
 
-- **GIVEN** a journal carrying a pending tool interaction
-- **WHEN** a `ToolApprovalResolved`, `ToolBatchAbandoned`, `TurnRecorded`, or `SessionCompacted` event replays afterward
-- **THEN** recovery SHALL clear the superseded pending interaction
-- **AND** the recovered session SHALL NOT treat the superseded approval as outstanding
+#### Scenario: Completed sibling retains its result
 
-#### Scenario: Approval click resumes a cold-resumed session
+- **GIVEN** one tool result has a journal record and another tool call waits on a journaled approval
+- **WHEN** the daemon requests a graceful drain
+- **THEN** the session acknowledges drain after the tool task stops
+- **AND** recovery does not execute the completed sibling again
 
-- **GIVEN** a tool approval prompt was outstanding when the session passivated
-- **WHEN** the session cold-resumes and the user clicks the approval afterward
-- **THEN** the session SHALL re-drive the parked tool batch and continue the turn
-- **AND** the user SHALL NOT have to send a separate message to wake the agent
+#### Scenario: Active sibling prevents the fast path
 
-#### Scenario: Pre-change snapshot recovers with no pending approval projection
+- **GIVEN** one tool call waits on a journaled approval and another tool call has no journaled result or approval
+- **WHEN** the daemon requests a graceful drain
+- **THEN** the session does not acknowledge drain through the approval fast path
+- **AND** the current bounded drain path remains in effect
 
-- **GIVEN** a snapshot written before approval recovery existed
-- **WHEN** the session recovers from that snapshot
-- **THEN** recovery SHALL succeed with an empty pending-interaction set
-- **AND** SHALL NOT fail or error on the missing field
+#### Scenario: Accepted buffered input prevents the fast path
 
-### Requirement: Recovered pending approvals restore turn context
+- **GIVEN** a session has accepted user input in its actor buffer
+- **WHEN** the daemon requests a graceful drain
+- **THEN** the session does not acknowledge drain through the approval fast path
 
-When a session recovers pending tool approvals from the journal, it SHALL also restore the original turn context for each pending approval. The restored context SHALL include the requester, audience, boundary, channel type, approval capability, principal classification, provenance, and adopted-context safety state needed to resume the original request faithfully.
+#### Scenario: Non-durable or resolved approval prevents the fast path
 
-#### Scenario: Pending approval restores original context
+- **GIVEN** an unfinished call has a non-durable approval or a resolved approval without a result
+- **WHEN** the daemon requests a graceful drain
+- **THEN** the session does not acknowledge drain through the approval fast path
 
-- **GIVEN** a `ToolApprovalRequested` event was written with turn context while a prompt was outstanding
-- **WHEN** the session cold-recovers through the journal path
-- **THEN** the pending approval is restored with that turn context
-- **AND** approval redrive uses the restored context rather than deriving a new context from the session id
+#### Scenario: Deferred approval response prevents the fast path
 
-#### Scenario: Legacy approval event uses compatibility restoration
+- **GIVEN** the session has a deferred approval response
+- **WHEN** the daemon requests a graceful drain
+- **THEN** the session does not acknowledge drain through the approval fast path
 
-- **GIVEN** a pre-change `ToolApprovalRequested` event has no turn-context record but still has legacy persisted trust fields
-- **WHEN** the session recovers the event
-- **THEN** the session MAY construct turn context from those legacy fields
-- **AND** this compatibility path is isolated from the normal new-event path
+#### Scenario: Cancellation preserves the approval prompt
 
-#### Scenario: Incomplete legacy approval fails loud
-
-- **GIVEN** a recovered pending approval lacks enough persisted context to restore the original requester and trust context
-- **WHEN** an approval response arrives for that pending call
-- **THEN** the session does not redrive the tool under a synthesized permissive context
-- **AND** the user receives an explicit expired or unrecoverable approval notice
-
-### Requirement: Restarted approvals resume as the original request
-
-An approval response received after idle passivation, cold recovery, or daemon restart SHALL resume the same original session turn. The resumed tool batch and any continuation LLM/tool calls SHALL use the restored turn context until the resumed turn completes or is abandoned.
-
-#### Scenario: Approval after cold recovery resumes original request
-
-- **GIVEN** a session has recovered a pending approval from the journal
-- **WHEN** the original requester approves the prompt
-- **THEN** the session re-drives the parked tool batch
-- **AND** the tool execution context uses the original turn audience, boundary, channel type, and approval capability
-
-#### Scenario: Continuation after redrive keeps restored context
-
-- **GIVEN** a recovered approval redrive has completed its parked tool call
-- **WHEN** the follow-up LLM response asks for another tool call in the same turn
-- **THEN** the continuation tool call uses the same restored turn context
-- **AND** it does not fall back to a context derived from missing transport metadata
+- **GIVEN** a durable approval prevents a tool call from execution
+- **WHEN** graceful drain cancels the pipeline task
+- **THEN** cancellation does not become a synthetic timeout or failed tool result
+- **AND** the existing approval prompt remains unresolved
+- **AND** its original button or text response resumes the recovered turn
+- **AND** a duplicate response does not execute the tool again
 
 ### Requirement: Idle passivation proceeds with pending approvals
 
@@ -258,3 +236,87 @@ be preserved.
 - **WHEN** the receive timeout fires
 - **THEN** passivation is deferred while the subscriber remains attached
 
+### Requirement: Accepted input survives a graceful stop
+
+The session SHALL store each accepted input before acknowledgment. The record SHALL retain its identity, order, content, media, source identity, and original authority.
+
+Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
+
+#### Scenario: Input acknowledgment follows its journal record
+
+- **GIVEN** a session receives user input
+- **WHEN** the journal stores its admission record
+- **THEN** the session acknowledges the input
+- **AND** cold recovery restores the pending input and its authority
+
+#### Scenario: Journal failure rejects input
+
+- **GIVEN** the journal cannot store an admission record
+- **WHEN** the session receives input
+- **THEN** the session rejects that input
+- **AND** it starts no model call for that input
+
+#### Scenario: A lost acknowledgment does not duplicate input
+
+- **GIVEN** the journal stores input with a stable source ID
+- **WHEN** the source retries that input
+- **THEN** the session acknowledges the stored input
+- **AND** it does not add a second pending record
+
+### Requirement: Graceful drain creates only a safe restart reminder
+
+The session SHALL create a restart reminder only after an eligible model task stops. It SHALL use the existing reminder definition and `current_session` delivery contract.
+
+#### Scenario: An interrupted model call creates a reminder
+
+- **GIVEN** a model call has pending admitted input
+- **AND** no tool batch or partial reply exists
+- **WHEN** graceful drain cancels the call and confirms its task stopped
+- **THEN** the restart manifest stores one reminder for that session
+- **AND** the reminder expires ten minutes after interruption
+
+#### Scenario: A completed turn stays quiet
+
+- **GIVEN** a model call completes during drain
+- **AND** no admitted input remains pending
+- **WHEN** the daemon starts again
+- **THEN** it registers no restart reminder for that session
+
+#### Scenario: A possible effect blocks the reminder
+
+- **GIVEN** a tool batch started or partial text reached a subscriber
+- **WHEN** graceful drain stops the session
+- **THEN** the manifest contains no restart reminder for that turn
+- **AND** the daemon reports the blocked session
+
+### Requirement: A fresh restart reminder resumes stored work
+
+The reminder manager SHALL deliver a fresh restart reminder through its existing `current_session` path. The session SHALL restore pending input under its recorded authority.
+
+#### Scenario: A fresh reminder resumes the pending input
+
+- **GIVEN** the restart manifest contains a reminder that has not expired
+- **WHEN** the daemon starts
+- **THEN** startup registers the reminder through `SaveReminderCommand`
+- **AND** the session resumes the stored input without a user prompt
+
+#### Scenario: The original authority remains in force
+
+- **GIVEN** a restart reminder wakes a session with pending input
+- **WHEN** the session starts the model call
+- **THEN** it restores the recorded requester, audience, and trust boundary
+- **AND** reminder automation authority does not replace that context
+
+#### Scenario: An expired reminder stays quiet
+
+- **GIVEN** the reminder expiration is in the past
+- **WHEN** startup reads the restart manifest
+- **THEN** it does not register or deliver that reminder
+- **AND** it logs one warning
+
+#### Scenario: Stored authority has no channel type
+
+- **GIVEN** an interrupted session has no stored channel type
+- **WHEN** graceful drain classifies the session
+- **THEN** the actor creates no restart reminder
+- **AND** the actor does not contain a channel-specific route list

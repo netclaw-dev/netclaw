@@ -3,10 +3,14 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
+using System.Net.Http.Json;
 using Mattermost;
 using Mattermost.Models.Posts;
+using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Mattermost.Transport;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels.Mattermost.IntegrationTests;
 
@@ -93,30 +97,28 @@ public sealed class MattermostReplyClientIntegrationTests
         using var botClient = new MattermostClient(_fixture.ServerUrl, _fixture.BotToken);
         var replyClient = new MattermostNetReplyClient(botClient);
 
-        var attachment = new MattermostAttachment(
-            Fallback: "Approve or deny — reply with A or B",
-            Color: "#3AA3E3",
-            Text: "Tool approval required",
-            Actions:
+        var request = new ToolInteractionRequest
+        {
+            SessionId = new SessionId("test/approval"),
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId("call-route-1"),
+            ToolName = new Netclaw.Tools.ToolName("git_push"),
+            DisplayText = "push to origin/main",
+            Patterns = ["origin/main"],
+            Options =
             [
-                new MattermostAttachmentAction(
-                    Id: "tool_approval_approve_once",
-                    Name: "Approve once",
-                    IntegrationUrl: "https://example.invalid/callback",
-                    Context: new Dictionary<string, string> { ["action_token"] = "abc123" },
-                    Style: "primary"),
-                new MattermostAttachmentAction(
-                    Id: "tool_approval_deny",
-                    Name: "Deny",
-                    IntegrationUrl: "https://example.invalid/callback",
-                    Context: new Dictionary<string, string> { ["action_token"] = "def456" },
-                    Style: "danger")
-            ]);
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, "Approve once"),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, "Deny")
+            ]
+        };
+        var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "https://example.invalid/callback", _fixture.ChannelId,
+            "", "prompt-route-1", new MattermostCallbackActionStore(TimeProvider.System));
 
         var result = await replyClient.PostReplyAsync(new MattermostPostMessage(
             ChannelId: new MattermostChannelId(_fixture.ChannelId),
             Text: "Post with attachment + buttons",
-            Attachments: [attachment]), ct);
+            Attachments: attachments), ct);
         Assert.NotNull(result.PostId);
 
         // Re-fetch via the SDK and assert the server echoes the attachment
@@ -133,12 +135,26 @@ public sealed class MattermostReplyClientIntegrationTests
         Assert.Equal(2, serverAttachment.Actions.Count);
         Assert.All(serverAttachment.Actions, action =>
             Assert.Equal(PostActionType.Button, action.Type));
-        Assert.Equal("tool_approval_approve_once", serverAttachment.Actions[0].Id);
+        Assert.Equal("toolapproval0", serverAttachment.Actions[0].Id);
         Assert.Equal("Approve once", serverAttachment.Actions[0].Name);
         Assert.Equal(ActionStyle.Primary, serverAttachment.Actions[0].Style);
-        Assert.Equal("tool_approval_deny", serverAttachment.Actions[1].Id);
+        Assert.Equal("toolapproval1", serverAttachment.Actions[1].Id);
         Assert.Equal("Deny", serverAttachment.Actions[1].Name);
         Assert.Equal(ActionStyle.Danger, serverAttachment.Actions[1].Style);
+
+        // An unauthenticated click must reach the action route's auth check.
+        // An invalid ID returns 404 before that check or any callback.
+        using var anonymousClient = _fixture.CreateHttpClient();
+        foreach (var action in serverAttachment.Actions)
+        {
+            using var response = await anonymousClient.PostAsJsonAsync(
+                $"/api/v4/posts/{result.PostId.Value.Value}/actions/{action.Id}", new { }, ct);
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        }
+
+        using var invalidResponse = await anonymousClient.PostAsJsonAsync(
+            $"/api/v4/posts/{result.PostId.Value.Value}/actions/tool_approval_approve_once", new { }, ct);
+        Assert.Equal(HttpStatusCode.NotFound, invalidResponse.StatusCode);
     }
 
     [Fact]

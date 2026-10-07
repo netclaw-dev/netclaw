@@ -76,7 +76,7 @@ public sealed class ToolOutputSpillTests : IDisposable
     [Fact]
     public async Task No_session_directory_degrades_to_inline_only()
     {
-        var ctx = TestToolExecutionContext.CreateBound("session/thread", null, new TestToolExecutionContextOptions
+        var ctx = TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
         }).Invocation;

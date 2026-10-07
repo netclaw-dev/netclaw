@@ -33,6 +33,78 @@ public sealed class McpClientManagerLifecycleTests
     private static readonly DateTimeOffset InitialTime = DateTimeOffset.Parse("2026-07-22T12:00:00Z");
 
     [Fact]
+    public async Task StartupConnectsIndependentServersBeforeEitherFinishes()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        var firstGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = runtime.Enqueue(new ClientPlan("first_tool")
+        {
+            Initialize = ct => firstGate.Task.WaitAsync(ct),
+        });
+        var second = runtime.Enqueue(new ClientPlan("second_tool")
+        {
+            Initialize = ct => secondGate.Task.WaitAsync(ct),
+        });
+        await using var harness = new ManagerHarness(
+            runtime,
+            new FakeTimeProvider(InitialTime),
+            NullNotificationSink.Instance,
+            new Dictionary<string, McpServerEntry>
+            {
+                ["first"] = HttpEntry(),
+                ["second"] = HttpEntry(),
+            });
+
+        var start = harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            await first.Created.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await second.Created.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.False(start.IsCompleted);
+        }
+        finally
+        {
+            firstGate.TrySetResult();
+            secondGate.TrySetResult();
+            await start;
+        }
+
+        Assert.Single(harness.Registry.GetToolsForServer(new McpServerName("first"), int.MaxValue));
+        Assert.Single(harness.Registry.GetToolsForServer(new McpServerName("second"), int.MaxValue));
+        Assert.All(harness.Manager.GetServerStatuses().Values,
+            status => Assert.Equal(McpConnectionState.Connected, status.State));
+    }
+
+    [Fact]
+    public async Task StartupFailureForOneServerKeepsAnotherServerCatalog()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("available_tool"));
+        runtime.Enqueue(new ClientPlan("unavailable_tool")
+        {
+            Initialize = _ => Task.FromException(new InvalidOperationException("server unavailable")),
+        });
+        await using var harness = new ManagerHarness(
+            runtime,
+            new FakeTimeProvider(InitialTime),
+            NullNotificationSink.Instance,
+            new Dictionary<string, McpServerEntry>
+            {
+                ["available"] = HttpEntry(),
+                ["unavailable"] = HttpEntry(),
+            });
+
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        Assert.Single(harness.Registry.GetToolsForServer(new McpServerName("available"), int.MaxValue));
+        Assert.Empty(harness.Registry.GetToolsForServer(new McpServerName("unavailable"), int.MaxValue));
+        var statuses = harness.Manager.GetServerStatuses();
+        Assert.Equal(McpConnectionState.Connected, statuses[new McpServerName("available")].State);
+        Assert.Equal(McpConnectionState.Unreachable, statuses[new McpServerName("unavailable")].State);
+    }
+
+    [Fact]
     public async Task ConcurrentReconnects_CreateOneCandidateAndPublishOneGeneration()
     {
         var runtime = new ControlledMcpClientRuntime();
@@ -908,7 +980,10 @@ public sealed class McpClientManagerLifecycleTests
         var cache = harness.Credentials.CreateTokenCache(
             ServerName,
             entry.Url!,
-            "static-client",
+            new McpOAuthClientIdentity(
+                "static-client",
+                clientSecret: null,
+                dynamicClientRegistration: false),
             explicitAuthorization: true);
         await cache.StoreTokensAsync(
             new TokenContainer
@@ -940,6 +1015,7 @@ public sealed class McpClientManagerLifecycleTests
     internal sealed class ManagerHarness : IAsyncDisposable
     {
         private readonly McpOAuthFlowBroker _flowBroker;
+        private readonly DisposableTempDir _temp = new();
         private bool _stopFailureObserved;
         private bool _managerDisposed;
 
@@ -972,8 +1048,18 @@ public sealed class McpClientManagerLifecycleTests
             FakeTimeProvider timeProvider,
             IOperationalNotificationSink notificationSink,
             McpServerEntry entry)
+            : this(runtime, timeProvider, notificationSink,
+                new Dictionary<string, McpServerEntry> { [ServerName.Value] = entry })
         {
-            var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        }
+
+        public ManagerHarness(
+            ControlledMcpClientRuntime runtime,
+            FakeTimeProvider timeProvider,
+            IOperationalNotificationSink notificationSink,
+            Dictionary<string, McpServerEntry> serverEntries)
+        {
+            var paths = new NetclawPaths(_temp.Path);
             paths.EnsureDirectoriesExist();
             Credentials = new McpOAuthCredentialStore(
                 paths,
@@ -987,7 +1073,7 @@ public sealed class McpClientManagerLifecycleTests
             SkillIndex = dependencies.SkillIndex;
             Logger = new RecordingLogger<McpClientManager>();
             Manager = new McpClientManager(
-                new Dictionary<string, McpServerEntry> { [ServerName.Value] = entry },
+                serverEntries,
                 Registry,
                 dependencies.SkillRegistry,
                 dependencies.SkillIndexPublisher,
@@ -1000,6 +1086,7 @@ public sealed class McpClientManagerLifecycleTests
                 notificationSink,
                 timeProvider,
                 runtime,
+                dependencies.ArtifactMaterializer,
                 Logger,
                 new SessionConfig());
         }
@@ -1028,11 +1115,18 @@ public sealed class McpClientManagerLifecycleTests
 
         public async ValueTask DisposeAsync()
         {
-            if (!_stopFailureObserved && !_managerDisposed)
-                await Manager.StopAsync(TestContext.Current.CancellationToken);
-            if (!_managerDisposed)
-                Manager.Dispose();
-            _flowBroker.Dispose();
+            try
+            {
+                if (!_stopFailureObserved && !_managerDisposed)
+                    await Manager.StopAsync(TestContext.Current.CancellationToken);
+                if (!_managerDisposed)
+                    Manager.Dispose();
+                _flowBroker.Dispose();
+            }
+            finally
+            {
+                _temp.Dispose();
+            }
         }
     }
 

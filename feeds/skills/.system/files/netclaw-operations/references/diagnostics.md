@@ -88,6 +88,15 @@ Slack health reads the live Socket Mode state. The connection supervisor checks 
 A disconnect emits `channel.disconnected`. The supervisor retries with exponential backoff up to five minutes.
 A successful recovery emits `channel.reconnected`.
 
+A graceful stop can resume a safe model turn through a standard reminder.
+The reminder expires ten minutes after the interruption. A completed reply,
+partial reply, or possible tool effect leaves the session quiet. A crash does
+not create a restart reminder.
+
+The daemon gives session drain 20 seconds within a 30-second shutdown phase.
+The CLI allows 45 seconds, and the generated systemd unit allows 60 seconds.
+A pod should set `terminationGracePeriodSeconds` to at least 60 seconds.
+
 If webhook notifications are configured, daemon crash paths emit
 `daemon.crashing` operational alerts with context (PID, reason, and latest known
 session/turn snapshot when available).

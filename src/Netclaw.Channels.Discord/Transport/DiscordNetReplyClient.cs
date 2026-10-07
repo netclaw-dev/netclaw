@@ -68,12 +68,14 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         if (message.Buttons is { Count: > 0 })
         {
             var builder = new ComponentBuilder();
-            foreach (var button in message.Buttons)
+            for (var index = 0; index < message.Buttons.Count; index++)
             {
+                var button = message.Buttons[index];
                 builder.WithButton(
                     label: button.Label,
                     customId: button.CustomId,
-                    style: (ButtonStyle)(int)button.Style);
+                    style: (ButtonStyle)(int)button.Style,
+                    row: index / 5);
             }
 
             components = builder.Build();

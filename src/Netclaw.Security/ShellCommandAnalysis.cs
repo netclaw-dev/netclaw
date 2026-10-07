@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
+using Netclaw.Configuration;
+using Netclaw.Tools;
 using ShellSyntaxTree;
 
 namespace Netclaw.Security;
@@ -17,13 +19,42 @@ internal sealed class ShellCommandAnalyzer
 {
     private const int MaxWrapperDepth = 8;
     private readonly ShellExecutionEnvironment _environment;
+    private readonly BashInitialStateMode? _screenState;
 
     public ShellCommandAnalyzer(ShellExecutionEnvironment environment)
+        : this(environment, screenState: null)
     {
-        _environment = environment ?? throw new ArgumentNullException(nameof(environment));
     }
 
+    private ShellCommandAnalyzer(
+        ShellExecutionEnvironment environment,
+        BashInitialStateMode? screenState)
+    {
+        _environment = environment ?? throw new ArgumentNullException(nameof(environment));
+        _screenState = screenState;
+    }
+
+    private static readonly BashInitialStateMode[] ScreenStates =
+    [
+        BashInitialStateMode.IsolatedNonInteractive,
+        BashInitialStateMode.FreshNonInteractiveNoStartup
+    ];
+
+    /// <summary>
+    /// Analyzes a command for a call with no managed temporary location. The parser
+    /// still uses the launch facts that the shell environment sets on every process.
+    /// </summary>
     public ShellCommandAnalysis Analyze(string command, string? workingDirectory = null)
+        => Analyze(command, workingDirectory, temporary: null);
+
+    /// <summary>
+    /// Analyzes a command with the launch facts of one call. The facts include the
+    /// managed temporary variables when the call has a temporary location.
+    /// </summary>
+    public ShellCommandAnalysis Analyze(
+        string command,
+        string? workingDirectory,
+        ManagedTemporaryLocation? temporary)
     {
         var commands = new List<CommandOccurrence>();
         var denyOnlyClauses = new List<Clause>();
@@ -33,6 +64,7 @@ internal sealed class ShellCommandAnalyzer
         var failure = Analyze(
             command,
             workingDirectory,
+            _screenState is null ? _environment.CreateLaunchEnvironment(temporary) : null,
             depth: 0,
             commands,
             denyOnlyClauses,
@@ -46,12 +78,60 @@ internal sealed class ShellCommandAnalyzer
             denyOnlyClauses,
             failure,
             knownRegionArguments,
-            syntaxProofComplete);
+            syntaxProofComplete)
+        {
+            ManagedTemporary = temporary,
+            ScreenClauses = _screenState is null
+                            && _environment.Grammar == ShellGrammar.Bash
+                            && (failure != ShellAnalysisFailure.None || commands.Count == 0)
+                ? CollectScreenClauses(command, workingDirectory)
+                : []
+        };
+    }
+
+    /// <summary>
+    /// Parses unresolved Bash source again for hard deny only. The screen first
+    /// parses the whole source, then each list element alone, with an assumed
+    /// bounded initial state. The clauses never become approval candidates.
+    /// </summary>
+    /// <remarks>
+    /// ShellSyntaxTree 0.4.0-beta.5 rejects a background list, so each element
+    /// of <c>echo ok &amp; sudo ls</c> meets hard deny only through this screen.
+    /// A list element that is still unparseable adds no clause.
+    /// </remarks>
+    private List<Clause> CollectScreenClauses(string command, string? workingDirectory)
+    {
+        var clauses = new List<Clause>();
+        if (TryCollectScreenClauses(command, workingDirectory, clauses))
+            return clauses;
+
+        foreach (var element in SplitListElements(command))
+            TryCollectScreenClauses(element, workingDirectory, clauses);
+
+        return clauses;
+    }
+
+    // SECURITY: a parse can stop part way, for example at a bash -lc child whose
+    // directory is unknown after a cd that can fail. Its commands so far still
+    // meet the screen, but the rest of the source is not seen. Only a complete
+    // parse ends the search; otherwise each list element is screened again.
+    private bool TryCollectScreenClauses(string source, string? workingDirectory, List<Clause> clauses)
+    {
+        foreach (var state in ScreenStates)
+        {
+            var screened = new ShellCommandAnalyzer(_environment, state).Analyze(source, workingDirectory);
+            clauses.AddRange(screened.Commands.Select(static occurrence => occurrence.Clause));
+            if (screened.Failure == ShellAnalysisFailure.None)
+                return true;
+        }
+
+        return false;
     }
 
     private ShellAnalysisFailure Analyze(
         string command,
         string? workingDirectory,
+        ShellLaunchEnvironment? launchEnvironment,
         int depth,
         List<CommandOccurrence> commands,
         List<Clause> denyOnlyClauses,
@@ -61,19 +141,16 @@ internal sealed class ShellCommandAnalyzer
         if (depth > MaxWrapperDepth)
             return ShellAnalysisFailure.Unresolved;
 
-        // Stable v0.3 excludes background lists. Keep this guard until the
-        // parser exposes their concurrency and shell-state boundaries.
-        if (_environment.Grammar == ShellGrammar.Bash
-            && ContainsBackgroundListOperator(command))
-            return ShellAnalysisFailure.Unresolved;
-
         ParsedCommand parsed;
         try
         {
-            parsed = _environment.ParseForApproval(
-                command,
-                workingDirectory,
-                publishAuthoredSourceFacts: depth == 0);
+            parsed = _screenState is { } state
+                ? _environment.ParseForProhibitionScreen(command, workingDirectory, state)
+                : _environment.ParseForApproval(
+                    command,
+                    workingDirectory,
+                    publishAuthoredSourceFacts: depth == 0,
+                    launchEnvironment);
         }
         catch
         {
@@ -99,25 +176,36 @@ internal sealed class ShellCommandAnalyzer
         if (_environment.Grammar == ShellGrammar.PowerShell)
         {
             commands.AddRange(parsed.Commands);
-            syntaxProofComplete &= ShellCommandAnalysis.TryCollectKnownExecutionRegionArguments(
-                parsed.Syntax,
-                knownRegionArguments);
+            syntaxProofComplete &= ShellCommandAnalysis.AssignmentSyntaxReconciliation.TryCreate(
+                    command,
+                    parsed.Commands,
+                    out var assignmentSyntax)
+                && ShellCommandAnalysis.TryCollectKnownExecutionRegionArguments(
+                    parsed.Syntax,
+                    knownRegionArguments,
+                    assignmentSyntax)
+                && assignmentSyntax.AllConsumed;
             return ShellAnalysisFailure.None;
         }
 
-        var innerCommands = ShellApprovalSemantics.ExtractInnerCommands(
-            command,
-            ShellPathStyle.Posix);
-        var unexpandedWrappers = parsed.Commands
+        var wrapperSources = parsed.Commands
             .Where(static occurrence => IsUnexpandedWrapperClause(occurrence.Clause))
+            .Select(FindWrapperSource)
             .ToList();
-        if (innerCommands.Count == 0 || unexpandedWrappers.Count == 0)
+        var hasDecodedWrapper = parsed.Commands
+            .Any(static occurrence => occurrence.Clause.IsCommandStringWrapped);
+        if (wrapperSources.Count == 0
+            || wrapperSources.All(static source => source is WrapperSource.Missing) && !hasDecodedWrapper)
         {
             commands.AddRange(parsed.Commands);
             return ShellAnalysisFailure.None;
         }
 
-        if (innerCommands.Count != unexpandedWrappers.Count)
+        // Every bundled wrapper needs its own child source. Source that mixes
+        // a bundled wrapper with a wrapper that the parser decoded stays
+        // unresolved.
+        if (hasDecodedWrapper
+            || wrapperSources.Any(static source => source is WrapperSource.Missing))
         {
             // Preserve the prior defense scan when wrapper extraction is incomplete.
             commands.AddRange(parsed.Commands.Where(static occurrence =>
@@ -131,7 +219,7 @@ internal sealed class ShellCommandAnalyzer
         // parser-owned position so every consumer sees execution order. Remove
         // only a direct shell dispatch; retain prefix executables such as sudo,
         // env, and nohup for hard-deny and approval policy.
-        var innerIndex = 0;
+        var sourceIndex = 0;
         foreach (var occurrence in parsed.Commands)
         {
             if (!IsUnexpandedWrapperClause(occurrence.Clause))
@@ -140,10 +228,14 @@ internal sealed class ShellCommandAnalyzer
                 continue;
             }
 
+            var childSource = wrapperSources[sourceIndex++];
+
             if (!IsTransparentShellDispatch(occurrence.Clause))
                 commands.Add(occurrence);
 
-            if (!TryResolveWrapperWorkingDirectory(
+            // A dynamic child source has no exact text to parse.
+            if (childSource is not WrapperSource.Exact exactSource
+                || !TryResolveWrapperWorkingDirectory(
                     occurrence,
                     workingDirectory,
                     out var innerWorkingDirectory))
@@ -151,9 +243,14 @@ internal sealed class ShellCommandAnalyzer
                 return ShellAnalysisFailure.Unresolved;
             }
 
+            var innerCommandStart = commands.Count;
+            // SECURITY: the launcher sets the launch facts on the outer shell only. A child
+            // shell can read startup files (bash -lc reads the login profile) that change
+            // HOME or TMPDIR, so the child source gets no launch facts.
             var failure = Analyze(
-                innerCommands[innerIndex++],
+                exactSource.Source,
                 innerWorkingDirectory,
+                launchEnvironment: null,
                 depth + 1,
                 commands,
                 denyOnlyClauses,
@@ -161,10 +258,72 @@ internal sealed class ShellCommandAnalyzer
                 ref syntaxProofComplete);
             if (failure != ShellAnalysisFailure.None)
                 return failure;
+
+            // SECURITY: an assignment prefix on the wrapper, for example
+            // GIT_SSH_COMMAND=... bash -lc "git push", reaches the child
+            // environment. The child candidates do not carry that assignment
+            // in their identity, so a plain grant for the child would cover
+            // the call. Keep the source unresolved. The check runs after the
+            // child analysis, so the hard-deny screen still sees the child.
+            if (occurrence.Assignments.Count > 0
+                || commands.Skip(innerCommandStart).Any(static inner => inner.Assignments.Count > 0))
+                return ShellAnalysisFailure.Unresolved;
         }
 
         return ShellAnalysisFailure.None;
     }
+
+    /// <summary>
+    /// The child source of a bundled wrapper: the parser value of the argument
+    /// after the first short option with <c>c</c> that follows a POSIX shell word.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: the child source must be the decoded value that the shell
+    /// passes to the wrapper. A raw-text split that ignores escapes can end
+    /// the child early, for example at <c>\"</c>, and hide the commands after
+    /// that point from approval and hard-deny policy.
+    /// </remarks>
+    private abstract record WrapperSource
+    {
+        private WrapperSource()
+        {
+        }
+
+        internal sealed record Missing : WrapperSource;
+
+        internal sealed record Dynamic : WrapperSource;
+
+        internal sealed record Exact(string Source) : WrapperSource;
+    }
+
+    private static WrapperSource FindWrapperSource(CommandOccurrence occurrence)
+    {
+        var words = occurrence.Clause.Verb.Tokens
+            .Select(static token => (Raw: token, Value: (ShellValueDomain?)null))
+            .Concat(occurrence.Arguments
+                .Where(static argument => !argument.Argument.IsCwdAttribution)
+                .Select(static argument => (Raw: argument.Argument.Raw, Value: (ShellValueDomain?)argument.Value)))
+            .ToList();
+        var invoker = words.FindIndex(static word => IsShellInvokerToken(word.Raw));
+        for (var index = invoker + 1; invoker >= 0 && index < words.Count - 1; index++)
+        {
+            if (IsShortCommandOption(words[index].Raw))
+            {
+                return words[index + 1].Value is ShellValueDomain.Exact exact
+                    ? new WrapperSource.Exact(exact.Value)
+                    : new WrapperSource.Dynamic();
+            }
+        }
+
+        return new WrapperSource.Missing();
+    }
+
+    private static bool IsShortCommandOption(string raw)
+        => raw.Length > 1
+           && raw[0] == '-'
+           && !raw.StartsWith("--", StringComparison.Ordinal)
+           && raw.AsSpan(1).IndexOf('c') >= 0;
+
     private static bool TryResolveWrapperWorkingDirectory(
         CommandOccurrence occurrence,
         string? inheritedWorkingDirectory,
@@ -206,11 +365,7 @@ internal sealed class ShellCommandAnalyzer
             return false;
         }
 
-        return clause.Args.Any(static arg =>
-            arg.Raw.Length > 1
-            && arg.Raw[0] == '-'
-            && !arg.Raw.StartsWith("--", StringComparison.Ordinal)
-            && arg.Raw.AsSpan(1).IndexOf('c') >= 0);
+        return clause.Args.Any(static arg => IsShortCommandOption(arg.Raw));
     }
 
     private static bool HasShellInvokerInArguments(Clause clause)
@@ -226,7 +381,7 @@ internal sealed class ShellCommandAnalyzer
             return true;
 
         if (!string.Equals(
-                ShellTokenizer.TrimShellPunctuation(clause.Verb.Tokens[0]),
+                LegacyShellTextScan.TrimShellPunctuation(clause.Verb.Tokens[0]),
                 "command",
                 StringComparison.Ordinal))
         {
@@ -241,7 +396,7 @@ internal sealed class ShellCommandAnalyzer
             if (arg.Kind == ArgKind.DynamicSkip)
                 return false;
 
-            var token = ShellTokenizer.TrimShellPunctuation(arg.Raw);
+            var token = LegacyShellTextScan.TrimShellPunctuation(arg.Raw);
             if (token is "--" or "-p")
                 continue;
 
@@ -252,11 +407,30 @@ internal sealed class ShellCommandAnalyzer
     }
 
     private static bool IsShellInvokerToken(string token)
-        => ShellApprovalSemantics.IsPosixShellInvoker(
-            ShellTokenizer.TrimShellPunctuation(token));
+        => ShellVerbPolicyData.PosixShellInvokers.Contains(
+            LegacyShellTextScan.TrimShellPunctuation(token));
 
-    private static bool ContainsBackgroundListOperator(string command)
+    /// <summary>
+    /// Splits Bash source at each unquoted list operator: <c>;</c>, <c>&amp;&amp;</c>,
+    /// <c>||</c>, and a background <c>&amp;</c>. Only the hard-deny screen uses the elements.
+    /// </summary>
+    private static List<string> SplitListElements(string command)
     {
+        var elements = new List<string>();
+        var start = 0;
+        foreach (var list in FindListOperators(command))
+        {
+            elements.Add(command[start..list.Index]);
+            start = list.Index + list.Length;
+        }
+
+        elements.Add(command[start..]);
+        return elements;
+    }
+
+    private static List<(int Index, int Length)> FindListOperators(string command)
+    {
+        var operators = new List<(int Index, int Length)>();
         char? quote = null;
         var escaped = false;
 
@@ -285,18 +459,27 @@ internal sealed class ShellCommandAnalyzer
                 continue;
             }
 
-            if (quote is not null || ch != '&')
+            if (quote is not null)
                 continue;
 
             var previous = i > 0 ? command[i - 1] : '\0';
             var next = i + 1 < command.Length ? command[i + 1] : '\0';
-            if (previous is '&' or '>' || next is '&' or '>')
-                continue;
-
-            return true;
+            if (ch == ';')
+            {
+                operators.Add((i, 1));
+            }
+            else if (ch is '&' or '|' && next == ch)
+            {
+                operators.Add((i, 2));
+                i++;
+            }
+            else if (ch == '&' && previous is not ('&' or '>') && next != '>')
+            {
+                operators.Add((i, 1));
+            }
         }
 
-        return false;
+        return operators;
     }
 }
 
@@ -304,6 +487,27 @@ internal enum ShellAnalysisFailure
 {
     None,
     Unresolved
+}
+
+/// <summary>How much of one command occurrence the parser could not prove.</summary>
+internal enum ShellUnresolvedPart
+{
+    /// <summary>The parser proves the whole command.</summary>
+    None = 0,
+
+    /// <summary>
+    /// Only an operand value is unknown. The program word, the command
+    /// structure, the working directory, and each redirect are proved.
+    /// </summary>
+    Operand = 1,
+
+    /// <summary>
+    /// The program word, the structure, the directory, a redirect, or the
+    /// scope of a glob with a wildcard in a directory segment is unknown. A glob
+    /// can name a protected path that no screen checks yet, so the D1 rule for
+    /// an unknown operand does not apply to it.
+    /// </summary>
+    Command = 2,
 }
 
 internal static class ShellGlobPath
@@ -355,9 +559,29 @@ public sealed record ShellCommandAnalysis
         Commands = commands.ToImmutableArray();
         DenyOnlyClauses = denyOnlyClauses.ToImmutableArray();
         Failure = failure;
-        HasDynamicSyntax = !syntaxProofComplete
-            || Commands.Any(command =>
-                CommandHasDynamicSyntax(command, knownRegionArguments));
+        SyntaxProofComplete = syntaxProofComplete;
+        var unresolvedParts = new Dictionary<CommandOccurrence, ShellUnresolvedPart>(
+            ReferenceEqualityComparer.Instance);
+        var expansionOnly = new HashSet<CommandOccurrence>(ReferenceEqualityComparer.Instance);
+        foreach (var command in Commands)
+        {
+            var part = ClassifyUnresolvedPart(command, knownRegionArguments);
+            // The expansion rule applies after the other causes. When it is the
+            // only cause of an exact command, a rewrite of the words can resolve
+            // the command, so the coordinator can keep its rewrite correction.
+            if (part != ShellUnresolvedPart.Command && HasUnboundedPathnameExpansion(command))
+            {
+                part = ShellUnresolvedPart.Command;
+                expansionOnly.Add(command);
+            }
+
+            if (part != ShellUnresolvedPart.None)
+                unresolvedParts[command] = part;
+        }
+
+        _unresolvedParts = unresolvedParts;
+        _expansionOnly = expansionOnly;
+        HasDynamicSyntax = !syntaxProofComplete || unresolvedParts.Count > 0;
         RequiresExactTreeApproval = ShellFileSystemTreeAccessPolicy.RequiresExactApproval(
             environment,
             Commands);
@@ -367,13 +591,54 @@ public sealed record ShellCommandAnalysis
 
     public string? WorkingDirectory { get; }
 
+    /// <summary>
+    /// Gets the managed temporary location whose variables the parser used, or
+    /// <see langword="null"/> when the call had none. A later parse of part of this
+    /// source uses the same location.
+    /// </summary>
+    internal ManagedTemporaryLocation? ManagedTemporary { get; init; }
+
     public IReadOnlyList<CommandOccurrence> Commands { get; }
 
     internal IReadOnlyList<Clause> DenyOnlyClauses { get; }
 
+    /// <summary>
+    /// The clauses of the hard-deny screen for unresolved Bash source. They
+    /// never become approval candidates.
+    /// </summary>
+    internal IReadOnlyList<Clause> ScreenClauses { get; init; } = [];
+
     public bool IsResolved => Failure == ShellAnalysisFailure.None && Commands.Count > 0;
 
+    /// <summary>
+    /// Gets whether any part of the source is unresolved. Advice for the whole
+    /// call reads it. Approval reads <see cref="GetUnresolvedPart"/> for each
+    /// command, so one unresolved command does not hide the others.
+    /// </summary>
     public bool HasDynamicSyntax { get; }
+
+    /// <summary>
+    /// Gets whether the PowerShell assignment and execution-region proof is
+    /// complete. Bash sources always have a complete proof here.
+    /// </summary>
+    internal bool SyntaxProofComplete { get; }
+
+    private readonly IReadOnlyDictionary<CommandOccurrence, ShellUnresolvedPart> _unresolvedParts;
+
+    /// <summary>Returns how much of one command of this analysis the parser could not prove.</summary>
+    internal ShellUnresolvedPart GetUnresolvedPart(CommandOccurrence command)
+        => _unresolvedParts.TryGetValue(command, out var part) ? part : ShellUnresolvedPart.None;
+
+    private readonly IReadOnlySet<CommandOccurrence> _expansionOnly;
+
+    /// <summary>
+    /// Returns true when the only cause that makes the command exact is a word
+    /// that Bash can glob, with an unknown value
+    /// (<see cref="HasUnboundedPathnameExpansion(CommandOccurrence)"/>). The
+    /// command stays exact, so no grant and no reviewed phrase covers it.
+    /// </summary>
+    internal bool IsUnresolvedOnlyByPathnameExpansion(CommandOccurrence command)
+        => _expansionOnly.Contains(command);
 
     /// <summary>
     /// Gets whether a filesystem tree effect requires one exact approval.
@@ -436,6 +701,24 @@ public sealed record ShellCommandAnalysis
             case ForEachSyntax loop:
                 CollectSourceAuthenticDenyOnlyClauses(loop.IteratorCommands, source, clauses, seen);
                 CollectSourceAuthenticDenyOnlyClauses(loop.Body, source, clauses, seen);
+                break;
+            case ConditionLoopSyntax loop:
+                CollectSourceAuthenticDenyOnlyClauses(loop.Condition, source, clauses, seen);
+                CollectSourceAuthenticDenyOnlyClauses(loop.Body, source, clauses, seen);
+                break;
+            case ConditionalSyntax conditional:
+                foreach (var branch in conditional.Branches)
+                {
+                    CollectSourceAuthenticDenyOnlyClauses(branch.Condition, source, clauses, seen);
+                    CollectSourceAuthenticDenyOnlyClauses(branch.Body, source, clauses, seen);
+                }
+
+                if (conditional.Else is { } otherwise)
+                    CollectSourceAuthenticDenyOnlyClauses(otherwise, source, clauses, seen);
+                break;
+            case CaseSyntax caseStatement:
+                foreach (var item in caseStatement.Items)
+                    CollectSourceAuthenticDenyOnlyClauses(item.Body, source, clauses, seen);
                 break;
             case CommandSubstitutionSyntax substitution:
                 CollectSourceAuthenticDenyOnlyClauses(substitution.Body, source, clauses, seen);
@@ -550,19 +833,85 @@ public sealed record ShellCommandAnalysis
             .SequenceEqual(element.Raw.AsSpan());
     }
 
-    private bool CommandHasDynamicSyntax(
+    private ShellUnresolvedPart ClassifyUnresolvedPart(
         CommandOccurrence command,
         IReadOnlySet<ClauseElement> accountedRegionArguments)
-        => !command.IsComplete
-            || !Enum.IsDefined(command.ImmediateRole)
-            || command.ImmediateRole == CommandOccurrenceRole.Unknown
-            || command.Ancestry.Any(static frame =>
-                !IsKnownAncestor(frame.Ancestor)
-                || !Enum.IsDefined(frame.Region)
-                || frame.Region == CommandAncestryRegion.Unknown)
+    {
+        if (!HasKnownStructure(command)
             || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
             || command.Clause.Verb.IsDynamic
-            || command.Clause.Args.Any(arg =>
+            || HasDynamicProgramWord(command)
+            || HasUnresolvedRedirect(command))
+        {
+            return ShellUnresolvedPart.Command;
+        }
+
+        // A glob in a directory segment can hide traversal or a symlink. It has
+        // a fixed reach only with the parser glob fact (ShellSyntaxTree
+        // 0.4.0-beta.11): the covering directory, to the segment depth.
+        // SECURITY: when such a glob can expand to a word that starts with "-",
+        // the expansion can add an option. Decision D1 then applies: the word is
+        // an unknown operand. A leaf glob keeps its earlier scope rule.
+        var globMayAddOption = false;
+        foreach (var arg in command.Clause.Args)
+        {
+            if (!ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
+                continue;
+
+            if (ShellGlobScope.FindGlobPattern(command, arg) is not { } pattern)
+                return ShellUnresolvedPart.Command;
+
+            globMayAddOption |= pattern.Glob!.MayStartWithDash;
+        }
+
+        if (HasOnlyDataOperands(command))
+            return ShellUnresolvedPart.None;
+
+        // A test builtin whose operands are not data can run a subscript.
+        return globMayAddOption
+               || HasUnresolvedOperand(command, accountedRegionArguments)
+               || HasTestBuiltinVerb(command)
+            ? ShellUnresolvedPart.Operand
+            : ShellUnresolvedPart.None;
+    }
+
+    /// <summary>
+    /// Returns true when the parser proves the structure of one command: the
+    /// command is complete, and its role and each ancestor are known.
+    /// </summary>
+    /// <remarks>
+    /// A literal twin has the structure of one top-level command, so the
+    /// structure of its source command must pass this check.
+    /// </remarks>
+    internal static bool HasKnownStructure(CommandOccurrence command)
+        => command.IsComplete
+           && Enum.IsDefined(command.ImmediateRole)
+           && command.ImmediateRole != CommandOccurrenceRole.Unknown
+           && !command.Ancestry.Any(static frame =>
+               !IsKnownAncestor(frame.Ancestor)
+               || !Enum.IsDefined(frame.Region)
+               || frame.Region == CommandAncestryRegion.Unknown);
+
+    // ShellSyntaxTree 0.4.0-beta.17 gives no command words for a bracket
+    // pattern in the program word, such as ["ci","build"], but it reports the
+    // word as literal. Bash expands the pattern, so the program is not fixed.
+    // With no other word, only the program word can make the words unknown, so
+    // the command stays unresolved, as it was with beta.10. Other program words
+    // with unknown words (a brace text, a tilde path) keep their decision.
+    private static bool HasDynamicProgramWord(CommandOccurrence command)
+    {
+        var elements = command.Clause.Elements;
+        return command.CommandWords is ShellCommandWords.Unknown
+               && elements.Count > 0
+               && elements[0] is { Role: ClauseElementRole.Verb, Kind: ArgKind.Literal }
+               && elements[0].Value.Contains('[', StringComparison.Ordinal)
+               && elements.Skip(1).All(static element => element.Role == ClauseElementRole.Redirect);
+    }
+
+    private static bool HasUnresolvedOperand(
+        CommandOccurrence command,
+        IReadOnlySet<ClauseElement> accountedRegionArguments)
+        => command.Clause.Args.Any(arg =>
                 arg.Kind == ArgKind.DynamicSkip
                 && !arg.IsCwdAttribution
                 && !IsAccountedExecutionRegionArgument(
@@ -579,52 +928,93 @@ public sealed record ShellCommandAnalysis
                 !IsAccountedExecutionRegionArgument(
                     argument,
                     accountedRegionArguments)
-                && HasUnsupportedArgumentDomain(argument))
-            // A glob in a directory segment can hide traversal or a symlink.
-            // Only a leaf glob has a fixed directory scope.
-            || command.Clause.Args.Any(arg =>
-                ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
-            || HasUnresolvedRedirect(command);
+                && (HasUnsupportedArgumentDomain(argument) || IsUnscopedVariableWord(argument))
+                && !IsUnknownOutputData(command, argument));
+
+    /// <summary>
+    /// Returns true when a variable word is not a path word, so it has no path
+    /// scope.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: Netclaw computes a path scope only from a path word that the
+    /// parser resolves, from a file word, and from a typed filesystem value. A
+    /// variable word such as <c>"$d"</c> is not a path word, also when the
+    /// parser proves its value. In
+    /// <c>for d in ../x; do dotnet build "$d"; done</c> or
+    /// <c>d=../x; dotnet build "$d"</c>, the value <c>../x</c> is outside the
+    /// folder, but the candidate keeps only the working directory scope. Such a
+    /// word is an unknown operand, so decision D1 lets only a safe phrase or a
+    /// grant for anywhere cover the command. ShellSyntaxTree 0.4.0-beta.19
+    /// gives a typed filesystem or data value only to a
+    /// <see cref="ArgKind.DynamicSkip"/> word, which keeps its own rule above.
+    /// A variable word that the parser marks as a path keeps its path scope,
+    /// or the path rule above makes it unknown when it has no resolved value.
+    /// A word whose proved value is an integer range (<c>"$?"</c>) is data, as
+    /// in <see cref="HasUnsupportedArgumentDomain(AnalyzedArgument)"/>.
+    /// </remarks>
+    private static bool IsUnscopedVariableWord(AnalyzedArgument argument)
+        => argument.Argument.Kind == ArgKind.EnvVar
+           && !argument.Argument.IsPath
+           && argument.Value is not ShellValueDomain.IntegerRange;
 
     internal static bool TryCollectKnownExecutionRegionArguments(
         ShellSyntaxNode node,
-        ISet<ClauseElement> arguments)
+        ISet<ClauseElement> arguments,
+        AssignmentSyntaxReconciliation assignmentSyntax)
     {
         ArgumentNullException.ThrowIfNull(node);
         ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(assignmentSyntax);
 
         return node switch
         {
             ShellBlockSyntax block => block.Statements.All(statement =>
-                TryCollectKnownExecutionRegionArguments(statement, arguments)),
+                TryCollectKnownExecutionRegionArguments(statement, arguments, assignmentSyntax)),
             SimpleCommandSyntax command => command.ExecutionRegions.All(region =>
-                    TryCollectKnownExecutionRegionArguments(region, arguments))
+                    TryCollectKnownExecutionRegionArguments(region, arguments, assignmentSyntax))
                 && command.Substitutions.All(substitution =>
-                    TryCollectKnownExecutionRegionArguments(substitution, arguments)),
+                    TryCollectKnownExecutionRegionArguments(substitution, arguments, assignmentSyntax)),
             PipelineSyntax pipeline => pipeline.Stages.All(stage =>
-                TryCollectKnownExecutionRegionArguments(stage, arguments)),
+                TryCollectKnownExecutionRegionArguments(stage, arguments, assignmentSyntax)),
             CommandListSyntax list => list.Items.All(item =>
-                TryCollectKnownExecutionRegionArguments(item.Command, arguments)),
+                TryCollectKnownExecutionRegionArguments(item.Command, arguments, assignmentSyntax)),
             GroupSyntax group => TryCollectKnownExecutionRegionArguments(
                 group.Body,
-                arguments),
+                arguments,
+                assignmentSyntax),
             ForEachSyntax loop => TryCollectKnownExecutionRegionArguments(
                     loop.IteratorCommands,
-                    arguments)
-                && TryCollectKnownExecutionRegionArguments(loop.Body, arguments),
+                    arguments,
+                    assignmentSyntax)
+                && TryCollectKnownExecutionRegionArguments(loop.Body, arguments, assignmentSyntax),
+            ConditionLoopSyntax loop => Enum.IsDefined(loop.LoopKind)
+                && loop.LoopKind != ConditionLoopKind.Unknown
+                && TryCollectKnownExecutionRegionArguments(loop.Condition, arguments, assignmentSyntax)
+                && TryCollectKnownExecutionRegionArguments(loop.Body, arguments, assignmentSyntax),
+            ConditionalSyntax conditional => conditional.Branches.Count > 0
+                && conditional.Branches.All(branch =>
+                    TryCollectKnownExecutionRegionArguments(branch.Condition, arguments, assignmentSyntax)
+                    && TryCollectKnownExecutionRegionArguments(branch.Body, arguments, assignmentSyntax))
+                && (conditional.Else is null
+                    || TryCollectKnownExecutionRegionArguments(conditional.Else, arguments, assignmentSyntax)),
+            CaseSyntax caseStatement => caseStatement.Items.All(item =>
+                TryCollectKnownExecutionRegionArguments(item.Body, arguments, assignmentSyntax)),
             CommandSubstitutionSyntax substitution => TryCollectKnownExecutionRegionArguments(
                 substitution.Body,
-                arguments),
+                arguments,
+                assignmentSyntax),
             ExecutionRegionSyntax region => TryCollectKnownExecutionRegion(
                 region,
-                arguments),
-            _ => false
+                arguments,
+                assignmentSyntax),
+            _ => assignmentSyntax.TryConsume(node)
         };
     }
 
     private static bool TryCollectKnownExecutionRegion(
         ExecutionRegionSyntax region,
-        ISet<ClauseElement> arguments)
+        ISet<ClauseElement> arguments,
+        AssignmentSyntaxReconciliation assignmentSyntax)
     {
         if (!Enum.IsDefined(region.Origin)
             || region.Origin == ExecutionRegionOrigin.Unknown
@@ -640,13 +1030,107 @@ public sealed record ShellCommandAnalysis
             return false;
         }
 
-        if (!TryCollectKnownExecutionRegionArguments(region.Body, arguments))
+        if (!TryCollectKnownExecutionRegionArguments(
+                region.Body,
+                arguments,
+                assignmentSyntax))
             return false;
 
         if (region.Origin == ExecutionRegionOrigin.CommandArgument)
             arguments.Add(region.HostArgument!);
 
         return true;
+    }
+
+    /// <summary>
+    /// Reconciles the non-exhaustive beta.4 syntax view with public assignment facts.
+    /// An exact shell-state source span can discharge one otherwise unknown syntax node.
+    /// </summary>
+    internal sealed class AssignmentSyntaxReconciliation
+    {
+        private readonly string _source;
+        private readonly Dictionary<(int Start, int Length), AssignmentIdentity> _unconsumed;
+
+        private AssignmentSyntaxReconciliation(
+            string source,
+            Dictionary<(int Start, int Length), AssignmentIdentity> unconsumed)
+        {
+            _source = source;
+            _unconsumed = unconsumed;
+        }
+
+        internal bool AllConsumed => _unconsumed.Count == 0;
+
+        internal static bool TryCreate(
+            string source,
+            IReadOnlyList<CommandOccurrence> commands,
+            out AssignmentSyntaxReconciliation reconciliation)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            ArgumentNullException.ThrowIfNull(commands);
+            var spans = new Dictionary<(int Start, int Length), AssignmentIdentity>();
+            foreach (var assignment in commands
+                         .SelectMany(static command => command.Assignments)
+                         .Where(static assignment =>
+                             assignment.Scope == ShellVariableAssignmentScope.ShellState))
+            {
+                if (assignment.SourceStart < 0
+                    || assignment.SourceLength <= 0
+                    || assignment.SourceStart > source.Length - assignment.SourceLength
+                    || assignment.AuthoredValue is not ShellValueDomain.Exact authored
+                    || assignment.EffectiveValue is not ShellValueDomain.Exact effective)
+                {
+                    reconciliation = null!;
+                    return false;
+                }
+
+                var span = (assignment.SourceStart, assignment.SourceLength);
+                var identity = new AssignmentIdentity(
+                    assignment.Name,
+                    authored.Value,
+                    effective.Value,
+                    assignment.MayAffectProcessEnvironment,
+                    source.Substring(span.SourceStart, span.SourceLength));
+                if (spans.TryGetValue(span, out var existing))
+                {
+                    if (existing != identity)
+                    {
+                        reconciliation = null!;
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                spans.Add(span, identity);
+            }
+
+            reconciliation = new AssignmentSyntaxReconciliation(source, spans);
+            return true;
+        }
+
+        internal bool TryConsume(ShellSyntaxNode node)
+        {
+            if (node.SourceStart is not { } start
+                || node.SourceLength is not { } length
+                || start < 0
+                || length <= 0
+                || start > _source.Length - length
+                || !_unconsumed.Remove((start, length), out var assignment))
+            {
+                return false;
+            }
+
+            return _source.AsSpan(start, length)
+                .SequenceEqual(assignment.Source.AsSpan());
+        }
+
+        private sealed record AssignmentIdentity(
+            string Name,
+            string AuthoredValue,
+            string EffectiveValue,
+            bool MayAffectProcessEnvironment,
+            string Source);
     }
 
     private static bool IsAccountedExecutionRegionArgument(
@@ -718,13 +1202,27 @@ public sealed record ShellCommandAnalysis
         => list.Values.Count is >= 2 and <= 32
            && list.Values.All(static value => value is not null);
 
+    // ShellSyntaxTree 0.4.0-beta.13 adds while, until, if, and case nodes, and
+    // beta.14 adds the background group. The state pass joins the facts of each
+    // path, so a command inside them has the same proof as a command at the top
+    // level. An unknown node or group kind still fails closed.
     private static bool IsKnownAncestor(ShellSyntaxNode ancestor)
         => ancestor is ShellBlockSyntax
             or SimpleCommandSyntax
             or PipelineSyntax
             or CommandListSyntax
             or GroupSyntax
+            {
+                GroupKind: ShellGroupKind.CurrentScope
+                    or ShellGroupKind.IsolatedScope
+                    or ShellGroupKind.Background
+            }
             or ForEachSyntax
+            or ConditionLoopSyntax { LoopKind: ConditionLoopKind.While or ConditionLoopKind.Until }
+            or ConditionalSyntax
+            or ConditionalBranchSyntax
+            or CaseSyntax
+            or CaseItemSyntax
             or CommandSubstitutionSyntax
             or ExecutionRegionSyntax;
 
@@ -800,6 +1298,189 @@ public sealed record ShellCommandAnalysis
         };
     }
 
+    /// <summary>
+    /// Returns true when every operand of the command is data: an output
+    /// command (<c>echo</c>, <c>printf</c>, <c>:</c>, <c>true</c>, <c>false</c>)
+    /// prints or ignores its operands, and a test builtin (<c>test</c>,
+    /// <c>[</c>) compares them.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: a dynamic operand of such a command reaches stdout or the exit
+    /// status only. It is not the program word, and it is not a redirect target:
+    /// <see cref="HasUnresolvedRedirect(CommandOccurrence)"/> checks each
+    /// redirect target separately. A command substitution inside an operand is
+    /// its own occurrence with its own candidate, so the rule hides no command.
+    /// ShellSyntaxTree accepts a dynamic printf operand only after a literal
+    /// format, and it rejects <c>printf -v</c>, so no dynamic value reaches the
+    /// printf format or a shell variable. A test builtin can evaluate an array
+    /// subscript in an operand, so its operands must also pass
+    /// <see cref="HasBoundedNameSafeValue(AnalyzedArgument)"/>. The rule is Bash
+    /// only: in PowerShell these words are aliases or external programs with
+    /// their own parameters. The first verb token decides, because the parser
+    /// folds a plain operand into the verb (<c>echo yes</c>, <c>[ abc</c>).
+    /// </remarks>
+    private bool HasOnlyDataOperands(CommandOccurrence command)
+        => Environment.Grammar == ShellGrammar.Bash
+           && command.Clause.Verb.Tokens is [var verb, ..]
+           && ShellVerbPolicyData.IsDataCommand(verb, ApprovalShell.Bash)
+           && (!HasTestBuiltinVerb(command)
+               || HasProvedDataOperands(command, isTestBuiltin: true));
+
+    private bool HasTestBuiltinVerb(CommandOccurrence command)
+        => Environment.Grammar == ShellGrammar.Bash
+           && command.Clause.Verb.Tokens is [var verb, ..]
+           && ShellVerbPolicyData.BashTestBuiltins.Contains(verb);
+
+    /// <summary>
+    /// Returns true when the parser proves every value of the operand (an exact
+    /// value or a finite set) and no value has a <c>[</c>.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: <c>[ -v 'a[$(cmd)]' ]</c> runs <c>cmd</c>, because Bash
+    /// evaluates the subscript as arithmetic. Arithmetic also evaluates the
+    /// value of a variable that it names, so <c>[ -v 'a[x]' ]</c> runs a
+    /// substitution in the value of <c>x</c>. A name without <c>[</c> has no
+    /// subscript, and the other test operators do not evaluate their operands.
+    /// An unknown value, a glob match, or a file name can hold any text, so
+    /// such an operand is not data. The rule reads only typed values. It does
+    /// not parse the test operators.
+    /// </remarks>
+    private static bool HasBoundedNameSafeValue(AnalyzedArgument argument)
+        => argument.Value switch
+        {
+            ShellValueDomain.Exact exact => HasNoSubscript(exact.Value),
+            ShellValueDomain.FiniteSet finite => finite.Values.All(HasNoSubscript),
+            _ => false
+        };
+
+    private static bool HasNoSubscript(string? value)
+        => value is not null && !value.Contains('[', StringComparison.Ordinal);
+
+    /// <summary>
+    /// Returns true when each operand of a Bash data command is proved data. An
+    /// output operand needs a word that Bash cannot glob, or a proved authored
+    /// value (an exact value or a finite set) with no glob character. A test
+    /// operand needs
+    /// <see cref="HasBoundedNameSafeValue(AnalyzedArgument)"/>.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: an unquoted word with an unknown value, such as <c>$n</c> or
+    /// <c>../"$d"/*</c>, gets pathname expansion. ShellSyntaxTree gives no path
+    /// for such a word, so the protected-path screen cannot see what it lists.
+    /// ShellSyntaxTree 0.4.0-beta.19 reports
+    /// <see cref="AnalyzedArgument.MayPathnameExpand"/> from the authored word,
+    /// so a quoted part such as <c>pre"$n"</c> is data. A quoted unknown value is still not data for a test
+    /// builtin, because a <c>-v</c> subscript can run code.
+    /// </remarks>
+    internal static bool HasProvedDataOperands(CommandOccurrence command, bool isTestBuiltin)
+        => command.Arguments.All(argument => isTestBuiltin
+            ? HasBoundedNameSafeValue(argument)
+            : !argument.MayPathnameExpand
+              || HasGlobFreeAuthoredValue(argument));
+
+    /// <summary>
+    /// Returns true when a Bash operand with an unknown value can undergo
+    /// pathname expansion at run time.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: ShellSyntaxTree 0.4.0-beta.19 reports
+    /// <see cref="AnalyzedArgument.MayPathnameExpand"/> from the authored word.
+    /// A word such as <c>"${d}ret"/*</c>, <c>$n</c>, or
+    /// <c>~/.netclaw/{keys,config}/key-1.xml</c> has no proved value and no
+    /// glob scope, so it can list or read the names in any directory, also a
+    /// protected one. Such a command gets one exact candidate with
+    /// <c>Once</c> and <c>Deny</c> only; no grant and no reviewed phrase covers
+    /// it, and an unattended run denies it. A proved glob scope
+    /// (<see cref="ShellValueDomain.PathPattern"/>) keeps decision D5, and a
+    /// quoted unknown value keeps decision D1.
+    /// Owner decision (#2349): a Bash data command keeps its earlier rule. An
+    /// output command (<c>echo</c>, <c>printf</c>) prints its operands, so the
+    /// worst case is file names in the output, never file contents. A test
+    /// builtin keeps the proved-value rule of
+    /// <see cref="HasBoundedNameSafeValue(AnalyzedArgument)"/>.
+    /// The rule does not read <c>MayFieldSplit</c>. A word that can split but
+    /// cannot glob is a quoted <c>"$@"</c> or a bounded arithmetic word. Field
+    /// splitting only cuts a value into more words, and each word keeps the
+    /// check of a normal operand: an unknown value gets decision D1, as a
+    /// quoted <c>"$x"</c> does. Splitting cannot add a path that the D1 gap
+    /// does not already accept. The agent cannot set <c>$@</c> without consent:
+    /// <c>set --</c> needs consent, and a function definition fails closed.
+    /// </remarks>
+    private bool HasUnboundedPathnameExpansion(CommandOccurrence command)
+        => Environment.Grammar == ShellGrammar.Bash
+           && !IsBashDataCommand(command)
+           && command.Arguments.Any(IsUnboundedPathnameExpansionWord);
+
+    private static bool IsUnboundedPathnameExpansionWord(AnalyzedArgument argument)
+        => argument.MayPathnameExpand
+           && argument.Value is ShellValueDomain.Unknown
+           && argument.Argument.Kind != ArgKind.Glob
+           && !HasGlobFreeAuthoredValue(argument)
+           && !IsStatusWord(argument);
+
+    private static bool IsBashDataCommand(CommandOccurrence command)
+        => command.Clause.Verb.Tokens is [var verb, ..]
+           && ShellVerbPolicyData.IsDataCommand(verb, ApprovalShell.Bash);
+
+    // `$?` is an exit status: an integer with no glob character.
+    private static bool IsStatusWord(AnalyzedArgument argument)
+        => argument.Argument.Kind == ArgKind.EnvVar
+           && argument.Argument.Raw == "$?";
+
+    /// <summary>
+    /// Returns true when the parser proves each authored value of the word
+    /// before splitting and pathname expansion, and no value has a glob
+    /// character. Bash then has nothing to expand, as for <c>$r</c> in
+    /// <c>for r in 1 2; do gh run view $r; done</c>.
+    /// </summary>
+    internal static bool HasGlobFreeAuthoredValue(AnalyzedArgument argument)
+        => argument.AuthoredValue switch
+        {
+            ShellValueDomain.Exact exact => HasNoGlobCharacter(exact.Value),
+            ShellValueDomain.FiniteSet finite => finite.Values.All(HasNoGlobCharacter),
+            _ => false
+        };
+
+    private static bool HasNoGlobCharacter(string? value)
+        => value is not null && value.IndexOfAny(['*', '?', '[']) < 0;
+
+    /// <summary>
+    /// Returns the source text of each word that makes a Bash command exact by
+    /// the pathname-expansion rule
+    /// (<see cref="HasUnboundedPathnameExpansion(CommandOccurrence)"/>).
+    /// </summary>
+    /// <remarks>
+    /// The approval coordinator names these words in its quote correction. In
+    /// double quotes, such a word gets no pathname expansion and no field
+    /// splitting, so its unknown value is one operand (decision D1). The list
+    /// grants no authority.
+    /// </remarks>
+    internal static IReadOnlyList<string> GetUnboundedPathnameExpansionWords(CommandOccurrence command)
+        => command.Arguments
+            .Where(IsUnboundedPathnameExpansionWord)
+            .Select(static argument => argument.Argument.Raw)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static bool IsUnknownOutputData(
+        CommandOccurrence command,
+        AnalyzedArgument argument)
+    {
+        // The parser proves the verb and every child command before this check.
+        // A bare status value cannot add an option or a path to an output command.
+        // PowerShell keeps this rule; Bash output operands use HasOnlyDataOperands.
+        return command.Redirects.Count == 0
+               && !command.Clause.Verb.IsDynamic
+               && command.Clause.Verb.Tokens.Count == 1
+               && ShellVerbPolicyData.SingleTokenSideEffectVerbs.Contains(command.Clause.Verb.Tokens[0])
+               && argument.Argument.Kind == ArgKind.EnvVar
+               && !argument.Argument.IsPath
+               && argument.Argument.Raw == "$?"
+               && argument.Value is ShellValueDomain.Unknown
+               && argument.AuthoredFileSystemValue is ShellValueDomain.Unknown
+               && argument.AuthoredNonFileSystemValue is ShellValueDomain.Unknown;
+    }
+
     private static bool HasUnresolvedRedirect(CommandOccurrence occurrence)
         => occurrence.Redirects.Any(redirect => HasUnresolvedRedirect(occurrence, redirect));
 
@@ -837,7 +1518,7 @@ public sealed record ShellCommandAnalysis
         if (!IsStandardInputSource(redirect.Source)
             || clause.Verb.Tokens.Count != 1
             || !string.Equals(
-                ShellTokenizer.TrimShellPunctuation(clause.Verb.Tokens[0]),
+                LegacyShellTextScan.TrimShellPunctuation(clause.Verb.Tokens[0]),
                 "cat",
                 StringComparison.Ordinal)
             || clause.Args.Any(static arg => !arg.IsCwdAttribution))
@@ -858,7 +1539,7 @@ public sealed record ShellCommandAnalysis
         return IsStandardInputSource(redirect.Source)
             && clause.Verb.Tokens.Count == 1
             && string.Equals(
-                ShellTokenizer.TrimShellPunctuation(clause.Verb.Tokens[0]),
+                LegacyShellTextScan.TrimShellPunctuation(clause.Verb.Tokens[0]),
                 "cat",
                 StringComparison.Ordinal)
             && !clause.Args.Any(static arg => !arg.IsCwdAttribution)

@@ -72,6 +72,10 @@ public static class ToolApprovalEntryComparer
                 ? Equals(left.Verb, right.Verb, shell)
                 : Equals(left.Verb, right.Verb);
         return phraseMatches &&
+               left.AssignmentDigest == right.AssignmentDigest &&
+               Equals(
+                   NormalizeDirectory(left.Repository),
+                   NormalizeDirectory(right.Repository)) &&
                (left.Shell is { } directoryShell
                    ? Equals(
                        NormalizeDirectory(left.Directory, directoryShell),
@@ -139,13 +143,55 @@ public static class ToolApprovalEntryComparer
     public static ApprovalEntry Normalize(ApprovalEntry entry)
     {
         var normalizedDir = NormalizeDirectory(entry.Directory, entry.Shell);
+        var normalizedRepository = NormalizeDirectory(entry.Repository);
 
         var dirChanged = !string.Equals(normalizedDir, entry.Directory, StringComparison.Ordinal);
+        var repositoryChanged = !string.Equals(normalizedRepository, entry.Repository, StringComparison.Ordinal);
 
-        if (!dirChanged)
+        if (!dirChanged && !repositoryChanged)
             return entry;
 
-        return entry with { Directory = normalizedDir };
+        return entry with { Directory = normalizedDir, Repository = normalizedRepository };
+    }
+
+    /// <summary>
+    /// Returns true when the command words of a shell grant cover the command
+    /// words of a call or of another grant. The approval matcher and the store
+    /// hygiene use this one rule.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: a grant with one word names only the program. It covers that
+    /// word alone, so a <c>gh</c> grant covers <c>gh --help</c> but not
+    /// <c>gh auth logout</c>. A grant with two or more words names a verb. It
+    /// covers each word list that starts with its words, because the later
+    /// words are arguments: a <c>git push</c> grant covers
+    /// <c>git push origin main</c>. A word in the grant is never free, so a
+    /// <c>git push origin feature-x</c> grant does not cover
+    /// <c>git push origin main</c>. An empty grant covers nothing.
+    /// </remarks>
+    public static bool CoversCommandWords(
+        IReadOnlyList<string> grantWords,
+        IReadOnlyList<string> candidateWords,
+        ApprovalShell shell)
+    {
+        // Focused mutation gate: run-exact-verb-chain-mutations.sh. A mutant of
+        // these checks lets a program-only grant cover a verb ("gh" would cover
+        // "gh auth logout"), or lets a grant cover a shorter word list.
+        var grantLength = grantWords.Count;
+        var candidateLength = candidateWords.Count;
+        if (grantLength == 0 || candidateLength < grantLength)
+            return false;
+
+        if (grantLength == 1 && candidateLength != 1)
+            return false;
+
+        for (var index = 0; index < grantLength; index++)
+        {
+            if (!Equals(grantWords[index], candidateWords[index], shell))
+                return false;
+        }
+
+        return true;
     }
 
     private static bool TokenSequencesEqual(

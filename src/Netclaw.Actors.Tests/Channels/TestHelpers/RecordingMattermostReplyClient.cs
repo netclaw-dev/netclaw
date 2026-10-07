@@ -13,6 +13,7 @@ internal sealed class RecordingMattermostReplyClient : IMattermostReplyClient
     private readonly List<MattermostPostMessage> _posts = [];
     private readonly List<(MattermostPostId PostId, string Text, IReadOnlyList<MattermostAttachment>? Attachments)> _updates = [];
     private readonly List<(MattermostChannelId ChannelId, string FilePath, string? FileName)> _uploads = [];
+    private readonly List<(MattermostChannelId ChannelId, string? RootPostId)> _typingPulses = [];
 
     public IReadOnlyList<MattermostPostMessage> Posts
     {
@@ -29,9 +30,17 @@ internal sealed class RecordingMattermostReplyClient : IMattermostReplyClient
         get { lock (_lock) return _uploads.ToList(); }
     }
 
+    public IReadOnlyList<(MattermostChannelId ChannelId, string? RootPostId)> TypingPulses
+    {
+        get { lock (_lock) return _typingPulses.ToList(); }
+    }
+
     public Exception? ThrowOnPost { get; set; }
 
     public Exception? ThrowOnUpload { get; set; }
+
+    /// <summary>When set, a typing pulse is recorded and then fails with this exception.</summary>
+    public Exception? ThrowOnTyping { get; set; }
 
     // Throws on the next post only, then auto-clears. Lets a test fail a content
     // post while letting a follow-up (e.g. fallback) succeed and be recorded.
@@ -46,6 +55,7 @@ internal sealed class RecordingMattermostReplyClient : IMattermostReplyClient
             _posts.Clear();
             _updates.Clear();
             _uploads.Clear();
+            _typingPulses.Clear();
         }
     }
 
@@ -83,5 +93,14 @@ internal sealed class RecordingMattermostReplyClient : IMattermostReplyClient
         var fileId = $"file-{Interlocked.Increment(ref _messageCounter)}";
         lock (_lock) _uploads.Add((channelId, filePath, fileName));
         return Task.FromResult(fileId);
+    }
+
+    public Task SendTypingAsync(
+        MattermostChannelId channelId,
+        string? rootPostId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock) _typingPulses.Add((channelId, rootPostId));
+        return ThrowOnTyping is { } ex ? Task.FromException(ex) : Task.CompletedTask;
     }
 }

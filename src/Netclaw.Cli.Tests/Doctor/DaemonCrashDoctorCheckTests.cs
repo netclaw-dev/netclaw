@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
@@ -10,8 +11,12 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
 
-public sealed class DaemonCrashDoctorCheckTests
+public sealed class DaemonCrashDoctorCheckTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     [Fact]
     public async Task ReturnsWarning_WhenRecentDaemonCrashLogExists()
     {
@@ -69,9 +74,9 @@ public sealed class DaemonCrashDoctorCheckTests
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
 
-    private static NetclawPaths CreateTempPaths()
+    private NetclawPaths CreateTempPaths()
     {
-        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var basePath = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         var paths = new NetclawPaths(basePath);
         paths.EnsureDirectoriesExist();
         return paths;

@@ -308,24 +308,28 @@ public class SetReminderToolTests : TestKit
         await execution;
     }
 
-    [Fact]
-    public async Task Mode_B_discord_self_targeting_persists_session_and_origin_channel_type()
+    [Theory]
+    [InlineData("discord", ChannelType.Discord, "129847561203948576/130111223344556677")]
+    [InlineData("mattermost", ChannelType.Mattermost, "abcdefghijklmnopqrstuvwxyz/zyxwvutsrqponmlkjihgfedcba")]
+    [InlineData("Mattermost", ChannelType.Mattermost, "abcdefghijklmnopqrstuvwxyz/zyxwvutsrqponmlkjihgfedcba")]
+    public async Task Mode_B_remote_session_persists_session_and_origin_channel_type(
+        string channelType, ChannelType expectedChannelType, string sessionId)
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
-        var context = TestToolExecutionContext.CreateBound("129847561203948576/130111223344556677", null, new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound(sessionId, null, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.TrustedInstance,
-            ChannelType = "discord"
+            ChannelType = channelType
         });
 
         var execution = Task.Run(async () =>
         {
             var result = await tool.ExecuteAsync(new Dictionary<string, object?>
             {
-                ["Id"] = "discord-self-target",
-                ["Name"] = "discord-self-target",
+                ["Id"] = "remote-self-target",
+                ["Name"] = "remote-self-target",
                 ["Prompt"] = "Check weather",
                 ["ScheduleType"] = "once",
                 ["Schedule"] = "5m",
@@ -336,8 +340,10 @@ public class SetReminderToolTests : TestKit
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(DeliveryKind.CurrentSession, cmd.Definition.Delivery.Kind);
-        Assert.Equal("129847561203948576/130111223344556677", cmd.Definition.Delivery.SessionId);
-        Assert.Equal(ChannelType.Discord, cmd.Definition.Delivery.OriginChannelType);
+        Assert.Equal(sessionId, cmd.Definition.Delivery.SessionId);
+        Assert.Equal(expectedChannelType, cmd.Definition.Delivery.OriginChannelType);
+        Assert.Null(cmd.Definition.Delivery.Transport);
+        Assert.Null(cmd.Definition.Delivery.Address);
         Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
         Assert.Equal(TrustBoundary.TrustedInstance, cmd.Definition.Boundary);
 
@@ -347,7 +353,7 @@ public class SetReminderToolTests : TestKit
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(5)));
 
-        await execution;
+        Assert.DoesNotContain("Error:", await execution);
     }
 
     [Fact]

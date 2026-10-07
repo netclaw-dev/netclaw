@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using System.Security.Cryptography;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Actors.Memory;
@@ -20,8 +21,12 @@ namespace Netclaw.Cli.Tests.Memory;
 /// overload of <see cref="MemoryCommand.RunAsync(string[], NetclawPaths, IConfiguration, System.Collections.Generic.IReadOnlyDictionary{string, EmbeddingModelManifestEntry}, TextWriter, TextWriter)"/>
 /// pointed at the tiny fixture ONNX graph — no network access.
 /// </summary>
-public sealed class MemoryCommandTests
+public sealed class MemoryCommandTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     private const string ModelId = "tiny-fixture";
     private static string FixturesDir => Path.Combine(AppContext.BaseDirectory, "Fixtures");
 
@@ -152,9 +157,9 @@ public sealed class MemoryCommandTests
         return (exitCode, stdout.ToString(), stderr.ToString());
     }
 
-    private static NetclawPaths CreateTempPaths(bool prePlaceValidModel)
+    private NetclawPaths CreateTempPaths(bool prePlaceValidModel)
     {
-        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-memory-command-tests", Guid.NewGuid().ToString("N"));
+        var basePath = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         var paths = new NetclawPaths(basePath);
         paths.EnsureDirectoriesExist();
 

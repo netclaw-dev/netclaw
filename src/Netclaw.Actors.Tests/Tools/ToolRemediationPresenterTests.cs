@@ -19,12 +19,26 @@ public class ToolRemediationPresenterTests
             "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call."
         },
         {
+            nameof(ToolRemediationCode.UseShellWorkingDirectory),
+            "Next action: remove the leading directory change and use the suggested WorkingDirectory for child-directory work. " +
+            "If the task needs shell directory behavior, keep the command and set WorkingDirectory to the current project directory. " +
+            "The new call passes normal policy."
+        },
+        {
             nameof(ToolRemediationCode.UseManagedTemporaryDirectory),
             "Next action: use the managed temporary directory from this result for disposable files, or retry unchanged for exact platform paths."
         },
         {
             nameof(ToolRemediationCode.ProvideUniqueOldString),
             "Next action: retry file_edit with a unique OldString, or set ReplaceAll=true when every match should change."
+        },
+        {
+            nameof(ToolRemediationCode.RewriteShellCommandWords),
+            "Next action: rewrite the command as this result says and call shell_execute again. The new call passes normal approval."
+        },
+        {
+            nameof(ToolRemediationCode.ShortenShellCommand),
+            "Next action: call shell_execute again with the shorter command. The new call passes normal approval."
         },
         {
             nameof(ToolRemediationCode.UseNativeTool),

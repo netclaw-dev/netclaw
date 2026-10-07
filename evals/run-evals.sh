@@ -1177,6 +1177,13 @@ daemon_log_no_skill_loaded() {
     ! daemon_log_tail | grep -qaE "turn_skill_loaded" 2>/dev/null
 }
 
+daemon_log_no_unexpected_skill_loaded() {
+    local expected_skill="$1"
+    ! daemon_log_tail \
+        | grep -aE "turn_skill_loaded" 2>/dev/null \
+        | grep -qavE "turn_skill_loaded skill=$expected_skill method=skill_load" 2>/dev/null
+}
+
 stdout_tool_called() {
     grep -qaE "\\[tool:call\\] $1\\(" "$STDOUT_FILE" 2>/dev/null
 }
@@ -1281,7 +1288,7 @@ assert_identity_version() {
 }
 
 assert_identity_repo() {
-    stdout_contains 'github.com/netclaw-dev/netclaw'
+    stdout_contains 'netclaw-dev/netclaw'
 }
 
 assert_identity_session() {
@@ -1292,7 +1299,8 @@ assert_identity_file_routing() {
     stdout_response_contains 'SOUL.md' && \
         stdout_response_contains 'AGENTS.md' && \
         stdout_response_contains 'TOOLING.md' && \
-        daemon_log_no_skill_loaded
+        daemon_log_no_unexpected_skill_loaded 'netclaw-operations' && \
+        stdout_no_skill_file_read_called
 }
 
 # Category 2: Skill Discovery — tests that the model retrieves procedural
@@ -1300,6 +1308,14 @@ assert_identity_file_routing() {
 assert_skill_scheduling_knowledge() {
     stdout_contains 'cron' \
         && daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
+        && stdout_no_skill_file_read_called
+}
+
+assert_skill_mattermost_current_session() {
+    stdout_response_contains 'current_session' \
+        && stdout_response_contains 'Mattermost' \
+        && daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
+        && stdout_tool_called 'skill_read_resource' \
         && stdout_no_skill_file_read_called
 }
 
@@ -1382,6 +1398,13 @@ assert_skill_activation_soft_scheduling() {
 assert_skill_activation_soft_memory() {
     { daemon_log_skill_loaded_via_skill_tool 'netclaw-memory' \
         || stdout_tool_called 'find_memories'; } \
+        && stdout_no_skill_file_read_called
+}
+
+# A request to test a reminder loads run-reminder or calls run_reminder.
+assert_skill_activation_run_reminder() {
+    { daemon_log_skill_loaded_via_skill_tool 'run-reminder' \
+        || stdout_tool_called 'run_reminder'; } \
         && stdout_no_skill_file_read_called
 }
 
@@ -1653,14 +1676,23 @@ assert_tool_known_image_metadata() {
 assert_tool_rationale_contract() {
     stdout_json_envelope_valid \
         && stdout_json_tool_call_sequence_matches \
-            '["file_list","list_reminders","file_read","skill_load"]' \
+            '["file_list","file_search","file_read","skill_load"]' \
         && stdout_json_all_tool_calls_have_rationale 4
 }
 
 assert_tool_timestamped_webhook() {
+    local route_file="$EVAL_HOME/data/config/webhooks/stripe-events.json"
     stdout_tool_called 'set_webhook' \
-        && stdout_contains 'HmacTimestamped' \
-        && stdout_contains 'Stripe-Signature'
+        && jq -e '
+            .verification.kind == "HmacTimestamped"
+                and .verification.secret == "eval-whsec-123"
+                and (.prompt | test("summar"; "i"))
+        ' "$route_file" >/dev/null 2>&1
+}
+
+setup_tool_timestamped_webhook() {
+    docker exec --user root "$EVAL_CONTAINER_NAME" \
+        rm -f /home/netclaw/.netclaw/config/webhooks/stripe-events.json
 }
 
 assert_tool_timeout_arg_recovery() {
@@ -1786,8 +1818,8 @@ assert_subagent_project_scope_declaration() {
 
     local child_log
     local -a child_logs
-    mapfile -t child_logs < <(find "$EVAL_HOME/logs/sessions" -type f \
-        -path '*_subagent_project-scope-analyst_*/session.log' \
+    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
+        -path '*/subagents/*/logs/session.log' \
         -newer "$PROJECT_SCOPE_LOG_MARKER" 2>/dev/null)
     [[ "${#child_logs[@]}" -eq 1 ]] || return 1
     child_log="${child_logs[0]}"
@@ -1798,23 +1830,38 @@ assert_subagent_project_scope_declaration() {
         'SubAgent \[project-scope-analyst\] project directory set to /home/netclaw/.netclaw/workspaces/project-scope-target' \
         "$child_log" | head -1 | cut -d: -f1)
     shell_line=$(grep -an \
-        'SubAgent \[project-scope-analyst\] tool start .* name=shell_execute' \
+        'SubAgent \[project-scope-analyst\] authorization attempt started .* toolName=shell_execute' \
         "$child_log" | head -1 | cut -d: -f1)
+    local -a shell_calls
+    mapfile -t shell_calls < <(grep -a \
+        'SubAgent \[project-scope-analyst\] authorization attempt started .* toolName=shell_execute' \
+        "$child_log" | sed -n 's/.* callId=\([^ ]*\) toolName=shell_execute.*/\1/p')
+    shell_count="${#shell_calls[@]}"
+    [[ "$shell_count" -eq 2 ]] || return 1
+    shell_result_count=0
+    local call_id
+    for call_id in "${shell_calls[@]}"; do
+        grep -q "callId=$call_id outcomeCategory=Success" "$child_log" || return 1
+        shell_result_count=$((shell_result_count + 1))
+    done
     shell_result_line=$(grep -an \
-        'SubAgent \[project-scope-analyst\] tool \[shell_execute\] result: Exit code: 0' \
+        "callId=${shell_calls[0]} outcomeCategory=Success" \
         "$child_log" | head -1 | cut -d: -f1)
-    shell_count=$(grep -ac \
-        'SubAgent \[project-scope-analyst\] tool start .* name=shell_execute' \
-        "$child_log")
-    shell_result_count=$(grep -ac \
-        'SubAgent \[project-scope-analyst\] tool \[shell_execute\] result: Exit code: 0' \
-        "$child_log")
     status_command_count=$(grep -aEo \
-        'shell_execute#[^(]+\(Command=git status --short, WorkingDirectory=/home/netclaw/\.netclaw/workspaces/project-scope-target,' \
+        'shell_execute#[^(]+\(Command=git status --short,' \
         "$child_log" | wc -l | tr -d ' ')
     diff_command_count=$(grep -aEo \
-        'shell_execute#[^(]+\(Command=git diff --stat, WorkingDirectory=/home/netclaw/\.netclaw/workspaces/project-scope-target,' \
+        'shell_execute#[^(]+\(Command=git diff --stat,' \
         "$child_log" | wc -l | tr -d ' ')
+
+    local preview
+    while IFS= read -r preview; do
+        if grep -q 'WorkingDirectory=' <<<"$preview"; then
+            grep -q \
+                'WorkingDirectory=/home/netclaw/.netclaw/workspaces/project-scope-target,' \
+                <<<"$preview" || return 1
+        fi
+    done < <(grep -aEo 'shell_execute#[^(]+\([^)]*\)' "$child_log")
 
     [[ -n "$declared_line" && -n "$shell_line" && -n "$shell_result_line" \
         && "$shell_count" -eq 2 && "$shell_result_count" -eq 2 \
@@ -1837,8 +1884,8 @@ assert_approval_natural_subagent_project_review() {
 
     local child_log
     local -a child_logs
-    mapfile -t child_logs < <(find "$EVAL_HOME/logs/sessions" -type f \
-        -path '*_subagent_project-scope-analyst_*/session.log' \
+    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
+        -path '*/subagents/*/logs/session.log' \
         -newer "$PROJECT_SCOPE_LOG_MARKER" 2>/dev/null)
     [[ "${#child_logs[@]}" -eq 1 ]] || return 1
     child_log="${child_logs[0]}"
@@ -1848,14 +1895,19 @@ assert_approval_natural_subagent_project_review() {
         'SubAgent \[project-scope-analyst\] project directory set to /home/netclaw/.netclaw/workspaces/project-scope-target' \
         "$child_log" | head -1 | cut -d: -f1)
     first_shell_line=$(grep -an \
-        'SubAgent \[project-scope-analyst\] tool start .* name=shell_execute' \
+        'SubAgent \[project-scope-analyst\] authorization attempt started .* toolName=shell_execute' \
         "$child_log" | head -1 | cut -d: -f1)
-    shell_count=$(grep -ac \
-        'SubAgent \[project-scope-analyst\] tool start .* name=shell_execute' \
-        "$child_log")
-    shell_result_count=$(grep -ac \
-        'SubAgent \[project-scope-analyst\] tool \[shell_execute\] result: Exit code: 0' \
-        "$child_log")
+    local -a shell_calls
+    mapfile -t shell_calls < <(grep -a \
+        'SubAgent \[project-scope-analyst\] authorization attempt started .* toolName=shell_execute' \
+        "$child_log" | sed -n 's/.* callId=\([^ ]*\) toolName=shell_execute.*/\1/p')
+    shell_count="${#shell_calls[@]}"
+    shell_result_count=0
+    local call_id
+    for call_id in "${shell_calls[@]}"; do
+        grep -q "callId=$call_id outcomeCategory=Success" "$child_log" || return 1
+        shell_result_count=$((shell_result_count + 1))
+    done
 
     [[ -n "$first_shell_line" && "$shell_count" -ge 1 \
         && "$shell_result_count" -eq "$shell_count" ]] || return 1
@@ -2430,7 +2482,7 @@ assert_approval_natural_directory_change() {
         && jq -e '(.argumentsJson | fromjson | .WorkingDirectory? == null)' \
             <<<"$shell_call" >/dev/null \
         && daemon_log_tail | grep -qaF \
-            "Tool authorization evaluated: shell_execute outcome=Denied reason=shell_path_outside_trust_zone" \
+            "Tool authorization evaluated: shell_execute outcome=Denied reason=shell_path_outside_trusted_roots" \
         && jq -e '
             (.response | test("blocked|denied|outside.*trust|approval"; "i"))
             and ((.response | test("observed directory.*(/tmp)|result.*(/tmp)"; "i")) | not)
@@ -2729,7 +2781,7 @@ run_all() {
         "Check your version" \
         "What version of Netclaw is this?"
 
-    run_case identity_repo "repo URL in output" \
+    run_case identity_repo "canonical repository in output" \
         "What is the Netclaw GitHub repository URL?" \
         "Where is the Netclaw source code?" \
         "What repo are you built from?"
@@ -2738,7 +2790,7 @@ run_all() {
         "What is your session ID?" \
         "What session are we in?"
 
-    run_case identity_file_routing "routes all three identity concerns without loading a skill" \
+    run_case identity_file_routing "routes all three identity concerns without unrelated skill access" \
         "Which identity file should hold each of these: my communication style, this deployment's recurring sales workflow, and the tools available on this host?" \
         "Map personality and operator context, deployment mission and review rules, and environment capabilities to the correct Netclaw identity files."
 
@@ -2753,6 +2805,9 @@ run_all() {
         "What types of schedules can I create with set_reminder? Be specific about the formats." \
         "What scheduling formats do Netclaw reminders support?" \
         "Explain the different schedule types I can use with reminders"
+
+    run_case skill_mattermost_current_session "uses the current Mattermost conversation for a reminder" \
+        "Which delivery_kind should I use for a reminder that returns to this same Mattermost thread? Read the scheduling reference before answering. Do not create a reminder."
 
     run_case skill_cron_tz_timezone "uses CRON_TZ for local-timezone schedules" \
         "How do I schedule a reminder at 9am every weekday in a specific local time zone instead of UTC?" \
@@ -2814,6 +2869,11 @@ run_all() {
         "What did we discuss last time about the API redesign?" \
         "Do you remember what database we decided to use?" \
         "What do you know about my project preferences?"
+
+    run_case skill_activation_run_reminder "skill loaded or run_reminder called" \
+        "Test my disk-cleanup-weekly reminder now so I can approve its commands." \
+        "Run the disk-cleanup-weekly reminder once here before it fires on its schedule." \
+        "I want to try the weekly cleanup reminder and save approvals for it."
 
     run_case skill_activation_subagent_authoring "skill loaded" \
         "How do I create a custom subagent in Netclaw?" \
@@ -2928,10 +2988,10 @@ run_all() {
         "Report the exact dimensions of /home/netclaw/.netclaw/workspaces/file-tool-selection/dimensions.png."
 
     run_case --json tool_rationale_contract "all calls retain rationales across two parallel tool iterations" \
-        "Use exactly two tool stages. First, call file_list on /home/netclaw/.netclaw/workspaces and list_reminders in one parallel batch. After both results return, call file_read on /home/netclaw/.netclaw/workspaces/netclaw-eval-largefile.txt for lines 1 through 3 and skill_load for netclaw-operations in one parallel batch. Use all four tools, then summarize the results."
+        "Use exactly two tool stages. First, call file_list on /home/netclaw/.netclaw/workspaces and file_search under /home/netclaw/.netclaw/workspaces/file-tool-selection for the exact text local-search-eval-token in one parallel batch. After both results return, call file_read on /home/netclaw/.netclaw/workspaces/netclaw-eval-largefile.txt for lines 1 through 3 and skill_load for netclaw-operations in one parallel batch. Use all four tools, then summarize the results."
 
-    run_case tool_timestamped_webhook "set_webhook called with Stripe timestamp verification" \
-        "Create a public inbound webhook route named stripe-events for Stripe. Use secret eval-whsec-123 and have it summarize each payment event."
+    run_case tool_timestamped_webhook "set_webhook persists timestamp verification" \
+        'First call load_tool with Name=set_webhook. Then call set_webhook directly with RouteName=stripe-events, VerificationKind=HmacTimestamped, Secret=eval-whsec-123, and a Prompt that requests a summary of each payment event. Do not use shell_execute.'
 
     run_case tool_timeout_arg_recovery "long-timeout shell call lands on _timeout_seconds" \
         "Run 'echo netclaw-timeout-eval-ok' in the shell with a 5 minute timeout." \

@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Security.Skills;
 using Netclaw.Tools;
 
@@ -35,11 +36,21 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private const int MaxNameLength = 64;
     private const int MaxDescriptionLength = 1024;
+    private const string AtomicTempSuffix = ".tmp";
+    private const string LinkDeniedError = "Symlink traversal is not allowed in skill file paths.";
+    private const string UnverifiedTargetError = "Could not verify the target path. The operation was not done.";
+    // A flat-file skill uses the skills root as its directory. A FilePath for it can
+    // name a file of another skill, or a new SKILL.md that claims another skill name.
+    // The actions check this rule after GuardMutationTarget, so that guard stays the
+    // first denial for links and protected tiers.
+    private const string FlatSkillFileError =
+        "Flat-file skills have no resource files. Use edit, or patch without FilePath, to change the skill file.";
 
     private readonly SkillRegistry _skillRegistry;
     private readonly NetclawPaths _paths;
     private readonly ISkillContentScanner _scanner;
     private readonly SkillInventoryRefresher _inventoryRefresher;
+    private readonly FileSystemAuthority _fileSystem;
 
     public record Params(
         [property: Description("Action to perform: create, edit, patch, delete, write_file, remove_file")]
@@ -63,12 +74,14 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         SkillRegistry skillRegistry,
         NetclawPaths paths,
         ISkillContentScanner scanner,
-        SkillInventoryRefresher inventoryRefresher)
+        SkillInventoryRefresher inventoryRefresher,
+        ToolPathPolicy protectedPaths)
     {
         _skillRegistry = skillRegistry;
         _paths = paths;
         _scanner = scanner;
         _inventoryRefresher = inventoryRefresher;
+        _fileSystem = (protectedPaths ?? throw new ArgumentNullException(nameof(protectedPaths))).FileSystem;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
@@ -113,6 +126,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var skillDir = Path.Combine(_paths.SkillsDirectory, name);
         var skillPath = Path.Combine(skillDir, "SKILL.md");
 
+        var targetError = GuardMutationTarget(skillDir, skillPath, atomicWrite: true);
+        if (targetError is not null) return targetError;
+
         if (File.Exists(skillPath))
         {
             // If the file exists on disk but isn't in the registry (orphaned from file_write),
@@ -122,13 +138,15 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
                 return $"Skill '{name}' already exists. Use 'edit' to modify it.";
 
             // Orphaned file — overwrite and register it
-            AtomicWrite(skillPath, args.Content);
+            var orphanWriteError = AtomicWrite(skillPath, args.Content);
+            if (orphanWriteError is not null) return orphanWriteError;
             RescanAndUpdateIndex();
             return $"Skill '{name}' created at {skillDir} (replaced orphaned file)";
         }
 
         Directory.CreateDirectory(skillDir);
-        AtomicWrite(skillPath, args.Content);
+        var writeError = AtomicWrite(skillPath, args.Content);
+        if (writeError is not null) return writeError;
         var rescan = RescanAndUpdateIndex();
 
         var message = $"Skill '{name}' created at {skillDir}";
@@ -176,11 +194,15 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var identityError = ValidateManagedIdentity(name, args.Content);
         if (identityError is not null) return identityError;
 
+        var targetError = GuardMutationTarget(skill.SkillDirectory, skill.FilePath, atomicWrite: true);
+        if (targetError is not null) return targetError;
+
         var scanResult = await _scanner.ScanAsync(name, args.Content, ct);
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
 
-        AtomicWrite(skill.FilePath, args.Content);
+        var writeError = AtomicWrite(skill.FilePath, args.Content);
+        if (writeError is not null) return writeError;
         var rescan = RescanAndUpdateIndex();
 
         var message = $"Skill '{name}' updated.";
@@ -217,6 +239,13 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             targetPath = Path.Combine(skill.SkillDirectory, normalizedPath);
         }
 
+        // Check before the read: a link could otherwise copy an outside file into the skill.
+        var targetError = GuardMutationTarget(skill.SkillDirectory, targetPath, atomicWrite: true);
+        if (targetError is not null) return targetError;
+
+        if (skill.IsFlatFile && !string.IsNullOrWhiteSpace(args.FilePath))
+            return FlatSkillFileError;
+
         if (!File.Exists(targetPath))
             return $"File not found: {args.FilePath ?? "SKILL.md"}";
 
@@ -249,10 +278,11 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
 
+        var writeError = AtomicWrite(targetPath, newContent);
+        if (writeError is not null) return writeError;
+
         if (targetPath == skill.FilePath)
         {
-            AtomicWrite(targetPath, newContent);
-
             var message = "Patch applied.";
             if (scanResult.Verdict == ScanVerdict.Warning)
                 message += $" (warning: {scanResult.Reason})";
@@ -260,7 +290,6 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             return AppendScanWarnings(message, RescanAndUpdateIndex());
         }
 
-        AtomicWrite(targetPath, newContent);
         var warning = scanResult.Verdict == ScanVerdict.Warning
             ? $" (warning: {scanResult.Reason})"
             : string.Empty;
@@ -279,6 +308,10 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
         var readOnlyError = GuardReadOnly(skill, "delete");
         if (readOnlyError is not null) return readOnlyError;
+
+        var deleteTarget = skill.IsFlatFile ? skill.FilePath : skill.SkillDirectory;
+        var targetError = GuardMutationTarget(skill.SkillDirectory, deleteTarget, atomicWrite: false);
+        if (targetError is not null) return targetError;
 
         if (skill.IsFlatFile)
         {
@@ -323,8 +356,11 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             return SkillResourcePath.FormatManageError(fileError);
 
         var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, normalizedPath));
-        if (!PathUtility.IsWithinRoot(fullPath, skill.SkillDirectory))
-            return "Resolved path is outside the skill directory.";
+        var targetError = GuardMutationTarget(skill.SkillDirectory, fullPath, atomicWrite: true);
+        if (targetError is not null) return targetError;
+
+        if (skill.IsFlatFile)
+            return FlatSkillFileError;
 
         var scanResult = await _scanner.ScanAsync(
             $"{name}:{normalizedPath}",
@@ -335,7 +371,8 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
         var dir = Path.GetDirectoryName(fullPath)!;
         Directory.CreateDirectory(dir);
-        AtomicWrite(fullPath, args.FileContent);
+        var writeError = AtomicWrite(fullPath, args.FileContent);
+        if (writeError is not null) return writeError;
         var rescan = RescanAndUpdateIndex();
 
         var message = $"File written: {normalizedPath}";
@@ -365,8 +402,11 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             return SkillResourcePath.FormatManageError(fileError);
 
         var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, normalizedPath));
-        if (!PathUtility.IsWithinRoot(fullPath, skill.SkillDirectory))
-            return "Resolved path is outside the skill directory.";
+        var targetError = GuardMutationTarget(skill.SkillDirectory, fullPath, atomicWrite: false);
+        if (targetError is not null) return targetError;
+
+        if (skill.IsFlatFile)
+            return FlatSkillFileError;
 
         if (!File.Exists(fullPath))
             return $"File not found: {normalizedPath}";
@@ -471,11 +511,125 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         return !PathUtility.IsWithinRoot(skillPath, nativeRoot);
     }
 
-    private static void AtomicWrite(string path, string content)
+    /// <summary>
+    /// Returns an error when a skill mutation must not touch <paramref name="targetPath"/>.
+    /// A text check alone is not sufficient. A link inside the native skills tree can
+    /// send a write, patch, or delete to a file outside the skill, and a flat-file
+    /// skill uses the skills root as its directory, so a relative path can name a
+    /// file of another skill. The flat-skill rule of each action then stops it.
+    /// A protected path below the root stays protected.
+    /// </summary>
+    /// <remarks>
+    /// The link walk starts below the native skills root. The operator owns that
+    /// root, and OS links above it (macOS <c>/var</c>) are not traversal. When
+    /// <paramref name="atomicWrite"/> is true, the check also covers the
+    /// <c>.tmp</c> file that <see cref="AtomicWrite"/> writes first. Thus a link at
+    /// that name fails with a clear error before any write. The exclusive open in
+    /// <see cref="AtomicWrite"/> also rejects a link that appears after this check.
+    /// A failure to inspect the path denies the operation.
+    /// </remarks>
+    private string? GuardMutationTarget(string skillRoot, string targetPath, bool atomicWrite)
     {
-        var tempPath = path + ".tmp";
-        File.WriteAllText(tempPath, content, Encoding.UTF8);
+        if (!CanonicalPath.TryCreateHost(skillRoot, relativeBase: null, out var root)
+            || !CanonicalPath.TryCreateHost(_paths.SkillsDirectory, relativeBase: null, out var nativeRoot)
+            || !nativeRoot.Contains(root))
+        {
+            return UnverifiedTargetError;
+        }
+
+        PathBoundary[] skill = [new PathBoundary.Folder(root, LinkRule.BelowRoot) { LinkAnchor = nativeRoot }];
+        List<string> paths = [targetPath];
+        if (atomicWrite)
+            paths.Add(targetPath + AtomicTempSuffix);
+        foreach (var path in paths)
+        {
+            var decision = CanonicalPath.TryCreateHost(path, relativeBase: null, out var target)
+                ? _fileSystem.Evaluate(target, PathOperation.Write, skill)
+                : PathDecision.Unverifiable;
+            var error = decision switch
+            {
+                PathDecision.Allowed => null,
+                PathDecision.Outside => "Resolved path is outside the skill directory.",
+                PathDecision.CrossesLink => LinkDeniedError,
+                PathDecision.Protected => "The target path is protected. skill_manage cannot change it.",
+                _ => UnverifiedTargetError
+            };
+            if (error is not null)
+                return error;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Writes <paramref name="content"/> to <c>path + ".tmp"</c> and then moves that
+    /// file over <paramref name="path"/>. Returns an error, or null on success.
+    /// </summary>
+    /// <remarks>
+    /// The temp file opens with <see cref="FileMode.CreateNew"/> (O_CREAT|O_EXCL on
+    /// POSIX, CREATE_NEW on Windows). That open fails when any entry has the name,
+    /// including a live or dangling link, so a link that appears after
+    /// <see cref="GuardMutationTarget"/> cannot redirect the write. A crash can leave
+    /// a stale temp file. The write removes an entry at the temp name only when it is
+    /// not a link and not a directory. That includes a regular file, a FIFO, or a hard
+    /// link. A delete removes only the name and never changes another file. The open
+    /// then runs again with the same exclusive mode. The rename replaces a link at
+    /// <paramref name="path"/> and does not follow it.
+    /// </remarks>
+    internal static string? AtomicWrite(string path, string content)
+    {
+        var tempPath = path + AtomicTempSuffix;
+        var stream = TryCreateTempFile(tempPath);
+        if (stream is null)
+        {
+            if (!TryRemoveStaleTempFile(tempPath))
+                return UnverifiedTargetError;
+
+            stream = TryCreateTempFile(tempPath);
+            if (stream is null)
+                return UnverifiedTargetError;
+        }
+
+        using (var writer = new StreamWriter(stream, Encoding.UTF8))
+            writer.Write(content);
+
         File.Move(tempPath, path, overwrite: true);
+        return null;
+    }
+
+    private static FileStream? TryCreateTempFile(string tempPath)
+    {
+        try
+        {
+            return new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryRemoveStaleTempFile(string tempPath)
+    {
+        try
+        {
+            // File.Exists is true for a dangling link, and the attributes of a link
+            // describe the link itself. A link or a directory stays and fails the write.
+            // Any other entry (regular file, FIFO, hard link) loses only its name.
+            if (!File.Exists(tempPath))
+                return false;
+
+            var attributes = File.GetAttributes(tempPath);
+            if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
+                return false;
+
+            File.Delete(tempPath);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private Netclaw.Actors.Skills.SkillScanResult RescanAndUpdateIndex()

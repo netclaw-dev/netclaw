@@ -363,16 +363,17 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         Assert.NotNull(generated);
 
         var actor = await GetPairingActorAsync(app, ct);
-        var actorSystem = app.Services.GetRequiredService<ActorSystem>();
-        var restartProbe = actorSystem.ActorOf(Props.Create(() => new PairingRestartProbe(actor)));
-        var restart = await restartProbe.Ask<PairingRestartObservation>(
-            new PairingRestartProbe.Restart(generated.FormattedCode, ct),
-            ActorTestTimeout,
-            ct);
-        var failure = Assert.IsType<InvalidOperationException>(restart.Failure.Cause);
+        using var restartWatchdog = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        restartWatchdog.CancelAfter(ActorTestTimeout);
+        var restartToken = restartWatchdog.Token;
+        // Await the failure first. The next query reply proves that the actor restarted.
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => actor.Ask<PairingExchangeResult>(
+            new PairingActor.ExchangeCode(generated.FormattedCode, null!, restartToken),
+            Timeout.InfiniteTimeSpan,
+            restartToken));
         Assert.Equal("The pairing exchange failed unexpectedly.", failure.Message);
         Assert.DoesNotContain(generated.FormattedCode, failure.Message, StringComparison.Ordinal);
-        Assert.Null(restart.PendingExpiry.ExpiresAt);
+        Assert.Null(await GetPendingExpiryAsync(app, restartToken));
 
         var replay = await client.PostAsJsonAsync(
             "/api/local-control/v1/pairing-code",
@@ -907,39 +908,6 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         request.Headers.TryAddWithoutValidation("X-Forwarded-For", forwardedFor);
         return client.SendAsync(request, ct);
     }
-
-    private sealed class PairingRestartProbe : ReceiveActor
-    {
-        private readonly IActorRef _pairingActor;
-        private IActorRef? _replyTo;
-        private Status.Failure? _failure;
-
-        public PairingRestartProbe(IActorRef pairingActor)
-        {
-            _pairingActor = pairingActor;
-
-            Receive<Restart>(restart =>
-            {
-                _replyTo = Sender;
-                _pairingActor.Tell(
-                    new PairingActor.ExchangeCode(restart.Code, null!, restart.CancellationToken),
-                    Self);
-                _pairingActor.Tell(PairingActor.GetPendingExpiry.Instance, Self);
-            });
-            Receive<Status.Failure>(failure => _failure = failure);
-            Receive<PairingActor.PendingExpiry>(pending =>
-            {
-                _replyTo!.Tell(new PairingRestartObservation(_failure!, pending));
-                Context.Stop(Self);
-            });
-        }
-
-        internal sealed record Restart(string Code, CancellationToken CancellationToken);
-    }
-
-    private sealed record PairingRestartObservation(
-        Status.Failure Failure,
-        PairingActor.PendingExpiry PendingExpiry);
 
     private string CreateRejectedProof(string proofCase)
     {

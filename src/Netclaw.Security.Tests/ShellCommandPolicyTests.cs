@@ -18,14 +18,29 @@ public sealed class ShellCommandPolicyTests
     [InlineData("netclaw daemon stop")]
     [InlineData("netclaw daemon kill")]
     [InlineData("systemctl stop netclaw")]
-    [InlineData("kill -9 12345")]
+    [InlineData("kill -9 $(cat ~/.netclaw/daemon.pid)")]
     [InlineData("killall netclaw")]
     [InlineData("pkill -f netclaw")]
+    [InlineData("pkill netclawd")]
+    [InlineData("pkill -f \"netclaw daemon\"")]
     public void Denies_self_destructive_commands(string command)
     {
         var decision = _policy.Evaluate(command);
         Assert.False(decision.Allowed);
         Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
+    }
+
+    // Owner decision D2: a kill that does not name the Netclaw daemon is an
+    // ordinary command. The hard-deny list does not block it, so the approval
+    // gate asks for it, and a grant can cover it.
+    [Theory]
+    [InlineData("kill -9 12345")]
+    [InlineData("kill \"$pid\"")]
+    [InlineData("pkill -f 'http.server 8899'")]
+    [InlineData("killall jekyll")]
+    public void Kill_without_the_daemon_name_is_not_hard_denied(string command)
+    {
+        Assert.True(_policy.Evaluate(command).Allowed);
     }
 
     // ── Privilege escalation ──
@@ -257,7 +272,7 @@ public sealed class ShellCommandPolicyTests
 
     [Theory]
     [InlineData("Netclaw Daemon Stop")]
-    [InlineData("KILL -9 123")]
+    [InlineData("KILL -9 $(PGREP NETCLAWD)")]
     [InlineData("rm -r -f /")]
     [InlineData("rm --recursive --force /")]
     public void Denies_case_insensitive_and_flag_variants(string command)

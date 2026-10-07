@@ -14,7 +14,7 @@ public sealed class ToolCorrectionDeliveryTests
     private static readonly ToolCorrection.NativeToolSuggested Native = new(new ToolName("file_write"));
     private static readonly ToolCorrection.ManagedTemporaryDirectorySuggested Temporary = new(
         new ManagedTemporaryCorrectionTarget("/session/tmp", "/tmp"));
-    private static readonly ToolCorrection.ProjectDirectorySuggested Project = new("/project");
+    private static readonly ToolCorrection.ShellWorkingDirectorySuggested ShellDirectory = new("/project/sub");
     private static readonly ManagedTemporaryCallSemantics.ShellCall Call = new(
         ApprovalShell.Bash, "printf result > /tmp/result.txt", "/tmp", false, TimeSpan.FromSeconds(30));
 
@@ -47,11 +47,12 @@ public sealed class ToolCorrectionDeliveryTests
     }
 
     [Fact]
-    public void Project_advice_does_not_arm_a_shell_retry()
+    public void One_call_directory_advice_does_not_arm_a_shell_retry_or_change_the_project()
     {
-        var delivery = ToolCorrectionDelivery.Create(new ToolCorrectionCollection([Project]), Call);
+        var delivery = ToolCorrectionDelivery.Create(new ToolCorrectionCollection([ShellDirectory]), Call);
 
-        Assert.Equal(ToolRemediationCode.SetWorkingDirectory, delivery.Receipt.RemediationCode);
+        Assert.Equal(ToolRemediationCode.UseShellWorkingDirectory, delivery.Receipt.RemediationCode);
+        Assert.Contains(ShellDirectory.Directory, delivery.Content, StringComparison.Ordinal);
         Assert.Null(delivery.NativeTool);
         Assert.Null(delivery.ManagedTemporaryStateChange);
     }
@@ -80,14 +81,14 @@ public sealed class ToolCorrectionDeliveryTests
     {
         IReadOnlyList<ToolCorrection>[] invalidCombinations =
         [
-            [Project, Native],
-            [Native, Project],
-            [Project, Temporary],
-            [Temporary, Project],
-            [Native, Temporary, Project],
+            [ShellDirectory, Native],
+            [Native, ShellDirectory],
+            [ShellDirectory, Temporary],
+            [Temporary, ShellDirectory],
+            [Native, Temporary, ShellDirectory],
             [Native, new ToolCorrection.NativeToolSuggested(new ToolName("file_read"))],
             [Temporary, new ToolCorrection.ManagedTemporaryDirectorySuggested(new ManagedTemporaryCorrectionTarget("/other/tmp", "/tmp"))],
-            [Project, new ToolCorrection.ProjectDirectorySuggested("/other/project")]
+            [ShellDirectory, new ToolCorrection.ShellWorkingDirectorySuggested("/other/project")]
         ];
 
         foreach (var corrections in invalidCombinations)

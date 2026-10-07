@@ -54,7 +54,7 @@ public sealed class ServerFeedSkillSyncToolIntegrationTests : IDisposable
                 "ResourcePath", "references/proof.txt"),
             context,
             TestContext.Current.CancellationToken);
-        Assert.Equal("logical resource bytes: A\n", initialResource);
+        Assert.Equal("logical resource bytes: A\n", ContentAfterPathLine(initialResource));
 
         handler.UseRevision("B");
 
@@ -69,7 +69,15 @@ public sealed class ServerFeedSkillSyncToolIntegrationTests : IDisposable
             context,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("logical resource bytes: B\n", resource);
+        Assert.Equal("logical resource bytes: B\n", ContentAfterPathLine(resource));
+    }
+
+    private static string ContentAfterPathLine(string result)
+    {
+        var newline = result.IndexOf('\n', StringComparison.Ordinal);
+        Assert.True(newline > 0, result);
+        Assert.StartsWith("path: ", result, StringComparison.Ordinal);
+        return result[(newline + 1)..];
     }
 
     private ServerFeedSkillSyncService CreateService(RevisionFeedHandler handler)

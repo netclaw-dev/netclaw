@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Time.Testing;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
@@ -22,6 +23,7 @@ using Netclaw.Actors.Tests.Tools;
 using Netclaw.Actors.Tests.Memory;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using ShellSyntaxTree;
@@ -30,8 +32,27 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) : TestKit(output: output)
+public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) : TestKit(output: output), IAsyncDisposable
 {
+    // The native-tool correction test makes the pipeline create a managed
+    // temporary directory inside its session directory.
+    private readonly DisposableTempDir _temp = new();
+
+    // TestKit stops the actor system only after AfterAllAsync returns. An actor can
+    // still write into the directory until then. Delete the directory after TestKit
+    // has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        try
+        {
+            await base.DisposeAsync();
+        }
+        finally
+        {
+            _temp.Dispose();
+        }
+    }
+
     private static readonly string ManagedTemporarySessionDirectory = Path.GetFullPath(
         Path.Combine(Path.GetTempPath(), "netclaw-test-sessions", "example"));
     private static readonly string TestManagedTemporaryDirectory = Path.Combine(
@@ -138,7 +159,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             TimeSpan.FromSeconds(2),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        approvalChannel.Complete(approvalRequest.CallId, ApprovalDecision.ApprovedOnce);
+        approvalChannel.Complete(approvalRequest.CallId, ConsentAnswer.Once.Instance);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
@@ -147,7 +168,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         Assert.Single(completed.ToolResults);
-        Assert.Equal("approved-and-ran", completed.ToolResults[0].Content);
+        Assert.Equal("approved-and-ran\n[approval: once]", completed.ToolResults[0].Content);
         Assert.True(AuthorizationAttemptId.TryParse(approvalRequest.AuthorizationAttemptId, out var attemptId));
         Assert.Equal(attemptId, completed.AuthorizationAttemptIds["call-1"]);
         Assert.Equal([attemptId, attemptId], executor.AttemptIds);
@@ -187,7 +208,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
             TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        approvalChannel.Complete(approvalRequest.CallId, ApprovalDecision.ApprovedAlways);
+        approvalChannel.Complete(approvalRequest.CallId, new ConsentAnswer.Grant(GrantScopeKind.Folder));
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
@@ -195,116 +216,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         var result = Assert.Single(completed.ToolResults);
-        Assert.Equal("ran-with-bypass", result.Content);
-    }
-
-    [Fact]
-    public async Task Source_less_approval_required_turn_fails_closed_without_prompt()
-    {
-        var executor = new ApprovalThenSuccessExecutor();
-        var approvalChannel = new ApprovalChannel();
-        var probe = CreateTestProbe("source-less-approval-probe");
-        var approvals = new List<ToolInteractionRequest>();
-
-        var toolCalls = new List<FunctionCallContent>
-        {
-            new("call-no-source", "shell_execute", new Dictionary<string, object?>
-            {
-                ["command"] = "git push origin dev"
-            })
-        };
-
-        var pipelineTask = new SessionToolPipelineTestFixture(
-                executor, toolCalls, new SessionId("D1/source-less-approval-test"), probe.Ref)
-            .WithTimeout(TimeSpan.FromSeconds(1))
-            .WithApprovals(
-                approvalChannel,
-                request => approvals.Add(request.Request),
-                Timeout.InfiniteTimeSpan)
-            .ExecuteAsync(TestContext.Current.CancellationToken);
-
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(3),
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-
-        var result = Assert.Single(completed.ToolResults);
-        Assert.Contains("no interactive approval requester is available", result.Content);
-        Assert.Empty(approvals);
-        Assert.True(AuthorizationAttemptId.TryParse(
-            completed.AuthorizationAttemptIds["call-no-source"].Value,
-            out _));
-    }
-
-    [Fact]
-    public async Task Undeclared_project_scope_returns_agent_correction_without_user_prompt()
-    {
-        var directory = Path.GetFullPath(AppContext.BaseDirectory);
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                [ShellTool.ToolName] = ToolApprovalMode.Approval
-            }
-        };
-        var environment = TestShellEnvironment.Current;
-        var command = environment.Grammar == ShellGrammar.Bash ? "pwd" : "Get-Location";
-        var shell = environment.Grammar == ShellGrammar.Bash ? ApprovalShell.Bash : ApprovalShell.PowerShell;
-        var paths = new NetclawPaths(directory, directory);
-        var registry = new ToolRegistry();
-        var shellTool = new FakeNetclawTool(ShellTool.ToolName, "unexpected execution");
-        registry.Register(shellTool);
-        registry.Register(new SetWorkingDirectoryTool(config, paths, new ToolPathPolicy(environment, [])));
-        var policy = new ToolAccessPolicy(paths, config,
-            new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
-                ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
-            new ShellCommandPolicy(environment), new ToolPathPolicy(environment, []),
-            safeVerbs: SafeVerbList.FromVerbs(shell, [command]));
-        var executor = new DispatchingToolExecutor(registry, policy);
-        var probe = CreateTestProbe("project-scope-correction-probe");
-        var approvals = new List<ToolInteractionRequest>();
-        var sessionId = new SessionId("D1/project-scope-correction");
-        var toolCalls = new List<FunctionCallContent>
-        {
-            new("call-1", "shell_execute", new Dictionary<string, object?>
-            {
-                ["Command"] = command,
-                ["WorkingDirectory"] = directory,
-                ["_rationale"] = "Inspect the project directory."
-            })
-        };
-
-        var pipelineTask = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
-            .WithTurnContext(InteractiveTurnContext(sessionId))
-            .WithSetWorkingDirectoryAvailable()
-            .WithApprovals(
-                new ApprovalChannel(),
-                request => approvals.Add(request.Request),
-                Timeout.InfiniteTimeSpan)
-            .ExecuteAsync(TestContext.Current.CancellationToken);
-
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(3),
-            cancellationToken: TestContext.Current.CancellationToken);
-        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-
-        var result = Assert.Single(completed.ToolResults);
-        Assert.Equal(
-            "Tool execution deferred: working_directory_not_declared\n" +
-            $"Project directory: '{directory}'.\n" +
-            "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call.",
-            result.Content);
-        Assert.Equal(
-            ToolRemediationCode.SetWorkingDirectory,
-            Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts["call-1"]).RemediationCode);
-        Assert.Empty(approvals);
-        Assert.False(shellTool.WasCalled);
-        Assert.Empty(completed.ManagedTemporaryCorrectionChanges);
-        Assert.True(AuthorizationAttemptId.TryParse(
-            completed.AuthorizationAttemptIds["call-1"].Value,
-            out _));
+        Assert.Equal("ran-with-bypass\n[approval: always in this folder]", result.Content);
     }
 
     [Theory]
@@ -410,6 +322,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
                 [call],
                 new SessionId("D1/native-temporary-collection"),
                 probe.Ref)
+            .InSessionDirectory(_temp.Path)
             .WithTurnContext(InteractiveTurnContext(new SessionId("D1/native-temporary-collection")))
             .WithApprovals(new ApprovalChannel(), _ => throw new InvalidOperationException("The collection must not prompt."), Timeout.InfiniteTimeSpan)
             .ExecuteAsync(TestContext.Current.CancellationToken);
@@ -422,7 +335,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var result = Assert.Single(completed.ToolResults);
         Assert.Equal(
             "Shell execution stopped because 'file_write' is a native Netclaw tool.\n" +
-            $"Managed temporary directory: '{Path.Combine(Path.GetTempPath(), "tmp", "parent")}'.\n" +
+            $"Managed temporary directory: '{Path.Combine(_temp.Path, "tmp", "parent")}'.\n" +
             "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
             result.Content);
         Assert.Equal(ToolRemediationCode.UseNativeTool, Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts["call-native-temporary-collection"]).RemediationCode);
@@ -659,7 +572,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             TestContext.Current.CancellationToken);
         Assert.Equal([ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
             request.Options.Select(option => option.Key.Value));
-        approvalChannel.Complete(request.CallId, ApprovalDecision.Denied);
+        approvalChannel.Complete(request.CallId, ConsentAnswer.Denied);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
@@ -830,7 +743,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await AwaitAssertAsync(() =>
         {
             var firstRequest = Assert.Single(approvals);
-            approvalChannel.Complete(firstRequest.CallId, ApprovalDecision.ApprovedOnce);
+            approvalChannel.Complete(firstRequest.CallId, ConsentAnswer.Once.Instance);
         }, duration: TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
@@ -840,7 +753,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         Assert.Single(completed.ToolResults);
-        Assert.Equal("approved-and-ran", completed.ToolResults[0].Content);
+        Assert.Equal("approved-and-ran\n[approval: once]", completed.ToolResults[0].Content);
         Assert.Single(approvals);
     }
 
@@ -881,7 +794,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         Assert.Equal(cwd, approvalRequest.Cwd);
 
-        approvalChannel.Complete(approvalRequest.CallId, ApprovalDecision.ApprovedAlways);
+        approvalChannel.Complete(approvalRequest.CallId, new ConsentAnswer.Grant(GrantScopeKind.Folder));
         await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
@@ -920,12 +833,40 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         await executionCts.CancelAsync();
 
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken));
+        Assert.True(pipelineTask.IsCanceled);
+        Assert.False(approvalChannel.Complete(approvalRequest.CallId, ConsentAnswer.Once.Instance));
+        Assert.False(probe.HasMessages);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Approval_dispatch_failure_remains_a_failure_without_caller_cancellation(bool isTimeout)
+    {
+        var probe = CreateTestProbe("approval-dispatch-failure");
+        var sessionId = new SessionId("D1/approval-dispatch-failure");
+        Exception failure = isTimeout
+            ? new TimeoutException("Approval dispatch timed out.")
+            : new OperationCanceledException("Approval dispatch canceled independently.");
+        using var executionCts = new CancellationTokenSource();
+
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                new ApprovalThenSuccessExecutor(),
+                [new FunctionCallContent("call-dispatch", "shell_execute",
+                    new Dictionary<string, object?> { ["command"] = "git status" })],
+                sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .WithApprovals(new ApprovalChannel(), _ => throw failure, Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(executionCts.Token);
+
         var failed = await probe.ExpectMsgAsync<ToolExecutionFailed>(
-            TimeSpan.FromSeconds(3),
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.IsType<TimeoutException>(failed.Cause);
-        Assert.False(approvalChannel.Complete(approvalRequest.CallId, ApprovalDecision.ApprovedOnce));
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Same(failure, failed.Cause);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.False(pipelineTask.IsCanceled);
+        await executionCts.CancelAsync();
     }
 
     [Fact]
@@ -1057,10 +998,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     [Fact]
     public async Task Self_monitoring_tool_is_bounded_only_by_caller_cancellation()
     {
-        // A self-monitoring tool that never completes is ended ONLY by caller (turn/
-        // user) cancellation — no parent watchdog exists. The cancel must surface as a
-        // failed batch (ToolExecutionFailed), NOT as a tool-result error fed back to the
-        // model as if the sub-agent had failed.
+        // Parent cancellation stops the task without a synthetic tool result or timeout.
         var executor = new SelfMonitoringStreamingExecutor();
         var probe = CreateTestProbe("self-monitoring-cancel-probe");
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -1078,11 +1016,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         cts.Cancel();
 
-        var failed = await probe.ExpectMsgAsync<ToolExecutionFailed>(
-            TimeSpan.FromSeconds(3),
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.IsType<TimeoutException>(failed.Cause);
-        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken));
+        Assert.True(pipelineTask.IsCanceled);
+        Assert.False(probe.HasMessages);
     }
 
     [Fact]
@@ -1567,8 +1504,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             // approved scope, not just ApprovedOnce.
             var approval = context?.Approval;
             if (approval is not null
-                && string.Equals(approval.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal)
-                && Patterns.All(approval.OneTimeApprovedPatterns.Contains))
+                && approval.OneTimeConsent is { } consent
+                && string.Equals(consent.ToolName, toolCall.Name, StringComparison.Ordinal)
+                && Patterns.All(consent.Keys.Contains))
             {
                 return Task.FromResult("ran-with-bypass");
             }

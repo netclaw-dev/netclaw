@@ -115,6 +115,29 @@ public sealed class DiscordApprovalPromptBuilderTests
     }
 
     [Fact]
+    public void Repository_prompt_renders_six_choices_and_a_repository_resolution()
+    {
+        var request = V2Request(
+            "./scripts/bump-version.sh", ["./scripts/bump-version.sh"], "/work/main",
+            [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveRepositoryKey, ApprovalOptionKeys.ApproveRepositoryLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveEverywhereKey, ApprovalOptionKeys.ApproveEverywhereLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]);
+
+        var (_, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+        var resolved = DiscordApprovalPromptBuilder.BuildResolvedPromptText(
+            request, ApprovalOptionKeys.ApproveRepository, "user-42");
+
+        Assert.Equal(6, buttons.Count);
+        Assert.Equal(ApprovalOptionKeys.ApproveRepositoryLabel, buttons[3].Label);
+        Assert.Contains("Saved: ./scripts/bump-version.sh in this repository", resolved);
+    }
+
+    [Fact]
     public void BuildButtonValue_roundtrips_with_TryParseButtonValue()
     {
         var request = new ToolInteractionRequest
@@ -509,5 +532,28 @@ public sealed class DiscordApprovalPromptBuilderTests
 
         Assert.True(textPrompt.Length < 2001, $"Text prompt length {textPrompt.Length} exceeded Discord's 2000-char cap");
         Assert.True(buttonPromptText.Length < 2001, $"Button prompt length {buttonPromptText.Length} exceeded Discord's 2000-char cap");
+    }
+
+    // A candidate verb can be the full text of one command. The header and the
+    // verb list must bound it, or Discord rejects the message.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Long_heredoc_command_builds_a_postable_prompt(bool withSiblingVerbs)
+    {
+        var request = LongApprovalCommand.Request(withSiblingVerbs);
+
+        var textPrompt = DiscordApprovalPromptBuilder.BuildTextPrompt(request);
+        var (buttonPrompt, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+        var resolved = DiscordApprovalPromptBuilder.BuildResolvedPromptText(request, ApprovalOptionKeys.ApproveOnce, "U123");
+
+        Assert.All([textPrompt, buttonPrompt, resolved], message => Assert.InRange(message.Length, 1, 2000));
+        Assert.Equal(request.Options.Select(static o => o.Label), buttons.Select(static b => b.Label));
+        Assert.Contains("B) Deny", textPrompt, StringComparison.Ordinal);
+        Assert.Contains("You can also reply with `A`, `B`", buttonPrompt, StringComparison.Ordinal);
+        Assert.Contains(withSiblingVerbs ? "**Approve in /home/user/repos/skill-server?**" : "**Approve gh api repos/netclaw-dev", buttonPrompt, StringComparison.Ordinal);
+        Assert.Contains("characters hidden", buttonPrompt, StringComparison.Ordinal);
+        if (withSiblingVerbs)
+            Assert.Contains("• `git push`", buttonPrompt, StringComparison.Ordinal);
     }
 }

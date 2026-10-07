@@ -7,8 +7,10 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
+using Netclaw.Tools.Authorization.Consent;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -51,7 +53,7 @@ public partial class DispatchingToolExecutorTests
     {
         using var directory = new DisposableTempDir();
         // macOS temporary roots contain symlinks. Stored-grant tests need a physical path, not an exact-approval path.
-        ToolPathPolicy.TryResolveSymlinksInPath(directory.Path, out var sessionDirectory);
+        FileSystemAuthority.TryResolveLinks(directory.Path, out var sessionDirectory);
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var checks = 0;
         var service = new FixedShellApprovalService(request =>
@@ -93,7 +95,7 @@ public partial class DispatchingToolExecutorTests
     public async Task Launch_retains_exact_arguments_and_starts_once()
     {
         using var directory = new DisposableTempDir();
-        ToolPathPolicy.TryResolveSymlinksInPath(directory.Path, out var sessionDirectory);
+        FileSystemAuthority.TryResolveLinks(directory.Path, out var sessionDirectory);
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var service = new FixedShellApprovalService(request => LaunchGrantResult(request, true));
         var executor = new DispatchingToolExecutor(registry, policy, service);
@@ -120,7 +122,7 @@ public partial class DispatchingToolExecutorTests
     public async Task Launch_cancellation_after_authorization_creates_no_process()
     {
         using var directory = new DisposableTempDir();
-        ToolPathPolicy.TryResolveSymlinksInPath(directory.Path, out var sessionDirectory);
+        FileSystemAuthority.TryResolveLinks(directory.Path, out var sessionDirectory);
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var executor = new DispatchingToolExecutor(registry, policy, GrantEveryShellCandidate());
         var context = TestToolExecutionContext.CreateBound("launch/cancel", sessionDirectory,
@@ -148,9 +150,9 @@ public partial class DispatchingToolExecutorTests
             ToolInput.Create("Command", "echo approved > once.txt"));
         var decision = await executor.EvaluateAuthorizationAsync(call, context, TestContext.Current.CancellationToken);
         var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        context.Approval.SeedOneTimeApproval(ShellTool.ToolName, OneTimeApprovalKeys.Create(approval));
+        context.Approval.SeedOneTimeConsent(new OneTimeConsent(ShellTool.ToolName, OneTimeApprovalKeys.Create(approval)));
         var launch = await executor.PrepareShellLaunchAsync(call, context, TestContext.Current.CancellationToken);
-        context.Approval.ClearOneTimeApproval();
+        context.Approval.ClearOneTimeConsent();
 
         using var process = await launch.StartAsync(TestContext.Current.CancellationToken);
         process.StandardInput.Close();
@@ -158,7 +160,7 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(0, process.ExitCode);
         Assert.Equal("approved", (await File.ReadAllTextAsync(Path.Combine(directory.Path, "once.txt"), TestContext.Current.CancellationToken)).Trim());
-        Assert.Null(context.Approval.OneTimeApprovedToolName);
+        Assert.Null(context.Approval.OneTimeConsent);
     }
 
     public static bool SupportsLaunchLinks => !OperatingSystem.IsWindows();
@@ -197,10 +199,12 @@ public partial class DispatchingToolExecutorTests
     }
 
     private static ShellApprovalMatchResult LaunchGrantResult(ShellApprovalMatchRequest request, bool approved)
-        => new(new PersistentGrantStoreStatus.Ready(),
-            request.Candidates.Select(candidate => approved
-                ? new ShellGrantCandidateMatch(candidate.CandidateId,
-                    new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat"),
-                    ShellCoverageKind.Session, [])
-                : new ShellGrantCandidateMatch(candidate.CandidateId, null, null, [])).ToArray());
+        => ShellApprovalMatchResult.Create(
+            request.Candidates,
+            persistentStoreFailure: null,
+            request.Candidates
+                .Select(candidate => approved
+                    ? ShellGrantCandidateResult.Session(candidate)
+                    : ShellGrantCandidateResult.Uncovered(candidate))
+                .ToArray());
 }

@@ -5,63 +5,10 @@
 // -----------------------------------------------------------------------
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
-
-/// <summary>
-/// Approval decision from the user in response to a <see cref="SessionProtocol.ToolInteractionRequest"/>.
-/// </summary>
-public enum ApprovalDecision
-{
-    /// <summary>Approved for the current blocked tool call retry only.</summary>
-    ApprovedOnce,
-
-    /// <summary>Approved for the current session/thread only.</summary>
-    ApprovedSession,
-
-    /// <summary>
-    /// Approved persistently with folder scope: writes a
-    /// <c>(verb, prompt's cwd)</c> entry to <c>tool-approvals.json</c>.
-    /// Future invocations of the same verb under the same directory tree
-    /// auto-approve; the same verb in a different cwd still prompts.
-    /// </summary>
-    ApprovedAlways,
-
-    /// <summary>
-    /// Approved persistently as a global wildcard: writes a
-    /// <c>(verb, null)</c> entry to <c>tool-approvals.json</c>. Future
-    /// invocations of the same verb in any cwd auto-approve. Used for
-    /// scheduled/unattended tasks where the cwd will vary across firings.
-    /// </summary>
-    ApprovedEverywhere,
-
-    /// <summary>User denied the request.</summary>
-    Denied,
-
-    /// <summary>No response received within the timeout window.</summary>
-    TimedOut
-}
-
-/// <summary>
-/// Extensions over <see cref="ApprovalDecision"/>.
-/// </summary>
-public static class ApprovalDecisionExtensions
-{
-    /// <summary>
-    /// True when the decision grants execution (any approve scope) rather than
-    /// Denied or TimedOut. Every "the user approved" branch — the live pipeline
-    /// retry, the cold re-drive plan, and the sub-agent loop — must classify the
-    /// approve scopes identically, so route them through this one predicate
-    /// instead of duplicating the scope list (a missed site reintroduces the
-    /// "approved command still fails" bug for the new scope).
-    /// </summary>
-    public static bool IsApprovalGrant(this ApprovalDecision decision)
-        => decision is ApprovalDecision.ApprovedOnce
-            or ApprovalDecision.ApprovedSession
-            or ApprovalDecision.ApprovedAlways
-            or ApprovalDecision.ApprovedEverywhere;
-}
 
 /// <summary>
 /// Bridge between the tool execution pipeline (thread pool) and the session actor
@@ -71,11 +18,11 @@ public static class ApprovalDecisionExtensions
 internal interface IApprovalChannel
 {
     /// <summary>
-    /// Waits for an approval decision for the given tool call. Blocks the calling
-    /// task (on thread pool) without consuming a thread. Returns <see cref="ApprovalDecision.TimedOut"/>
+    /// Waits for the operator's answer for the given tool call. Blocks the calling
+    /// task (on thread pool) without consuming a thread. Returns a timeout refusal
     /// if no decision arrives within <paramref name="timeout"/>.
     /// </summary>
-    Task<ApprovalDecision> WaitForApprovalAsync(ToolCallId callId, TimeSpan timeout, CancellationToken ct);
+    Task<ConsentAnswer> WaitForApprovalAsync(ToolCallId callId, TimeSpan timeout, CancellationToken ct);
 
     /// <summary>
     /// Atomically claims a pending approval request so no later response can use
@@ -88,7 +35,7 @@ internal interface IApprovalChannel
     /// Completes a pending approval request. Called by tests and simple callers
     /// that do not need a separate claim/persist/complete sequence.
     /// </summary>
-    bool Complete(ToolCallId callId, ApprovalDecision decision);
+    bool Complete(ToolCallId callId, ConsentAnswer answer);
 }
 
 /// <summary>
@@ -98,13 +45,13 @@ internal interface IApprovalChannel
 /// </summary>
 internal sealed class ClaimedApprovalWait
 {
-    private readonly TaskCompletionSource<ApprovalDecision> _completion;
+    private readonly TaskCompletionSource<ConsentAnswer> _completion;
 
-    public ClaimedApprovalWait(TaskCompletionSource<ApprovalDecision> completion)
+    public ClaimedApprovalWait(TaskCompletionSource<ConsentAnswer> completion)
         => _completion = completion;
 
-    public bool Complete(ApprovalDecision decision)
-        => _completion.TrySetResult(decision);
+    public bool Complete(ConsentAnswer answer)
+        => _completion.TrySetResult(answer);
 }
 
 /// <summary>
@@ -113,11 +60,11 @@ internal sealed class ClaimedApprovalWait
 /// </summary>
 internal sealed class ApprovalChannel : IApprovalChannel
 {
-    private readonly ConcurrentDictionary<ToolCallId, TaskCompletionSource<ApprovalDecision>> _pending = new();
+    private readonly ConcurrentDictionary<ToolCallId, TaskCompletionSource<ConsentAnswer>> _pending = new();
 
-    public async Task<ApprovalDecision> WaitForApprovalAsync(ToolCallId callId, TimeSpan timeout, CancellationToken ct)
+    public async Task<ConsentAnswer> WaitForApprovalAsync(ToolCallId callId, TimeSpan timeout, CancellationToken ct)
     {
-        var tcs = new TaskCompletionSource<ApprovalDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<ConsentAnswer>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_pending.TryAdd(callId, tcs))
             throw new InvalidOperationException($"Approval wait for call '{callId}' is already pending.");
 
@@ -135,7 +82,7 @@ internal sealed class ApprovalChannel : IApprovalChannel
             if (completed == cancellationTask)
                 throw new OperationCanceledException(ct);
 
-            return ApprovalDecision.TimedOut;
+            return ConsentAnswer.TimedOut;
         }
         finally
         {
@@ -155,12 +102,12 @@ internal sealed class ApprovalChannel : IApprovalChannel
         return false;
     }
 
-    public bool Complete(ToolCallId callId, ApprovalDecision decision)
-        => TryClaim(callId, out var wait) && wait.Complete(decision);
+    public bool Complete(ToolCallId callId, ConsentAnswer answer)
+        => TryClaim(callId, out var wait) && wait.Complete(answer);
 
-    private bool TryRemoveExact(ToolCallId callId, TaskCompletionSource<ApprovalDecision> tcs)
+    private bool TryRemoveExact(ToolCallId callId, TaskCompletionSource<ConsentAnswer> tcs)
     {
-        var pair = new KeyValuePair<ToolCallId, TaskCompletionSource<ApprovalDecision>>(callId, tcs);
-        return ((ICollection<KeyValuePair<ToolCallId, TaskCompletionSource<ApprovalDecision>>>)_pending).Remove(pair);
+        var pair = new KeyValuePair<ToolCallId, TaskCompletionSource<ConsentAnswer>>(callId, tcs);
+        return ((ICollection<KeyValuePair<ToolCallId, TaskCompletionSource<ConsentAnswer>>>)_pending).Remove(pair);
     }
 }

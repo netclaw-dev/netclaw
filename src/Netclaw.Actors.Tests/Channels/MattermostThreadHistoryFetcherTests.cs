@@ -11,14 +11,25 @@ using Netclaw.Channels.Mattermost.Transport;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
 
-public sealed class MattermostThreadHistoryFetcherTests
+public sealed class MattermostThreadHistoryFetcherTests : IAsyncLifetime
 {
     private const string ServerUrl = "https://mattermost.example.com";
     private const string BotUserId = "bot-user-id";
+    private readonly List<TestSessionTempDirectory> _tempDirs = [];
+
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var dir in _tempDirs)
+            await dir.DisposeAsync();
+        _tempDirs.Clear();
+    }
 
     [Fact]
     public async Task Includes_bot_authored_root_for_proactive_post_bootstrap()
@@ -239,7 +250,7 @@ public sealed class MattermostThreadHistoryFetcherTests
               && t.Text.Contains("content scanning", StringComparison.OrdinalIgnoreCase));
     }
 
-    private static MattermostThreadHistoryFetcher CreateFetcher(
+    private MattermostThreadHistoryFetcher CreateFetcher(
         MattermostThreadHistoryFetcher.MessageFetcher? messageFetcher = null,
         MattermostThreadHistoryFetcher.FileDownloader? fileDownloader = null,
         IContentScanner? scanner = null,
@@ -248,7 +259,10 @@ public sealed class MattermostThreadHistoryFetcherTests
         MattermostChannelOptions? options = null,
         NetclawPaths? paths = null)
     {
-        var testPaths = paths ?? TestMattermostGatewayDeps.NewTestPaths();
+        var owningDir = paths is null ? TestMattermostGatewayDeps.NewTestPaths() : null;
+        if (owningDir is not null)
+            _tempDirs.Add(owningDir);
+        var testPaths = paths ?? owningDir!.Paths;
         return new MattermostThreadHistoryFetcher(
             messageFetcher ?? ((_, _) => Task.FromResult<IReadOnlyList<MattermostThreadHistoryFetcher.HistoricalMessage>>([])),
             fileDownloader ?? ((_, _, _, _) => Task.FromResult<(string FilePath, long BytesWritten)?>(null)),

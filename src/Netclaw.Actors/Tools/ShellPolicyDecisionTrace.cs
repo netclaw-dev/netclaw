@@ -4,8 +4,10 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
 
 namespace Netclaw.Actors.Tools;
 
@@ -55,6 +57,24 @@ internal enum ShellPolicyTraceReason
     TraceLimitReached = 21,
     PolicyDenied = 22,
     AgentCorrection = 23,
+    PersistentRepositoryGrant = 24,
+    AssignmentMismatch = 25,
+}
+
+/// <summary>
+/// The diagnostic name of a candidate's coverage in a trace row. Logs and the
+/// evidence fixtures use these names, so they must not change. The decision
+/// itself uses <see cref="Coverage"/>; only the trace translates it.
+/// </summary>
+internal enum ShellPolicyTraceCoverage
+{
+    Uncovered = 0,
+    OneTime = 1,
+    Session = 2,
+    PersistentGlobal = 3,
+    PersistentFolder = 4,
+    ReviewedSafePolicy = 5,
+    PersistentRepository = 6,
 }
 
 internal enum ShellScopeRelation
@@ -67,6 +87,7 @@ internal enum ShellScopeRelation
     OutsideGrantRoot = 5,
     SymlinkBoundary = 6,
     UnderIntentRoot = 7,
+    SameRepository = 8,
 }
 
 internal sealed record ShellPolicyTraceRow(
@@ -75,7 +96,7 @@ internal sealed record ShellPolicyTraceRow(
     ShellPolicyTraceReason Reason,
     ShellPolicyCandidateId? CandidateId,
     string? ExecutableBasename,
-    ShellCoverageKind? Coverage,
+    ShellPolicyTraceCoverage? Coverage,
     ShellScopeRelation ScopeRelation,
     DateTimeOffset? GrantTimestamp);
 
@@ -100,23 +121,17 @@ internal sealed class ShellPolicyDecisionTraceBuilder
 
     internal void AddActorEvidence(
         ShellPolicyCandidate candidate,
-        ShellGrantCandidateMatch actorMatch)
+        ShellGrantCandidateResult actorMatch)
     {
-        if (actorMatch.Match is not null && actorMatch.GrantCoverage is { } coverage)
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(actorMatch);
+        if (actorMatch.Grant is { } grant)
         {
-            AddDetail(new ShellPolicyTraceRow(
-                ShellPolicyTraceStage.StoredGrantMatch,
-                ShellPolicyTraceOutcome.Covered,
-                ToTraceReason(coverage),
-                candidate.Id,
-                GetExecutableBasename(candidate.Candidate),
-                coverage,
-                ToScopeRelation(coverage),
-                actorMatch.GrantCreatedAt));
+            AddCoverage(candidate, grant);
             return;
         }
 
-        var nearMiss = actorMatch.NearMisses.FirstOrDefault();
+        var nearMiss = actorMatch.NearMiss;
         AddDetail(new ShellPolicyTraceRow(
             ShellPolicyTraceStage.StoredGrantMatch,
             ShellPolicyTraceOutcome.Uncovered,
@@ -124,10 +139,8 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             candidate.Id,
             GetExecutableBasename(candidate.Candidate),
             nearMiss is null
-                ? ShellCoverageKind.Uncovered
-                : nearMiss.Grant.Directory is null
-                    ? ShellCoverageKind.PersistentGlobal
-                    : ShellCoverageKind.PersistentFolder,
+                ? ShellPolicyTraceCoverage.Uncovered
+                : ToTraceCoverage(GrantScope.OfStoredEntry(nearMiss.Grant)),
             nearMiss is null
                 ? ShellScopeRelation.None
                 : ToScopeRelation(nearMiss),
@@ -135,48 +148,54 @@ internal sealed class ShellPolicyDecisionTraceBuilder
     }
 
     internal void AddCoverage(
-        ShellPolicyCoverageSource source,
         ShellPolicyCandidate candidate,
-        DateTimeOffset? grantTimestamp = null)
+        Coverage coverage)
     {
-        var (stage, coverage, reason, scope) = source switch
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(coverage);
+        var (stage, displayCoverage, reason, scope) = coverage switch
         {
-            ShellPolicyCoverageSource.OneTime => (
+            Coverage.OneTime => (
                 ShellPolicyTraceStage.OneTimeApproval,
-                ShellCoverageKind.OneTime,
+                ShellPolicyTraceCoverage.OneTime,
                 ShellPolicyTraceReason.OneTimeGrant,
                 ShellScopeRelation.None),
-            ShellPolicyCoverageSource.Session => (
+            Coverage.Stored { Scope: GrantScope.Session } => (
                 ShellPolicyTraceStage.StoredGrantMatch,
-                ShellCoverageKind.Session,
+                ShellPolicyTraceCoverage.Session,
                 ShellPolicyTraceReason.SessionGrant,
                 ShellScopeRelation.ThisChat),
-            ShellPolicyCoverageSource.PersistentGlobal => (
+            Coverage.Stored { Scope: GrantScope.Everywhere } => (
                 ShellPolicyTraceStage.StoredGrantMatch,
-                ShellCoverageKind.PersistentGlobal,
+                ShellPolicyTraceCoverage.PersistentGlobal,
                 ShellPolicyTraceReason.PersistentGlobalGrant,
                 ShellScopeRelation.Global),
-            ShellPolicyCoverageSource.PersistentFolder => (
+            Coverage.Stored { Scope: GrantScope.Folder } => (
                 ShellPolicyTraceStage.StoredGrantMatch,
-                ShellCoverageKind.PersistentFolder,
+                ShellPolicyTraceCoverage.PersistentFolder,
                 ShellPolicyTraceReason.PersistentFolderGrant,
                 ShellScopeRelation.UnderGrantRoot),
-            ShellPolicyCoverageSource.ReviewedSafeReal => (
+            Coverage.Stored { Scope: GrantScope.Repository } => (
+                ShellPolicyTraceStage.StoredGrantMatch,
+                ShellPolicyTraceCoverage.PersistentRepository,
+                ShellPolicyTraceReason.PersistentRepositoryGrant,
+                ShellScopeRelation.SameRepository),
+            Coverage.ReviewedSafe { Root: ReviewedSafeRoot.Real } => (
                 ShellPolicyTraceStage.ReviewedSafePolicy,
-                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyTraceCoverage.ReviewedSafePolicy,
                 ShellPolicyTraceReason.ReviewedSafePhrase,
                 ShellScopeRelation.UnderRealRoot),
-            ShellPolicyCoverageSource.ReviewedSafeIntent => (
+            Coverage.ReviewedSafe { Root: ReviewedSafeRoot.Intent } => (
                 ShellPolicyTraceStage.ReviewedSafePolicy,
-                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyTraceCoverage.ReviewedSafePolicy,
                 ShellPolicyTraceReason.ReviewedSafePhrase,
                 ShellScopeRelation.UnderIntentRoot),
-            ShellPolicyCoverageSource.ApprovalExemptSideEffect => (
+            Coverage.Exempt => (
                 ShellPolicyTraceStage.ReviewedSafePolicy,
-                ShellCoverageKind.ReviewedSafePolicy,
+                ShellPolicyTraceCoverage.ReviewedSafePolicy,
                 ShellPolicyTraceReason.ApprovalExemptSideEffect,
                 ShellScopeRelation.None),
-            _ => throw new ArgumentOutOfRangeException(nameof(source))
+            _ => throw new ArgumentOutOfRangeException(nameof(coverage))
         };
         AddDetail(new ShellPolicyTraceRow(
             stage,
@@ -184,9 +203,9 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             reason,
             candidate.Id,
             GetExecutableBasename(candidate.Candidate),
-            coverage,
+            displayCoverage,
             scope,
-            grantTimestamp));
+            (coverage as Coverage.Stored)?.GrantedAt));
     }
 
     internal ShellPolicyDecisionTrace Complete(ToolAuthorizationDecision decision)
@@ -198,17 +217,6 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         _rows.Add(completion);
         _completedTrace = new ShellPolicyDecisionTrace(Array.AsReadOnly(_rows.ToArray()));
         return _completedTrace;
-    }
-
-    internal ShellPolicyDecisionTrace ReplaceCompletion(ToolAuthorizationDecision decision)
-    {
-        if (_completedTrace is not null)
-        {
-            _rows.RemoveAt(_rows.Count - 1);
-            _completedTrace = null;
-        }
-
-        return Complete(decision);
     }
 
     internal static string SanitizeText(string value)
@@ -312,22 +320,17 @@ internal sealed class ShellPolicyDecisionTraceBuilder
 
     private static string? GetExecutableBasename(ApprovalCandidate candidate)
     {
-        if (candidate.VerbTokens is not { Count: > 0 })
+        // Unknown command words have no tokens; the display verb still names the program.
+        var executable = candidate.VerbTokens is { Count: > 0 } tokens
+            ? tokens[0]
+            : candidate.Verb.Split(' ', 2)[0];
+        if (executable.Length == 0)
             return null;
 
-        var executable = candidate.VerbTokens[0];
         var separator = executable.LastIndexOfAny(['/', '\\']);
         var basename = separator < 0 ? executable : executable[(separator + 1)..];
         return SanitizeText(basename);
     }
-
-    private static ShellPolicyTraceReason ToTraceReason(ShellCoverageKind coverage) => coverage switch
-    {
-        ShellCoverageKind.Session => ShellPolicyTraceReason.SessionGrant,
-        ShellCoverageKind.PersistentGlobal => ShellPolicyTraceReason.PersistentGlobalGrant,
-        ShellCoverageKind.PersistentFolder => ShellPolicyTraceReason.PersistentFolderGrant,
-        _ => ShellPolicyTraceReason.None,
-    };
 
     private static ShellPolicyTraceReason ToTraceReason(ShellApprovalNearMissReason reason) => reason switch
     {
@@ -336,6 +339,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         ShellApprovalNearMissReason.MissingDirectory => ShellPolicyTraceReason.MissingDirectory,
         ShellApprovalNearMissReason.TokenMismatch => ShellPolicyTraceReason.TokenMismatch,
         ShellApprovalNearMissReason.ShellMismatch => ShellPolicyTraceReason.ShellMismatch,
+        ShellApprovalNearMissReason.AssignmentMismatch => ShellPolicyTraceReason.AssignmentMismatch,
         _ => ShellPolicyTraceReason.None,
     };
 
@@ -357,12 +361,12 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         _ => ShellPolicyTraceReason.PolicyDenied,
     };
 
-    private static ShellScopeRelation ToScopeRelation(ShellCoverageKind coverage) => coverage switch
+    private static ShellPolicyTraceCoverage ToTraceCoverage(GrantScope scope) => scope switch
     {
-        ShellCoverageKind.Session => ShellScopeRelation.ThisChat,
-        ShellCoverageKind.PersistentGlobal => ShellScopeRelation.Global,
-        ShellCoverageKind.PersistentFolder => ShellScopeRelation.UnderGrantRoot,
-        _ => ShellScopeRelation.None,
+        GrantScope.Repository => ShellPolicyTraceCoverage.PersistentRepository,
+        GrantScope.Folder => ShellPolicyTraceCoverage.PersistentFolder,
+        GrantScope.Everywhere => ShellPolicyTraceCoverage.PersistentGlobal,
+        _ => throw new ArgumentOutOfRangeException(nameof(scope), scope, "A near miss is a stored grant."),
     };
 
     private static ShellScopeRelation ToScopeRelation(ShellApprovalNearMiss nearMiss)
@@ -370,9 +374,12 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         {
             ShellApprovalNearMissReason.OutsideDirectory => ShellScopeRelation.OutsideGrantRoot,
             ShellApprovalNearMissReason.Symlink => ShellScopeRelation.SymlinkBoundary,
-            _ => nearMiss.Grant.Directory is null
-                ? ShellScopeRelation.Global
-                : ShellScopeRelation.None,
+            _ => GrantScope.OfStoredEntry(nearMiss.Grant) switch
+            {
+                GrantScope.Repository => ShellScopeRelation.SameRepository,
+                GrantScope.Everywhere => ShellScopeRelation.Global,
+                _ => ShellScopeRelation.None,
+            },
         };
 
     private static bool IsUnsafeTextCodeUnit(char value)

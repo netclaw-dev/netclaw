@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 namespace Netclaw.Security;
 
 /// <summary>
-/// Redacts common secret-bearing patterns from tool output before returning text to the LLM.
+/// Redacts common secret-bearing patterns before text reaches an output or log boundary.
 /// This is defense-in-depth for accidental leakage; not a replacement for access controls.
 /// </summary>
 public static partial class SecretOutputRedactor
@@ -69,6 +69,9 @@ public static partial class SecretOutputRedactor
         sanitized = HeaderSecretValueRegex().Replace(sanitized, m =>
             $"{m.Groups[1].Value}{Redacted}");
 
+        sanitized = SlackWebhookUrlRegex().Replace(sanitized, m =>
+            $"{m.Groups[1].Value}{Redacted}");
+
         sanitized = ProviderTokenRegex().Replace(sanitized, Redacted);
 
         sanitized = AwsAccessKeyRegex().Replace(sanitized, Redacted);
@@ -117,6 +120,9 @@ public static partial class SecretOutputRedactor
 
     [GeneratedRegex("(Authorization\\s*:\\s*Bearer\\s+)(\\S+)", RegexOptions.IgnoreCase)]
     private static partial Regex HeaderSecretValueRegex();
+
+    [GeneratedRegex("(https://hooks\\.slack\\.com/services/)[A-Z0-9_-]+/[A-Z0-9_-]+/[A-Z0-9_-]+", RegexOptions.IgnoreCase)]
+    private static partial Regex SlackWebhookUrlRegex();
 
     [GeneratedRegex("((?:Password|Pwd)\\s*=\\s*)[^;]+;", RegexOptions.IgnoreCase)]
     private static partial Regex ConnectionStringPasswordRegex();

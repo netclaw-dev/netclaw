@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
@@ -27,7 +28,7 @@ public sealed class SessionToolExecutionPipelineHintTests
     {
         var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
             toolName: ShellTool,
-            decision: ApprovalDecision.Denied,
+            refusal: RefusalKind.Denied,
             cwd: "/home/user/repos/bar",
             sessionDirectory: "/home/user/.netclaw/sessions/abc",
             projectDirectory: null,
@@ -42,7 +43,7 @@ public sealed class SessionToolExecutionPipelineHintTests
     {
         var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
             toolName: ShellTool,
-            decision: ApprovalDecision.Denied,
+            refusal: RefusalKind.Denied,
             cwd: "/home/user/repos/bar",
             sessionDirectory: "/home/user/.netclaw/sessions/abc",
             projectDirectory: null,
@@ -56,7 +57,7 @@ public sealed class SessionToolExecutionPipelineHintTests
     {
         var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
             toolName: ShellTool,
-            decision: ApprovalDecision.TimedOut,
+            refusal: RefusalKind.TimedOut,
             cwd: "/home/user/repos/bar",
             sessionDirectory: "/home/user/.netclaw/sessions/abc",
             projectDirectory: null,
@@ -70,7 +71,7 @@ public sealed class SessionToolExecutionPipelineHintTests
     {
         var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
             toolName: "file_write",
-            decision: ApprovalDecision.Denied,
+            refusal: RefusalKind.Denied,
             cwd: "/home/user/repos/bar",
             sessionDirectory: "/home/user/.netclaw/sessions/abc",
             projectDirectory: null,
@@ -84,7 +85,7 @@ public sealed class SessionToolExecutionPipelineHintTests
     {
         var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
             toolName: ShellTool,
-            decision: ApprovalDecision.Denied,
+            refusal: RefusalKind.Denied,
             cwd: "/home/user/.netclaw/sessions/abc/sub",
             sessionDirectory: "/home/user/.netclaw/sessions/abc",
             projectDirectory: null,
@@ -98,7 +99,7 @@ public sealed class SessionToolExecutionPipelineHintTests
     {
         var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
             toolName: ShellTool,
-            decision: ApprovalDecision.Denied,
+            refusal: RefusalKind.Denied,
             cwd: "/home/user/repos/foo/sub",
             sessionDirectory: "/home/user/.netclaw/sessions/abc",
             projectDirectory: "/home/user/repos/foo",
@@ -112,7 +113,7 @@ public sealed class SessionToolExecutionPipelineHintTests
     {
         var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
             toolName: ShellTool,
-            decision: ApprovalDecision.Denied,
+            refusal: RefusalKind.Denied,
             cwd: null,
             sessionDirectory: "/home/user/.netclaw/sessions/abc",
             projectDirectory: null,
@@ -138,7 +139,7 @@ public sealed class SessionToolExecutionPipelineHintTests
 
         var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
             toolName: ShellTool,
-            decision: ApprovalDecision.Denied,
+            refusal: RefusalKind.Denied,
             cwd: "/tmp",
             sessionDirectory: "/home/user/.netclaw/sessions/abc",
             projectDirectory: null,
@@ -160,7 +161,7 @@ public sealed class SessionToolExecutionPipelineHintTests
 
         var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
             toolName: ShellTool,
-            decision: ApprovalDecision.Denied,
+            refusal: RefusalKind.Denied,
             cwd: "/outside/project",
             sessionDirectory: "/home/user/.netclaw/sessions/abc",
             projectDirectory: null,

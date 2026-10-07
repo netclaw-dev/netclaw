@@ -42,7 +42,11 @@ public sealed partial class CancelReminderTool : NetclawTool<CancelReminderTool.
 
         var id = new ReminderId(args.ReminderId);
         var response = await _reminderManager.Ask<ReminderCancelledResponse>(
-            new CancelReminderCommand(id), TimeSpan.FromSeconds(10), ct);
+            new CancelReminderCommand(
+                id,
+                new ReminderAudienceAuthorizationContext(context.Audience, context.SessionId ?? context.ChannelType)),
+            TimeSpan.FromSeconds(10),
+            ct);
 
         return response.Found
             ? $"Reminder '{args.ReminderId}' cancelled (disabled). The definition is preserved on disk."

@@ -174,6 +174,15 @@ internal sealed class DaemonRuntimeStatusService(
                 Message = "MCP server is disabled in configuration."
             },
 
+            McpConnectionState.Connected when status.IsDegraded => new DaemonRuntimeStatus.Connector
+            {
+                Key = key,
+                DisplayName = displayName,
+                Enabled = true,
+                Status = "degraded",
+                Message = $"Connected but not responding ({status.ToolCount} cached tools): {status.ErrorMessage}"
+            },
+
             McpConnectionState.Connected when status.ToolCount > 0 => new DaemonRuntimeStatus.Connector
             {
                 Key = key,

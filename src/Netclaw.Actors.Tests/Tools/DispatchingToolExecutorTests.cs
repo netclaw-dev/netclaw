@@ -7,27 +7,33 @@ using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Authorization;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
+using Netclaw.Tools.Authorization.Consent;
 using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
 
-public partial class DispatchingToolExecutorTests
+public partial class DispatchingToolExecutorTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+    private string BoundSessionDirectory => _temp.Path;
+
+    public void Dispose() => _temp.Dispose();
+
     private const string MissingShellCommandError =
         "Error parsing arguments for tool 'shell_execute': Required parameter 'Command' is missing.";
     private static readonly ShellExecutionEnvironment ShellEnvironment = TestShellEnvironment.Current;
-    private static readonly string BoundSessionDirectory = Path.Combine(
-        Path.GetTempPath(),
-        "netclaw-dispatching-tool-tests",
-        Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
     private readonly DispatchingToolExecutor _executor;
     private readonly DispatchingToolExecutor _restrictedExecutor;
 
@@ -425,7 +431,7 @@ public partial class DispatchingToolExecutorTests
             "call-2", "file_read",
             ToolInput.Create("Path", missingPath));
 
-        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", Path.GetTempPath(), new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", _temp.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
@@ -604,7 +610,7 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
         Assert.NotNull(decision.ApprovalContext);
-        Assert.Empty(decision.ApprovalContext.Candidates!);
+        Assert.Empty(decision.ApprovalContext!.Candidates!);
     }
 
     [Fact]
@@ -616,7 +622,6 @@ public partial class DispatchingToolExecutorTests
         var markerPath = Path.Combine(Path.GetTempPath(), $"netclaw-approval-{Guid.NewGuid():N}");
         var command = $"touch {markerPath} <(true)";
         var arguments = ToolInput.Create("Command", command);
-        Assert.False(ShellTokenizer.IsMessyCompoundCommand(command));
         var matcher = new ShellApprovalMatcher(
             ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
         Assert.Empty(matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
@@ -635,117 +640,8 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
         Assert.NotNull(decision.ApprovalContext);
-        Assert.Empty(decision.ApprovalContext.Candidates!);
+        Assert.Empty(decision.ApprovalContext!.Candidates!);
         Assert.False(File.Exists(markerPath));
-    }
-
-    [Fact]
-    public async Task Authorization_evaluation_preserves_partial_approval_matches()
-    {
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
-        var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config));
-        var approvedMatch = new ToolApprovalMatch("git status", "session", "this chat");
-        var approvalService = new FixedApprovalService(
-            new ToolApprovalCheckResult(["git push"], [approvedMatch]));
-        var executor = new DispatchingToolExecutor(
-            registry,
-            new ToolAccessPolicy(new NetclawPaths(),
-                config,
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])),
-            approvalService);
-        var call = CreateToolCall(
-            "call-partial-approval",
-            "shell_execute",
-            ToolInput.Create("Command", "git status && git push"));
-        var context = TestToolExecutionContext.CreateBound(
-            "signalr/thread-partial-approval",
-            null,
-            new TestToolExecutionContextOptions
-            {
-                Audience = TrustAudience.Personal,
-                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
-            });
-
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            context,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        Assert.NotNull(decision.ApprovalContext);
-        Assert.Equal(["git status", "git push"], decision.ApprovalContext.CandidateVerbs);
-        Assert.Empty(decision.ApprovalMatches);
-    }
-
-    [Fact]
-    public async Task Authorization_evaluation_prompts_only_for_exact_unapproved_candidates()
-    {
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
-        var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config));
-        var approvedMatch = new ToolApprovalMatch("git status", "session", "this chat");
-        var context = CreateInteractivePersonalContext("signalr/thread-exact-partial-approval");
-        var approvedCandidate = BashCandidate("git status", context.SessionDirectory);
-        var unapprovedCandidate = BashCandidate("git push", context.SessionDirectory);
-        var approvalService = new FixedApprovalService(
-            new ToolApprovalCheckResult(
-                ["git push"],
-                [approvedMatch])
-            {
-                CandidateChecks =
-                [
-                    new ToolApprovalCandidateCheck(approvedCandidate, approvedMatch),
-                    new ToolApprovalCandidateCheck(unapprovedCandidate, ApprovedMatch: null)
-                ]
-            });
-        var executor = new DispatchingToolExecutor(
-            registry,
-            new ToolAccessPolicy(new NetclawPaths(),
-                config,
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])),
-            approvalService);
-        var call = CreateToolCall(
-            "call-exact-partial-approval",
-            "shell_execute",
-            ToolInput.Create("Command", "git status && git push"));
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            context,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        var approvalContext = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        Assert.Equal(["git push"], approvalContext.Patterns);
-        Assert.Equal(["git push"], approvalContext.CandidateVerbs);
-        Assert.Equal([unapprovedCandidate], approvalContext.Candidates);
-        Assert.Equal([approvedMatch], decision.ApprovalMatches);
     }
 
     [SlopwatchSuppress("SW001", "This test pins the Bash compound-command coverage model used by the Linux approval policy.")]
@@ -770,26 +666,17 @@ public partial class DispatchingToolExecutorTests
             registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
             var approvalService = new FixedShellApprovalService(request =>
             {
-                var matches = request.Candidates.Select(candidate =>
+                var results = request.Candidates.Select(candidate =>
                 {
                     if (!candidate.Candidate.Verb.StartsWith("git status", StringComparison.Ordinal))
-                    {
-                        return new ShellGrantCandidateMatch(
-                            candidate.CandidateId,
-                            Match: null,
-                            GrantCoverage: null,
-                            NearMisses: []);
-                    }
+                        return ShellGrantCandidateResult.Uncovered(candidate);
 
-                    return new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat"),
-                        ShellCoverageKind.Session,
-                        []);
+                    return ShellGrantCandidateResult.Session(candidate);
                 }).ToArray();
-                return new ShellApprovalMatchResult(
-                    new PersistentGrantStoreStatus.Unavailable(ApprovalStoreFailure.InvalidData),
-                    Array.AsReadOnly(matches));
+                return ShellApprovalMatchResult.Create(
+                    request.Candidates,
+                    ApprovalStoreFailure.InvalidData,
+                    results);
             });
             var executor = new DispatchingToolExecutor(
                 registry,
@@ -845,7 +732,7 @@ public partial class DispatchingToolExecutorTests
                     Assert.Equal(ShellPolicyTraceOutcome.Covered, row.Outcome);
                     Assert.Equal(ShellPolicyTraceReason.SessionGrant, row.Reason);
                     Assert.Equal("git", row.ExecutableBasename);
-                    Assert.Equal(ShellCoverageKind.Session, row.Coverage);
+                    Assert.Equal(ShellPolicyTraceCoverage.Session, row.Coverage);
                     Assert.Equal(ShellScopeRelation.ThisChat, row.ScopeRelation);
                 },
                 row =>
@@ -854,7 +741,7 @@ public partial class DispatchingToolExecutorTests
                     Assert.Equal(ShellPolicyTraceOutcome.Uncovered, row.Outcome);
                     Assert.Equal(ShellPolicyTraceReason.NoGrant, row.Reason);
                     Assert.Equal("head", row.ExecutableBasename);
-                    Assert.Equal(ShellCoverageKind.Uncovered, row.Coverage);
+                    Assert.Equal(ShellPolicyTraceCoverage.Uncovered, row.Coverage);
                     Assert.Equal(ShellScopeRelation.None, row.ScopeRelation);
                 },
                 row =>
@@ -863,7 +750,7 @@ public partial class DispatchingToolExecutorTests
                     Assert.Equal(ShellPolicyTraceOutcome.Covered, row.Outcome);
                     Assert.Equal(ShellPolicyTraceReason.ReviewedSafePhrase, row.Reason);
                     Assert.Equal("head", row.ExecutableBasename);
-                    Assert.Equal(ShellCoverageKind.ReviewedSafePolicy, row.Coverage);
+                    Assert.Equal(ShellPolicyTraceCoverage.ReviewedSafePolicy, row.Coverage);
                     Assert.Equal(ShellScopeRelation.UnderRealRoot, row.ScopeRelation);
                 },
                 row =>
@@ -883,31 +770,7 @@ public partial class DispatchingToolExecutorTests
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
     public async Task Authorization_evaluation_composes_grants_with_causal_intent_diagnostics()
     {
-        var approvalService = new FixedShellApprovalService(request =>
-        {
-            var matches = request.Candidates.Select(candidate =>
-            {
-                var shell = Assert.IsType<ApprovalShell>(candidate.Candidate.Shell);
-                var tokens = Assert.IsAssignableFrom<IReadOnlyList<string>>(
-                    candidate.Candidate.VerbTokens);
-                var entry = ApprovalEntry.CreateTokenPrefix(
-                    shell,
-                    tokens,
-                    directory: null,
-                    createdAt: null);
-                return new ShellGrantCandidateMatch(
-                    candidate.CandidateId,
-                    new ToolApprovalMatch(
-                        candidate.Candidate.Verb,
-                        "persistent",
-                        entry.FormatScope()),
-                    ShellCoverageKind.PersistentGlobal,
-                    NearMisses: []);
-            }).ToArray();
-            return new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(matches));
-        });
+        var approvalService = GrantShellVerbs(directory: null, "cd", "gh api");
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(
@@ -931,22 +794,21 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
         Assert.Equal(ToolAllowReason.StoredApproval, decision.AllowReason);
-        var request = Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest);
-        Assert.All(request.Candidates, candidate =>
-            Assert.Contains(candidate.Candidate.Verb, new[] { "cd", "gh api" }));
-        Assert.Contains(request.Candidates, candidate => candidate.Candidate.Verb == "cd");
-        Assert.Contains(request.Candidates, candidate => candidate.Candidate.Verb == "gh api");
+        // Each diagnostic asks the store in each directory where it can run.
+        Assert.Equal(
+            ["cd@/work/intent", "gh api@/work/intent", "wc@/work", "wc@/work/intent", "head@/work", "head@/work/intent"],
+            DescribeRequest(approvalService));
         var intentRows = decision.ShellPolicyTrace.Rows
             .Where(row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot)
             .ToArray();
-        Assert.Equal(2, intentRows.Length);
+        Assert.Equal(4, intentRows.Length);
         Assert.All(intentRows, row =>
         {
             Assert.Equal(ShellPolicyTraceStage.ReviewedSafePolicy, row.Stage);
             Assert.Equal(ShellPolicyTraceReason.ReviewedSafePhrase, row.Reason);
         });
         Assert.Equal(
-            new[] { "head", "wc" },
+            new[] { "head", "head", "wc", "wc" },
             intentRows
                 .Select(row => Assert.IsType<string>(row.ExecutableBasename))
                 .Order(StringComparer.Ordinal)
@@ -960,32 +822,14 @@ public partial class DispatchingToolExecutorTests
     public async Task Causal_intent_accepts_session_or_real_folder_prerequisite_coverage(
         string prerequisiteCoverageName)
     {
-        var prerequisiteCoverage = Enum.Parse<ShellCoverageKind>(prerequisiteCoverageName);
-        var approvalService = new FixedShellApprovalService(request =>
-        {
-            var matches = request.Candidates.Select(candidate =>
-            {
-                var match = prerequisiteCoverage == ShellCoverageKind.Session
-                    ? new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat")
-                    : new ToolApprovalMatch(
-                        candidate.Candidate.Verb,
-                        "persistent",
-                        ApprovalEntry.CreateTokenPrefix(
-                            ApprovalShell.Bash,
-                            Assert.IsAssignableFrom<IReadOnlyList<string>>(
-                                candidate.Candidate.VerbTokens),
-                            "/work/intent",
-                            createdAt: null).FormatScope());
-                return new ShellGrantCandidateMatch(
-                    candidate.CandidateId,
-                    match,
-                    prerequisiteCoverage,
-                    NearMisses: []);
-            }).ToArray();
-            return new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(matches));
-        });
+        var approvalService = prerequisiteCoverageName == "Session"
+            ? new FixedShellApprovalService(request => ShellApprovalMatchResult.Create(
+                request.Candidates,
+                null,
+                request.Candidates.Select(static candidate => candidate.Candidate.Verb is "cd" or "inspect"
+                    ? ShellGrantCandidateResult.Session(candidate)
+                    : ShellGrantCandidateResult.Uncovered(candidate)).ToArray()))
+            : GrantShellVerbs("/work/intent", "cd", "inspect");
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, ["head"]));
@@ -1004,16 +848,14 @@ public partial class DispatchingToolExecutorTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
-        var request = Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest);
-        Assert.Equal(["cd", "inspect"], request.Candidates
-            .Select(candidate => candidate.Candidate.Verb).ToArray());
-        Assert.All(request.Candidates, candidate =>
-            Assert.Equal("/work/intent", candidate.Candidate.Directory));
+        Assert.Equal(
+            ["cd@/work/intent", "inspect@/work/intent", "head@/work", "head@/work/intent"],
+            DescribeRequest(approvalService));
         Assert.Equal(
             2,
             decision.ShellPolicyTrace.Rows.Count(row =>
                 row.Stage == ShellPolicyTraceStage.StoredGrantMatch
-                && row.Coverage == prerequisiteCoverage));
+                && row.Coverage == Enum.Parse<ShellPolicyTraceCoverage>(prerequisiteCoverageName)));
         Assert.Contains(
             decision.ShellPolicyTrace.Rows,
             row => row is
@@ -1028,28 +870,7 @@ public partial class DispatchingToolExecutorTests
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
     public async Task Causal_intent_does_not_rebase_a_folder_grant_to_the_intent_scope()
     {
-        var approvalService = new FixedShellApprovalService(request =>
-            new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(request.Candidates.Select(candidate =>
-                {
-                    var grant = ApprovalEntry.CreateTokenPrefix(
-                        ApprovalShell.Bash,
-                        Assert.IsAssignableFrom<IReadOnlyList<string>>(
-                            candidate.Candidate.VerbTokens),
-                        "/work",
-                        createdAt: null);
-                    return new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        Match: null,
-                        GrantCoverage: null,
-                        NearMisses:
-                        [
-                            new ShellApprovalNearMiss(
-                                grant,
-                                ShellApprovalNearMissReason.OutsideDirectory)
-                        ]);
-                }).ToArray())));
+        var approvalService = GrantShellVerbs("/work", "cd", "inspect", "head");
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, ["head"]));
@@ -1067,44 +888,18 @@ public partial class DispatchingToolExecutorTests
             CreateInteractivePersonalContext("signalr/causal-intent-folder-near-miss"),
             TestContext.Current.CancellationToken);
 
+        // The /work grant covers only the head occurrence that runs in /work when cd fails.
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        var request = Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest);
-        Assert.All(request.Candidates, candidate =>
-            Assert.Equal("/tmp", candidate.Candidate.Directory));
-        Assert.DoesNotContain(
-            decision.ShellPolicyTrace.Rows,
-            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+        var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        Assert.Equal(["cd", "inspect"], approval.CandidateVerbs);
+        Assert.Equal(["/tmp", "/tmp"], approval.Candidates!.Select(static candidate => candidate.Directory));
     }
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
-    public async Task Causal_intent_requires_authority_for_each_prerequisite()
+    public async Task Causal_list_prompt_offers_reusable_grants_for_an_uncovered_prerequisite()
     {
-        var approvalService = new FixedShellApprovalService(request =>
-            new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(request.Candidates.Select(candidate =>
-                {
-                    if (candidate.Candidate.Verb != "cd")
-                    {
-                        return new ShellGrantCandidateMatch(
-                            candidate.CandidateId,
-                            Match: null,
-                            GrantCoverage: null,
-                            NearMisses: []);
-                    }
-
-                    var entry = ApprovalEntry.CreateTokenPrefix(
-                        ApprovalShell.Bash,
-                        ["cd"],
-                        directory: null,
-                        createdAt: null);
-                    return new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        new ToolApprovalMatch("cd", "persistent", entry.FormatScope()),
-                        ShellCoverageKind.PersistentGlobal,
-                        NearMisses: []);
-                }).ToArray())));
+        var approvalService = GrantShellVerbs(directory: null, "cd");
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(
@@ -1125,20 +920,21 @@ public partial class DispatchingToolExecutorTests
             CreateInteractivePersonalContext("signalr/causal-intent-missing-prerequisite"),
             TestContext.Current.CancellationToken);
 
+        // Before the directory proof applied to causal lists, this prompt offered only Once.
+        // A safe-listed action still needs its own grant: safe policy alone cannot establish intent.
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
         var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        Assert.True(approval.IsMessy);
-        Assert.Empty(approval.Candidates!);
+        Assert.False(approval.IsMessy);
+        Assert.Equal(["gh api"], approval.CandidateVerbs);
+        Assert.Equal("/tmp", Assert.Single(approval.Candidates!).Directory);
         Assert.Equal(
             [
                 Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveOnce,
+                Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveSession,
+                Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveEverywhere,
                 Netclaw.Actors.Protocol.ApprovalOptionKeys.Deny
             ],
             approval.Options.Select(option => option.Key.Value).ToArray());
-        Assert.Equal(
-            ["cd", "gh api"],
-            Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest)
-                .Candidates.Select(candidate => candidate.Candidate.Verb).ToArray());
     }
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
@@ -1146,14 +942,12 @@ public partial class DispatchingToolExecutorTests
     public async Task Exact_one_time_retry_covers_the_original_causal_call()
     {
         var approvalService = new FixedShellApprovalService(request =>
-            new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(request.Candidates.Select(candidate =>
-                    new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        Match: null,
-                        GrantCoverage: null,
-                        NearMisses: [])).ToArray())));
+            ShellApprovalMatchResult.Create(
+                request.Candidates,
+                null,
+                request.Candidates
+                    .Select(static candidate => ShellGrantCandidateResult.Uncovered(candidate))
+                    .ToArray()));
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(
@@ -1174,8 +968,8 @@ public partial class DispatchingToolExecutorTests
             context,
             TestContext.Current.CancellationToken);
         var approval = Assert.IsType<ToolApprovalContext>(initial.ApprovalContext);
-        context.OneTimeApprovedToolName = call.Name;
-        context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(approval));
+        Assert.Equal(["cd", "inspect"], approval.CandidateVerbs);
+        context.Approval.SeedOneTimeConsent(new OneTimeConsent(call.Name, OneTimeApprovalKeys.Create(approval)));
 
         var retry = await executor.EvaluateAuthorizationAsync(
             call,
@@ -1184,9 +978,6 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.Allowed, retry.Outcome);
         Assert.Equal(ToolAllowReason.OneTimeApproval, retry.AllowReason);
-        Assert.DoesNotContain(
-            retry.ShellPolicyTrace.Rows,
-            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
     }
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
@@ -1196,7 +987,7 @@ public partial class DispatchingToolExecutorTests
     public async Task Parser_owned_directory_effect_allows_wrapped_transition(
         string command)
     {
-        var approvalService = GrantEveryShellCandidate();
+        var approvalService = GrantShellVerbs(directory: null, "command cd", "builtin cd", "inspect");
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(
@@ -1229,13 +1020,16 @@ public partial class DispatchingToolExecutorTests
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
-    [InlineData("cd /tmp && inspect; pushd /other; head result.log")]
-    [InlineData("cd /tmp && inspect; popd; head result.log")]
-    [InlineData("cd /tmp && inspect; cd \"$1\"; head result.log")]
-    [InlineData("cd /tmp extra && inspect; head result.log")]
-    [InlineData("cd -z /tmp && inspect; head result.log")]
+    // An invalid cd always fails, so the parser proves that head runs in the
+    // call directory. Then inspect is the command with no proved directory.
+    [InlineData("cd /tmp && inspect; pushd /other; head result.log", "head result.log")]
+    [InlineData("cd /tmp && inspect; popd; head result.log", "head result.log")]
+    [InlineData("cd /tmp && inspect; cd \"$1\"; head result.log", "head result.log")]
+    [InlineData("cd /tmp extra && inspect; head result.log", "inspect")]
+    [InlineData("cd -z /tmp && inspect; head result.log", "inspect")]
     public async Task Unproved_directory_effect_keeps_causal_chain_strict(
-        string command)
+        string command,
+        string exactCommand)
     {
         var approvalService = GrantEveryShellCandidate();
         var executor = CreateApprovalGatedShellExecutor(
@@ -1257,9 +1051,12 @@ public partial class DispatchingToolExecutorTests
             CreateInteractivePersonalContext("signalr/causal-intent-strict-effect"),
             TestContext.Current.CancellationToken);
 
+        // The command after the unproved directory change is one exact
+        // candidate. No grant and no intent rule covers it.
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        Assert.True(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).IsMessy);
-        Assert.Null(approvalService.LastRequest);
+        var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        Assert.Contains(exactCommand, approval.CandidateVerbs);
+        Assert.Equal([ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.DenyKey], approval.Options.Select(static option => option.Key));
         Assert.DoesNotContain(
             decision.ShellPolicyTrace.Rows,
             row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
@@ -1337,26 +1134,30 @@ public partial class DispatchingToolExecutorTests
                 context,
                 TestContext.Current.CancellationToken);
 
+            // The command after the linked directory change is one exact candidate.
             Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
             var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-            Assert.True(approval.IsMessy);
-            Assert.Null(approvalService.LastRequest);
+            Assert.Equal(["head result.log"], approval.CandidateVerbs);
             Assert.DoesNotContain(
                 decision.ShellPolicyTrace.Rows,
                 row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
 
-            context.OneTimeApprovedToolName = call.Name;
-            context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(approval));
+            context.Approval.SeedOneTimeConsent(new OneTimeConsent(call.Name, OneTimeApprovalKeys.Create(approval)));
             var retry = await executor.EvaluateAuthorizationAsync(
                 call,
                 context,
                 TestContext.Current.CancellationToken);
 
+            // The "Once" answer covers only the exact command. The proved
+            // commands keep their own grant decisions.
             Assert.Equal(ToolAuthorizationOutcome.Allowed, retry.Outcome);
             Assert.Equal(ToolAllowReason.OneTimeApproval, retry.AllowReason);
-            Assert.Null(approvalService.LastRequest);
-            var completion = Assert.Single(retry.ShellPolicyTrace.Rows);
-            Assert.Equal(ShellPolicyTraceStage.Completion, completion.Stage);
+            Assert.Contains(
+                retry.ShellPolicyTrace.Rows,
+                row => row.Stage == ShellPolicyTraceStage.OneTimeApproval && row.ExecutableBasename == "head");
+            var completion = Assert.Single(
+                retry.ShellPolicyTrace.Rows,
+                row => row.Stage == ShellPolicyTraceStage.Completion);
             Assert.Equal(ShellPolicyTraceOutcome.Allow, completion.Outcome);
         }
         finally
@@ -1396,9 +1197,11 @@ public partial class DispatchingToolExecutorTests
                 CreateInteractivePersonalContext("signalr/causal-intent-symlink-fallback"),
                 TestContext.Current.CancellationToken);
 
+            // The command after the linked directory change is one exact candidate.
             Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-            Assert.True(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).IsMessy);
-            Assert.Null(approvalService.LastRequest);
+            Assert.Contains(
+                "head result.log",
+                Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).CandidateVerbs);
             Assert.DoesNotContain(
                 decision.ShellPolicyTrace.Rows,
                 row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
@@ -1454,7 +1257,7 @@ public partial class DispatchingToolExecutorTests
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
-    public async Task Causal_intent_does_not_grant_reviewed_safe_authority_to_headless_runs()
+    public async Task Causal_intent_decides_a_headless_run_as_a_chat()
     {
         var approvalService = GrantEveryShellCandidate();
         var executor = CreateApprovalGatedShellExecutor(
@@ -1471,26 +1274,24 @@ public partial class DispatchingToolExecutorTests
                 "cd /tmp && inspect; head result.log",
                 "WorkingDirectory",
                 "/work"));
-        var context = TestToolExecutionContext.CreateBound(
-            "webhook/causal-intent-headless",
+        ToolExecutionContext Context(bool interactive) => TestToolExecutionContext.CreateBound(
+            interactive ? "signalr/causal-intent" : "webhook/causal-intent-headless",
             null,
             new TestToolExecutionContextOptions
             {
                 Audience = TrustAudience.Personal,
-                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false)
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(interactive)
             });
 
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            context,
-            TestContext.Current.CancellationToken);
+        var attended = await executor.EvaluateAuthorizationAsync(call, Context(true), TestContext.Current.CancellationToken);
+        var headless = await executor.EvaluateAuthorizationAsync(call, Context(false), TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("shell_unresolved_trust_zone_input", decision.DenyReason);
-        Assert.Null(approvalService.LastRequest);
-        Assert.DoesNotContain(
-            decision.ShellPolicyTrace.Rows,
-            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+        // D2: a headless run uses the audience policy of a chat.
+        Assert.Equal(attended.Outcome, headless.Outcome);
+        Assert.Equal(attended.AllowReason, headless.AllowReason);
+        Assert.Equal(
+            attended.ShellPolicyTrace.Rows.Select(static row => row.ScopeRelation),
+            headless.ShellPolicyTrace.Rows.Select(static row => row.ScopeRelation));
     }
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX causal-directory semantics.")]
@@ -1539,7 +1340,7 @@ public partial class DispatchingToolExecutorTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+        Assert.Equal("shell_path_outside_trusted_roots", decision.DenyReason);
         Assert.Equal(0, approvalService.RequestCount);
     }
 
@@ -1587,7 +1388,7 @@ public partial class DispatchingToolExecutorTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+        Assert.Equal("shell_path_outside_trusted_roots", decision.DenyReason);
         Assert.Equal(0, approvalService.RequestCount);
     }
 
@@ -1632,7 +1433,7 @@ public partial class DispatchingToolExecutorTests
         var grantTimestamp = new DateTimeOffset(2026, 8, 13, 7, 0, 0, TimeSpan.Zero);
         var approvalService = new FixedShellApprovalService(request =>
         {
-            var matches = request.Candidates.Select(candidate =>
+            var results = request.Candidates.Select(candidate =>
             {
                 var shell = Assert.IsType<ApprovalShell>(candidate.Candidate.Shell);
                 var tokens = Assert.IsAssignableFrom<IReadOnlyList<string>>(candidate.Candidate.VerbTokens);
@@ -1641,18 +1442,9 @@ public partial class DispatchingToolExecutorTests
                     tokens,
                     directory: null,
                     grantTimestamp);
-                return new ShellGrantCandidateMatch(
-                    candidate.CandidateId,
-                    new ToolApprovalMatch(candidate.Candidate.Verb, "persistent", entry.FormatScope()),
-                    ShellCoverageKind.PersistentGlobal,
-                    NearMisses: [])
-                {
-                    GrantCreatedAt = grantTimestamp
-                };
+                return ShellGrantCandidateResult.Persistent(candidate, entry);
             }).ToArray();
-            return new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(matches));
+            return ShellApprovalMatchResult.Create(request.Candidates, null, results);
         });
         var logger = new RecordingLogger<DispatchingToolExecutor>();
         var executor = CreateApprovalGatedShellExecutor(approvalService, logger);
@@ -1682,9 +1474,10 @@ public partial class DispatchingToolExecutorTests
         const string rawGrantPath = "/private/ghp_12345678901234567890/path";
         var grantTimestamp = new DateTimeOffset(2026, 8, 13, 7, 30, 0, TimeSpan.Zero);
         var approvalService = new FixedShellApprovalService(request =>
-            new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(request.Candidates.Select(candidate =>
+            ShellApprovalMatchResult.Create(
+                request.Candidates,
+                null,
+                request.Candidates.Select(candidate =>
                 {
                     var shell = Assert.IsType<ApprovalShell>(candidate.Candidate.Shell);
                     var grant = ApprovalEntry.CreateTokenPrefix(
@@ -1692,17 +1485,12 @@ public partial class DispatchingToolExecutorTests
                         ["git", "push"],
                         rawGrantPath,
                         grantTimestamp);
-                    return new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        Match: null,
-                        GrantCoverage: null,
-                        NearMisses:
-                        [
-                            new ShellApprovalNearMiss(
-                                grant,
-                                ShellApprovalNearMissReason.OutsideDirectory)
-                        ]);
-                }).ToArray())));
+                    return ShellGrantCandidateResult.Uncovered(
+                        candidate,
+                        new ShellApprovalNearMiss(
+                            grant,
+                            ShellApprovalNearMissReason.OutsideDirectory));
+                }).ToArray()));
         var logger = new RecordingLogger<DispatchingToolExecutor>();
         var executor = CreateApprovalGatedShellExecutor(approvalService, logger);
         var call = new FunctionCallContent(
@@ -1729,7 +1517,7 @@ public partial class DispatchingToolExecutorTests
             row => row.Stage == ShellPolicyTraceStage.StoredGrantMatch);
         Assert.Equal(ShellPolicyTraceOutcome.Uncovered, nearMissRow.Outcome);
         Assert.Equal(ShellPolicyTraceReason.OutsideDirectory, nearMissRow.Reason);
-        Assert.Equal(ShellCoverageKind.PersistentFolder, nearMissRow.Coverage);
+        Assert.Equal(ShellPolicyTraceCoverage.PersistentFolder, nearMissRow.Coverage);
         Assert.Equal(ShellScopeRelation.OutsideGrantRoot, nearMissRow.ScopeRelation);
         Assert.Equal(grantTimestamp, nearMissRow.GrantTimestamp);
         Assert.NotNull(decision.ApprovalContext);
@@ -1753,12 +1541,11 @@ public partial class DispatchingToolExecutorTests
         var builder = new ShellPolicyDecisionTraceBuilder();
         for (var index = 0; index < 300; index++)
         {
-            builder.AddCoverage(
-                ShellPolicyCoverageSource.ReviewedSafeReal,
-                new ShellPolicyCandidate(
-                    new ShellPolicyCandidateId(index),
-                    BashCandidate($"/usr/bin/tool-{index}"),
-                    SourceOccurrence: null));
+            var candidate = new ShellPolicyCandidate(
+                new ShellPolicyCandidateId(index),
+                BashCandidate($"/usr/bin/tool-{index}"),
+                SourceOccurrence: null);
+            builder.AddCoverage(candidate, new Coverage.ReviewedSafe(ReviewedSafeRoot.Real));
         }
 
         var decision = ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy);
@@ -1809,12 +1596,11 @@ public partial class DispatchingToolExecutorTests
         var logger = new RecordingLogger<DispatchingToolExecutor>();
         var executor = CreateApprovalGatedShellExecutor(logger: logger);
         var builder = new ShellPolicyDecisionTraceBuilder();
-        builder.AddCoverage(
-                ShellPolicyCoverageSource.ReviewedSafeReal,
-            new ShellPolicyCandidate(
-                new ShellPolicyCandidateId(0),
-                BashCandidate($"/usr/bin/{secret}\r\n\u202Espoof"),
-                SourceOccurrence: null));
+        var candidate = new ShellPolicyCandidate(
+            new ShellPolicyCandidateId(0),
+            BashCandidate($"/usr/bin/{secret}\r\n\u202Espoof"),
+            SourceOccurrence: null);
+        builder.AddCoverage(candidate, new Coverage.ReviewedSafe(ReviewedSafeRoot.Real));
         var trace = builder.Complete(
             ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy));
 
@@ -1851,14 +1637,16 @@ public partial class DispatchingToolExecutorTests
             new ShellPolicyCandidateId(0),
             BashCandidate("git push"),
             SourceOccurrence: null);
-        var grant = ApprovalEntry.CreateTokenPrefix(
-            ApprovalShell.Bash,
-            ["git", "status"]);
-        var actorMatch = new ShellGrantCandidateMatch(
+        var grant = nearMissReason == ShellApprovalNearMissReason.ShellMismatch
+            ? ApprovalEntry.CreateTokenPrefix(ApprovalShell.PowerShell, ["git", "push"])
+            : ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "status"]);
+        var grantCandidate = new ShellGrantCandidate(
             candidate.Id,
-            Match: null,
-            GrantCoverage: null,
-            NearMisses: [new ShellApprovalNearMiss(grant, nearMissReason)]);
+            candidate.Candidate,
+            RealDirectory: null);
+        var actorMatch = ShellGrantCandidateResult.Uncovered(
+            grantCandidate,
+            new ShellApprovalNearMiss(grant, nearMissReason));
         var builder = new ShellPolicyDecisionTraceBuilder();
 
         builder.AddActorEvidence(candidate, actorMatch);
@@ -1870,33 +1658,87 @@ public partial class DispatchingToolExecutorTests
     }
 
     [Fact]
-    public async Task Authorization_evaluation_denies_duplicate_actor_candidate_id()
+    public void Shell_approval_result_rejects_duplicate_candidate_id()
     {
-        var approvalService = new FixedShellApprovalService(request =>
+        var first = new ShellGrantCandidate(
+            new ShellPolicyCandidateId(0),
+            BashCandidate("git status"),
+            RealDirectory: null);
+        var second = new ShellGrantCandidate(
+            new ShellPolicyCandidateId(1),
+            BashCandidate("git push"),
+            RealDirectory: null);
+
+        Assert.Throws<ArgumentException>(() => ShellApprovalMatchResult.Create(
+            [first, second],
+            null,
+            [
+                ShellGrantCandidateResult.Uncovered(first),
+                ShellGrantCandidateResult.Uncovered(first)
+            ]));
+    }
+
+    [Fact]
+    public void Persistent_shell_result_rejects_a_grant_for_another_candidate()
+    {
+        var candidate = new ShellGrantCandidate(
+            new ShellPolicyCandidateId(0),
+            BashCandidate("git push"),
+            RealDirectory: null);
+        var grant = ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.Bash,
+            ["git", "status"]);
+
+        Assert.Throws<ArgumentException>(() =>
+            ShellGrantCandidateResult.Persistent(candidate, grant));
+    }
+
+    [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only symbolic-link semantics")]
+    public async Task Stored_grant_match_rechecks_folder_scope_after_the_service_response()
+    {
+        var root = Directory.CreateTempSubdirectory("netclaw-approval-refresh-");
+        try
         {
-            var duplicateId = request.Candidates[0].CandidateId;
-            return new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(request.Candidates.Select(candidate =>
-                    new ShellGrantCandidateMatch(
-                        duplicateId,
-                        Match: null,
-                        GrantCoverage: null,
-                        NearMisses: [])).ToArray()));
-        });
-        var executor = CreateApprovalGatedShellExecutor(approvalService);
-        var call = new FunctionCallContent(
-            "call-duplicate-candidate-id",
-            "shell_execute",
-            ToolInput.Create("Command", "git status && git push"));
+            var grantDirectory = Path.Combine(root.FullName, "grant");
+            var candidateDirectory = Path.Combine(grantDirectory, "candidate");
+            var outsideDirectory = Path.Combine(root.FullName, "outside");
+            Directory.CreateDirectory(candidateDirectory);
+            Directory.CreateDirectory(outsideDirectory);
+            var service = new FixedShellApprovalService(request =>
+            {
+                var candidate = request.Candidates[0];
+                var grant = ApprovalEntry.CreateTokenPrefix(
+                    ApprovalShell.Bash,
+                    ["git", "status"],
+                    grantDirectory);
+                var result = ShellApprovalMatchResult.Create(
+                    request.Candidates,
+                    persistentStoreFailure: null,
+                    [ShellGrantCandidateResult.Persistent(candidate, grant)]);
+                Directory.Delete(candidateDirectory);
+                Directory.CreateSymbolicLink(candidateDirectory, outsideDirectory);
+                return result;
+            });
+            var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
+            var coordinator = new ShellPolicyCoordinator(registry, policy, service);
+            var requestCandidate = new ShellGrantCandidate(
+                new ShellPolicyCandidateId(0),
+                BashCandidate("git status", candidateDirectory),
+                root.FullName);
+            var request = new ShellApprovalMatchRequest(
+                SessionId: null,
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [requestCandidate]);
 
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            CreateInteractivePersonalContext("signalr/duplicate-candidate-id"),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("internal_policy_failure", decision.DenyReason);
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                coordinator.MatchStoredGrantsAsync(request, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
     }
 
     [Fact]
@@ -1951,14 +1793,12 @@ public partial class DispatchingToolExecutorTests
         var approvalService = new FixedShellApprovalService(request =>
         {
             cancellation.Cancel();
-            return new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(request.Candidates.Select(candidate =>
-                    new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        Match: null,
-                        GrantCoverage: null,
-                        NearMisses: [])).ToArray()));
+            return ShellApprovalMatchResult.Create(
+                request.Candidates,
+                null,
+                request.Candidates
+                    .Select(static candidate => ShellGrantCandidateResult.Uncovered(candidate))
+                    .ToArray());
         });
         var executor = CreateApprovalGatedShellExecutor(approvalService);
         var call = new FunctionCallContent(
@@ -1979,14 +1819,17 @@ public partial class DispatchingToolExecutorTests
     public async Task Authorization_evaluation_denies_mismatched_actor_match()
     {
         var approvalService = new FixedShellApprovalService(request =>
-            new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(request.Candidates.Select(candidate =>
-                    new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        new ToolApprovalMatch("unrelated", "persistent", "anywhere"),
-                        ShellCoverageKind.Session,
-                        NearMisses: [])).ToArray())));
+        {
+            var expected = request.Candidates[0];
+            var changed = new ShellGrantCandidate(
+                expected.CandidateId,
+                BashCandidate("unrelated"),
+                expected.RealDirectory);
+            return ShellApprovalMatchResult.Create(
+                [changed],
+                null,
+                [ShellGrantCandidateResult.Session(changed)]);
+        });
         var executor = CreateApprovalGatedShellExecutor(approvalService);
         var call = new FunctionCallContent(
             "call-mismatched-actor-match",
@@ -2000,102 +1843,10 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
         Assert.Equal("internal_policy_failure", decision.DenyReason);
-    }
-
-    [Theory]
-    [InlineData("this chat", false)]
-    [InlineData("garbage anywhere", true)]
-    public async Task Authorization_evaluation_denies_malformed_persistent_actor_scope(
-        string scope,
-        bool claimsGlobalScope)
-    {
-        var coverage = claimsGlobalScope
-            ? ShellCoverageKind.PersistentGlobal
-            : ShellCoverageKind.PersistentFolder;
-        var approvalService = new FixedShellApprovalService(request =>
-            new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(request.Candidates.Select(candidate =>
-                    new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        new ToolApprovalMatch(candidate.Candidate.Verb, "persistent", scope),
-                        coverage,
-                        NearMisses: [])).ToArray())));
-        var executor = CreateApprovalGatedShellExecutor(approvalService);
-        var call = new FunctionCallContent(
-            "call-malformed-persistent-scope",
-            "shell_execute",
-            ToolInput.Create("Command", "git status"));
-
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            CreateInteractivePersonalContext("signalr/malformed-persistent-scope"),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("internal_policy_failure", decision.DenyReason);
-    }
-
-    [Fact]
-    public async Task Authorization_evaluation_denies_invalid_store_failure_enum()
-    {
-        var approvalService = new FixedShellApprovalService(request =>
-            new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Unavailable((ApprovalStoreFailure)999),
-                Array.AsReadOnly(request.Candidates.Select(candidate =>
-                    new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat"),
-                        ShellCoverageKind.Session,
-                        NearMisses: [])).ToArray())));
-        var executor = CreateApprovalGatedShellExecutor(approvalService);
-        var call = new FunctionCallContent(
-            "call-invalid-store-enum",
-            "shell_execute",
-            ToolInput.Create("Command", "git status"));
-
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            CreateInteractivePersonalContext("signalr/invalid-store-enum"),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("internal_policy_failure", decision.DenyReason);
-    }
-
-    [Theory]
-    [InlineData(MalformedActorEvidenceCase.InvalidCoverage)]
-    [InlineData(MalformedActorEvidenceCase.SessionTimestamp)]
-    [InlineData(MalformedActorEvidenceCase.MultipleNearMisses)]
-    [InlineData(MalformedActorEvidenceCase.InvalidNearMissReason)]
-    [InlineData(MalformedActorEvidenceCase.NearMissWithUnavailableStore)]
-    [InlineData(MalformedActorEvidenceCase.MatchWithNearMiss)]
-    [InlineData(MalformedActorEvidenceCase.CoverageWithoutMatch)]
-    [InlineData(MalformedActorEvidenceCase.NullStoreStatus)]
-    [InlineData(MalformedActorEvidenceCase.WrongCandidateCount)]
-    public async Task Authorization_evaluation_rejects_malformed_actor_evidence(
-        MalformedActorEvidenceCase malformedCase)
-    {
-        var approvalService = new FixedShellApprovalService(request =>
-            CreateMalformedActorResult(request, malformedCase));
-        var executor = CreateApprovalGatedShellExecutor(approvalService);
-        var call = new FunctionCallContent(
-            "call-malformed-actor-evidence",
-            ShellTool.ToolName,
-            ToolInput.Create("Command", "git status"));
-
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            CreateInteractivePersonalContext("signalr/malformed-actor-evidence"),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("internal_policy_failure", decision.DenyReason);
         var row = Assert.Single(decision.ShellPolicyTrace.Rows);
         Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
         Assert.Equal(ShellPolicyTraceOutcome.Deny, row.Outcome);
         Assert.Equal(ShellPolicyTraceReason.InternalPolicyFailure, row.Reason);
-        Assert.Equal(1, approvalService.RequestCount);
     }
 
     [Fact]
@@ -2111,30 +1862,13 @@ public partial class DispatchingToolExecutorTests
                 Assert.IsAssignableFrom<IReadOnlyList<string>>(
                     persistentCandidate.Candidate.VerbTokens),
                 createdAt: grantTimestamp);
-            return new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(
+            return ShellApprovalMatchResult.Create(
+                request.Candidates,
+                null,
                 [
-                    new ShellGrantCandidateMatch(
-                        persistentCandidate.CandidateId,
-                        new ToolApprovalMatch(
-                            persistentCandidate.Candidate.Verb,
-                            "persistent",
-                            persistentEntry.FormatScope()),
-                        ShellCoverageKind.PersistentGlobal,
-                        NearMisses: [])
-                    {
-                        GrantCreatedAt = grantTimestamp
-                    },
-                    new ShellGrantCandidateMatch(
-                        sessionCandidate.CandidateId,
-                        new ToolApprovalMatch(
-                            sessionCandidate.Candidate.Verb,
-                            "session",
-                            "this chat"),
-                        ShellCoverageKind.Session,
-                        NearMisses: [])
-                ]));
+                    ShellGrantCandidateResult.Persistent(persistentCandidate, persistentEntry),
+                    ShellGrantCandidateResult.Session(sessionCandidate)
+                ]);
         });
         var executor = CreateApprovalGatedShellExecutor(approvalService);
         var call = new FunctionCallContent(
@@ -2158,101 +1892,22 @@ public partial class DispatchingToolExecutorTests
                 row.Stage == ShellPolicyTraceStage.StoredGrantMatch),
             row =>
             {
-                Assert.Equal(ShellCoverageKind.PersistentGlobal, row.Coverage);
+                Assert.Equal(ShellPolicyTraceCoverage.PersistentGlobal, row.Coverage);
                 Assert.Equal(grantTimestamp, row.GrantTimestamp);
             },
-            row => Assert.Equal(ShellCoverageKind.Session, row.Coverage));
-    }
-
-    // The match factories cannot travel through the theory signature:
-    // ShellApprovalMatchRequest/ShellApprovalMatchResult are internal, so a
-    // public theory method taking a Func over them fails CS0051. Rows carry
-    // only the case slug; the theory body resolves the factory from here.
-    private static readonly Dictionary<string, Func<ShellApprovalMatchRequest, ShellApprovalMatchResult>>
-        UnstableActorBatchFactories = new()
-        {
-            ["trace-preserved-after-fault"] = request =>
-            {
-                var first = request.Candidates[0];
-                var second = request.Candidates[1];
-                var matches = new[]
-                {
-                    new ShellGrantCandidateMatch(
-                        first.CandidateId,
-                        new ToolApprovalMatch(first.Candidate.Verb, "session", "this chat"),
-                        ShellCoverageKind.Session,
-                        NearMisses: []),
-                    new ShellGrantCandidateMatch(
-                        second.CandidateId,
-                        new ToolApprovalMatch("unrelated", "session", "this chat"),
-                        ShellCoverageKind.Session,
-                        NearMisses: [])
-                };
-                return new ShellApprovalMatchResult(
-                    new PersistentGrantStoreStatus.Ready(),
-                    Array.AsReadOnly(matches));
-            },
-            ["changing-actor-batch"] = request =>
-            {
-                var first = request.Candidates[0];
-                var second = request.Candidates[1];
-                return new ShellApprovalMatchResult(
-                    new PersistentGrantStoreStatus.Ready(),
-                    new ShrinkingCandidateMatchList(
-                    [
-                        new ShellGrantCandidateMatch(
-                            first.CandidateId,
-                            new ToolApprovalMatch(first.Candidate.Verb, "session", "this chat"),
-                            ShellCoverageKind.Session,
-                            NearMisses: []),
-                        new ShellGrantCandidateMatch(
-                            second.CandidateId,
-                            new ToolApprovalMatch("unrelated", "session", "this chat"),
-                            ShellCoverageKind.Session,
-                            NearMisses: [])
-                    ]));
-            },
-        };
-
-    public static IEnumerable<object[]> UnstableActorBatchCases() =>
-        UnstableActorBatchFactories.Keys.Select(static slug => new object[] { slug });
-
-    [Theory]
-    [MemberData(nameof(UnstableActorBatchCases))]
-    public async Task Unstable_actor_batch_applies_no_partial_evidence(string caseSlug)
-    {
-        var approvalService = new FixedShellApprovalService(UnstableActorBatchFactories[caseSlug]);
-        var executor = CreateApprovalGatedShellExecutor(approvalService);
-        var call = new FunctionCallContent(
-            $"call-{caseSlug}",
-            ShellTool.ToolName,
-            ToolInput.Create("Command", "git status && git push"));
-
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            CreateInteractivePersonalContext($"signalr/{caseSlug}"),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("internal_policy_failure", decision.DenyReason);
-        var row = Assert.Single(decision.ShellPolicyTrace.Rows);
-        Assert.Equal(ShellPolicyTraceStage.Completion, row.Stage);
-        Assert.Equal(ShellPolicyTraceOutcome.Deny, row.Outcome);
-        Assert.Equal(ShellPolicyTraceReason.InternalPolicyFailure, row.Reason);
+            row => Assert.Equal(ShellPolicyTraceCoverage.Session, row.Coverage));
     }
 
     [Fact]
     public async Task Authorization_evaluation_denies_uncovered_candidate_when_store_is_unavailable()
     {
         var approvalService = new FixedShellApprovalService(request =>
-            new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Unavailable(ApprovalStoreFailure.InvalidData),
-                Array.AsReadOnly(request.Candidates.Select(candidate =>
-                    new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        Match: null,
-                        GrantCoverage: null,
-                        NearMisses: [])).ToArray())));
+            ShellApprovalMatchResult.Create(
+                request.Candidates,
+                ApprovalStoreFailure.InvalidData,
+                request.Candidates
+                    .Select(static candidate => ShellGrantCandidateResult.Uncovered(candidate))
+                    .ToArray()));
         var executor = CreateApprovalGatedShellExecutor(approvalService);
         var call = new FunctionCallContent(
             "call-unavailable-store-miss",
@@ -2290,24 +1945,21 @@ public partial class DispatchingToolExecutorTests
             };
             var registry = new ToolRegistry();
             registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config));
-            var approvedScope = ApprovalEntry.CreateTokenPrefix(
+            var approvedGrant = ApprovalEntry.CreateTokenPrefix(
                 ApprovalShell.Bash,
                 ["git", "push"],
-                approvedDirectory).FormatScope();
-            var approvedMatch = new ToolApprovalMatch("git push", "persistent", approvedScope);
-            var approvedCandidate = BashCandidate("git push", approvedDirectory);
+                approvedDirectory);
+            var approvedMatch = new ToolApprovalMatch("git push", new GrantScope.Folder(approvedDirectory));
             var unapprovedCandidate = BashCandidate("git push", unapprovedDirectory);
-            var approvalService = new FixedApprovalService(
-                new ToolApprovalCheckResult(
-                    ["git push"],
-                    [approvedMatch])
-                {
-                    CandidateChecks =
-                    [
-                        new ToolApprovalCandidateCheck(approvedCandidate, approvedMatch),
-                        new ToolApprovalCandidateCheck(unapprovedCandidate, ApprovedMatch: null)
-                    ]
-                });
+            var approvalService = new FixedShellApprovalService(request =>
+                ShellApprovalMatchResult.Create(
+                    request.Candidates,
+                    persistentStoreFailure: null,
+                    request.Candidates
+                        .Select(candidate => candidate.Candidate.Directory == approvedDirectory
+                            ? ShellGrantCandidateResult.Persistent(candidate, approvedGrant)
+                            : ShellGrantCandidateResult.Uncovered(candidate))
+                        .ToArray()));
             var executor = new DispatchingToolExecutor(
                 registry,
                 new ToolAccessPolicy(
@@ -2345,166 +1997,6 @@ public partial class DispatchingToolExecutorTests
         {
             Directory.Delete(root, recursive: true);
         }
-    }
-
-    [Fact]
-    public async Task Authorization_evaluation_denies_inconsistent_candidate_result()
-    {
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
-        var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config));
-        var approvalService = new FixedApprovalService(
-            new ToolApprovalCheckResult(
-                ["git push"],
-                [])
-            {
-                CandidateChecks =
-                [
-                    new ToolApprovalCandidateCheck(
-                        new ApprovalCandidate("git push", Directory: null),
-                        ApprovedMatch: null)
-                ]
-            });
-        var executor = new DispatchingToolExecutor(
-            registry,
-            new ToolAccessPolicy(new NetclawPaths(),
-                config,
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])),
-            approvalService);
-        var call = CreateToolCall(
-            "call-inconsistent-partial-approval",
-            "shell_execute",
-            ToolInput.Create("Command", "git status && git push"));
-        var context = CreateInteractivePersonalContext("signalr/thread-inconsistent-partial-approval");
-
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            context,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("internal_policy_failure", decision.DenyReason);
-    }
-
-    [Fact]
-    public async Task Authorization_evaluation_denies_inconsistent_parser_tokens()
-    {
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
-        var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config));
-        var forgedCandidate = new ApprovalCandidate("git status", Directory: null)
-        {
-            Shell = ApprovalShell.Bash,
-            VerbTokens = Array.AsReadOnly(["git", "push"]),
-        };
-        var approvalService = new FixedApprovalService(
-            new ToolApprovalCheckResult(
-                ["git status", "git push"],
-                [])
-            {
-                CandidateChecks =
-                [
-                    new ToolApprovalCandidateCheck(forgedCandidate, ApprovedMatch: null),
-                    new ToolApprovalCandidateCheck(BashCandidate("git push"), ApprovedMatch: null)
-                ]
-            });
-        var executor = new DispatchingToolExecutor(
-            registry,
-            new ToolAccessPolicy(new NetclawPaths(),
-                config,
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])),
-            approvalService);
-        var call = new FunctionCallContent(
-            "call-inconsistent-parser-tokens",
-            "shell_execute",
-            ToolInput.Create("Command", "git status && git push"));
-        var context = CreateInteractivePersonalContext("signalr/thread-inconsistent-parser-tokens");
-
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            context,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("internal_policy_failure", decision.DenyReason);
-    }
-
-    [Fact]
-    public async Task Authorization_evaluation_rejects_inconsistent_all_approved_result()
-    {
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
-        var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config));
-        var approvalService = new FixedApprovalService(
-            new ToolApprovalCheckResult(
-                [],
-                [])
-            {
-                CandidateChecks =
-                [
-                    new ToolApprovalCandidateCheck(
-                        new ApprovalCandidate("git push", Directory: null),
-                        ApprovedMatch: null)
-                ]
-            });
-        var executor = new DispatchingToolExecutor(
-            registry,
-            new ToolAccessPolicy(new NetclawPaths(),
-                config,
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([])),
-            approvalService);
-        var call = CreateToolCall(
-            "call-inconsistent-all-approved",
-            "shell_execute",
-            ToolInput.Create("Command", "git status && git push"));
-        var context = CreateInteractivePersonalContext("signalr/thread-inconsistent-all-approved");
-
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            context,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("internal_policy_failure", decision.DenyReason);
     }
 
     [Fact]
@@ -2606,7 +2098,7 @@ public partial class DispatchingToolExecutorTests
                 $"call-{toolName}-deny", toolName,
                 buildArgs(filePath));
 
-            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-{toolName}-session-{Guid.NewGuid():N}");
+            var sessionDir = Path.Combine(_temp.Path, $"{toolName}-session");
             Directory.CreateDirectory(sessionDir);
 
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
@@ -2646,7 +2138,7 @@ public partial class DispatchingToolExecutorTests
                 "call-3", "file_write",
                 ToolInput.Create("Path", filePath, "Content", "dispatch test"));
 
-            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-dispatch-session-{Guid.NewGuid():N}");
+            var sessionDir = Path.Combine(_temp.Path, "dispatch-session");
             Directory.CreateDirectory(sessionDir);
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-1", sessionDir, new TestToolExecutionContextOptions
@@ -2722,7 +2214,7 @@ public partial class DispatchingToolExecutorTests
             new ToolPathPolicy([]));
 
         var registry = new ToolRegistry();
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-{audience}-tools-{Guid.NewGuid():N}"));
+        var paths = new NetclawPaths(Path.Combine(_temp.Path, $"{audience}-tools"));
         paths.EnsureDirectoriesExist();
         registry.WithFirstPartyTools(policy, webhookRouteStore: new WebhookRouteStore(paths));
         // set_webhook and delete_webhook ask WebhookRouteActor. This test reads
@@ -2785,7 +2277,7 @@ public partial class DispatchingToolExecutorTests
         try
         {
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
             var executor = new DispatchingToolExecutor(
                 registry,
                 policy,
@@ -2811,8 +2303,7 @@ public partial class DispatchingToolExecutorTests
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
             Assert.Null(context.Receipt);
 
-            context.OneTimeApprovedToolName = toolCall.Name;
-            context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
+            context.Approval.SeedOneTimeConsent(new OneTimeConsent(toolCall.Name, OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext)));
 
             // The one-time-approval bypass should let the call succeed.
             // Output text varies by test environment (git status); meaningful
@@ -2820,8 +2311,7 @@ public partial class DispatchingToolExecutorTests
             _ = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
             Assert.Equal(ToolInvocationOutcomeCategory.Success, context.Receipt?.Category);
 
-            context.OneTimeApprovedToolName = null;
-            context.SetOneTimeApprovedPatterns([]);
+            context.Approval.ClearOneTimeConsent();
 
             await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
@@ -2865,8 +2355,7 @@ public partial class DispatchingToolExecutorTests
         var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
             executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
 
-        context.OneTimeApprovedToolName = toolCall.Name;
-        context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
+        context.Approval.SeedOneTimeConsent(new OneTimeConsent(toolCall.Name, OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext)));
 
         var decision = await executor.EvaluateAuthorizationAsync(
             toolCall,
@@ -2882,8 +2371,13 @@ public partial class DispatchingToolExecutorTests
     [Fact]
     public async Task One_time_approval_remains_valid_when_persistent_store_is_unavailable()
     {
-        var initialExecutor = CreateApprovalGatedShellExecutor(new FixedApprovalService(
-            new ToolApprovalCheckResult(["git push"], [])));
+        var initialExecutor = CreateApprovalGatedShellExecutor(new FixedShellApprovalService(request =>
+            ShellApprovalMatchResult.Create(
+                request.Candidates,
+                persistentStoreFailure: null,
+                request.Candidates
+                    .Select(static candidate => ShellGrantCandidateResult.Uncovered(candidate))
+                    .ToArray())));
         var context = CreateInteractivePersonalContext("signalr/store-unavailable");
         var toolCall = new FunctionCallContent(
             "call-store-unavailable-once",
@@ -2896,14 +2390,15 @@ public partial class DispatchingToolExecutorTests
             TestContext.Current.CancellationToken);
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, initial.Outcome);
         Assert.NotNull(initial.ApprovalContext);
-        context.OneTimeApprovedToolName = toolCall.Name;
-        context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(initial.ApprovalContext));
+        context.Approval.SeedOneTimeConsent(new OneTimeConsent(toolCall.Name, OneTimeApprovalKeys.Create(initial.ApprovalContext!)));
 
-        var unavailableExecutor = CreateApprovalGatedShellExecutor(new FixedApprovalService(
-            new ToolApprovalCheckResult(["git push"], [])
-            {
-                PersistentStoreFailure = ApprovalStoreFailure.InvalidData,
-            }));
+        var unavailableExecutor = CreateApprovalGatedShellExecutor(new FixedShellApprovalService(request =>
+            ShellApprovalMatchResult.Create(
+                request.Candidates,
+                ApprovalStoreFailure.InvalidData,
+                request.Candidates
+                    .Select(static candidate => ShellGrantCandidateResult.Uncovered(candidate))
+                    .ToArray())));
         var retry = await unavailableExecutor.EvaluateAuthorizationAsync(
             toolCall,
             context,
@@ -2966,8 +2461,7 @@ public partial class DispatchingToolExecutorTests
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
 
-            context.OneTimeApprovedToolName = toolCall.Name;
-            context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
+            context.Approval.SeedOneTimeConsent(new OneTimeConsent(toolCall.Name, OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext)));
 
             var retryResult = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
             Assert.Contains("Successfully wrote", retryResult, StringComparison.Ordinal);
@@ -2981,8 +2475,7 @@ public partial class DispatchingToolExecutorTests
             await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(secondCall, context, TestContext.Current.CancellationToken));
 
-            context.OneTimeApprovedToolName = null;
-            context.SetOneTimeApprovedPatterns([]);
+            context.Approval.ClearOneTimeConsent();
 
             await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
@@ -3067,7 +2560,7 @@ public partial class DispatchingToolExecutorTests
         try
         {
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
             var executor = new DispatchingToolExecutor(
                 registry,
                 policy,
@@ -3091,13 +2584,21 @@ public partial class DispatchingToolExecutorTests
                 ? "Get-Location; Get-ChildItem"
                 : "pwd && ls";
 
-            await approvalService.RecordApprovalAsync(
-                "signalr/thread-filtered",
+            await approvalService.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"signalr/thread-filtered",
                 TrustAudience.Personal,
                 new ToolName("shell_execute"),
-                [approvedPattern],
-                persistent: false,
-                cwd: null,
+                [
+                    new ToolApprovalGrant(
+                        new ApprovalCandidate(approvedPattern, Directory: null)
+                        {
+                            Shell = ShellEnvironment.Grammar == ShellGrammar.PowerShell
+                                ? ApprovalShell.PowerShell
+                                : ApprovalShell.Bash,
+                            VerbTokens = [approvedPattern],
+                        },
+                        GrantScope.Session.Instance)
+                ],
                 TestContext.Current.CancellationToken);
 
             var call = CreateToolCall(
@@ -3111,14 +2612,12 @@ public partial class DispatchingToolExecutorTests
             Assert.Equal([unapprovedPattern], firstAttempt.ApprovalContext.Patterns);
             Assert.Equal([unapprovedPattern], firstAttempt.ApprovalContext.CandidateVerbs);
 
-            context.OneTimeApprovedToolName = call.Name;
-            context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
+            context.Approval.SeedOneTimeConsent(new OneTimeConsent(call.Name, OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext)));
 
             var retryResult = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
             Assert.Contains("Exit code: 0", retryResult, StringComparison.Ordinal);
 
-            context.OneTimeApprovedToolName = null;
-            context.SetOneTimeApprovedPatterns([]);
+            context.Approval.ClearOneTimeConsent();
 
             await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
@@ -3130,7 +2629,7 @@ public partial class DispatchingToolExecutorTests
     }
 
     [Fact]
-    public async Task Persistent_approval_hit_records_audit_context_without_prompting()
+    public async Task Persistent_approval_hit_reports_its_grant_scope_without_prompting()
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -3144,7 +2643,7 @@ public partial class DispatchingToolExecutorTests
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config));
 
-        var tempFile = Path.GetTempFileName();
+        var tempFile = Path.Combine(_temp.Path, "tool-approvals.json");
         var system = ActorSystem.Create($"tool-approval-audit-{Guid.NewGuid():N}");
         try
         {
@@ -3158,7 +2657,7 @@ public partial class DispatchingToolExecutorTests
                 ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "status"]));
 
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(store), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
             var executor = new DispatchingToolExecutor(
                 registry,
                 new ToolAccessPolicy(new NetclawPaths(),
@@ -3194,12 +2693,7 @@ public partial class DispatchingToolExecutorTests
             Assert.Equal(ToolAllowReason.StoredApproval, decision.AllowReason);
             var match = Assert.Single(decision.ApprovalMatches);
             Assert.Equal("git status", match.Pattern);
-            Assert.Equal("persistent", match.Source);
-            Assert.Equal("Bash token-prefix \"git status\" anywhere", match.Scope);
-            Assert.Equal("PreviouslyApproved", context.AppliedApprovalDecision);
-            Assert.Equal(
-                "git status [persistent: Bash token-prefix \"git status\" anywhere]",
-                context.AppliedApprovalPattern);
+            Assert.Equal(GrantScope.Everywhere.Instance, match.Scope);
         }
         finally
         {
@@ -3227,7 +2721,7 @@ public partial class DispatchingToolExecutorTests
         try
         {
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
             var executor = new DispatchingToolExecutor(
                 registry,
                 new ToolAccessPolicy(new NetclawPaths(),
@@ -3275,9 +2769,8 @@ public partial class DispatchingToolExecutorTests
                 TrustAudience.Personal,
                 new ToolName(toolCall.Name),
                 reviewedCandidates
-                    .Select(static candidate => new ToolApprovalGrant(candidate, Directory: null))
+                    .Select(static candidate => new ToolApprovalGrant(candidate, GrantScope.Session.Instance))
                     .ToArray(),
-                persistent: false,
                 TestContext.Current.CancellationToken);
 
             // Approved in firstContext's session — call should succeed.
@@ -3340,7 +2833,7 @@ public partial class DispatchingToolExecutorTests
         try
         {
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
-            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor), ShellEnvironment);
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
             var executor = new DispatchingToolExecutor(
                 registry,
                 new ToolAccessPolicy(new NetclawPaths(),
@@ -3381,13 +2874,13 @@ public partial class DispatchingToolExecutorTests
             // ApprovedSession click: the grant is recorded under the
             // canonical name (pending.ToolName), with the canonical
             // candidate verb extracted by DefaultApprovalMatcher.
-            await approvalService.RecordApprovalAsync(
-                "slack/D0/1779",
+            await approvalService.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"slack/D0/1779",
                 TrustAudience.Personal,
                 new ToolName(canonicalName),
-                firstAttempt.ApprovalContext.CandidateVerbs,
-                persistent: false,
-                cwd: null,
+                firstAttempt.ApprovalContext.Candidates!
+                    .Select(static candidate => new ToolApprovalGrant(candidate, GrantScope.Session.Instance))
+                    .ToArray(),
                 TestContext.Current.CancellationToken);
 
             // Retry — still under the sanitized alias the LLM uses. Pre-fix
@@ -3499,16 +2992,12 @@ public partial class DispatchingToolExecutorTests
                 ShellTool.ToolName,
                 ToolInput.Create("Command", phrase, "WorkingDirectory", root));
             var registry = new ToolRegistry();
-            var coordinator = new ShellPolicyCoordinator(registry, policy, approvalService: null);
+            registry.Register(tool);
 
-            var authorization = await coordinator.EvaluateAsync(
-                tool,
-                call,
-                context,
-                TestContext.Current.CancellationToken);
+            var authorization = await AuthorizeShellAsync(registry, policy, approvalService: null, call, context);
 
-            Assert.Equal(ToolAuthorizationOutcome.Allowed, authorization.Decision.Outcome);
-            var analysis = Assert.IsType<ShellAuthorizationResult.Authorized>(authorization).Analysis;
+            var analysis = Assert.IsType<ShellCommandAnalysis>(
+                Assert.IsType<AuthorizationDecision.Allowed>(authorization).Analysis);
             Assert.Equal(phrase, analysis.Source);
             Assert.Equal(root, analysis.WorkingDirectory);
         }
@@ -3604,9 +3093,8 @@ public partial class DispatchingToolExecutorTests
 
         var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
             executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
-        context.Approval.SeedOneTimeApproval(
-            call.Name,
-            OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
+        context.Approval.SeedOneTimeConsent(
+            OneTimeApprovalKeys.CreateConsent(call.Name, firstAttempt.ApprovalContext));
 
         var result = await executor.ExecuteAsync(
             call,
@@ -4033,22 +3521,13 @@ public partial class DispatchingToolExecutorTests
             "WorkingDirectory", Path.GetTempPath());
         var authoritativeContext = CreateInteractivePersonalContext("signalr/native-temporary-authoritative");
         var call = CreateToolCall("call-native-temporary-authoritative", ShellTool.ToolName, arguments);
-        var coordinator = new ShellPolicyCoordinator(registry, policy, approvalService);
-
-        var authorization = await coordinator.EvaluateAsync(
-            shellTool,
-            call,
-            authoritativeContext,
-            TestContext.Current.CancellationToken);
-
-        var decision = authorization.Decision;
+        var decision = await AuthorizeShellAsync(registry, policy, approvalService, call, authoritativeContext);
         Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
         var corrections = Assert.IsType<ToolCorrectionCollection>(decision.AgentCorrections);
         Assert.Collection(
             corrections.Items,
             correction => Assert.IsType<ToolCorrection.NativeToolSuggested>(correction),
             correction => Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(correction));
-        Assert.IsType<ShellAuthorizationResult.Stopped>(authorization);
         Assert.Equal(0, approvalService.RequestCount);
         Assert.Null(authoritativeContext.Receipt);
     }
@@ -4063,9 +3542,8 @@ public partial class DispatchingToolExecutorTests
             "WorkingDirectory", Path.GetTempPath()));
         var preflight = Assert.IsType<ShellPolicyPreflightResult.Continue>(
             policy.AuthorizeShellPreflight(registry.GetByName(ShellTool.ToolName)!, context, call.Arguments));
-        context.Approval.SeedOneTimeApproval(ShellTool.ToolName, ["unrelated invocation"]);
-        context.Approval.ApplyDecision("existing decision", "existing pattern");
-        var patterns = context.Approval.OneTimeApprovedPatterns;
+        var oneTimeConsent = new OneTimeConsent(ShellTool.ToolName, ["unrelated invocation"]);
+        context.Approval.SeedOneTimeConsent(oneTimeConsent);
         var cwd = context.Approval.Cwd;
         var attempt = context.Approval.AuthorizationAttemptId;
         var service = new FixedShellApprovalService(_ => throw new InvalidOperationException("Collection cannot contact the store."));
@@ -4077,23 +3555,22 @@ public partial class DispatchingToolExecutorTests
         Assert.Equal(2, first!.Items.Count);
         Assert.Equal(first.Items, second!.Items);
         Assert.Equal(0, service.RequestCount);
-        Assert.Same(patterns, context.Approval.OneTimeApprovedPatterns);
-        Assert.Equal(ShellTool.ToolName, context.Approval.OneTimeApprovedToolName);
+        Assert.Same(oneTimeConsent, context.Approval.OneTimeConsent);
         Assert.Equal(cwd, context.Approval.Cwd);
         Assert.Equal(attempt, context.Approval.AuthorizationAttemptId);
-        Assert.Equal("existing decision", context.Approval.AppliedDecision);
-        Assert.Equal("existing pattern", context.Approval.AppliedPattern);
         Assert.Null(context.Approval.ManagedTemporaryRetry);
         Assert.Null(context.Receipt);
         Assert.Empty(context.Outputs.FileAttachments);
     }
 
+    // The Personal profile may read the directory, attended or not (D2), so the
+    // reviewed phrase runs with no project declaration.
     [Theory]
     [InlineData(ToolApprovalMode.Auto, true)]
     [InlineData(ToolApprovalMode.Auto, false)]
     [InlineData(ToolApprovalMode.Approval, true)]
     [InlineData(ToolApprovalMode.Approval, false)]
-    public async Task Coordinator_selects_project_correction_from_registry_without_caller_advice(
+    public async Task Coordinator_runs_a_readable_reviewed_phrase_without_project_correction(
         ToolApprovalMode mode, bool interactive)
     {
         var directory = Path.GetFullPath(AppContext.BaseDirectory);
@@ -4111,18 +3588,15 @@ public partial class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(interactive)
             });
-        var coordinator = new ShellPolicyCoordinator(registry, policy, approvalService: null);
         var call = CreateToolCall("project", ShellTool.ToolName,
             ToolInput.Create("Command", command, "WorkingDirectory", directory));
 
-        var result = await coordinator.EvaluateAsync(registry.GetByName(ShellTool.ToolName)!, call, context,
-            TestContext.Current.CancellationToken);
+        var result = await AuthorizeShellAsync(registry, policy, approvalService: null, call, context);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Decision.Outcome);
-        Assert.Equal(directory, Assert.IsType<ToolCorrection.ProjectDirectorySuggested>(result.Decision.AgentCorrection).Directory);
-        Assert.IsType<ShellAuthorizationResult.Stopped>(result);
-        Assert.Null(result.Decision.ApprovalContext);
+        Assert.Null(result.ApprovalContext);
         Assert.Null(context.Receipt);
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, result.Outcome);
+        Assert.Null(result.AgentCorrections);
     }
 
     [Theory]
@@ -4137,26 +3611,24 @@ public partial class DispatchingToolExecutorTests
         var context = CreateInteractivePersonalContext("signalr/auto-temporary");
         var call = CreateToolCall("auto-temporary", ShellTool.ToolName,
             ToolInput.Create("Command", "git push", "WorkingDirectory", Path.GetTempPath()));
-        var result = await new ShellPolicyCoordinator(registry, policy, service).EvaluateAsync(
-            registry.GetByName(ShellTool.ToolName)!, call, context, TestContext.Current.CancellationToken);
+        var result = await AuthorizeShellAsync(registry, policy, service, call, context);
 
-        Assert.IsType<ShellAuthorizationResult.Stopped>(result);
         Assert.Equal(0, service.RequestCount);
         if (mode == ToolApprovalMode.Auto)
         {
-            Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Decision.Outcome);
-            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(result.Decision.AgentCorrection);
+            Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Outcome);
+            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(result.AgentCorrection);
         }
         else
         {
-            Assert.Equal(ToolAuthorizationOutcome.Denied, result.Decision.Outcome);
-            Assert.Null(result.Decision.AgentCorrections);
+            Assert.Equal(ToolAuthorizationOutcome.Denied, result.Outcome);
+            Assert.Null(result.AgentCorrections);
         }
     }
 
     [Theory]
     [InlineData(ToolApprovalMode.Auto, "", nameof(ToolAuthorizationOutcome.Allowed))]
-    [InlineData(ToolApprovalMode.Approval, "", nameof(ToolAuthorizationOutcome.RequiresApproval))]
+    [InlineData(ToolApprovalMode.Approval, "", nameof(ToolAuthorizationOutcome.Allowed))]
     [InlineData(ToolApprovalMode.Deny, "", nameof(ToolAuthorizationOutcome.Denied))]
     [InlineData(ToolApprovalMode.Auto, " > result.log", nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))]
     [InlineData(ToolApprovalMode.Approval, " > result.log", nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))]
@@ -4176,22 +3648,19 @@ public partial class DispatchingToolExecutorTests
         var call = CreateToolCall("temp-diagnostic", ShellTool.ToolName,
             ToolInput.Create("Command", diagnostic + suffix, "WorkingDirectory", directory));
 
-        var result = await new ShellPolicyCoordinator(registry, policy, approvalService: null).EvaluateAsync(
-            registry.GetByName(ShellTool.ToolName)!, call, context, TestContext.Current.CancellationToken);
+        var result = await AuthorizeShellAsync(registry, policy, approvalService: null, call, context);
 
-        Assert.Equal(expected, result.Decision.Outcome.ToString());
+        Assert.Equal(expected, result.Outcome.ToString());
         Assert.Equal(directory, call.Arguments!["WorkingDirectory"]);
         Assert.Null(context.Receipt);
         if (expected == nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))
-            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(result.Decision.AgentCorrection);
+            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(result.AgentCorrection);
         else
-            Assert.Null(result.Decision.AgentCorrections);
+            Assert.Null(result.AgentCorrections);
         if (expected == nameof(ToolAuthorizationOutcome.Allowed))
             Assert.Equal(
                 Path.GetFullPath(directory),
-                Assert.IsType<ShellAuthorizationResult.Authorized>(result).Analysis.WorkingDirectory);
-        else
-            Assert.IsType<ShellAuthorizationResult.Stopped>(result);
+                Assert.IsType<AuthorizationDecision.Allowed>(result).Analysis?.WorkingDirectory);
     }
 
     [Fact]
@@ -4202,30 +3671,17 @@ public partial class DispatchingToolExecutorTests
         var approvalService = new FixedShellApprovalService(request =>
         {
             Assert.Equal(2, request.Candidates.Count);
-            var matches = request.Candidates.Select((candidate, index) =>
+            var results = request.Candidates.Select((candidate, index) =>
             {
                 if (index != 0)
-                {
-                    return new ShellGrantCandidateMatch(
-                        candidate.CandidateId,
-                        Match: null,
-                        GrantCoverage: null,
-                        NearMisses: []);
-                }
+                    return ShellGrantCandidateResult.Uncovered(candidate);
 
                 approvedMatch = new ToolApprovalMatch(
                     candidate.Candidate.Verb,
-                    "session",
-                    "this chat");
-                return new ShellGrantCandidateMatch(
-                    candidate.CandidateId,
-                    approvedMatch,
-                    ShellCoverageKind.Session,
-                    NearMisses: []);
+                    GrantScope.Session.Instance);
+                return ShellGrantCandidateResult.Session(candidate);
             }).ToArray();
-            return new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(matches));
+            return ShellApprovalMatchResult.Create(request.Candidates, null, results);
         });
         var executor = new DispatchingToolExecutor(registry, policy, approvalService);
         var call = CreateToolCall(
@@ -4422,6 +3878,16 @@ public partial class DispatchingToolExecutorTests
     // the constructor's null default — do not route them through
     // CreateApprovalGatedShellExecutor, which substitutes an
     // UnexpectedApprovalService for a null approvalService).
+    // Authorizes one shell call with the linear authorizer, as the executor does.
+    private static Task<AuthorizationDecision> AuthorizeShellAsync(
+        ToolRegistry registry,
+        ToolAccessPolicy policy,
+        IToolApprovalService? approvalService,
+        FunctionCallContent call,
+        ToolExecutionContext context)
+        => new ToolAuthorizer(registry, policy, approvalService, new ShellPolicyCoordinator(registry, policy, approvalService))
+            .AuthorizeAsync(call, context, TestContext.Current.CancellationToken);
+
     private static (ToolRegistry Registry, ToolAccessPolicy Policy) CreateApprovalGatedShellRegistryAndPolicy(
         ShellExecutionEnvironment environment,
         SafeVerbList? safeVerbs = null,
@@ -4476,11 +3942,43 @@ public partial class DispatchingToolExecutorTests
         return config;
     }
 
+    // Grants the named verbs everywhere, or in one folder and below it, as the store matches them.
+    private static FixedShellApprovalService GrantShellVerbs(string? directory, params string[] verbs)
+        => new(request => ShellApprovalMatchResult.Create(
+            request.Candidates,
+            null,
+            request.Candidates.Select(candidate =>
+            {
+                var inFolder = directory is null
+                    || candidate.Candidate.Directory is { } candidateDirectory
+                    && (candidateDirectory == directory
+                        || candidateDirectory.StartsWith(directory + "/", StringComparison.Ordinal));
+                if (!verbs.Contains(candidate.Candidate.Verb) || !inFolder)
+                    return ShellGrantCandidateResult.Uncovered(candidate);
+
+                var entry = ApprovalEntry.CreateTokenPrefix(
+                    ApprovalShell.Bash,
+                    Assert.IsAssignableFrom<IReadOnlyList<string>>(candidate.Candidate.VerbTokens),
+                    directory,
+                    createdAt: null);
+                return ShellGrantCandidateResult.Persistent(candidate, entry);
+            }).ToArray()));
+
+    private static IReadOnlyList<string> DescribeRequest(FixedShellApprovalService approvalService)
+        => Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest).Candidates
+            .Select(static candidate => $"{candidate.Candidate.Verb}@{candidate.Candidate.Directory}")
+            .ToArray();
+
     private static FixedShellApprovalService GrantEveryShellCandidate()
         => new(request =>
         {
-            var matches = request.Candidates.Select(candidate =>
+            var results = request.Candidates.Select(candidate =>
             {
+                // A candidate without command words (an exact unresolved
+                // command) has no grant identity, as in the real store.
+                if (candidate.Candidate.VerbTokens is null)
+                    return ShellGrantCandidateResult.Uncovered(candidate);
+
                 var shell = Assert.IsType<ApprovalShell>(candidate.Candidate.Shell);
                 var tokens = Assert.IsAssignableFrom<IReadOnlyList<string>>(
                     candidate.Candidate.VerbTokens);
@@ -4489,98 +3987,10 @@ public partial class DispatchingToolExecutorTests
                     tokens,
                     directory: null,
                     createdAt: null);
-                return new ShellGrantCandidateMatch(
-                    candidate.CandidateId,
-                    new ToolApprovalMatch(
-                        candidate.Candidate.Verb,
-                        "persistent",
-                        entry.FormatScope()),
-                    ShellCoverageKind.PersistentGlobal,
-                    NearMisses: []);
+                return ShellGrantCandidateResult.Persistent(candidate, entry);
             }).ToArray();
-            return new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(matches));
+            return ShellApprovalMatchResult.Create(request.Candidates, null, results);
         });
-
-    private static ShellApprovalMatchResult CreateMalformedActorResult(
-        ShellApprovalMatchRequest request,
-        MalformedActorEvidenceCase malformedCase)
-    {
-        var candidate = request.Candidates[0];
-        var sessionMatch = new ToolApprovalMatch(
-            candidate.Candidate.Verb,
-            "session",
-            "this chat");
-        var mismatchedGrant = ApprovalEntry.CreateTokenPrefix(
-            Assert.IsType<ApprovalShell>(candidate.Candidate.Shell),
-            ["git", "push"]);
-        var tokenNearMiss = new ShellApprovalNearMiss(
-            mismatchedGrant,
-            ShellApprovalNearMissReason.TokenMismatch);
-        var store = malformedCase switch
-        {
-            MalformedActorEvidenceCase.NullStoreStatus => null!,
-            MalformedActorEvidenceCase.NearMissWithUnavailableStore =>
-                new PersistentGrantStoreStatus.Unavailable(ApprovalStoreFailure.InvalidData),
-            _ => (PersistentGrantStoreStatus)new PersistentGrantStoreStatus.Ready(),
-        };
-        var match = malformedCase switch
-        {
-            MalformedActorEvidenceCase.MultipleNearMisses => new ShellGrantCandidateMatch(
-                candidate.CandidateId,
-                Match: null,
-                GrantCoverage: null,
-                NearMisses: [tokenNearMiss, tokenNearMiss]),
-            MalformedActorEvidenceCase.InvalidNearMissReason => new ShellGrantCandidateMatch(
-                candidate.CandidateId,
-                Match: null,
-                GrantCoverage: null,
-                NearMisses:
-                [
-                    new ShellApprovalNearMiss(
-                        mismatchedGrant,
-                        (ShellApprovalNearMissReason)999)
-                ]),
-            MalformedActorEvidenceCase.NearMissWithUnavailableStore => new ShellGrantCandidateMatch(
-                candidate.CandidateId,
-                Match: null,
-                GrantCoverage: null,
-                NearMisses: [tokenNearMiss]),
-            MalformedActorEvidenceCase.MatchWithNearMiss => new ShellGrantCandidateMatch(
-                candidate.CandidateId,
-                sessionMatch,
-                ShellCoverageKind.Session,
-                NearMisses: [tokenNearMiss]),
-            MalformedActorEvidenceCase.CoverageWithoutMatch => new ShellGrantCandidateMatch(
-                candidate.CandidateId,
-                Match: null,
-                GrantCoverage: ShellCoverageKind.Session,
-                NearMisses: []),
-            MalformedActorEvidenceCase.InvalidCoverage => new ShellGrantCandidateMatch(
-                candidate.CandidateId,
-                sessionMatch,
-                (ShellCoverageKind)999,
-                NearMisses: []),
-            MalformedActorEvidenceCase.SessionTimestamp => new ShellGrantCandidateMatch(
-                candidate.CandidateId,
-                sessionMatch,
-                ShellCoverageKind.Session,
-                NearMisses: [])
-            {
-                GrantCreatedAt = new DateTimeOffset(2026, 8, 14, 1, 0, 0, TimeSpan.Zero)
-            },
-            _ => new ShellGrantCandidateMatch(
-                candidate.CandidateId,
-                Match: null,
-                GrantCoverage: null,
-                NearMisses: []),
-        };
-        var matches = malformedCase == MalformedActorEvidenceCase.WrongCandidateCount
-            ? Array.Empty<ShellGrantCandidateMatch>()
-            : [match];
-        return new ShellApprovalMatchResult(store, Array.AsReadOnly(matches));
-    }
 
     [Fact]
     public async Task Missing_rationale_rejects_before_the_approval_service()
@@ -4612,7 +4022,7 @@ public partial class DispatchingToolExecutorTests
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
-    private static ToolExecutionContext CreateInteractivePersonalExecutionContext(string sessionId)
+    private ToolExecutionContext CreateInteractivePersonalExecutionContext(string sessionId)
         => TestToolExecutionContext.CreateBound(
             sessionId,
             BoundSessionDirectory,
@@ -4684,19 +4094,6 @@ public partial class DispatchingToolExecutorTests
 
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
-    public enum MalformedActorEvidenceCase
-    {
-        InvalidCoverage,
-        SessionTimestamp,
-        MultipleNearMisses,
-        InvalidNearMissReason,
-        NearMissWithUnavailableStore,
-        MatchWithNearMiss,
-        CoverageWithoutMatch,
-        NullStoreStatus,
-        WrongCandidateCount,
-    }
-
     private static ApprovalCandidate BashCandidate(string verb, string? directory = null) =>
         new(verb, directory)
         {
@@ -4716,22 +4113,11 @@ public partial class DispatchingToolExecutorTests
             CancellationToken ct = default)
             => throw new InvalidOperationException("The approval-exempt path must not query stored approvals.");
 
-        public Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
-            ToolApprovalSessionId? sessionId,
-            TrustAudience audience,
-            ToolName toolName,
-            IReadOnlyList<string> patterns,
-            string? cwd,
-            CancellationToken ct = default)
-            => throw new InvalidOperationException("The approval-exempt path must not query stored approvals.");
-
-        public Task RecordApprovalAsync(
+        public Task RecordApprovalCandidatesAsync(
             ToolApprovalSessionId sessionId,
             TrustAudience audience,
             ToolName toolName,
-            IReadOnlyList<string> patterns,
-            bool persistent,
-            string? cwd,
+            IReadOnlyList<ToolApprovalGrant> grants,
             CancellationToken ct = default)
             => throw new InvalidOperationException("The approval-exempt path must not record an approval.");
     }
@@ -4747,22 +4133,11 @@ public partial class DispatchingToolExecutorTests
             CancellationToken ct = default)
             => Task.FromResult(result);
 
-        public Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
-            ToolApprovalSessionId? sessionId,
-            TrustAudience audience,
-            ToolName toolName,
-            IReadOnlyList<string> patterns,
-            string? cwd,
-            CancellationToken ct = default)
-            => throw new InvalidOperationException("The test does not use the legacy approval check.");
-
-        public Task RecordApprovalAsync(
+        public Task RecordApprovalCandidatesAsync(
             ToolApprovalSessionId sessionId,
             TrustAudience audience,
             ToolName toolName,
-            IReadOnlyList<string> patterns,
-            bool persistent,
-            string? cwd,
+            IReadOnlyList<ToolApprovalGrant> grants,
             CancellationToken ct = default)
             => throw new InvalidOperationException("The authorization evaluator must not record an approval.");
     }
@@ -4793,42 +4168,13 @@ public partial class DispatchingToolExecutorTests
             CancellationToken ct = default)
             => throw new InvalidOperationException("The shell coordinator must use the typed batch protocol.");
 
-        public Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
-            ToolApprovalSessionId? sessionId,
-            TrustAudience audience,
-            ToolName toolName,
-            IReadOnlyList<string> patterns,
-            string? cwd,
-            CancellationToken ct = default)
-            => throw new InvalidOperationException("The shell coordinator must use the typed batch protocol.");
-
-        public Task RecordApprovalAsync(
+        public Task RecordApprovalCandidatesAsync(
             ToolApprovalSessionId sessionId,
             TrustAudience audience,
             ToolName toolName,
-            IReadOnlyList<string> patterns,
-            bool persistent,
-            string? cwd,
+            IReadOnlyList<ToolApprovalGrant> grants,
             CancellationToken ct = default)
             => throw new InvalidOperationException("The authorization evaluator must not record an approval.");
-    }
-
-    private sealed class ShrinkingCandidateMatchList(
-        ShellGrantCandidateMatch[] items) : IReadOnlyList<ShellGrantCandidateMatch>
-    {
-        private int _countReads;
-
-        public int Count => Interlocked.Increment(ref _countReads) == 1
-            ? items.Length
-            : 1;
-
-        public ShellGrantCandidateMatch this[int index] => items[index];
-
-        public IEnumerator<ShellGrantCandidateMatch> GetEnumerator()
-            => ((IEnumerable<ShellGrantCandidateMatch>)items).GetEnumerator();
-
-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
-            => items.GetEnumerator();
     }
 
     private sealed class RecordingLogger<T> : ILogger<T>

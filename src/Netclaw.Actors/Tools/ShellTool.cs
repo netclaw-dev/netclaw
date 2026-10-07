@@ -36,6 +36,7 @@ namespace Netclaw.Actors.Tools;
 public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {
     public const string ToolName = "shell_execute";
+    private const string MissingCommandError = "Error: 'command' parameter is required.";
 
     // The required execution context carries the session default or the
     // agent's validated _timeout_seconds hint as a semantic value.
@@ -56,7 +57,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             "The smallest shell operation that answers the request. Use one operation per call. Keep independent searches and diagnostics separate; do not join them with separators or labels. Add a pipeline only when the requested result requires it. Omit WorkingDirectory for declared-project work. Do not use shell for disposable text unless shell behavior is requested. Do not verify successful structured results with shell. If approval is required but no interactive requester is available, do not retry or substitute the call during that turn. After an access denial, do not retry that call during the same user turn. Do not change its scope or substitute another tool to evade the denial. A later explicit user request can start a new call under normal approval policy. Apply one 'Tool execution deferred:' correction unchanged.")]
         string Command,
         [param: Description(
-            "Set only for one call in a named child directory or worktree. Omit for declared-project work. Standard temporary APIs use temp_dir.")]
+            "Set for one call in a named child directory or worktree. Omit for ordinary declared-project work. After one-call directory advice, set this to project_dir if the task needs the original inline directory behavior. Standard temporary APIs use temp_dir.")]
         string? WorkingDirectory = null);
 
     public ShellTool(ToolConfig config, ToolPathPolicy pathPolicy, ShellCommandPolicy commandPolicy)
@@ -91,6 +92,17 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         return await ExecuteCoreAsync(args, context, launch, ct);
     }
 
+    internal string ValidateUnanalyzedArguments(IDictionary<string, object?>? arguments)
+    {
+        if (!TryParse(arguments, out var error, out var args))
+            return error;
+
+        if (string.IsNullOrWhiteSpace(args.Command))
+            return MissingCommandError;
+
+        throw new InvalidOperationException("Unanalyzed shell input cannot execute.");
+    }
+
     private async Task<string> ExecuteCoreAsync(
         Params args,
         ToolInvocationContext context,
@@ -98,7 +110,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Command))
-            return "Error: 'command' parameter is required.";
+            return MissingCommandError;
 
         var launch = authorizedLaunch ?? CreateDirectLaunch(args.Command, args.WorkingDirectory, context);
         var effectiveTimeout = context.ExecutionTimeout.Value;

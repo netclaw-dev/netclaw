@@ -13,6 +13,7 @@ using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
 using Netclaw.Tests.Utilities;
@@ -47,6 +48,26 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
         var (coordinator, drain) = CreateCoordinator(
             ["slack/C123.1", "slack/C123.2"],
             timeProvider: time);
+        drain.RestartReminder = new ReminderDefinition
+        {
+            Id = new ReminderId("restart-resume-test"),
+            Title = "Resume after daemon restart",
+            Instructions = "Resume the work that was interrupted by the daemon restart.",
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = time.GetUtcNow()
+            },
+            Delivery = new ReminderDelivery
+            {
+                Kind = DeliveryKind.CurrentSession,
+                SessionId = "slack/C123.1",
+                OriginChannelType = ChannelType.Slack
+            },
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            ExpiresAt = time.GetUtcNow().AddMinutes(10)
+        };
 
         var restart = coordinator.RequestConfigRestartAsync(CancellationToken.None);
         await drain.AllRequestsObserved;
@@ -60,8 +81,7 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
 
         var manifest = await new RestartManifestStore(_paths).ReadAsync(CancellationToken.None);
         Assert.NotNull(manifest);
-        Assert.Equal(["slack/C123.1", "slack/C123.2"], manifest!.SessionIds);
-        Assert.Empty(manifest.TimedOutSessionIds);
+        Assert.Equal("restart-resume-test", Assert.Single(manifest!.RestartReminders).Id.Value);
 
         var alert = Assert.Single(_sink.Alerts);
         Assert.Equal("drained", alert.Context!["drainOutcome"]);
@@ -89,9 +109,7 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
         Assert.True(_restartSignal.RestartRequested);
         Assert.True(_appLifetime.StopRequested);
 
-        var manifest = await new RestartManifestStore(_paths).ReadAsync(CancellationToken.None);
-        Assert.NotNull(manifest);
-        Assert.Equal(["slack/C123.2"], manifest!.TimedOutSessionIds);
+        Assert.Null(await new RestartManifestStore(_paths).ReadAsync(CancellationToken.None));
 
         var alert = Assert.Single(_sink.Alerts);
         Assert.Equal("timeout", alert.Context!["drainOutcome"]);
@@ -197,14 +215,9 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
     [Fact]
     public async Task SessionDrainHelper_daemon_stop_bound_times_out_instead_of_hanging_when_a_session_never_acks()
     {
-        // Mirrors the daemon-stop CoordinatedShutdown drain task wired in Program.cs
-        // (netclaw-dev/netclaw#1664): a session whose in-flight turn is parked on interactive
-        // tool approval never acks PrepareForDaemonRestart. Previously this call passed
-        // CancellationToken.None for the operation token and hung until Akka's own 200s
-        // before-service-unbind phase timeout abandoned the task. The bounded CTS below —
-        // sized from DaemonConfig.BoundedDrainTimeout (GracefulShutdownBudget minus
-        // DrainSafetyMargin) and driven by TimeProvider exactly as Program.cs constructs it —
-        // must make the drain complete with a timed-out result well before that.
+        // This test mirrors the daemon-stop drain task in Program.cs. A session task can
+        // ignore cancellation and fail to acknowledge drain. The bounded CTS must end the
+        // drain before Akka's phase timeout abandons the task.
         var time = new FakeTimeProvider();
         var activeIds = new[] { "slack/approval-parked" };
         var drain = new DrainControl(activeIds, activeIds); // never acknowledged
@@ -312,6 +325,8 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
         private int _requestCount;
         private int _acknowledgementCount;
 
+        public ReminderDefinition? RestartReminder { get; set; }
+
         public DrainControl(
             IReadOnlyList<string> activeSessionIds,
             IReadOnlyList<string> timedOutSessionIds)
@@ -346,7 +361,11 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
                 if (_timedOutSessionIds.Contains(sessionId))
                     continue;
 
-                replyTo.Tell(CommandAck.For(new SessionId(sessionId)));
+                replyTo.Tell(new DaemonRestartPrepared(
+                    new SessionId(sessionId),
+                    RestartReminder?.Delivery.SessionId == sessionId
+                        ? RestartReminder
+                        : null));
                 if (Interlocked.Increment(ref _acknowledgementCount) == _expectedAcknowledgementCount)
                     _allAcknowledgementsSent.TrySetResult();
             }

@@ -82,6 +82,9 @@ public sealed class McpOAuthEndToEndTests : IDisposable
             NullNotificationSink.Instance,
             TimeProvider.System,
             new BodylessDcrRuntime(),
+            new McpArtifactMaterializer(
+                new MagicByteContentScanner(new ContentPolicy()),
+                new RecordingLogger<McpArtifactMaterializer>()),
             logger,
             new SessionConfig());
 

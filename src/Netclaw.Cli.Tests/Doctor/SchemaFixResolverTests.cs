@@ -282,6 +282,68 @@ public sealed class SchemaFixResolverTests
         Assert.Equal("ReadWrite", config["Mode"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("oneOf")]
+    [InlineData("anyOf")]
+    public void IgnoresDisallowedPropertiesFromInactiveUnionBranch(string unionKeyword)
+    {
+        var (schema, schemaJson) = ParseSchema($$"""
+            {
+              "type": "object",
+              "properties": {
+                "Models": {
+                  "{{unionKeyword}}": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "Main": { "type": "string" }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["Definitions", "Roles"],
+                      "properties": {
+                        "Definitions": { "type": "object" },
+                        "Roles": { "type": "object" }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "Settings": {
+                  "type": "object",
+                  "properties": {
+                    "Enabled": { "type": "boolean" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+            """);
+
+        var config = JsonNode.Parse("""
+            {
+              "Models": {
+                "Definitions": {},
+                "Roles": {}
+              },
+              "Settings": {
+                "Enabled": true,
+                "Retired": true
+              }
+            }
+            """)!.AsObject();
+
+        var result = SchemaFixResolver.TryApplySchemaFixes(schema, schemaJson, config, out var fixes);
+
+        Assert.True(result);
+        Assert.Single(fixes);
+        Assert.Null(config["Settings"]!["Retired"]);
+        Assert.NotNull(config["Models"]!["Definitions"]);
+        Assert.NotNull(config["Models"]!["Roles"]);
+    }
+
     private static (JsonSchema Schema, JsonObject Json) ParseSchema(string schemaText)
     {
         var schema = JsonSchema.FromText(schemaText);

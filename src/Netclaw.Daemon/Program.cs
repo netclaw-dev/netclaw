@@ -169,7 +169,7 @@ static async Task RunDaemonAsync(
     builder.WebHost.UseUrls($"http://{daemonConfig.Host}:{daemonConfig.Port}");
     var daemonLogLevel = builder.ConfigureNetclawLogging(paths);
     builder.AddNetclawTelemetry();
-    ConfigureDaemonServices(
+    var configurationWarnings = ConfigureDaemonServices(
         builder.Services,
         builder.Configuration,
         paths,
@@ -242,6 +242,9 @@ static async Task RunDaemonAsync(
         shellResolution.Environment.ExecutablePath,
         shellResolution.Environment.Grammar,
         shellResolution.Environment.PowerShellDialect?.ToString() ?? "not-applicable");
+    foreach (var warning in configurationWarnings)
+        startupLogger.LogWarning("Configuration warning: {ConfigurationWarning}", warning);
+
     if (shellResolution.FallbackReason is { } fallbackReason)
     {
         startupLogger.LogWarning(
@@ -399,10 +402,7 @@ static NetclawPaths ConfigureConfigServices(
     // 1. netclaw.json (base config, optional)
     // 2. secrets.json (credentials overlay, optional)
     // 3. NETCLAW_* environment variables (highest priority)
-    configuration
-        .AddJsonFile(bootstrapPaths.NetclawConfigPath, optional: true, reloadOnChange: false)
-        .AddJsonFile(bootstrapPaths.SecretsPath, optional: true, reloadOnChange: false)
-        .AddEnvironmentVariables("NETCLAW_");
+    configuration.AddNetclawDaemonSources(bootstrapPaths);
 
     // Re-create paths with config-driven overrides (e.g. custom workspaces directory).
     var workspacesDir = configuration.GetValue<string>("Workspaces:Directory");
@@ -439,7 +439,8 @@ static NetclawPaths ConfigureConfigServices(
 // Daemon-only services (actor system, tools, persistence)
 // ═══════════════════════════════════════════════════════════════════════
 
-static void ConfigureDaemonServices(
+// Returns configuration warnings. The caller logs them after the host builds its loggers.
+static IReadOnlyList<string> ConfigureDaemonServices(
     IServiceCollection services,
     IConfigurationManager configuration,
     NetclawPaths paths,
@@ -584,23 +585,15 @@ static void ConfigureDaemonServices(
     var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));
     services.AddSingleton(sessionConfig);
 
-    // Tools (auto-bound, no required properties)
-    var toolConfig = configuration.GetSection("Tools")
-        .Get<ToolConfig>() ?? new ToolConfig();
-    var attachmentErrors = toolConfig.AudienceProfiles.ValidateChannelAttachments();
-    if (attachmentErrors.Count > 0)
-    {
-        throw new InvalidOperationException(
-            "Invalid Tools.AudienceProfiles.ChannelAttachments configuration: "
-            + string.Join("; ", attachmentErrors));
-    }
-    services.AddSingleton(toolConfig);
-
-    var securityPolicyConfig = configuration.GetSection("Security")
-        .Get<SecurityPolicyConfig>() ?? new SecurityPolicyConfig();
+    // The Tools defaults depend on the resolved posture, so Security and Tools bind together.
+    var policyConfiguration = PolicyConfiguration.Bind(configuration);
+    var securityPolicyConfig = policyConfiguration.Security;
     services.AddSingleton(securityPolicyConfig);
-    var effectivePolicyDefaults = SecurityPolicyDefaults.Resolve(securityPolicyConfig);
+    var effectivePolicyDefaults = policyConfiguration.Defaults;
     services.AddSingleton(effectivePolicyDefaults);
+    var toolConfig = policyConfiguration.Tools;
+    var toolConfigWarnings = policyConfiguration.ToolWarnings;
+    services.AddSingleton(toolConfig);
     services.AddSingleton<TrustContextDeriver>();
 
     // Reminder limits stay private. Netclaw sets the library acknowledgement
@@ -627,25 +620,17 @@ static void ConfigureDaemonServices(
         .Get<SearchConfig>() ?? new SearchConfig();
     var searchBackend = searchConfig.Enabled ? CreateSearchBackend(searchConfig) : null;
 
+    // Server feed skill sources (private skill-server instances). The feed list
+    // is fixed for the daemon lifetime; the tool path policy protects the sync
+    // state file of each feed.
+    var skillFeedsConfig = configuration.GetSection("SkillFeeds")
+        .Get<SkillFeedsConfig>() ?? new SkillFeedsConfig();
+    services.AddSingleton(skillFeedsConfig);
+
     // Agent tools cannot read or change the control plane. This also protects the
     // complete operator-only tool catalogs from model-visible name disclosure.
-    var toolPathPolicy = DaemonToolPathPolicyFactory.Create(paths, shellEnvironment);
+    var toolPathPolicy = DaemonToolPathPolicyFactory.Create(paths, shellEnvironment, skillFeedsConfig);
     services.AddSingleton(toolPathPolicy);
-
-    // Load operator-authored hard-deny overrides (additive only — see
-    // HardDenyOverridesLoader). Missing file → empty list and only shipped
-    // defaults apply. Malformed file → daemon refuses to start; the
-    // loader throws InvalidDataException with operator-facing context so
-    // the failure surfaces loudly rather than silently dropping rules.
-    var hardDenyOverridesLoader = new HardDenyOverridesLoader();
-    var hardDenyOverrides = hardDenyOverridesLoader.Load(paths.HardDenyOverridesPath);
-    services.AddSingleton(hardDenyOverridesLoader);
-
-    var shellCommandPolicy = new ShellCommandPolicy(
-        shellEnvironment,
-        toolConfig.HardDenyPatterns,
-        hardDenyOverrides);
-    services.AddSingleton(shellCommandPolicy);
 
     services.AddShellParser(shellEnvironment);
 
@@ -676,7 +661,6 @@ static void ConfigureDaemonServices(
         SkillSyncEnabled: skillSyncConfig.Enabled,
         SubAgentsEnabled: subAgentConfig.Enabled,
         SchedulingEnabled: schedulingConfig.Enabled);
-    var fileApprovalMatcher = new FilePathApprovalMatcher(paths.ConfigDirectory);
     // Safe-verbs list: bundled per-OS defaults only — embedded resource in
     // Netclaw.Configuration with no on-disk user override. Used by the
     // approval gate's verb-pattern Layer to auto-allow demonstrably
@@ -687,29 +671,15 @@ static void ConfigureDaemonServices(
     var safeVerbs = SafeVerbLoader.Load(shellEnvironment.Platform == ShellPlatform.Windows);
     services.AddSingleton(safeVerbs);
 
-    var toolAccessPolicy = new ToolAccessPolicy(
+    var toolAccessPolicy = services.AddDaemonToolAuthorization(
         paths,
+        shellEnvironment,
         toolConfig,
         effectivePolicyDefaults,
-        shellCommandPolicy,
         toolPathPolicy,
-        fileApprovalMatcher,
+        safeVerbs,
         featureGates,
-        safeVerbs);
-    services.AddSingleton(toolAccessPolicy);
-
-    var approvalShell = shellEnvironment.Grammar switch
-    {
-        ShellGrammar.Bash => ApprovalShell.Bash,
-        ShellGrammar.PowerShell => ApprovalShell.PowerShell,
-        _ => throw new InvalidOperationException("The native shell grammar is invalid.")
-    };
-    var toolApprovalStore = new ToolApprovalStore(
-        paths.ToolApprovalsPath,
-        TimeProvider.System,
-        new ApprovalStoreMigrationContext(approvalShell));
-    services.AddSingleton(toolApprovalStore);
-    services.AddSingleton<IToolApprovalService, AkkaToolApprovalService>();
+        TimeProvider.System);
 
     var toolRegistry = new ToolRegistry();
     toolRegistry.WithFirstPartyTools(toolAccessPolicy, searchBackend,
@@ -725,11 +695,6 @@ static void ConfigureDaemonServices(
     var resolvedExternalSources = externalSkillsConfig.ResolveEnabledSources();
     services.AddSingleton(externalSkillsConfig);
     services.AddSingleton(resolvedExternalSources);
-
-    // Server feed skill sources (private skill-server instances)
-    var skillFeedsConfig = configuration.GetSection("SkillFeeds")
-        .Get<SkillFeedsConfig>() ?? new SkillFeedsConfig();
-    services.AddSingleton(skillFeedsConfig);
 
     services.AddSingleton(skillRegistry);
 
@@ -814,13 +779,7 @@ static void ConfigureDaemonServices(
 
     services.AddSingleton<IMemoryExtractor>(NullMemoryExtractor.Instance);
 
-    services.AddSingleton(toolRegistry);
-    services.AddSingleton<IToolExecutor>(sp =>
-        new DispatchingToolExecutor(
-            toolRegistry,
-            toolAccessPolicy,
-            sp.GetService<IToolApprovalService>(),
-            sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
+    services.AddDaemonToolExecutor(toolRegistry, toolAccessPolicy);
     // Operational notification webhooks
     var notificationsConfig = configuration.GetSection("Notifications")
         .Get<NotificationsConfig>() ?? new NotificationsConfig();
@@ -828,7 +787,9 @@ static void ConfigureDaemonServices(
 
     if (notificationsConfig.Webhooks.Count > 0)
     {
-        services.AddHttpClient("Notifications").AddNetclawHeaders("webhook");
+        services.AddHttpClient("Notifications")
+            .RemoveAllLoggers()
+            .AddNetclawHeaders("webhook");
         services.AddSingleton<WebhookNotificationService>();
         services.AddSingleton<IOperationalNotificationSink>(sp =>
             sp.GetRequiredService<WebhookNotificationService>());
@@ -874,6 +835,7 @@ static void ConfigureDaemonServices(
         sp.GetRequiredService<TimeProvider>(),
         sp.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping));
     services.AddSingleton<IMcpClientRuntime, McpClientRuntime>();
+    services.AddSingleton<McpArtifactMaterializer>();
     services.AddSingleton<McpClientManager>();
     services.AddSingleton<IMcpPromptSkillLoader>(sp => sp.GetRequiredService<McpClientManager>());
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
@@ -1064,11 +1026,9 @@ static void ConfigureDaemonServices(
     {
         // Prevent coordinated shutdown from calling Environment.Exit(),
         // which would kill the process before the restart loop can iterate.
-        // The before-service-unbind phase needs a generous timeout (DaemonConfig.
-        // GracefulShutdownBudget) because sessions mid-LLM-call (TurnLlmTimeout defaults to
-        // 3 minutes) must finish before passivation can begin. See DaemonConfig.
-        // GracefulShutdownBudget remarks for the full set of surfaces this must stay in
-        // lockstep with.
+        // The before-service-unbind phase gives session drain time to confirm model
+        // cancellation and write restart reminders. DaemonConfig keeps this phase,
+        // the CLI wait, and the systemd stop timeout in order.
         akkaBuilder.AddHocon(
             DaemonShutdownConfiguration.BuildCoordinatedShutdownHocon(DaemonConfig.GracefulShutdownBudget),
             HoconAddMode.Prepend);
@@ -1101,10 +1061,9 @@ static void ConfigureDaemonServices(
         {
             var reminderManager = registry.Get<Netclaw.Actors.Hosting.ReminderManagerActorKey>();
             var tp = sp.GetRequiredService<TimeProvider>();
-            var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
             var targetResolvers = sp.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
             var schedulingCfg = sp.GetRequiredService<SchedulingConfig>();
-            toolRegistry.WithReminderTools(reminderManager, tp, historyStore, schedulingCfg, targetResolvers);
+            toolRegistry.WithReminderTools(reminderManager, tp, schedulingCfg, targetResolvers);
 
             var bgJobManager = registry.Get<Netclaw.Actors.Hosting.BackgroundJobManagerActorKey>();
             toolRegistry.WithBackgroundJobTools(bgJobManager);
@@ -1119,12 +1078,12 @@ static void ConfigureDaemonServices(
             // Runs in an early CoordinatedShutdown phase while actors are still alive.
             // If DaemonRestartCoordinator already drained sessions (config reload), the ingress
             // gate will be closed and this task skips its drain to avoid double-draining.
-            // The phase timeout (DaemonConfig.GracefulShutdownBudget) is generous because
-            // sessions mid-LLM-call must finish before passivation can begin.
+            // The phase timeout lets sessions confirm model cancellation before passivation.
             var cs = CoordinatedShutdown.Get(system);
             var sessionManager = registry.Get<SessionManagerActorKey>();
             var ingressGate = sp.GetRequiredService<SessionIngressGate>();
             var lifecycleNotifier = sp.GetRequiredService<DaemonLifecycleNotifier>();
+            var restartManifestStore = sp.GetRequiredService<RestartManifestStore>();
             var drainLogger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Netclaw.Daemon.SessionDrain");
 
             cs.AddTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "drain-llm-sessions", async () =>
@@ -1142,8 +1101,8 @@ static void ConfigureDaemonServices(
                     // the phase timeout itself fires and abandons this task outright.
                     // netclaw-dev/netclaw#1664: a session parked on interactive tool approval
                     // never acks PrepareForDaemonRestart, so an unbounded wait here (previously
-                    // CancellationToken.None, CancellationToken.None) hung for the full 200s
-                    // phase timeout with no timeout of its own, leaking the abandoned drain task.
+                    // CancellationToken.None, CancellationToken.None) had left the drain task
+                    // active until the phase timeout, with no separate drain deadline.
                     using var drainDeadlineCts = new CancellationTokenSource(DaemonConfig.BoundedDrainTimeout, tp);
 
                     var drainResult = await SessionDrainHelper.DrainAsync(
@@ -1152,6 +1111,18 @@ static void ConfigureDaemonServices(
                         drainLogger,
                         drainDeadlineCts.Token,
                         CancellationToken.None);
+
+                    if (drainResult.RestartReminders.Count == 0)
+                    {
+                        await restartManifestStore.DeleteAsync();
+                    }
+                    else
+                    {
+                        await restartManifestStore.WriteAsync(new RestartManifest
+                        {
+                            RestartReminders = [.. drainResult.RestartReminders]
+                        }, CancellationToken.None);
+                    }
 
                     lifecycleNotifier.NotifyShutdown("daemon-stop", drainResult.ToNotificationContext());
                 }
@@ -1198,6 +1169,8 @@ static void ConfigureDaemonServices(
     // Active session cleanup during host shutdown
     services.AddSingleton<SessionRegistryShutdownService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SessionRegistryShutdownService>());
+
+    return toolConfigWarnings;
 }
 
 static ISearchBackend? CreateSearchBackend(SearchConfig config)

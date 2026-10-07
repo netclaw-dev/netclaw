@@ -28,7 +28,7 @@ public sealed class MemoryCurationMergeRoutingTests : IAsyncDisposable
 {
     private static readonly SessionId TestSessionId = new("test-channel/merge-routing");
 
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-curation-merge-routing-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-curation-merge-routing-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 

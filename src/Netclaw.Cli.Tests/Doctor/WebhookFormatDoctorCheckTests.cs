@@ -58,13 +58,16 @@ public sealed class WebhookFormatDoctorCheckTests : IDisposable
     [Fact]
     public async Task ReturnsWarning_WhenSlackUrlHasNoFormat()
     {
+        const string workspace = "T000TEST";
+        const string channel = "B000TEST";
+        const string credential = "fakeWebhookToken";
         WriteConfig(new
         {
             Notifications = new
             {
                 Webhooks = new[]
                 {
-                    new { Url = "https://hooks.slack.com/services/T00/B00/xxx" }
+                    new { Url = $"https://hooks.slack.com/services/{workspace}/{channel}/{credential}" }
                 }
             }
         });
@@ -74,6 +77,9 @@ public sealed class WebhookFormatDoctorCheckTests : IDisposable
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("hooks.slack.com", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(workspace, result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(channel, result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(credential, result.Message, StringComparison.Ordinal);
         Assert.NotNull(result.Remediation);
     }
 

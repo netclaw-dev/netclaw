@@ -6,6 +6,7 @@
 using System.Text.Json;
 using Netclaw.Actors.Channels;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
 using R3;
 using Termina.Reactive;
@@ -294,11 +295,7 @@ internal sealed class ConfigDashboardStatusReader
 
     private static string SecuritySummary(Dictionary<string, object> config)
     {
-        var posture = ConfigFileHelper.TryGetPathValue(config, "Security.DeploymentPosture", out var value)
-            && value is string text
-            && Enum.TryParse<DeploymentPosture>(text, ignoreCase: true, out var parsed)
-                ? parsed
-                : DeploymentPosture.Personal;
+        DeploymentPostureReader.TryRead(config, out var posture, out _);
 
         var enabled = 0;
         foreach (var path in FeatureConfigPaths)

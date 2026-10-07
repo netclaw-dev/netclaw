@@ -274,8 +274,26 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
                 && existing.Version == version
                 && string.Equals(existing.Sha256, digestHex, StringComparison.OrdinalIgnoreCase))
             {
-                unchangedCount++;
-                continue;
+                // The agent can write to this folder, so the published version
+                // alone does not prove the installed files. A local change is
+                // replaced with the published version.
+                if (existing.Files is null)
+                {
+                    _logger.LogInformation(
+                        "Skill '{SkillName}' from feed '{FeedName}' has no recorded file hashes. Netclaw installs the published version again to record them",
+                        entry.Name, feed.Name);
+                }
+                else if (SkillSyncHelpers.InstalledFilesMatch(Path.Combine(feedDir, entry.Name), existing.Files))
+                {
+                    unchangedCount++;
+                    continue;
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Skill '{SkillName}' from feed '{FeedName}' does not match its published files. Netclaw restores the published version {Version}",
+                        entry.Name, feed.Name, version);
+                }
             }
 
             try
@@ -377,7 +395,8 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
                 {
                     Version = version,
                     Sha256 = digestHex,
-                    SyncedAtUtc = now
+                    SyncedAtUtc = now,
+                    Files = SkillSyncHelpers.HashInstalledFiles(downloadedFiles)
                 };
 
                 _logger.LogInformation(

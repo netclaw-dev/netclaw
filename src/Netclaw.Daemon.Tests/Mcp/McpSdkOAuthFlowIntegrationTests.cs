@@ -105,6 +105,89 @@ public sealed class McpSdkOAuthFlowIntegrationTests
     }
 
     [Fact]
+    public async Task ConfiguredConfidentialClientExchangesAndRefreshesWithCurrentSecret()
+    {
+        const string clientId = "configured-client";
+        const string firstSecret = "first-configured-secret";
+        const string replacementSecret = "replacement-configured-secret";
+        var ct = TestContext.Current.CancellationToken;
+        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
+        server.RegisterConfidentialClient(clientId, firstSecret, RedirectUri);
+        using var directory = new DisposableTempDir();
+        string issuedAccessToken;
+
+        await using (var first = CreateManagerHarness(
+                         server,
+                         directory.Path,
+                         oauthClientId: clientId,
+                         oauthClientSecret: firstSecret))
+        {
+            await CompleteManagerAuthorizationAsync(server, first, ct);
+
+            var tokenRequest = Assert.Single(server.TokenRequests);
+            Assert.Equal(clientId, tokenRequest.ClientId);
+            Assert.Equal(firstSecret, tokenRequest.ClientSecret);
+            Assert.Empty(server.DynamicClientRegistrations);
+            Assert.Null(first.Credentials.GetActiveForTests(first.ServerName)?.ClientSecret);
+            issuedAccessToken = tokenRequest.IssuedAccessToken;
+        }
+
+        server.RegisterConfidentialClient(clientId, replacementSecret, RedirectUri);
+        server.RevokeAccessToken(issuedAccessToken);
+        await using var restarted = CreateManagerHarness(
+            server,
+            directory.Path,
+            oauthClientId: clientId,
+            oauthClientSecret: replacementSecret);
+
+        await restarted.Manager.StartAsync(ct);
+
+        Assert.Equal(McpConnectionState.Connected, restarted.Manager.GetServerStatuses()[restarted.ServerName].State);
+        var refresh = Assert.Single(server.RefreshRequests);
+        Assert.Equal(clientId, refresh.ClientId);
+        Assert.Equal(replacementSecret, refresh.ClientSecret);
+        Assert.Empty(server.DynamicClientRegistrations);
+    }
+
+    [Fact]
+    public async Task ConfiguredSecretIsPresentInFailedRefreshDiagnostics()
+    {
+        const string clientId = "configured-client";
+        const string originalSecret = "original-configured-secret";
+        const string serverSecret = "server-replacement-secret";
+        const string rejectedSecret = "rejected-configured-secret";
+        var ct = TestContext.Current.CancellationToken;
+        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
+        server.RegisterConfidentialClient(clientId, originalSecret, RedirectUri);
+        using var directory = new DisposableTempDir();
+        string issuedAccessToken;
+
+        await using (var first = CreateManagerHarness(
+                         server,
+                         directory.Path,
+                         oauthClientId: clientId,
+                         oauthClientSecret: originalSecret))
+        {
+            await CompleteManagerAuthorizationAsync(server, first, ct);
+            issuedAccessToken = Assert.Single(server.TokenRequests).IssuedAccessToken;
+        }
+
+        server.RegisterConfidentialClient(clientId, serverSecret, RedirectUri);
+        server.RevokeAccessToken(issuedAccessToken);
+        await using var restarted = CreateManagerHarness(
+            server,
+            directory.Path,
+            oauthClientId: clientId,
+            oauthClientSecret: rejectedSecret);
+
+        await restarted.Manager.StartAsync(ct);
+
+        Assert.Contains(restarted.Logger.Entries, entry =>
+            entry.Contains("configuredClientSecret=True", StringComparison.Ordinal)
+            && entry.Contains("refreshBlockedByMissing=[]", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ExplicitAuthorizationGivesTheOperatorTimeToFinishInTheBrowser()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -392,6 +475,127 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         // A refresh that silently falls through to interactive authorization is the failure
         // this test exists to catch, so no new authorization request may appear.
         Assert.Equal(authorizationsBefore, server.AuthorizationRequests.Count);
+    }
+
+    [Fact]
+    public async Task RejectedRefreshGrantIsDiagnosedAsAServerRejection()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
+        using var directory = new DisposableTempDir();
+        await using (var first = CreateManagerHarness(server, directory.Path))
+        {
+            await CompleteManagerAuthorizationAsync(server, first, ct);
+        }
+
+        // Issue #2263: a bound record with every field present, an access token that lapsed
+        // days ago, and a refresh token the authorization server no longer honours.
+        server.RevokeRefreshTokens();
+        server.RevokeAccessToken(server.TokenRequests[^1].IssuedAccessToken);
+        ExpireStoredAccessToken(directory.Path, TimeSpan.FromDays(3));
+        await using var restarted = CreateManagerHarness(server, directory.Path);
+
+        await restarted.Manager.StartAsync(ct);
+
+        Assert.Equal(1, server.RefreshAttemptCount);
+        Assert.Equal(0, server.RefreshGrantCount);
+        Assert.Equal(McpConnectionState.AuthFailed, restarted.Manager.GetServerStatuses()[restarted.ServerName].State);
+
+        // The SDK discards the token endpoint error. The daemon log must still show that the
+        // grant was sent and why the authorization server rejected it.
+        Assert.Contains(restarted.Logger.Entries, IsRejectedRefreshGrant);
+        var diagnostic = Assert.Single(restarted.Logger.Entries, IsRefreshDiagnostic);
+        Assert.Contains("refreshBlockedByMissing=[]", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PublicDynamicClientWithoutSecretIsNotReportedAsBlockedRefresh()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
+        server.IssuePublicClients();
+        server.AdvertiseTokenEndpointAuthMethods("none");
+        using var directory = new DisposableTempDir();
+        await using (var first = CreateManagerHarness(server, directory.Path))
+        {
+            await CompleteManagerAuthorizationAsync(server, first, ct);
+            Assert.Null(first.Credentials.GetActiveForTests(first.ServerName)?.ClientSecret);
+        }
+
+        server.RevokeRefreshTokens();
+        server.RevokeAccessToken(server.TokenRequests[^1].IssuedAccessToken);
+        ExpireStoredAccessToken(directory.Path, TimeSpan.FromDays(3));
+        await using var restarted = CreateManagerHarness(server, directory.Path);
+
+        await restarted.Manager.StartAsync(ct);
+
+        // A public client has no secret by design. The SDK still sends the refresh grant, so
+        // an absent secret is not a refresh blocker.
+        Assert.Equal(1, server.RefreshAttemptCount);
+        Assert.Contains(restarted.Logger.Entries, IsRejectedRefreshGrant);
+        var diagnostic = Assert.Single(restarted.Logger.Entries, IsRefreshDiagnostic);
+        Assert.Contains("clientSecret=False", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("refreshBlockedByMissing=[]", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RefreshTokenRotatedByLiveConnectionReachesReplacementCandidate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
+        using var directory = new DisposableTempDir();
+        await using var harness = CreateManagerHarness(server, directory.Path);
+        await CompleteManagerAuthorizationAsync(server, harness, ct);
+        var live = Assert.IsType<McpServerSnapshot>(harness.Manager.GetSnapshot(harness.ServerName));
+        var firstAccess = server.TokenRequests[^1].IssuedAccessToken;
+        var authorizationsBefore = server.AuthorizationRequests.Count;
+
+        // Issue #2263: a reconnect builds a candidate while the old connection keeps serving
+        // tool calls. The old connection rotates the single-use refresh token first.
+        var barrier = new InitializationBarrier { RequestAfterRelease = true };
+        harness.Runtime.InitializationBarrier = barrier;
+        var reconnect = harness.Manager.TryReconnectAsync(harness.ServerName, ct);
+        await barrier.Reached.Task.WaitAsync(ct);
+        server.RevokeAccessToken(firstAccess);
+        await live.Client!.ListToolsAsync(cancellationToken: ct);
+        Assert.Equal(1, server.RefreshGrantCount);
+
+        barrier.Release.TrySetResult(true);
+        Assert.True(await reconnect);
+
+        // The candidate used the rotated tokens instead of redeeming the consumed refresh token.
+        Assert.Equal(1, server.RefreshAttemptCount);
+        Assert.Equal(McpConnectionState.Connected, harness.Manager.GetServerStatuses()[harness.ServerName].State);
+        Assert.Equal(authorizationsBefore, server.AuthorizationRequests.Count);
+
+        // The stored refresh token is still the live one: the next expiry refreshes cleanly.
+        server.RevokeAccessToken(server.RefreshRequests[^1].IssuedAccessToken);
+        var replacement = Assert.IsType<McpServerSnapshot>(harness.Manager.GetSnapshot(harness.ServerName));
+        await replacement.Client!.ListToolsAsync(cancellationToken: ct);
+        Assert.Equal(2, server.RefreshGrantCount);
+        Assert.Equal(authorizationsBefore, server.AuthorizationRequests.Count);
+    }
+
+    [Fact]
+    public async Task RefreshResponseWithStringExpiresInIsStored()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var server = await FakeOAuthMcpServer.StartAsync(ct);
+        using var directory = new DisposableTempDir();
+        await using var harness = CreateManagerHarness(server, directory.Path);
+        await CompleteManagerAuthorizationAsync(server, harness, ct);
+        server.ReturnExpiresInAsString();
+        server.RevokeAccessToken(server.TokenRequests[^1].IssuedAccessToken);
+        var authorizationsBefore = server.AuthorizationRequests.Count;
+
+        await harness.Manager.TryReconnectAsync(harness.ServerName, ct);
+
+        Assert.Equal(1, server.RefreshGrantCount);
+        Assert.Equal(McpConnectionState.Connected, harness.Manager.GetServerStatuses()[harness.ServerName].State);
+        Assert.Equal(authorizationsBefore, server.AuthorizationRequests.Count);
+        var active = harness.Credentials.GetActiveForTests(harness.ServerName);
+        Assert.Equal(server.RefreshRequests[^1].IssuedAccessToken, active?.AccessToken.Value);
+        Assert.NotNull(active?.ExpiresAt);
     }
 
     [Fact]
@@ -724,6 +928,27 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             && exception.ToString().Contains("HTTP 403", StringComparison.Ordinal));
     }
 
+    private static bool IsRefreshDiagnostic(string entry)
+        => entry.StartsWith("OAuth refresh failure diagnostics", StringComparison.Ordinal);
+
+    private static bool IsRejectedRefreshGrant(string entry)
+        => entry.Contains("rejected a refresh grant for MCP server 'fake-oauth': HTTP 400 error=invalid_grant", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Moves the stored access token's lifetime into the past, the state a daemon finds its
+    /// record in after the token lapsed while nothing refreshed it.
+    /// </summary>
+    private static void ExpireStoredAccessToken(string basePath, TimeSpan expiredFor)
+    {
+        var paths = new NetclawPaths(basePath);
+        var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(paths.SecretsPath))!;
+        var record = root[McpOAuthCredentialStore.SectionKey]!["fake-oauth"]!;
+        var expiresAt = DateTimeOffset.UtcNow - expiredFor;
+        record["ObtainedAt"] = expiresAt.AddHours(-1);
+        record["ExpiresAt"] = expiresAt;
+        File.WriteAllText(paths.SecretsPath, root.ToJsonString());
+    }
+
     private static async Task CompleteManagerAuthorizationAsync(
         FakeOAuthMcpServer server,
         ManagerOAuthHarness harness,
@@ -744,7 +969,9 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         Dictionary<string, SensitiveString>? headers = null,
         string? endpointOverride = null,
         bool enabled = true,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        string? oauthClientId = null,
+        string? oauthClientSecret = null)
     {
         timeProvider ??= TimeProvider.System;
         var paths = new NetclawPaths(basePath);
@@ -755,8 +982,8 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             new NullSecretsProtector(),
             NullLogger<McpOAuthCredentialStore>.Instance);
         var broker = new McpOAuthFlowBroker(timeProvider, CancellationToken.None);
-        var runtime = new FakeServerMcpRuntime(server, failToolListing);
         var logger = new RecordingLogger<McpClientManager>();
+        var runtime = new FakeServerMcpRuntime(server, failToolListing, logger);
         var serverName = new McpServerName("fake-oauth");
         var dependencies = McpManagerTestDependencies.Create();
         var manager = new McpClientManager(
@@ -768,6 +995,8 @@ public sealed class McpSdkOAuthFlowIntegrationTests
                     Transport = "http",
                     Url = endpointOverride ?? server.McpEndpoint.ToString(),
                     Headers = headers,
+                    OAuthClientId = oauthClientId,
+                    OAuthClientSecret = oauthClientSecret is null ? null : new SensitiveString(oauthClientSecret),
                 },
             },
             new ToolRegistry(),
@@ -782,6 +1011,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             NullNotificationSink.Instance,
             timeProvider,
             runtime,
+            dependencies.ArtifactMaterializer,
             logger,
             new SessionConfig());
         return new ManagerOAuthHarness(manager, credentials, broker, runtime, logger, serverName);
@@ -817,8 +1047,10 @@ public sealed class McpSdkOAuthFlowIntegrationTests
 
     private sealed class FakeServerMcpRuntime(
         FakeOAuthMcpServer server,
-        bool failToolListing) : IMcpClientRuntime
+        bool failToolListing,
+        ILogger logger) : IMcpClientRuntime
     {
+        private readonly McpClientRuntime _production = new(logger, TimeProvider.System, server.CreateTestServerHandler());
         private int _createCount;
         private int _failNextToolListing;
 
@@ -835,10 +1067,10 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         public IClientTransport CreateHttpTransport(HttpClientTransportOptions options)
         {
             LastHttpOptions = options;
-            // Mirror the production runtime: the SDK's OAuth token exchange runs through the
-            // rejection handler, so a 400 invalid_client surfaces instead of the SDK's
-            // protocol fallback masking it.
-            return new HttpClientTransport(options, server.CreateTransportHttpClient(), ownsHttpClient: true);
+            // The production runtime builds the transport over the in-memory server, so every
+            // OAuth test runs the production handler chain: the invalid_client rejection
+            // handler and the per-connection refresh grant handler.
+            return _production.CreateHttpTransport(options);
         }
 
         public Task<McpClient> CreateAsync(
@@ -863,6 +1095,8 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             {
                 barrier.Reached.TrySetResult(true);
                 await barrier.Release.Task.WaitAsync(cancellationToken);
+                if (barrier.RequestAfterRelease)
+                    tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
             }
             var prompts = await ListPromptsAsync(client, cancellationToken);
             return new McpClientInitialization(tools.Cast<AIFunction>().ToList(), prompts);
@@ -916,6 +1150,12 @@ public sealed class McpSdkOAuthFlowIntegrationTests
 
     private sealed class InitializationBarrier
     {
+        /// <summary>
+        /// Makes the candidate send one more MCP request after release, so it must use
+        /// whatever credentials are current at that moment.
+        /// </summary>
+        public bool RequestAfterRelease { get; init; }
+
         public TaskCompletionSource<bool> Reached { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -966,6 +1206,8 @@ public sealed class McpSdkOAuthFlowIntegrationTests
 
         public IReadOnlyList<TokenRequestObservation> TokenRequests => _state.TokenRequests;
 
+        public IReadOnlyList<RefreshRequestObservation> RefreshRequests => _state.RefreshRequests;
+
         public IReadOnlyDictionary<string, string> LastMcpHeaders => _state.LastMcpHeaders;
 
         public void RejectClient(string clientId) => _state.RejectClient(clientId);
@@ -974,11 +1216,25 @@ public sealed class McpSdkOAuthFlowIntegrationTests
 
         public void AcceptRefreshToken(string token, string clientId) => _state.AcceptRefreshToken(token, clientId);
 
+        public void RegisterConfidentialClient(string clientId, string clientSecret, Uri redirectUri)
+            => _state.RegisterConfidentialClient(clientId, clientSecret, redirectUri);
+
         public void FailNextTokenExchange() => _state.FailNextTokenExchange();
 
         public void RevokeAccessToken(string token) => _state.RevokeAccessToken(token);
 
+        public void RevokeRefreshTokens() => _state.RevokeRefreshTokens();
+
+        public void AdvertiseTokenEndpointAuthMethods(params string[] methods)
+            => _state.AdvertiseTokenEndpointAuthMethods(methods);
+
+        public void IssuePublicClients() => _state.IssuePublicClients();
+
+        public void ReturnExpiresInAsString() => _state.ReturnExpiresInAsString();
+
         public int RefreshGrantCount => _state.RefreshGrantCount;
+
+        public int RefreshAttemptCount => _state.RefreshAttemptCount;
 
         public static async Task<FakeOAuthMcpServer> StartAsync(
             CancellationToken ct,
@@ -1064,21 +1320,8 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             return client;
         }
 
-        /// <summary>
-        /// Builds the client the SDK transport uses, wrapping the in-memory test server with
-        /// the same OAuth rejection handler the production runtime installs.
-        /// </summary>
-        public HttpClient CreateTransportHttpClient()
-        {
-            var client = new HttpClient(new OAuthClientRejectionHandler
-            {
-                InnerHandler = _app.GetTestServer().CreateHandler(),
-            })
-            {
-                BaseAddress = _state.Origin,
-            };
-            return client;
-        }
+        /// <summary>Returns a handler that sends requests to the in-memory server.</summary>
+        public HttpMessageHandler CreateTestServerHandler() => _app.GetTestServer().CreateHandler();
 
         public async Task<BrowserAuthorizationResult> AuthorizeAsync(
             Uri authorizationUri,
@@ -1118,10 +1361,12 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         private readonly ConcurrentDictionary<string, byte> _acceptedAccessTokens = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, string> _refreshTokens = new(StringComparer.Ordinal);
         private int _refreshGrantCount;
+        private int _refreshAttemptCount;
         private readonly ConcurrentDictionary<string, byte> _rejectedClients = new(StringComparer.Ordinal);
         private readonly ConcurrentQueue<DynamicClientRegistrationObservation> _registrations = new();
         private readonly ConcurrentQueue<AuthorizationObservation> _authorizations = new();
         private readonly ConcurrentQueue<TokenRequestObservation> _tokenRequests = new();
+        private readonly ConcurrentQueue<RefreshRequestObservation> _refreshRequests = new();
         private int _clientSequence;
         private int _codeSequence;
         private int _tokenSequence;
@@ -1131,6 +1376,9 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         private int _authorizedMcpRequestCount;
         private int _failNextTokenExchange;
         private IReadOnlyDictionary<string, string> _lastMcpHeaders = new Dictionary<string, string>();
+        private volatile string[] _tokenEndpointAuthMethods = ["client_secret_post"];
+        private volatile bool _issuePublicClients;
+        private volatile bool _expiresInAsString;
 
         public FakeOAuthMcpServerState(
             Uri origin,
@@ -1185,6 +1433,8 @@ public sealed class McpSdkOAuthFlowIntegrationTests
 
         public IReadOnlyList<TokenRequestObservation> TokenRequests => _tokenRequests.ToArray();
 
+        public IReadOnlyList<RefreshRequestObservation> RefreshRequests => _refreshRequests.ToArray();
+
         public IReadOnlyDictionary<string, string> LastMcpHeaders => _lastMcpHeaders;
 
         public IResult HandleProtectedResourceMetadata()
@@ -1209,7 +1459,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
                 registration_endpoint = RegistrationEndpoint.ToString(),
                 response_types_supported = new[] { "code" },
                 grant_types_supported = new[] { "authorization_code", "refresh_token" },
-                token_endpoint_auth_methods_supported = new[] { "client_secret_post" },
+                token_endpoint_auth_methods_supported = _tokenEndpointAuthMethods,
                 code_challenge_methods_supported = new[] { "S256" },
             });
         }
@@ -1232,7 +1482,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             var requestedTokenMethod = ReadOptionalString(root, "token_endpoint_auth_method");
             var scope = ReadOptionalString(root, "scope");
             var clientId = $"client-{Interlocked.Increment(ref _clientSequence)}";
-            var clientSecret = $"secret-{clientId}";
+            var clientSecret = _issuePublicClients ? null : $"secret-{clientId}";
 
             _clients[clientId] = new RegisteredClient(clientId, clientSecret, redirectUris);
             _registrations.Enqueue(new DynamicClientRegistrationObservation(
@@ -1256,7 +1506,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
                 redirect_uris = redirectUris,
                 grant_types = grantTypes,
                 response_types = responseTypes,
-                token_endpoint_auth_method = "client_secret_post",
+                token_endpoint_auth_method = requestedTokenMethod ?? "client_secret_post",
             });
         }
 
@@ -1322,7 +1572,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
                 return Results.BadRequest("Unknown client_id.");
 
             var clientSecret = form["client_secret"].ToString();
-            if (!string.Equals(clientSecret, client.ClientSecret, StringComparison.Ordinal))
+            if (!string.Equals(clientSecret, client.ClientSecret ?? string.Empty, StringComparison.Ordinal))
                 return Results.BadRequest("Invalid client_secret.");
 
             var acceptsJson = context.Request.Headers.Accept.ToString()
@@ -1388,20 +1638,37 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         /// </summary>
         private IResult HandleRefreshGrant(IFormCollection form)
         {
+            Interlocked.Increment(ref _refreshAttemptCount);
             var presented = form["refresh_token"].ToString();
             if (!_refreshTokens.TryRemove(presented, out var clientId))
                 return Results.BadRequest(new { error = "invalid_grant" });
 
             var requestedClientId = form["client_id"].ToString();
-            if (!string.Equals(requestedClientId, clientId, StringComparison.Ordinal))
-                return Results.BadRequest(new { error = "invalid_client" });
-
+            var clientSecret = form["client_secret"].ToString();
             var sequence = Interlocked.Increment(ref _tokenSequence);
             var issuedAccessToken = $"access-{sequence}";
             var issuedRefreshToken = $"refresh-{sequence}";
+            _refreshRequests.Enqueue(new RefreshRequestObservation(requestedClientId, clientSecret, issuedAccessToken));
+            if (!string.Equals(requestedClientId, clientId, StringComparison.Ordinal))
+                return Results.BadRequest(new { error = "invalid_client" });
+            if (_clients.TryGetValue(clientId, out var client)
+                && !string.Equals(clientSecret, client.ClientSecret ?? string.Empty, StringComparison.Ordinal))
+                return Results.BadRequest(new { error = "invalid_client" });
+
             _refreshTokens[issuedRefreshToken] = clientId;
             _acceptedAccessTokens[issuedAccessToken] = 0;
             Interlocked.Increment(ref _refreshGrantCount);
+
+            if (_expiresInAsString)
+            {
+                return Results.Json(new
+                {
+                    access_token = issuedAccessToken,
+                    refresh_token = issuedRefreshToken,
+                    token_type = "Bearer",
+                    expires_in = "3599",
+                });
+            }
 
             return Results.Json(new
             {
@@ -1415,7 +1682,24 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         /// <summary>Stops accepting an access token, which makes the resource server answer 401.</summary>
         public void RevokeAccessToken(string token) => _acceptedAccessTokens.TryRemove(token, out _);
 
+        /// <summary>
+        /// Forgets every outstanding refresh token, the way a provider does when a refresh token
+        /// lapses, is revoked, or was already consumed by a rotation the client never persisted.
+        /// </summary>
+        public void RevokeRefreshTokens() => _refreshTokens.Clear();
+
+        public void AdvertiseTokenEndpointAuthMethods(params string[] methods) => _tokenEndpointAuthMethods = methods;
+
+        /// <summary>Registers later dynamic clients as public clients, issuing no client secret.</summary>
+        public void IssuePublicClients() => _issuePublicClients = true;
+
+        /// <summary>Sends <c>expires_in</c> as a JSON string in refresh responses, as some providers do.</summary>
+        public void ReturnExpiresInAsString() => _expiresInAsString = true;
+
         public int RefreshGrantCount => Volatile.Read(ref _refreshGrantCount);
+
+        /// <summary>Counts every refresh grant the token endpoint received, accepted or not.</summary>
+        public int RefreshAttemptCount => Volatile.Read(ref _refreshAttemptCount);
 
         public bool TryAcceptBearer(string authorizationHeader)
         {
@@ -1430,6 +1714,9 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         public void AcceptBearer(string token) => _acceptedAccessTokens[token] = 0;
 
         public void AcceptRefreshToken(string token, string clientId) => _refreshTokens[token] = clientId;
+
+        public void RegisterConfidentialClient(string clientId, string clientSecret, Uri redirectUri)
+            => _clients[clientId] = new RegisteredClient(clientId, clientSecret, [redirectUri.ToString()]);
 
         public void RejectClient(string clientId) => _rejectedClients[clientId] = 0;
 
@@ -1488,7 +1775,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
 
     private sealed record RegisteredClient(
         string ClientId,
-        string ClientSecret,
+        string? ClientSecret,
         IReadOnlyList<string> RedirectUris);
 
     private sealed class AuthorizationCodeRecord(
@@ -1520,7 +1807,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
 
     private sealed record DynamicClientRegistrationObservation(
         string ClientId,
-        string ClientSecret,
+        string? ClientSecret,
         string? ClientName,
         string? ClientUri,
         string? LogoUri,
@@ -1552,4 +1839,6 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         string IssuedAccessToken,
         string IssuedRefreshToken,
         bool AcceptsJson);
+
+    private sealed record RefreshRequestObservation(string ClientId, string ClientSecret, string IssuedAccessToken);
 }

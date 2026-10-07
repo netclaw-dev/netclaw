@@ -3,9 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
 
 namespace Netclaw.Actors.Tests.Tools;
 
@@ -25,73 +27,19 @@ public sealed class ShellApprovalEvidenceTests
     {
         var verb = shell == ApprovalShell.Bash ? "git status" : "Get-Location";
         var candidate = CreateCandidate(0, shell, verb, directory);
+        var grantCandidate = CreateGrantCandidate(candidate, directory);
         var entry = ApprovalEntry.CreateTokenPrefix(
             shell,
             Assert.IsAssignableFrom<IReadOnlyList<string>>(candidate.Candidate.VerbTokens),
             directory);
-        var result = new ShellApprovalMatchResult(
-            new PersistentGrantStoreStatus.Ready(),
-            [
-                new ShellGrantCandidateMatch(
-                    candidate.Id,
-                    new ToolApprovalMatch(verb, "persistent", entry.FormatScope()),
-                    ShellCoverageKind.PersistentFolder,
-                    NearMisses: [])
-            ]);
+        var result = ShellApprovalMatchResult.Create(
+            [grantCandidate],
+            persistentStoreFailure: null,
+            [ShellGrantCandidateResult.Persistent(grantCandidate, entry)]);
 
-        var valid = ValidatedShellGrantEvidence.TryCreate(
-            result,
-            [candidate],
-            directory,
-            out var evidence);
-
-        Assert.True(valid);
-        Assert.NotNull(evidence);
-    }
-
-    [Theory]
-    [InlineData(
-        ApprovalShell.Bash,
-        "git status",
-        "/danger",
-        "Bash token-prefix \"git status\" in /safe/../danger")]
-    [InlineData(
-        ApprovalShell.PowerShell,
-        "Get-Location",
-        "C:\\danger",
-        "PowerShell token-prefix \"Get-Location\" in C:\\safe\\..\\danger")]
-    [InlineData(
-        ApprovalShell.Bash,
-        "git status",
-        null,
-        "Bash token-prefix \"git  status\" anywhere")]
-    public void Persistent_scope_must_be_canonical(
-        ApprovalShell shell,
-        string verb,
-        string? directory,
-        string scope)
-    {
-        var candidate = CreateCandidate(0, shell, verb, directory);
-        var result = new ShellApprovalMatchResult(
-            new PersistentGrantStoreStatus.Ready(),
-            [
-                new ShellGrantCandidateMatch(
-                    candidate.Id,
-                    new ToolApprovalMatch(verb, "persistent", scope),
-                    directory is null
-                        ? ShellCoverageKind.PersistentGlobal
-                        : ShellCoverageKind.PersistentFolder,
-                    NearMisses: [])
-            ]);
-
-        var valid = ValidatedShellGrantEvidence.TryCreate(
-            result,
-            [candidate],
-            directory,
-            out var evidence);
-
-        Assert.False(valid);
-        Assert.Null(evidence);
+        var match = Assert.Single(result.Candidates);
+        Assert.Equal(new Coverage.Stored(new GrantScope.Folder(directory), GrantedAt: null), match.Grant);
+        Assert.Equal(new GrantScope.Folder(directory), match.FormatMatch(candidate.Candidate).Scope);
     }
 
     [Theory]
@@ -103,6 +51,8 @@ public sealed class ShellApprovalEvidenceTests
     {
         var covered = CreateCandidate(0, ApprovalShell.Bash, "git status", null);
         var uncovered = CreateCandidate(1, ApprovalShell.Bash, "git push", null);
+        var coveredGrantCandidate = CreateGrantCandidate(covered, directory: null);
+        var uncoveredGrantCandidate = CreateGrantCandidate(uncovered, directory: null);
         var typedGrant = ApprovalEntry.CreateTokenPrefix(
             ApprovalShell.Bash,
             ["git", "status"]);
@@ -121,34 +71,23 @@ public sealed class ShellApprovalEvidenceTests
                 "/outside"),
             _ => throw new ArgumentOutOfRangeException(nameof(malformedCase), malformedCase, null)
         };
-        var result = new ShellApprovalMatchResult(
-            new PersistentGrantStoreStatus.Ready(),
+
+        var exception = Record.Exception(() => ShellApprovalMatchResult.Create(
+            [coveredGrantCandidate, uncoveredGrantCandidate],
+            persistentStoreFailure: null,
             [
-                new ShellGrantCandidateMatch(
-                    covered.Id,
-                    new ToolApprovalMatch(covered.Candidate.Verb, "session", "this chat"),
-                    ShellCoverageKind.Session,
-                    NearMisses: []),
-                new ShellGrantCandidateMatch(
-                    uncovered.Id,
-                    Match: null,
-                    GrantCoverage: null,
-                    NearMisses:
-                    [
-                        new ShellApprovalNearMiss(
-                            malformedGrant,
-                            ShellApprovalNearMissReason.ShellMismatch)
-                    ])
-            ]);
+                ShellGrantCandidateResult.Session(coveredGrantCandidate),
+                ShellGrantCandidateResult.Uncovered(
+                    uncoveredGrantCandidate,
+                    new ShellApprovalNearMiss(
+                        malformedGrant,
+                        ShellApprovalNearMissReason.ShellMismatch))
+            ]));
 
-        var valid = ValidatedShellGrantEvidence.TryCreate(
-            result,
-            [covered, uncovered],
-            cwd: null,
-            out var evidence);
-
-        Assert.False(valid);
-        Assert.Null(evidence);
+        if (malformedCase == MalformedNearMissGrantCase.NonShell)
+            Assert.IsType<ArgumentException>(exception);
+        else
+            Assert.IsType<System.Text.Json.JsonException>(exception);
     }
 
     private static ShellPolicyCandidate CreateCandidate(
@@ -165,6 +104,11 @@ public sealed class ShellApprovalEvidenceTests
                     verb.Split(' ', StringSplitOptions.RemoveEmptyEntries))
             },
             SourceOccurrence: null);
+
+    private static ShellGrantCandidate CreateGrantCandidate(
+        ShellPolicyCandidate candidate,
+        string? directory)
+        => new(candidate.Id, candidate.Candidate, directory);
 
     public enum MalformedNearMissGrantCase
     {

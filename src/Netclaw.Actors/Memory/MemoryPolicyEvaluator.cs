@@ -37,16 +37,11 @@ public sealed class MemoryPolicyEvaluator
         return new MemoryPolicyDecision(true);
     }
 
-    public static string ResolveAudience(string? audience, TrustAudience fallback)
-        => SecurityPolicyDefaults.TryParseAudience(audience, out var parsed)
-            ? parsed.ToWireValue()
-            : fallback.ToWireValue();
-
     public static IReadOnlyList<string> AllowedAudienceWireValues(TrustAudience audience) => audience switch
     {
         TrustAudience.Public => [TrustAudience.Public.ToWireValue()],
         TrustAudience.Team => [TrustAudience.Public.ToWireValue(), TrustAudience.Team.ToWireValue()],
         TrustAudience.Personal => [TrustAudience.Public.ToWireValue(), TrustAudience.Team.ToWireValue(), TrustAudience.Personal.ToWireValue()],
-        _ => [TrustAudience.Public.ToWireValue()]
+        _ => throw new ArgumentOutOfRangeException(nameof(audience), audience, "Undefined trust audience.")
     };
 }

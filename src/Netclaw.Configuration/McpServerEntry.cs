@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json.Serialization;
+
 namespace Netclaw.Configuration;
 
 /// <summary>
@@ -53,6 +55,10 @@ public sealed class McpServerEntry
 
     /// <summary>Static OAuth client ID for servers that don't support dynamic client registration.</summary>
     public string? OAuthClientId { get; set; }
+
+    /// <summary>OAuth client secret for a pre-registered confidential client.</summary>
+    [JsonIgnore]
+    public SensitiveString? OAuthClientSecret { get; set; }
 
     /// <summary>Space-separated OAuth scopes to request (optional override).</summary>
     public string? OAuthScope { get; set; }

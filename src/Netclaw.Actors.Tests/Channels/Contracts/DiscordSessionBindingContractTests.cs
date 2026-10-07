@@ -214,8 +214,8 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
     {
         var ct = TestContext.Current.CancellationToken;
         var sid = new SessionId("session-discord-file-output");
-        var paths = TestDiscordGatewayDeps.NewTestPaths();
-        var filePath = Path.Combine(paths.BasePath, $"discord-upload-{Guid.NewGuid():N}.txt");
+        await using var paths = TestDiscordGatewayDeps.NewTestPaths();
+        var filePath = Path.Join(paths.Paths.BasePath, $"discord-upload-{Guid.NewGuid():N}.txt");
         await File.WriteAllTextAsync(filePath, "hello discord", ct);
 
         var pipeline = new RecordingSessionPipeline(_ =>

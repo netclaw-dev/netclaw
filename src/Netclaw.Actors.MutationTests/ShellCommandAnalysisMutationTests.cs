@@ -25,6 +25,335 @@ public sealed class ShellCommandAnalysisMutationTests
             PwshDialect.WindowsPowerShell51);
 
     [Fact]
+    public void A_failed_directory_change_keeps_the_original_scope_after_a_sequence()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var policy = new ShellCommandPolicy(environment);
+        var matcher = new ShellApprovalMatcher(environment);
+        var analysis = policy.Analyze("cd /work/sub && true; touch marker.txt", "/work");
+
+        Assert.True(BashDirectoryScopeProjection.TryCreate(
+            analysis, policy, matcher, out var projection));
+
+        Assert.Equal(["/work", "/work/sub"], projection.Candidates
+            .Where(static candidate => candidate.Verb == "touch")
+            .Select(static candidate => candidate.Directory)
+            .Distinct()
+            .Order(StringComparer.Ordinal));
+    }
+
+    // Owner decision D2: only a kill whose operand text names the Netclaw
+    // daemon stays hard-denied. Any other kill reaches the approval gate. A
+    // name split by quotes or an escape is unparseable, and the text scan
+    // still joins it.
+    [Theory]
+    [InlineData("pkill netclawd", false)]
+    [InlineData("kill -9 $(cat ~/.netclaw/daemon.pid)", false)]
+    [InlineData("KILLALL NetClaw", false)]
+    [InlineData("pkill net''clawd", false)]
+    [InlineData("pkill net\\clawd", false)]
+    [InlineData("kill -9 12345", true)]
+    [InlineData("pkill -f 'http.server 8899'", true)]
+    [InlineData("echo netclaw", true)]
+    public void Only_a_kill_that_names_the_daemon_is_hard_denied(string command, bool allowed)
+    {
+        var policy = new ShellCommandPolicy(ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+
+        Assert.Equal(allowed, policy.Evaluate(command).Allowed);
+    }
+
+    // A word with a control character gets the deepest ancestor directory of
+    // its text before that character, not an unresolved scope.
+    [Theory]
+    [InlineData("python3 -c \"import sys\nprint(1)\"", "python3@/work")]
+    [InlineData("python3 -c \"/opt/tools/run\nexit()\"", "python3@/opt/tools")]
+    public void Control_character_word_gets_its_clean_ancestor_scope(string command, string expected)
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = command,
+                ["WorkingDirectory"] = "/work"
+            });
+
+        Assert.False(analysis.IsMessy);
+        Assert.Equal(
+            [expected],
+            analysis.Candidates.Select(static candidate => $"{candidate.Verb}@{candidate.Directory}"));
+    }
+
+    // An absolute word below an absent top-level directory names no existing
+    // file (an API route), so it has no path scope. The probe needs a working
+    // directory that exists on this host; a synthetic one keeps the scope.
+    [Theory]
+    [InlineData("gh api /repos/o/r/actions/jobs/1/logs", true, "gh api@{cwd}")]
+    [InlineData("gh api \"/advisories?ecosystem=nuget\"", true, "gh api@{cwd}")]
+    [InlineData("ls /usr/netclaw-absent", true, "ls@/usr/netclaw-absent")]
+    [InlineData("gh api /repos/o/r/actions/jobs/1/logs", false, "gh api@/repos/o/r/actions/jobs/1/logs")]
+    public void Absent_top_level_word_has_no_path_scope(string command, bool realWorkingDirectory, string expected)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var cwd = realWorkingDirectory ? Path.GetFullPath(AppContext.BaseDirectory).TrimEnd('/') : "/netclaw-synthetic/work";
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = command,
+                ["WorkingDirectory"] = cwd
+            });
+
+        Assert.False(analysis.IsMessy);
+        Assert.Equal(
+            [expected.Replace("{cwd}", cwd, StringComparison.Ordinal)],
+            analysis.Candidates.Select(static candidate => $"{candidate.Verb}@{candidate.Directory}"));
+    }
+
+    // A dynamic value is data only in an operand of an output command: echo,
+    // :, true, false, or printf after a literal format that is not an option.
+    [Theory]
+    [InlineData("git push; echo \"head: $(git rev-parse HEAD)\"", false)]
+    [InlineData("git push; true \"$(date)\"", false)]
+    [InlineData("git push; printf '%s' \"$(date)\"", false)]
+    [InlineData("git push; printf \"$(date)\" x", true)]
+    [InlineData("git push; printf -v name '%s' \"$(date)\"", true)]
+    [InlineData("git push; cat \"$(date)\"", true)]
+    [InlineData("git push; echo $?", false)]
+    [InlineData("git push; echo $? > /work/out/marker", false)]
+    [InlineData("git push; echo $? > \"$(date)\"", true)]
+    [InlineData("git push; \"$(date)\" \"$@\"", true)]
+    public void Dynamic_value_is_data_only_in_an_output_operand(string command, bool messy)
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = command,
+                ["WorkingDirectory"] = "/work"
+            });
+
+        Assert.Equal(messy, analysis.IsMessy);
+        Assert.Equal(messy, analysis.Candidates.Count == 0);
+    }
+
+    // A Bash test builtin (test, [) compares its operands. An operand is data
+    // only with a bounded value and no "[": Bash evaluates an array subscript
+    // in a -v operand, and that arithmetic runs a command substitution. An
+    // assignment does not change a data command without a redirect.
+    [Theory]
+    [InlineData("git push; [ 3 -gt 2 ]", false)]
+    [InlineData("git push; x=3; [ \"$x\" -gt 2 ]", false)]
+    [InlineData("git push; for d in a b; do [ \"$d\" = a ]; done", false)]
+    [InlineData("git push; for i in 1 2 3; do test \"$i\" -gt 2; done", false)]
+    [InlineData("git push; [ -v 'a[x]' ]", true)]
+    [InlineData("git push; for d in 'a[x]' b; do [ -v \"$d\" ]; done", true)]
+    [InlineData("git push; n=$(date); [ -v \"$n\" ]", true)]
+    [InlineData("git push; for f in /work/*; do [ -f \"$f\" ]; done", true)]
+    [InlineData("git push; n=$(date); echo \"$n\"", false)]
+    [InlineData("git push; n=$(date); echo \"$n\" > /work/out", true)]
+    [InlineData("git push; n=$(date); echo $n", true)]
+    [InlineData("git push; x=3; echo yes", false)]
+    public void Test_builtin_operand_is_data_only_with_a_bounded_value_without_a_subscript(
+        string command,
+        bool messy)
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = command,
+                ["WorkingDirectory"] = "/work"
+            });
+
+        Assert.Equal(messy, analysis.IsMessy);
+        Assert.Equal(messy, analysis.Candidates.Count == 0);
+        Assert.All(
+            analysis.Candidates.Where(static candidate => candidate.Verb is "[" or "test" or "echo"),
+            static candidate => Assert.True(ApprovalPatternMatching.IsPureSideEffect(candidate)));
+    }
+
+    // ShellSyntaxTree 0.4.0-beta.19 reports whether Bash can glob a word. An
+    // operand with an unknown value that can glob makes the command one exact
+    // candidate, because no proved scope bounds what it reads. Owner decision
+    // (#2349): an echo or printf operand keeps its earlier rule, because the
+    // worst case is file names in the output.
+    [Theory]
+    [InlineData("git push; n=$(date); echo \"$n\"", false)]
+    [InlineData("git push; n=$(date); echo pre\"$n\"", false)]
+    [InlineData("git push; n=$(date); echo \"a\"$'b'\"$n\"", false)]
+    [InlineData("git push; echo $((1 + 2))", false)]
+    [InlineData("git push; n=$(date); echo $n", false)]
+    [InlineData("git push; n=$(date); echo \"${n}ret\"/*", false)]
+    [InlineData("git push; echo {a,b}", false)]
+    [InlineData("git push; echo $@", false)]
+    [InlineData("git push; for pid in $(pgrep x); do echo $pid; done", false)]
+    [InlineData("git push; printf '%s' $(git push)", false)]
+    [InlineData("git push; f=$(date); cat /work/$f", true)]
+    [InlineData("git push; git log -n $?", false)]
+    [InlineData("git push; n=$(date); git log -n $n", true)]
+    [InlineData("git push; for f in '*.cs'; do cat /work/$f; done", true)]
+    [InlineData("git push; n=$(date); cat $n", true)]
+    [InlineData("git push; cat ~/notes/{a,b}.txt", true)]
+    [InlineData("git push; n=$(date); cat \"$n\"", false)]
+    public void Unknown_word_that_can_glob_is_not_data(string command, bool exactCandidate)
+    {
+        var policy = new ShellCommandPolicy(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+
+        var analysis = policy.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            exactCandidate,
+            analysis.GetUnresolvedPart(analysis.Commands[^1]) == ShellUnresolvedPart.Command);
+    }
+
+    // A variable word gives the candidate no path scope, also with a proved
+    // value. So a loop or an assignment value is an unknown operand (D1), and
+    // a folder grant cannot cover ../x. A literal word and a resolved path
+    // keep their scope.
+    [Theory]
+    [InlineData("for d in ../x; do dotnet build \"$d\"; done", true)]
+    [InlineData("for n in /etc/shadow a; do gh api \"$n\"; done", true)]
+    [InlineData("d=../x; dotnet build \"$d\"", true)]
+    [InlineData("x=/etc; dotnet build \"$x/y\"", true)]
+    [InlineData("dotnet build ../x", false)]
+    [InlineData("dotnet build \"$HOME/x\"", false)]
+    [InlineData("dotnet build -c Release", false)]
+    [InlineData("dotnet build \"$?\"", false)]
+    public void Variable_word_without_a_path_scope_is_an_unknown_operand(
+        string command,
+        bool unknownOperand)
+    {
+        var policy = new ShellCommandPolicy(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+
+        var analysis = policy.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            unknownOperand ? ShellUnresolvedPart.Operand : ShellUnresolvedPart.None,
+            analysis.GetUnresolvedPart(analysis.Commands[^1]));
+    }
+
+    // F2 (0.27.1): after a cd that can fail, the directory of a later command
+    // is not known. A Bash data command with no redirect and proved data
+    // operands has no path scope, so it keeps its normal candidate and its
+    // approval exemption. Any other command stays one exact candidate.
+    [Theory]
+    [InlineData("echo \"---\"", true)]
+    [InlineData("echo \"== $n ==\"", true)]
+    [InlineData("[ 3 -gt 2 ]", true)]
+    [InlineData("echo \"---\" > /work/out", false)]
+    [InlineData("echo $n", false)]
+    [InlineData("[ -v \"$n\" ]", false)]
+    [InlineData("cat a.txt", false)]
+    public void Data_command_after_an_unknown_directory_keeps_its_exemption(string command, bool exempt)
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "cd sub && n=$(git fetch) && git fetch \"$n\"; " + command,
+                ["WorkingDirectory"] = "/work"
+            });
+
+        var candidate = analysis.CommandCandidates[^1];
+        Assert.Equal(exempt, ApprovalPatternMatching.IsPureSideEffect(candidate));
+        Assert.Equal(!exempt, candidate.Unresolved == ShellUnresolvedPart.Command);
+    }
+
+    // Bash has nothing to expand when each proved authored value has no glob
+    // character.
+    [Theory]
+    [InlineData("x=/a; echo $x", true)]
+    [InlineData("for r in 1 2; do echo $r; done", true)]
+    [InlineData("x='a*'; echo $x", false)]
+    [InlineData("x='*a'; echo $x", false)]
+    [InlineData("for r in 1 '*'; do echo $r; done", false)]
+    [InlineData("n=$(date); echo $n", false)]
+    public void Glob_free_authored_value_has_nothing_to_expand(string command, bool expected)
+    {
+        var policy = new ShellCommandPolicy(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+
+        var analysis = policy.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            expected,
+            ShellCommandAnalysis.HasGlobFreeAuthoredValue(analysis.Commands[^1].Arguments[^1]));
+    }
+
+    // In PowerShell, test is not a builtin, so it keeps its candidate.
+    [Fact]
+    public void Power_shell_test_word_is_not_a_data_command()
+    {
+        var analysis = new ShellApprovalMatcher(PowerShellEnvironment).AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "test value",
+                ["WorkingDirectory"] = @"C:\work"
+            });
+
+        var candidate = Assert.Single(analysis.Candidates);
+        Assert.Equal("test", candidate.Verb);
+        Assert.False(ApprovalPatternMatching.IsPureSideEffect(candidate));
+    }
+
+    // PowerShell keeps the bare status rule: only $? keeps the static
+    // candidates of an output command without a redirect.
+    [Fact]
+    public void Power_shell_bare_status_output_keeps_static_candidates()
+    {
+        var matcher = new ShellApprovalMatcher(PowerShellEnvironment);
+
+        ShellApprovalAnalysis Analyze(string command) => matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = command,
+                ["WorkingDirectory"] = @"C:\work"
+            });
+
+        var status = Analyze("git push; echo $?");
+        var other = Analyze("git push; echo $dynamic");
+
+        Assert.False(status.IsMessy);
+        Assert.Contains("git push", status.Candidates.Select(static candidate => candidate.Verb));
+        Assert.True(other.IsMessy);
+    }
+
+    // The data-operand rule is Bash only. In PowerShell, echo is an alias of
+    // Write-Output, so a dynamic value keeps the call unresolved.
+    [Fact]
+    public void Power_shell_output_alias_keeps_a_dynamic_value_unresolved()
+    {
+        var analysis = new ShellCommandAnalyzer(PowerShellEnvironment).Analyze("echo $dynamic", @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax);
+    }
+
+    [Fact]
     public void Known_and_unknown_execution_regions_keep_distinct_analysis_results()
     {
         var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);

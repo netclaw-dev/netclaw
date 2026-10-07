@@ -4,42 +4,74 @@
 // </copyright>
 // -----------------------------------------------------------------------
 
+using System.Runtime.CompilerServices;
+
 namespace Netclaw.Tests.Utilities;
 
 internal sealed class DisposableTempDir : IDisposable
 {
-    public string Path { get; } = System.IO.Path.Combine(
-        System.IO.Path.GetTempPath(),
-        $"netclaw-test-{Guid.NewGuid():N}");
+    private const int MaxAttempts = 8;
 
-    public DisposableTempDir() => Directory.CreateDirectory(Path);
+    public string Path { get; }
+
+    /// <summary>
+    /// The folder name carries the name of the test file that made it. When a
+    /// test leaks the folder, the leak report names the file.
+    /// </summary>
+    public DisposableTempDir([CallerFilePath] string callerFile = "")
+    {
+        Path = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            $"netclaw-test-{System.IO.Path.GetFileNameWithoutExtension(callerFile)}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path);
+    }
 
     public void Dispose()
     {
         if (!Directory.Exists(Path))
             return;
 
-        // Retry loop for Windows CI where SQLite pooled connections can
-        // briefly hold file handles after the test completes.
-        for (var i = 0; i < 5; i++)
+        // Windows refuses to delete a file or a working directory that a process
+        // still holds. A killed process tree and a pooled SQLite connection can hold
+        // one for a short time after the test ends. Retry for a few seconds.
+        // The delete succeeds on the first try on Linux and macOS.
+        for (var i = 0; i < MaxAttempts; i++)
         {
             try
             {
                 Directory.Delete(Path, recursive: true);
                 return;
             }
-            catch (IOException) when (i < 4) // slopwatch-ignore: SW003 test cleanup retry
+            catch (IOException) when (i < MaxAttempts - 1) // slopwatch-ignore: SW003 test cleanup retry
             {
-                Thread.Sleep(50 * (i + 1));
+                // Clear the pools only after a failure. The call closes the idle
+                // connections of every database in the process, which other tests
+                // can observe.
+                if (i == 0)
+                    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+                Thread.Sleep(100 * (i + 1));
             }
-            catch (UnauthorizedAccessException) when (i < 4) // slopwatch-ignore: SW003 test cleanup retry
+            catch (UnauthorizedAccessException) when (i < MaxAttempts - 1) // slopwatch-ignore: SW003 test cleanup retry
             {
-                Thread.Sleep(50 * (i + 1));
+                // A test can leave a read-only file. Windows refuses to delete it.
+                ClearReadOnlyAttributes(Path);
+                Thread.Sleep(100 * (i + 1));
             }
             catch (DirectoryNotFoundException)
             {
                 return;
             }
+        }
+    }
+
+    private static void ClearReadOnlyAttributes(string root)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories))
+        {
+            var attributes = File.GetAttributes(entry);
+            if ((attributes & FileAttributes.ReadOnly) != 0)
+                File.SetAttributes(entry, attributes & ~FileAttributes.ReadOnly);
         }
     }
 }

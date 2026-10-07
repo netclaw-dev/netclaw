@@ -47,8 +47,11 @@ Rules:
 
 - Always choose `delivery_kind` explicitly.
 - Do not try to route via `delivery_instructions`.
-- `current_session` is the session check-back path and should be preferred for
-  conversational follow-ups in Slack/TUI/SignalR sessions.
+- Use `current_session` for a reminder that must return to the current conversation.
+  Slack, Discord, Mattermost, TUI, and SignalR support this route.
+  Mattermost uses the original channel and thread root ID.
+  Omit `delivery_transport` and `delivery_address` for this route.
+  Netclaw preserves the stored reminder audience when the reminder executes.
 - `channel` requires both transport + address and resolves names/handles to
   canonical IDs at set time; unresolved targets fail loud.
 - Discord reminder targets must be explicit because channel IDs and user IDs are
@@ -131,8 +134,26 @@ the audience of the channel/session that created it. A reminder cannot be
 minted with broader audience than the creator currently holds; lowering the
 audience is always allowed.
 
+### Reminder visibility by audience
+
+`list_reminders`, `get_reminder_history`, `cancel_reminder`, and the status/get
+lookups scope every result to the caller's audience. A reminder is visible or
+actionable only when its audience is at or below the caller's audience:
+
+| Caller audience | Reminders it can see and act on |
+|------------------|---------------------------------|
+| Personal | Personal, Team, Public |
+| Team | Team, Public |
+| Public | Public |
+
+A Team session cannot see a Personal reminder in `list_reminders`, cannot cancel
+it, cannot read its history or status, and cannot overwrite it by reusing its ID
+in `set_reminder` — each of those calls behaves exactly as it would for an ID
+that does not exist. Do not treat "not found" as proof a reminder was deleted;
+it may exist at a higher audience than the current session.
+
 Other scheduling tools: `list_reminders`, `cancel_reminder`,
-`get_reminder_history`.
+`get_reminder_history`, and `run_reminder` (see "Test a reminder in a chat").
 
 ## Proactive channel messaging
 
@@ -204,13 +225,35 @@ send_channel_message(
 ## Approval Requirements for Reminders and Webhooks
 
 Reminders and webhooks execute without a human present — they CANNOT prompt for
-tool approval. The cwd at firing time will not match any cwd a user clicked
-"Always here" for during interactive use, so folder-scoped approvals will not
-match.
+tool approval. A call that needs approval and has no saved grant is denied.
 
-**Before creating a reminder that uses shell commands**, identify the verbs the
-task will need (e.g. `freshdesk`, `curl`, `git pull`) and pre-approve them as
-global wildcards. Two paths:
+### Test a reminder in a chat (`/run-reminder`)
+
+The best way to collect the grants is to test the reminder once, attended:
+
+- In a chat, the user types `/run-reminder <id>`. From a terminal, the user runs
+  `netclaw reminder run <id>`. That command opens a normal chat with
+  `/run-reminder <id>` as its first message.
+- The `run-reminder` skill warns the user that the steps are real, then calls
+  `run_reminder`. The tool returns the reminder's exact scheduled prompt. The
+  agent carries it out in the chat. Approval prompts go to the person who
+  started the test.
+- An "Always here", "This repository", or "Always anywhere" answer saves a
+  grant for the chat's audience. The scheduled run reads it. "Once" and
+  "This chat" answers do not carry over: each scheduled run is a new session.
+  The tool result shows the choice, for example `[approval: this chat only]`.
+- The chat must have the same audience as the reminder. A wider chat would
+  pass calls that the scheduled run denies, so `run_reminder` refuses it. A
+  reminder above the chat's audience reads as not found.
+- Limitation (#2330): `run_reminder` runs only in a chat at the reminder's
+  audience. A CLI chat is Personal, so `netclaw reminder run` tests only
+  Personal reminders. A bot with a disposition below Personal may have no chat
+  where some of its reminders can be tested.
+- The test does not change the schedule and writes no reminder history.
+
+**Before creating a reminder that uses shell commands**, you can also identify
+the verbs the task will need (e.g. `freshdesk`, `curl`, `git pull`) and
+pre-approve them as global wildcards. Two paths:
 
 1. **Suggest `trust-verb` from the agent.** When you (the agent) are helping the
    user set up a scheduled task, identify the verbs the task will need and ask
@@ -231,28 +274,27 @@ If the user has already trusted the verb in a previous session, no action is
 needed — `(verb, null)` grants persist in `tool-approvals.json` across daemon
 restarts.
 
-**Path restrictions:** A trusted verb runs wherever the creating audience's
-file-access policy allows — the same scoping `file_write` uses. Reminders and
-webhooks run autonomously (no live human approver), so even a Personal one is
-confined to an *autonomous zone* rather than the blanket access an interactive
-Personal session gets. Inside that zone it can **read** its session directory,
-the current project, and the shared read roots (skills, identity, workspaces),
-and can **write** to its session directory, the current project, and the
-**workspaces** directory — the designated working area for persisted state, so a
-reminder can keep a dedup/state file there across runs. It cannot write outside
-those — notably not to the system-managed skills or identity trees. A Team or
-Public reminder/webhook is confined to its session directory and cannot run
-`shell_execute` at all, since shell is Personal-only. Protected paths —
-`secrets.json`, `.netclaw/keys`, `config/webhooks` — are always denied regardless
-of audience or pre-approval.
+**Path restrictions:** A reminder or webhook uses the file-access policy of its
+audience, the same as a chat of that audience (decision D2). A Personal one has
+the reach of a Personal chat. A Team or Public reminder/webhook is confined to
+its session directory and cannot run `shell_execute` at all, since shell is
+Personal-only. A bounded (`Roots`) profile confines attended and unattended
+runs alike. Protected paths — `secrets.json`, `.netclaw/keys`,
+`config/webhooks` — are always denied regardless of audience or pre-approval.
 
-**If a reminder fails with `command_not_pre_approved`:** The verb is not in the
-approval store as a global wildcard. Run
-`netclaw approvals trust-verb <verb>` and the next firing succeeds.
+**If a reminder fails with `approval_required_unattended`:** The call needs
+approval, and no stored grant covers it. Test the reminder with
+`/run-reminder <id>` in a chat with the same audience and answer the prompt
+with an "Always" option, or run `netclaw approvals trust-verb <verb>`.
 
-**If a reminder fails with `path_outside_trust_zone`:** The command targets a
-path outside the allowed roots. Either move the target into a workspace, or ask
-the user to add the path to trusted roots in config.
+**If a reminder fails with `shell_path_outside_trusted_roots`:** The audience
+profile is bounded (`Roots`) and the command targets a path outside its roots.
+Either move the target into those roots, or ask the user to add the path to the
+profile. A grant cannot open it.
+
+**If a reminder fails with `shell_path_protected`:** The command uses a
+protected path, such as the config directory or the keys. No grant or profile
+change opens it. Use the CLI command for that setting.
 
 ## Background Jobs
 
@@ -319,8 +361,8 @@ Rules:
 - Job definitions persist to `~/.netclaw/jobs/{id}.json` until 24 hours after
   the job reaches a terminal state.
 
-`check_background_job` is only available when shell execution is granted (same
-`shell` grant category). It validates that the requesting session matches the
+`check_background_job` is only available when `shell_execute` is available: the
+Personal audience and a host shell mode. It validates that the requesting session matches the
 submitting session's audience and boundary.
 
 After submitting a long finite job, schedule a check-back reminder so you report

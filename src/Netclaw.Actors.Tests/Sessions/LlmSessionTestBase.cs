@@ -17,13 +17,19 @@ using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tests.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public abstract class LlmSessionTestBase : TestKit
+public abstract class LlmSessionTestBase : TestKit, IAsyncDisposable
 {
+    private TestSessionTempDirectory? _testTempDir;
+
     protected LlmSessionTestBase(ITestOutputHelper output) : base(output: output) { }
+
+    protected NetclawPaths TestPaths => _testTempDir?.Paths
+        ?? throw new InvalidOperationException("Test paths are not initialized.");
 
     /// <summary>
     /// Derived classes that want serialize-messages verification on top of the
@@ -101,7 +107,12 @@ public abstract class LlmSessionTestBase : TestKit
         // tests but a steady source of restart churn across the shared threadpool
         // that destabilizes real-process integration tests running in parallel.
         services.AddSingleton(TimeProvider.System);
-        services.AddTestNetclawPaths();
+        // Own a unique temp directory for this test and register it (plus its
+        // NetclawPaths) so SessionServices can construct. Disposed in
+        // DisposeAsync so the /tmp tree is not leaked (issue #2266).
+        _testTempDir = TestSessionTempDirectory.Create("netclaw-llm-session-");
+        services.AddSingleton(_testTempDir);
+        services.AddSingleton(_testTempDir.Paths);
         services.AddSingleton(SecurityPolicyDefaults.Resolve(null));
         services.AddSingleton<BackgroundJobDefinitionStore>();
         // WithNetclawActors() starts ReminderManagerActor, which resolves these
@@ -120,4 +131,21 @@ public abstract class LlmSessionTestBase : TestKit
     }
 
     protected virtual void ConfigureSessionServices(IServiceCollection services) { }
+
+    // TestKit stops the actor system only after AfterAllAsync returns, so an actor can
+    // still write into the temp directory until then (issue #2266). Delete the
+    // directory after TestKit has disposed. The finally block runs the cleanup even
+    // when the base teardown throws.
+    async ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        try
+        {
+            await base.DisposeAsync();
+        }
+        finally
+        {
+            if (_testTempDir is not null)
+                await _testTempDir.DisposeAsync();
+        }
+    }
 }

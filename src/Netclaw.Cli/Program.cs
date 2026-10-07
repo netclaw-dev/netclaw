@@ -39,6 +39,7 @@ using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using Netclaw.Configuration.Secrets;
+using Netclaw.Security;
 using Termina;
 using Termina.Diagnostics;
 using Termina.Hosting;
@@ -65,6 +66,7 @@ static async Task RunAsync(string[] args)
     // ── Mode selection from CLI args ──
     var parseResult = CliArgsParser.Parse(args);
     string? headlessPrompt = null;
+    string? chatInitialMessage = null;
     string mode;
 
     switch (parseResult.Kind)
@@ -91,6 +93,16 @@ static async Task RunAsync(string[] args)
         default: // CliParseKind.Known
             mode = parseResult.Mode!;
             break;
+    }
+
+    // ── Reminder test: a normal chat whose first message is /run-reminder <id> ──
+    // The run-reminder skill and the run_reminder tool do the work, so the
+    // chat and the CLI use one code path.
+    if (mode is "reminder" && ReminderCommand.GetRunReminderId(args) is { } runReminderId)
+    {
+        chatInitialMessage = $"/run-reminder {runReminderId}";
+        mode = "chat";
+        args = ["chat"];
     }
 
     // Kick off the update check only for modes that do not boot Termina or
@@ -1113,7 +1125,11 @@ static async Task RunAsync(string[] args)
     ConfigureCliChatServices(webBuilder.Services, webBuilder.Configuration);
 
     // Shared navigation state for passing resume session ID to ChatViewModel
-    var navState = new ChatNavigationState { ResumeSessionId = resumeSessionId };
+    var navState = new ChatNavigationState
+    {
+        ResumeSessionId = resumeSessionId,
+        InitialMessage = chatInitialMessage
+    };
     webBuilder.Services.AddSingleton(navState);
 
     // Suppress framework console logging — console is reserved for the chat UI
@@ -1553,9 +1569,9 @@ static void WriteSimpleDiff(string original, string updated)
             continue;
 
         if (oldLine is not null)
-            Console.WriteLine($"  - {oldLine}");
+            Console.WriteLine($"  - {SecretOutputRedactor.Redact(oldLine)}");
         if (newLine is not null)
-            Console.WriteLine($"  + {newLine}");
+            Console.WriteLine($"  + {SecretOutputRedactor.Redact(newLine)}");
     }
 }
 

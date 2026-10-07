@@ -16,18 +16,35 @@ internal static class DiscordApprovalPromptBuilder
     private const string ComplexCommandHint = "_complex command — only one-shot approval available_";
 
     /// <summary>
-    /// Display-text budget chosen to keep the assembled prompt under
-    /// Discord's hard 2000-char per-message cap once scaffolding is added.
-    /// Exceeding the cap causes the post to fail and the binding to
-    /// auto-deny, which the model misreads as a user decline.
+    /// Discord rejects a message with more than 2000 characters of content.
+    /// Then the user sees no prompt and the call does not run.
     /// </summary>
-    internal const int MaxDisplayTextChars = 1700;
+    internal const int MaxMessageChars = 2000;
+
+    /// <summary>
+    /// Display-text budget. With the field budgets below, the largest prompt
+    /// (a verb list, the complex-command hint, and adopted context) stays under
+    /// <see cref="MaxMessageChars"/>. Discord has the smallest limit, so this
+    /// budget sets the command length that every approval prompt can show.
+    /// </summary>
+    internal const int MaxDisplayTextChars = ApprovalOptionKeys.MaxCommandTextChars;
+
+    // Field budgets. A candidate verb can be the full text of one command, so
+    // the header, the verb list, and the resolution line bound it again.
+    private const int MaxToolNameChars = 100;
+    private const int MaxHeaderVerbChars = 120;
+    private const int MaxLocationChars = 160;
+    private const int MaxListedVerbChars = 120;
+    private const int MaxVerbListChars = 300;
+    private const int VerbLineOverheadChars = 7;
+    private const int MaxResolutionVerbsChars = 300;
+    private const int MaxSpeakerListChars = 100;
 
     public static string BuildTextPrompt(ToolInteractionRequest request)
     {
         var sb = new StringBuilder();
         sb.AppendLine(request.ToolName.IsMcp ? "MCP tool approval required:" : "Netclaw approval required:");
-        sb.Append("Tool: ").AppendLine(request.ToolName.Value);
+        sb.Append("Tool: ").AppendLine(ToolNameText(request.ToolName.Value));
         sb.Append(request.ToolName.IsMcp ? "Invocation: " : "Action: ")
             .AppendLine(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars));
         sb.AppendLine(BuildApproveHeader(request));
@@ -35,7 +52,7 @@ internal static class DiscordApprovalPromptBuilder
         var verbs = ResolveDisplayVerbs(request);
         if (!request.ToolName.IsMcp && verbs.Count > 1)
         {
-            foreach (var verb in verbs)
+            foreach (var verb in BoundVerbList(verbs))
                 sb.Append("  • ").AppendLine(verb);
         }
 
@@ -47,7 +64,7 @@ internal static class DiscordApprovalPromptBuilder
         sb.AppendLine();
         sb.AppendLine("Reply with:");
         AppendReplyOptions(sb, request.Options);
-        return sb.ToString().TrimEnd();
+        return FitMessage(sb.ToString().TrimEnd());
     }
 
     public static (string Text, IReadOnlyList<DiscordButtonSpec> Buttons) BuildButtonPrompt(
@@ -72,7 +89,7 @@ internal static class DiscordApprovalPromptBuilder
                 Style: GetButtonStyle(option.Key.Value)))
             .ToList();
 
-        return (sb.ToString().TrimEnd(), buttons);
+        return (FitMessage(sb.ToString().TrimEnd()), buttons);
     }
 
     public static string BuildDecisionStatus(string selectedKey)
@@ -94,7 +111,7 @@ internal static class DiscordApprovalPromptBuilder
         sb.Append(statusEmoji)
             .Append(request.ToolName.IsMcp ? " **MCP tool approval resolved**" : " **Tool approval resolved**")
             .AppendLine();
-        sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
+        sb.Append("**Tool:** `").Append(ToolNameText(request.ToolName.Value)).AppendLine("`");
         sb.Append(request.ToolName.IsMcp ? "**Invocation:** `" : "**Action:** `")
             .Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
         sb.Append("**").Append(BuildResolutionLine(request, selectedKey)).Append("**");
@@ -104,10 +121,10 @@ internal static class DiscordApprovalPromptBuilder
         {
             sb.AppendLine();
             sb.Append("**Adopted context:** present").AppendLine();
-            sb.Append("**Speakers:** `").Append(string.Join(", ", request.AdoptedSpeakerIds)).Append('`');
+            sb.Append("**Speakers:** `").Append(SpeakerList(request)).Append('`');
         }
 
-        return sb.ToString();
+        return FitMessage(sb.ToString());
     }
 
     /// <summary>
@@ -140,7 +157,7 @@ internal static class DiscordApprovalPromptBuilder
 
         if (!string.IsNullOrEmpty(toolName) && !string.IsNullOrEmpty(displayText))
         {
-            sb.Append("**Tool:** `").Append(toolName).AppendLine("`");
+            sb.Append("**Tool:** `").Append(ToolNameText(toolName)).AppendLine("`");
             sb.Append(isMcpTool ? "**Invocation:** `" : "**Action:** `")
                 .Append(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))
                 .AppendLine("`");
@@ -149,12 +166,12 @@ internal static class DiscordApprovalPromptBuilder
         sb.Append("**").Append(BuildGenericResolutionLine(selectedKey, isMcpTool)).Append("**");
         sb.Append(" (by <@").Append(senderId).Append(">)");
 
-        return sb.ToString();
+        return FitMessage(sb.ToString());
     }
 
     private static string BuildGenericResolutionLine(string selectedKey, bool isMcpTool)
         => isMcpTool
-            ? selectedKey switch
+            ? ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
             {
                 ApprovalOptionKeys.ApproveAlways or ApprovalOptionKeys.ApproveEverywhere => "Always allowed this MCP tool",
                 ApprovalOptionKeys.ApproveSession => "Allowed this MCP tool for this chat",
@@ -162,9 +179,10 @@ internal static class DiscordApprovalPromptBuilder
                 ApprovalOptionKeys.Deny => "Denied",
                 _ => "Resolved"
             }
-            : selectedKey switch
+            : ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
             {
                 ApprovalOptionKeys.ApproveAlways => "Saved: always here",
+                ApprovalOptionKeys.ApproveRepository => "Saved: this repository",
                 ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
                 ApprovalOptionKeys.ApproveSession => "Saved for this chat",
                 ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
@@ -174,7 +192,7 @@ internal static class DiscordApprovalPromptBuilder
 
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
     {
-        sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
+        sb.Append("**Tool:** `").Append(ToolNameText(request.ToolName.Value)).AppendLine("`");
         sb.Append(request.ToolName.IsMcp ? "**Invocation:** `" : "**Action:** `")
             .Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
         sb.Append("**").Append(BuildApproveHeader(request)).AppendLine("**");
@@ -182,7 +200,7 @@ internal static class DiscordApprovalPromptBuilder
         var verbs = ResolveDisplayVerbs(request);
         if (!request.ToolName.IsMcp && verbs.Count > 1)
         {
-            foreach (var verb in verbs)
+            foreach (var verb in BoundVerbList(verbs))
                 sb.Append("  • `").Append(verb).AppendLine("`");
         }
 
@@ -207,7 +225,7 @@ internal static class DiscordApprovalPromptBuilder
         var location = ResolveHeaderLocation(request);
 
         return verbs.Count == 1
-            ? $"Approve {verbs[0]} in {location}?"
+            ? $"Approve {ApprovalDisplayTextFormatter.Truncate(verbs[0], MaxHeaderVerbChars)} in {location}?"
             : $"Approve in {location}?";
     }
 
@@ -220,7 +238,7 @@ internal static class DiscordApprovalPromptBuilder
     {
         if (request.ToolName.IsMcp)
         {
-            return selectedKey switch
+            return ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
             {
                 ApprovalOptionKeys.ApproveAlways or ApprovalOptionKeys.ApproveEverywhere => $"Always allowed: {request.ToolName}",
                 ApprovalOptionKeys.ApproveSession => $"Allowed for this chat: {request.ToolName}",
@@ -230,12 +248,15 @@ internal static class DiscordApprovalPromptBuilder
             };
         }
 
-        var verbs = string.Join(", ", ResolveDisplayVerbs(request));
+        var verbs = ApprovalDisplayTextFormatter.Truncate(
+            string.Join(", ", ResolveDisplayVerbs(request)),
+            MaxResolutionVerbsChars);
         var location = ResolveHeaderLocation(request);
 
-        return selectedKey switch
+        return ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
         {
             ApprovalOptionKeys.ApproveAlways => $"Saved: {verbs} in {location}",
+            ApprovalOptionKeys.ApproveRepository => $"Saved: {verbs} in this repository",
             ApprovalOptionKeys.ApproveEverywhere => $"Saved: {verbs} anywhere",
             ApprovalOptionKeys.ApproveSession => $"Saved for this chat: {verbs} in {location}",
             ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
@@ -245,6 +266,9 @@ internal static class DiscordApprovalPromptBuilder
     }
 
     private static string ResolveHeaderLocation(ToolInteractionRequest request)
+        => ApprovalDisplayTextFormatter.Truncate(ResolveFullHeaderLocation(request), MaxLocationChars);
+
+    private static string ResolveFullHeaderLocation(ToolInteractionRequest request)
     {
         var distinctDirs = request.Candidates
             .Where(c => !string.IsNullOrWhiteSpace(c.Directory))
@@ -281,8 +305,26 @@ internal static class DiscordApprovalPromptBuilder
             return;
 
         sb.Append("**Adopted context:** present").AppendLine();
-        sb.Append("**Speakers:** `").Append(string.Join(", ", request.AdoptedSpeakerIds)).AppendLine("`");
+        sb.Append("**Speakers:** `").Append(SpeakerList(request)).AppendLine("`");
     }
+
+    private static string SpeakerList(ToolInteractionRequest request)
+        => ApprovalDisplayTextFormatter.Truncate(string.Join(", ", request.AdoptedSpeakerIds), MaxSpeakerListChars);
+
+    private static string ToolNameText(string toolName)
+        => ApprovalDisplayTextFormatter.Truncate(toolName, MaxToolNameChars);
+
+    private static IReadOnlyList<string> BoundVerbList(IReadOnlyList<string> verbs)
+        => ApprovalDisplayTextFormatter.TruncateList(
+            verbs, MaxListedVerbChars, MaxVerbListChars, VerbLineOverheadChars);
+
+    /// <summary>
+    /// The field budgets keep a prompt under <see cref="MaxMessageChars"/>;
+    /// this last bound also covers a field that a later change adds without a
+    /// budget.
+    /// </summary>
+    private static string FitMessage(string text)
+        => ApprovalDisplayTextFormatter.Truncate(text, MaxMessageChars);
 
     private static void AppendReplyOptions(StringBuilder sb, IReadOnlyList<ToolInteractionOption> options)
     {
@@ -297,15 +339,7 @@ internal static class DiscordApprovalPromptBuilder
         => ((char)('A' + index)).ToString();
 
     private static string GetDecisionLabel(string selectedKey)
-        => selectedKey switch
-        {
-            ApprovalOptionKeys.ApproveOnce => ApprovalOptionKeys.ApproveOnceLabel,
-            ApprovalOptionKeys.ApproveSession => ApprovalOptionKeys.ApproveSessionLabel,
-            ApprovalOptionKeys.ApproveAlways => ApprovalOptionKeys.ApproveAlwaysLabel,
-            ApprovalOptionKeys.ApproveEverywhere => ApprovalOptionKeys.ApproveEverywhereLabel,
-            ApprovalOptionKeys.Deny => ApprovalOptionKeys.DenyLabel,
-            _ => selectedKey
-        };
+        => ApprovalOptionKeys.LabelFor(selectedKey);
 
     internal static string BuildButtonValue(ToolInteractionRequest request, ToolInteractionOption option)
         => ApprovalButtonValueCodec.Encode(request, option);

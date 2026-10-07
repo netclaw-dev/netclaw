@@ -69,7 +69,11 @@ internal static class TestShellEnvironment
             PwshDialect.WindowsPowerShell51);
     }
 
-    private static ShellExecutionEnvironment CreateEnvironment()
+    /// <summary>
+    /// Creates a new environment of the CI contract. Its daemon environment
+    /// snapshot is the environment of this process now.
+    /// </summary>
+    public static ShellExecutionEnvironment CreateEnvironment()
     {
         if (OperatingSystem.IsWindows())
         {

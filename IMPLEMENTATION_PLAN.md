@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-08-28
+Execution plan last updated: 2026-08-28. Restart review proposal added: 2026-09-18.
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -100,13 +100,220 @@ the smallest repeatable manual script plus expected output.
 
 - Product: `PROJECT_CONTEXT.md`, `docs/prd/README.md`, `docs/prd/PRD-001-netclaw-mvp.md`
 - CLI/config: `docs/prd/PRD-004-cli-onboarding-and-config.md`, `docs/spec/SPEC-004-cli-contract.md`, `docs/spec/SPEC-007-guided-onboarding.md`, `openspec/specs/netclaw-config-command/spec.md`, `openspec/changes/netclaw-config-command/tasks.md`
-- Security/gateway: `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/spec/SPEC-001-runtime-boundaries.md`, `docs/spec/SPEC-003-acl-policy-and-security-controls.md`, `openspec/specs/netclaw-acl/spec.md`, `openspec/specs/netclaw-gateway-security/spec.md`
+- Security/gateway: `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/spec/SPEC-001-runtime-boundaries.md`, `docs/architecture/tool-authorization.md`, `openspec/specs/tool-authorization/spec.md`
 - Input adapters: `docs/prd/PRD-009-input-adapters-and-unified-input.md`, `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-discord-socket/spec.md`, `openspec/changes/add-mattermost-channel/tasks.md`
 - Models/providers: `docs/prd/PRD-005-model-provider-strategy.md`, `docs/spec/SPEC-008-model-provider-abstraction.md`, `openspec/specs/netclaw-model-providers/spec.md`
-- MCP/tools: `docs/prd/PRD-006-mcp-tool-integration.md`, `openspec/specs/netclaw-mcp/spec.md`, `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-approval-gates/spec.md`
+- MCP/tools: `docs/prd/PRD-006-mcp-tool-integration.md`, `openspec/specs/netclaw-mcp/spec.md`, `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-authorization/spec.md`
 - Memory/personality: `docs/prd/PRD-007-agent-personality-and-local-memory.md`, `openspec/specs/netclaw-agent-memory/spec.md`, `openspec/specs/project-instructions/spec.md`
 - Scheduling: `docs/prd/PRD-008-scheduling-and-periodic-tasks.md`, `openspec/specs/netclaw-scheduling/spec.md`, `openspec/specs/reminder-execution-history/spec.md`
 - Testing: `docs/spec/SPEC-010-testing-and-smoke-strategy.md`, `TOOLING.md`
+
+## Review Proposal: Shorter Daemon Restarts
+
+Status: Approved for implementation on 2026-09-18.
+This plan does not authorize a live daemon restart.
+Baseline revision: `a4b81b5c9184d1986bfa7d872e0932ac636d4b71`.
+
+Source PRDs: [PRD-001 FR-016](docs/prd/PRD-001-netclaw-mvp.md#fr-016-config-change-restart-coordination)
+and [PRD-008](docs/prd/PRD-008-scheduling-and-periodic-tasks.md).
+Related contracts: [SPEC-011](docs/spec/SPEC-011-daemon-architecture.md),
+[session resume](openspec/specs/session-resume/spec.md), and
+[reminders](openspec/specs/netclaw-scheduling/spec.md).
+Use the [engineering glossary](docs/spec/GLOSSARY.md) for shared terms.
+
+### Objective
+
+Reduce the stop-to-listener interval while Netclaw preserves accepted work.
+Do not replay a tool after its effect can be uncertain.
+Do not increase the original turn authority.
+Do not add channel-specific recovery code.
+
+This work excludes CLI display latency and recovery after an ungraceful crash.
+Issue [#2199](https://github.com/netclaw-dev/netclaw/issues/2199) tracks CLI latency.
+
+### Observed Delay
+
+One local restart supplied this evidence:
+
+| Phase | Observed time | Finding |
+|---|---:|---|
+| Session drain | 190 seconds | Two sessions waited on durable approvals until the deadline. |
+| Later teardown | About 16 seconds | Browser MCP disposal used about 10 seconds. |
+| Service gap | About 26 seconds | The available logs do not assign this delay. |
+| Process start to listener | About 8.2 seconds | Startup work delayed listener readiness. |
+
+The startup trace included these approximate costs:
+
+- Process setup and model probes used 1.5 seconds.
+- SQLite and memory startup used 1.4 seconds.
+- Four MCP connections used 4.2 seconds.
+- Final hosted services used 1.1 seconds.
+
+PR #2203 now connects independent MCP servers concurrently.
+A new trace must measure its actual startup gain.
+The unexplained 26-second service gap remains a separate investigation.
+
+### Approved Stop Policy
+
+Any graceful stop can create a restart reminder for safely interrupted work.
+This policy covers updates, manual restarts, service restarts, and pod replacements.
+A forced process kill cannot create this guarantee.
+
+A restart reminder expires ten minutes after the interruption.
+The deadline does not reset after another process start.
+An expired reminder logs one warning and does not start model work.
+
+Netclaw creates no reminder for these states:
+
+- The session completed its work and waits for user input.
+- A tool can have an uncertain external effect.
+- Partial assistant text reached the output stream.
+- The stored turn has no channel type for current-session delivery.
+- Pending inputs have different authority.
+
+An open approval remains parked in the journal.
+The existing approval path can re-drive it after user action.
+This slice accepts temporary approval UI inconsistency after restart.
+
+### Minimal Design
+
+The design reuses these owners:
+
+| Data or decision | Owner | Lifetime |
+|---|---|---|
+| Accepted input and original authority | Session journal | Durable |
+| Active model and tool cancellation | `LlmSessionActor` | Actor-local |
+| Wakeup schedule and delivery | Reminder manager | Durable |
+| Cross-process handoff | Restart manifest | Durable until startup reads it |
+
+The session stores each accepted input before it sends an acknowledgment.
+The record contains its ID, content, media, source ID, and `TurnContextRecord`.
+Journal order supplies input order.
+Terminal turn events close the consumed input IDs.
+
+The actor gives an active model call a two-second completion grace.
+It then cancels the call and waits for that exact task to stop.
+A durable approval wait uses the existing tool pipeline cancellation token.
+The actor does not cancel a tool with an uncertain effect.
+
+The actor returns one standard `ReminderDefinition` after a safe interruption.
+The reminder uses `DeliveryKind.CurrentSession` and expires after ten minutes.
+Its instruction is `Resume the work that was interrupted by the daemon restart.`
+
+The restart manifest stores the definition.
+Startup registers each fresh definition through `SaveReminderCommand`.
+The reminder manager owns scheduling, retry, deduplication, and delivery.
+Existing gateways deliver the reminder through their current path.
+
+The session recognizes the internal reminder ID.
+It restores pending input and its original `TurnContextRecord` from the journal.
+The reminder supplies a wakeup signal only.
+Its automation authority does not replace the stored authority.
+
+No route binder is required.
+No channel state is stored.
+No resume candidate protocol is required.
+No channel adapter changes are allowed.
+
+### Ordered Flow
+
+This flow is schematic.
+It omits persistence callbacks and normal reminder settlement.
+
+```text
+input -> session: SendUserMessage
+session -> journal: InputAdmitted
+journal -> session: stored
+session -> source: CommandAck
+stop -> session: PrepareForDaemonRestart
+session -> model: cancel and await exact task
+session -> stop: standard ReminderDefinition or none
+stop -> manifest: restart reminders
+start -> reminder manager: SaveReminderCommand
+gateway -> session: ordinary reminder turn
+session -> journal: restore pending input and authority
+session -> model: resume stored work
+```
+
+### Risk Controls
+
+| Risk | Control | Required proof |
+|---|---|---|
+| Lost accepted input | Persist before acknowledgment. | Actor test with journal replay. |
+| Duplicate input after a lost acknowledgment | Keep a bounded source ID ledger. | Retry test with one pending record. |
+| Duplicate tool effect | Close input before tool execution. Do not cancel uncertain effects. | Actor test for a started tool batch. |
+| Repeated partial reply | Track streamed text. Do not create a reminder. | Actor stream test. |
+| Stale wakeup | Store an absolute ten-minute expiry. | Fake-time startup test. |
+| Wider authority | Restore the journaled `TurnContextRecord`. | Actor test with low trust input. |
+| Duplicate reminder registration | Use one stable reminder ID and `CreateOnly`. | Startup conflict test. |
+| Missing delivery route | Require a stored channel type. Let the reminder system resolve the gateway. | Actor test with missing channel context. |
+| Manifest truncation | Write the manifest atomically. | Store round-trip test. |
+| Long cooperative cancellation | Keep the bounded daemon stop deadline. | Test a client that ignores cancellation. |
+
+### Pull Request Stack
+
+**PR #2207: Plan and contracts.**
+
+- Record the measured delay and its limits.
+- Record the ten-minute policy and safety boundaries.
+- Keep all later pull requests traceable to this objective.
+
+**PR #2208: Stop durable approval waits.**
+
+- Cancel only a tool pipeline that waits only on journaled approvals.
+- Wait for the exact pipeline task before drain acknowledgment.
+- Keep the approval request usable after cold recovery.
+
+**PR #2209: Persist accepted input.**
+
+- Add `InputId`, `InputAdmitted`, and `InputClosed`.
+- Persist input before acknowledgment.
+- Restore pending input from the journal and snapshots.
+- Deduplicate a retry by its stable source identity.
+
+**PR #2210: Resume through the reminder manager.**
+
+- Give the active model call a two-second grace.
+- Cancel and await an eligible call.
+- Put a standard restart reminder in the manifest.
+- Register fresh reminders at startup.
+- Restore original input and authority when the reminder arrives.
+- Change no channel-specific file.
+
+**PR #2211: Bound daemon stop time.**
+
+- Reduce the final daemon stop budget to 30 seconds.
+- Keep the drain deadline below the host and service deadlines.
+- Preserve timeout diagnostics for sessions that cannot stop safely.
+
+### Validation
+
+Run focused actor tests for the state transitions and journal boundaries.
+Run daemon tests for manifest production and reminder registration.
+Run reminder tests for one-shot expiration.
+Run the behavioral eval suite because the operations skill changes.
+Use `https://spark2.testlab.petabridge.net/` for eval execution.
+
+Run `dotnet slopwatch analyze` after code changes.
+Run `./scripts/Add-FileHeaders.ps1 -Verify` after code changes.
+Run OpenSpec validation for each changed contract.
+
+A process check must use a disposable `NETCLAW_HOME`.
+It must prove a fresh reminder resumes work once.
+It must prove an expired reminder stays quiet.
+It must prove a parked approval remains usable.
+It must not replace the active daemon binary on this system.
+
+### Completion Conditions
+
+- Approval-only drain finishes after pipeline cancellation.
+- Safe model interruption returns one standard reminder.
+- Completed sessions create no restart reminder.
+- Startup ignores reminders older than ten minutes.
+- The resumed model call uses stored input and authority.
+- No channel-specific code changes appear in the stack.
+- The 30-second stop budget remains a fallback for unsafe states.
+- Tests, OpenSpec validation, Slopwatch, headers, and evals pass.
 
 ## NOW
 
@@ -188,7 +395,7 @@ Done when:
 ### Priority: Preserve The Daemon Working Directory
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
-**Specs:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-approval-gates/spec.md`
+**Specs:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-authorization/spec.md`
 **Surface area:** daemon lifecycle, path normalization, shell authorization
 **Verification:** L1 plus a live daemon restart
 
@@ -256,9 +463,57 @@ Done when:
 ### Priority: Reduce Shell Approval Fatigue
 
 **PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
-**Spec:** `openspec/specs/tool-approval-gates/spec.md`
+**Spec:** `openspec/specs/tool-authorization/spec.md`
 **Surface area:** shell authorization, approval matching, security corpus
 **Verification:** L2
+
+#### Active delivery: complete compound scopes
+
+The `0.27.0-beta.4` session declared its project root. Later calls still used
+inline `cd` with a pipeline and later statements. ShellSyntaxTree parsed the
+source, but Netclaw lost reusable candidates after a directory join. The
+source also contains `rm`, `python3`, and `dotnet new install` prompts with no
+matching grant. Those prompts remain subject to approval.
+
+The approved contract is in
+`openspec/changes/reduce-complex-shell-approval-prompts/`. The goal is to
+reuse existing grants only when every reachable verb, directory, and path
+scope has proof. A parent folder grant covers descendants after each concrete
+path passes symlink and protected-path checks. A deep glob cannot use that
+rule without proof for every possible match.
+
+**Delivery:** Five reviewable PRs are planned. The first Netclaw PR adds a
+typed one-call directory correction and sanitized evidence. The second
+Netclaw PR adds conservative coverage for complete static compounds. The
+ShellSyntaxTree PR publishes bounded syntax facts, then tag
+`0.4.0-beta.3` publishes the public package. The fourth PR pins that
+package and consumes only proved facts. The user authorized automatic merge
+after CI and independent security review.
+The fifth PR adds an explicit repository grant for ordinary Git checkouts
+and their registered linked worktrees. Existing folder grants retain their
+path meaning. A main checkout with `--separate-git-dir` keeps folder scope.
+
+**Delivery evidence:** ShellSyntaxTree PR #184 merged. Its `0.4.0-beta.3`
+package passed the publish job and is available on NuGet. Netclaw PRs #2191,
+#2193, and #2194 merged after their CI checks passed. PR #2194 pins the public
+beta. PR #2195 adds the explicit repository grant and has passed local tests,
+focused mutants, native approval smoke, and independent authority review.
+Its final merge depends on CI for the branch after the PR #2194 merge.
+
+The full hosted eval for PR #2195 passed 73 of 91 cases, so that suite remains
+red. The isolated typed-directory case passed five of five runs. Several
+failed worktree cases used successful read-only `git -C` calls, which the
+typed-directory oracle rejects. The worktree creation case denied an
+unapproved `git worktree add`, as required. The live daemon still runs
+`0.27.0-beta.4`; these changes need a later Netclaw rollout.
+
+**Gates:** Prove both outcomes of a directory change, every pipeline stage,
+an ungranted verb, each possible path, redirects, hard denials, protected
+paths, symbolic links, audience and session boundaries, and exact retries.
+Run focused mutation tests at the authority boundary. Restore the public
+beta from NuGet before the fourth PR. Keep unknown syntax, runtime
+values, and deep globs under exact approval. Do not add executable-specific
+argument parsers to Netclaw.
 
 The user promoted this work into `NOW`. The work must reduce repeat prompts
 without allowing an incomplete or unknown shell form.
@@ -511,13 +766,13 @@ Done when:
   stayed below threshold. Prompt equivalents fell from 32 to 25, while the
   explicit directory-transition shell attempts fell from 24 to 12. These
   variable results remain recorded, not converted into weaker assertions.
-  See `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-guidance-fresh-session-eval-results.json`.
+  See `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-guidance-fresh-session-eval-results.json`.
 - [x] PR #1982 merged as `9d02d19efd75fe871c8603e151e3e7169a9d9433`.
   The live daemon preserved a rollback binary, swapped to that exact commit,
   recovered its session catalog, and passed five natural fixed-pipeline runs
   without an approval or complex marker.
 - [x] Forty-five post-swap fresh sessions are frozen in
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-9d02d19-binary-swap-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-9d02d19-binary-swap-eval-results.json`.
   The original eight workloads improved from 17/40 to 23/40 behavior passes;
   the added fixed-pipeline case passed 5/5. Observed prompt equivalents fell
   from 25 to 2, but 446 historical grants make that prompt delta non-causal.
@@ -532,7 +787,7 @@ Done when:
   one additional shell call after denial. The initial controlled DeepSeek run
   was blocked by provider billing, so the live comparison is operational
   deployment evidence rather than a same-model causal estimate. See
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-7efa7fd-followup-live-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-7efa7fd-followup-live-eval-results.json`.
 - [x] After billing resumed, an isolated same-model rerun of the exact merged
   image passed known-file and disposable-output cases 10/10, but the terminal
   directory-denial case passed only 3/5. Both failures followed stale inherited
@@ -542,7 +797,7 @@ Done when:
   affected cases passed 15/15. Structured-file cases used no shell. All five
   external directory transitions produced exactly one hard denial, no scope
   correction, and no retry. See
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-terminal-denial-guidance-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-terminal-denial-guidance-eval-results.json`.
 - [x] The terminal-denial guidance correction merged in PR #1985. The exact
   merged binary was swapped into the live daemon. Five fresh live sessions
   retained all five required denials. Three stopped without a substitute call;
@@ -559,7 +814,7 @@ Done when:
   compound run. Generic independent-operation guidance raised the exact
   committed image to 5/5. It produced five successful single-operation shell
   calls and no approval equivalent. See
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-independent-operation-guidance-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-independent-operation-guidance-eval-results.json`.
 - [x] The initial follow-up disposable eval was discarded. Its prompt requested
   a diagnostic command but omitted the exact content required by its assertion.
   The corrected case names the disposable file effect and exact content without
@@ -874,7 +1129,7 @@ Done when:
 #### Task 1.3: Complete `Security & Access` config area
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`, `docs/prd/PRD-002-gateway-security-envelope.md`
-**Spec:** `openspec/specs/netclaw-config-command/spec.md`, `openspec/specs/security-posture-tui/spec.md`, `openspec/specs/netclaw-acl/spec.md`
+**Spec:** `openspec/specs/netclaw-config-command/spec.md`, `openspec/specs/security-posture-tui/spec.md`, `openspec/specs/tool-authorization/spec.md`
 **Surface area:** UI, config, security
 **Verification:** L3
 
@@ -1110,7 +1365,7 @@ according to the same security envelope.
 #### Task 3.1: Add adapter config-to-runtime contract tests
 
 **PRD:** `docs/prd/PRD-009-input-adapters-and-unified-input.md`, `docs/prd/PRD-002-gateway-security-envelope.md`
-**Spec:** `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-discord-socket/spec.md`, `openspec/specs/netclaw-acl/spec.md`
+**Spec:** `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-discord-socket/spec.md`, `openspec/specs/tool-authorization/spec.md`
 **Surface area:** runtime, config, ACL
 **Verification:** L2
 
@@ -1223,7 +1478,7 @@ Done when:
   still produce terminal failed `spawn_agent` results.
 - [ ] No turn loop can report success while a tool result is still pending.
 - [ ] Logs/traces correlate model call, tool call, approval, and session turn.
-  `openspec/changes/correlate-tool-authorization-attempts/` implements the
+  `openspec/changes/archive/2026-09-29-correlate-tool-authorization-attempts/` implements the
   call-local authorization-attempt link across policy, correction, prompt,
   decision, retry, recovery, and result. Model-call and session-turn links
   remain part of the broader observability item.

@@ -1,0 +1,165 @@
+{
+  "configVersion": 1,
+  "Security": {
+    "DeploymentPosture": "Public",
+    "ShellExecutionMode": "Off",
+    "StrictDefaults": true
+  },
+  "Tools": {
+    "ShellMode": "Off",
+    "AudienceProfiles": {
+      "Public": {
+        "ToolsMode": "Allowlist",
+        "AllowedTools": [
+          "file_read",
+          "file_list",
+          "file_search",
+          "tool_output_read",
+          "attach_file"
+        ],
+        "McpServersMode": "Allowlist",
+        "AllowedMcpServers": [],
+        "McpServerToolGrants": null,
+        "ReadFiles": {
+          "Mode": "Roots",
+          "Roots": [
+            "{session_dir}"
+          ]
+        },
+        "WriteFiles": {
+          "Mode": "Roots",
+          "Roots": [
+            "{session_dir}"
+          ]
+        },
+        "AttachFiles": {
+          "Mode": "Roots",
+          "Roots": [
+            "{session_dir}"
+          ]
+        },
+        "ApprovalPolicy": null,
+        "ChannelAttachments": {
+          "AllowedCategories": [
+            "Image"
+          ],
+          "MaxFileBytes": 26214400,
+          "MaxFilesPerMessage": 10
+        }
+      },
+      "Team": {
+        "ToolsMode": "Allowlist",
+        "AllowedTools": [
+          "file_read",
+          "file_list",
+          "file_search",
+          "tool_output_read",
+          "file_write",
+          "file_edit",
+          "attach_file",
+          "web_search",
+          "web_fetch",
+          "skill_manage",
+          "set_reminder",
+          "list_reminders",
+          "cancel_reminder",
+          "get_reminder_history",
+          "set_working_directory"
+        ],
+        "McpServersMode": "Allowlist",
+        "AllowedMcpServers": [],
+        "McpServerToolGrants": null,
+        "ReadFiles": {
+          "Mode": "Roots",
+          "Roots": [
+            "{session_dir}"
+          ]
+        },
+        "WriteFiles": {
+          "Mode": "Roots",
+          "Roots": [
+            "{session_dir}"
+          ]
+        },
+        "AttachFiles": {
+          "Mode": "Roots",
+          "Roots": [
+            "{session_dir}"
+          ]
+        },
+        "ApprovalPolicy": null,
+        "ChannelAttachments": {
+          "AllowedCategories": [
+            "Image",
+            "Pdf",
+            "Document",
+            "Archive",
+            "Media"
+          ],
+          "MaxFileBytes": 26214400,
+          "MaxFilesPerMessage": 10
+        }
+      },
+      "Personal": {
+        "ToolsMode": "All",
+        "AllowedTools": [],
+        "McpServersMode": "All",
+        "AllowedMcpServers": [],
+        "McpServerToolGrants": null,
+        "ReadFiles": {
+          "Mode": "All",
+          "Roots": []
+        },
+        "WriteFiles": {
+          "Mode": "All",
+          "Roots": []
+        },
+        "AttachFiles": {
+          "Mode": "All",
+          "Roots": []
+        },
+        "ApprovalPolicy": null,
+        "ChannelAttachments": {
+          "AllowedCategories": [
+            "Image",
+            "Pdf",
+            "Document",
+            "Archive",
+            "Media",
+            "Other"
+          ],
+          "MaxFileBytes": 26214400,
+          "MaxFilesPerMessage": 10
+        }
+      },
+      "GlobalReadRoots": [
+        "{skills_dir}",
+        "{identity_dir}",
+        "{workspaces_dir}"
+      ]
+    }
+  },
+  "Identity": {
+    "AgentName": "Netclaw",
+    "CommunicationStyle": "Concise \u0026 casual",
+    "UserTimezone": "UTC"
+  },
+  "Memory": {
+    "Enabled": false
+  },
+  "Search": {
+    "Enabled": false
+  },
+  "SkillSync": {
+    "Enabled": false
+  },
+  "Scheduling": {
+    "Enabled": false
+  },
+  "SubAgents": {
+    "Enabled": false
+  },
+  "Webhooks": {
+    "Enabled": false
+  }
+}

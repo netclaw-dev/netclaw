@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Netclaw.Cli;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Provider;
@@ -13,8 +14,12 @@ using Xunit;
 namespace Netclaw.Cli.Tests.Doctor;
 
 [Collection(Netclaw.Cli.Tests.LegacyModelEnvironmentCollection.Name)]
-public sealed class ChatClientDoctorCheckTests
+public sealed class ChatClientDoctorCheckTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     [Fact]
     public async Task ReturnsWarning_WhenNoProvidersConfigured()
     {
@@ -396,7 +401,7 @@ public sealed class ChatClientDoctorCheckTests
         }
     }
 
-    private static NetclawPaths CreatePathsWithConfig(string configJson)
+    private NetclawPaths CreatePathsWithConfig(string configJson)
     {
         var basePath = CreateTempBasePath();
         var paths = new NetclawPaths(basePath);
@@ -418,9 +423,9 @@ public sealed class ChatClientDoctorCheckTests
     private static void WriteSecrets(NetclawPaths paths, string secretsJson) =>
         File.WriteAllText(paths.SecretsPath, secretsJson);
 
-    private static string CreateTempBasePath()
+    private string CreateTempBasePath()
     {
-        var path = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
     }

@@ -80,4 +80,10 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
 
     public IReadOnlyList<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; init; } =
         Array.Empty<AdoptedContextSnapshotRecord>();
+
+    public IReadOnlyList<SessionProtocol.InputAdmitted> PendingInputs { get; init; } =
+        Array.Empty<SessionProtocol.InputAdmitted>();
+
+    public IReadOnlyList<string> RecentSourceMessageKeys { get; init; } =
+        Array.Empty<string>();
 }

@@ -23,6 +23,7 @@ public static class DoctorRegistrationExtensions
         services.AddSingleton<IReadOnlyDictionary<string, RelevanceModelManifestEntry>>(EmbeddingModelProvisioner.RelevanceAllowlist);
         services.AddSingleton<IDoctorCheck, ConfigSchemaDoctorCheck>();
         services.AddSingleton<IDoctorCheck, ToolAudienceProfilesDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, ToolApprovalHygieneDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SecurityPolicyDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SlackAclDoctorCheck>();
         services.AddSingleton<IDoctorCheck, TelemetryDoctorCheck>();

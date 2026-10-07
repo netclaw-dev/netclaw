@@ -6,6 +6,8 @@
 
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -18,6 +20,8 @@ using ModelContextProtocol.Server;
 //     function of their input:
 //       add(a, b)                -> a + b
 //       echo(text)               -> text
+//       image-with-notes()       -> one image and one text block
+//       image-with-metadata()    -> an image and application metadata
 //       record-tasks(tasks, ref) -> a summary of the structured arguments
 //       process-info()           -> process ID and command-line arguments
 //
@@ -50,6 +54,8 @@ namespace Netclaw.SmokeMcpServer;
 
 internal sealed class Program
 {
+    private static readonly byte[] ValidPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==");
     private static McpServerPrimitiveCollection<McpServerTool>? _dynamicTools;
 
     // Class is non-static so WithTools<Program>() can construct it for tool
@@ -67,6 +73,32 @@ internal sealed class Program
     [Description("Echo the given text back verbatim.")]
     public static string Echo(
         [Description("The text to echo back unchanged.")] string text) => text;
+
+    /// <summary>Deterministic tool: returns an image block followed by notes.</summary>
+    [McpServerTool(Name = "image-with-notes")]
+    [Description("Return a deterministic image with model-readable notes.")]
+    public static IEnumerable<AIContent> ImageWithNotes(
+        [Description("Return valid PNG bytes when true. Return invalid test bytes when false.")]
+        bool validContent = true)
+    {
+        yield return new DataContent(validContent ? ValidPng : new byte[] { 1, 2, 3 }, "image/png");
+        yield return new TextContent("chart-notes");
+    }
+
+    /// <summary>Deterministic tool: returns an image with application metadata.</summary>
+    [McpServerTool(Name = "image-with-metadata")]
+    [Description("Return a deterministic image with application metadata.")]
+    public static CallToolResult ImageWithMetadata(
+        [Description("Return valid PNG bytes when true. Return invalid test bytes when false.")]
+        bool validContent = true)
+        => new()
+        {
+            Content =
+            [
+                ImageContentBlock.FromBytes(validContent ? ValidPng : new byte[] { 1, 2, 3 }, "image/png"),
+            ],
+            Meta = new JsonObject { ["vendor/example"] = true },
+        };
 
     /// <summary>
     /// Deterministic tool with a structured (array-of-objects) parameter. Its
@@ -171,6 +203,8 @@ internal sealed class Program
         {
             McpServerTool.Create(Add, new McpServerToolCreateOptions { Name = "add" }),
             McpServerTool.Create(Echo, new McpServerToolCreateOptions { Name = "echo" }),
+            McpServerTool.Create(ImageWithNotes, new McpServerToolCreateOptions { Name = "image-with-notes" }),
+            McpServerTool.Create(ImageWithMetadata, new McpServerToolCreateOptions { Name = "image-with-metadata" }),
             McpServerTool.Create(RecordTasks, new McpServerToolCreateOptions { Name = "record-tasks" }),
             McpServerTool.Create(ProcessInfo, new McpServerToolCreateOptions { Name = "process-info" }),
         };

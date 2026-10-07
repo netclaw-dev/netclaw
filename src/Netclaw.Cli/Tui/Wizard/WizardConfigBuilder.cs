@@ -11,6 +11,7 @@ using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Tui.Sections;
+using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 
@@ -41,7 +42,7 @@ public sealed class WizardConfigBuilder
     public MattermostConfigSection? Mattermost { get; set; }
     public SecurityConfigSection Security { get; set; } = new();
     public SearchConfigSection? Search { get; set; }
-    public ToolConfig? Tools { get; set; }
+    public ToolsConfigSection? Tools { get; set; }
     public BrowserAutomationConfigSection? BrowserAutomation { get; set; }
     public IdentityConfigSection? Identity { get; set; }
     public WorkspacesConfigSection? Workspaces { get; set; }
@@ -268,9 +269,10 @@ public sealed class WizardConfigBuilder
             ["StrictDefaults"] = true
         };
 
-        // Tools section
+        // Tools section: only the shell mode. The daemon computes the audience profiles and the
+        // other Tools defaults from the posture, so a copy of a default never freezes here.
         if (Tools is not null)
-            config["Tools"] = Tools;
+            config["Tools"] = SecurityPostureStepViewModel.BuildToolsDictionary(Tools.ShellMode);
 
         // Workspaces section
         if (Workspaces is not null)
@@ -606,6 +608,12 @@ public sealed class SecurityConfigSection
     public DeploymentPosture DeploymentPosture { get; set; } = DeploymentPosture.Personal;
     public ShellExecutionMode ShellExecutionMode { get; set; } = ShellExecutionMode.HostAllowed;
 }
+
+/// <summary>
+/// The Tools keys that <c>netclaw init</c> writes: only the shell mode for the posture. It does
+/// not hold audience profiles or other defaults. The daemon computes them from the posture.
+/// </summary>
+public sealed record ToolsConfigSection(ShellExecutionMode ShellMode);
 
 public sealed class SearchConfigSection
 {

@@ -4,23 +4,18 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Services;
 
 public sealed record RestartManifest
 {
-    public required string Reason { get; init; }
-
-    public required DateTimeOffset RequestedAt { get; init; }
-
-    public required List<string> SessionIds { get; init; }
-
-    public List<string> TimedOutSessionIds { get; init; } = [];
+    public List<ReminderDefinition> RestartReminders { get; init; } = [];
 }
 
 /// <summary>
-/// Persists short-lived restart recovery state across a coordinated in-process host restart.
+/// Persists short-lived reminders across a coordinated daemon restart.
 /// </summary>
 public sealed class RestartManifestStore
 {
@@ -41,8 +36,16 @@ public sealed class RestartManifestStore
         ArgumentNullException.ThrowIfNull(manifest);
         _paths.EnsureDirectoriesExist();
 
-        await using var stream = File.Create(_paths.RestartManifestPath);
-        await JsonSerializer.SerializeAsync(stream, manifest, JsonOptions, cancellationToken);
+        var json = JsonSerializer.Serialize(manifest, JsonOptions);
+        await AtomicFile.WriteAllTextAsync(
+            _paths.RestartManifestPath,
+            json,
+            static path =>
+            {
+                if (!OperatingSystem.IsWindows())
+                    File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            },
+            cancellationToken);
     }
 
     public async Task<RestartManifest?> ReadAsync(CancellationToken cancellationToken)

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Security.Authorization.Consent;
 using Netclaw.Tools;
 
 namespace Netclaw.Security;
@@ -26,51 +27,33 @@ public interface IToolApprovalService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Returns the subset of <paramref name="patterns"/> (candidate verb chains)
-    /// that are not approved for the given audience and tool. The
-    /// <paramref name="cwd"/> is the candidate's resolved working directory; it
-    /// is used by the compatibility matcher to evaluate folder-scoped
-    /// <see cref="Netclaw.Configuration.ApprovalEntry"/> records. May be null
-    /// for tools whose approvals are not directory-anchored.
+    /// Records the grants for the candidates that the operator reviewed, in one
+    /// atomic batch. Each grant carries its own scope. The service writes the
+    /// persistent grants to the store and every grant to the session.
     /// </summary>
-    Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
-        ToolApprovalSessionId? sessionId,
-        TrustAudience audience,
-        ToolName toolName,
-        IReadOnlyList<string> patterns,
-        string? cwd,
-        CancellationToken ct = default);
-
-    Task RecordApprovalAsync(
-        ToolApprovalSessionId sessionId,
-        TrustAudience audience,
-        ToolName toolName,
-        IReadOnlyList<string> patterns,
-        bool persistent,
-        string? cwd,
-        CancellationToken ct = default);
-}
-
-/// <summary>
-/// Records the structured candidates the user reviewed in one atomic batch.
-/// </summary>
-public interface IStructuredToolApprovalService
-{
     Task RecordApprovalCandidatesAsync(
         ToolApprovalSessionId sessionId,
         TrustAudience audience,
         ToolName toolName,
         IReadOnlyList<ToolApprovalGrant> grants,
-        bool persistent,
         CancellationToken ct = default);
 }
 
 /// <summary>
-/// One reviewed candidate and the directory scope selected by the user.
+/// One reviewed candidate and the scope that the operator selected for it.
 /// </summary>
 public sealed record ToolApprovalGrant(
     ApprovalCandidate Candidate,
-    string? Directory);
+    GrantScope Scope)
+{
+    /// <summary>
+    /// The worktree root that the grant builder resolved for a
+    /// <see cref="GrantScope.Repository"/> grant. The approval actor resolves the
+    /// candidate again and refuses the grant when the worktree changed. Other
+    /// scopes leave it null.
+    /// </summary>
+    public string? RepositoryWorktree { get; init; }
+}
 
 /// <summary>
 /// Approval-service session identity. Kept in the security layer because
@@ -106,7 +89,12 @@ public sealed record ToolApprovalCandidateCheck(
     ApprovalCandidate Candidate,
     ToolApprovalMatch? ApprovedMatch);
 
+/// <summary>
+/// One candidate that a grant covered. <see cref="Pattern"/> is the verb of the
+/// candidate (the command words of the call), and <see cref="Scope"/> is the
+/// scope of the grant. The words of the grant can be fewer: the grant
+/// <c>git push</c> covers the candidate <c>git push origin</c>.
+/// </summary>
 public sealed record ToolApprovalMatch(
     string Pattern,
-    string Source,
-    string Scope);
+    GrantScope Scope);

@@ -8,8 +8,10 @@ using System.Text.Json.Serialization;
 namespace Netclaw.Configuration.Feeds;
 
 /// <summary>
-/// Tracks which system skills have been synced from the feed.
-/// Persisted at <c>~/.netclaw/skills/.system/.sync-state.json</c>.
+/// Tracks which skills or sub-agents a server feed sync installed.
+/// Persisted at <see cref="NetclawPaths.ServerFeedSyncStatePath"/> and
+/// <see cref="NetclawPaths.ServerFeedAgentSyncStatePath"/>. The tool path
+/// policy write-protects both files for each configured feed.
 /// </summary>
 public sealed class SkillSyncState
 {
@@ -33,4 +35,16 @@ public sealed class SyncedSkillState
 
     [JsonPropertyName("syncedAtUtc")]
     public DateTimeOffset SyncedAtUtc { get; set; }
+
+    /// <summary>
+    /// The SHA-256 of each installed skill file, keyed by its relative path with
+    /// <c>/</c> separators. The feed sync compares the skill directory with this
+    /// map and installs the published version again when they differ.
+    /// </summary>
+    /// <remarks>
+    /// Null in a record that an older daemon wrote, and in a sub-agent record.
+    /// The feed sync installs a skill again once to record the map.
+    /// </remarks>
+    [JsonPropertyName("files")]
+    public Dictionary<string, string>? Files { get; set; }
 }

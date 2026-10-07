@@ -29,7 +29,7 @@ namespace Netclaw.Actors.Tests.Memory;
 /// </summary>
 public sealed class SqliteMemoryStoreDedupCollisionTests : IAsyncDisposable
 {
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-dedup-collision-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-dedup-collision-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly FakeTimeProvider _timeProvider;
     private readonly SQLiteMemoryStore _store;

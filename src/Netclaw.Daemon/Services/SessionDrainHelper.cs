@@ -8,6 +8,7 @@ using Akka.Actor;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Daemon.Services;
@@ -57,7 +58,7 @@ internal static class SessionDrainHelper
         {
             try
             {
-                var ack = await sessionManager.Ask<CommandAck>(
+                var ack = await sessionManager.Ask<DaemonRestartPrepared>(
                     new PrepareForDaemonRestart(sessionId, reason),
                     timeout: Timeout.InfiniteTimeSpan,
                     cancellationToken: operationCancellationToken);
@@ -72,11 +73,11 @@ internal static class SessionDrainHelper
                         reason);
                 }
 
-                return new DrainOutcome(sessionId, drained);
+                return new DrainOutcome(sessionId, drained, drained ? ack.RestartReminder : null);
             }
             catch (OperationCanceledException) when (!callerCancellationToken.IsCancellationRequested)
             {
-                return new DrainOutcome(sessionId, false);
+                return new DrainOutcome(sessionId, false, null);
             }
             catch (OperationCanceledException)
             {
@@ -85,7 +86,7 @@ internal static class SessionDrainHelper
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Failed to drain session {SessionId} before shutdown.", sessionId.Value);
-                return new DrainOutcome(sessionId, false);
+                return new DrainOutcome(sessionId, false, null);
             }
         }).ToArray();
 
@@ -106,24 +107,33 @@ internal static class SessionDrainHelper
                 string.Join(", ", timedOut.Select(static id => id.Value)));
         }
 
-        return new DrainResult(sessionIds, drained, timedOut);
+        var reminders = outcomes
+            .Where(static outcome => outcome.RestartReminder is not null)
+            .Select(static outcome => outcome.RestartReminder!)
+            .ToArray();
+        return new DrainResult(sessionIds, drained, timedOut, reminders);
     }
 
-    internal sealed record DrainOutcome(SessionId SessionId, bool Drained);
+    internal sealed record DrainOutcome(
+        SessionId SessionId,
+        bool Drained,
+        ReminderDefinition? RestartReminder);
 
     internal sealed record DrainResult(
         IReadOnlyList<SessionId> AllSessionIds,
         IReadOnlyList<SessionId> DrainedSessionIds,
-        IReadOnlyList<SessionId> TimedOutSessionIds)
+        IReadOnlyList<SessionId> TimedOutSessionIds,
+        IReadOnlyList<ReminderDefinition> RestartReminders)
     {
-        public static readonly DrainResult Empty = new([], [], []);
+        public static readonly DrainResult Empty = new([], [], [], []);
 
         public Dictionary<string, string> ToNotificationContext() => new()
         {
             ["drainOutcome"] = TimedOutSessionIds.Count == 0 ? "drained" : "timeout",
             ["activeSessions"] = AllSessionIds.Count.ToString(CultureInfo.InvariantCulture),
             ["drainedSessions"] = DrainedSessionIds.Count.ToString(CultureInfo.InvariantCulture),
-            ["timedOutSessions"] = TimedOutSessionIds.Count.ToString(CultureInfo.InvariantCulture)
+            ["timedOutSessions"] = TimedOutSessionIds.Count.ToString(CultureInfo.InvariantCulture),
+            ["restartReminders"] = RestartReminders.Count.ToString(CultureInfo.InvariantCulture)
         };
     }
 }

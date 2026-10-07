@@ -35,6 +35,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
             """
             {
               "configVersion": 1,
+              "Security": { "DeploymentPosture": "Personal" },
               "Slack": { "Enabled": true, "AllowedChannelIds": ["C01"] },
               "Discord": { "Enabled": true, "AllowedChannelIds": ["123456789"] },
               "Mattermost": {

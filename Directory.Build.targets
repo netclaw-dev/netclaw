@@ -14,4 +14,11 @@
       <_Parameter2>$(BuildTimestamp)</_Parameter2>
     </AssemblyAttribute>
   </ItemGroup>
+  <!--
+    Test projects that set UseTestRunTempRoot get a private temp root per test
+    process and a gate that fails the run when a test leaks into it.
+  -->
+  <ItemGroup Condition="'$(UseTestRunTempRoot)' == 'true'">
+    <Compile Include="$(MSBuildThisFileDirectory)tests/Shared/TestRunTempRoot.cs" Link="TestRunTempRoot.cs" />
+  </ItemGroup>
 </Project>

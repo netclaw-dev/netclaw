@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using ShellSyntaxTree;
 using Xunit;
 
@@ -23,6 +24,7 @@ public class ShellExecutionEnvironmentTests
         Assert.Equal(ShellGrammar.Bash, environment.Grammar);
         Assert.Equal(ShellPathStyle.Posix, environment.PathStyle);
         Assert.Equal(["-c"], environment.CommandArguments);
+        Assert.Null(environment.BashVersion);
         Assert.Null(environment.PowerShellDialect);
     }
 
@@ -98,6 +100,45 @@ public class ShellExecutionEnvironmentTests
         Assert.Contains("variable-attribute state", parsed.UnparseableReason);
     }
 
+    [Theory]
+    [InlineData(5, 2)]
+    [InlineData(5, 3)]
+    public void Probed_supported_Bash_parser_publishes_bounded_assignment_facts(
+        int major,
+        int minor)
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(major, minor));
+
+        var parsed = environment.Parse("root='/work/tree'; inspect \"$root/file\"", "/work");
+
+        Assert.False(parsed.IsUnparseable, parsed.UnparseableReason);
+        var command = Assert.Single(parsed.Commands);
+        var assignment = Assert.Single(command.Assignments);
+        Assert.Equal("root", assignment.Name);
+        Assert.Equal("/work/tree", Assert.IsType<ShellValueDomain.Exact>(
+            assignment.EffectiveValue).Value);
+    }
+
+    [Theory]
+    [InlineData(5, 1)]
+    [InlineData(5, 4)]
+    [InlineData(6, 0)]
+    public void Probed_unsupported_Bash_version_keeps_unknown_initial_state(
+        int major,
+        int minor)
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(major, minor));
+
+        var parsed = environment.Parse("root='/work/tree'; inspect \"$root/file\"", "/work");
+
+        Assert.True(parsed.IsUnparseable);
+        Assert.Empty(parsed.Commands);
+    }
+
     [Fact]
     public void Parse_preserves_the_two_parameter_public_contract()
     {
@@ -129,12 +170,31 @@ public class ShellExecutionEnvironmentTests
         Assert.Contains("PowerShell 7 dialect", rejected.UnparseableReason);
     }
 
+    [Fact]
+    public void PowerShell_parser_publishes_isolated_assignment_facts()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            "C:\\PowerShell\\7\\pwsh.exe",
+            PwshDialect.PowerShell7);
+
+        var parsed = environment.Parse(
+            "$root='C:/work/tree'; Get-Item \"$root/file\"",
+            "C:/work");
+
+        Assert.False(parsed.IsUnparseable, parsed.UnparseableReason);
+        var command = Assert.Single(parsed.Commands);
+        var assignment = Assert.Single(command.Assignments);
+        Assert.Equal("root", assignment.Name);
+        Assert.Equal("C:/work/tree", Assert.IsType<ShellValueDomain.Exact>(
+            assignment.EffectiveValue).Value);
+    }
+
     [Theory]
     [InlineData(PwshDialect.PowerShell7, "C:\\PowerShell\\7\\pwsh.exe")]
     [InlineData(
         PwshDialect.WindowsPowerShell51,
         "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")]
-    public void PowerShell_parser_keeps_unknown_initial_state(
+    public void PowerShell_parser_uses_the_isolated_initial_state(
         PwshDialect dialect,
         string executable)
     {
@@ -145,9 +205,11 @@ public class ShellExecutionEnvironmentTests
 
         Assert.False(parsed.IsUnparseable, parsed.UnparseableReason);
         var occurrence = Assert.Single(parsed.Commands);
-        Assert.False(occurrence.IsComplete);
-        Assert.IsType<ShellValueDomain.Unknown>(
-            occurrence.Arguments.Single(argument => argument.Argument.Raw == "$f").Value);
+        Assert.True(occurrence.IsComplete);
+        Assert.Equal(
+            ["a.txt", "b.txt"],
+            Assert.IsType<ShellValueDomain.FiniteSet>(
+                occurrence.Arguments.Single(argument => argument.Argument.Raw == "$f").Value).Values);
     }
 
     [Fact]
@@ -182,5 +244,44 @@ public class ShellExecutionEnvironmentTests
 
         Assert.NotSame(first, second);
         Assert.Equal(["-c", "git diff"], second.ArgumentList);
+    }
+
+    [Fact]
+    public async Task Bash_startup_overrides_cannot_replace_an_authored_directory_change()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+
+        var environment = ShellExecutionEnvironment.CreateBash(
+            OperatingSystem.IsMacOS() ? ShellPlatform.MacOS : ShellPlatform.Linux);
+        var startInfo = environment.CreateProcessStartInfo("cd / && pwd");
+        startInfo.Environment["BASH_ENV"] = "/dev/stdin";
+        startInfo.Environment["BASH_FUNC_cd%%"] = "() { builtin cd /tmp; }";
+        startInfo.Environment["SHELLOPTS"] = "physical";
+        startInfo.Environment["BASHOPTS"] = "lastpipe";
+        startInfo.Environment["POSIXLY_CORRECT"] = "y";
+        startInfo.Environment["BASH_COMPAT"] = "4.2";
+        startInfo.Environment["LD_PRELOAD"] = "/tmp/hidden.so";
+        startInfo.Environment["DYLD_INSERT_LIBRARIES"] = "/tmp/hidden.dylib";
+        startInfo.Environment["LIBPATH"] = "/tmp/lib";
+        startInfo.Environment["SHLIB_PATH"] = "/tmp/shlib";
+        startInfo.Environment["PATH"] = "/usr/bin:/bin";
+        ShellExecutionEnvironment.RemoveBashStartupOverrides(startInfo.Environment);
+
+        using var process = Process.Start(startInfo)!;
+        process.StandardInput.Close();
+        var output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, process.ExitCode);
+        Assert.Equal("/", output.Trim());
+        Assert.Equal("/usr/bin:/bin", startInfo.Environment["PATH"]);
+        Assert.DoesNotContain(startInfo.Environment.Keys, static key =>
+            key is "BASH_ENV" or "ENV" or "SHELLOPTS" or "BASHOPTS" or "CDPATH"
+                or "GLOBIGNORE" or "IFS" or "POSIXLY_CORRECT" or "BASH_COMPAT"
+                or "LIBPATH" or "SHLIB_PATH"
+            || key.StartsWith("BASH_FUNC_", StringComparison.Ordinal)
+            || key.StartsWith("LD_", StringComparison.Ordinal)
+            || key.StartsWith("DYLD_", StringComparison.Ordinal));
     }
 }

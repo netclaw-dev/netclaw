@@ -20,7 +20,7 @@ namespace Netclaw.Actors.Tests.Tools;
 /// audience (transitive provenance, matching <c>set_reminder</c>) and cannot be
 /// minted above the creator's authority (downgrade-only escalation guard).
 /// </summary>
-public class SetWebhookToolProvenanceTests : TestKit, IDisposable
+public class SetWebhookToolProvenanceTests : TestKit, IAsyncDisposable
 {
     private readonly DisposableTempDir _dir = new();
     private WebhookRouteStore _store = null!;
@@ -39,7 +39,20 @@ public class SetWebhookToolProvenanceTests : TestKit, IDisposable
         });
     }
 
-    void IDisposable.Dispose() => _dir.Dispose();
+    // TestKit stops the actor system only after AfterAllAsync returns. An actor can
+    // still write into the directory until then. Delete the directory after TestKit
+    // has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        try
+        {
+            await base.DisposeAsync();
+        }
+        finally
+        {
+            _dir.Dispose();
+        }
+    }
 
     private static ToolExecutionContext Context(TrustAudience audience)
         => TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions { Audience = audience });

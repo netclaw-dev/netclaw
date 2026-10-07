@@ -6,10 +6,10 @@
     <AkkaHostingVersion>1.5.71</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.70</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>0.7.0</AkkaRemindersVersion>
-    <OpenTelemetryVersion>1.18.0</OpenTelemetryVersion>
+    <OpenTelemetryVersion>1.19.1</OpenTelemetryVersion>
     <SlackNetVersion>0.18.0</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
-    <MattermostNetVersion>5.0.10</MattermostNetVersion>
+    <MattermostNetVersion>5.0.12</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.8.3</MicrosoftExtensionsAIVersion>
     <!-- Microsoft.Extensions.TimeProvider.Testing ships on the dotnet/extensions minor
          cadence and has no 10.8.x patch, so it cannot share MicrosoftExtensionsAIVersion
@@ -22,7 +22,7 @@
          integration tests. The 13.x line is the .NET 10 generation of Aspire;
          9.x pulls a vulnerable KubernetesClient 17.0.4 (GHSA-w7r3-mgwf-4mqq)
          that trips NU1902 under our TreatWarningsAsErrors policy. -->
-    <AspireHostingVersion>13.5.3</AspireHostingVersion>
+    <AspireHostingVersion>13.5.4</AspireHostingVersion>
     <CommunityToolkitAspireVersion>13.5.0</CommunityToolkitAspireVersion>
     <ModelContextProtocolVersion>2.2.0</ModelContextProtocolVersion>
   </PropertyGroup>
@@ -35,7 +35,7 @@
     <PackageVersion Include="Akka.Persistence.Sql.Hosting" Version="$(AkkaPersistenceSqlHostingVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders.Sqlite" Version="$(AkkaRemindersVersion)" />
-    <PackageVersion Include="Anthropic" Version="12.46.0" />
+    <PackageVersion Include="Anthropic" Version="12.50.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.13.0" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(MicrosoftAspNetCoreVersion)" />
@@ -79,24 +79,23 @@
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
-    <PackageVersion Include="ShellSyntaxTree" Version="0.4.0-beta.2" />
+    <PackageVersion Include="ShellSyntaxTree" Version="0.4.0-beta.24" />
     <PackageVersion Include="Termina" Version="0.16.2" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.0" />
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>
-    <PackageVersion Include="Google.Protobuf" Version="3.36.1" />
-    <PackageVersion Include="Grpc.Tools" Version="2.83.0" />
+    <PackageVersion Include="Google.Protobuf" Version="3.36.2" />
+    <PackageVersion Include="Grpc.Tools" Version="2.84.0" />
     <PackageVersion Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
   <!-- Test dependencies -->
   <ItemGroup>
     <PackageVersion Include="Akka.Hosting.TestKit" Version="$(AkkaHostingVersion)" />
-    <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
-    <PackageVersion Include="CsCheck" Version="4.8.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageVersion Include="CsCheck" Version="4.9.1" />
     <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
     <PackageVersion Include="Testcontainers" Version="4.14.0" />
     <!-- Transitive security pin: Testcontainers 4.13.0 pulls SSH.NET 2025.1.0,
@@ -117,7 +116,7 @@
          trips NU1903 (GHSA-hv8m-jj95-wg3x, LZ4 decompression AccessViolation).
          Keep this on the patched 3.x line already used by dev until Aspire ships
          a non-vulnerable transitive dependency on its own. -->
-    <PackageVersion Include="MessagePack" Version="3.1.8" />
+    <PackageVersion Include="MessagePack" Version="3.1.10" />
   </ItemGroup>
   <!-- Image normalization (Netclaw.Media). SkiaSharp ships Windows/macOS native
        assets in the base package; Linux needs the explicit headless native asset

@@ -255,6 +255,7 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
         var hasAuthFailure = false;
         var hasConnectivityFailure = false;
         var hasAwaitingAuth = false;
+        var hasDegraded = false;
         var enabledCount = 0;
         var failedCount = 0;
 
@@ -282,7 +283,8 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
             switch (state)
             {
                 case "Connected":
-                    statusMessages.Add($"{name}: connected ({toolCount} tools)");
+                    hasDegraded |= McpDaemonStatusText.IsDegraded(statusEntry);
+                    statusMessages.Add($"{name}: {McpDaemonStatusText.FormatConnected(statusEntry, toolCount, error)}");
                     break;
                 case "AwaitingAuth":
                     hasAwaitingAuth = true;
@@ -332,6 +334,10 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
         if (hasAwaitingAuth)
             return DoctorCheckResult.Warning("mcp-servers", summary,
                 "Complete OAuth for MCP servers that are awaiting authorization.");
+
+        if (hasDegraded)
+            return DoctorCheckResult.Warning("mcp-servers", summary,
+                "Check the MCP endpoints that are connected but not responding; their cached tools are likely to fail.");
 
         return DoctorCheckResult.Pass("mcp-servers", summary);
     }

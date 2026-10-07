@@ -56,8 +56,7 @@ public sealed class WindowsPowerShellDenyOnlyApprovalTests
         Assert.True(complete.Decision.Allowed);
         Assert.False(complete.Decision.NeedsApproval);
         Assert.Equal(ToolAllowReason.PolicyAuto, complete.Decision.AllowReason);
-        Assert.NotNull(complete.AuthorizedAnalysis);
-        Assert.False(complete.AuthorizedAnalysis.IsResolved);
+        Assert.False(Assert.IsType<ShellCommandAnalysis>(complete.AuthorizedAnalysis).IsResolved);
     }
 
     [Fact]

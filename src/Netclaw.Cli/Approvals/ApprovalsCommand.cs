@@ -173,7 +173,8 @@ internal static class ApprovalsCommand
                     {
                         exactTargets.Add(candidateTarget);
                     }
-                    else if (ScopeLabelEquals(entry, FormatLegacyScope(entry), opts.Pattern))
+                    else if (FormatLegacyScope(entry) is { } legacyScope
+                             && ScopeLabelEquals(entry, legacyScope, opts.Pattern))
                     {
                         legacyTargets.Add(candidateTarget);
                     }
@@ -215,10 +216,12 @@ internal static class ApprovalsCommand
         return 0;
     }
 
-    private static string FormatLegacyScope(ApprovalEntry entry) =>
-        entry.Directory is null
-            ? $"{entry.Verb} anywhere"
-            : $"{entry.Verb} in {entry.Directory}";
+    private static string? FormatLegacyScope(ApprovalEntry entry) =>
+        entry.Repository is not null
+            ? null
+            : entry.Directory is null
+                ? $"{entry.Verb} anywhere"
+                : $"{entry.Verb} in {entry.Directory}";
 
     private static bool ScopeLabelEquals(ApprovalEntry entry, string label, string supplied) =>
         entry.Shell is { } shell
@@ -340,8 +343,10 @@ internal static class ApprovalsCommand
         {
             writer.WriteLine("Usage: netclaw approvals trust-verb <phrase> [--audience personal|team|public] [--tool <name>]");
             writer.WriteLine();
-            writer.WriteLine("Adds a global-wildcard approval. Shell phrases use typed canonical token prefixes;");
-            writer.WriteLine("other tools use exact phrases. Use it for unattended or scheduled tasks.");
+            writer.WriteLine("Adds a global-wildcard approval. A shell phrase of two or more words covers its");
+            writer.WriteLine("command words and any later words: 'git push' covers 'git push origin main'.");
+            writer.WriteLine("A one-word phrase covers the program alone: 'gh' does not cover 'gh pr view'.");
+            writer.WriteLine("Other tools use exact phrases. Use it for unattended or scheduled tasks.");
             return null;
         }
 
@@ -418,7 +423,9 @@ internal static class ApprovalsCommand
         writer.WriteLine("                    Flags: --audience <personal|team|public>");
         writer.WriteLine("  trust-verb <phrase>");
         writer.WriteLine("                    Add one static canonical phrase as a global wildcard.");
-        writer.WriteLine("                    Shell phrases become typed token prefixes; other tools stay exact.");
+        writer.WriteLine("                    A shell phrase of two or more words covers its command words");
+        writer.WriteLine("                    and any later words. A one-word phrase covers the program alone:");
+        writer.WriteLine("                    'gh' does not cover 'gh pr view'. Other tools stay exact.");
         writer.WriteLine("                    Flags: --audience <personal|team|public> (default personal)");
         writer.WriteLine("                           --tool <name>                       (default shell_execute)");
         writer.WriteLine("                           --shell <bash|powershell>           (shell_execute only)");

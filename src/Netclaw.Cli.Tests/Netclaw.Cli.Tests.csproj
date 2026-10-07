@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <UseTestRunTempRoot>true</UseTestRunTempRoot>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,7 +15,7 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="NSec.Cryptography" />
     <PackageReference Include="Termina" />
-    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.v3.mtp-off" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
 
@@ -33,6 +34,8 @@
          MemoryCommandTests (backfill-embeddings). -->
     <None Include="../Netclaw.Embeddings.Tests/Fixtures/*.onnx" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../Netclaw.Embeddings.Tests/Fixtures/*.txt" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- netclaw init output before init stopped writing audience profiles (InitOutputEquivalenceTests). -->
+    <None Include="Tui/Wizard/InitOutput/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

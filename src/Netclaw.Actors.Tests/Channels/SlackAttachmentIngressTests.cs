@@ -20,6 +20,7 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tests.Sessions;
 using FakeChatClient = Netclaw.Tests.Utilities.FakeChatClient;
 using Netclaw.Channels.Slack;
+using Netclaw.Tests.Utilities;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using SlackNet.Blocks;
@@ -52,13 +53,24 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
     private readonly FakeChatClient _chatClient = new() { ResponseText = "ok" };
     private readonly RecordingReplyClient _replyClient = new();
     private readonly ConfigurableFakeSlackFileHandler _httpHandler = new();
-    private readonly NetclawPaths _paths = new(Path.Combine(
-        Path.GetTempPath(),
-        $"netclaw-slack-attachment-tests-{Guid.NewGuid():N}"));
+    private readonly TestSessionTempDirectory _tempDir =
+        TestSessionTempDirectory.Create(prefix: "netclaw-slack-attachment-tests-", createDirectoryTree: true);
+    private NetclawPaths _paths => _tempDir.Paths;
 
     public SlackAttachmentIngressVisionTests(ITestOutputHelper output) : base(output: output)
     {
-        _paths.EnsureDirectoriesExist();
+    }
+
+    protected override async Task AfterAllAsync()
+    {
+        try
+        {
+            await base.AfterAllAsync();
+        }
+        finally
+        {
+            await _tempDir.DisposeAsync();
+        }
     }
 
     /// <summary>

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using ShellSyntaxTree;
@@ -56,7 +57,7 @@ internal sealed class TemporaryPathCorrectionPolicy
             AddTemporaryRoot(additionalRoot, roots);
 
         _temporaryRoots = Array.AsReadOnly(roots.ToArray());
-        TemporaryRoot = roots.Count > 0 ? roots[0].Canonical : null;
+        TemporaryRoot = roots.Count > 0 ? roots[0].Resolved.Value : null;
     }
 
     internal string? TemporaryRoot { get; }
@@ -91,7 +92,7 @@ internal sealed class TemporaryPathCorrectionPolicy
         return new ToolCorrection.ManagedTemporaryDirectorySuggested(
             new ManagedTemporaryCorrectionTarget(
                 managedTemporaryDirectory,
-                temporaryRoot.Canonical));
+                temporaryRoot.Resolved.Value));
     }
 
     /// <summary>
@@ -128,7 +129,7 @@ internal sealed class TemporaryPathCorrectionPolicy
             ?? ToolArgumentHelper.GetString(arguments, "path");
         if (string.IsNullOrWhiteSpace(path)
             || !Path.IsPathFullyQualified(path)
-            || pathPolicy.IsDenied(path)
+            || pathPolicy.FileSystem.IsProtected(path, PathOperation.Write)
             || !TryGetEligibleTemporaryRoot(path, out var temporaryRoot))
         {
             return null;
@@ -143,10 +144,6 @@ internal sealed class TemporaryPathCorrectionPolicy
     internal bool IsPlatformTemporaryRoot(string? path)
         => TryGetTemporaryRoot(path, out _);
 
-    internal bool IsEligiblePlatformTemporaryPath(string? path)
-        => !string.IsNullOrWhiteSpace(path)
-           && TryGetEligibleTemporaryRoot(path, out _);
-
     /// <summary>
     /// Gets the canonical platform temporary root when the path stays below it without a link escape.
     /// </summary>
@@ -156,11 +153,9 @@ internal sealed class TemporaryPathCorrectionPolicy
         {
             foreach (var root in _temporaryRoots)
             {
-                if ((IsWithinRoot(normalized, root.Authored)
-                     || IsWithinRoot(normalized, root.Canonical))
-                    && IsLinkFreeTemporaryPath(normalized, root))
+                if (IsLinkFreeTemporaryPath(normalized, root))
                 {
-                    temporaryRoot = root.Canonical;
+                    temporaryRoot = root.Resolved.Value;
                     return true;
                 }
             }
@@ -289,64 +284,34 @@ internal sealed class TemporaryPathCorrectionPolicy
     private bool IsLinkFreeTemporaryPath(
         string path,
         PlatformTemporaryRoot temporaryRoot)
-    {
-        if (!TryNormalizePath(path, out var normalized)
-            || !TryMapToCanonicalTemporaryPath(
-                normalized,
-                temporaryRoot,
-                out var canonicalPath))
-        {
-            return false;
-        }
+        => TryNormalizePath(path, out var normalized)
+           && IsLinkFreeTemporaryPath(normalized, temporaryRoot);
 
-        return _pathInspector.HasNoLinkEscape(
-            temporaryRoot.Canonical,
-            canonicalPath,
-            _environment.PathStyle);
-    }
-
-    private bool TryMapToCanonicalTemporaryPath(
-        string path,
-        PlatformTemporaryRoot temporaryRoot,
-        out string canonicalPath)
-    {
-        canonicalPath = string.Empty;
-        if (IsWithinRoot(path, temporaryRoot.Canonical))
-        {
-            canonicalPath = path;
-            return true;
-        }
-
-        if (!IsWithinRoot(path, temporaryRoot.Authored))
-        {
-            return false;
-        }
-
-        var relative = path[temporaryRoot.Authored.Length..]
-            .TrimStart('/', '\\');
-        canonicalPath = relative.Length == 0
-            ? temporaryRoot.Canonical
-            : temporaryRoot.Canonical.TrimEnd('/', '\\') +
-              (_environment.PathStyle == ShellPathStyle.Windows ? '\\' : '/') +
-              relative;
-        return true;
-    }
+    private bool IsLinkFreeTemporaryPath(
+        CanonicalPath path,
+        PlatformTemporaryRoot temporaryRoot)
+        => temporaryRoot.TryMapToResolved(path, out var resolved)
+           && _pathInspector.HasNoLinkEscape(
+               temporaryRoot.Resolved.Value,
+               resolved.Value,
+               _environment.PathStyle);
 
     private void AddTemporaryRoot(
         string path,
         ICollection<PlatformTemporaryRoot> roots)
     {
-        if (!ShellPathRules.TryNormalize(path, _environment.PathStyle, out var authored)
+        if (!TryNormalizePath(path, out var authored)
             || !_pathInspector.TryResolveRoot(
                 path,
                 _environment.PathStyle,
-                out var canonical)
-            || roots.Any(root => PathEquals(root.Authored, authored)))
+                out var resolvedText)
+            || !TryNormalizePath(resolvedText, out var resolved)
+            || roots.Any(root => root.Authored.IsSamePath(authored)))
         {
             return;
         }
 
-        roots.Add(new PlatformTemporaryRoot(authored, canonical));
+        roots.Add(new PlatformTemporaryRoot(authored, resolved));
     }
 
     private bool TryGetTemporaryRoot(
@@ -359,8 +324,8 @@ internal sealed class TemporaryPathCorrectionPolicy
 
         foreach (var root in _temporaryRoots)
         {
-            if (PathEquals(normalized, root.Authored)
-                || PathEquals(normalized, root.Canonical))
+            if (normalized.IsSamePath(root.Authored)
+                || normalized.IsSamePath(root.Resolved))
             {
                 temporaryRoot = root;
                 return true;
@@ -375,8 +340,7 @@ internal sealed class TemporaryPathCorrectionPolicy
         out string managedTemporaryDirectory)
     {
         managedTemporaryDirectory = string.Empty;
-        if (context.RunScope.InteractiveApproval is not InteractiveApprovalCapability.Available
-            || context.Audience != TrustAudience.Personal
+        if (context.Audience != TrustAudience.Personal
             || !TryNormalizePath(
                 context.SessionStorage?.ManagedTemporary.Directory.Value,
                 out var normalized)
@@ -385,22 +349,12 @@ internal sealed class TemporaryPathCorrectionPolicy
             return false;
         }
 
-        managedTemporaryDirectory = normalized;
+        managedTemporaryDirectory = normalized.Value;
         return true;
     }
 
-    private bool TryNormalizePath(string? path, out string normalized)
-        => ShellPathRules.TryNormalize(path, _environment.PathStyle, out normalized);
-
-    private bool IsWithinRoot(string candidate, string root)
-        => ShellPathRules.IsWithinRoot(candidate, root, _environment.PathStyle);
-
-    private bool PathEquals(string left, string right)
-        => ShellPathRules.Equals(left, right, _environment.PathStyle);
-
-    private readonly record struct PlatformTemporaryRoot(
-        string Authored,
-        string Canonical);
+    private bool TryNormalizePath(string? path, out CanonicalPath normalized)
+        => CanonicalPath.TryCreate(path, relativeBase: null, _environment.PathStyle, out normalized);
 }
 
 /// <summary>
@@ -415,7 +369,7 @@ internal interface IPlatformTemporaryPathInspector
     bool SupportsPathInspection(ShellPathStyle pathStyle);
 }
 
-/// <summary>Uses host filesystem metadata to inspect platform temporary paths.</summary>
+/// <summary>Uses the filesystem authority to inspect platform temporary paths on the host.</summary>
 internal sealed class HostPlatformTemporaryPathInspector : IPlatformTemporaryPathInspector
 {
     internal static HostPlatformTemporaryPathInspector Instance { get; } = new();
@@ -426,53 +380,15 @@ internal sealed class HostPlatformTemporaryPathInspector : IPlatformTemporaryPat
 
     public bool TryResolveRoot(string path, ShellPathStyle pathStyle, out string resolvedRoot)
     {
-        resolvedRoot = string.Empty;
-        if (!ShellPathRules.UsesHostPathStyle(pathStyle)
-            || !ShellPathRules.TryNormalize(path, pathStyle, out var normalized)
-            || !Directory.Exists(normalized))
-        {
-            return false;
-        }
-
-        try
-        {
-            var fullPath = Path.GetFullPath(normalized);
-            var root = Path.GetPathRoot(fullPath);
-            if (string.IsNullOrEmpty(root))
-                return false;
-
-            var current = root;
-            var remainder = fullPath.Length > root.Length
-                ? fullPath[root.Length..]
-                : string.Empty;
-            var segments = remainder.Split(
-                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                StringSplitOptions.RemoveEmptyEntries);
-
-            foreach (var segment in segments)
-            {
-                current = Path.Combine(current, segment);
-                if (!Directory.Exists(current))
-                    return false;
-
-                var target = new DirectoryInfo(current)
-                    .ResolveLinkTarget(returnFinalTarget: true);
-                if (target is not null)
-                    current = target.FullName;
-            }
-
-            return ShellPathRules.TryNormalize(current, pathStyle, out resolvedRoot);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
+        var resolved = PlatformTemporaryRoot.TryResolve(path, pathStyle, out var root);
+        resolvedRoot = resolved ? root.Resolved.Value : string.Empty;
+        return resolved;
     }
 
     public bool HasNoLinkEscape(string root, string path, ShellPathStyle pathStyle)
-        => ShellPathRules.UsesHostPathStyle(pathStyle)
-           && !PathUtility.ContainsSymlinkSegment(root, path);
+        => CanonicalPath.IsHostPathStyle(pathStyle)
+           && !FileSystemAuthority.CrossesLink(root, path, includeAnchor: false);
 
     public bool SupportsPathInspection(ShellPathStyle pathStyle)
-        => ShellPathRules.UsesHostPathStyle(pathStyle);
+        => CanonicalPath.IsHostPathStyle(pathStyle);
 }

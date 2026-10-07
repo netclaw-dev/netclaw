@@ -95,6 +95,7 @@ public sealed record MattermostGatewayDependencies(
     TimeProvider TimeProvider,
     MattermostChannelOptions Options,
     MattermostChannelId? DefaultChannelId,
+    IChannelRegistry ChannelRegistry,
     IMattermostReplyClient ReplyClient,
     IContentScanner ContentScanner,
     ToolAudienceProfiles AudienceProfiles,

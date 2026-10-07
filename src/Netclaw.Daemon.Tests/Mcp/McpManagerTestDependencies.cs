@@ -6,7 +6,9 @@
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Mcp;
 using Netclaw.Security;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Netclaw.Daemon.Tests.Mcp;
 
@@ -17,13 +19,15 @@ internal sealed class McpManagerTestDependencies
         SkillRegistry skillRegistry,
         SkillIndexContextLayer skillIndex,
         ToolAccessPolicy toolAccessPolicy,
-        SkillIndexPublisher skillIndexPublisher)
+        SkillIndexPublisher skillIndexPublisher,
+        McpArtifactMaterializer artifactMaterializer)
     {
         ToolConfig = toolConfig;
         SkillRegistry = skillRegistry;
         SkillIndex = skillIndex;
         ToolAccessPolicy = toolAccessPolicy;
         SkillIndexPublisher = skillIndexPublisher;
+        ArtifactMaterializer = artifactMaterializer;
     }
 
     public ToolConfig ToolConfig { get; }
@@ -35,6 +39,8 @@ internal sealed class McpManagerTestDependencies
     public ToolAccessPolicy ToolAccessPolicy { get; }
 
     public SkillIndexPublisher SkillIndexPublisher { get; }
+
+    public McpArtifactMaterializer ArtifactMaterializer { get; }
 
     public static McpManagerTestDependencies Create() => Create(new ToolConfig());
 
@@ -52,11 +58,15 @@ internal sealed class McpManagerTestDependencies
             new ShellCommandPolicy(),
             new ToolPathPolicy([]));
         var skillIndexPublisher = new SkillIndexPublisher(skillRegistry, skillIndex, toolAccessPolicy);
+        var artifactMaterializer = new McpArtifactMaterializer(
+            new MagicByteContentScanner(new ContentPolicy()),
+            NullLogger<McpArtifactMaterializer>.Instance);
         return new McpManagerTestDependencies(
             toolConfig,
             skillRegistry,
             skillIndex,
             toolAccessPolicy,
-            skillIndexPublisher);
+            skillIndexPublisher,
+            artifactMaterializer);
     }
 }

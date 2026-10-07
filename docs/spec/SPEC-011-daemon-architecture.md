@@ -55,6 +55,12 @@ Netclaw.Actors, Netclaw.Configuration, OllamaSharp / OpenAI client
 
 Binds: address and port from `DaemonConfig` (`Host`, `Port`); defaults to `http://127.0.0.1:5199` (loopback only). `ExposureMode` declares network reachability and tunnel infrastructure, separately from chat audience/profile selection.
 
+At startup, `McpClientManager` starts each enabled server connection concurrently.
+It waits for every initial attempt before the daemon listener starts. Each
+server uses its own connection gate. The shared registries publish complete
+catalogs before the listener accepts a session. A failed server keeps its
+error status while other server catalogs remain available.
+
 ### `Netclaw.Cli`
 
 Lightweight CLI and TUI client. No actor system, no persistence, no tool
@@ -210,6 +216,38 @@ The daemon writes its PID to `~/.netclaw/netclaw.pid` for lifecycle management.
 shutdown. The daemon handles SIGTERM by draining active sessions and stopping
 the actor system cleanly.
 
+The session journals each accepted input before it acknowledges the source.
+The record retains the text, media, source message ID, and original authority.
+A completed reply, a started tool batch, or a terminal failure consumes the
+input ID. The actor restores unconsumed records from the journal after a cold
+start. A retry with the same stable source message ID does not add a second
+record. A source without a stable ID cannot use this deduplication rule.
+
+During drain, a session can stop a tool task that waits only for durable
+approval prompts. The session waits for the tool task to stop before it
+acknowledges drain. Its journal retains the prompts and completed sibling
+results. An approval after restart resumes the original turn under its
+recorded authority. Active tools, accepted buffered input, and incomplete
+results keep the current bounded drain path.
+
+The pipeline reports cancellation through its canceled task state. The daemon
+keeps the existing approval prompt. Button and text responses can resume the
+recovered turn. A channel UI can temporarily lag the session state after restart.
+
+During any graceful stop, the actor gives an active model call a two-second
+completion grace. It then cancels an eligible call and waits for its task.
+The actor returns a standard `current_session` reminder for durable pending
+input. The reminder expires ten minutes after the interruption. Startup
+registers each fresh reminder through the reminder manager. The session
+restores the pending input under its recorded authority when the reminder
+arrives. A completed turn, partial text, or possible tool effect produces no
+restart reminder.
+
+The daemon gives session drain 20 seconds within a 30-second shutdown phase.
+The CLI allows 45 seconds before forced termination. The generated systemd
+unit allows 60 seconds. A container should set
+`terminationGracePeriodSeconds` to at least 60 seconds.
+
 `netclaw daemon status` checks the PID file and verifies the process is alive.
 Reports: running/stopped, PID, uptime, port, number of active sessions.
 
@@ -336,8 +374,8 @@ not execute tools.
 4. **Valid config**: close daemon-managed ingress, enumerate live session actors,
    ask them to drain, persist a restart manifest, and request coordinated
    daemon restart
-5. **After restart**: warm the sessions that were active when restart began and
-   inject a continuity notice for the next turn
+5. **After restart**: register fresh restart reminders. The normal reminder
+   route activates each target session.
 6. **Invalid config**: log warning with validation errors, preserve previous config
 
 ### What Changes Take Effect After Restart
@@ -361,7 +399,8 @@ not execute tools.
 
 - `netclaw init` TUI wizard (writes incrementally per section)
 - Manual file editing by operator
-- Agent self-configuration via `config_write` tool grant (SEC-008)
+- Not agent file tools: tool authorization write-denies the config directory
+  (see `docs/architecture/tool-authorization.md`)
 
 All changes go to disk first. The `FileSystemWatcher` is the single reload
 trigger — there is no in-memory config mutation path.
@@ -450,7 +489,7 @@ docker run -d \
 
 - Runtime boundaries: SPEC-001
 - Session lifecycle: SPEC-002
-- Security controls: SPEC-003
+- Security controls: SPEC-003 (pointer to `docs/architecture/tool-authorization.md`)
 - CLI contract: SPEC-004
 - Operator UI: SPEC-005
 - Gateway exposure: SPEC-006

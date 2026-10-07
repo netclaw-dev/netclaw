@@ -7,14 +7,17 @@ using System.Collections.Concurrent;
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
+using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Services;
 using Netclaw.Tests.Utilities;
 using Xunit;
-using static Netclaw.Actors.Sessions.SessionProtocol;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Daemon.Tests.Services;
 
@@ -32,44 +35,41 @@ public sealed class RestartRecoveryServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task StartAsync_warms_manifest_sessions_and_marks_catalog_active()
+    public async Task StartAsync_registers_only_fresh_reminders_and_accepts_an_existing_definition()
     {
-        var warmedSessions = new ConcurrentQueue<WarmSession>();
-        var actor = _system.ActorOf(Props.Create(() => new WarmSessionActor(warmedSessions)));
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
+        var saved = new ConcurrentQueue<SaveReminderCommand>();
+        var reminderActor = _system.ActorOf(Props.Create(() => new ReminderActor(saved)));
         var manifestStore = new RestartManifestStore(_paths);
         var catalog = new SessionCatalogService(
             _paths,
-            TimeProvider.System,
+            time,
             new TestSessionStorageResolver(_paths),
             NullLogger<SessionCatalogService>.Instance);
-        var sessionId = new SessionId("slack/C123/1710000000.000001");
-
-        catalog.OnSessionActivated(sessionId, Netclaw.Actors.Channels.ChannelType.Slack);
-        catalog.OnSessionDeactivated(sessionId);
 
         await manifestStore.WriteAsync(new RestartManifest
         {
-            Reason = "config-reload",
-            RequestedAt = TimeProvider.System.GetUtcNow(),
-            SessionIds = [sessionId.Value],
-            TimedOutSessionIds = [sessionId.Value]
+            RestartReminders =
+            [
+                CreateReminder("fresh", time.GetUtcNow().AddMinutes(10)),
+                CreateReminder("stale", time.GetUtcNow().AddSeconds(-1))
+            ]
         }, CancellationToken.None);
 
         var sut = new RestartRecoveryService(
             manifestStore,
-            new StubRequiredActor(actor),
+            new StubRequiredActor<ReminderManagerActorKey>(reminderActor),
             catalog,
+            time,
             NullLogger<RestartRecoveryService>.Instance);
 
         await sut.StartAsync(CancellationToken.None);
 
-        Assert.True(warmedSessions.TryDequeue(out var warmed));
-        Assert.Equal(sessionId, warmed!.SessionId);
-        Assert.Contains("last durable checkpoint", warmed.RestartNotice, StringComparison.Ordinal);
+        var command = Assert.Single(saved);
+        Assert.Equal("fresh", command.Definition.Id.Value);
+        Assert.True(command.Definition.Schedule.FireAt > time.GetUtcNow());
+        Assert.Equal(TrustAudience.Personal, command.Authorization?.SourceAudience);
         Assert.Null(await manifestStore.ReadAsync(CancellationToken.None));
-
-        var entry = Assert.Single(catalog.ListRecent());
-        Assert.Equal("active", entry.Status);
     }
 
     public void Dispose()
@@ -79,7 +79,29 @@ public sealed class RestartRecoveryServiceTests : IDisposable
         _dir.Dispose();
     }
 
-    private sealed class StubRequiredActor : IRequiredActor<SessionManagerActorKey>
+    private static ReminderDefinition CreateReminder(string id, DateTimeOffset expiresAt)
+        => new()
+        {
+            Id = new ReminderId(id),
+            Title = "Resume after daemon restart",
+            Instructions = "Resume the work that was interrupted by the daemon restart.",
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = expiresAt.AddMinutes(-10)
+            },
+            Delivery = new ReminderDelivery
+            {
+                Kind = DeliveryKind.CurrentSession,
+                SessionId = "signalr/restart",
+                OriginChannelType = ChannelType.SignalR
+            },
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.Personal,
+            ExpiresAt = expiresAt
+        };
+
+    private sealed class StubRequiredActor<TKey> : IRequiredActor<TKey>
     {
         public StubRequiredActor(IActorRef actorRef)
         {
@@ -92,14 +114,20 @@ public sealed class RestartRecoveryServiceTests : IDisposable
             => Task.FromResult(ActorRef);
     }
 
-    private sealed class WarmSessionActor : ReceiveActor
+    private sealed class ReminderActor : ReceiveActor
     {
-        public WarmSessionActor(ConcurrentQueue<WarmSession> warmedSessions)
+        public ReminderActor(ConcurrentQueue<SaveReminderCommand> saved)
         {
-            Receive<WarmSession>(msg =>
+            Receive<SaveReminderCommand>(command =>
             {
-                warmedSessions.Enqueue(msg);
-                Sender.Tell(CommandAck.For(msg.SessionId));
+                saved.Enqueue(command);
+                Sender.Tell(new ReminderSavedResponse(
+                    command.Definition.Id,
+                    command.Definition.Title,
+                    Success: false,
+                    NextFire: null,
+                    Error: ReminderSaveError.Conflict,
+                    ErrorMessage: "The reminder already exists."));
             });
         }
     }

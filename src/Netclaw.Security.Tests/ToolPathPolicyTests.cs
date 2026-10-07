@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Security.Authorization.Filesystem;
 using ShellSyntaxTree;
 using Xunit;
 
@@ -18,23 +19,23 @@ public sealed class ToolPathPolicyTests
     [InlineData("relative\\path", ShellPathStyle.Windows)]
     [InlineData("C:\\work\\line\nbreak", ShellPathStyle.Windows)]
     [InlineData(@"C:\work", (ShellPathStyle)999)]
-    public void Canonical_shell_path_rejects_invalid_values(
+    public void Canonical_path_rejects_invalid_values(
         string path,
         ShellPathStyle pathStyle)
     {
-        Assert.False(CanonicalShellPath.TryCreate(path, pathStyle, out _));
+        Assert.False(CanonicalPath.TryCreate(path, relativeBase: null, pathStyle, out _));
     }
 
     [Theory]
     [InlineData("/work/../external/file.txt", ShellPathStyle.Posix, "/external/file.txt")]
     [InlineData(@"C:\work\..\external\file.txt", ShellPathStyle.Windows, @"C:\external\file.txt")]
     [InlineData(@"\\server\share\work\..\file.txt", ShellPathStyle.Windows, @"\\server\share\file.txt")]
-    public void Canonical_shell_path_uses_declared_style_on_every_host(
+    public void Canonical_path_uses_declared_style_on_every_host(
         string value,
         ShellPathStyle pathStyle,
         string expected)
     {
-        Assert.True(CanonicalShellPath.TryCreate(value, pathStyle, out var path));
+        Assert.True(CanonicalPath.TryCreate(value, relativeBase: null, pathStyle, out var path));
         Assert.Equal(expected, path.Value);
     }
 
@@ -45,8 +46,9 @@ public sealed class ToolPathPolicyTests
             @"C:\Program Files\PowerShell\7\pwsh.exe",
             PwshDialect.PowerShell7);
         var policy = new ToolPathPolicy(environment, [@"C:\protected"]);
-        Assert.True(CanonicalShellPath.TryCreate(
+        Assert.True(CanonicalPath.TryCreate(
             "/protected",
+            relativeBase: null,
             ShellPathStyle.Posix,
             out var path));
 
@@ -63,18 +65,18 @@ public sealed class ToolPathPolicyTests
     [InlineData("/home/user/.netclaw/keys", "/home/user/.netclaw/keys/keyring.xml", true)]
     [InlineData("/home/user/.netclaw/keys", "/home/user/.netclaw/keys-backup/data.txt", false)]
     [InlineData("/home/user/.netclaw/config/webhooks", "/home/user/.netclaw/config/webhooks/github-issues.json", true)]
-    public void IsDenied_matches_denied_paths(string deniedPath, string testPath, bool expected)
+    public void Write_protection_matches_denied_paths(string deniedPath, string testPath, bool expected)
     {
         var policy = new ToolPathPolicy([deniedPath]);
-        Assert.Equal(expected, policy.IsDenied(testPath));
+        Assert.Equal(expected, policy.FileSystem.IsProtected(testPath, PathOperation.Write));
     }
 
     [Fact]
-    public void IsDenied_returns_false_for_empty_path()
+    public void Write_protection_returns_false_for_empty_path()
     {
         var policy = new ToolPathPolicy(["/some/path"]);
-        Assert.False(policy.IsDenied(""));
-        Assert.False(policy.IsDenied("  "));
+        Assert.False(policy.FileSystem.IsProtected("", PathOperation.Write));
+        Assert.False(policy.FileSystem.IsProtected("  ", PathOperation.Write));
     }
 
     [Theory]
@@ -91,6 +93,12 @@ public sealed class ToolPathPolicyTests
     [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat ~/.netclaw/config/*.json", true)]
     [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "jq . ~/.netclaw/config/*.json", true)]
     [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "tar czf /tmp/netclaw-config.tgz ~/.netclaw/config", true)]
+    // With no live config directory in the lists, the default layout keeps its hint with a high-risk verb.
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat ~/.netclaw/config/netclaw.json", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "jq .Tools ~/.netclaw/config/tool-approvals.json", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat ~/.netclaw/config/../config/secrets.json", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "grep -r token ~/.netclaw/config/", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat ~/.netclaw/config/net*.json", true)]
     public void CommandReferencesDeniedPath_matches_denied_paths_in_commands(
         string[] deniedPaths,
         string command,
@@ -136,9 +144,9 @@ public sealed class ToolPathPolicyTests
     public void Multiple_denied_paths()
     {
         var policy = new ToolPathPolicy(["/path/a", "/path/b"]);
-        Assert.True(policy.IsDenied("/path/a"));
-        Assert.True(policy.IsDenied("/path/b"));
-        Assert.False(policy.IsDenied("/path/c"));
+        Assert.True(policy.FileSystem.IsProtected("/path/a", PathOperation.Write));
+        Assert.True(policy.FileSystem.IsProtected("/path/b", PathOperation.Write));
+        Assert.False(policy.FileSystem.IsProtected("/path/c", PathOperation.Write));
     }
 
     [Fact]
@@ -161,8 +169,6 @@ public sealed class ToolPathPolicyTests
             "/home/user/.netclaw/netclaw.pid",
             "/home/user/.netclaw/netclaw.lock",
             "/home/user/.netclaw/cache/restart-manifest.json",
-            "/home/user/.netclaw/skills/.system",
-            "/home/user/.netclaw/skills/.server-feeds",
         };
         var readDeny = new[]
         {
@@ -203,12 +209,10 @@ public sealed class ToolPathPolicyTests
     [InlineData("/home/user/.netclaw/netclaw.pid")]
     [InlineData("/home/user/.netclaw/netclaw.lock")]
     [InlineData("/home/user/.netclaw/cache/restart-manifest.json")]
-    [InlineData("/home/user/.netclaw/skills/.system/my-skill/SKILL.md")]
-    [InlineData("/home/user/.netclaw/skills/.server-feeds/my-feed/feed-skill/SKILL.md")]
-    public void IsDenied_blocks_control_plane_files(string path)
+    public void Write_protection_blocks_control_plane_files(string path)
     {
         var policy = CreateProductionPolicy();
-        Assert.True(policy.IsDenied(path));
+        Assert.True(policy.FileSystem.IsProtected(path, PathOperation.Write));
     }
 
     [Theory]
@@ -219,22 +223,24 @@ public sealed class ToolPathPolicyTests
     [InlineData("/home/user/.netclaw/identity/SOUL.md")]
     [InlineData("/home/user/.netclaw/identity/AGENTS.md")]
     [InlineData("/home/user/.netclaw/skills/my-skill/SKILL.md")]
+    [InlineData("/home/user/.netclaw/skills/.system/my-skill/SKILL.md")]
+    [InlineData("/home/user/.netclaw/skills/.server-feeds/my-feed/feed-skill/SKILL.md")]
     [InlineData("/tmp/foo.json")]
     [InlineData("/home/user/Documents/notes.txt")]
-    public void IsDenied_allows_safe_write_paths(string path)
+    public void Write_protection_allows_safe_write_paths(string path)
     {
         var policy = CreateProductionPolicy();
-        Assert.False(policy.IsDenied(path));
+        Assert.False(policy.FileSystem.IsProtected(path, PathOperation.Write));
     }
 
     [Theory]
     [InlineData("/home/user/.netclaw/config/secrets.json")]
     [InlineData("/home/user/.netclaw/keys/keyring.xml")]
     [InlineData("/home/user/.netclaw/config/webhooks/github-issues.json")]
-    public void IsReadDenied_blocks_sensitive_paths(string path)
+    public void Read_protection_blocks_sensitive_paths(string path)
     {
         var policy = CreateProductionPolicy();
-        Assert.True(policy.IsReadDenied(path));
+        Assert.True(policy.FileSystem.IsProtected(path, PathOperation.Read));
     }
 
     [Theory]
@@ -245,19 +251,19 @@ public sealed class ToolPathPolicyTests
     [InlineData("/home/user/.netclaw/netclaw.pid")]
     [InlineData("/home/user/.netclaw/netclaw.lock")]
     [InlineData("/home/user/.netclaw/cache/restart-manifest.json")]
-    public void IsReadDenied_blocks_control_plane_files(string path)
+    public void Read_protection_blocks_control_plane_files(string path)
     {
         var policy = CreateProductionPolicy();
-        Assert.True(policy.IsReadDenied(path));
+        Assert.True(policy.FileSystem.IsProtected(path, PathOperation.Read));
     }
 
     [Fact]
-    public void IsReadDenied_allows_ordinary_config_while_shell_remains_denied()
+    public void Read_protection_allows_ordinary_config_while_shell_remains_denied()
     {
         var policy = CreateProductionPolicy();
         const string configPath = "/home/user/.netclaw/config/netclaw.json";
 
-        Assert.False(policy.IsReadDenied(configPath));
+        Assert.False(policy.FileSystem.IsProtected(configPath, PathOperation.Read));
         Assert.True(policy.CommandReferencesDeniedPath($"cat {configPath}"));
     }
 
@@ -269,14 +275,14 @@ public sealed class ToolPathPolicyTests
     }
 
     // Regression (#1724): a symlinked INTERMEDIATE directory into a denied
-    // location must not bypass IsReadDenied. Shell catches this via
+    // location must not bypass read protection. Shell catches this via
     // TryResolveSymlinksInPath; the read side must too, since interactive
-    // Personal reads have IsReadDenied as their sole backstop.
+    // Personal reads have read protection as their sole backstop.
     [Theory]
     [InlineData(SymlinkTraversalShape.SingleSymlinkedDirectory)]
     [InlineData(SymlinkTraversalShape.MultiDepthSymlinkChain)]
     [InlineData(SymlinkTraversalShape.DotDotTraversalAfterResolvedLink)]
-    public void IsReadDenied_blocks_symlinked_directory_traversal(SymlinkTraversalShape shape)
+    public void Read_protection_blocks_symlinked_directory_traversal(SymlinkTraversalShape shape)
     {
         var scratch = Path.Combine(Path.GetTempPath(), $"netclaw-symlink-{Guid.NewGuid():N}");
         var deniedDir = Path.Combine(scratch, "denied");
@@ -344,7 +350,7 @@ public sealed class ToolPathPolicyTests
             // symlink resolution needs an on-disk target to resolve).
             var policy = new ToolPathPolicy([deniedDir]);
 
-            Assert.True(policy.IsReadDenied(viaLink));
+            Assert.True(policy.FileSystem.IsProtected(viaLink, PathOperation.Read));
         }
         catch (UnauthorizedAccessException)
         {
@@ -369,10 +375,10 @@ public sealed class ToolPathPolicyTests
     [InlineData("/home/user/repositories/foo.cs")]
     [InlineData("/tmp/notes.txt")]
     [InlineData("/home/user/downloads/report.pdf")]
-    public void IsReadDenied_allows_non_sensitive_paths(string path)
+    public void Read_protection_allows_non_sensitive_paths(string path)
     {
         var policy = CreateProductionPolicy();
-        Assert.False(policy.IsReadDenied(path));
+        Assert.False(policy.FileSystem.IsProtected(path, PathOperation.Read));
     }
 
     [Fact]
@@ -468,23 +474,23 @@ public sealed class ToolPathPolicyTests
     [InlineData("netclaw.json")]
     [InlineData("hard-deny-overrides.json")]
     [InlineData("future/subsystem/settings.json")]
-    public void IsDenied_blocks_descendants_of_config_dir(string relativePath)
+    public void Write_protection_blocks_descendants_of_config_dir(string relativePath)
     {
         var configDir = "/home/user/.netclaw/config";
         var policy = new ToolPathPolicy([configDir]);
         var segments = relativePath.Split('/');
 
-        Assert.True(policy.IsDenied(Path.Combine([configDir, .. segments])));
+        Assert.True(policy.FileSystem.IsProtected(Path.Combine([configDir, .. segments]), PathOperation.Write));
     }
 
     [Fact]
-    public void IsDenied_does_not_block_sibling_of_config_dir()
+    public void Write_protection_does_not_block_sibling_of_config_dir()
     {
         // boundary safety: ~/.netclaw/configbackup/ must not be denied just
         // because its name shares a prefix with ~/.netclaw/config/.
         var policy = new ToolPathPolicy(["/home/user/.netclaw/config"]);
 
-        Assert.False(policy.IsDenied("/home/user/.netclaw/configbackup/file.json"));
+        Assert.False(policy.FileSystem.IsProtected("/home/user/.netclaw/configbackup/file.json", PathOperation.Write));
     }
 
     [Theory]

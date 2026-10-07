@@ -3,12 +3,14 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 
@@ -59,9 +61,6 @@ public sealed class ToolAccessPolicy
     internal ShellCommandPolicy ShellCommandPolicy => _shellCommandPolicy;
 
     internal PathAccessPolicy SharedPathAccessPolicy => _pathAccessPolicy;
-
-    internal bool IsEligiblePlatformTemporaryPath(string path)
-        => _temporaryPathCorrectionPolicy.IsEligiblePlatformTemporaryPath(path);
 
     public ToolAccessPolicy(
         NetclawPaths paths,
@@ -127,10 +126,15 @@ public sealed class ToolAccessPolicy
         _temporaryPathCorrectionPolicy = platformTemporaryScopePolicy;
     }
 
+    /// <summary>
+    /// Filters the tools that the model can see for a turn. The trust context
+    /// is required. A caller without a resolved audience must refuse tool
+    /// exposure itself. This method does not treat a missing audience as Public.
+    /// </summary>
     public IReadOnlyList<AITool> FilterExposedTools(
         IEnumerable<AITool> tools,
         ToolRegistry registry,
-        EffectiveTrustContext? trustContext)
+        EffectiveTrustContext trustContext)
         => tools
             .Where(tool =>
             {
@@ -148,8 +152,8 @@ public sealed class ToolAccessPolicy
         ToolInvocationContext context)
         => tools.Where(tool => IsToolExposed(tool, context)).ToList();
 
-    public bool IsToolExposed(ToolRegistration registration, EffectiveTrustContext? trustContext)
-        => IsToolExposed(registration.Tool, ResolveAudience(trustContext));
+    public bool IsToolExposed(ToolRegistration registration, EffectiveTrustContext trustContext)
+        => IsToolExposed(registration.Tool, trustContext.EffectiveAudience);
 
     public bool IsToolExposed(INetclawTool tool, ToolInvocationContext context)
         => IsToolExposed(tool, ResolveAudience(context));
@@ -187,55 +191,34 @@ public sealed class ToolAccessPolicy
         return true;
     }
 
-    /// <summary>Applies access and approval policy to a non-shell tool invocation.</summary>
-    /// <exception cref="InvalidOperationException">
-    /// <paramref name="tool"/> is <c>shell_execute</c>, which requires the asynchronous shell coordinator.
-    /// </exception>
-    public ToolAuthorizationDecision AuthorizeInvocation(INetclawTool tool, ToolExecutionContext context)
-        => AuthorizeInvocation(tool, context, arguments: null);
-
-    /// <summary>Applies access and approval policy to a non-shell tool invocation.</summary>
-    /// <exception cref="InvalidOperationException">
-    /// <paramref name="tool"/> is <c>shell_execute</c>, which requires the asynchronous shell coordinator.
-    /// </exception>
-    public ToolAuthorizationDecision AuthorizeInvocation(
-        INetclawTool tool,
-        ToolExecutionContext context,
-        IDictionary<string, object?>? arguments)
+    /// <summary>
+    /// Decides whether the caller's audience may use the tool. An MCP tool needs
+    /// its server and the tool in the audience allow lists. Another tool needs its
+    /// name in the audience profile.
+    /// </summary>
+    /// <returns>A denial, or null when the audience may use the tool.</returns>
+    internal ToolAuthorizationDecision? AdmitAudience(INetclawTool tool, ToolExecutionContext context)
     {
-        if (IsShellTool(tool))
-        {
-            throw new InvalidOperationException(
-                "Shell commands require the asynchronous shell policy coordinator.");
-        }
-
         if (tool is McpToolAdapter mcp)
-            return AuthorizeMcpInvocation(mcp, context, arguments);
+            return AdmitMcpAudience(mcp, context);
 
-        var toolName = new ToolName(tool.Name);
-        if (!_profileResolver.IsToolAllowed(toolName, context.Invocation))
-            return ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile");
-
-        return string.Equals(tool.Name, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal)
-            ? AuthorizeBackgroundJobControl(context)
-            : AuthorizeStructuredInvocation(tool, toolName, context, arguments);
+        return _profileResolver.IsToolAllowed(new ToolName(tool.Name), context.Invocation)
+            ? null
+            : ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile");
     }
 
-    /// <summary>Builds canonical shell analysis and applies synchronous access rules before approval evidence.</summary>
-    internal ShellPolicyPreflightResult AuthorizeShellPreflight(
-        INetclawTool tool,
-        ToolExecutionContext context,
-        IDictionary<string, object?>? arguments)
+    /// <summary>
+    /// Converts the result of the shell screens and the consent mode into the
+    /// preflight result that correction and coverage selection read.
+    /// </summary>
+    /// <param name="decision">The screen denial, the automatic allow, or the consent request.</param>
+    /// <param name="analysis">The command analysis, or null when the call has no command text or a screen denied it.</param>
+    /// <param name="directoryScopes">The directory proof that supplied the candidates, or null.</param>
+    internal static ShellPolicyPreflightResult CompleteShellPreflight(
+        ToolAuthorizationDecision decision,
+        ShellCommandAnalysis? analysis,
+        BashDirectoryScopeProjection? directoryScopes)
     {
-        if (!IsShellTool(tool))
-            throw new ArgumentException("Shell preflight requires the shell tool.", nameof(tool));
-
-        ShellCommandAnalysis? analysis = null;
-        var toolName = new ToolName(tool.Name);
-        var decision = !_profileResolver.IsToolAllowed(toolName, context.Invocation)
-            ? ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile")
-            : AuthorizeShellInvocation(toolName, context, arguments, out analysis);
-
         if (!decision.NeedsApproval)
         {
             return new ShellPolicyPreflightResult.Complete(
@@ -244,26 +227,21 @@ public sealed class ToolAccessPolicy
         }
 
         if (analysis is null)
-        {
-            return new ShellPolicyPreflightResult.Complete(
-                decision,
-                authorizedAnalysis: null);
-        }
+            return new ShellPolicyPreflightResult.Complete(decision, authorizedAnalysis: null);
 
         return decision.ApprovalContext is { } approvalContext
             ? new ShellPolicyPreflightResult.Continue(
                 analysis,
                 approvalContext,
-                ShellEnvironment)
+                directoryScopes)
             : new ShellPolicyPreflightResult.Complete(
                 ToolAuthorizationDecision.Deny("internal_policy_failure"),
                 authorizedAnalysis: null);
     }
 
-    private ToolAuthorizationDecision AuthorizeMcpInvocation(
+    private ToolAuthorizationDecision? AdmitMcpAudience(
         McpToolAdapter tool,
-        ToolExecutionContext context,
-        IDictionary<string, object?>? arguments)
+        ToolExecutionContext context)
     {
         var serverName = new McpServerName(tool.ServerName);
         if (!_profileResolver.IsMcpServerAllowed(serverName, context.Invocation))
@@ -277,119 +255,214 @@ public sealed class ToolAccessPolicy
             return ToolAuthorizationDecision.Deny("mcp_tool_not_allowed_for_audience_profile");
         }
 
-        var toolName = new ToolName(tool.Name);
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the arguments that consent reads. An MCP call drops the Netclaw
+    /// metadata fields, so a grant never depends on them.
+    /// </summary>
+    internal static IDictionary<string, object?>? GetApprovalArguments(
+        INetclawTool tool,
+        IDictionary<string, object?>? arguments)
+    {
+        if (tool is not McpToolAdapter)
+            return arguments;
+
         var (_, approvalArguments) = ToolCallMeta.ExtractFrom(
             arguments,
             key => ToolArgumentValidator.ResolveMetaField(tool, key));
-        var approvalMode = GetApprovalMode(
-            toolName,
-            context,
-            approvalArguments,
-            McpApprovalMatcher.Instance);
-        return AuthorizeNonShellApproval(
-            toolName,
-            context,
-            approvalArguments,
-            McpApprovalMatcher.Instance,
-            approvalMode);
+        return approvalArguments;
     }
 
-    private ToolAuthorizationDecision AuthorizeStructuredInvocation(
-        INetclawTool tool,
-        ToolName toolName,
+    /// <summary>Selects the matcher that gives the candidates and the mode key of a call that is not a shell call.</summary>
+    internal IToolApprovalMatcher SelectApprovalMatcher(INetclawTool tool)
+        => tool is McpToolAdapter
+            ? McpApprovalMatcher.Instance
+            : SelectMatcherForTool(new ToolName(tool.Name));
+
+    /// <summary>Returns the directory that ShellTool executes in, from the argument or the context.</summary>
+    /// <remarks>
+    /// All shell policy checks use this directory. The explicit tool argument can
+    /// be absent while the context supplies an active project, session, or
+    /// inherited directory.
+    /// </remarks>
+    internal static string? ResolveShellWorkingDirectory(
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments)
+        => context.ResolveShellCwd(ExtractWorkingDirectory(arguments));
+
+    /// <summary>Applies the hard-deny list to the parsed command.</summary>
+    /// <returns>A denial that names the deny category, or null.</returns>
+    internal ToolAuthorizationDecision? ScreenHardDeny(ShellCommandAnalysis analysis)
     {
-        var pathDenial = PreflightStructuredPathAccess(tool, context.Invocation, arguments);
-        if (pathDenial is not null)
-            return pathDenial;
+        var hardDenyDecision = _shellCommandPolicy.Evaluate(analysis);
+        if (!hardDenyDecision.Allowed)
+            return ToolAuthorizationDecision.Deny(
+                $"hard_deny_{hardDenyDecision.DenyCategory?.ToWireName() ?? "unknown"}");
 
-        var matcher = SelectMatcherForTool(toolName);
-        var approvalMode = GetApprovalMode(toolName, context, arguments, matcher);
-        if (approvalMode == ToolApprovalMode.Deny)
-            return ToolAuthorizationDecision.Deny("tool_denied_by_approval_policy");
-
-        return AuthorizeNonShellApproval(toolName, context, arguments, matcher, approvalMode);
+        return null;
     }
 
-    private ToolAuthorizationDecision AuthorizeShellInvocation(
+    /// <summary>Denies shell text that names a protected path, whatever the operation.</summary>
+    internal ToolAuthorizationDecision? ScreenProtectedShellText(ShellCommandAnalysis analysis)
+        => _toolPathPolicy.CommandReferencesDeniedPath(analysis)
+            ? ToolAuthorizationDecision.Deny("shell_references_protected_path")
+            : null;
+
+    /// <summary>Denies a working directory with a <c>..</c> segment.</summary>
+    /// <remarks>The OS resolves ".." after a symlink. Lexical policy normalization does not.</remarks>
+    internal static ToolAuthorizationDecision? ScreenShellWorkingDirectory(string? workingDirectory)
+        => workingDirectory is not null && CanonicalPath.HasParentSegment(workingDirectory)
+            ? ToolAuthorizationDecision.Deny("shell_invalid_working_directory")
+            : null;
+
+    /// <summary>Projects the parsed command to its consent candidates in the resolved working directory.</summary>
+    internal ShellApprovalAnalysis AnalyzeShellApproval(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments,
+        string? workingDirectory,
+        ShellCommandAnalysis analysis)
+        => _shellApprovalMatcher.AnalyzeInvocation(
+            toolName,
+            WithResolvedShellWorkingDirectory(arguments, workingDirectory),
+            analysis);
+
+    /// <summary>
+    /// Returns true when a complete directory proof gives each occurrence of an
+    /// unresolved compound its own directory.
+    /// </summary>
+    /// <remarks>
+    /// A complete directory proof clears the unresolved-input gate. Attended
+    /// and unattended calls use the same proof (D2). The caller must screen
+    /// each slice before it uses the proof candidates.
+    /// </remarks>
+    internal bool TryProveDirectoryScopes(
+        ShellCommandAnalysis analysis,
+        ShellApprovalAnalysis approval,
+        [NotNullWhen(true)] out BashDirectoryScopeProjection? proof)
+    {
+        proof = null;
+        if (approval is not { IsMessy: true, Candidates.Count: 0 }
+            || !BashDirectoryScopeProjection.TryCreate(
+                analysis,
+                _shellCommandPolicy,
+                _shellApprovalMatcher,
+                out var projection)
+            || !projection.Slices.All(slice => IsDirectoryScopeEligible(slice.WorkingDirectory)))
+        {
+            return false;
+        }
+
+        proof = projection;
+        return true;
+    }
+
+    /// <summary>Screens each slice of a directory proof in slice order.</summary>
+    /// <returns>The first denial of a slice: hard deny, protected text, or file protection.</returns>
+    internal ToolAuthorizationDecision? ScreenDirectoryScopes(
+        BashDirectoryScopeProjection proof,
+        ToolExecutionContext context)
+        => ScreenScopedSlices(proof.Slices, context);
+
+    /// <summary>
+    /// Returns the literal twins of the Bash commands of a call (owner decision
+    /// F1). A command without twins keeps its own candidates.
+    /// </summary>
+    /// <remarks>
+    /// The caller must screen each twin with <see cref="ScreenLiteralTwins"/>
+    /// before it uses the twin candidates.
+    /// </remarks>
+    internal bool TryProjectLiteralTwins(
+        ShellCommandAnalysis analysis,
+        [NotNullWhen(true)] out BashLiteralTwinSlices? twins)
+        => BashLiteralTwinSlices.TryCreate(
+            analysis,
+            _shellCommandPolicy,
+            _shellApprovalMatcher,
+            out twins);
+
+    /// <summary>
+    /// Screens each literal twin as if the operator typed it: hard deny,
+    /// protected text, and file protection in the directory of the twin.
+    /// </summary>
+    /// <returns>The first denial of a twin. One denied twin denies the call.</returns>
+    internal ToolAuthorizationDecision? ScreenLiteralTwins(
+        BashLiteralTwinSlices twins,
+        ToolExecutionContext context)
+        => ScreenScopedSlices(twins.Slices, context);
+
+    private ToolAuthorizationDecision? ScreenScopedSlices(
+        IEnumerable<ScopedShellApprovalSlice> slices,
+        ToolExecutionContext context)
+    {
+        foreach (var slice in slices)
+        {
+            var denial = ScreenHardDeny(slice.Analysis)
+                ?? ScreenProtectedShellText(slice.Analysis)
+                ?? ScreenShellTrustZone(slice.Analysis, slice.WorkingDirectory, context);
+            if (denial is not null)
+                return denial;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gives a call with an unresolved command the candidates of each command.
+    /// The unresolved command becomes one exact candidate, so the other
+    /// commands get their normal decisions. Attended and unattended calls get
+    /// the same candidates (D2).
+    /// </summary>
+    internal static ShellApprovalAnalysis WithCommandCandidates(ShellApprovalAnalysis approval)
+        => approval is { IsMessy: true, Candidates.Count: 0, CommandCandidates.Count: > 0 }
+            ? approval with
+            {
+                Candidates = approval.CommandCandidates,
+                IsMessy = false
+            }
+            : approval;
+
+    /// <summary>
+    /// Replaces the candidates of each command that has literal twins with the
+    /// candidates of its screened twins.
+    /// </summary>
+    internal static ShellApprovalAnalysis WithLiteralTwins(
+        ShellApprovalAnalysis approval,
+        BashLiteralTwinSlices twins)
+        => twins.Apply(approval);
+
+    /// <summary>Replaces the unresolved candidates with the candidates of a screened directory proof.</summary>
+    internal static ShellApprovalAnalysis WithDirectoryScopes(
+        ShellApprovalAnalysis approval,
+        BashDirectoryScopeProjection proof)
+        => approval with
+        {
+            Candidates = proof.Candidates,
+            IsMessy = false
+        };
+
+    /// <summary>Resolves the consent mode of a shell call. Auto becomes Approval for a link-following tree effect.</summary>
+    internal ToolApprovalMode GetShellApprovalMode(
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
-        out ShellCommandAnalysis? authorizedAnalysis)
-    {
-        authorizedAnalysis = null;
+        ShellCommandAnalysis? analysis)
+        => ResolveShellApprovalMode(
+            GetApprovalMode(toolName, context, arguments, _shellApprovalMatcher),
+            analysis?.RequiresExactTreeApproval == true);
 
-        if (EvaluateShellCapability(context.Invocation) is { } capabilityDecision)
-            return capabilityDecision;
+    /// <summary>Returns the denial for a Deny consent mode or an unknown mode, or null.</summary>
+    internal static ToolAuthorizationDecision? ScreenApprovalModeDenial(ToolApprovalMode mode)
+        => GetApprovalModeDecision(mode) is { Outcome: ToolAuthorizationOutcome.Denied } denial
+            ? denial
+            : null;
 
-        var shellCommand = ExtractShellCommand(arguments);
-        var workingDirectory = context.ResolveShellCwd(ExtractWorkingDirectory(arguments));
-        ShellCommandAnalysis? shellAnalysis = null;
-        if (shellCommand is not null)
-        {
-            shellAnalysis = _shellCommandPolicy.Analyze(shellCommand, workingDirectory);
-            var hardDenyDecision = _shellCommandPolicy.Evaluate(shellAnalysis);
-            if (!hardDenyDecision.Allowed)
-                return ToolAuthorizationDecision.Deny(
-                    $"hard_deny_{hardDenyDecision.DenyCategory?.ToWireName() ?? "unknown"}");
-
-            if (_toolPathPolicy.CommandReferencesDeniedPath(shellAnalysis))
-                return ToolAuthorizationDecision.Deny("shell_references_protected_path");
-        }
-
-        // All shell policy checks use the directory that ShellTool executes.
-        // The explicit tool argument can be absent while the context supplies
-        // an active project, session, or inherited directory.
-        var analysisArguments = WithResolvedShellWorkingDirectory(arguments, workingDirectory);
-        var shellApproval = shellAnalysis is null
-            ? null
-            : _shellApprovalMatcher.AnalyzeInvocation(
-                toolName,
-                analysisArguments,
-                shellAnalysis);
-
-        // Shell does not classify an executable as a reader or writer. Once
-        // shell capability and command policy pass, every known path must pass
-        // the conservative Write file-protection layer.
-        if (shellCommand is not null)
-        {
-            var pathAccessDeny = EnforceShellFileProtection(
-                shellApproval!,
-                shellAnalysis!,
-                workingDirectory,
-                context);
-            if (pathAccessDeny is not null)
-                return pathAccessDeny;
-        }
-
-        var configuredMode = GetApprovalMode(toolName, context, arguments, _shellApprovalMatcher);
-        var mode = ResolveShellApprovalMode(
-            configuredMode,
-            shellAnalysis?.RequiresExactTreeApproval == true);
-        var approvalModeDecision = GetApprovalModeDecision(mode);
-        if (approvalModeDecision is { Outcome: ToolAuthorizationOutcome.Denied })
-            return approvalModeDecision;
-
-        authorizedAnalysis = shellAnalysis;
-
-        if (approvalModeDecision is not null)
-            return approvalModeDecision;
-
-        return AuthorizeShellApproval(
-            toolName,
-            context,
-            arguments,
-            mode,
-            shellApproval,
-            workingDirectory);
-    }
-
-    private ToolAuthorizationDecision AuthorizeBackgroundJobControl(ToolExecutionContext context)
+    internal ToolAuthorizationDecision AuthorizeBackgroundJobControl(ToolExecutionContext context)
         => EvaluateShellCapability(context.Invocation)
            ?? ToolAuthorizationDecision.Allow(ToolAllowReason.BackgroundJobLifecycle);
 
-    private ToolAuthorizationDecision? EvaluateShellCapability(ToolInvocationContext context)
+    internal ToolAuthorizationDecision? EvaluateShellCapability(ToolInvocationContext context)
     {
         var shellMode = ResolveShellMode();
         if (shellMode == ShellExecutionMode.Off)
@@ -423,203 +496,216 @@ public sealed class ToolAccessPolicy
                pathFacts,
                context);
 
-    internal bool CausalIntentReferencesProtectedPath(
-        ShellPolicyCandidatePathFacts facts)
-    {
-        ArgumentNullException.ThrowIfNull(facts);
-        if (facts.Intent?.ResolutionBase is not { } intent
-            || string.IsNullOrWhiteSpace(intent.AuthoredValue)
-            || facts.Fallbacks.Count == 0)
-        {
-            return true;
-        }
-
-        if (ScopeReferencesProtectedPath(intent)
-            || facts.Fallbacks.Any(fallback =>
-                ScopeReferencesProtectedPath(fallback.ResolutionBase)))
-        {
-            return true;
-        }
-
-        if (facts.Intent is { } intentPaths
-            && ViewReferencesProtectedPath(intentPaths))
-        {
-            return true;
-        }
-
-        return facts.Fallbacks.Any(ViewReferencesProtectedPath);
-    }
-
-    private bool ScopeReferencesProtectedPath(ShellPolicyScopePathFact scope)
-        => scope is
-        {
-            State: ShellPolicyPathResolutionState.Known,
-            Path: { } path
-        }
-           && _toolPathPolicy.IsShellDeniedProjectedPath(path);
-
-    private bool ViewReferencesProtectedPath(ShellPolicyResolvedPathView view)
-        => view.Facts.Any(fact =>
-            fact.Source.Origin is ShellPolicyPathOrigin.EffectiveArgument
-                or ShellPolicyPathOrigin.AuthoredArgument
-                or ShellPolicyPathOrigin.Redirect
-            && fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
-            && (fact.State == ShellPolicyPathResolutionState.InvalidKnownValue
-                || fact.Paths.Any(path =>
-                    _toolPathPolicy.IsShellDeniedProjectedPath(path))));
-
-    internal bool IsCausalIntentDirectoryEligible(string intentDirectory)
-    {
-        if (ShellEnvironment.Grammar != ShellGrammar.Bash
-            || !ShellPathRules.TryNormalize(
-                intentDirectory,
-                ShellEnvironment.PathStyle,
-                out var normalized)
-            || !ShellPathRules.Equals(
-                normalized,
-                intentDirectory,
-                ShellEnvironment.PathStyle))
-        {
-            return false;
-        }
-
-        if (_temporaryPathCorrectionPolicy.IsEligiblePlatformTemporaryPath(normalized))
-            return true;
-
-        try
-        {
-            return !PathUtility.ContainsSymlinkSegment("/", normalized);
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                      or IOException
-                                      or NotSupportedException
-                                      or UnauthorizedAccessException
-                                      or System.Security.SecurityException)
-        {
-            return false;
-        }
-    }
-
-    internal bool AreCausalIntentDirectoriesEligible(
-        string intentDirectory,
-        IReadOnlyList<string> fallbackDirectories)
-        => fallbackDirectories.Count > 0
-           && IsCausalIntentDirectoryEligible(intentDirectory)
-           && fallbackDirectories.All(IsCausalIntentDirectoryEligible);
+    /// <summary>
+    /// Returns true when a canonical Bash scope directory has no link from the
+    /// volume root, except the platform temporary alias (R7).
+    /// </summary>
+    private bool IsDirectoryScopeEligible(string scopeDirectory)
+        => ShellEnvironment.Grammar == ShellGrammar.Bash
+           && CanonicalPath.TryCreate(scopeDirectory, relativeBase: null, ShellEnvironment.PathStyle, out var directory)
+           && string.Equals(directory.Value, scopeDirectory, StringComparison.Ordinal)
+           && FileSystemAuthority.IsLinkFreeFromVolumeRoot(directory, LinkRule.FromVolumeRootExceptTemporaryAlias);
 
     internal ShellApprovalMatcher ShellApprovalMatcher => _shellApprovalMatcher;
 
     /// <summary>
-    /// Applies the file-protection layer after shell capability and command
-    /// policy pass. Every known shell path uses conservative <see
-    /// cref="PathAccessPolicy.FileOperation.Write"/> authority because Netclaw
-    /// does not infer whether an arbitrary executable only reads a path.
+    /// Requires the working directory and every known path of the command to be
+    /// inside a trusted root for Write.
     /// </summary>
-    private ToolAuthorizationDecision? EnforceShellFileProtection(
-        ShellApprovalAnalysis approval,
+    internal ToolAuthorizationDecision? ScreenShellTrustZone(
         ShellCommandAnalysis analysis,
         string? workingDirectory,
         ToolExecutionContext context)
     {
-        // Unattended runs cannot send unresolved path syntax to a user. An
-        // interactive run keeps the existing one-shot approval path for that
-        // syntax. Known paths still pass Write protection below.
-        if (approval.IsMessy
-            && context.RunScope.InteractiveApproval
-            is InteractiveApprovalCapability.Unavailable)
-        {
-            return ToolAuthorizationDecision.Deny("shell_unresolved_trust_zone_input");
-        }
-
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
             var expandedWorkingDirectory = PathUtility.ExpandAndNormalize(workingDirectory, workingDirectory: null);
             if (expandedWorkingDirectory is null)
                 return ToolAuthorizationDecision.Deny("shell_invalid_working_directory");
 
-            if (_pathAccessPolicy.Evaluate(
-                    expandedWorkingDirectory,
-                    context.Invocation,
-                    PathAccessPolicy.FileOperation.Write) is not PathAccessPolicy.PathAccessDecision.Allowed)
+            var workingDirectoryAccess = _pathAccessPolicy.Evaluate(
+                expandedWorkingDirectory,
+                context.Invocation,
+                PathAccessPolicy.FileOperation.Write);
+            if (workingDirectoryAccess is not PathAccessPolicy.PathAccessDecision.Allowed)
                 return ToolAuthorizationDecision.Deny("shell_working_directory_outside_trust_zone");
         }
 
+        var readOnly = ReadOnlyOccurrences(analysis);
         return EnforceKnownShellPaths(
             ShellPolicyPathFacts.CreateExecutionViews(analysis)
-                .SelectMany(EnumerateKnownShellPaths),
+                .SelectMany((view, index) => EnumerateKnownShellPaths(
+                    view,
+                    readOnly.Contains(analysis.Commands[index]))),
             context.Invocation);
     }
 
     /// <summary>
-    /// Applies conservative write protection to all paths in a shell policy projection.
+    /// Applies file protection to all paths in a shell policy projection: write
+    /// protection, and read protection for a read-only program (decision D6).
     /// </summary>
     /// <remarks>
-    /// Causal Bash analysis can add intent and fallback views after shell preflight.
+    /// A causal list adds an intent view after shell preflight.
     /// The coordinator must call this method before it checks stored grants or reviewed-safe coverage.
     /// </remarks>
+    /// <param name="candidates">The path facts of each candidate, with its source occurrence.</param>
+    /// <param name="analyses">
+    /// The analyses that own the source occurrences: the call analysis and the
+    /// analysis of each literal twin. A twin gets the read rule of its typed literal.
+    /// </param>
+    /// <param name="context">The invocation that supplies the trusted roots.</param>
     internal ToolAuthorizationDecision? EnforceProjectedShellFileProtection(
-        IReadOnlyList<ShellPolicyCandidatePathFacts> pathFacts,
-        ToolInvocationContext context)
-        => EnforceKnownShellPaths(
-            pathFacts.SelectMany(EnumerateKnownShellPaths),
-            context);
-
-    private ToolAuthorizationDecision? EnforceKnownShellPaths(
-        IEnumerable<CanonicalShellPath> paths,
+        IReadOnlyList<(ShellPolicyCandidatePathFacts PathFacts, CommandOccurrence? Occurrence)> candidates,
+        IReadOnlyList<ShellCommandAnalysis> analyses,
         ToolInvocationContext context)
     {
-        foreach (var path in paths
-                     .Where(static path => !IsNullDevice(path))
-                     .DistinctBy(static path => (path.PathStyle, path.Value)))
+        var readOnly = new HashSet<CommandOccurrence>(ReferenceEqualityComparer.Instance);
+        foreach (var owner in analyses)
+            readOnly.UnionWith(ReadOnlyOccurrences(owner));
+
+        return EnforceKnownShellPaths(
+            candidates.SelectMany(candidate => EnumerateKnownShellPaths(
+                candidate.PathFacts,
+                candidate.Occurrence is { } occurrence && readOnly.Contains(occurrence))),
+            context);
+    }
+
+    /// <summary>
+    /// Returns the occurrences of a Bash program that only reads its operands
+    /// (<see cref="ShellVerbPolicyData.ReadOnlyOperandVerbs"/>, decision D6).
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: the set is empty for unresolved or dynamic syntax, because a
+    /// function or an alias can replace the program. An occurrence with an
+    /// assignment prefix or a dynamic program word is never read-only. A redirect
+    /// that writes keeps write protection for its target only. Each argument must have a bounded value, so a
+    /// glob or an unknown value cannot read a path that no check sees.
+    /// </remarks>
+    private static HashSet<CommandOccurrence> ReadOnlyOccurrences(ShellCommandAnalysis analysis)
+    {
+        var occurrences = new HashSet<CommandOccurrence>(ReferenceEqualityComparer.Instance);
+        if (analysis.Environment.Grammar != ShellGrammar.Bash
+            || !analysis.IsResolved
+            || analysis.HasDynamicSyntax)
         {
-            if (_pathAccessPolicy.EvaluateShellPath(path, context) is not PathAccessPolicy.PathAccessDecision.Allowed)
-                return ToolAuthorizationDecision.Deny("shell_path_outside_trust_zone");
+            return occurrences;
+        }
+
+        foreach (var occurrence in analysis.Commands)
+        {
+            var directory = occurrence.WorkingDirectory is ShellValueDomain.Exact exact
+                ? exact.Value
+                : analysis.WorkingDirectory;
+            if (occurrence is { IsComplete: true, Assignments.Count: 0, Clause.Verb: { IsDynamic: false, Tokens: [var program, ..] } }
+                && ShellVerbPolicyData.ReadOnlyOperandVerbs.Contains(program)
+                && occurrence.Arguments.All(argument => IsReadOnlyOperand(argument, directory)))
+            {
+                occurrences.Add(occurrence);
+            }
+        }
+
+        return occurrences;
+    }
+
+    // SECURITY: each value must be bounded. A path gets a path fact. A plain word
+    // must have one value that names no entry of the occurrence directory: such a
+    // word (grep -r token config) is a path that no path fact sees, and its scope
+    // is not read below, so the occurrence is not read-only. The parser reports a
+    // brace word ({netclaw,secrets}.json) or an ANSI-C quoted word ($'\x73') as one
+    // exact value, but Bash expands it, so such a word is never a read-only operand.
+    private static bool IsReadOnlyOperand(AnalyzedArgument argument, string? directory)
+        => !ToolPathPolicy.HasUnmodeledExpansion(argument.Element.Raw)
+           && argument.Value is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
+           && (argument.Argument.IsPath
+               || argument.Value is ShellValueDomain.Exact exact && !NamesEntry(exact.Value, directory));
+
+    // The one shared file-word rule of the approval matcher, the store, and the doctor.
+    private static bool NamesEntry(string word, string? directory)
+        => ShellGrantFileWords.NamesEntry(word, directory, out _);
+
+    private ToolAuthorizationDecision? EnforceKnownShellPaths(
+        IEnumerable<ShellPathAccess> paths,
+        ToolInvocationContext context)
+    {
+        foreach (var access in paths
+                     .Where(static access => !ShellRedirectPolicyFacts.IsNullDevice(access.Path))
+                     .DistinctBy(static access => (access.Path.Style, access.Path.Value, access.Read)))
+        {
+            if (IsShellPathAllowed(access, context))
+                continue;
+
+            // The code only names the cause. Both codes deny, and no grant opens either one.
+            // shell_path_protected: the path or its link target is protected.
+            // shell_path_outside_trusted_roots: a bounded (Roots) profile does not hold the path.
+            return ToolAuthorizationDecision.Deny(
+                access.Path.IsHostStyle && _toolPathPolicy.FileSystem.IsProtected(access.Path.Value, PathOperation.Write)
+                    ? "shell_path_protected"
+                    : "shell_path_outside_trusted_roots");
         }
 
         return null;
     }
 
-    private static IEnumerable<CanonicalShellPath> EnumerateKnownShellPaths(
-        ShellPolicyCandidatePathFacts candidate)
+    // D6: a read-only program can read a write-protected path that a file tool
+    // may read. Its scopes and operands get read protection instead.
+    private bool IsShellPathAllowed(ShellPathAccess access, ToolInvocationContext context)
+        => _pathAccessPolicy.EvaluateShellPath(access.Path, context) is PathAccessPolicy.PathAccessDecision.Allowed
+           || access.Read != ShellPathRead.None
+           && _pathAccessPolicy.EvaluateShellReadPath(access.Path, context, access.Read == ShellPathRead.Operand)
+               is PathAccessPolicy.PathAccessDecision.Allowed;
+
+    private static IEnumerable<ShellPathAccess> EnumerateKnownShellPaths(
+        ShellPolicyCandidatePathFacts candidate,
+        bool readOnly)
     {
         if (candidate.RealScope.Path is { } realScope)
-            yield return realScope;
+            yield return new ShellPathAccess(realScope, readOnly ? ShellPathRead.Scope : ShellPathRead.None);
 
-        foreach (var path in EnumerateKnownShellPaths(candidate.Real))
+        foreach (var path in EnumerateKnownShellPaths(candidate.Real, readOnly))
             yield return path;
 
         if (candidate.Intent is { } intent)
         {
-            foreach (var path in EnumerateKnownShellPaths(intent))
-                yield return path;
-        }
-
-        foreach (var fallback in candidate.Fallbacks)
-        {
-            foreach (var path in EnumerateKnownShellPaths(fallback))
+            foreach (var path in EnumerateKnownShellPaths(intent, readOnly))
                 yield return path;
         }
     }
 
-    private static IEnumerable<CanonicalShellPath> EnumerateKnownShellPaths(
-        ShellPolicyResolvedPathView view)
+    private static IEnumerable<ShellPathAccess> EnumerateKnownShellPaths(
+        ShellPolicyResolvedPathView view,
+        bool readOnly)
     {
         if (view.ResolutionBase.Path is { } resolutionBase)
-            yield return resolutionBase;
+            yield return new ShellPathAccess(resolutionBase, readOnly ? ShellPathRead.Scope : ShellPathRead.None);
 
-        foreach (var path in view.Facts
-                     .Where(static fact => fact.State == ShellPolicyPathResolutionState.Known)
-                     .SelectMany(static fact => fact.Paths))
+        foreach (var fact in view.Facts.Where(static fact => fact.State == ShellPolicyPathResolutionState.Known))
         {
-            yield return path;
+            // A redirect that writes (cat cfg > /tmp/x) keeps write protection for its target.
+            var read = readOnly
+                       && (fact.Source.Origin != ShellPolicyPathOrigin.Redirect
+                           || fact.Source.RedirectMode == FileRedirectMode.Input)
+                ? ShellPathRead.Operand
+                : ShellPathRead.None;
+            foreach (var path in fact.Paths)
+                yield return new ShellPathAccess(path, read);
         }
     }
 
-    private static bool IsNullDevice(CanonicalShellPath path)
-        => path.PathStyle == ShellPathStyle.Posix
-           && string.Equals(path.Value, "/dev/null", StringComparison.Ordinal);
+    private enum ShellPathRead
+    {
+        /// <summary>The path gets write protection only.</summary>
+        None,
 
-    private ToolAuthorizationDecision? PreflightStructuredPathAccess(
+        /// <summary>A scope of a read-only program: the working directory or a candidate folder.</summary>
+        Scope,
+
+        /// <summary>A path that a read-only program reads.</summary>
+        Operand,
+    }
+
+    private readonly record struct ShellPathAccess(CanonicalPath Path, ShellPathRead Read);
+
+    internal ToolAuthorizationDecision? PreflightStructuredPathAccess(
         INetclawTool tool,
         ToolInvocationContext context,
         IDictionary<string, object?>? arguments)
@@ -651,18 +737,18 @@ public sealed class ToolAccessPolicy
 
         var decision = _pathAccessPolicy.Evaluate(rawPath, context, request.Operation);
         return decision is PathAccessPolicy.PathAccessDecision.Denied
-            { Failure: PathAccessPolicy.PathAccessFailure.AccessDenied } denied
+        { Failure: PathAccessPolicy.PathAccessFailure.AccessDenied } denied
             ? ToolAuthorizationDecision.Deny("path_access_denied", denied.Error)
             : null;
     }
 
-    private static string? ExtractShellCommand(IDictionary<string, object?>? arguments)
+    internal static string? ExtractShellCommand(IDictionary<string, object?>? arguments)
     {
         // Use the shared extractor so JsonElement-valued arguments (the
         // shape LLM-generated tool calls arrive in) get string-converted
         // correctly. The direct `is string` pattern previously here
         // silently returned null for every real shell call, which disabled
-        // the hard-deny pre-check at AuthorizeInvocation. The matcher's
+        // the hard-deny screen. The matcher's
         // GetCommand uses ToolArgumentHelper.GetString — mirror it here
         // for consistency.
         if (arguments is null)
@@ -701,17 +787,16 @@ public sealed class ToolAccessPolicy
         return analysisArguments;
     }
 
-    private ToolAuthorizationDecision AuthorizeNonShellApproval(
+    /// <summary>
+    /// Builds the consent request of a call that is not a shell call: its
+    /// candidates, display text, offered options, and any temporary-directory advice.
+    /// </summary>
+    internal ToolAuthorizationDecision BuildNonShellConsentRequest(
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
-        IToolApprovalMatcher matcher,
-        ToolApprovalMode mode)
+        IToolApprovalMatcher matcher)
     {
-        var approvalModeDecision = GetApprovalModeDecision(mode);
-        if (approvalModeDecision is not null)
-            return approvalModeDecision;
-
         var patterns = matcher.ExtractPatterns(toolName, arguments);
         var candidates = matcher.ExtractCandidates(toolName, arguments);
         var displayText = matcher.FormatForDisplay(toolName, arguments);
@@ -733,7 +818,7 @@ public sealed class ToolAccessPolicy
             directoryApprovalAvailable: false);
     }
 
-    private ToolAuthorizationDecision AuthorizeShellApproval(
+    internal ToolAuthorizationDecision AuthorizeShellApproval(
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
@@ -778,11 +863,14 @@ public sealed class ToolAccessPolicy
     {
         var candidateVerbs = candidates
             .Select(static candidate => candidate.Verb)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(ApprovalPatternMatching.VerbTextComparer(candidates.FirstOrDefault()?.Shell))
             .ToList();
 
         var managedTemporaryRetry = context.Approval.ManagedTemporaryRetry;
         var isManagedTemporaryRetry = managedTemporaryRetry is not null;
+        var repository = isManagedTemporaryRetry
+            ? null
+            : ResolveOfferedRepository(toolName, isMessy, hasReusablePhrase, candidates, context.Approval.Cwd);
         IReadOnlyList<ToolApprovalOption> options;
         if (isManagedTemporaryRetry)
         {
@@ -790,11 +878,14 @@ public sealed class ToolAccessPolicy
         }
         else
         {
-            options = BuildApprovalOptions(GetApprovalOptionProfile(
-                toolName,
-                isMessy,
-                hasReusablePhrase,
-                directoryApprovalAvailable));
+            options = BuildApprovalOptions(
+                GetApprovalOptionProfile(
+                    toolName,
+                    isMessy,
+                    hasReusablePhrase,
+                    directoryApprovalAvailable),
+                repository is not null,
+                HasAssignmentDigest(candidates));
         }
 
         var approvalContext = new ToolApprovalContext(
@@ -809,7 +900,8 @@ public sealed class ToolAccessPolicy
         {
             IsManagedTemporaryRetry = isManagedTemporaryRetry,
             ManagedTemporaryDirectory = managedTemporaryRetry?.ManagedTemporaryDirectory,
-            PlatformTemporaryRoot = managedTemporaryRetry?.PlatformTemporaryRoot
+            PlatformTemporaryRoot = managedTemporaryRetry?.PlatformTemporaryRoot,
+            RepositoryCommonDirectory = repository
         };
 
         return ToolAuthorizationDecision.RequiresApproval(
@@ -837,24 +929,7 @@ public sealed class ToolAccessPolicy
         return correction;
     }
 
-    internal ToolCorrection.ProjectDirectorySuggested? EvaluateShellProjectCorrection(
-        IReadOnlyList<ApprovalCandidate> candidates,
-        string? cwd,
-        ToolInvocationContext invocation)
-    {
-        if (_temporaryPathCorrectionPolicy.IsPlatformTemporaryRoot(cwd))
-            return null;
-
-        if (_safeVerbPolicy is null)
-            return null;
-
-        if (!_safeVerbPolicy.CanShortCircuitAfterProjectDeclaration(candidates, cwd, invocation))
-            return null;
-
-        return new ToolCorrection.ProjectDirectorySuggested(cwd!);
-    }
-
-    private ToolApprovalMode GetApprovalMode(
+    internal ToolApprovalMode GetApprovalMode(
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
@@ -900,8 +975,9 @@ public sealed class ToolAccessPolicy
     {
         var candidateVerbs = unapprovedCandidates
             .Select(static candidate => candidate.Verb)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(ApprovalPatternMatching.VerbTextComparer(unapprovedCandidates.FirstOrDefault()?.Shell))
             .ToList();
+        string? repository = null;
         IReadOnlyList<ToolApprovalOption> options;
         if (context.IsManagedTemporaryRetry)
         {
@@ -909,15 +985,23 @@ public sealed class ToolAccessPolicy
         }
         else
         {
-            options = BuildApprovalOptions(GetApprovalOptionProfile(
-                new ToolName(ShellTool.ToolName),
-                isMessy: false,
-                unapprovedCandidates.All(HasReusableShellPhrase),
-                IsShellDirectoryApprovalAvailable(
-                    unapprovedCandidates,
-                    context.Cwd,
-                    sessionOwnedDirectories,
-                    pathStyle)));
+            var shellToolName = new ToolName(ShellTool.ToolName);
+            var hasReusablePhrase = unapprovedCandidates.All(HasReusableShellPhrase);
+            repository = ResolveOfferedRepository(
+                shellToolName, isMessy: false, hasReusablePhrase,
+                unapprovedCandidates, context.Cwd);
+            options = BuildApprovalOptions(
+                GetApprovalOptionProfile(
+                    shellToolName,
+                    isMessy: false,
+                    hasReusablePhrase,
+                    IsShellDirectoryApprovalAvailable(
+                        unapprovedCandidates,
+                        context.Cwd,
+                        sessionOwnedDirectories,
+                        pathStyle)),
+                repository is not null,
+                HasAssignmentDigest(unapprovedCandidates));
         }
 
         return context with
@@ -925,7 +1009,8 @@ public sealed class ToolAccessPolicy
             Patterns = candidateVerbs,
             CandidateVerbs = candidateVerbs,
             Candidates = unapprovedCandidates,
-            Options = options
+            Options = options,
+            RepositoryCommonDirectory = repository
         };
     }
 
@@ -1038,7 +1123,10 @@ public sealed class ToolAccessPolicy
     /// allow this tool</c> because it persists a canonical-tool grant.</item>
     /// </list>
     /// </summary>
-    private static IReadOnlyList<ToolApprovalOption> BuildApprovalOptions(ApprovalOptionProfile profile)
+    private static IReadOnlyList<ToolApprovalOption> BuildApprovalOptions(
+        ApprovalOptionProfile profile,
+        bool includeRepository,
+        bool hasAssignmentDigest)
     {
         if (profile is ApprovalOptionProfile.OneShotOnly)
         {
@@ -1049,32 +1137,83 @@ public sealed class ToolAccessPolicy
             ];
         }
 
-        var options = new List<ToolApprovalOption>(5)
+        var options = new List<ToolApprovalOption>(6)
         {
             new ToolApprovalOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
-            new ToolApprovalOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel)
+            new ToolApprovalOption(
+                hasAssignmentDigest
+                    ? ApprovalOptionKeys.ApproveAssignmentSessionV1Key
+                    : ApprovalOptionKeys.ApproveSessionKey,
+                ApprovalOptionKeys.ApproveSessionLabel)
         };
 
         if (profile is ApprovalOptionProfile.StandardWithDirectory)
         {
-            options.Add(new ToolApprovalOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel));
+            options.Add(new ToolApprovalOption(
+                hasAssignmentDigest
+                    ? ApprovalOptionKeys.ApproveAssignmentAlwaysV1Key
+                    : ApprovalOptionKeys.ApproveAlwaysKey,
+                ApprovalOptionKeys.ApproveAlwaysLabel));
+        }
+
+        if (includeRepository)
+        {
+            options.Add(new ToolApprovalOption(
+                hasAssignmentDigest
+                    ? ApprovalOptionKeys.ApproveAssignmentRepositoryV1Key
+                    : ApprovalOptionKeys.ApproveRepositoryKey,
+                ApprovalOptionKeys.ApproveRepositoryLabel));
         }
 
         options.Add(new ToolApprovalOption(
-            ApprovalOptionKeys.ApproveEverywhereKey,
+            hasAssignmentDigest
+                ? ApprovalOptionKeys.ApproveAssignmentEverywhereV1Key
+                : ApprovalOptionKeys.ApproveEverywhereKey,
             ApprovalOptionKeys.LabelFor(
-                ApprovalOptionKeys.ApproveEverywhere,
+                hasAssignmentDigest
+                    ? ApprovalOptionKeys.ApproveAssignmentEverywhereV1
+                    : ApprovalOptionKeys.ApproveEverywhere,
                 profile is ApprovalOptionProfile.McpTool)));
         options.Add(new ToolApprovalOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel));
 
         return options;
     }
 
+    internal static bool HasAssignmentDigest(IReadOnlyList<ApprovalCandidate> candidates)
+        => candidates.Any(static candidate =>
+            candidate.AssignmentDigest is not null);
+
+    private static string? ResolveOfferedRepository(
+        ToolName toolName,
+        bool isMessy,
+        bool hasReusablePhrase,
+        IReadOnlyList<ApprovalCandidate> candidates,
+        string? cwd)
+    {
+        var grantCandidates = candidates
+            .Where(static candidate => !ApprovalPatternMatching.IsPureSideEffect(candidate))
+            .ToArray();
+        if (isMessy || !hasReusablePhrase
+            || !string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal)
+            || !RepositoryIdentity.TryResolveAll(
+                grantCandidates.Select(static candidate => candidate.Directory).ToArray(),
+                cwd,
+                out var repositories))
+        {
+            return null;
+        }
+
+        return repositories![0].CommonDirectory;
+    }
+
+    // An approval-exempt output command is never saved, so it needs no command words.
+    // An exact candidate of an unresolved command offers only "Once".
     private static bool HasReusableShellPhrase(ApprovalCandidate candidate) =>
-        candidate.Shell is not null &&
-        candidate.VerbTokens is { Count: > 0 } tokens &&
-        tokens.All(static token =>
-            token.Length > 0 && !token.Any(char.IsWhiteSpace));
+        candidate.Shell is not null
+        && candidate.Unresolved == ShellUnresolvedPart.None
+        && (ApprovalPatternMatching.IsPureSideEffect(candidate)
+            || candidate.VerbTokens is { Count: > 0 } tokens
+               && tokens.All(static token => token.Length > 0));
 
     /// <summary>
     /// Returns true when the cwd is too shallow to support a folder-scoped
@@ -1087,7 +1226,7 @@ public sealed class ToolAccessPolicy
         if (string.IsNullOrWhiteSpace(cwd))
             return false;
 
-        return !ShellPathRules.TryGetRootRelativeDepth(cwd, pathStyle, out var depth)
+        return !CanonicalPath.TryGetRootDepth(cwd, pathStyle, out var depth)
                || depth < 2;
     }
 
@@ -1151,9 +1290,6 @@ public sealed class ToolAccessPolicy
     private ShellExecutionMode ResolveShellMode()
         => _toolConfig.ShellMode ?? _defaults.ShellExecutionMode;
 
-    private static TrustAudience ResolveAudience(EffectiveTrustContext? trustContext)
-        => trustContext?.EffectiveAudience ?? TrustAudience.Public;
-
     private static TrustAudience ResolveAudience(ToolInvocationContext context)
         => context.Audience;
 
@@ -1183,7 +1319,7 @@ public sealed class ToolAccessPolicy
                 => !_featureGates.SkillSyncEnabled,
             "spawn_agent"
                 => !_featureGates.SubAgentsEnabled,
-            "set_reminder" or "cancel_reminder" or "list_reminders" or "get_reminder_history"
+            "set_reminder" or "cancel_reminder" or "list_reminders" or "get_reminder_history" or "run_reminder"
                 => !_featureGates.SchedulingEnabled,
             _ => false
         };
@@ -1242,6 +1378,8 @@ public sealed record ToolApprovalContext(
     internal string? ManagedTemporaryDirectory { get; init; }
 
     internal string? PlatformTemporaryRoot { get; init; }
+
+    internal string? RepositoryCommonDirectory { get; init; }
 }
 
 public sealed record ToolApprovalOption(ApprovalOptionKey Key, string Label);

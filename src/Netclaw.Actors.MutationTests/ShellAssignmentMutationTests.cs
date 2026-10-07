@@ -1,0 +1,460 @@
+// -----------------------------------------------------------------------
+// <copyright file="ShellAssignmentMutationTests.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
+using System.Collections.Immutable;
+using System.Reflection;
+using Netclaw.Actors.Authorization.Consent;
+using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
+using Netclaw.Security;
+using Netclaw.Tools;
+using ShellSyntaxTree;
+using Xunit;
+
+namespace Netclaw.Actors.MutationTests;
+
+public sealed class ShellAssignmentMutationTests
+{
+    private static readonly ApprovalAssignmentDigest FirstDigest = new(
+        $"sha256:{new string('a', 64)}");
+    private static readonly ApprovalAssignmentDigest SecondDigest = new(
+        $"sha256:{new string('b', 64)}");
+
+    [Fact]
+    public void Assignment_grants_require_the_same_explicit_constraint()
+    {
+        var qualified = Candidate(FirstDigest);
+        var unqualified = Candidate(null);
+        var matching = Entry(FirstDigest);
+        var changed = Entry(SecondDigest);
+        var absent = Entry(assignmentDigest: null);
+
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+            qualified,
+            "/work",
+            [matching]));
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
+            qualified,
+            "/work",
+            [changed]));
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
+            qualified,
+            "/work",
+            [absent]));
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+            unqualified,
+            "/work",
+            [absent]));
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
+            unqualified,
+            "/work",
+            [matching]));
+    }
+
+    [Fact]
+    public void Reviewed_safe_policy_rejects_an_assignment_constraint()
+    {
+        // The daemon environment holds "mode", so the assignment reaches the
+        // program and qualifies the candidate (decision F3).
+        var environment = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2),
+            [new("PATH", "/usr/bin"), new("mode", "inherited")]);
+        var matcher = new ShellApprovalMatcher(environment);
+        var qualified = Assert.Single(matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Arguments("mode='fast'; grep item")));
+        var unqualified = Assert.Single(matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Arguments("grep item")));
+        var policy = new ReviewedSafeShellPolicy(
+            SafeVerbList.FromVerbs(ApprovalShell.Bash, ["grep"]),
+            new PathAccessPolicy(
+                new ToolConfig(),
+                new NetclawPaths(),
+                new ToolPathPolicy(environment, [])));
+
+        Assert.False(policy.IsReviewedDiagnosticInvocation(
+            [qualified],
+            ShellPathStyle.Posix));
+        Assert.True(policy.IsReviewedDiagnosticInvocation(
+            [unqualified],
+            ShellPathStyle.Posix));
+    }
+
+    [Fact]
+    public void PowerShell_assignment_span_can_cover_only_one_opaque_node()
+    {
+        const string Source = " $mode='fast'; inspect item";
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var parsed = environment.Parse(Source, @"C:\work");
+        var block = Assert.IsType<ShellBlockSyntax>(parsed.Syntax);
+        var list = Assert.IsType<CommandListSyntax>(Assert.Single(block.Statements));
+        var assignmentNode = list.Items[0].Command;
+        Assert.True(ShellCommandAnalysis.AssignmentSyntaxReconciliation.TryCreate(
+            Source,
+            parsed.Commands,
+            out var reconciliation));
+
+        Assert.True(reconciliation.TryConsume(assignmentNode));
+        Assert.True(reconciliation.AllConsumed);
+        Assert.False(reconciliation.TryConsume(assignmentNode));
+        Assert.False(reconciliation.TryConsume(list.Items[1].Command));
+    }
+
+    [Fact]
+    public void Fallback_wrapper_assignment_fails_closed_without_hiding_hard_denies()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2));
+        var analyzer = new ShellCommandAnalyzer(environment);
+        var assigned = analyzer.Analyze(
+            "bash -lc \"mode='fast'; inspect item\"",
+            "/work");
+        var mixed = analyzer.Analyze(
+            "bash -lc \"mode='fast' inspect item; report item\"",
+            "/work");
+        var plain = analyzer.Analyze(
+            "bash -lc \"inspect item\"",
+            "/work");
+        var topLevel = analyzer.Analyze(
+            "mode='fast'; inspect item",
+            "/work");
+        var policy = new ShellCommandPolicy(environment);
+
+        Assert.False(assigned.IsResolved);
+        Assert.Contains(assigned.Commands, static command => command.Assignments.Count > 0);
+        Assert.False(mixed.IsResolved);
+        Assert.Contains(mixed.Commands, static command => command.Assignments.Count > 0);
+        Assert.Contains(mixed.Commands, static command => command.Assignments.Count == 0);
+        Assert.True(plain.IsResolved);
+        Assert.True(topLevel.IsResolved);
+        Assert.False(policy.Evaluate(
+            "bash -lc \"mode='fast'; netclaw daemon stop\"",
+            "/work").Allowed);
+
+        // An assignment prefix on the wrapper itself reaches the child
+        // environment, so the child candidate must not stay resolved.
+        var wrapperPrefix = analyzer.Analyze(
+            "GIT_SSH_COMMAND=evil bash -lc \"git push\"",
+            "/work");
+        Assert.False(wrapperPrefix.IsResolved);
+        Assert.Contains(
+            wrapperPrefix.Commands,
+            static command => command.Clause.Verb.Tokens.SequenceEqual(["git", "push"]));
+        Assert.False(policy.Evaluate(
+            "GIT_SSH_COMMAND=evil bash -lc \"netclaw daemon stop\"",
+            "/work").Allowed);
+    }
+
+    [Fact]
+    public void Wrapper_child_source_is_the_decoded_argument_value()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2));
+        var analyzer = new ShellCommandAnalyzer(environment);
+        var escaped = analyzer.Analyze(
+            "bash -lc \"echo \\\"a b\\\"; rm -rf ~/work\"",
+            "/work");
+        var optionFirst = analyzer.Analyze(
+            "bash --norc -lc \"echo \\\"a b\\\"; rm -rf ~/work\"",
+            "/work");
+        var dynamic = analyzer.Analyze(
+            "bash -lc \"$CHILD\"",
+            "/work");
+        var missing = analyzer.Analyze(
+            "bash -lc",
+            "/work");
+        var policy = new ShellCommandPolicy(environment);
+
+        Assert.True(escaped.IsResolved);
+        Assert.Equal(
+            ["echo", "rm"],
+            escaped.Commands.Select(static command => command.Clause.Verb.Tokens[0]));
+        Assert.True(optionFirst.IsResolved);
+        Assert.Equal(
+            ["echo", "rm"],
+            optionFirst.Commands.Select(static command => command.Clause.Verb.Tokens[0]));
+        Assert.False(dynamic.IsResolved);
+        // The option is the last word, so the wrapper has no child source.
+        Assert.Equal(
+            ["bash"],
+            missing.Commands.Select(static command => command.Clause.Verb.Tokens[0]));
+        Assert.False(policy.Evaluate(
+            "bash -lc \"echo \\\"a b\\\"; netclaw daemon stop\"",
+            "/work").Allowed);
+        // The assignment keeps this analysis unresolved. The decoded child
+        // clauses must still meet the hard-deny list.
+        Assert.False(policy.Evaluate(
+            "bash -lc \"echo \\\"a b\\\"; X=1 netclaw daemon stop\"",
+            "/work").Allowed);
+
+        // With an unknown initial state, the approval parser rejects the
+        // assignment word. Only the hard-deny screen sees the denied command.
+        var unknownState = new ShellCommandPolicy(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+        Assert.False(unknownState.Evaluate(
+            "bash -lc \"echo \\\"a b\\\"; X=1 netclaw daemon stop\"",
+            "/work").Allowed);
+        Assert.False(unknownState.Evaluate(
+            "X=1 netclaw daemon stop",
+            "/work").Allowed);
+        Assert.True(unknownState.Evaluate(
+            "X=1 inspect item",
+            "/work").Allowed);
+        // A cd that can fail leaves the bash -lc child without a directory, so
+        // the parse stops there. Each list element is screened again, and the
+        // child meets the hard-deny list.
+        Assert.False(unknownState.Evaluate(
+            "cd /work/sub && git fetch; bash -lc \"echo \\\"a b\\\"; netclaw daemon stop\"",
+            "/work").Allowed);
+        Assert.True(unknownState.Evaluate(
+            "cd /work/sub && git fetch; bash -lc \"echo \\\"a b\\\"; git status\"",
+            "/work").Allowed);
+        // The parser rejects arithmetic expansion, so only the per-element
+        // screen sees the denied command after the background operator.
+        Assert.False(unknownState.Evaluate(
+            "echo $((1 + 1)) & netclaw daemon stop",
+            "/work").Allowed);
+    }
+
+    [Fact]
+    public void Bash_strong_initial_state_requires_the_complete_host_identity()
+    {
+        AssertBounded(ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2)));
+        AssertBounded(ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 3)));
+
+        AssertUnknown(ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 1)));
+        AssertUnknown(ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 4)));
+        AssertUnknown(CreateBashEnvironment(
+            "/usr/bin/bash",
+            ["-c"],
+            new Version(5, 2)));
+        AssertUnknown(CreateBashEnvironment(
+            "/bin/bash",
+            ["--noprofile", "-c"],
+            new Version(5, 2)));
+    }
+
+    [Fact]
+    public void Bash_sanitizer_removes_every_startup_and_loader_override()
+    {
+        var exactNames = new[]
+        {
+            "BASH_ENV",
+            "ENV",
+            "SHELLOPTS",
+            "BASHOPTS",
+            "CDPATH",
+            "GLOBIGNORE",
+            "IFS",
+            "POSIXLY_CORRECT",
+            "BASH_COMPAT",
+            "LIBPATH",
+            "SHLIB_PATH",
+        };
+        var familyNames = new[]
+        {
+            "BASH_FUNC_tool%%",
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+        };
+        var environment = exactNames
+            .Concat(familyNames)
+            .ToDictionary(static name => name, static _ => (string?)"blocked");
+        environment["ORDINARY_VALUE"] = "preserved";
+
+        ShellExecutionEnvironment.RemoveBashStartupOverrides(environment);
+
+        Assert.All(exactNames, name => Assert.DoesNotContain(name, environment.Keys));
+        Assert.All(familyNames, name => Assert.DoesNotContain(name, environment.Keys));
+        Assert.Equal("preserved", environment["ORDINARY_VALUE"]);
+    }
+
+    [Fact]
+    public void Assignment_prompts_never_emit_a_legacy_reusable_option_key()
+    {
+        var profileType = typeof(ToolAccessPolicy).GetNestedType(
+            "ApprovalOptionProfile",
+            BindingFlags.NonPublic)!;
+        var profile = Enum.Parse(profileType, "StandardWithDirectory");
+        var method = typeof(ToolAccessPolicy).GetMethod(
+            "BuildApprovalOptions",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        var qualified = Assert.IsAssignableFrom<IReadOnlyList<ToolApprovalOption>>(
+            method.Invoke(null, [profile, true, true]));
+        var unqualified = Assert.IsAssignableFrom<IReadOnlyList<ToolApprovalOption>>(
+            method.Invoke(null, [profile, true, false]));
+
+        Assert.True(ToolAccessPolicy.HasAssignmentDigest(
+            [Candidate(FirstDigest)]));
+        Assert.True(ToolAccessPolicy.HasAssignmentDigest(
+            [
+                Candidate(null),
+                Candidate(FirstDigest),
+            ]));
+        Assert.False(ToolAccessPolicy.HasAssignmentDigest(
+            [Candidate(null)]));
+        Assert.All(
+            new[]
+            {
+                ApprovalOptionKeys.ApproveAssignmentSessionV1,
+                ApprovalOptionKeys.ApproveAssignmentAlwaysV1,
+                ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
+                ApprovalOptionKeys.ApproveAssignmentEverywhereV1,
+            },
+            optionKey => Assert.False(ConsentAnswerCodec.IsOffered(
+                [],
+                optionKey,
+                "/work/repository/.git")));
+
+        foreach (var (assignmentKey, legacyKey) in new[]
+                 {
+                     (ApprovalOptionKeys.ApproveAssignmentSessionV1, ApprovalOptionKeys.ApproveSession),
+                     (ApprovalOptionKeys.ApproveAssignmentAlwaysV1, ApprovalOptionKeys.ApproveAlways),
+                     (ApprovalOptionKeys.ApproveAssignmentEverywhereV1, ApprovalOptionKeys.ApproveEverywhere),
+                 })
+        {
+            Assert.True(ConsentAnswerCodec.IsOffered(
+                [assignmentKey],
+                assignmentKey,
+                repositoryCommonDirectory: null));
+            Assert.False(ConsentAnswerCodec.IsOffered(
+                [legacyKey],
+                assignmentKey,
+                repositoryCommonDirectory: null));
+            Assert.False(ConsentAnswerCodec.IsOffered(
+                [assignmentKey],
+                legacyKey,
+                repositoryCommonDirectory: null));
+        }
+
+        Assert.False(ConsentAnswerCodec.IsOffered(
+            [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
+            ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
+            repositoryCommonDirectory: null));
+        Assert.True(ConsentAnswerCodec.IsOffered(
+            [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
+            ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
+            "/work/repository/.git"));
+        Assert.False(ConsentAnswerCodec.IsOffered(
+            [ApprovalOptionKeys.ApproveRepository],
+            ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
+            "/work/repository/.git"));
+        Assert.False(ConsentAnswerCodec.IsOffered(
+            [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
+            ApprovalOptionKeys.ApproveRepository,
+            "/work/repository/.git"));
+        Assert.False(ConsentAnswerCodec.IsOffered(
+            [ApprovalOptionKeys.ApproveRepository],
+            ApprovalOptionKeys.ApproveRepository,
+            repositoryCommonDirectory: null));
+        Assert.True(ConsentAnswerCodec.IsOffered(
+            [ApprovalOptionKeys.ApproveRepository],
+            ApprovalOptionKeys.ApproveRepository,
+            "/work/repository/.git"));
+        Assert.False(ConsentAnswerCodec.IsOffered(
+            [],
+            ApprovalOptionKeys.ApproveRepository,
+            "/work/repository/.git"));
+        Assert.True(ConsentAnswerCodec.IsOffered(
+            [],
+            ApprovalOptionKeys.ApproveAlways,
+            repositoryCommonDirectory: null));
+
+        Assert.Equal(
+            [
+                ApprovalOptionKeys.ApproveOnce,
+                ApprovalOptionKeys.ApproveAssignmentSessionV1,
+                ApprovalOptionKeys.ApproveAssignmentAlwaysV1,
+                ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
+                ApprovalOptionKeys.ApproveAssignmentEverywhereV1,
+                ApprovalOptionKeys.Deny,
+            ],
+            qualified.Select(static option => option.Key.Value));
+        Assert.Equal(
+            [
+                ApprovalOptionKeys.ApproveOnce,
+                ApprovalOptionKeys.ApproveSession,
+                ApprovalOptionKeys.ApproveAlways,
+                ApprovalOptionKeys.ApproveRepository,
+                ApprovalOptionKeys.ApproveEverywhere,
+                ApprovalOptionKeys.Deny,
+            ],
+            unqualified.Select(static option => option.Key.Value));
+    }
+
+    private static ApprovalCandidate Candidate(ApprovalAssignmentDigest? digest)
+        => new("inspect", "/work")
+        {
+            AssignmentDigest = digest,
+            Shell = ApprovalShell.Bash,
+            VerbTokens = ["inspect"],
+        };
+
+    private static ApprovalEntry Entry(ApprovalAssignmentDigest? assignmentDigest)
+        => ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.Bash,
+            ["inspect"],
+            directory: "/work",
+            assignmentDigest: assignmentDigest);
+
+    private static Dictionary<string, object?> Arguments(string command) => new()
+    {
+        ["Command"] = command,
+        ["WorkingDirectory"] = "/work",
+    };
+
+    private static void AssertBounded(ShellExecutionEnvironment environment)
+    {
+        var parsed = environment.Parse("mode='fast'; inspect item", "/work");
+
+        Assert.False(parsed.IsUnparseable, parsed.UnparseableReason);
+        Assert.Single(Assert.Single(parsed.Commands).Assignments);
+    }
+
+    private static void AssertUnknown(ShellExecutionEnvironment environment)
+    {
+        var parsed = environment.Parse("mode='fast'; inspect item", "/work");
+
+        Assert.True(parsed.IsUnparseable);
+        Assert.Empty(parsed.Commands);
+    }
+
+    private static ShellExecutionEnvironment CreateBashEnvironment(
+        string executable,
+        ImmutableArray<string> arguments,
+        Version version)
+    {
+        var constructor = Assert.Single(typeof(ShellExecutionEnvironment)
+            .GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
+        return Assert.IsType<ShellExecutionEnvironment>(constructor.Invoke(
+        [
+            ShellPlatform.Linux,
+            executable,
+            ShellGrammar.Bash,
+            ShellPathStyle.Posix,
+            arguments,
+            version,
+            null,
+            ImmutableDictionary<string, string>.Empty,
+        ]));
+    }
+}

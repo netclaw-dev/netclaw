@@ -78,6 +78,22 @@ public sealed class SecretOutputRedactorTests
         Assert.Equal("Authorization: Bearer ***REDACTED***", redacted);
     }
 
+    // ── Credential-bearing URLs ──
+
+    [Theory]
+    [InlineData("https://hooks.slack.com/services/T000TEST/B000TEST/fakeWebhookToken")]
+    [InlineData("""{"Url": "https://hooks.slack.com/services/T000TEST/B000TEST/fakeWebhookToken"}""")]
+    [InlineData("Sending request to https://hooks.slack.com/services/T000TEST/B000TEST/fakeWebhookToken")]
+    public void Redact_masks_slack_webhook_credentials(string input)
+    {
+        var redacted = SecretOutputRedactor.Redact(input);
+
+        Assert.Contains("https://hooks.slack.com/services/***REDACTED***", redacted, StringComparison.Ordinal);
+        Assert.DoesNotContain("T000TEST", redacted, StringComparison.Ordinal);
+        Assert.DoesNotContain("B000TEST", redacted, StringComparison.Ordinal);
+        Assert.DoesNotContain("fakeWebhookToken", redacted, StringComparison.Ordinal);
+    }
+
     // ── Connection string redaction ──
 
     [Theory]
@@ -177,5 +193,18 @@ public sealed class SecretOutputRedactorTests
         var redacted = SecretOutputRedactor.RedactForLogging(exception);
 
         Assert.Same(exception, redacted);
+    }
+
+    [Fact]
+    public void RedactForLogging_masks_slack_webhook_credentials()
+    {
+        const string url = "https://hooks.slack.com/services/T000TEST/B000TEST/fakeWebhookToken";
+        var exception = new HttpRequestException($"Delivery to {url} failed.");
+
+        var redacted = SecretOutputRedactor.RedactForLogging(exception);
+
+        Assert.DoesNotContain("T000TEST", redacted.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("B000TEST", redacted.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("fakeWebhookToken", redacted.ToString(), StringComparison.Ordinal);
     }
 }

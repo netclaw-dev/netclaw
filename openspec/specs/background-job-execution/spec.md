@@ -343,8 +343,9 @@ operation SHALL be idempotent.
 ### Requirement: check_background_job tool
 
 The system SHALL provide a `check_background_job` tool only when shell
-execution is available. The tool SHALL use the `shell` grant category and SHALL
-accept a `JobId` parameter and an optional `Cancel` boolean parameter. When
+execution is available. Its admission SHALL follow `shell_execute`: the
+Personal audience and a host shell mode (`tool-authorization` TA-4). Its
+`shell` grant category is metadata only. The tool SHALL accept a `JobId` parameter and an optional `Cancel` boolean parameter. When
 `Cancel` is false or absent, the tool SHALL return job status (running,
 completed, failed, cancelled, timed_out), output tail (last N characters if
 still running, full truncated result if complete), and the output file path.
