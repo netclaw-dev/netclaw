@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using R3;
@@ -93,6 +95,52 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
     public const string IdentityRoute = "/init/identity";
     public const string WizardRoute = "/init";
     public const string MenuRoute = "/init/menu";
+
+    /// <summary>
+    /// Picks where <c>netclaw init</c> starts. Any <c>netclaw.json</c> opens the existing-install
+    /// menu, except the seed the installers write for <c>--channel</c>, which is the first-run wizard.
+    /// An unreadable file still opens the menu, so a damaged config is never written over.
+    /// </summary>
+    public static string ResolveStartRoute(NetclawPaths paths)
+    {
+        if (!File.Exists(paths.NetclawConfigPath))
+            return WizardRoute;
+
+        try
+        {
+            return JsonNode.Parse(File.ReadAllText(paths.NetclawConfigPath)) is JsonObject config && IsInstallerSeed(config)
+                ? WizardRoute
+                : MenuRoute;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return MenuRoute;
+        }
+    }
+
+    /// <summary>
+    /// True when the config holds only <c>configVersion</c> and/or <c>Daemon.UpdateChannel</c>, the
+    /// shape <c>install.sh</c> and <c>install.ps1</c> write. An empty object is not a seed.
+    /// </summary>
+    internal static bool IsInstallerSeed(JsonObject config)
+    {
+        if (config.Count == 0)
+            return false;
+
+        foreach (var (key, value) in config)
+        {
+            if (string.Equals(key, "configVersion", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var onlyUpdateChannel = string.Equals(key, "Daemon", StringComparison.OrdinalIgnoreCase)
+                && value is JsonObject daemon
+                && daemon.All(static p => string.Equals(p.Key, "UpdateChannel", StringComparison.OrdinalIgnoreCase));
+            if (!onlyUpdateChannel)
+                return false;
+        }
+
+        return true;
+    }
 
     public ReactiveProperty<Phase> CurrentPhase { get; } = new(Phase.Menu);
     public ReactiveProperty<int> SelectedIndex { get; } = new(0);
