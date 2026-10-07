@@ -41,7 +41,6 @@ using Netclaw.Providers.OAuth;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Security;
 using Termina;
-using Termina.Diagnostics;
 using Termina.Hosting;
 
 try
@@ -176,11 +175,6 @@ static async Task RunAsync(string[] args)
 
         if (mode is "init")
         {
-            // Enable Termina trace logging for debugging TUI input/rendering issues
-            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-init-trace.log");
-            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
-            Console.Error.WriteLine($"Trace log: {traceFile}");
-
             // Provider descriptors (includes IProviderProbe via registry)
             builder.Services.AddProviderDescriptors();
             builder.Services.AddProviderOAuthServices();
@@ -756,9 +750,6 @@ static async Task RunAsync(string[] args)
             builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
             builder.Services.AddSingleton<TuiNavigation>();
 
-            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-mcp-tools-trace.log");
-            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
-
             builder.Services.AddTermina("/mcp-tools", t =>
             {
                 ConfigureNativeSelection(t);
@@ -803,9 +794,6 @@ static async Task RunAsync(string[] args)
             builder.Services.AddProviderDescriptors();
             builder.Services.AddProviderOAuthServices();
 
-            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-provider-trace.log");
-            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
-
             builder.Services.AddTermina("/provider", t =>
             {
                 ConfigureNativeSelection(t);
@@ -832,9 +820,6 @@ static async Task RunAsync(string[] args)
         {
             var builder = CreateQuietHostBuilder(args);
             builder.Services.AddProviderDescriptors();
-
-            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-model-trace.log");
-            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/model", t =>
             {
@@ -863,9 +848,6 @@ static async Task RunAsync(string[] args)
             var builder = CreateQuietHostBuilder(args);
             builder.Services.AddSingleton(paths);
 
-            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-approvals-trace.log");
-            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
-
             builder.Services.AddTermina("/approvals", t =>
             {
                 ConfigureNativeSelection(t);
@@ -887,9 +869,6 @@ static async Task RunAsync(string[] args)
         if (args.Length > 1 && args[1] is "ui" or "tui")
         {
             var builder = CreateQuietHostBuilder(args);
-
-            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-reminder-trace.log");
-            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/reminder", t =>
             {
@@ -1308,9 +1287,6 @@ static async Task RunConfigEditorAsync(string[] args)
         .AddSectionEditor<SecurityPostureStepViewModel>()
         .AddSectionEditor<FeatureSelectionStepViewModel>()
         .AddSectionEditor<ExposureModeStepViewModel>();
-
-    var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-config-trace.log");
-    builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
     builder.Services.AddTermina("/config", t =>
     {
