@@ -31,6 +31,7 @@ public sealed class ConfigDashboardViewModelTests
             "Telemetry & Alerting",
             "Security & Access",
             "Workspaces Directory",
+            "Data Retention",
             "Run Full Doctor",
             "Quit",
         ], labels);
@@ -90,6 +91,7 @@ public sealed class ConfigDashboardViewModelTests
     [InlineData("Browser Automation", "/browser-automation")]
     [InlineData("Telemetry & Alerting", "/telemetry-alerting")]
     [InlineData("Workspaces Directory", "/workspaces")]
+    [InlineData("Data Retention", "/retention")]
     public void Task1_config_areas_route_to_dedicated_pages(string label, string expectedRoute)
     {
         using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState());
@@ -173,6 +175,7 @@ public sealed class ConfigDashboardViewModelTests
         // Features default to enabled when absent, so a bare config reports 6/6.
         Assert.Equal("Public · 6/6 enabled", Summary(vm, "Security & Access"));
         Assert.Equal(paths.WorkspacesDirectory, Summary(vm, "Workspaces Directory"));
+        Assert.Equal("logs 14d", Summary(vm, "Data Retention"));
     }
 
     [Fact]

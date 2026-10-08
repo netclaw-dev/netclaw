@@ -79,6 +79,7 @@ public sealed class ConfigDashboardViewModel : ReactiveViewModel
         new("Telemetry & Alerting", "Telemetry and outbound webhook alerting.", "/telemetry-alerting"),
         new("Security & Access", "Posture, enabled features, audience profiles, and exposure mode.", "/security"),
         new("Workspaces Directory", "Project discovery root for workspace-aware prompts.", "/workspaces"),
+        new("Data Retention", "How long the daemon keeps logs and other data.", "/retention"),
         new("Run Full Doctor", "Exit the dashboard and run `netclaw doctor`.", IsTerminal: true),
         new("Quit", "Exit without changing settings.", IsTerminal: true),
     ];
@@ -198,6 +199,7 @@ internal sealed class ConfigDashboardStatusReader
             "Telemetry & Alerting" => TelemetrySummary(config),
             "Security & Access" => SecuritySummary(config),
             "Workspaces Directory" => WorkspacesSummary(config),
+            "Data Retention" => RetentionSummary(),
             _ => string.Empty
         };
     }
@@ -319,6 +321,20 @@ internal sealed class ConfigDashboardStatusReader
             && value is string dir && !string.IsNullOrWhiteSpace(dir)
                 ? dir
                 : _paths.WorkspacesDirectory;
+
+    private string RetentionSummary()
+    {
+        try
+        {
+            return string.Join(" · ", RetentionSettings.All.Select(setting =>
+                $"{setting.Id} {RetentionConfigStore.Short(RetentionConfigStore.Read(_paths, setting).Days)}"));
+        }
+        catch (InvalidDataException)
+        {
+            // The dashboard render must not throw on a malformed netclaw.json.
+            return "– config error";
+        }
+    }
 
     private static bool BoolAt(Dictionary<string, object> config, string path)
         => ConfigFileHelper.TryGetPathValue(config, path, out var value) && value is bool flag && flag;

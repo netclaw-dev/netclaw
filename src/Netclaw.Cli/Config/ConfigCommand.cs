@@ -19,6 +19,9 @@ internal static class ConfigCommand
         if (args.Length > 1 && CliArgsParser.IsHelpToken(args[1]))
             return WriteHelp(writer);
 
+        if (args.Length > 1 && args[1] == "retention")
+            return RetentionCommand.Run(args[2..], paths, writer, errorWriter);
+
         if (args.Length > 1)
         {
             writer.WriteLine("Usage: netclaw config");
@@ -38,9 +41,13 @@ internal static class ConfigCommand
     private static int WriteHelp(TextWriter writer)
     {
         writer.WriteLine("Usage: netclaw config");
+        writer.WriteLine("       netclaw config retention [--logs-days <days>]");
         writer.WriteLine();
         writer.WriteLine("Launch the main post-install settings dashboard.");
         writer.WriteLine("Use `netclaw init` for bootstrap setup on a new install.");
+        writer.WriteLine();
+        writer.WriteLine("Subcommands:");
+        writer.WriteLine("  retention   Show or set how long the daemon keeps data (`netclaw config retention --help`).");
         return 0;
     }
 }

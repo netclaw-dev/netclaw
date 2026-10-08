@@ -6,7 +6,7 @@
 using System.Globalization;
 using Microsoft.Extensions.Configuration;
 
-namespace Netclaw.Daemon.Configuration;
+namespace Netclaw.Configuration;
 
 /// <summary>
 /// The rules every <c>Retention:*:Days</c> setting shares: how the value is read and how a
@@ -16,6 +16,27 @@ namespace Netclaw.Daemon.Configuration;
 /// </summary>
 internal static class RetentionPolicy
 {
+    /// <summary>The longest setting <see cref="TryParseDays"/> accepts; the JSON schema has the same maximum.</summary>
+    public const int MaxDays = 36500;
+
+    /// <summary>
+    /// Checks a number of days typed by a person (the config editor and the command line). The
+    /// daemon is more lenient on purpose, because it must still start with a hand-edited value;
+    /// see <see cref="ResolveDays"/>.
+    /// </summary>
+    public static bool TryParseDays(string? text, out int days, out string error)
+    {
+        error = $"Days must be a whole number from 0 to {MaxDays} (0 keeps the data forever).";
+        if (int.TryParse(text?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out days) && days is >= 0 and <= MaxDays)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        days = 0;
+        return false;
+    }
+
     /// <summary>
     /// Reads <paramref name="key"/> as a number of days. Returns <paramref name="defaultDays"/>
     /// when the key is missing or blank, and also, with a <paramref name="warning"/> for the caller

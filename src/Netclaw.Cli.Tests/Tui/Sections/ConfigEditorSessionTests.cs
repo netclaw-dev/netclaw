@@ -74,6 +74,24 @@ public sealed class ConfigEditorSessionTests : IDisposable
         }
     }
 
+    // Only "cannot write here" errors replace the link. A full disk (ENOSPC, 28) is a save error:
+    // replacing the link would detach it from the file it points at.
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(false, 30)]  // EROFS, a read-only file system
+    [InlineData(false, 28)]  // ENOSPC, no space left
+    [InlineData(false, 5)]   // EIO
+    [InlineData(false, 0)]
+    public void Only_permission_and_read_only_errors_replace_a_symbolic_link(bool unauthorized, int errno)
+    {
+        if (OperatingSystem.IsWindows())
+            return; // errno values are POSIX
+
+        Exception ex = unauthorized ? new UnauthorizedAccessException() : new IOException("write failed", errno);
+
+        Assert.Equal(unauthorized || errno == 30, ConfigFileHelper.CanReplaceLink(ex));
+    }
+
     [Fact]
     public void Save_writes_into_the_key_spelling_the_file_already_has()
     {

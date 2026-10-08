@@ -216,7 +216,7 @@ internal static class ConfigFileHelper
     /// Serialize a config dictionary and write it to disk, creating parent directories if needed.
     /// The file keeps its mode (an owner-only netclaw.json stays owner-only), and a symbolic link is
     /// followed so the file it points at is rewritten and the link stays a link. When the link's
-    /// target cannot be written, the link itself is replaced.
+    /// target is read-only or not permitted, the link itself is replaced; any other write error is thrown.
     /// </summary>
     internal static void WriteConfigFile(string path, Dictionary<string, object> data)
     {
@@ -228,13 +228,25 @@ internal static class ConfigFileHelper
         {
             WriteKeepingMode(target, data, json);
         }
-        catch (Exception ex) when (target != path && ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (target != path && CanReplaceLink(ex))
         {
             // The link's target directory cannot take a new file (read-only, or another owner).
-            // Replace the link itself, as saves did before links were followed.
+            // Replace the link itself, as saves did before links were followed. Any other write
+            // failure, such as a full disk, is a save error: replacing the link would detach it.
             WriteKeepingMode(path, data, json);
         }
     }
+
+    // .NET on Unix puts the errno in IOException.HResult. EROFS is 30 on Linux and macOS.
+    private const int ReadOnlyFileSystemErrno = 30;
+
+    /// <summary>
+    /// True for the write errors that mean the link's target cannot take the file: permission
+    /// denied, or a read-only file system.
+    /// </summary>
+    internal static bool CanReplaceLink(Exception ex)
+        => ex is UnauthorizedAccessException
+           || (ex is IOException { HResult: ReadOnlyFileSystemErrno } && !OperatingSystem.IsWindows());
 
     private static void WriteKeepingMode(string path, Dictionary<string, object> data, string json)
     {

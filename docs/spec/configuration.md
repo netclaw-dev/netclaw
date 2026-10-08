@@ -470,7 +470,9 @@ are not size-rotated today (tracked separately).
 
 A daemon actor (`DataRetentionActor`) deletes expired data shortly after the daemon starts and then every
 12 hours. Each kind of data is one retention job with its own `Days` setting; a value is read once, at
-daemon start.
+daemon start. A change to `netclaw.json` restarts the daemon in process, so a running daemon uses the new
+value without a manual restart. Set a value in the `netclaw config` dashboard (Data Retention) or with
+`netclaw config retention --logs-days <days>`.
 
 ```json
 {

@@ -33,9 +33,13 @@ Guided setup sequence:
 
 - `netclaw config show [--format text|json]`
 - `netclaw config validate [--strict]`
+- `netclaw config retention [--logs-days <days>]`
 
 Behavior:
 
+- `netclaw config retention` shows how long the daemon keeps data. Each option sets one
+  `Retention:*:Days` key in `netclaw.json` and rejects a value that is not a whole number
+  of days from 0 to 36500 with exit code 1. Zero keeps the data forever.
 - structured validation with property path and remediation hints
 - non-zero exit code on validation failure
 

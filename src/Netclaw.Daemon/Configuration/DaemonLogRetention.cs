@@ -20,11 +20,6 @@ namespace Netclaw.Daemon.Configuration;
 /// </summary>
 internal static class DaemonLogRetention
 {
-    public const string ConfigKey = "Retention:Logs:Days";
-
-    /// <summary>Default for <see cref="ConfigKey"/>.</summary>
-    public const int DefaultRetentionDays = 14;
-
     /// <summary>
     /// The newest daemon logs and the newest crash logs are always kept, so a wrong clock cannot
     /// wipe the whole history.
@@ -44,7 +39,8 @@ internal static class DaemonLogRetention
     /// <summary>The retention job for the daemon and crash logs in <paramref name="paths"/>.</summary>
     public static RetentionJob CreateJob(IConfiguration configuration, NetclawPaths paths, out string? warning)
     {
-        var days = RetentionPolicy.ResolveDays(configuration, ConfigKey, DefaultRetentionDays, out warning);
+        var setting = RetentionSettings.Logs;
+        var days = RetentionPolicy.ResolveDays(configuration, setting.ConfigKey, setting.DefaultDays, out warning);
         return new RetentionJob(
             "daemon and crash log",
             days,

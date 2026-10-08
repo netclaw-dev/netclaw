@@ -1000,7 +1000,8 @@ static async Task RunAsync(string[] args)
         configPaths.EnsureDirectoriesExist();
 
         var configExitCode = ConfigCommand.Run(args, configPaths);
-        if (configExitCode != 0 || (args.Length > 1 && IsHelpToken(args[1])))
+        // Any argument after `config` is a help request or a subcommand that ConfigCommand has run.
+        if (configExitCode != 0 || args.Length > 1)
         {
             Environment.ExitCode = configExitCode;
             return;
@@ -1306,6 +1307,7 @@ static async Task RunConfigEditorAsync(string[] args)
         t.RegisterRoute<BrowserAutomationConfigPage, BrowserAutomationConfigViewModel>("/browser-automation");
         t.RegisterRoute<TelemetryAlertingConfigPage, TelemetryAlertingConfigViewModel>("/telemetry-alerting");
         t.RegisterRoute<WorkspacesConfigPage, WorkspacesConfigViewModel>("/workspaces");
+        t.RegisterRoute<RetentionConfigPage, RetentionConfigViewModel>("/retention");
         t.RegisterRoute<SecurityAccessPage, SecurityAccessViewModel>("/security");
         t.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>("/exposure-mode");
         t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools");
