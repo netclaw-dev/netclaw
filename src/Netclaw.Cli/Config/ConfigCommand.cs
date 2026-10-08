@@ -11,6 +11,17 @@ internal static class ConfigCommand
 {
     internal const string MissingConfigMessage = "No configuration found. Run `netclaw init` first.";
 
+    /// <summary>
+    /// Runs <c>netclaw config</c> with arguments. Returns false when the caller must open the
+    /// dashboard: no argument was given and the install has a config. Any argument is a help
+    /// request or a subcommand that this call has already run.
+    /// </summary>
+    public static bool Handle(string[] args, NetclawPaths paths, out int exitCode, TextWriter? output = null, TextWriter? error = null)
+    {
+        exitCode = Run(args, paths, output, error);
+        return exitCode != 0 || args.Length > 1;
+    }
+
     public static int Run(string[] args, NetclawPaths paths, TextWriter? output = null, TextWriter? error = null)
     {
         var writer = output ?? Console.Out;

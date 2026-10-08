@@ -79,6 +79,7 @@ public sealed class ConfigEditorSessionTests : IDisposable
     [Theory]
     [InlineData(true, 0)]
     [InlineData(false, 30)]  // EROFS, a read-only file system
+    [InlineData(false, 16)]  // EBUSY, a single file mounted into a container
     [InlineData(false, 28)]  // ENOSPC, no space left
     [InlineData(false, 5)]   // EIO
     [InlineData(false, 0)]
@@ -89,7 +90,7 @@ public sealed class ConfigEditorSessionTests : IDisposable
 
         Exception ex = unauthorized ? new UnauthorizedAccessException() : new IOException("write failed", errno);
 
-        Assert.Equal(unauthorized || errno == 30, ConfigFileHelper.CanReplaceLink(ex));
+        Assert.Equal(unauthorized || errno is 30 or 16, ConfigFileHelper.CanReplaceLink(ex));
     }
 
     [Fact]

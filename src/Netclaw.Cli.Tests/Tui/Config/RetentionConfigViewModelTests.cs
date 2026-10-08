@@ -14,6 +14,7 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Config;
 
+[Collection(Netclaw.Cli.Tests.RetentionEnvironmentCollection.Name)]
 public sealed class RetentionConfigViewModelTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
@@ -192,5 +193,144 @@ public sealed class RetentionConfigViewModelTests : IDisposable
 
         File.WriteAllText(_paths.NetclawConfigPath, """{ "configVersion": 1, "Retention": { "Logs": { "Days": 0 } } }""");
         Assert.Equal("logs forever", vm.StatusFor(item));
+    }
+
+    [Fact]
+    public void Saving_a_value_that_is_already_stored_does_not_rewrite_the_file()
+    {
+        // Compact JSON: a rewrite would re-indent it, and the daemon would restart for nothing.
+        const string compact = """{"configVersion":1,"Retention":{"Logs":{"Days":30}}}""";
+        File.WriteAllText(_paths.NetclawConfigPath, compact);
+        using var vm = new RetentionConfigViewModel(_paths);
+        vm.AppendText("30");
+
+        Assert.True(vm.Save());
+
+        Assert.Equal(compact, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal("Data retention is unchanged.", vm.Status.Value.Text);
+    }
+
+    [Fact]
+    public void After_a_save_the_next_key_starts_a_new_number()
+    {
+        using var vm = new RetentionConfigViewModel(_paths);
+        vm.AppendText("3");
+        Assert.True(vm.Save());
+
+        vm.AppendText("5");
+
+        Assert.Equal("5", vm.Rows[0].Draft.Value);
+    }
+
+    [Fact]
+    public void After_a_rejected_entry_the_next_key_replaces_the_bad_text()
+    {
+        using var vm = new RetentionConfigViewModel(_paths);
+        vm.AppendText("-7");
+        Assert.False(vm.Save());
+
+        vm.AppendText("4");
+        vm.AppendText("5");
+
+        Assert.Equal("45", vm.Rows[0].Draft.Value);
+    }
+
+    [Theory]
+    [InlineData("30.0")]
+    [InlineData("\"abc\"")]
+    [InlineData("true")]
+    [InlineData("99999999999")]
+    public void A_stored_value_that_is_not_an_integer_is_reported_and_any_valid_value_replaces_it(string stored)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, $$"""{ "configVersion": 1, "Retention": { "Logs": { "Days": {{stored}} } } }""");
+        using var vm = new RetentionConfigViewModel(_paths);
+
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("is not an integer; using the default of 14 days.", vm.Status.Value.Text, StringComparison.Ordinal);
+        Assert.Contains("stored value is not valid", vm.DisplayValue(vm.Rows[0]), StringComparison.Ordinal);
+
+        // The default is a valid value too: typing it must rewrite the bad text.
+        vm.AppendText("14");
+        Assert.True(vm.Save());
+
+        var after = RetentionConfigStore.Read(_paths, RetentionSettings.Logs);
+        Assert.Equal(new RetentionValue(14, true), after);
+    }
+
+    [Fact]
+    public void Backspace_on_a_stored_value_that_is_not_valid_clears_the_draft()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Retention": { "Logs": { "Days": "abc" } } }""");
+        using var vm = new RetentionConfigViewModel(_paths);
+
+        vm.Backspace();
+        vm.AppendText("5");
+
+        Assert.Equal("5", vm.Rows[0].Draft.Value);
+    }
+
+    [Fact]
+    public void A_flat_colon_key_is_updated_in_place()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Retention:Logs:Days": 5 }""");
+        using var vm = new RetentionConfigViewModel(_paths);
+        Assert.Equal("keep 5 days", vm.DisplayValue(vm.Rows[0]));
+        vm.AppendText("9");
+
+        Assert.True(vm.Save());
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var names = doc.RootElement.EnumerateObject().Select(static p => p.Name).Where(n => n.StartsWith("Retention", StringComparison.OrdinalIgnoreCase)).ToArray();
+        Assert.Equal(["Retention:Logs:Days"], names);
+        // The daemon loads this file with the configuration builder, which rejects a duplicate key.
+        var daemonView = new ConfigurationBuilder().AddJsonFile(_paths.NetclawConfigPath).Build();
+        Assert.Equal("9", daemonView["Retention:Logs:Days"]);
+    }
+
+    [Fact]
+    public void A_spelling_the_editor_cannot_edit_is_refused_without_writing()
+    {
+        const string halfFlat = """{ "Retention:Logs": { "Days": 5 } }""";
+        File.WriteAllText(_paths.NetclawConfigPath, halfFlat);
+        using var vm = new RetentionConfigViewModel(_paths);
+        vm.AppendText("9");
+
+        Assert.False(vm.Save());
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Contains("Edit netclaw.json by hand", vm.Status.Value.Text, StringComparison.Ordinal);
+        Assert.Equal(halfFlat, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public void An_environment_override_is_named_on_open_and_after_a_save()
+    {
+        const string name = "NETCLAW_Retention__Logs__Days";
+        Environment.SetEnvironmentVariable(name, "2");
+        try
+        {
+            using var vm = new RetentionConfigViewModel(_paths);
+            Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+            Assert.Equal($"{name} is set and overrides netclaw.json for the daemon.", vm.Status.Value.Text);
+
+            vm.AppendText("30");
+            Assert.True(vm.Save());
+            Assert.Contains($"{name} is set and overrides netclaw.json for the daemon.", vm.Status.Value.Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, null);
+        }
+    }
+
+    [Fact]
+    public void Dashboard_summary_reports_a_config_error_for_a_file_the_daemon_cannot_load()
+    {
+        // The dashboard reads the file with the JSON serializer first, which accepts a duplicate
+        // key; the configuration builder, which the daemon uses, rejects it.
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "configVersion": 1, "Retention": { "Logs": { "Days": 5, "Days": 6 } } }""");
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState(), _paths);
+
+        Assert.Equal("– config error", vm.StatusFor(vm.Items.Single(static i => i.Label == "Data Retention")));
     }
 }

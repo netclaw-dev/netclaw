@@ -57,7 +57,12 @@ internal static class RetentionCommand
             foreach (var setting in RetentionSettings.All)
             {
                 var value = RetentionConfigStore.Read(paths, setting);
-                output.WriteLine($"{setting.Label}: {RetentionConfigStore.Describe(value.Days)}{(value.IsSet ? string.Empty : " (default)")}");
+                output.WriteLine($"{setting.Label}: {RetentionConfigStore.Describe(value.Days)}{(value.IsSet && value.Warning is null ? string.Empty : " (default)")}");
+                foreach (var warning in new[] { value.Warning, RetentionConfigStore.EnvironmentOverrideWarning(setting) })
+                {
+                    if (warning is not null)
+                        error.WriteLine($"warning: {warning}");
+                }
             }
 
             if (written > 0)
@@ -65,7 +70,7 @@ internal static class RetentionCommand
 
             return 0;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or InvalidOperationException)
         {
             error.WriteLine($"Could not use netclaw.json: {ex.Message}");
             return 1;

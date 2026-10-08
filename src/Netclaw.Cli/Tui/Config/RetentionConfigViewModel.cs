@@ -19,7 +19,6 @@ internal sealed class RetentionRow(RetentionSetting setting, RetentionValue save
     public ReactiveProperty<string> Draft { get; } = new(saved.Days.ToString());
     /// <summary>True once a key press has started a new number, so later keys extend it.</summary>
     public bool Editing { get; set; }
-    public bool IsDirty => Draft.Value != Saved.Days.ToString();
 }
 
 /// <summary>
@@ -52,9 +51,11 @@ internal sealed class RetentionConfigViewModel : ReactiveViewModel
 
         Rows = rows;
         SelectedRow = new ReactiveProperty<int>(0);
-        Status = new ReactiveProperty<ConfigStatusMessage>(loadError is null
-            ? new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral)
-            : new ConfigStatusMessage(loadError, ConfigStatusTone.Error));
+        var warnings = string.Join(" ", rows.Select(static r => r.Saved.Warning).Concat(EnvironmentWarnings()).OfType<string>());
+        Status = new ReactiveProperty<ConfigStatusMessage>(
+            loadError is not null ? new ConfigStatusMessage(loadError, ConfigStatusTone.Error)
+            : warnings.Length > 0 ? new ConfigStatusMessage(warnings, ConfigStatusTone.Warning)
+            : new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
     }
 
     internal Action<string>? RouteRequested { get; set; }
@@ -67,8 +68,12 @@ internal sealed class RetentionConfigViewModel : ReactiveViewModel
     /// <summary>What the row reads as: the saved value, or the typed text with a note that it is not saved.</summary>
     public string DisplayValue(RetentionRow row)
     {
-        if (!row.IsDirty)
-            return RetentionConfigStore.Describe(row.Saved.Days) + (row.Saved.IsSet ? string.Empty : " (default)");
+        if (!row.Editing)
+        {
+            return row.Saved.Warning is not null
+                ? $"{RetentionConfigStore.Describe(row.Saved.Days)} (default; the stored value is not valid, Enter replaces it)"
+                : RetentionConfigStore.Describe(row.Saved.Days) + (row.Saved.IsSet ? string.Empty : " (default)");
+        }
 
         return RetentionPolicy.TryParseDays(row.Draft.Value, out var days, out _)
             ? $"{RetentionConfigStore.Describe(days)} (not saved)"
@@ -98,7 +103,9 @@ internal sealed class RetentionConfigViewModel : ReactiveViewModel
         if (row.Draft.Value.Length == 0)
             return;
 
-        row.Draft.Value = row.Draft.Value[..^1];
+        // The draft of a stored value that is not valid is the default, not the text in the file.
+        // Backspace clears it so the next keys start a new number.
+        row.Draft.Value = !row.Editing && row.Saved.Warning is not null ? string.Empty : row.Draft.Value[..^1];
         row.Editing = true;
         ClearStatus();
         RequestRedraw();
@@ -110,10 +117,12 @@ internal sealed class RetentionConfigViewModel : ReactiveViewModel
     private bool SaveCore()
     {
         var changes = new List<(RetentionSetting, int)>();
-        foreach (var row in Rows.Where(static r => r.IsDirty))
+        foreach (var row in Rows.Where(static r => r.Editing || r.Saved.Warning is not null))
         {
             if (!RetentionPolicy.TryParseDays(row.Draft.Value, out var days, out var problem))
             {
+                // The next key starts a new number instead of extending the rejected text.
+                row.Editing = false;
                 Status.Value = new ConfigStatusMessage($"{row.Setting.Label}: {problem}", ConfigStatusTone.Error);
                 RequestRedraw();
                 return false;
@@ -130,8 +139,11 @@ internal sealed class RetentionConfigViewModel : ReactiveViewModel
             row.Editing = false;
         }
 
+        var overrides = string.Join(" ", EnvironmentWarnings().OfType<string>());
         Status.Value = written > 0
-            ? new ConfigStatusMessage($"Data retention saved. {RetentionConfigStore.Applied}", ConfigStatusTone.Success)
+            ? new ConfigStatusMessage(
+                $"Data retention saved. {RetentionConfigStore.Applied}{(overrides.Length > 0 ? " " + overrides : string.Empty)}",
+                overrides.Length > 0 ? ConfigStatusTone.Warning : ConfigStatusTone.Success)
             : new ConfigStatusMessage("Data retention is unchanged.", ConfigStatusTone.Neutral);
         RequestRedraw();
         return true;
@@ -157,6 +169,9 @@ internal sealed class RetentionConfigViewModel : ReactiveViewModel
         Status.Dispose();
         base.Dispose();
     }
+
+    private static IEnumerable<string?> EnvironmentWarnings()
+        => RetentionSettings.All.Select(RetentionConfigStore.EnvironmentOverrideWarning);
 
     private void ClearStatus()
     {

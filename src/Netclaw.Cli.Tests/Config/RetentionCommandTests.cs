@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -10,6 +11,7 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Config;
 
+[Collection(Netclaw.Cli.Tests.RetentionEnvironmentCollection.Name)]
 public sealed class RetentionCommandTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
@@ -139,5 +141,103 @@ public sealed class RetentionCommandTests : IDisposable
         Assert.Equal(1, Run());
 
         Assert.StartsWith("Could not use netclaw.json:", _error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_retention_option_does_not_open_the_dashboard()
+    {
+        Assert.True(ConfigCommand.Handle(["config", "retention", "--logs-days", "5"], _paths, out var exitCode, _output, _error));
+        Assert.Equal(0, exitCode);
+    }
+
+    [Theory]
+    [InlineData("--help")]
+    [InlineData("retention")]
+    [InlineData("extra")]
+    public void Any_argument_is_handled_without_the_dashboard(string argument)
+    {
+        Assert.True(ConfigCommand.Handle(["config", argument], _paths, out _, _output, _error));
+    }
+
+    [Fact]
+    public void No_argument_opens_the_dashboard_when_there_is_a_config()
+    {
+        Assert.False(ConfigCommand.Handle(["config"], _paths, out var exitCode, _output, _error));
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void Setting_a_value_that_is_already_stored_does_not_rewrite_the_file()
+    {
+        const string compact = """{"configVersion":1,"Retention":{"Logs":{"Days":30}}}""";
+        File.WriteAllText(_paths.NetclawConfigPath, compact);
+
+        Assert.Equal(0, Run("--logs-days", "30"));
+
+        Assert.Equal(compact, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.DoesNotContain("applies the change", _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("30.0")]
+    [InlineData("\"abc\"")]
+    [InlineData("true")]
+    [InlineData("99999999999")]
+    public void A_stored_value_that_is_not_an_integer_is_reported_and_any_valid_value_replaces_it(string stored)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, $$"""{ "configVersion": 1, "Retention": { "Logs": { "Days": {{stored}} } } }""");
+
+        Assert.Equal(0, Run());
+
+        Assert.Equal("Daemon and crash logs: keep 14 days (default)" + Environment.NewLine, _output.ToString());
+        Assert.StartsWith("warning: Retention:Logs:Days value '", _error.ToString(), StringComparison.Ordinal);
+        Assert.EndsWith("' is not an integer; using the default of 14 days." + Environment.NewLine, _error.ToString(), StringComparison.Ordinal);
+
+        // The default is a valid value too: setting it must rewrite the bad text.
+        Assert.Equal(0, Run("--logs-days", "14"));
+        Assert.Equal(new RetentionValue(14, true), RetentionConfigStore.Read(_paths, RetentionSettings.Logs));
+    }
+
+    [Fact]
+    public void A_flat_colon_key_is_updated_in_place()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Retention:Logs:Days": 5 }""");
+
+        Assert.Equal(0, Run());
+        Assert.Contains("keep 5 days", _output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, Run("--logs-days", "9"));
+
+        var text = File.ReadAllText(_paths.NetclawConfigPath);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(text, "Days"));
+        Assert.Equal("9", new ConfigurationBuilder().AddJsonFile(_paths.NetclawConfigPath).Build()["Retention:Logs:Days"]);
+    }
+
+    [Fact]
+    public void A_spelling_the_command_cannot_edit_fails_without_writing()
+    {
+        const string halfFlat = """{ "Retention:Logs": { "Days": 5 } }""";
+        File.WriteAllText(_paths.NetclawConfigPath, halfFlat);
+
+        Assert.Equal(1, Run("--logs-days", "9"));
+
+        Assert.Equal("Could not use netclaw.json: Retention:Logs:Days is set in a spelling this command cannot edit. Edit netclaw.json by hand." + Environment.NewLine, _error.ToString());
+        Assert.Equal(halfFlat, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public void An_environment_override_is_named_in_a_warning()
+    {
+        const string name = "NETCLAW_Retention__Logs__Days";
+        Environment.SetEnvironmentVariable(name, "2");
+        try
+        {
+            Assert.Equal(0, Run("--logs-days", "30"));
+
+            Assert.Equal($"warning: {name} is set and overrides netclaw.json for the daemon." + Environment.NewLine, _error.ToString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, null);
+        }
     }
 }

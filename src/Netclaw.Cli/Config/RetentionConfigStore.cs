@@ -12,7 +12,8 @@ namespace Netclaw.Cli.Config;
 /// <summary>The stored value of one <see cref="RetentionSetting"/>.</summary>
 /// <param name="Days">The number of days that applies. Zero keeps the data forever.</param>
 /// <param name="IsSet">False when netclaw.json does not set the key and the default applies.</param>
-internal sealed record RetentionValue(int Days, bool IsSet);
+/// <param name="Warning">Set when the stored value is not an integer and the default applies instead.</param>
+internal sealed record RetentionValue(int Days, bool IsSet, string? Warning = null);
 
 /// <summary>
 /// Reads and writes the retention settings in netclaw.json for the <c>netclaw config</c> editor
@@ -29,8 +30,20 @@ internal static class RetentionConfigStore
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
             .Build();
-        var days = RetentionPolicy.ResolveDays(configuration, setting.ConfigKey, setting.DefaultDays, out _);
-        return new RetentionValue(days, !string.IsNullOrWhiteSpace(configuration[setting.ConfigKey]));
+        var days = RetentionPolicy.ResolveDays(configuration, setting.ConfigKey, setting.DefaultDays, out var warning);
+        return new RetentionValue(days, !string.IsNullOrWhiteSpace(configuration[setting.ConfigKey]), warning);
+    }
+
+    /// <summary>
+    /// The warning to show when an environment variable overrides the file, or null. The daemon
+    /// reads <c>NETCLAW_</c> variables after netclaw.json, so a change to the file has no effect.
+    /// </summary>
+    public static string? EnvironmentOverrideWarning(RetentionSetting setting)
+    {
+        var name = "NETCLAW_" + setting.ConfigKey.Replace(":", "__", StringComparison.Ordinal);
+        return string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name))
+            ? null
+            : $"{name} is set and overrides netclaw.json for the daemon.";
     }
 
     /// <summary>
@@ -40,13 +53,14 @@ internal static class RetentionConfigStore
     /// </summary>
     public static int Save(NetclawPaths paths, IEnumerable<(RetentionSetting Setting, int Days)> changes)
     {
+        var existing = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
         var actions = new List<SectionFieldAction>();
         foreach (var (setting, days) in changes)
         {
             var current = Read(paths, setting);
-            var unchanged = current.IsSet ? current.Days == days : days == setting.DefaultDays;
+            var unchanged = current.Warning is null && (current.IsSet ? current.Days == days : days == setting.DefaultDays);
             if (!unchanged)
-                actions.Add(new SectionFieldAction(setting.FilePath, SectionFieldActionKind.Set, days));
+                actions.Add(new SectionFieldAction(PathToWrite(existing, setting, current), SectionFieldActionKind.Set, days));
         }
 
         if (actions.Count == 0)
@@ -56,6 +70,25 @@ internal static class RetentionConfigStore
         session.Apply(new SectionContribution(actions));
         session.Save();
         return actions.Count;
+    }
+
+    // The daemon reads "Retention:Logs:Days" from a nested object or from a flat key with the
+    // colons. A write must go to the spelling the file has: a second spelling gives a duplicate
+    // key, and the daemon then stops at startup.
+    private static string PathToWrite(Dictionary<string, object> existing, RetentionSetting setting, RetentionValue current)
+    {
+        var nested = ConfigFileHelper.ResolveExistingKeyPath(existing, setting.FilePath);
+        if (ConfigFileHelper.TryGetPathValue(existing, nested, out _))
+            return nested;
+
+        var flat = existing.Keys.FirstOrDefault(key => string.Equals(key, setting.ConfigKey, StringComparison.OrdinalIgnoreCase));
+        if (flat is not null)
+            return flat;
+
+        if (current.IsSet)
+            throw new InvalidOperationException($"{setting.ConfigKey} is set in a spelling this command cannot edit. Edit netclaw.json by hand.");
+
+        return nested;
     }
 
     /// <summary>"keep 14 days", "keep 1 day", or "keep forever".</summary>

@@ -14,6 +14,7 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Config;
 
+[Collection(Netclaw.Cli.Tests.RetentionEnvironmentCollection.Name)]
 public sealed class RetentionConfigPageTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
@@ -70,6 +71,21 @@ public sealed class RetentionConfigPageTests : IDisposable
         await app.RunAsync(cts.Token);
 
         Assert.True(terminal.Contains("keep forever"), $"Screen:\n{terminal}");
+    }
+
+    [Fact]
+    public async Task Keys_that_are_not_digits_are_ignored()
+    {
+        var (terminal, app, _) = CreateHeadlessApp(out var input);
+        input.EnqueueString("3a-0");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(30, RetentionConfigStore.Read(_paths, RetentionSettings.Logs).Days);
+        Assert.False(terminal.Contains("not a valid number"), $"Screen:\n{terminal}");
     }
 
     private (VirtualTerminal Terminal, TerminaApplication App, RetentionConfigViewModel Vm)

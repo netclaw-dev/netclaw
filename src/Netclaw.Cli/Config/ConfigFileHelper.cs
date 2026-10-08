@@ -216,9 +216,16 @@ internal static class ConfigFileHelper
     /// Serialize a config dictionary and write it to disk, creating parent directories if needed.
     /// The file keeps its mode (an owner-only netclaw.json stays owner-only), and a symbolic link is
     /// followed so the file it points at is rewritten and the link stays a link. When the link's
-    /// target is read-only or not permitted, the link itself is replaced; any other write error is thrown.
+    /// target is not writable (permission denied, read-only, or busy), the link itself is replaced; any other write error is thrown.
     /// </summary>
     internal static void WriteConfigFile(string path, Dictionary<string, object> data)
+        => WriteConfigFile(path, data, AtomicFile.WriteAllText);
+
+    // The writer is a parameter so a test can make the write fail like a full disk.
+    internal static void WriteConfigFile(
+        string path,
+        Dictionary<string, object> data,
+        Action<string, string, Action<string>?> atomicWrite)
     {
         var info = new FileInfo(path);
         var target = info.LinkTarget is null ? path : info.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? path;
@@ -226,32 +233,34 @@ internal static class ConfigFileHelper
 
         try
         {
-            WriteKeepingMode(target, data, json);
+            WriteKeepingMode(target, data, json, atomicWrite);
         }
         catch (Exception ex) when (target != path && CanReplaceLink(ex))
         {
-            // The link's target directory cannot take a new file (read-only, or another owner).
-            // Replace the link itself, as saves did before links were followed. Any other write
-            // failure, such as a full disk, is a save error: replacing the link would detach it.
-            WriteKeepingMode(path, data, json);
+            // The link's target cannot take a new file: another owner, a read-only file system, or
+            // a single file mounted into a container (busy). Replace the link itself, as saves did
+            // before links were followed. Any other write failure, such as a full disk, is a save
+            // error: replacing the link would detach it.
+            WriteKeepingMode(path, data, json, atomicWrite);
         }
     }
 
-    // .NET on Unix puts the errno in IOException.HResult. EROFS is 30 on Linux and macOS.
+    // .NET on Unix puts the errno in IOException.HResult. These values are the same on Linux and macOS.
+    private const int BusyErrno = 16;
     private const int ReadOnlyFileSystemErrno = 30;
 
     /// <summary>
     /// True for the write errors that mean the link's target cannot take the file: permission
-    /// denied, or a read-only file system.
+    /// denied, a read-only file system, or a busy file (a single-file bind mount).
     /// </summary>
     internal static bool CanReplaceLink(Exception ex)
         => ex is UnauthorizedAccessException
-           || (ex is IOException { HResult: ReadOnlyFileSystemErrno } && !OperatingSystem.IsWindows());
+           || (ex is IOException { HResult: BusyErrno or ReadOnlyFileSystemErrno } && !OperatingSystem.IsWindows());
 
-    private static void WriteKeepingMode(string path, Dictionary<string, object> data, string json)
+    private static void WriteKeepingMode(string path, Dictionary<string, object> data, string json, Action<string, string, Action<string>?> atomicWrite)
     {
         PreserveLegacyModelsBackup(path, data);
-        AtomicFile.WriteAllText(path, json, temp => AtomicFile.CopyUnixMode(path, temp));
+        atomicWrite(path, json, temp => AtomicFile.CopyUnixMode(path, temp));
     }
 
     private static void PreserveLegacyModelsBackup(string path, Dictionary<string, object> data)

@@ -999,9 +999,7 @@ static async Task RunAsync(string[] args)
         var configPaths = new NetclawPaths();
         configPaths.EnsureDirectoriesExist();
 
-        var configExitCode = ConfigCommand.Run(args, configPaths);
-        // Any argument after `config` is a help request or a subcommand that ConfigCommand has run.
-        if (configExitCode != 0 || args.Length > 1)
+        if (ConfigCommand.Handle(args, configPaths, out var configExitCode))
         {
             Environment.ExitCode = configExitCode;
             return;
