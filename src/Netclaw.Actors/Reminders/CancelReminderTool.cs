@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Reminders;
 /// LLM tool for cancelling (disabling) a reminder by ID.
 /// </summary>
 [NetclawTool("cancel_reminder",
-    "Cancel a reminder (a scheduled or recurring job) by its ID — disables it and stops future executions. The reminder definition is preserved for diagnosis. Use list_reminders to find reminder IDs. To delete a reminder permanently, run the CLI command 'netclaw reminder delete <id>' with shell_execute.",
+    "Cancel a reminder (a scheduled or recurring job) by its ID — disables it and stops future executions. The reminder definition is preserved for diagnosis. Use list_reminders to find reminder IDs.",
     Grant = "scheduling")]
 public sealed partial class CancelReminderTool : NetclawTool<CancelReminderTool.Params>
 {
