@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.104.0"
+  version: "2.105.0"
 ---
 
 # Netclaw Operations
@@ -37,6 +37,33 @@ a reference file — load the one matching the user's intent with
 | Rotate or repair secrets | `skill_read_resource('netclaw-operations', 'references/secrets.md')` |
 | Pair remote devices, manage access | `skill_read_resource('netclaw-operations', 'references/devices.md')` |
 | Kick the tires on Netclaw end-to-end locally | `skill_read_resource('netclaw-operations', 'references/demo-apphost.md')` |
+
+## Built-in Tools Before the `netclaw` CLI
+
+A built-in tool needs no shell approval. A `netclaw` command through `shell_execute`
+needs one, and an unattended run cannot get it. Use the built-in tool when one does
+the operation. If the tool is not in your tool list, it is deferred: call
+`load_tool(name)`, then call the tool. Call `search_tools(query)` only when you do
+not know the name, and wait for its result before a shell call.
+
+| Operation | Built-in tool |
+|-----------|---------------|
+| Reminders: list, create or change, stop, read run history, test | `list_reminders`, `set_reminder`, `cancel_reminder`, `get_reminder_history`, `run_reminder` |
+| Inbound webhooks: list, create or change, delete | `list_webhooks`, `set_webhook`, `delete_webhook` |
+| Memories: search, read, save, change or delete | `find_memories`, `get_memories`, `store_memory`, `update_memory` |
+| Skills: load, read a bundled file, create or edit or delete | `skill_load`, `skill_read_resource`, `skill_manage` |
+| Read `netclaw.json`, the saved shell grants (`tool-approvals.json`), or a log | `file_read` |
+
+A `netclaw` command for an operation in this table, such as `netclaw reminder list`
+or `netclaw skill list`, is for a person at a terminal. Do not run it.
+
+Run a `netclaw` command through `shell_execute` only when no built-in tool does the
+operation. Common cases: `netclaw status`, `netclaw doctor`,
+`netclaw reminder show|status|enable|delete <id>`, `netclaw approvals trust-verb|revoke`
+(run `netclaw approvals list` first to get the exact label for a revoke),
+`netclaw secrets set`, `netclaw mcp ...`, `netclaw skill sync|validate|issues|source`,
+`netclaw sessions`, `netclaw stats`, `netclaw update`, and
+`netclaw memory backfill-embeddings`.
 
 ## File and Shell Selection
 
@@ -703,8 +730,10 @@ holds raw paths or arguments.
 
 ### Inspecting, revoking, and pre-approving grants
 
-Use the `netclaw approvals` CLI rather than hand-editing
-`tool-approvals.json`. The daemon reads the file on every approval check, so
+To read the saved grants, call `file_read` on `~/.netclaw/config/tool-approvals.json`.
+To change a grant, use the `netclaw approvals` CLI; you cannot write that file.
+A revoke needs the exact label that `netclaw approvals list` prints, so run `list`
+before a revoke. The daemon reads the file on every approval check, so
 mutations take effect on the next prompt without a daemon restart.
 
 You may read each file under `~/.netclaw/config/` with `file_read`, for example

@@ -371,6 +371,40 @@ substitute_identity_template() {
         "$template_file" > "$output_file"
 }
 
+# Writes one reminder definition file into the eval home. A case setup calls
+# this after daemon startup, so only the cases that need a reminder have one.
+# The reminder tools read the definition files for each call. The daemon gives
+# a schedule entry only to the files that exist at startup, so these reminders
+# cannot fire during a run.
+# Args: id, title, cron expression
+write_eval_reminder() {
+    local id="$1" title="$2" cron="$3"
+    local file="$EVAL_HOME/data/schedules/reminders/$id.json"
+    local now_ms=$(( $(date +%s) * 1000 ))
+    jq -n --arg id "$id" --arg title "$title" --arg cron "$cron" --argjson now "$now_ms" '
+        {
+            id: $id,
+            title: $title,
+            schedule: { type: "Cron", cronExpression: $cron, originalExpression: $cron },
+            instructions: "Reply with the single word ok.",
+            delivery: { kind: "None" },
+            deliveryRequired: false,
+            enabled: true,
+            consecutiveFailures: 0,
+            audience: "Personal",
+            boundary: "boundary:trusted-instance",
+            createdBy: "eval-fixture",
+            createdAtMs: $now,
+            updatedAtMs: $now
+        }' > "$file"
+    # The daemon runs as another user and rewrites the file on a cancel.
+    chmod ugo+rw "$file"
+}
+
+seed_disk_cleanup_reminder() {
+    write_eval_reminder "disk-cleanup-weekly" "Weekly disk space cleanup" "0 3 * * 0"
+}
+
 start_eval_daemon() {
     # Use identity templates from the repo source, not the host's ~/.netclaw/identity
     # — host files can be contaminated with user-specific names (e.g., "ArdyBot")
@@ -419,6 +453,15 @@ start_eval_daemon() {
         cp "$EVAL_ASSET_ROOT/evals/fixtures/mcp/prompt_server.py" \
             "$EVAL_HOME/data/evals/prompt_server.py"
         chmod ugo+x "$EVAL_HOME/data/evals/prompt_server.py"
+    fi
+
+    # A second MCP server gives the daemon a full tool catalog, as production has.
+    # A search for a built-in tool must still find it among these tools.
+    if [[ -f "$EVAL_ASSET_ROOT/evals/fixtures/mcp/catalog_server.py" ]]; then
+        mkdir -p "$EVAL_HOME/data/evals"
+        cp "$EVAL_ASSET_ROOT/evals/fixtures/mcp/catalog_server.py" \
+            "$EVAL_HOME/data/evals/catalog_server.py"
+        chmod ugo+x "$EVAL_HOME/data/evals/catalog_server.py"
     fi
 
     # An operator may supply an encrypted provider value from an existing
@@ -483,6 +526,9 @@ start_eval_daemon() {
     printf 'batch-second-marker\n' > "$selection_root/batch-second.txt"
     printf '\211PNG\r\n\032\n\000\000\000\rIHDR\000\000\000\003\000\000\000\002' \
         > "$selection_root/dimensions.png"
+
+    # The reminder cases write their definition files here after startup.
+    mkdir -p "$EVAL_HOME/data/schedules/reminders"
 
     # Seed the project-root fixture for the set_working_directory evals. The
     # natural prompt requires Git semantics, a project marker, and a build file.
@@ -1402,6 +1448,12 @@ assert_skill_activation_soft_memory() {
 }
 
 # A request to test a reminder loads run-reminder or calls run_reminder.
+# The prompt names this reminder, so the reminder must exist. Without it, a
+# correct agent lists the reminders, finds none, and has no reminder to test.
+setup_skill_activation_run_reminder() {
+    seed_disk_cleanup_reminder
+}
+
 assert_skill_activation_run_reminder() {
     { daemon_log_skill_loaded_via_skill_tool 'run-reminder' \
         || stdout_tool_called 'run_reminder'; } \
@@ -1578,13 +1630,17 @@ setup_tool_direct_attachment() {
 assert_tool_native_shell_recovery() {
     local shell_call_id native_call_id headless_log session_log
     stdout_json_envelope_valid || return 1
-    stdout_json_tool_call_sequence_matches '["shell_execute","list_reminders"]' || return 1
+    # The correction activates the native tool, so a load_tool call between the
+    # two calls is redundant. It is not an error: no shell process starts.
+    stdout_json_tool_call_sequence_matches '["shell_execute","list_reminders"]' \
+        || stdout_json_tool_call_sequence_matches '["shell_execute","load_tool","list_reminders"]' \
+        || return 1
     jq -e '
         ((.toolCalls[0].argumentsJson | fromjson).Command == "list_reminders")
     ' "$STDOUT_FILE" >/dev/null 2>&1 || return 1
 
     shell_call_id=$(jq -r '.toolCalls[0].callId' "$STDOUT_FILE")
-    native_call_id=$(jq -r '.toolCalls[1].callId' "$STDOUT_FILE")
+    native_call_id=$(jq -r '.toolCalls[-1].callId' "$STDOUT_FILE")
     headless_log=$(stdout_json_headless_log_path) || return 1
     session_log=$(stdout_json_session_actor_log_path) || return 1
     awk -v call_id="$shell_call_id" '
@@ -2650,6 +2706,206 @@ assert_approval_schedule_pre_approval() {
         stdout_contains 'freshdesk'
 }
 
+# ─── Built-in Tools Before CLI ───────────────────────────────────────────────
+#
+# Regression for a production session: the owner asked about a recurring job,
+# and the agent ran `netclaw reminder list` through shell_execute. That call
+# needs a shell approval. The built-in `list_reminders` tool needs none.
+#
+# Each case passes only on tool-call evidence: the built-in tool ran, and no
+# shell_execute call ran the `netclaw` CLI. Some prompts name a step on purpose:
+# two regression cases tell the agent to read the scheduling reference, and
+# the search case tells it to search. No prompt names the correct tool.
+# The two control cases need the CLI, because no built-in tool does the work.
+# The controls stop a fix that only teaches the agent to avoid the word
+# `netclaw`.
+
+# Prints the Command of each shell_execute call, one for each line.
+# The key match ignores case, because tool arguments tolerate spelling.
+stdout_json_shell_commands() {
+    jq -r '
+        .toolCalls[]?
+        | select(.toolName == "shell_execute")
+        | (try (.argumentsJson | fromjson) catch {})
+        | to_entries[]
+        | select((.key | ascii_downcase) == "command")
+        | .value
+        | tostring
+        | gsub("\n"; " ; ")
+    ' "$STDOUT_FILE" 2>/dev/null
+}
+
+# Matches `netclaw` in the command position: at the start, or after a list,
+# pipe, or substitution operator. It accepts a path before the name
+# (/usr/local/bin/netclaw), an assignment prefix (NO_COLOR=1 netclaw), and a
+# small set of wrapper words. A path such as ~/.netclaw/logs, a file such as
+# netclaw.json, and an operand such as `grep netclaw file` do not match.
+# Known limit: a call behind a wrapper with its own operands
+# (`timeout 30 netclaw ...`, `bash -c "netclaw ..."`) does not match.
+NETCLAW_CLI_COMMAND_POSITION='(^|[;&|(`])[[:space:]]*((sudo|exec|command|time|nohup|env|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*([^[:space:];&|()]*/)?netclaw'
+
+# True when a shell_execute call runs the `netclaw` CLI.
+stdout_json_shell_ran_netclaw_cli() {
+    stdout_json_shell_commands \
+        | grep -qaE "${NETCLAW_CLI_COMMAND_POSITION}([[:space:]]|\$)"
+}
+
+# True when a shell_execute call runs the `netclaw` CLI with these words.
+# Args: an extended regex for the words after `netclaw`.
+stdout_json_shell_ran_netclaw_cli_with() {
+    stdout_json_shell_commands \
+        | grep -qaE "${NETCLAW_CLI_COMMAND_POSITION}[[:space:]]+$1"
+}
+
+# Args: the built-in tool that the case requires.
+assert_builtin_tool_without_netclaw_cli() {
+    stdout_json_envelope_valid \
+        && stdout_json_tool_called "$1" \
+        && ! stdout_json_shell_ran_netclaw_cli
+}
+
+# True when the JSON envelope of any turn has a call that matches the filter.
+# A multi-turn case writes one envelope for each turn into STDOUT_FILE.
+# Args: a jq filter that tests one element of .toolCalls.
+stdout_json_any_turn_tool_call() {
+    jq -s -e "any(.[]; any(.toolCalls[]?; $1))" "$STDOUT_FILE" >/dev/null 2>&1
+}
+
+# The log of the session that the first envelope names.
+stdout_json_first_turn_headless_log_path() {
+    local session_id log_path
+    session_id=$(jq -s -r '.[0].sessionId // empty' "$STDOUT_FILE")
+    [[ -n "$session_id" ]] || return 1
+    log_path="$EVAL_HOME/logs/${session_id//\//-}.log"
+    [[ -f "$log_path" ]] || return 1
+    printf '%s\n' "$log_path"
+}
+
+setup_cli_preference_reminder_schedule() {
+    seed_disk_cleanup_reminder
+}
+
+# The regression case. It has the context of the production session: the
+# agent reads the scheduling reference, and then gets the owner's exact
+# question. Turn 1 must read the reference. Turn 2 must call list_reminders,
+# and the seeded reminder must be in a tool result. No turn can run the CLI.
+assert_cli_preference_reminder_schedule() {
+    local headless_log
+    stdout_json_any_turn_tool_call \
+        '.toolName == "skill_read_resource" and ((.argumentsJson // "") | contains("scheduling"))' \
+        || return 1
+    jq -e 'any(.toolCalls[]?; .toolName == "list_reminders")' "$LAST_TURN_STDOUT_FILE" \
+        >/dev/null 2>&1 || return 1
+    ! stdout_json_shell_ran_netclaw_cli || return 1
+    headless_log=$(stdout_json_first_turn_headless_log_path) || return 1
+    grep -qaF 'ID: disk-cleanup-weekly' "$headless_log"
+}
+
+setup_cli_preference_reminder_after_reference() {
+    seed_disk_cleanup_reminder
+}
+
+# The same failure in one turn: the agent reads the scheduling reference and
+# then needs the reminder list. The reference read is a precondition.
+assert_cli_preference_reminder_after_reference() {
+    assert_builtin_tool_without_netclaw_cli 'list_reminders' || return 1
+    stdout_json_tool_call_arguments 'skill_read_resource' | grep -qaF 'scheduling'
+}
+
+# True when a search_tools result of this turn lists the named tool.
+# A result ends at the next timestamped log record.
+# Args: the tool name.
+headless_log_search_result_lists_tool() {
+    local headless_log
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    awk -v tool="$1" '
+        /^\[[0-9][0-9][0-9][0-9]-/ { in_result = index($0, "TOOL_RESULT: search_tools ") > 0; next }
+        in_result && index($0, "  " tool " ") == 1 { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$headless_log"
+}
+
+setup_cli_preference_reminder_search() {
+    seed_disk_cleanup_reminder
+}
+
+# The second regression case. The production agent searched for "list
+# reminders" first. The daemon cut the result to ten tools in registration
+# order, and list_reminders was not one of them. The search result itself is
+# the evidence here, so this case does not depend on a recovery by the model.
+assert_cli_preference_reminder_search() {
+    assert_builtin_tool_without_netclaw_cli 'list_reminders' || return 1
+    stdout_json_tool_called 'search_tools' || return 1
+    headless_log_search_result_lists_tool 'list_reminders'
+}
+
+# The guard cases pass on dev before the fix. They keep the correct behavior
+# for the operations next to the regression.
+
+setup_cli_guard_reminder_question() {
+    seed_disk_cleanup_reminder
+}
+
+# The owner's exact question in a new session. On dev the agent passes this
+# case when it loads the tool first, and fails when it loads the skill first.
+assert_cli_guard_reminder_question() {
+    local headless_log
+    assert_builtin_tool_without_netclaw_cli 'list_reminders' || return 1
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    grep -qaF 'ID: disk-cleanup-weekly' "$headless_log"
+}
+
+setup_cli_guard_reminder_cancel() {
+    EVAL_REMINDER_TARGET="eval-cancel-target-$1"
+    write_eval_reminder "$EVAL_REMINDER_TARGET" "Stale status report $1" "0 4 1 1 *"
+}
+
+assert_cli_guard_reminder_cancel() {
+    assert_builtin_tool_without_netclaw_cli 'cancel_reminder' || return 1
+    stdout_json_tool_call_arguments 'cancel_reminder' \
+        | grep -qaF "\"$EVAL_REMINDER_TARGET\""
+}
+
+setup_cli_guard_reminder_history() {
+    seed_disk_cleanup_reminder
+}
+
+assert_cli_guard_reminder_history() {
+    assert_builtin_tool_without_netclaw_cli 'get_reminder_history'
+}
+
+assert_cli_guard_webhook_list() {
+    assert_builtin_tool_without_netclaw_cli 'list_webhooks'
+}
+
+# A file tool can read the grant store, and so can a reviewed-safe shell
+# reader such as `cat`. Both are correct. Only the `netclaw approvals` CLI
+# is the failure.
+assert_cli_guard_approvals_read() {
+    stdout_json_envelope_valid || return 1
+    ! stdout_json_shell_ran_netclaw_cli || return 1
+    jq -e 'any(.toolCalls[]?; (.argumentsJson // "") | contains("tool-approvals.json"))' \
+        "$STDOUT_FILE" >/dev/null 2>&1
+}
+
+setup_cli_control_reminder_delete() {
+    EVAL_REMINDER_TARGET="eval-delete-target-$1"
+    write_eval_reminder "$EVAL_REMINDER_TARGET" "Retired audit job $1" "0 5 1 1 *"
+}
+
+# Control: no built-in tool deletes a reminder permanently. The CLI is correct.
+assert_cli_control_reminder_delete() {
+    stdout_json_envelope_valid \
+        && stdout_json_shell_ran_netclaw_cli_with \
+            "reminder[[:space:]]+delete[[:space:]]+['\"]?$EVAL_REMINDER_TARGET"
+}
+
+# Control: no built-in tool reports live daemon health. The CLI is correct.
+assert_cli_control_daemon_status() {
+    stdout_json_envelope_valid \
+        && stdout_json_shell_ran_netclaw_cli_with '(status|doctor)'
+}
+
 # ─── Case & Category Runner ──────────────────────────────────────────────────
 
 print_category() {
@@ -2732,6 +2988,7 @@ run_case() {
         local rendered_prompt="$prompt"
         rendered_prompt="${rendered_prompt//\{\{MANAGED_WORKTREE_BRANCH\}\}/${MANAGED_WORKTREE_BRANCH:-}}"
         rendered_prompt="${rendered_prompt//\{\{CYCLE_PROMPT\}\}/${CYCLE_PROMPT:-}}"
+        rendered_prompt="${rendered_prompt//\{\{EVAL_REMINDER_TARGET\}\}/${EVAL_REMINDER_TARGET:-}}"
         run_prompt "$rendered_prompt" "$output_format"
 
         local passed=0
@@ -3213,6 +3470,49 @@ run_all() {
 
     run_case approval_schedule_pre_approval "suggests global pre-approval for verbs in unattended tasks" \
         "Schedule a daily reminder that runs the freshdesk CLI to summarize tickets. The reminder fires unattended and won't be able to answer approval prompts, so the verb needs to be globally pre-approved before the schedule fires. Call netclaw approvals trust-verb freshdesk via shell_execute as part of the setup."
+
+    end_category
+
+    # ── Built-in Tools Before CLI ──
+    # Three regression cases, five guards, and two controls. See the assertion comments.
+    print_category "Built-in Tools Before CLI"
+
+    run_multi_turn_case --json cli_preference_reminder_schedule "after the scheduling reference, the owner question uses list_reminders" \
+        "Which schedule types can a reminder have? Read your scheduling reference before you answer." \
+        "what happened to your recurring disk space clean up job, btw? how often does that run now?"
+
+    run_case --json cli_preference_reminder_after_reference "after the scheduling reference in one turn, the agent uses list_reminders" \
+        "Read your scheduling reference first. Then tell me what happened to the recurring disk space clean up job and how often it runs now." \
+        "Load your operations skill and its scheduling reference. Then tell me which jobs you have scheduled and when each one fires next."
+
+    run_case --json cli_preference_reminder_search "a search for \"list reminders\" returns list_reminders" \
+        "Search your tools for \"list reminders\". Then use what the search returns to tell me which reminders are scheduled."
+
+    run_case --json cli_guard_reminder_question "guard: owner question in a new session uses list_reminders" \
+        "what happened to your recurring disk space clean up job, btw? how often does that run now?"
+
+    run_case --json cli_guard_reminder_cancel "guard: reminder cancel uses cancel_reminder, not the netclaw CLI" \
+        "Cancel the {{EVAL_REMINDER_TARGET}} reminder." \
+        "Please stop the {{EVAL_REMINDER_TARGET}} reminder. I do not need it for now."
+
+    run_case --json cli_guard_reminder_history "guard: run history uses get_reminder_history, not the netclaw CLI" \
+        "When did the disk-cleanup-weekly reminder last run, and did that run succeed?" \
+        "Show me the recent run history of the disk-cleanup-weekly reminder."
+
+    run_case --json cli_guard_webhook_list "guard: webhook list uses list_webhooks, not the netclaw CLI" \
+        "Which inbound webhooks do you have configured?" \
+        "Do we have any inbound webhook routes set up? List them."
+
+    run_case --json cli_guard_approvals_read "guard: saved grants come from the grant store, not the netclaw CLI" \
+        "Which shell commands have I permanently approved for you? List the saved grants." \
+        "Show me the shell approvals that are saved for you right now."
+
+    run_case --json cli_control_reminder_delete "control: permanent delete has no built-in tool and uses the netclaw CLI" \
+        "Permanently delete the {{EVAL_REMINDER_TARGET}} reminder and its run history. A cancel is not enough; I want the definition removed."
+
+    run_case --json cli_control_daemon_status "control: live daemon health has no built-in tool and uses the netclaw CLI" \
+        "Check the live health of your own daemon and tell me whether anything is degraded." \
+        "Is your daemon healthy right now? Check its status and report any problem."
 
     end_category
 }

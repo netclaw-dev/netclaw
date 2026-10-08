@@ -5,6 +5,22 @@ When disabled, reminder tools are hidden, `ReminderManagerActor` skips startup
 reconciliation, and fired reminders are acknowledged but not executed. Public
 audience sessions cannot use scheduling tools regardless of the config flag.
 
+Use the reminder tools, not the `netclaw reminder` commands in the third column.
+Those commands are for a person at a terminal, and each one needs a shell approval.
+The tools are deferred: call `load_tool(name)` first.
+
+| Operation | Tool and arguments | Operator command |
+|-----------|--------------------|------------------|
+| List reminders; read a schedule, a status, or the next fire time | `list_reminders` (`Filter`: `active` or `all`; `all` adds disabled reminders) | `netclaw reminder list` (a table; `--json` for raw JSON) |
+| Create or change a reminder | `set_reminder` (see below) | none |
+| Stop a reminder (disable it) | `cancel_reminder` (`ReminderId`) | `netclaw reminder cancel <id>` |
+| Read the run history | `get_reminder_history` (`ReminderId`, optional `Last`) | `netclaw reminder history <id>` |
+| Test a reminder in this chat | `run_reminder` (`Id`) | `netclaw reminder run <id>` |
+
+No tool reads the instructions or the delivery of a reminder, reads its retry state,
+enables it again, or deletes it. For those operations, run
+`netclaw reminder show|status|enable|delete <id>` through `shell_execute`.
+
 `set_reminder` accepts three schedule types:
 
 | Type | Examples |
@@ -65,21 +81,8 @@ Rules:
   not keep firing indefinitely.
 
 `cancel_reminder` **disables** the reminder — it stops future executions but
-preserves the definition file on disk for diagnosis and re-enablement. To
-permanently delete a reminder and its history, use the CLI:
-
-```
-netclaw reminder delete <id>
-```
-
-The `cancel` CLI subcommand mirrors the tool behavior (disable only):
-
-```
-netclaw reminder list            # table: id, status, failures, schedule, next_fire, title
-netclaw reminder list --json     # raw JSON, for parsing
-netclaw reminder cancel <id>     # disable, keep definition
-netclaw reminder delete <id>     # permanent delete + history
-```
+preserves the definition file on disk for diagnosis and re-enablement.
+`netclaw reminder delete <id>` permanently deletes a reminder and its history.
 
 Reminders that hit 5 consecutive failures are auto-disabled with a
 `ReminderAutoDisabled` critical alert. The definition stays on disk so the
@@ -167,9 +170,6 @@ it, cannot read its history or status, and cannot overwrite it by reusing its ID
 in `set_reminder` — each of those calls behaves exactly as it would for an ID
 that does not exist. Do not treat "not found" as proof a reminder was deleted;
 it may exist at a higher audience than the current session.
-
-Other scheduling tools: `list_reminders`, `cancel_reminder`,
-`get_reminder_history`, and `run_reminder` (see "Test a reminder in a chat").
 
 ## Proactive channel messaging
 

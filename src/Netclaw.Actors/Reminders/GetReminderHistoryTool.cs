@@ -18,7 +18,7 @@ namespace Netclaw.Actors.Reminders;
 /// agent can reason about job health and drill into specific sessions if needed.
 /// </summary>
 [NetclawTool("get_reminder_history",
-    "Get recent execution history for a reminder. Returns timestamps, success/failure, duration, and session IDs for past runs. Use the session_id to drill into a specific execution.",
+    "Get recent execution history for a reminder (a scheduled or recurring job). Returns timestamps, success/failure, duration, and session IDs for past runs. Use the session_id to drill into a specific execution.",
     Grant = "scheduling")]
 public sealed partial class GetReminderHistoryTool : NetclawTool<GetReminderHistoryTool.Params>
 {

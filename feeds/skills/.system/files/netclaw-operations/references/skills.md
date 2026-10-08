@@ -9,10 +9,12 @@ needs the running daemon, because it lists the daemon's live registry — the
 only view that includes dynamic MCP prompt skills. `netclaw skill sync` also
 needs the daemon. Other subcommands are offline.
 
-During an agent session, use `skill_load(name)` to activate guidance and
-`skill_read_resource(name, path)` for bundled files. Skill origin and physical
-location are intentionally hidden behind those logical tools. Use the CLI path
-commands below only for explicit operator inspection and diagnostics.
+During an agent session, use `skill_load(name)` to activate guidance,
+`skill_read_resource(name, path)` for bundled files, and `skill_manage` to create,
+edit, or delete a native skill. The skill index in your prompt lists the skills.
+Skill origin and physical location are intentionally hidden behind those logical
+tools. The commands below are for the operator. Run one yourself only when no tool
+does the operation (`sync`, `validate`, `issues`, `source`) or the operator asks.
 
 | Command | What it does |
 |---------|--------------|

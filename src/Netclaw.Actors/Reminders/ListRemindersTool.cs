@@ -16,7 +16,7 @@ namespace Netclaw.Actors.Reminders;
 /// LLM tool for listing reminder definitions.
 /// </summary>
 [NetclawTool("list_reminders",
-    "List reminder definitions with IDs, schedules, status, and next fire times.",
+    "List reminders (scheduled, recurring, and cron jobs) with IDs, schedules, status, and next fire times.",
     Grant = "scheduling")]
 public sealed partial class ListRemindersTool : NetclawTool<ListRemindersTool.Params>
 {
