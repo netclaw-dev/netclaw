@@ -605,4 +605,36 @@ public sealed class ChatSessionSetupTests : IDisposable
 
         Assert.Equal((0, 0, 0, 0), (stranded, notDelivered, duplicated, unbound));
     }
+
+    // Every EnsureSession on a known session makes the daemon send the session-joined output again,
+    // which the page prints as "Session started". A first message that cannot be sent used to bind
+    // twice (the submit, then the flush that retries it).
+    [Fact]
+    public async Task A_first_message_that_cannot_be_sent_binds_the_session_once()
+    {
+        _releaseFirstSetup.SetResult();
+        _sendGate = _ => throw new IOException("the message is over the connection limit");
+        var (chat, client) = CreateChat();
+        using var _ = chat;
+        await using var __ = client;
+        var notDelivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = chat.SessionOutput.Subscribe(output =>
+        {
+            if (output is ErrorOutput)
+                notDelivered.TrySetResult();
+        });
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var readySubscription = chat.StatusMessage.Subscribe(status =>
+        {
+            if (status == "Ready")
+                ready.TrySetResult();
+        });
+        chat.OnActivated();
+        await ready.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        await chat.SubmitAsync("over-the-limit").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await notDelivered.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, _transport.EnsureSessionCalls);
+    }
 }
