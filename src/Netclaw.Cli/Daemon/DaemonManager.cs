@@ -159,7 +159,7 @@ public sealed partial class DaemonManager
         // Best-effort — the daemon may already be unreachable.
         try
         {
-            var endpoint = DaemonApi.ResolveEndpoint(new NetclawPaths());
+            var endpoint = DaemonApi.ResolveEndpoint(_paths);
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
             await http.PostAsync(
                 $"{endpoint}/api/lifecycle/shutdown?reason={Uri.EscapeDataString(reason)}",

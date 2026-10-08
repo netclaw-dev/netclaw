@@ -182,6 +182,37 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
         Assert.True(status.IsRunning);
     }
 
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task StopAsync_SendsTheShutdownNoticeToThisHomesEndpoint()
+    {
+        // The notice must go to the daemon of the home the manager was built on, never to the
+        // default home's endpoint, or a test (or any non-default home) shuts down someone else's daemon.
+        var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        probe.Start();
+        var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+        using var listener = new System.Net.HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var requestTask = Task.Run(async () =>
+        {
+            var received = await listener.GetContextAsync();
+            received.Response.StatusCode = 200;
+            received.Response.Close();
+            return received.Request.Url!.AbsolutePath;
+        });
+        Netclaw.Cli.Config.ClientConfigFile.WriteEndpoint(_paths, $"http://127.0.0.1:{port}");
+        var daemon = StartFakeDaemon();
+        File.WriteAllText(_paths.PidFilePath, daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Message);
+        var path = await requestTask.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal("/api/lifecycle/shutdown", path);
+    }
+
     public static bool IsLinux => OperatingSystem.IsLinux();
 
     private System.Diagnostics.Process StartFakeDaemon()
