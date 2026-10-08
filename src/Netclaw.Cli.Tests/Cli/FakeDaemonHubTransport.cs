@@ -109,9 +109,6 @@ internal sealed class FakeDaemonHubTransport : IDaemonHubTransport
         _ = Closed?.Invoke(error);
     }
 
-    /// <summary>Flips the connected flag without raising <c>Closed</c>, so no connection event follows.</summary>
-    public void SetConnected(bool connected) => _connected = connected;
-
     /// <summary>Pushes a server-to-client output through the registered handler.</summary>
     public void PushOutput(SessionOutputDto dto) => _outputHandler?.Invoke(dto);
 

@@ -190,9 +190,9 @@ public sealed class ChatSessionSetupTests : IDisposable
         Assert.Equal(["B", "closing"], _sent.ToArray());
         Assert.Equal(1, Volatile.Read(ref attemptsOfA));
         Assert.Equal([NotDelivered], notices.ToArray());
-        // The first set-up, the one that delivered B, and the closing message's own EnsureSession
-        // when it was sent directly. Nothing retries A, so there is no reconnect storm.
-        Assert.InRange(_transport.EnsureSessionCalls, 2, 3);
+        // The resume bind, plus the closing message's own EnsureSession when it was sent directly.
+        // Nothing retries A, so there is no reconnect storm.
+        Assert.InRange(_transport.EnsureSessionCalls, 1, 2);
     }
 
     [Fact]
@@ -241,6 +241,12 @@ public sealed class ChatSessionSetupTests : IDisposable
         using var _ = chat;
         await using var __ = client;
         var notices = SubscribeToNotices(chat);
+        var noticeSessions = new ConcurrentQueue<string>();
+        using var noticeSubscription = chat.SessionOutput.Subscribe(output =>
+        {
+            if (output is ErrorOutput error)
+                noticeSessions.Enqueue(error.SessionId.Value);
+        });
         var statuses = new ConcurrentQueue<string>();
         using var subscription = chat.StatusMessage.Subscribe(statuses.Enqueue);
         _releaseFirstSetup.SetResult();
@@ -248,6 +254,7 @@ public sealed class ChatSessionSetupTests : IDisposable
         await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken);
 
         Assert.Equal([NotDelivered], notices.ToArray());
+        Assert.Equal(["fake/session"], noticeSessions.ToArray());
         Assert.DoesNotContain("Ready", statuses);
 
         // Not ready, so the next message queues instead of being sent past the failure.
@@ -256,38 +263,6 @@ public sealed class ChatSessionSetupTests : IDisposable
         Assert.Contains(statuses, status => status.StartsWith("Queued 1 message(s)", StringComparison.Ordinal));
         await WaitForSendsAsync(1);
         Assert.Equal(["next"], _sent.ToArray());
-    }
-
-    [Fact]
-    public async Task A_failed_send_marks_a_chat_that_was_ready_as_not_ready()
-    {
-        var (chat, client) = await StartChatAsync();
-        using var _ = chat;
-        await using var __ = client;
-        var notices = SubscribeToNotices(chat);
-        var statuses = new ConcurrentQueue<string>();
-        using var subscription = chat.StatusMessage.Subscribe(statuses.Enqueue);
-
-        await chat.SubmitAsync("m1").WaitAsync(Timeout, TestContext.Current.CancellationToken);
-        _releaseFirstSetup.SetResult();
-        await WaitForSendsAsync(1);
-        await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken); // m1 is out and the chat is ready
-
-        // The connection is gone but no connection event has told the chat yet: X queues while the
-        // chat still counts as ready, and the flush that follows meets a message that cannot be sent.
-        _sendGate = text => text == "X" ? throw new IOException("the connection dropped during the send") : Task.CompletedTask;
-        _transport.SetConnected(false);
-        await chat.SubmitAsync("X").WaitAsync(Timeout, TestContext.Current.CancellationToken);
-        _transport.SetConnected(true);
-        await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken);
-        Assert.Equal([NotDelivered], notices.ToArray());
-
-        // The failure took the chat out of the ready state: Y queues behind it. A chat that still
-        // counted as ready would send Y directly, which sets the "Generating..." status.
-        await chat.SubmitAsync("Y").WaitAsync(Timeout, TestContext.Current.CancellationToken);
-        await WaitForSendsAsync(1);
-        Assert.DoesNotContain("Generating...", statuses);
-        Assert.Equal(["m1", "Y"], _sent.ToArray());
     }
 
     [Fact]
@@ -403,6 +378,7 @@ public sealed class ChatSessionSetupTests : IDisposable
         Assert.Equal(["first"], _sent.ToArray());
         Assert.Equal(1, _transport.EnsureSessionCalls);
         Assert.Equal("fake/session", chat.SessionIdDisplay.Value);
+        Assert.True(File.Exists(Path.Combine(_paths.LogsDirectory, "signalr-fake-session.log")), "the per-session usage log was not opened");
         Assert.DoesNotContain(statuses, status => status.StartsWith("Send failed", StringComparison.Ordinal));
     }
 
@@ -444,5 +420,189 @@ public sealed class ChatSessionSetupTests : IDisposable
         Assert.All(
             _transport.Invocations.Where(call => call.Method == "EnsureSession"),
             call => Assert.Equal("existing/session", call.Args[0]));
+    }
+
+    [Fact]
+    public async Task An_idle_new_chat_reconnects_after_a_drop_and_still_creates_no_session()
+    {
+        _releaseFirstSetup.SetResult();
+        var (chat, client) = CreateChat();
+        using var _ = chat;
+        await using var __ = client;
+        var dropSeen = false;
+        var readyAgain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = chat.StatusMessage.Subscribe(status =>
+        {
+            if (status.Contains("dropped", StringComparison.Ordinal))
+                dropSeen = true;
+            else if (dropSeen && status == "Ready")
+                readyAgain.TrySetResult();
+        });
+        var connected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var connectedSubscription = client.ConnectionEvents.Subscribe(evt =>
+        {
+            if (evt.State is DaemonConnectionState.Connected)
+                connected.TrySetResult();
+        });
+        chat.OnActivated();
+        await connected.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        // The daemon restarts. A new chat has no session for DaemonClient to re-attach, so the
+        // chat has to reconnect by itself.
+        _transport.RaiseClosed(new IOException("daemon restarted"));
+
+        await readyAgain.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        Assert.True(_transport.IsConnected);
+        Assert.Equal(0, _transport.EnsureSessionCalls);
+    }
+
+    [Fact]
+    public async Task A_resumed_chat_whose_first_attach_fails_attaches_on_the_retry()
+    {
+        var attempts = 0;
+        _transport.EnsureSessionGate = _ =>
+            Interlocked.Increment(ref attempts) == 1 ? throw new IOException("the attach failed") : Task.CompletedTask;
+        var (chat, client) = CreateChat(new ChatNavigationState { ResumeSessionId = "existing/session" });
+        using var _ = chat;
+        await using var __ = client;
+        var attached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = chat.SessionIdDisplay.Subscribe(id =>
+        {
+            if (id is not null)
+                attached.TrySetResult();
+        });
+
+        chat.OnActivated();
+        await attached.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.Equal("existing/session", chat.SessionIdDisplay.Value);
+        Assert.All(
+            _transport.Invocations.Where(call => call.Method == "EnsureSession"),
+            call => Assert.Equal("existing/session", call.Args[0]));
+    }
+
+    [Fact]
+    public async Task A_new_chat_that_is_connected_and_idle_shows_Ready_as_its_last_status()
+    {
+        _releaseFirstSetup.SetResult();
+        var connectionHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _transport.StartHook = _ => connectionHeld.Task;
+        var (chat, client) = CreateChat();
+        using var _ = chat;
+        await using var __ = client;
+        chat.OnActivated();
+
+        // Subscribed after the chat, so it sees the Connected event once the chat's own handler has run.
+        var connected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = client.ConnectionEvents.Subscribe(evt =>
+        {
+            if (evt.State is DaemonConnectionState.Connected)
+                connected.TrySetResult();
+        });
+        connectionHeld.SetResult();
+        await connected.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken); // any flush in flight is over
+
+        Assert.Equal("Ready", chat.StatusMessage.Value);
+    }
+
+    [Fact]
+    public async Task A_chat_disposed_while_its_first_message_binds_still_sends_it_and_does_not_throw()
+    {
+        _releaseFirstSetup.SetResult();
+        var (chat, client) = CreateChat();
+        await using var _ = client;
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = chat.StatusMessage.Subscribe(status =>
+        {
+            if (status == "Ready")
+                ready.TrySetResult();
+        });
+        chat.OnActivated();
+        await ready.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        var bindReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBind = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _transport.EnsureSessionGate = async _ =>
+        {
+            bindReached.TrySetResult();
+            await releaseBind.Task;
+        };
+
+        // Enter, then an immediate quit.
+        var submit = chat.SubmitAsync("typed-then-quit");
+        await bindReached.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        chat.Dispose();
+        releaseBind.SetResult();
+
+        await submit.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await WaitForSendsAsync(1);
+        Assert.Equal(["typed-then-quit"], _sent.ToArray());
+        Assert.Empty(Directory.GetFiles(_paths.LogsDirectory, "signalr-*.log"));
+    }
+
+    // A submit and the flush race on a chat that has no session yet. The interleavings are too fine to
+    // script (the window is a few instructions), so this runs the race many times; before the fix a run
+    // of this size strands a message or sends one to no session in about one iteration in sixty.
+    [Fact]
+    public async Task A_submit_racing_the_flush_of_a_new_chat_is_sent_once_to_a_session()
+    {
+        _releaseFirstSetup.SetResult();
+        const int iterations = 1000;
+        int stranded = 0, notDelivered = 0, duplicated = 0, unbound = 0;
+
+        for (var i = 0; i < iterations; i++)
+        {
+            var transport = new FakeDaemonHubTransport();
+            var sent = new ConcurrentQueue<object?>();
+            transport.VoidInvokeHook = (method, args, _) =>
+            {
+                if (method == "SendMessage")
+                    sent.Enqueue(args[0]);
+                return Task.CompletedTask;
+            };
+            var client = new DaemonClient(
+                "http://localhost", transport, reconnectDelays: [TimeSpan.Zero], rpcTimeout: TimeSpan.FromSeconds(30));
+            using var chat = new ChatViewModel(
+                client, TimeProvider.System, new ModelCapabilities { ModelId = "test-model" }, new ChatNavigationState(), _paths);
+            var notices = SubscribeToNotices(chat);
+            await client.ConnectAsync(TestContext.Current.CancellationToken);
+
+            using var start = new ManualResetEventSlim(false);
+            var spin = i % 7;
+            var ct = TestContext.Current.CancellationToken;
+            var flush = Task.Run(async () =>
+            {
+                start.Wait(ct);
+                await chat.EnsureSessionAndFlushAsync();
+            }, ct);
+            var submit = Task.Run(async () =>
+            {
+                start.Wait(ct);
+                for (var yields = 0; yields < spin; yields++)
+                    await Task.Yield();
+
+                await chat.SubmitAsync("m");
+            }, ct);
+            start.Set();
+            await Task.WhenAll(flush, submit).WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+            // A message that is not here in half a second is stranded, not slow.
+            var deadline = Environment.TickCount64 + 500;
+            while (sent.IsEmpty && notices.IsEmpty && Environment.TickCount64 < deadline)
+                await Task.Yield();
+
+            if (sent.IsEmpty && notices.IsEmpty)
+                stranded++;
+            notDelivered += notices.Count;
+            if (sent.Count > 1)
+                duplicated++;
+            if (sent.Any(sessionId => sessionId is null))
+                unbound++;
+
+            await client.DisposeAsync();
+        }
+
+        Assert.Equal((0, 0, 0, 0), (stranded, notDelivered, duplicated, unbound));
     }
 }

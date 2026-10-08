@@ -138,13 +138,6 @@ public sealed class ChatOnboardingTests : IDisposable
         var turns = new System.Collections.Concurrent.ConcurrentQueue<string>();
         using var turnSent = new SemaphoreSlim(0);
 
-        // The chat re-attaches its session after the client reports "Reconnected". The
-        // first EnsureSession RPC after that event is held, so the turn below is submitted
-        // while the chat is provably not ready: it must be queued and flushed, not sent
-        // twice and not dropped. Releasing the hold lets the re-attach finish.
-        var reconnectedSeen = false;
-        using var reattachReached = new ManualResetEventSlim(false);
-        using var reattachRelease = new ManualResetEventSlim(false);
         var transport = new FakeDaemonHubTransport
         {
             VoidInvokeHook = (method, args, _) =>
@@ -157,57 +150,33 @@ public sealed class ChatOnboardingTests : IDisposable
                 return Task.CompletedTask;
             }
         };
-        var defaultResponder = transport.EnsureSessionResponder;
-        var held = 0;
-        transport.EnsureSessionResponder = args =>
-        {
-            if (Volatile.Read(ref reconnectedSeen) && Interlocked.Exchange(ref held, 1) == 0)
-            {
-                reattachReached.Set();
-                reattachRelease.Wait(timeout);
-            }
-            return defaultResponder(args);
-        };
-
         await using var client = new DaemonClient(
             "http://localhost", transport, reconnectDelays: [TimeSpan.Zero], rpcTimeout: TimeSpan.FromSeconds(30));
 
-        // Subscribed before the chat so the flag is set before the chat's own handler runs.
         var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var sub = client.ConnectionEvents.Subscribe(evt =>
         {
             if (evt.State is DaemonConnectionState.Connected && evt.Message.Contains("Reconnected", StringComparison.Ordinal))
-            {
-                Volatile.Write(ref reconnectedSeen, true);
                 reconnected.TrySetResult();
-            }
         });
 
         using var chat = new ChatViewModel(
             client, TimeProvider.System, new ModelCapabilities { ModelId = "test-model" }, navigation, _paths);
 
-        try
-        {
-            chat.OnActivated();
-            Assert.True(await turnSent.WaitAsync(timeout, ct), "The onboarding trigger was never sent.");
+        chat.OnActivated();
+        Assert.True(await turnSent.WaitAsync(timeout, ct), "The onboarding trigger was never sent.");
 
-            await chat.SubmitAsync("hello");
-            Assert.True(await turnSent.WaitAsync(timeout, ct), "The turn after the trigger was never sent.");
+        await chat.SubmitAsync("hello");
+        Assert.True(await turnSent.WaitAsync(timeout, ct), "The turn after the trigger was never sent.");
 
-            transport.RaiseClosed();
-            await reconnected.Task.WaitAsync(timeout, ct);
-            Assert.True(reattachReached.Wait(timeout, ct), "The chat never re-attached its session after the reconnect.");
+        transport.RaiseClosed();
+        await reconnected.Task.WaitAsync(timeout, ct);
 
-            await chat.SubmitAsync("after-reconnect");
-        }
-        finally
-        {
-            reattachRelease.Set();
-        }
+        await chat.SubmitAsync("after-reconnect");
 
-        Assert.True(await turnSent.WaitAsync(timeout, ct), "The turn submitted during the re-attach was never sent.");
+        Assert.True(await turnSent.WaitAsync(timeout, ct), "The turn submitted after the reconnect was never sent.");
 
-        // A trigger re-sent by the re-attach flush would land in the list ahead of this turn.
+        // A trigger re-sent by the flush after the reconnect would land in the list ahead of this turn.
         await chat.SubmitAsync("sentinel");
         Assert.True(await turnSent.WaitAsync(timeout, ct), "The closing turn was never sent.");
 

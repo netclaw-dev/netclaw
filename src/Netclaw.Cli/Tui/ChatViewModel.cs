@@ -64,6 +64,7 @@ public partial class ChatViewModel : ReactiveViewModel
     // silently gets no data from TUI turns (issue #1173).
     private StreamWriter? _usageLog;
     private bool _sessionReady;
+    private bool _disposed;
     private int _connectAttempts;
     private readonly ObservableCollection<string> _approvalOptions = [];
 
@@ -137,15 +138,23 @@ public partial class ChatViewModel : ReactiveViewModel
                     IsGenerating.Value = false;
                 }
 
+                // DaemonClient re-attaches a session it has. A chat with none (a new chat that has not
+                // sent yet) reconnects itself, so an idle chat survives a daemon restart.
+                if (evt.State is DaemonConnectionState.Disconnected or DaemonConnectionState.TransportClosed
+                    && SessionIdDisplay.Value is null)
+                {
+                    _ = ConnectUntilReadyAsync();
+                }
+
+                // The status is written before the flush so that the flush's "Ready" is the last word.
+                StatusMessage.Value = IsGenerating.Value && evt.State is DaemonConnectionState.Connected
+                    ? "Generating..."
+                    : evt.Message;
+
                 if (evt.State is DaemonConnectionState.Connected)
                 {
                     _ = EnsureSessionAndFlushAsync();
                 }
-
-                if (IsGenerating.Value && evt.State is DaemonConnectionState.Connected)
-                    StatusMessage.Value = "Generating...";
-                else
-                    StatusMessage.Value = evt.Message;
 
                 RequestRedraw();
             });
@@ -436,6 +445,7 @@ public partial class ChatViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
+        _disposed = true;
         _daemonOutputSubscription?.Dispose();
         _daemonConnectionSubscription?.Dispose();
         _outputSubject.Dispose();
@@ -463,13 +473,14 @@ public partial class ChatViewModel : ReactiveViewModel
             TimeSpan.FromSeconds(10)
         };
 
-        while (!_sessionReady)
+        // A submit that finds the chat ready still enqueues (the ready check and the enqueue are not
+        // atomic), so the loop also runs until the queue is empty.
+        while (!_sessionReady || !_pendingMessages.IsEmpty)
         {
             try
             {
                 await _daemonClient.ConnectAsync();
                 await EnsureSessionAndFlushAsync();
-                return;
             }
             catch
             {
@@ -519,79 +530,86 @@ public partial class ChatViewModel : ReactiveViewModel
         await _sessionSetup.WaitAsync();
         try
         {
-            // Another caller already finished the set-up and nothing is waiting to be sent.
+            // Another caller already finished the set-up and nothing is waiting to be sent. The
+            // connection event that called this has just written its message over the status.
             if (_sessionReady && _resumeSessionId is null && _initialMessage is null && _pendingMessages.IsEmpty)
-                return;
+            {
+                if (!IsGenerating.Value)
+                    StatusMessage.Value = "Ready";
 
-            // A resumed chat attaches to its session now, and a chat that already has one re-attaches
-            // on reconnect. A new chat has no session until its first message: opening the chat and
-            // quitting without typing must not leave an empty session behind. After the first call
-            // DaemonClient has the session ID cached, so the bind uses EnsureSessionAsync and skips
-            // the redundant resume.
-            var resumeId = _resumeSessionId;
-            _resumeSessionId = null;
-            var sessionId = resumeId is not null || SessionIdDisplay.Value is not null
-                ? await BindSessionAsync(resumeId)
-                : null;
+                return;
+            }
+
+            // A resumed chat attaches to its session now. A new chat has none until its first message:
+            // opening the chat and quitting without typing must not leave an empty session behind. The
+            // resume ID is cleared only once the attach has worked, so a failed attach is retried.
+            var sessionId = SessionIdDisplay.Value;
+            if (_resumeSessionId is { } resumeId)
+            {
+                sessionId = await BindSessionAsync(resumeId);
+                _resumeSessionId = null;
+            }
+
             IsInputEnabled.Value = true;
             _connectAttempts = 0;
 
             // Each queued message (and the initial message) is taken out first and sent once. One
             // whose send throws is dropped, not put back: a message that can never be sent (too
             // large for the connection, for one) would otherwise stay first in line and make every
-            // reconnect fail again. After a failure the method returns; the connection event that
-            // follows a torn-down connection flushes the messages still queued. The chat is marked
-            // ready only once the queue is empty, so a new submit queues behind the messages already
-            // waiting instead of overtaking them.
+            // reconnect fail again. After a failure the method returns and the connect loop runs it
+            // again for the messages still queued. The chat is marked ready only once the queue is
+            // empty, so a new submit queues behind the messages already waiting instead of overtaking
+            // them. A message that is enqueued after the last check is flushed by the connect loop
+            // that its submit started.
             var triggerSent = false;
-            do
+            while (true)
             {
-                while (true)
+                // Only this method dequeues, so a message seen here is the one dequeued below, and the
+                // session is bound before any message is taken out.
+                var queued = _pendingMessages.TryPeek(out _);
+                if (!queued && _initialMessage is null)
+                    break;
+
+                sessionId ??= await BindSessionAsync(null);
+
+                string next;
+                var isTrigger = !queued;
+                if (isTrigger)
                 {
-                    if (sessionId is null && (_initialMessage is not null || !_pendingMessages.IsEmpty))
-                        sessionId = await BindSessionAsync(null);
-
-                    var isTrigger = false;
-                    var found = _pendingMessages.TryDequeue(out var next);
-                    if (!found && _initialMessage is { } trigger)
-                    {
-                        // Auto-send hidden trigger message (e.g., onboarding interview prompt).
-                        // Not rendered as a user bubble — the LLM's greeting is the first visible thing.
-                        next = trigger;
-                        _initialMessage = null;
-                        found = isTrigger = true;
-                        IsGenerating.Value = true;
-                        StatusMessage.Value = "Generating...";
-                        RequestRedraw();
-                    }
-
-                    if (!found)
-                        break;
-
-                    try
-                    {
-                        await _daemonClient.SendAsync(next!);
-                        triggerSent |= isTrigger;
-                    }
-                    catch
-                    {
-                        _sessionReady = false;
-                        IsGenerating.Value = false;
-                        // A status line is overwritten by the connection events within milliseconds, so the
-                        // notice goes into the transcript, where the failed message's bubble already is.
-                        _outputSubject.OnNext(new ErrorOutput
-                        {
-                            SessionId = new SessionId(sessionId!),
-                            Message = "A message could not be sent and was not delivered."
-                        });
-                        RequestRedraw();
-                        return;
-                    }
+                    // Auto-send hidden trigger message (e.g., onboarding interview prompt).
+                    // Not rendered as a user bubble — the LLM's greeting is the first visible thing.
+                    next = _initialMessage!;
+                    _initialMessage = null;
+                    IsGenerating.Value = true;
+                    StatusMessage.Value = "Generating...";
+                    RequestRedraw();
+                }
+                else
+                {
+                    _pendingMessages.TryDequeue(out next!);
                 }
 
-                _sessionReady = true;
+                try
+                {
+                    await _daemonClient.SendAsync(next);
+                    triggerSent |= isTrigger;
+                }
+                catch
+                {
+                    IsGenerating.Value = false;
+                    // A status line is overwritten by the connection events within milliseconds, so the
+                    // notice goes into the transcript, where the failed message's bubble already is.
+                    _outputSubject.OnNext(new ErrorOutput
+                    {
+                        SessionId = new SessionId(sessionId),
+                        Message = "A message could not be sent and was not delivered."
+                    });
+                    RequestRedraw();
+                    return;
+                }
             }
-            while (!_pendingMessages.IsEmpty); // a submit that queued itself just before the flag was set
+
+            _sessionReady = true;
 
             if (!triggerSent && !IsGenerating.Value)
                 StatusMessage.Value = "Ready";
@@ -609,8 +627,15 @@ public partial class ChatViewModel : ReactiveViewModel
         var sessionId = resumeId is not null
             ? await _daemonClient.ResumeSessionAsync(resumeId, DaemonClient.TuiChannelType)
             : await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
-        SessionIdDisplay.Value = sessionId;
-        OpenUsageLogIfNeeded(sessionId);
+
+        // The chat can be disposed while the RPC is in flight (Enter, then an immediate quit); the
+        // message still goes out, there is just nothing left to update.
+        if (!_disposed)
+        {
+            SessionIdDisplay.Value = sessionId;
+            OpenUsageLogIfNeeded(sessionId);
+        }
+
         return sessionId;
     }
 
