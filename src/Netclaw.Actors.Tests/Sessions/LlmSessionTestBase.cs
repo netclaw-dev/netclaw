@@ -132,6 +132,13 @@ public abstract class LlmSessionTestBase : TestKit, IAsyncDisposable
 
     protected virtual void ConfigureSessionServices(IServiceCollection services) { }
 
+    /// <summary>
+    /// Deletes the directories that a derived class owns outside <see cref="TestPaths"/>.
+    /// Runs after TestKit has disposed. A derived class cannot re-implement
+    /// <see cref="IAsyncDisposable.DisposeAsync"/> without skipping the cleanup below.
+    /// </summary>
+    protected virtual void DeleteOwnedDirectories() { }
+
     // TestKit stops the actor system only after AfterAllAsync returns, so an actor can
     // still write into the temp directory until then (issue #2266). Delete the
     // directory after TestKit has disposed. The finally block runs the cleanup even
@@ -144,8 +151,15 @@ public abstract class LlmSessionTestBase : TestKit, IAsyncDisposable
         }
         finally
         {
-            if (_testTempDir is not null)
-                await _testTempDir.DisposeAsync();
+            try
+            {
+                DeleteOwnedDirectories();
+            }
+            finally
+            {
+                if (_testTempDir is not null)
+                    await _testTempDir.DisposeAsync();
+            }
         }
     }
 }

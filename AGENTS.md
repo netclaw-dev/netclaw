@@ -375,9 +375,13 @@ each other. Otherwise, open one PR.
   directory.** Use `DisposableTempDir` or `TestSessionTempDirectory`. Delete
   the path in `Dispose`. A `TestKit` class has `IAsyncDisposable`, so xunit
   does not call its `IDisposable.Dispose`. `TestKit` also stops its actor system
-  after `AfterAllAsync` returns. A `TestKit` class that owns a temp folder MUST
+  after `AfterAllAsync` returns, and it fails the test when `AfterAllAsync`
+  takes more than 5 seconds. A `TestKit` class that owns a temp folder MUST
   re-implement `IAsyncDisposable.DisposeAsync`. It calls `base.DisposeAsync()`,
-  and then deletes the folder. Each test process gets a private temp root
+  and then deletes the folder. A class that derives from `LlmSessionTestBase`
+  overrides `DeleteOwnedDirectories` instead. `TestKitTeardownGuardTests` fails
+  when an `AfterAllAsync` override deletes or disposes. Each test process gets
+  a private temp root
   (`tests/Shared/TestRunTempRoot.cs`). The test run fails with "Test Assembly
   Cleanup Failure" when a test leaves an entry in that root. The CI log prints
   the leaks. A test project opts in with

@@ -33,7 +33,7 @@ namespace Netclaw.Channels.Mattermost.IntegrationTests;
 /// </summary>
 [Collection("Mattermost")]
 public sealed class MattermostTypingIntegrationTests(
-    MattermostFixture fixture, ITestOutputHelper output) : TestKit(output: output)
+    MattermostFixture fixture, ITestOutputHelper output) : TestKit(output: output), IAsyncDisposable
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
@@ -45,11 +45,14 @@ public sealed class MattermostTypingIntegrationTests(
         builder.WithInMemoryJournal().WithInMemorySnapshotStore().WithNetclawSerialization();
     }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directory
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {

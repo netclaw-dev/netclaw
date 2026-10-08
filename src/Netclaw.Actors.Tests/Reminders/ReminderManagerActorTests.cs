@@ -25,7 +25,7 @@ using static Netclaw.Actors.Reminders.ReminderProtocol;
 namespace Netclaw.Actors.Tests.Reminders;
 
 [Collection(ReminderActorTestCollection.Name)]
-public class ReminderManagerActorTests : TestKit
+public class ReminderManagerActorTests : TestKit, IAsyncDisposable
 {
     private readonly TestSessionTempDirectory _tempDir =
         TestSessionTempDirectory.Create(prefix: "netclaw-reminder-tests-", createDirectoryTree: true);
@@ -44,17 +44,17 @@ public class ReminderManagerActorTests : TestKit
 
     public ReminderManagerActorTests(ITestOutputHelper output) : base(output: output) { }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directory
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {
-            // Base teardown can throw (actor-system shutdown). Run temp cleanup
-            // in finally so a failed teardown does not recreate the /tmp leak
-            // (issue #2266).
             await _tempDir.DisposeAsync();
         }
     }

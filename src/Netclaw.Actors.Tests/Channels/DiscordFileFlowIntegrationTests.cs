@@ -32,7 +32,7 @@ namespace Netclaw.Actors.Tests.Channels;
 /// end-to-end without a live Discord connection. Mirrors
 /// <see cref="SlackFileFlowIntegrationTests"/> for the Discord adapter.
 /// </summary>
-public sealed class DiscordFileFlowIntegrationTests : TestKit
+public sealed class DiscordFileFlowIntegrationTests : TestKit, IAsyncDisposable
 {
     private static readonly byte[] FakePngBytes = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==");
@@ -48,11 +48,14 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
     {
     }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directory
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {

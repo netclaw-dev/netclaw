@@ -36,7 +36,7 @@ namespace Netclaw.Actors.Tests.Channels;
 /// is @-mentioned in an existing Slack thread, prior messages (text + images)
 /// are fetched and injected as context before the first LLM turn.
 /// </summary>
-public sealed class SlackThreadBackfillIntegrationTests : TestKit
+public sealed class SlackThreadBackfillIntegrationTests : TestKit, IAsyncDisposable
 {
     private static readonly byte[] FakePngBytes = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==");
@@ -52,11 +52,14 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
     {
     }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directory
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {

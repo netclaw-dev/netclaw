@@ -30,7 +30,7 @@ using static Netclaw.Actors.SubAgents.SubAgentProtocol;
 
 namespace Netclaw.Actors.Tests.SubAgents;
 
-public class SubAgentActorTests : TestKit
+public class SubAgentActorTests : TestKit, IAsyncDisposable
 {
     private const string ApprovalProbeToolName = "approval_probe";
     private static readonly TimeSpan ApprovalAskTimeout = TimeSpan.FromSeconds(30);
@@ -46,17 +46,17 @@ public class SubAgentActorTests : TestKit
         return dir.Path;
     }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directories
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {
-            // Base teardown can throw (actor-system shutdown). Run temp cleanup
-            // in finally so a failed teardown does not recreate the /tmp leak
-            // (issue #2266).
             foreach (var dir in _tempDirs)
                 await dir.DisposeAsync();
             _tempDirs.Clear();

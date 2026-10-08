@@ -26,9 +26,15 @@ internal sealed class DisposableTempDir : IDisposable
         Directory.CreateDirectory(Path);
     }
 
-    public void Dispose()
+    public void Dispose() => Delete(Path);
+
+    /// <summary>
+    /// Deletes a folder that a test owns. <see cref="TestSessionTempDirectory"/>
+    /// deletes its folder through this method too.
+    /// </summary>
+    internal static void Delete(string path)
     {
-        if (!Directory.Exists(Path))
+        if (!Directory.Exists(path))
             return;
 
         // Windows refuses to delete a file or a working directory that a process
@@ -39,14 +45,15 @@ internal sealed class DisposableTempDir : IDisposable
         {
             try
             {
-                Directory.Delete(Path, recursive: true);
+                Directory.Delete(path, recursive: true);
                 return;
             }
             catch (IOException) when (i < MaxAttempts - 1) // slopwatch-ignore: SW003 test cleanup retry
             {
                 // Clear the pools only after a failure. The call closes the idle
                 // connections of every database in the process, which other tests
-                // can observe.
+                // can observe. The first call in a process also loads the SQLite
+                // native library, which a test without SQLite does not need.
                 if (i == 0)
                     Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
 
@@ -55,7 +62,7 @@ internal sealed class DisposableTempDir : IDisposable
             catch (UnauthorizedAccessException) when (i < MaxAttempts - 1) // slopwatch-ignore: SW003 test cleanup retry
             {
                 // A test can leave a read-only file. Windows refuses to delete it.
-                ClearReadOnlyAttributes(Path);
+                ClearReadOnlyAttributes(path);
                 Thread.Sleep(100 * (i + 1));
             }
             catch (DirectoryNotFoundException)

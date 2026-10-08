@@ -42,7 +42,7 @@ namespace Netclaw.Actors.Tests.Channels;
 ///    session media directory → DataContent reaches LLM context
 /// 2. Outbound: FileOutput from session pipeline → SlackReplyClient upload
 /// </summary>
-public sealed class SlackFileFlowIntegrationTests : TestKit
+public sealed class SlackFileFlowIntegrationTests : TestKit, IAsyncDisposable
 {
     private static readonly byte[] FakePngBytes = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==");
@@ -58,11 +58,14 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     {
     }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directory
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {

@@ -366,9 +366,8 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
             await EvaluateOutcomeAsync(journey.SessionId.Value, main));
     }
 
-    protected override async Task AfterAllAsync()
+    protected override void DeleteOwnedDirectories()
     {
-        await base.AfterAllAsync();
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
     }

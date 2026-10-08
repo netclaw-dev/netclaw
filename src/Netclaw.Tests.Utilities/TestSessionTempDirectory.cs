@@ -69,36 +69,13 @@ public sealed class TestSessionTempDirectory : IAsyncDisposable
     }
 
     /// <summary>
-    /// Deletes the owned temp directory tree. If a SQLite file is still
-    /// locked, clears the connection pools and retries before giving up
-    /// (leaving a single directory behind is preferable to failing a run).
+    /// Deletes the owned temp directory tree. <see cref="DisposableTempDir.Delete"/>
+    /// retries when a file is still locked, and clears the SQLite connection
+    /// pools only after a delete attempt fails.
     /// </summary>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (!Directory.Exists(Path))
-            return;
-
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-
-        for (var i = 0; i < 8; i++)
-        {
-            try
-            {
-                Directory.Delete(Path, recursive: true);
-                return;
-            }
-            catch (IOException) when (i < 7)
-            {
-                await Task.Delay(25 * (i + 1)); // slopwatch-ignore: SW004 test cleanup retry for locked SQLite files
-            }
-            catch (UnauthorizedAccessException) when (i < 7)
-            {
-                await Task.Delay(25 * (i + 1)); // slopwatch-ignore: SW004 test cleanup retry for locked SQLite files
-            }
-            catch (DirectoryNotFoundException)
-            {
-                return;
-            }
-        }
+        DisposableTempDir.Delete(Path);
+        return ValueTask.CompletedTask;
     }
 }

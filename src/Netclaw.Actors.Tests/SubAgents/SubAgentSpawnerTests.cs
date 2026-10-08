@@ -24,7 +24,7 @@ using static Netclaw.Actors.SubAgents.SubAgentProtocol;
 
 namespace Netclaw.Actors.Tests.SubAgents;
 
-public sealed class SubAgentSpawnerTests : TestKit
+public sealed class SubAgentSpawnerTests : TestKit, IAsyncDisposable
 {
     private readonly TestSessionTempDirectory _parentSessionDir =
         TestSessionTempDirectory.Create("netclaw-spawner-session-");
@@ -38,17 +38,17 @@ public sealed class SubAgentSpawnerTests : TestKit
         // No hosting or persistence needed; the probe stands in for the child actor.
     }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directories
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {
-            // Base teardown can throw (actor-system shutdown). Run temp cleanup
-            // in finally so a failed teardown does not recreate the /tmp leak
-            // (issue #2266).
             await _parentSessionDir.DisposeAsync();
             await _testProjectDir.DisposeAsync();
         }

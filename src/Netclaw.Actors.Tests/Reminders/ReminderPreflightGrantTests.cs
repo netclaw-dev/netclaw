@@ -108,9 +108,8 @@ public sealed class ReminderPreflightGrantTests : LlmSessionTestBase
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant with tools."));
     }
 
-    protected override async Task AfterAllAsync()
+    protected override void DeleteOwnedDirectories()
     {
-        await base.AfterAllAsync();
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
     }

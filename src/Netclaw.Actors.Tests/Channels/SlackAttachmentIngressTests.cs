@@ -36,7 +36,7 @@ namespace Netclaw.Actors.Tests.Channels;
 /// DataContent inlining) against a stubbed HTTP handler, content scanner,
 /// and reply client. None of these tests touch a live Slack connection.
 /// </summary>
-public sealed class SlackAttachmentIngressVisionTests : TestKit
+public sealed class SlackAttachmentIngressVisionTests : TestKit, IAsyncDisposable
 {
     private static readonly byte[] FakePngBytes = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==");
@@ -61,11 +61,14 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
     {
     }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directory
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {

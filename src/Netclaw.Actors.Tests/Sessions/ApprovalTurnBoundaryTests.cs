@@ -77,9 +77,8 @@ public sealed class ApprovalTurnBoundaryTests : LlmSessionTestBase
             new StaticSystemPromptProvider("You are a test assistant with tools."));
     }
 
-    protected override async Task AfterAllAsync()
+    protected override void DeleteOwnedDirectories()
     {
-        await base.AfterAllAsync();
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
     }
@@ -363,9 +362,8 @@ public sealed class ApprovalRedriveBoundaryTests : LlmSessionTestBase
             new StaticSystemPromptProvider("You are a test assistant with tools."));
     }
 
-    protected override async Task AfterAllAsync()
+    protected override void DeleteOwnedDirectories()
     {
-        await base.AfterAllAsync();
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
     }
