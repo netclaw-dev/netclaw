@@ -375,7 +375,9 @@ substitute_identity_template() {
 # this after daemon startup, so only the cases that need a reminder have one.
 # The reminder tools read the definition files for each call. The daemon gives
 # a schedule entry only to the files that exist at startup, so these reminders
-# cannot fire during a run.
+# cannot fire during a run. They also have no next fire time, so a prompt
+# must not ask for one: an agent that does not get it from the tool goes to
+# the CLI for it.
 # Args: id, title, cron expression
 write_eval_reminder() {
     local id="$1" title="$2" cron="$3"
@@ -3483,7 +3485,7 @@ run_all() {
 
     run_case --json cli_preference_reminder_after_reference "after the scheduling reference in one turn, the agent uses list_reminders" \
         "Read your scheduling reference first. Then tell me what happened to the recurring disk space clean up job and how often it runs now." \
-        "Load your operations skill and its scheduling reference. Then tell me which jobs you have scheduled and when each one fires next."
+        "Load your operations skill and its scheduling reference. Then tell me which jobs you have scheduled and how often each one runs."
 
     run_case --json cli_preference_reminder_search "a search for \"list reminders\" returns list_reminders" \
         "Search your tools for \"list reminders\". Then use what the search returns to tell me which reminders are scheduled."

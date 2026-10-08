@@ -11,7 +11,7 @@ The tools are deferred: call `load_tool(name)` first.
 
 | Operation | Tool and arguments | Operator command |
 |-----------|--------------------|------------------|
-| List reminders; read a schedule, a status, or the next fire time | `list_reminders` (`Filter`: `active` or `all`; `all` adds disabled reminders) | `netclaw reminder list` (a table; `--json` for raw JSON) |
+| List reminders; read a schedule, a status, or the next fire time | `list_reminders` (`Filter`: `active` or `all`; `all` adds disabled reminders) | `netclaw reminder list` |
 | Create or change a reminder | `set_reminder` (see below) | none |
 | Stop a reminder (disable it) | `cancel_reminder` (`ReminderId`) | `netclaw reminder cancel <id>` |
 | Read the run history | `get_reminder_history` (`ReminderId`, optional `Last`) | `netclaw reminder history <id>` |
