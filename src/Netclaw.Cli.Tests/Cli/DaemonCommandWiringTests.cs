@@ -172,10 +172,9 @@ public sealed class DaemonCommandWiringTests : IDisposable
         _children.Add(process);
         File.WriteAllText(Path.Combine(netclawHome, "netclaw.pid"), process.Id.ToString());
 
-        // A real daemon holds the home's lock for as long as it lives; the pid file alone is not proof.
-        var daemonLock = HoldDaemonLock(netclawHome);
-        process.EnableRaisingEvents = true;
-        process.Exited += (_, _) => daemonLock.Dispose();
+        // No lock file on purpose: a lock held by this process would be released by an Exited
+        // callback that can run after the CLI has already seen the daemon exit, so the CLI would
+        // still report it as running.
         return process;
     }
 

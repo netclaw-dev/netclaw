@@ -484,10 +484,9 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         try
         {
             File.WriteAllText(_paths.PidFilePath, daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            // A real daemon holds the lock for as long as it lives.
-            var daemonLock = new FileStream(_paths.LockFilePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            daemon.EnableRaisingEvents = true;
-            daemon.Exited += (_, _) => daemonLock.Dispose();
+            // No lock file on purpose: a real daemon's lock dies with the process, but a lock held by
+            // this test process would be released by an Exited callback that can run after the stop
+            // has already seen the exit, making the reset abort as "still running".
             var unitPath = Path.Combine(_dir.Path, "netclaw.service");
             File.WriteAllText(unitPath, "[Service]\nExecStart=/opt/netclaw/netclawd\n");
             var runner = new RecordingCommandRunner(daemon.Id);
