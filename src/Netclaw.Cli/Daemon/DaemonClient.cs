@@ -292,6 +292,7 @@ public sealed class DaemonClient : IAsyncDisposable
             {
                 using var op = LinkOperation(c.Token);
                 await EnsureConnectedAsync(op.Token);
+                await ReattachIfNeededAsync(op.Token);
                 c.Ack.TrySetResult();
                 break;
             }

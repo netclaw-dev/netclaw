@@ -66,6 +66,7 @@ public partial class ChatViewModel : ReactiveViewModel
     private bool _sessionReady;
     private bool _disposed;
     private int _connectAttempts;
+    private int _connectLoopRunning;
     private readonly ObservableCollection<string> _approvalOptions = [];
 
     public ReactiveProperty<bool> IsGenerating { get; } = new(false);
@@ -191,6 +192,9 @@ public partial class ChatViewModel : ReactiveViewModel
         IsGenerating.Value = true;
         StatusMessage.Value = "Generating...";
 
+        // Under the same gate as the flush: Dispose waits on it, so a message sent just before the
+        // user quits is not cut off between the session being created and the send.
+        await _sessionSetup.WaitAsync();
         try
         {
             await BindSessionAsync(null);
@@ -206,6 +210,10 @@ public partial class ChatViewModel : ReactiveViewModel
             StatusMessage.Value = $"Send failed ({ex.Message}). Reconnecting...";
             RequestRedraw();
             _ = ConnectUntilReadyAsync();
+        }
+        finally
+        {
+            ReleaseSessionSetup();
         }
     }
 
@@ -446,6 +454,10 @@ public partial class ChatViewModel : ReactiveViewModel
     public override void Dispose()
     {
         _disposed = true;
+
+        // Let a send that is in flight finish (the user typed Enter, then quit); the daemon
+        // connection is torn down by the host after this returns.
+        _sessionSetup.Wait(TimeSpan.FromSeconds(2));
         _daemonOutputSubscription?.Dispose();
         _daemonConnectionSubscription?.Dispose();
         _outputSubject.Dispose();
@@ -473,24 +485,40 @@ public partial class ChatViewModel : ReactiveViewModel
             TimeSpan.FromSeconds(10)
         };
 
-        // A submit that finds the chat ready still enqueues (the ready check and the enqueue are not
-        // atomic), so the loop also runs until the queue is empty.
-        while (!_sessionReady || !_pendingMessages.IsEmpty)
+        // One loop at a time: every enqueue and every drop asks for one, and a second loop would
+        // reset nothing but add retries and reset the back-off.
+        if (Interlocked.Exchange(ref _connectLoopRunning, 1) == 1)
+            return;
+
+        try
         {
-            try
+            // A submit that finds the chat ready still enqueues (the ready check and the enqueue are
+            // not atomic), so the loop also runs until the queue is empty.
+            while (!_sessionReady || !_pendingMessages.IsEmpty)
             {
-                await _daemonClient.ConnectAsync();
-                await EnsureSessionAndFlushAsync();
-            }
-            catch
-            {
-                _connectAttempts++;
-                var idx = Math.Min(_connectAttempts - 1, delays.Length - 1);
-                StatusMessage.Value = $"Connecting... retry {_connectAttempts} in {delays[idx].TotalSeconds:0}s";
-                RequestRedraw();
-                await Task.Delay(delays[idx]);
+                try
+                {
+                    await _daemonClient.ConnectAsync();
+                    await EnsureSessionAndFlushAsync();
+                }
+                catch
+                {
+                    _connectAttempts++;
+                    var idx = Math.Min(_connectAttempts - 1, delays.Length - 1);
+                    StatusMessage.Value = $"Connecting... retry {_connectAttempts} in {delays[idx].TotalSeconds:0}s";
+                    RequestRedraw();
+                    await Task.Delay(delays[idx], _timeProvider);
+                }
             }
         }
+        finally
+        {
+            Volatile.Write(ref _connectLoopRunning, 0);
+        }
+
+        // A caller that found the loop running just before it ended is not left waiting.
+        if (!_sessionReady || !_pendingMessages.IsEmpty)
+            _ = ConnectUntilReadyAsync();
     }
 
     private void ProcessOutput(SessionOutput output)
@@ -551,7 +579,6 @@ public partial class ChatViewModel : ReactiveViewModel
             }
 
             IsInputEnabled.Value = true;
-            _connectAttempts = 0;
 
             // Each queued message (and the initial message) is taken out first and sent once. One
             // whose send throws is dropped, not put back: a message that can never be sent (too
@@ -610,6 +637,7 @@ public partial class ChatViewModel : ReactiveViewModel
             }
 
             _sessionReady = true;
+            _connectAttempts = 0;
 
             if (!triggerSent && !IsGenerating.Value)
                 StatusMessage.Value = "Ready";

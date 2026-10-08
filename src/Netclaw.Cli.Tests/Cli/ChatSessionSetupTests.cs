@@ -70,13 +70,13 @@ public sealed class ChatSessionSetupTests : IDisposable
         _dir.Dispose();
     }
 
-    private (ChatViewModel Chat, DaemonClient Client) CreateChat(ChatNavigationState? navigation = null)
+    private (ChatViewModel Chat, DaemonClient Client) CreateChat(ChatNavigationState? navigation = null, TimeProvider? timeProvider = null)
     {
         var client = new DaemonClient(
             "http://localhost", _transport, reconnectDelays: [TimeSpan.Zero], rpcTimeout: TimeSpan.FromSeconds(30));
         var chat = new ChatViewModel(
             client,
-            TimeProvider.System,
+            timeProvider ?? TimeProvider.System,
             new ModelCapabilities { ModelId = "test-model" },
             navigation ?? new ChatNavigationState(),
             _paths);
@@ -529,14 +529,23 @@ public sealed class ChatSessionSetupTests : IDisposable
             await releaseBind.Task;
         };
 
-        // Enter, then an immediate quit.
+        // Enter, then an immediate quit: Dispose has to wait for the send, because the host tears the
+        // connection down as soon as it returns.
         var submit = chat.SubmitAsync("typed-then-quit");
         await bindReached.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        var releaser = Task.Run(() =>
+        {
+            // Dispose blocks its caller, so the bind is released from here once Dispose is waiting;
+            // there is nothing to observe, so it is a bounded wait.
+            using var dispose = new ManualResetEventSlim(false);
+            dispose.Wait(TimeSpan.FromMilliseconds(100));
+            releaseBind.SetResult();
+        }, TestContext.Current.CancellationToken);
         chat.Dispose();
-        releaseBind.SetResult();
+        await client.DisposeAsync();
 
+        await releaser;
         await submit.WaitAsync(Timeout, TestContext.Current.CancellationToken);
-        await WaitForSendsAsync(1);
         Assert.Equal(["typed-then-quit"], _sent.ToArray());
         Assert.Empty(Directory.GetFiles(_paths.LogsDirectory, "signalr-*.log"));
     }
@@ -636,5 +645,75 @@ public sealed class ChatSessionSetupTests : IDisposable
         await notDelivered.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, _transport.EnsureSessionCalls);
+    }
+
+    [Fact]
+    public async Task A_failing_bind_retries_with_a_growing_back_off_in_a_single_loop()
+    {
+        _releaseFirstSetup.SetResult();
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        _transport.EnsureSessionGate = _ => throw new IOException("the bind failed");
+        var (chat, client) = CreateChat(timeProvider: time);
+        using var _ = chat;
+        await using var __ = client;
+        chat.OnActivated();
+        await chat.SubmitAsync("a");
+        await chat.SubmitAsync("b");
+        await chat.SubmitAsync("c");
+
+        var deadline = Environment.TickCount64 + 10_000;
+        while (chat.StatusMessage.Value != "Connecting... retry 5 in 10s" && Environment.TickCount64 < deadline)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+            await Task.Yield();
+        }
+
+        // One loop, one attempt per back-off step; the connect event adds one flush of its own.
+        Assert.Equal("Connecting... retry 5 in 10s", chat.StatusMessage.Value);
+        Assert.InRange(_transport.EnsureSessionCalls, 5, 6);
+    }
+
+    [Fact]
+    public async Task A_message_is_not_taken_out_of_the_queue_before_the_session_is_bound()
+    {
+        _releaseFirstSetup.SetResult();
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var failures = 0;
+        _transport.EnsureSessionGate = _ =>
+            Interlocked.Increment(ref failures) == 1 ? throw new IOException("the bind failed") : Task.CompletedTask;
+        var (chat, client) = CreateChat(timeProvider: time);
+        using var _ = chat;
+        await using var __ = client;
+        chat.OnActivated();
+        await chat.SubmitAsync("a");
+        await chat.SubmitAsync("b");
+
+        var deadline = Environment.TickCount64 + 10_000;
+        while (_sent.Count < 2 && Environment.TickCount64 < deadline)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+            await Task.Yield();
+        }
+
+        Assert.Equal(["a", "b"], _sent.ToArray());
+    }
+
+    [Fact]
+    public async Task A_connect_after_a_silent_drop_re_attaches_the_session()
+    {
+        _releaseFirstSetup.SetResult();
+        var (chat, client) = CreateChat();
+        using var _ = chat;
+        await using var __ = client;
+        await client.ResumeSessionAsync("existing/session", DaemonClient.TuiChannelType, TestContext.Current.CancellationToken);
+
+        // The send killed the connection and the foreground reconnect got there before the drop
+        // notification was processed, so DaemonClient's own reconnect has nothing to do.
+        _transport.SetConnected(false);
+        await client.ConnectAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, _transport.StartAttempts);
+        Assert.Equal(2, _transport.EnsureSessionCalls); // the resume, then the re-attach on the new connection
+        Assert.Equal("existing/session", _transport.Invocations[^1].Args[0]);
     }
 }
