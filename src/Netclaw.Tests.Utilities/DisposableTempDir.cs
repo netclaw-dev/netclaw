@@ -61,7 +61,8 @@ internal sealed class DisposableTempDir : IDisposable
             }
             catch (UnauthorizedAccessException) when (i < MaxAttempts - 1) // slopwatch-ignore: SW003 test cleanup retry
             {
-                // A test can leave a read-only file. Windows refuses to delete it.
+                // A test can leave a read-only file, and git marks its object files
+                // read-only. Windows refuses to delete such a file.
                 ClearReadOnlyAttributes(path);
                 Thread.Sleep(100 * (i + 1));
             }
