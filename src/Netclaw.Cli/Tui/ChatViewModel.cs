@@ -184,7 +184,7 @@ public partial class ChatViewModel : ReactiveViewModel
 
         try
         {
-            await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
+            await BindSessionAsync(null);
 
             await _daemonClient.SendAsync(text);
         }
@@ -523,16 +523,16 @@ public partial class ChatViewModel : ReactiveViewModel
             if (_sessionReady && _resumeSessionId is null && _initialMessage is null && _pendingMessages.IsEmpty)
                 return;
 
-            // On the first call, use ResumeSessionAsync if a resume ID was provided.
-            // After that, DaemonClient has the session ID cached, so use EnsureSessionAsync
-            // to avoid redundant resume calls on reconnect.
+            // A resumed chat attaches to its session now, and a chat that already has one re-attaches
+            // on reconnect. A new chat has no session until its first message: opening the chat and
+            // quitting without typing must not leave an empty session behind. After the first call
+            // DaemonClient has the session ID cached, so the bind uses EnsureSessionAsync and skips
+            // the redundant resume.
             var resumeId = _resumeSessionId;
             _resumeSessionId = null;
-            var sessionId = resumeId is not null
-                ? await _daemonClient.ResumeSessionAsync(resumeId, DaemonClient.TuiChannelType)
-                : await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
-            SessionIdDisplay.Value = sessionId;
-            OpenUsageLogIfNeeded(sessionId);
+            var sessionId = resumeId is not null || SessionIdDisplay.Value is not null
+                ? await BindSessionAsync(resumeId)
+                : null;
             IsInputEnabled.Value = true;
             _connectAttempts = 0;
 
@@ -548,6 +548,9 @@ public partial class ChatViewModel : ReactiveViewModel
             {
                 while (true)
                 {
+                    if (sessionId is null && (_initialMessage is not null || !_pendingMessages.IsEmpty))
+                        sessionId = await BindSessionAsync(null);
+
                     var isTrigger = false;
                     var found = _pendingMessages.TryDequeue(out var next);
                     if (!found && _initialMessage is { } trigger)
@@ -570,11 +573,17 @@ public partial class ChatViewModel : ReactiveViewModel
                         await _daemonClient.SendAsync(next!);
                         triggerSent |= isTrigger;
                     }
-                    catch (Exception ex)
+                    catch
                     {
                         _sessionReady = false;
                         IsGenerating.Value = false;
-                        StatusMessage.Value = $"A message could not be sent and was dropped ({ex.Message}).";
+                        // A status line is overwritten by the connection events within milliseconds, so the
+                        // notice goes into the transcript, where the failed message's bubble already is.
+                        _outputSubject.OnNext(new ErrorOutput
+                        {
+                            SessionId = new SessionId(sessionId!),
+                            Message = "A message could not be sent and was not delivered."
+                        });
                         RequestRedraw();
                         return;
                     }
@@ -593,6 +602,16 @@ public partial class ChatViewModel : ReactiveViewModel
         {
             ReleaseSessionSetup();
         }
+    }
+
+    private async Task<string> BindSessionAsync(string? resumeId)
+    {
+        var sessionId = resumeId is not null
+            ? await _daemonClient.ResumeSessionAsync(resumeId, DaemonClient.TuiChannelType)
+            : await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
+        SessionIdDisplay.Value = sessionId;
+        OpenUsageLogIfNeeded(sessionId);
+        return sessionId;
     }
 
     private void ReleaseSessionSetup()

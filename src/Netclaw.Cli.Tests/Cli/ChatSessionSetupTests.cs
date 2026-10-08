@@ -10,6 +10,7 @@ using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using R3;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Cli.Tests.Cli;
 
@@ -69,7 +70,7 @@ public sealed class ChatSessionSetupTests : IDisposable
         _dir.Dispose();
     }
 
-    private async Task<(ChatViewModel Chat, DaemonClient Client)> StartChatAsync(ChatNavigationState? navigation = null)
+    private (ChatViewModel Chat, DaemonClient Client) CreateChat(ChatNavigationState? navigation = null)
     {
         var client = new DaemonClient(
             "http://localhost", _transport, reconnectDelays: [TimeSpan.Zero], rpcTimeout: TimeSpan.FromSeconds(30));
@@ -79,9 +80,31 @@ public sealed class ChatSessionSetupTests : IDisposable
             new ModelCapabilities { ModelId = "test-model" },
             navigation ?? new ChatNavigationState(),
             _paths);
+        return (chat, client);
+    }
+
+    private async Task<(ChatViewModel Chat, DaemonClient Client)> StartChatAsync(ChatNavigationState? navigation = null)
+    {
+        // A chat resuming a session binds it as soon as it connects, which gives these tests a
+        // set-up to hold open. A new chat binds nothing until its first message.
+        var (chat, client) = CreateChat(navigation ?? new ChatNavigationState { ResumeSessionId = "resumed/session" });
         chat.OnActivated();
         await _firstSetupReached.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
         return (chat, client);
+    }
+
+    private const string NotDelivered = "A message could not be sent and was not delivered.";
+
+    // The transcript lines the page renders for ErrorOutput; unlike the status bar they are not overwritten.
+    private static ConcurrentQueue<string> SubscribeToNotices(ChatViewModel chat)
+    {
+        var notices = new ConcurrentQueue<string>();
+        chat.SessionOutput.Subscribe(output =>
+        {
+            if (output is ErrorOutput error)
+                notices.Enqueue(error.Message);
+        });
+        return notices;
     }
 
     private async Task WaitForSendsAsync(int count)
@@ -153,8 +176,7 @@ public sealed class ChatSessionSetupTests : IDisposable
         var (chat, client) = await StartChatAsync();
         using var _ = chat;
         await using var __ = client;
-        var statuses = new ConcurrentQueue<string>();
-        using var subscription = chat.StatusMessage.Subscribe(statuses.Enqueue);
+        var notices = SubscribeToNotices(chat);
 
         await chat.SubmitAsync("A").WaitAsync(Timeout, TestContext.Current.CancellationToken);
         await chat.SubmitAsync("B").WaitAsync(Timeout, TestContext.Current.CancellationToken);
@@ -167,7 +189,7 @@ public sealed class ChatSessionSetupTests : IDisposable
 
         Assert.Equal(["B", "closing"], _sent.ToArray());
         Assert.Equal(1, Volatile.Read(ref attemptsOfA));
-        Assert.Contains(statuses, status => status.StartsWith("A message could not be sent and was dropped", StringComparison.Ordinal));
+        Assert.Equal([NotDelivered], notices.ToArray());
         // The first set-up, the one that delivered B, and the closing message's own EnsureSession
         // when it was sent directly. Nothing retries A, so there is no reconnect storm.
         Assert.InRange(_transport.EnsureSessionCalls, 2, 3);
@@ -207,5 +229,220 @@ public sealed class ChatSessionSetupTests : IDisposable
         await WaitForSendsAsync(1);
 
         Assert.Equal(["q1", "q2", "sentinel"], _sent.ToArray());
+    }
+
+    [Fact]
+    public async Task A_failed_send_does_not_throw_out_of_the_flush_and_leaves_the_chat_not_ready()
+    {
+        _sendGate = _ => throw new IOException("the connection dropped during the send");
+        var navigation = new ChatNavigationState();
+        navigation.StartOnboarding("the-trigger");
+        var (chat, client) = CreateChat(navigation);
+        using var _ = chat;
+        await using var __ = client;
+        var notices = SubscribeToNotices(chat);
+        var statuses = new ConcurrentQueue<string>();
+        using var subscription = chat.StatusMessage.Subscribe(statuses.Enqueue);
+        _releaseFirstSetup.SetResult();
+
+        await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.Equal([NotDelivered], notices.ToArray());
+        Assert.DoesNotContain("Ready", statuses);
+
+        // Not ready, so the next message queues instead of being sent past the failure.
+        _sendGate = null;
+        await chat.SubmitAsync("next").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        Assert.Contains(statuses, status => status.StartsWith("Queued 1 message(s)", StringComparison.Ordinal));
+        await WaitForSendsAsync(1);
+        Assert.Equal(["next"], _sent.ToArray());
+    }
+
+    [Fact]
+    public async Task A_failed_send_marks_a_chat_that_was_ready_as_not_ready()
+    {
+        var (chat, client) = await StartChatAsync();
+        using var _ = chat;
+        await using var __ = client;
+        var notices = SubscribeToNotices(chat);
+        var statuses = new ConcurrentQueue<string>();
+        using var subscription = chat.StatusMessage.Subscribe(statuses.Enqueue);
+
+        await chat.SubmitAsync("m1").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        _releaseFirstSetup.SetResult();
+        await WaitForSendsAsync(1);
+        await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken); // m1 is out and the chat is ready
+
+        // The connection is gone but no connection event has told the chat yet: X queues while the
+        // chat still counts as ready, and the flush that follows meets a message that cannot be sent.
+        _sendGate = text => text == "X" ? throw new IOException("the connection dropped during the send") : Task.CompletedTask;
+        _transport.SetConnected(false);
+        await chat.SubmitAsync("X").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        _transport.SetConnected(true);
+        await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        Assert.Equal([NotDelivered], notices.ToArray());
+
+        // The failure took the chat out of the ready state: Y queues behind it. A chat that still
+        // counted as ready would send Y directly, which sets the "Generating..." status.
+        await chat.SubmitAsync("Y").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await WaitForSendsAsync(1);
+        Assert.DoesNotContain("Generating...", statuses);
+        Assert.Equal(["m1", "Y"], _sent.ToArray());
+    }
+
+    [Fact]
+    public async Task A_failed_send_that_closes_the_connection_drops_that_message_and_delivers_the_rest_once_after_the_reconnect()
+    {
+        var attemptsOfA = 0;
+        _sendGate = text =>
+        {
+            if (text == "A")
+            {
+                Interlocked.Increment(ref attemptsOfA);
+                _transport.RaiseClosed(new IOException("the connection closed during the send"));
+                throw new IOException("the connection closed during the send");
+            }
+
+            return Task.CompletedTask;
+        };
+        var (chat, client) = await StartChatAsync();
+        using var _ = chat;
+        await using var __ = client;
+        var notices = SubscribeToNotices(chat);
+
+        await chat.SubmitAsync("A").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await chat.SubmitAsync("B").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await chat.SubmitAsync("C").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        _releaseFirstSetup.SetResult();
+
+        // B and C go out when the client reconnects and reports Connected.
+        await WaitForSendsAsync(2);
+        await chat.SubmitAsync("closing").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await WaitForSendsAsync(1);
+
+        Assert.Equal(["B", "C", "closing"], _sent.ToArray());
+        Assert.Equal(1, Volatile.Read(ref attemptsOfA));
+        Assert.Equal([NotDelivered], notices.ToArray());
+    }
+
+    [Fact]
+    public async Task A_send_that_fails_while_the_chat_is_ready_is_queued_again_and_sent_once()
+    {
+        var failures = 0;
+        _sendGate = text =>
+        {
+            if (text == "X" && Interlocked.Increment(ref failures) == 1)
+                throw new IOException("the connection dropped during the send");
+
+            return Task.CompletedTask;
+        };
+        var (chat, client) = await StartChatAsync();
+        using var _ = chat;
+        await using var __ = client;
+
+        await chat.SubmitAsync("m1").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        _releaseFirstSetup.SetResult();
+        await WaitForSendsAsync(1);
+        await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken); // the chat is ready
+
+        // Ready, so X is sent directly; that send fails and X goes back in the queue.
+        await chat.SubmitAsync("X").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await WaitForSendsAsync(1);
+
+        await chat.SubmitAsync("closing").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await WaitForSendsAsync(1);
+
+        Assert.Equal(["m1", "X", "closing"], _sent.ToArray());
+        Assert.Equal(2, Volatile.Read(ref failures));
+    }
+
+    [Fact]
+    public async Task A_set_up_whose_chat_is_disposed_as_it_finishes_completes_normally()
+    {
+        var (chat, client) = CreateChat();
+        await using var _ = client;
+        _releaseFirstSetup.SetResult();
+
+        // "Ready" is the last status the set-up writes; the chat goes away while that write is being
+        // delivered, so the set-up reaches its release with the gate already disposed.
+        using var subscription = chat.StatusMessage.Subscribe(status =>
+        {
+            if (status == "Ready")
+                chat.Dispose();
+        });
+
+        await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken);
+    }
+
+    // Opening the chat and quitting without typing must not leave an empty session on the daemon.
+    [Fact]
+    public async Task A_new_chat_creates_its_session_with_the_first_message_and_not_when_it_opens()
+    {
+        _releaseFirstSetup.SetResult(); // nothing here holds a set-up open
+        var (chat, client) = CreateChat();
+        using var _ = chat;
+        await using var __ = client;
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var statuses = new ConcurrentQueue<string>();
+        using var subscription = chat.StatusMessage.Subscribe(status =>
+        {
+            statuses.Enqueue(status);
+            if (status == "Ready")
+                ready.TrySetResult();
+        });
+
+        chat.OnActivated();
+        await ready.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, _transport.EnsureSessionCalls);
+        Assert.Null(chat.SessionIdDisplay.Value);
+
+        await chat.SubmitAsync("first").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await WaitForSendsAsync(1);
+
+        Assert.Equal(["first"], _sent.ToArray());
+        Assert.Equal(1, _transport.EnsureSessionCalls);
+        Assert.Equal("fake/session", chat.SessionIdDisplay.Value);
+        Assert.DoesNotContain(statuses, status => status.StartsWith("Send failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_message_typed_before_a_new_chat_has_connected_creates_the_session_and_arrives_once()
+    {
+        _releaseFirstSetup.SetResult(); // nothing here holds a set-up open
+        var connectionHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _transport.StartHook = _ => connectionHeld.Task;
+        var (chat, client) = CreateChat();
+        using var _ = chat;
+        await using var __ = client;
+        chat.OnActivated();
+
+        await chat.SubmitAsync("typed-early").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        connectionHeld.SetResult();
+        await WaitForSendsAsync(1);
+
+        await chat.SubmitAsync("sentinel").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await WaitForSendsAsync(1);
+
+        Assert.Equal(["typed-early", "sentinel"], _sent.ToArray());
+        Assert.Equal("fake/session", chat.SessionIdDisplay.Value);
+    }
+
+    [Fact]
+    public async Task A_resumed_chat_attaches_to_its_session_when_it_opens()
+    {
+        var (chat, client) = await StartChatAsync(new ChatNavigationState { ResumeSessionId = "existing/session" });
+        using var _ = chat;
+        await using var __ = client;
+        _releaseFirstSetup.SetResult();
+
+        await chat.SubmitAsync("hello").WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await WaitForSendsAsync(1);
+
+        Assert.Equal("existing/session", _transport.Invocations.First(call => call.Method == "EnsureSession").Args[0]);
+        Assert.Equal("existing/session", chat.SessionIdDisplay.Value);
+        Assert.All(
+            _transport.Invocations.Where(call => call.Method == "EnsureSession"),
+            call => Assert.Equal("existing/session", call.Args[0]));
     }
 }
