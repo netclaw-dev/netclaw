@@ -29,7 +29,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output)
+public sealed partial class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output)
     : PersistenceTestKit(output: output), IAsyncDisposable
 {
     private static readonly TimeSpan FaultCeiling = TimeSpan.FromSeconds(20);
@@ -1244,12 +1244,15 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
     private sealed class SummaryClient : ScriptedClient
     {
         private int _count;
+        public string ResponseText { get; set; } = "The original task remains active.";
+        public Exception? Failure { get; set; }
         public int Count => Volatile.Read(ref _count);
         public override Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _count);
-            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "The original task remains active.")));
+            if (Failure is { } failure) throw failure;
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, ResponseText)));
         }
     }
     async ValueTask IAsyncDisposable.DisposeAsync()

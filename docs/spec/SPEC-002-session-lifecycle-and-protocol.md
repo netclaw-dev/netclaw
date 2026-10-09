@@ -164,6 +164,12 @@ primary model. Allows routing compaction to a cheaper/faster model.
 
 ### Tool Call/Result Pair Integrity
 
+The compaction pipeline rejects an empty task window when the observer fails or returns no summary.
+The session actor reports the failure and preserves the original history and task authority.
+It does not commit `SessionCompacted` or create a compaction snapshot for that failed attempt.
+A valid summary permits a zero-message retention window.
+A nonempty extractive window remains valid when the observer fails.
+
 During compaction, tool call/result pairs must remain atomic. Never orphan
 a tool call from its result. Tool interactions older than the retention window
 are summarized as "Used {tool} for {purpose} → {outcome}".
