@@ -326,7 +326,7 @@ internal sealed class SessionToolExecutionPipeline
                         batch.SetWorkingDirectoryAvailable)
                 };
                 if (batch.StreamResults)
-                    batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result));
+                    batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result, batch.CancellationToken));
                 return result;
             });
             var results = await Task.WhenAll(tasks);
@@ -347,7 +347,7 @@ internal sealed class SessionToolExecutionPipeline
 
             if (batch.StreamResults)
             {
-                batch.ReplyTo.Tell(new ToolExecutionBatchCompleted());
+                batch.ReplyTo.Tell(new ToolExecutionBatchCompleted(batch.CancellationToken));
                 return;
             }
 
@@ -355,6 +355,7 @@ internal sealed class SessionToolExecutionPipeline
             var modelInputMediaReferences = results.SelectMany(r => r.ModelInputMediaReferences).ToList();
             batch.ReplyTo.Tell(new ToolExecutionCompleted
             {
+                ExecutionToken = batch.CancellationToken,
                 ToolResults = [.. results.Select(r => r.Message)],
                 ModelInputMediaReferences = modelInputMediaReferences,
                 FileAttachments = fileAttachments,
@@ -399,7 +400,7 @@ internal sealed class SessionToolExecutionPipeline
         }
         catch (TimeoutException ex)
         {
-            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex });
+            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, ExecutionToken = batch.CancellationToken });
         }
         catch (OperationCanceledException) when (batch.CancellationToken.IsCancellationRequested)
         {
@@ -408,7 +409,7 @@ internal sealed class SessionToolExecutionPipeline
         }
         catch (Exception ex)
         {
-            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex });
+            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, ExecutionToken = batch.CancellationToken });
         }
     }
 

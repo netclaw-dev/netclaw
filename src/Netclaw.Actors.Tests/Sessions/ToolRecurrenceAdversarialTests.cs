@@ -8,12 +8,20 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Akka.Actor;
+using Akka.Configuration;
+using Akka.Dispatch;
+using Akka.Dispatch.MessageQueues;
+using Akka.Event;
+using Akka.Persistence;
+using Akka.Routing;
 using Akka.TestKit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.SubAgents;
 using Netclaw.Actors.Tools;
@@ -21,6 +29,7 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
+using AkkaPersistence = Akka.Persistence.Persistence;
 using ChatRole = Microsoft.Extensions.AI.ChatRole;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 using static Netclaw.Actors.SubAgents.SubAgentProtocol;
@@ -33,8 +42,11 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
     private static readonly TimeSpan FaultCeiling = TimeSpan.FromSeconds(30);
     private readonly AdversarialChatClient _client = new();
     private readonly EffectLedger _ledger = new();
+    private readonly RecordingGrantService _grants = new();
     private IActorRef? _childActor;
     private SubAgentResult? _childResult;
+    private TestProbe? _parentSubscriber;
+    private bool _captureReplies;
     private readonly List<CompactionOutput> _compactions = [];
     private readonly List<string> _admittedCallIds = [];
 
@@ -54,6 +66,7 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("Use the supplied task contract."));
         services.AddSingleton<IToolExecutor>(new EffectExecutor(_ledger));
+        services.AddSingleton<IToolApprovalService>(_grants);
         var registry = new ToolRegistry();
         registry.RegisterCore(AIFunctionFactory.Create((int step) => $"Step {step}", ProbeTool), "builtin");
         services.AddSingleton(registry);
@@ -306,11 +319,12 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         _client.RejectRequestsAfter = 1;
 
         var completion = RunToCompletionAsync(true);
-        await _ledger.ApplicationEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+        var executionToken = await _ledger.ApplicationEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
         Assert.NotNull(_childActor);
         // Inject a defective completed pipeline message, not an ordinary pending wait.
         _childActor.Tell(new ToolExecutionCompleted
         {
+            ExecutionToken = executionToken,
             ToolResults = [new SerializableChatMessage
             {
                 Role = Netclaw.Actors.Protocol.ChatRole.Tool,
@@ -328,6 +342,347 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         Assert.NotEqual(SubAgentRunOutcome.Completed, _childResult.Outcome);
         Assert.Empty(_ledger.Effects);
         Assert.Equal(1, _client.RequestCount);
+    }
+
+    [Theory]
+    [InlineData(false, "model")]
+    [InlineData(false, "single")]
+    [InlineData(true, "model")]
+    [InlineData(true, "single")]
+    public async Task Settled_parent_rejects_late_replies_before_or_during_a_fresh_task(bool freshTask, string replyKind)
+    {
+        ConfigureEffects();
+        _client.Repeat = true;
+        _client.Frames = [[Call("repeat", 1)]];
+        _client.RejectRequestsAfter = freshTask ? 5 : 4;
+        InstallReplyCaptureMailbox();
+        await RunToCompletionAsync(false);
+        var subscriber = Assert.IsType<TestProbe>(_parentSubscriber);
+        await subscriber.FishForMessageAsync<object>(message => message is ProcessingStateOutput { IsProcessing: false },
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        var session = new SessionId("adversarial/effects");
+        var owner = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(session.Value)}")
+            .ResolveOne(FaultCeiling, TestContext.Current.CancellationToken);
+        if (freshTask)
+        {
+            _client.HoldRequest = 5;
+            _client.Repeat = false;
+            await ActorRegistry.Get<SessionManagerActorKey>().Ask<CommandAck>(new SendUserMessage
+            { SessionId = session, Content = "This new authorized task must remain separate." },
+                FaultCeiling, TestContext.Current.CancellationToken);
+            await _client.HeldRequestEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+        }
+
+        var captured = CapturedReply(replyKind);
+        // The original sender orders the exact old envelope before the actor acknowledgement.
+        owner.Tell(captured.Message, captured.Sender);
+        owner.Tell(new JoinSession(subscriber)
+        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, captured.Sender);
+        var observed = new List<object>();
+        var barrier = await subscriber.FishForMessageAsync<object>(message =>
+        {
+            observed.Add(message);
+            return message is SessionJoined;
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        var state = Assert.IsType<SessionJoined>(barrier);
+        Assert.Equal(1, state.TurnCount);
+        Assert.DoesNotContain(observed, message => message is TurnCompleted or ToolInteractionRequest or ToolResultOutput);
+        Assert.NotNull(state.RecentMessages);
+        Assert.Equal(2, _ledger.Effects.Count);
+        Assert.Equal(freshTask ? 5 : 4, _client.RequestCount);
+        Assert.False(_client.UnexpectedRequest.Task.IsCompleted);
+
+        if (freshTask)
+        {
+            _client.ReleaseHeldRequest.TrySetResult();
+            await subscriber.FishForMessageAsync<object>(message => message is TurnCompleted,
+                FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.FishForMessageAsync<object>(message => message is ProcessingStateOutput { IsProcessing: false },
+                FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(2, _ledger.Effects.Count);
+            Assert.Equal(5, _client.RequestCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("model")]
+    [InlineData("aggregate")]
+    public async Task Settled_child_stops_and_cannot_accept_a_late_reply(string replyKind)
+    {
+        ConfigureEffects();
+        _client.Repeat = true;
+        _client.Frames = [[Call("repeat", 1)]];
+        _client.RejectRequestsAfter = 4;
+        InstallReplyCaptureMailbox();
+        await RunToCompletionAsync(true);
+        var child = Assert.IsAssignableFrom<IActorRef>(_childActor);
+        var watcher = CreateTestProbe();
+        watcher.Watch(child);
+        await watcher.ExpectTerminatedAsync(child, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        var deadLetters = CreateTestProbe();
+        Sys.EventStream.Subscribe(deadLetters, typeof(DeadLetter));
+        var captured = CapturedReply(replyKind);
+        child.Tell(captured.Message, captured.Sender);
+        await deadLetters.FishForMessageAsync<DeadLetter>(message => ReferenceEquals(message.Message, captured.Message) && Equals(message.Recipient, child),
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(2, _ledger.Effects.Count);
+        Assert.Equal(4, _client.RequestCount);
+        Assert.Equal(SubAgentRunOutcome.Partial, Assert.IsType<SubAgentResult>(_childResult).Outcome);
+    }
+
+    [Theory]
+    [InlineData("single", false)]
+    [InlineData("batch", false)]
+    [InlineData("single", true)]
+    [InlineData("batch", true)]
+    public async Task A_prior_reply_cannot_complete_a_new_batch_that_reuses_its_provider_call_id(string replyKind, bool identicalArguments)
+    {
+        ConfigureEffects();
+        _client.Repeat = true;
+        _client.Frames = [[Call("repeat", 1)]];
+        InstallReplyCaptureMailbox();
+        await RunToCompletionAsync(false);
+        var subscriber = Assert.IsType<TestProbe>(_parentSubscriber);
+        await subscriber.FishForMessageAsync<object>(message => message is ProcessingStateOutput { IsProcessing: false },
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        var captured = CapturedReply(replyKind);
+        var oldResult = Assert.IsType<ToolExecutionSingleCompleted>(CapturedReply("single").Message).Result;
+        var oldId = Assert.IsType<ToolCallId>(oldResult.Message.ToolCallId).Value;
+        _client.Repeat = false;
+        _client.PreserveCallIdsFromRequest = 5;
+        var currentStep = identicalArguments ? 1 : 2;
+        _client.Frames = [[], [], [], [], [Call(oldId, currentStep)]];
+        _client.RejectRequestsAfter = 6;
+        _ledger.HoldStep = currentStep;
+        var session = new SessionId("adversarial/effects");
+        await ActorRegistry.Get<SessionManagerActorKey>().Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session, Content = "A new requester authorizes a different effect.",
+            Source = new MessageSource
+            {
+                ChannelType = ChannelType.SignalR, SenderId = new SenderId("operator-new"),
+                Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal,
+                Principal = PrincipalClassification.Operator,
+                Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
+                DefaultDeliveryTarget = new ChannelDeliveryTargetInfo("signalr", "destination", "operator-new", "operator-new")
+            }
+        }, FaultCeiling, TestContext.Current.CancellationToken);
+        await _ledger.ApplicationEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+        var current = _ledger.Executions.Last();
+        Assert.Equal(oldId, current.CallId);
+        Assert.NotEqual(oldResult.AuthorizationAttemptId, current.AuthorizationAttemptId);
+        Assert.Equal("operator-new", current.Scope.DefaultDeliveryTarget?.DestinationId);
+        var owner = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(session.Value)}")
+            .ResolveOne(FaultCeiling, TestContext.Current.CancellationToken);
+        owner.Tell(captured.Message, captured.Sender);
+        owner.Tell(new JoinSession(subscriber)
+        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, captured.Sender);
+        var observed = new List<object>();
+        var barrier = await subscriber.FishForMessageAsync<object>(message =>
+        {
+            observed.Add(message);
+            return message is SessionJoined;
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(1, Assert.IsType<SessionJoined>(barrier).TurnCount);
+        Assert.False(current.CancellationToken.IsCancellationRequested);
+        Assert.DoesNotContain(observed, message => message is TurnCompleted or ToolInteractionRequest or ToolResultOutput);
+        Assert.Equal(2, _ledger.Effects.Count);
+        Assert.Equal(5, _client.RequestCount);
+
+        _ledger.ReleaseApplication.TrySetResult();
+        var currentResults = new List<ToolResultOutput>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            if (message is ToolResultOutput result) currentResults.Add(result);
+            return message is TurnCompleted;
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.FishForMessageAsync<object>(message => message is ProcessingStateOutput { IsProcessing: false },
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        var actual = Assert.Single(currentResults);
+        Assert.Equal(oldId, actual.CallId.Value);
+        Assert.Equal($"verified effect {currentStep}", actual.Result);
+        Assert.Equal(new[] { 1, 1, currentStep }.Order().ToArray(), _ledger.Effects.Order().ToArray());
+        Assert.Equal($"verified effect {currentStep}", await File.ReadAllTextAsync(_ledger.PathFor(currentStep), TestContext.Current.CancellationToken));
+        Assert.Equal(6, _client.RequestCount);
+        Assert.Equal("operator-new", _ledger.Executions.Last().Scope.DefaultDeliveryTarget?.DestinationId);
+        var latestRequest = _client.Requests.Last();
+        var latestBatch = Array.FindLastIndex(latestRequest, message =>
+            message.Contents.OfType<FunctionCallContent>().Any(call => call.CallId == oldId));
+        Assert.True(latestBatch >= 0);
+        var paired = Assert.Single(latestRequest.Skip(latestBatch + 1)
+            .SelectMany(message => message.Contents.OfType<FunctionResultContent>()), result => result.CallId == oldId);
+        Assert.Equal($"verified effect {currentStep}", paired.Result?.ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_closed_approval_callback_cannot_create_a_prompt_or_grant_for_a_fresh_task(bool replayRequest)
+    {
+        ConfigureEffects();
+        _ledger.RequireApproval = true;
+        _client.Repeat = true;
+        _client.Frames = [[Call("approved-repeat", 1)]];
+        InstallReplyCaptureMailbox();
+        var session = new SessionId("adversarial/effects");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await JoinSessionAsync(manager, subscriber, session, OutputFilter.Full | OutputFilter.ProcessingState);
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session, Content = "Execute the effect with my explicit approval.",
+            Source = ApprovalRequester("operator-old")
+        }, FaultCeiling, TestContext.Current.CancellationToken);
+        var prompts = new List<ToolInteractionRequest>();
+        for (var round = 0; round < 2; round++)
+        {
+            var request = await subscriber.FishForMessageAsync<ToolInteractionRequest>(_ => true,
+                FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+            prompts.Add(request);
+            await manager.Ask<CommandAck>(new ToolInteractionResponse
+            {
+                SessionId = session, CallId = request.CallId,
+                SelectedKey = ApprovalOptionKeys.ApproveOnceKey, SenderId = new SenderId("operator-old")
+            }, FaultCeiling, TestContext.Current.CancellationToken);
+        }
+        await subscriber.FishForMessageAsync<object>(message => message is TurnCompleted,
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.FishForMessageAsync<object>(message => message is ProcessingStateOutput { IsProcessing: false },
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(2, _ledger.Effects.Count);
+        Assert.Equal(4, _client.RequestCount);
+        Assert.Empty(_grants.Writes);
+        var captured = ReplyCaptureMailbox.Captures.GetOrCreateValue(Sys).First(envelope =>
+            envelope.Message is ToolExecutionApprovalRequested);
+        var callback = Assert.IsType<ToolExecutionApprovalRequested>(captured.Message);
+        Assert.Same(prompts[0], callback.Dispatch.Request);
+        Assert.True(callback.ExecutionToken.IsCancellationRequested);
+        var before = await ReadSessionEventsAsync(session);
+        Assert.Equal(2, before.OfType<ToolApprovalRequested>().Count());
+        Assert.Equal(2, before.OfType<ToolApprovalResolved>().Count());
+        var confirmed = before.OfType<ToolCallRecorded>()
+            .Where(evt => evt.ToolResult.Content.Contains("verified effect 1", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(2, confirmed.Length);
+        Assert.Equal(confirmed[0].ToolResult.Content, confirmed[1].ToolResult.Content);
+
+        _client.Repeat = false;
+        _client.HoldRequest = 5;
+        _client.RejectRequestsAfter = 5;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session, Content = "A fresh task needs no old approval.",
+            Source = ApprovalRequester("operator-new")
+        }, FaultCeiling, TestContext.Current.CancellationToken);
+        await _client.HeldRequestEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+        var owner = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(session.Value)}")
+            .ResolveOne(FaultCeiling, TestContext.Current.CancellationToken);
+        if (replayRequest)
+            owner.Tell(captured.Message, captured.Sender);
+        owner.Tell(new JoinSession(subscriber)
+        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, captured.Sender);
+        var observed = new List<object>();
+        var barrier = await subscriber.FishForMessageAsync<object>(message =>
+        {
+            observed.Add(message);
+            return message is SessionJoined;
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(1, Assert.IsType<SessionJoined>(barrier).TurnCount);
+        Assert.DoesNotContain(observed, message => message is ToolInteractionRequest or TurnCompleted or ToolResultOutput);
+        var after = await ReadSessionEventsAsync(session);
+        Assert.Equal(before.OfType<ToolApprovalRequested>().Select(evt => JsonSerializer.Serialize(evt)).ToArray(),
+            after.OfType<ToolApprovalRequested>().Select(evt => JsonSerializer.Serialize(evt)).ToArray());
+        Assert.Equal(before.OfType<ToolApprovalResolved>().Select(evt => JsonSerializer.Serialize(evt)).ToArray(),
+            after.OfType<ToolApprovalResolved>().Select(evt => JsonSerializer.Serialize(evt)).ToArray());
+        var nack = await manager.Ask<CommandNack>(new ToolInteractionResponse
+        {
+            SessionId = session, CallId = prompts[0].CallId,
+            SelectedKey = ApprovalOptionKeys.ApproveSessionKey, SenderId = new SenderId("operator-old")
+        }, FaultCeiling, TestContext.Current.CancellationToken);
+        Assert.Equal(ApprovalNackReasons.PromptExpired, nack.Reason);
+        Assert.Empty(_grants.Writes);
+        Assert.Equal(2, _ledger.Effects.Count);
+        Assert.Equal(5, _client.RequestCount);
+        _client.ReleaseHeldRequest.TrySetResult();
+        await subscriber.FishForMessageAsync<object>(message => message is TurnCompleted,
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.FishForMessageAsync<object>(message => message is ProcessingStateOutput { IsProcessing: false },
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(2, _ledger.Effects.Count);
+        Assert.Equal(5, _client.RequestCount);
+        Assert.Empty(_grants.Writes);
+    }
+
+    private static MessageSource ApprovalRequester(string sender) => new()
+    {
+        ChannelType = ChannelType.SignalR, SenderId = new SenderId(sender),
+        Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal,
+        Principal = PrincipalClassification.Operator,
+        Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
+        DefaultDeliveryTarget = new ChannelDeliveryTargetInfo("signalr", "destination", sender, sender)
+    };
+
+    private async Task<IReadOnlyList<ISessionEvent>> ReadSessionEventsAsync(SessionId session)
+    {
+        var reader = CreateTestProbe();
+        AkkaPersistence.Instance.Apply(Sys).JournalFor(string.Empty).Tell(
+            new ReplayMessages(1, long.MaxValue, long.MaxValue, $"session-{session.Value}", reader));
+        var events = new List<ISessionEvent>();
+        await reader.FishForMessageAsync<object>(message =>
+        {
+            if (message is ReplayedMessage replayed)
+                events.Add(Assert.IsAssignableFrom<ISessionEvent>(replayed.Persistent.Payload));
+            return message is RecoverySuccess;
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        return events;
+    }
+
+    private Envelope CapturedReply(string kind)
+    {
+        if (kind == "model")
+            return ReplyCaptureMailbox.Captures.GetOrCreateValue(Sys).Single(envelope =>
+                envelope.Message is LlmResponseReceived { CallId: 4 });
+        if (kind == "single")
+            return ReplyCaptureMailbox.Captures.GetOrCreateValue(Sys).First(envelope =>
+                envelope.Message is ToolExecutionSingleCompleted { Result.Receipt: ToolInvocationReceipt.Succeeded });
+        if (kind == "batch")
+            return ReplyCaptureMailbox.Captures.GetOrCreateValue(Sys).First(envelope =>
+                envelope.Message is ToolExecutionBatchCompleted);
+        return ReplyCaptureMailbox.Captures.GetOrCreateValue(Sys).First(envelope =>
+            envelope.Message is ToolExecutionCompleted completed
+            && completed.ToolReceipts.Values.Any(receipt => receipt is ToolInvocationReceipt.Succeeded));
+    }
+
+    private void InstallReplyCaptureMailbox()
+    {
+        _captureReplies = true;
+        Sys.Settings.InjectTopLevelFallback(ConfigurationFactory.ParseString(
+            $"reply-capture-mailbox {{ mailbox-type = \"{typeof(ReplyCaptureMailbox).AssemblyQualifiedName}\" }}"));
+        ((ExtendedActorSystem)Sys).Provider.Deployer.SetDeploy(new Deploy(
+            "/session-manager/adversarial%2Feffects", Config.Empty, NoRouter.Instance, LocalScope.Instance,
+            Deploy.NoDispatcherGiven, "reply-capture-mailbox"));
+    }
+
+    public sealed class ReplyCaptureMailbox(Settings settings, Config config) : MailboxType(settings, config), IProducesMessageQueue<ReplyCaptureQueue>
+    {
+        internal static readonly ConditionalWeakTable<ActorSystem, ConcurrentQueue<Envelope>> Captures = new();
+        public override IMessageQueue Create(IActorRef owner, ActorSystem system)
+            => new ReplyCaptureQueue(Captures.GetOrCreateValue(system));
+    }
+
+    public sealed class ReplyCaptureQueue(ConcurrentQueue<Envelope> captured) : IMessageQueue, IUnboundedDequeBasedMessageQueueSemantics
+    {
+        private readonly UnboundedDequeMessageQueue _inner = new();
+        public int Count => _inner.Count;
+        public bool HasMessages => _inner.HasMessages;
+        public void Enqueue(IActorRef receiver, Envelope envelope)
+        {
+            if (envelope.Message is LlmResponseReceived or ToolExecutionSingleCompleted or ToolExecutionBatchCompleted or ToolExecutionCompleted or ToolExecutionApprovalRequested)
+                captured.Enqueue(envelope);
+            _inner.Enqueue(receiver, envelope);
+        }
+        public void EnqueueFirst(Envelope envelope) => _inner.EnqueueFirst(envelope);
+        public bool TryDequeue(out Envelope envelope) => _inner.TryDequeue(out envelope);
+        public void CleanUp(IActorRef owner, IMessageQueue deadletters) => _inner.CleanUp(owner, deadletters);
     }
 
     private void ConfigureEffects()
@@ -349,7 +704,8 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
                 new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
                 new ShellCommandPolicy(), new ToolPathPolicy([]));
-            var actor = Sys.ActorOf(SubAgentActor.CreateProps(definition, _client, policy));
+            var props = SubAgentActor.CreateProps(definition, _client, policy);
+            var actor = Sys.ActorOf(_captureReplies ? props.WithMailbox("reply-capture-mailbox") : props);
             _childActor = actor;
             var scope = SubAgentTestScope.Create(sessionDirectory: Path.Combine(TestPaths.BasePath, "child-workspace"));
             var storage = SessionStoragePaths.CreateLegacy(
@@ -368,8 +724,9 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
 
         var manager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe();
+        _parentSubscriber = subscriber;
         var sessionId = new SessionId("adversarial/effects");
-        await JoinSessionAsync(manager, subscriber, sessionId, OutputFilter.Full);
+        await JoinSessionAsync(manager, subscriber, sessionId, OutputFilter.Full | OutputFilter.ProcessingState);
         await manager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
@@ -407,6 +764,11 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         public int RejectRequestsAfter { get; set; } = int.MaxValue;
         public int CompactAfterRequest { get; set; } = int.MaxValue;
         public int CompactionCount => Volatile.Read(ref _compactions);
+        public int HoldRequest { get; set; } = int.MaxValue;
+        public int PreserveCallIdsFromRequest { get; set; } = int.MaxValue;
+        public ConcurrentQueue<ChatMessage[]> Requests { get; } = new();
+        public TaskCompletionSource HeldRequestEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseHeldRequest { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int RequestCount => Volatile.Read(ref _requests);
         public ConcurrentQueue<string> PairingErrors { get; } = new();
         public TaskCompletionSource ToolFreeRequest { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -423,6 +785,12 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
                 return Text("The effect task remains incomplete. Preserve the recorded tool evidence.");
             }
             var request = Interlocked.Increment(ref _requests);
+            Requests.Enqueue(snapshot);
+            if (request == HoldRequest)
+            {
+                HeldRequestEntered.TrySetResult();
+                await ReleaseHeldRequest.Task.WaitAsync(cancellationToken);
+            }
             if (request > RejectRequestsAfter)
             {
                 UnexpectedRequest.TrySetResult();
@@ -451,7 +819,7 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
 
             var frame = Frames[Repeat ? 0 : request - 1];
             var calls = frame.Select(call => new FunctionCallContent(
-                $"request-{request}-{call.CallId}", call.Name, call.Arguments)).ToArray();
+                request >= PreserveCallIdsFromRequest ? call.CallId : $"request-{request}-{call.CallId}", call.Name, call.Arguments)).ToArray();
             _previousCalls.Clear();
             _previousCalls.AddRange(calls);
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, calls.Cast<AIContent>().ToList()))
@@ -478,16 +846,37 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         public void Dispose() { }
     }
 
+    private sealed class RecordingGrantService : IToolApprovalService
+    {
+        public ConcurrentQueue<IReadOnlyList<ToolApprovalGrant>> Writes { get; } = new();
+        public Task<ToolApprovalCheckResult> CheckApprovalAsync(ToolApprovalSessionId? sessionId,
+            TrustAudience audience, ToolName toolName, IReadOnlyList<ApprovalCandidate> candidates,
+            string? cwd, CancellationToken ct = default)
+            => Task.FromResult(new ToolApprovalCheckResult(candidates.Select(candidate => candidate.Verb).ToArray(), []));
+        public Task RecordApprovalCandidatesAsync(ToolApprovalSessionId sessionId,
+            TrustAudience audience, ToolName toolName, IReadOnlyList<ToolApprovalGrant> grants,
+            CancellationToken ct = default)
+        {
+            Writes.Enqueue(grants.ToArray());
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class EffectLedger
     {
+        public sealed record Execution(string CallId, AuthorizationAttemptId AuthorizationAttemptId, ToolRunScope Scope, CancellationToken CancellationToken);
+        public ConcurrentQueue<Execution> Executions { get; } = new();
         public string Directory { get; set; } = string.Empty;
         public ConcurrentBag<int> Effects { get; } = [];
         public ConcurrentBag<int> Attempts { get; } = [];
         private readonly ConcurrentDictionary<int, int> _occurrences = new();
         private readonly object _effectGate = new();
         public bool EmitReceipt { get; set; } = true;
+        public bool RequireApproval { get; set; }
         public bool HoldBeforeApply { get; set; }
-        public TaskCompletionSource ApplicationEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int HoldStep { get; set; } = int.MaxValue;
+        public TaskCompletionSource ReleaseApplication { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<CancellationToken> ApplicationEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Func<int, int, ToolInvocationReceipt> ReceiptForOccurrence { get; set; }
             = (_, _) => new ToolInvocationReceipt.Succeeded([], null);
         public Func<int, int, string> ResultForOccurrence { get; set; }
@@ -502,8 +891,13 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
             Attempts.Add(step);
             if (HoldBeforeApply)
             {
-                ApplicationEntered.TrySetResult();
+                ApplicationEntered.TrySetResult(ct);
                 await TestStreamingHelpers.ParkUntilCancelledAsync(ct);
+            }
+            if (step == HoldStep)
+            {
+                ApplicationEntered.TrySetResult(ct);
+                await ReleaseApplication.Task.WaitAsync(ct);
             }
             lock (_effectGate)
             {
@@ -521,6 +915,14 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
     {
         public async Task<string> ExecuteAsync(FunctionCallContent call, ToolExecutionContext context, CancellationToken ct = default)
         {
+            if (ledger.RequireApproval && context.OneTimeApprovedToolName != call.Name)
+                throw new ToolApprovalRequiredException(new ToolApprovalContext(
+                    call.Name, "The effect needs explicit approval.", [call.Name], [call.Name],
+                    [new ToolApprovalOption(ApprovalOptionKeys.ApproveOnceKey, "Approve once"),
+                     new ToolApprovalOption(ApprovalOptionKeys.ApproveSessionKey, "This chat"),
+                     new ToolApprovalOption(new ApprovalOptionKey(ApprovalOptionKeys.Deny), "Deny")],
+                    Candidates: [new ApprovalCandidate(call.Name, null)]));
+            ledger.Executions.Enqueue(new EffectLedger.Execution(call.CallId, context.Approval.AuthorizationAttemptId, context.RunScope, ct));
             var (output, receipt) = await ledger.ApplyAsync(call.Arguments!, ct);
             if (ledger.EmitReceipt)
                 context.Outputs.TryComplete(receipt);

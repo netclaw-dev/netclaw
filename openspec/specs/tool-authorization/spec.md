@@ -193,6 +193,37 @@ The baseline SHALL NOT create a requester, grant, or input activation.
 - **AND** a different requester or source scope cannot replace it
 - **AND** snapshot recovery retains the original requester without a new input activation
 
+New local foreground approval requests and foreground child spawn callbacks SHALL carry the original parent dispatch token.
+The parent SHALL validate current dispatch ownership before approval persistence, prompt output, or child creation.
+Local foreground child activity and routed foreground callbacks SHALL use the same ownership boundary before parent effects.
+Durable shell background deliveries SHALL retain their separate origin and input-admission contract.
+This requirement SHALL NOT assign a parent dispatch token to a future accepted background child run.
+An unbound public approval output SHALL NOT create parent approval state.
+Durable approval answers SHALL retain their canonical pending context and existing requester and claimed-wait checks.
+A canceled old dispatch SHALL NOT invalidate an already durable approval solely through that token.
+Cold redrive SHALL create a new dispatch token without replacing the original requester or authorization attempt.
+
+#### Scenario: A stale approval request cannot acquire fresh authority
+
+- **GIVEN** an old local approval request and a fresh task with another requester
+- **WHEN** the old request reaches the parent mailbox
+- **THEN** the parent creates no approval record, prompt, or grant
+- **AND** the fresh task retains its canonical requester
+
+#### Scenario: A parked approval retains its canonical authority
+
+- **GIVEN** a durable approval for requester `U1` survives cancellation of its old dispatch
+- **WHEN** requester `U1` supplies an authorized answer after recovery
+- **THEN** the existing cold-redrive path retains that context and authorization attempt
+- **AND** the new dispatch receives its own local token
+
+#### Scenario: A stale child callback cannot reopen parent work
+
+- **GIVEN** a settled parent dispatch and a captured child spawn or activity callback
+- **WHEN** that callback arrives during another task
+- **THEN** the parent creates no old child and emits no old activity
+- **AND** no callback changes the current task authority
+
 ### Requirement: TA-2 Schema exposure grants no authority
 
 The model SHALL see only policy-visible tool schemas. Schema exposure,

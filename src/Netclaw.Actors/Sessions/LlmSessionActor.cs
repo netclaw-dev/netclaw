@@ -486,7 +486,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionWorkFailed>(_ => { });
         CommandDistillationAckNoOp();
         CommandJobReapResolved();
-        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
+        Command<SpawnChildActorRequest>(HandleSpawnChildActorRequest);
         Command<DeliveryFailed>(HandleDeliveryFailedWhenReady);
 
         // Approval click for a tool batch that parked while the session was
@@ -569,6 +569,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolExecutionSingleCompleted>(msg =>
         {
+            if (!OwnsToolExecution(msg.ExecutionToken))
+                return;
             var result = msg.Result;
             Persist(new ToolCallRecorded
             {
@@ -587,8 +589,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             });
         });
 
-        Command<ToolExecutionBatchCompleted>(_ =>
+        Command<ToolExecutionBatchCompleted>(msg =>
         {
+            if (!OwnsToolExecution(msg.ExecutionToken))
+                return;
             _watchdog.Stop(Timers);
             CancelAndDisposeToolExecutionCts();
             _activeToolWorkTask = null;
@@ -600,6 +604,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolExecutionFailed>(msg =>
         {
+            if (!OwnsToolExecution(msg.ExecutionToken))
+                return;
             _watchdog.Stop(Timers);
             CancelAndDisposeToolExecutionCts();
             _mediaBuffer.Clear();
@@ -630,9 +636,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FailCurrentTurn(errorMessage, msg.Cause, category);
         });
 
-        Command<ToolInteractionRequest>(msg => HandleToolInteractionRequestDispatch(
-            new ToolInteractionRequestDispatch(msg, PersistApprovalState: true)));
-        Command<ToolInteractionRequestDispatch>(HandleToolInteractionRequestDispatch);
+        Command<ToolExecutionApprovalRequested>(msg =>
+        {
+            if (OwnsToolExecution(msg.ExecutionToken))
+                HandleToolInteractionRequestDispatch(msg.Dispatch);
+        });
+        Command<ToolExecutionSubAgentActivity>(msg =>
+        {
+            if (OwnsToolExecution(msg.ExecutionToken))
+                EmitOutput(msg.Output, OutputFilter.ToolCalls);
+        });
 
         CommandAsync<ToolInteractionResponse>(HandleProcessingApprovalResponseAsync);
 
@@ -753,15 +766,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FailCurrentTurn(errorMessage, timeoutCause, ErrorCategory.Timeout);
         });
 
-        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
+        Command<SpawnChildActorRequest>(HandleSpawnChildActorRequest);
         Command<RoutedSkillExecutionCompleted>(HandleRoutedSkillExecutionCompleted);
-        Command<RoutedSkillExecutionFailed>(msg =>
-            FailCurrentTurn(
-                $"Skill '/{msg.SkillName}' routed to subagent '{msg.SubagentName}' failed: {msg.ErrorMessage}",
-                new InvalidOperationException(msg.ErrorMessage),
-                ErrorCategory.ToolFailure));
+        Command<RoutedSkillExecutionFailed>(HandleRoutedSkillExecutionFailed);
         Command<RoutedSkillSubAgentActivity>(msg =>
         {
+            if (!OwnsToolExecution(msg.ExecutionToken))
+                return;
             EmitOutput(new SubAgentOutput
             {
                 SessionId = _sessionId,
@@ -878,6 +889,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleToolExecutionCompleted(ToolExecutionCompleted msg)
     {
+        if (!OwnsToolExecution(msg.ExecutionToken))
+            return;
         _watchdog.Stop(Timers);
         CancelAndDisposeToolExecutionCts();
 
@@ -1211,7 +1224,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<ProcessingWatchdogExpired>(HandleCompactionWatchdogExpired);
-        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
+        Command<SpawnChildActorRequest>(HandleSpawnChildActorRequest);
 
         Command<CompactionTriggered>(HandleCompactionTriggered);
 
@@ -1603,7 +1616,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<ProcessingWatchdogExpired>(_ => { });
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
-        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
+        Command<SpawnChildActorRequest>(HandleSpawnChildActorRequest);
 
         // Timeout — stop even if distillation didn't finish
         Command<PassivationTimeout>(_ =>
@@ -2032,7 +2045,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _lastInputTokenCount = usage.InputTokenCount.Value;
     }
 
-    private void EmitToolCycleCorrection(IReadOnlyList<FunctionCallContent> toolCalls)
+    private void EmitToolCycleCorrection(IReadOnlyList<FunctionCallContent> toolCalls, CancellationToken executionToken)
     {
         foreach (var call in toolCalls)
         {
@@ -2054,7 +2067,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 [],
                 [],
                 AuthorizationAttemptId.New(),
-                Receipt: receipt)));
+                Receipt: receipt), executionToken));
         }
 
     }
@@ -2084,15 +2097,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         if (recordCompletedCycle && preparedCycleBatch is null && _toolExecutor is not null)
             preparedCycleBatch = ToolCycleSignatureFactory.Prepare(toolCalls, _toolExecutor);
+        CancelAndDisposeToolExecutionCts();
+        _activeToolExecutionCts = new CancellationTokenSource();
+        var toolExecutionCt = _activeToolExecutionCts.Token;
         _activeToolBatch.Start(toolCalls, preparedCycleBatch);
         if (refusedCallIds is { Count: > 0 })
         {
             _activeToolBatch.MarkRefused(refusedCallIds);
-            EmitToolCycleCorrection(toolCalls.Where(call => refusedCallIds.Contains(call.CallId)).ToList());
+            EmitToolCycleCorrection(toolCalls.Where(call => refusedCallIds.Contains(call.CallId)).ToList(), toolExecutionCt);
             toolCalls = toolCalls.Where(call => !refusedCallIds.Contains(call.CallId)).ToList();
             if (toolCalls.Count == 0)
             {
-                Self.Tell(new ToolExecutionBatchCompleted());
+                Self.Tell(new ToolExecutionBatchCompleted(toolExecutionCt));
                 return;
             }
         }
@@ -2108,22 +2124,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // and compaction, so no batch tool-execution watchdog is armed here.
         var toolExecutionTimeout = _config.ToolExecutionTimeout;
 
-        // Capture subscriber snapshot for subagent activity notifications.
-        // These are emitted directly from the tool execution thread via Tell(),
-        // which is thread-safe. The snapshot ensures we don't read _subscribers
-        // from a non-actor thread.
-        var subscriberSnapshot = _subscribers.Snapshot();
-        var logActor = _logActor;
+        // The mailbox rejects activity from canceled dispatches before public output.
         Action<SubAgentOutput> emitSubAgentOutput = output =>
-        {
-            SessionSubscriberManager.Emit(subscriberSnapshot, output, OutputFilter.ToolCalls);
-            logActor?.Tell(output);
-        };
+            self.Tell(new ToolExecutionSubAgentActivity(output, toolExecutionCt));
 
         // Marshal child-actor spawning back onto the session actor thread.
         Func<object, string, CancellationToken, Task<object>> spawnChildActor = async (props, name, ct) =>
             await self.Ask<IActorRef>(
-                new SpawnChildActorRequest((Props)props, name),
+                new SpawnChildActorRequest((Props)props, name, toolExecutionCt),
                 timeout: toolExecutionTimeout,
                 cancellationToken: ct);
 
@@ -2139,9 +2147,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var setWorkingDirectoryTool = GetExposedSetWorkingDirectoryTool();
         var setWorkingDirectoryAvailable = setWorkingDirectoryTool is not null;
 
-        CancelAndDisposeToolExecutionCts();
-        _activeToolExecutionCts = new CancellationTokenSource();
-        var toolExecutionCt = _activeToolExecutionCts.Token;
         var turnContext = _currentTurnContext
             ?? throw new InvalidOperationException("Tool batch dispatch requires admitted turn authority.");
         var runEnvironment = new SessionToolRunEnvironment
@@ -2164,7 +2169,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitSubAgentOutput = emitSubAgentOutput,
             ApprovalRequests = new ToolApprovalRequests(
                 _approvalChannel,
-                request => self.Tell(request),
+                request => self.Tell(new ToolExecutionApprovalRequested(request, toolExecutionCt)),
                 new ToolExecutionTimeout(Timeout.InfiniteTimeSpan)),
             BackgroundJobs = backgroundJobs,
             SetWorkingDirectoryAvailable = setWorkingDirectoryAvailable,
@@ -2937,13 +2942,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<SessionDistillationCompleted>(msg => HandleDistillationResult(msg));
 
         Command<RoutedSkillExecutionCompleted>(HandleRoutedSkillExecutionCompleted);
-        Command<RoutedSkillExecutionFailed>(msg =>
-            FailCurrentTurn(
-                $"Skill '/{msg.SkillName}' routed to subagent '{msg.SubagentName}' failed: {msg.ErrorMessage}",
-                new InvalidOperationException(msg.ErrorMessage),
-                ErrorCategory.ToolFailure));
+        Command<RoutedSkillExecutionFailed>(HandleRoutedSkillExecutionFailed);
         Command<RoutedSkillSubAgentActivity>(msg =>
         {
+            if (!OwnsToolExecution(msg.ExecutionToken))
+                return;
             EmitOutput(new SubAgentOutput
             {
                 SessionId = _sessionId,
@@ -3097,6 +3100,38 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _activeLlmCts?.Cancel();
         _activeLlmCts?.Dispose();
         _activeLlmCts = null;
+    }
+
+    private bool OwnsToolExecution(CancellationToken executionToken)
+    {
+        if (_activeToolExecutionCts is { IsCancellationRequested: false } source
+            && source.Token == executionToken)
+            return true;
+
+        _log.Debug("Ignoring a stale local tool callback");
+        return false;
+    }
+
+    private void HandleSpawnChildActorRequest(SpawnChildActorRequest msg)
+    {
+        if (!OwnsToolExecution(msg.ExecutionToken))
+        {
+            Sender.Tell(new Status.Failure(new OperationCanceledException(
+                "The parent tool dispatch no longer owns this child request.")));
+            return;
+        }
+        Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName));
+    }
+
+    private void HandleRoutedSkillExecutionFailed(RoutedSkillExecutionFailed msg)
+    {
+        if (!OwnsToolExecution(msg.ExecutionToken))
+            return;
+        CancelAndDisposeToolExecutionCts();
+        FailCurrentTurn(
+            $"Skill '/{msg.SkillName}' routed to subagent '{msg.SubagentName}' failed: {msg.ErrorMessage}",
+            new InvalidOperationException(msg.ErrorMessage),
+            ErrorCategory.ToolFailure);
     }
 
     private void CancelAndDisposeToolExecutionCts()
@@ -3788,7 +3823,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TryReplyAck();
         _recallManager.ResetForNewTurn();
 
-        _ = ExecuteRoutedSkillAsync(Self, skill, profile, effectiveTask, skillBody, routedAudience);
+        CancelAndDisposeToolExecutionCts();
+        _activeToolExecutionCts = new CancellationTokenSource();
+        _ = ExecuteRoutedSkillAsync(Self, skill, profile, effectiveTask, skillBody, routedAudience,
+            _activeToolExecutionCts.Token);
         TransitionTo(SessionPhase.Processing);
         return true;
     }
@@ -3799,18 +3837,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         SubAgentProfile profile,
         string task,
         string skillBody,
-        TrustAudience audience)
+        TrustAudience audience,
+        CancellationToken executionToken)
     {
         try
         {
             Func<object, string, CancellationToken, Task<object>> spawnChildActor = async (props, name, ct) =>
                 await self.Ask<IActorRef>(
-                    new SpawnChildActorRequest((Props)props, name),
+                    new SpawnChildActorRequest((Props)props, name, executionToken),
                     timeout: _config.ToolExecutionTimeout,
                     cancellationToken: ct);
             var outputs = new ToolExecutionOutputs(info =>
             {
                 self.Tell(new RoutedSkillSubAgentActivity(
+                    executionToken,
                     _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                     new AgentName(info.AgentName),
                     info.IsStarted ? SubAgentPhase.Started : SubAgentPhase.Completed,
@@ -3840,19 +3880,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 task,
                 runtimeContext: null,
                 context.Invocation,
-                CancellationToken.None,
+                executionToken,
                 systemPromptOverlay: skillBody);
 
-            self.Tell(new RoutedSkillExecutionCompleted(skill.Name, profile.Name, result));
+            self.Tell(new RoutedSkillExecutionCompleted(skill.Name, profile.Name, result, executionToken));
         }
         catch (Exception ex)
         {
-            self.Tell(new RoutedSkillExecutionFailed(skill.Name, profile.Name, ex.Message));
+            self.Tell(new RoutedSkillExecutionFailed(skill.Name, profile.Name, ex.Message, executionToken));
         }
     }
 
     private void HandleRoutedSkillExecutionCompleted(RoutedSkillExecutionCompleted msg)
     {
+        if (!OwnsToolExecution(msg.ExecutionToken))
+            return;
+        CancelAndDisposeToolExecutionCts();
         if (!msg.Result.Success)
         {
             FailCurrentTurn(
@@ -4051,6 +4094,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ApplyLegacyToolBaseline(evt);
             return;
         }
+        if (_state.History.Any(message => ReferenceEquals(message, evt.AssistantMessage)))
+            throw new InvalidDataException("A normal batch requires a new canonical assistant occurrence.");
         ApplyToolBatchHistory(evt);
         RestoreActiveToolBatchFrom(evt);
     }
@@ -4084,7 +4129,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var executor = _toolExecutor
             ?? throw new InvalidOperationException("A legacy tool baseline requires the tool executor.");
         var unanswered = ChatMessageConverter.ToAiMessage(assistant, reinjectMeta: true).Contents
-            .OfType<FunctionCallContent>().Where(call => !ParkedToolBatchHistory.HasToolResult(_state.History, call.CallId)).ToArray();
+            .OfType<FunctionCallContent>().Where(call => !ParkedToolBatchHistory.HasToolResult(_state.History, assistant, call.CallId)).ToArray();
         var prepared = ToolCycleSignatureFactory.Prepare(unanswered, executor);
         return new ToolLoopAdmission
         {
@@ -4100,8 +4145,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_state.FindLastUserMessage() != evt.UserMessage)
             _state = _state with { History = _state.History.Add(evt.UserMessage) };
 
-        if (!_state.History.Contains(evt.AssistantMessage))
-            _state = _state with { History = _state.History.Add(evt.AssistantMessage) };
+        _state = _state with { History = _state.History.Add(evt.AssistantMessage) };
     }
 
     private void RestoreActiveToolBatchFrom(ToolBatchStarted evt)
@@ -4119,7 +4163,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _activeToolBatch.RecordCompleted(toolCallId.Value);
 
-            if (ParkedToolBatchHistory.HasToolResult(_state.History, toolCallId.Value))
+            var assistant = _state.History.LastOrDefault(message => message.Role == Protocol.ChatRole.Assistant
+                && message.ToolCalls.Count > 0)
+                ?? throw new InvalidDataException("A tool result requires its canonical assistant batch.");
+            if (ParkedToolBatchHistory.HasToolResult(_state.History, assistant, toolCallId.Value))
                 alreadyRecorded = true;
         }
 
@@ -4403,7 +4450,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_toolApprovals.HasResolved(callId))
             return "already_resolved";
 
-        if (ParkedToolBatchHistory.HasToolResult(_state.History, callId))
+        if (ParkedToolBatchHistory.HasHistoricalToolResult(_state.History, callId))
             return "already_completed";
 
         if (ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, callId) is not null)
@@ -4915,7 +4962,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var aiMessage = ChatMessageConverter.ToAiMessage(assistantMsg, reinjectMeta: true);
         var toolCalls = aiMessage.Contents
             .OfType<FunctionCallContent>()
-            .Where(tc => !ParkedToolBatchHistory.HasToolResult(_state.History, tc.CallId)
+            .Where(tc => !ParkedToolBatchHistory.HasToolResult(_state.History, assistantMsg, tc.CallId)
                 && (tc.CallId == callId || !_toolApprovals.HasPending(tc.CallId)))
             .ToList();
         if (toolCalls.Count == 0)
@@ -5400,14 +5447,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private sealed record RoutedSkillExecutionCompleted(
         string SkillName,
         string SubagentName,
-        SubAgentResult Result) : INoSerializationVerificationNeeded;
+        SubAgentResult Result,
+        CancellationToken ExecutionToken) : INoSerializationVerificationNeeded;
 
     private sealed record RoutedSkillExecutionFailed(
         string SkillName,
         string SubagentName,
-        string ErrorMessage) : INoSerializationVerificationNeeded;
+        string ErrorMessage,
+        CancellationToken ExecutionToken) : INoSerializationVerificationNeeded;
 
     private sealed record RoutedSkillSubAgentActivity(
+        CancellationToken ExecutionToken,
         long TimestampMs,
         AgentName AgentName,
         SubAgentPhase Phase,

@@ -11,7 +11,9 @@ fi
 # Resolve exact boundaries. An absent or duplicate marker must fail before Stryker starts.
 spans="$(
   perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
-    @targets = $ARGV =~ /TurnStateTracker/
+    @targets = $ARGV =~ /LlmSessionActor/
+      ? (["_log.Debug(\"Ignoring a stale local tool callback\");\n        return false;", 1, "false"])
+      : $ARGV =~ /TurnStateTracker/
       ? (["previous.Outcome == group.Outcome", 1])
       : (
       ["left with { AdoptedSpeakerIds = right.AdoptedSpeakerIds } == right", 1],
@@ -22,13 +24,18 @@ spans="$(
       $start = index($_, $marker);
       die "An adoption boundary is missing or duplicated.\n"
         if $start < 0 || index($_, $marker, $start + 1) >= 0;
+      if (defined $target->[2]) {
+        $start += rindex($marker, $target->[2]);
+        $marker = $target->[2];
+      }
       $first = 1 + (substr($_, 0, $start) =~ tr/\n/\n/);
       $last = $first + ($marker =~ tr/\n/\n/);
       ($file = $ARGV) =~ s{.*/src/Netclaw.Actors/}{};
       print "$file $start ", $start + length($marker), " $first $last $count\n";
     }
   ' "$repo_root/src/Netclaw.Actors/Sessions/SessionState.cs" \
-    "$repo_root/src/Netclaw.Actors/Sessions/Handlers/TurnStateTracker.cs"
+    "$repo_root/src/Netclaw.Actors/Sessions/Handlers/TurnStateTracker.cs" \
+    "$repo_root/src/Netclaw.Actors/Sessions/LlmSessionActor.cs"
 )"
 
 mutate_args=()
@@ -42,7 +49,7 @@ done <<< "$spans"
 config_path="$(mktemp --suffix=.json)"
 trap 'rm -f "$config_path"' EXIT
 jq '."stryker-config"."test-case-filter" =
-  "FullyQualifiedName~ToolTaskAdoptionMutationTests|FullyQualifiedName~ToolRecurrenceMutationTests"' \
+  "FullyQualifiedName~ToolTaskAdoptionMutationTests|FullyQualifiedName~ToolRecurrenceMutationTests|FullyQualifiedName~LateToolReplyMutationTests"' \
   "$test_project/stryker-config.json" > "$config_path"
 
 (
@@ -58,7 +65,8 @@ report="$output_path/reports/mutation-report.json"
 while read -r file span_start span_end first last count; do
   jq -e --arg source "$repo_root/src/Netclaw.Actors/$file" \
     --argjson first "$first" --argjson last "$last" --argjson count "$count" '
-    (if $count == 2 then ["Linq method mutation (Take() to Skip())",
+    (if $source | endswith("LlmSessionActor.cs") then ["Boolean mutation"]
+     elif $count == 2 then ["Linq method mutation (Take() to Skip())",
        "LogicalNotExpression to un-LogicalNotExpression mutation"]
      else ["Equality mutation"] end) as $expected
     | [.files[$source].mutants[] | select(.status != "Ignored")

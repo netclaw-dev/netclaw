@@ -886,6 +886,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         Self.Tell(new ToolExecutionCompleted
         {
+            ExecutionToken = _executionCts?.Token
+                ?? throw new InvalidOperationException("A child correction requires its active execution source."),
             ToolResults = results,
             ToolReceipts = receipts,
             AuthorizationAttemptIds = authorizationAttemptIds
@@ -1658,6 +1660,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             }
             self.Tell(new ToolExecutionCompleted
             {
+                ExecutionToken = ct,
                 ToolResults = [.. results.Select(r => r.Message)],
                 ModelInputMediaReferences = [.. results.SelectMany(r => r.ModelInputMediaReferences)],
                 ManagedTemporaryCorrectionChanges = [.. results.Where(r => r.ManagedTemporaryCorrectionUpdate is not null).Select(r => r.ManagedTemporaryCorrectionUpdate!)],
@@ -1689,7 +1692,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         }
         catch (Exception ex)
         {
-            self.Tell(new ToolExecutionFailed { Cause = ex });
+            self.Tell(new ToolExecutionFailed { Cause = ex, ExecutionToken = ct });
         }
     }
 
