@@ -26,7 +26,7 @@
 - [x] 4.1 Add framework-safe admission, result, and checkpoint metadata; verify round-trip serialization and private digest exclusion from diagnostics.
 - [x] 4.2 Preserve retained state in session events and snapshots; verify snapshot recovery and journal replay produce equal decisions.
 - [x] 4.3 Add durable task adoption from canonical admitted context; verify old attempts retain authority and fresh consumption resets before continuation.
-- [ ] 4.4 Reconstruct the suffix after the last checkpoint. Verify committed result pairs and detector evidence at every listed crash cut. Verify unknown outcomes reach the model without automatic tool replay or forced review.
+- [x] 4.4 Reconstruct the suffix after the last checkpoint. Verify committed result pairs and detector evidence at every listed crash cut. Verify unknown outcomes reach the model without automatic tool replay or forced review.
 - [x] 4.5 Inject checkpoint and snapshot failures; verify an explicit error and no silent detector reset or premature dispatch.
 - [x] 4.6 Load captured pre-change records; verify conversation recovery and an explicit detector baseline gap without fabricated receipt evidence.
 - [x] 4.7 Test the rollback reader or document database restoration; verify new event variants cannot silently corrupt an older runtime.
@@ -125,3 +125,14 @@
 - Configuration tests passed six cases. Doctor tests passed 37 cases. This repair changes no configuration or CLI code.
 - Open tasks retain private replay, shadow, productive holdout, and exhaustive crash gates.
 - Open tasks also retain model trials, hosted CI for later revisions, and final contract reconciliation.
+
+### Completed actor and journal cuts
+
+- The final persistence fixture passes 19 cases without skips. Root integration passes 39 affected actor controls without skips.
+- The unknown-outcome cases preserve one committed sibling and close the unanswered call with truthful non-success text.
+- A held model request proves that the framework executes no retry before the model decision.
+- The model can finish or choose a new retry. The new retry retains the original authority and supplies a genuine result receipt.
+- A fabricated-success recovery fault fails both new cases. Exact source and assembly restoration passes three controls, including mandatory MissingReceipt settlement.
+- Independent review finds no remaining distinct durable prefix without direct or documented equivalent-prefix evidence in the listed cut matrix.
+- Task 4.4 is complete for actor and journal recovery. It does not prove OS-process storage durability or physical external exactly-once effects.
+- Private replay, shadow, productive holdout, model evals, and final activation reconciliation retain their separate gates.
