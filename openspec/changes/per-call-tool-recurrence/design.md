@@ -180,6 +180,13 @@ Recovery applies checkpoints, then reconstructs any later incomplete checkpoint 
 It counts a fully paired round once. It does not fabricate missing receipts or replay completed side effects.
 An interrupted partial batch retains existing completed result evidence without a false completed-group observation.
 
+Recovery restores the recorded session before the next model request.
+The model decides the next action from that record, including whether to retry an operation with an unknown outcome.
+The framework does not require operator review or choose a retry policy for uncertain external effects.
+It retains committed call/result pairs and uses the existing non-success closure for interrupted unanswered calls.
+It cannot invent successful results or automatically execute an unanswered call as a recovery action.
+A model-chosen retry passes the ordinary tool policy. This contract does not guarantee exactly-once external effects.
+
 A snapshot preserves the same retained state as journal replay.
 Automatic restart continuation restores the original task identity and detector state.
 A genuinely fresh authorized user input or scheduled task starts a new task and clears prior evidence at durable adoption.

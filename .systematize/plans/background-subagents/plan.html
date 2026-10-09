@@ -77,7 +77,7 @@ session.RecordCompletionAndQueueParentContinuation(run_id, typed_result)</pre>
 <p>The selected first PR changes detector behavior and removes hard tool budgets. It does not depend on background execution.</p>
 <p>The next PR changes spawn, status, and cancel. Agent messages and peer discovery remain deferred.</p>
 <p>A smaller detector delivery retains outcome-sensitive exact matches and defers tool-specific broader identities. It still removes hard tool budgets and adds evals.</p>
-<p>No line-count reduction or delivery date is promised. A freed parent actor does not by itself free model-server capacity.</p>
+<p>No line-count reduction or delivery date is promised.</p>
 </section>
 
 <section id="questions">
@@ -111,11 +111,9 @@ session.RecordCompletionAndQueueParentContinuation(run_id, typed_result)</pre>
 <p>One writer owns a workspace. Concurrent writers need separate authorized worktrees.</p>
 <p>Read-only tasks can share a checkout. The parent serializes shared edits and owns integration.</p>
 <p>A returned file path does not grant access. This policy does not add a worktree manager.</p></div>
-<div class="decision" id="q-capacity"><h3>Q6. Pending provider capacity decision</h3>
-<p>The owner must choose verified spare or separate capacity, or runtime preemption for single-slot providers.</p>
-<p>The current provider path has no reserved parent slot or priority mechanism.</p>
-<p>A held-child actor test proves actor responsiveness. A real-provider test must prove the parent reply before child release.</p>
-<p><strong>Blocks:</strong> Dependent background runtime implementation and the claimed parent response guarantee.</p></div>
+<div class="decision" id="q-capacity"><h3>Q6. Accepted inference backend boundary</h3>
+<p>The inference backend owns request queues and capacity. Netclaw adds no provider-slot limits, reservations, or parent/child preemption.</p>
+<p>Delete existing code that implements that coordination, if present. The inspected request paths contain no such scheduler.</p></div>
 <div class="decision" id="q-rollout"><h3>Q7. Accepted activation and rollback scope</h3>
 <p>The first PR replaces the detector and removes hard budgets atomically after required gates pass. It adds no feature flag.</p>
 <p>Rollback requires a tested compatible reader or a pre-upgrade backup. An older binary cannot read the new records.</p>
@@ -617,7 +615,7 @@ At finalization completion or grace deadline:
 <p><strong>Required proof:</strong> <a href="#g1">G1</a> tests parent responsiveness. <a href="#g2">G2</a> tests cancellation and races. <a href="#g3">G3</a> tests recovery and delivery.</p>
 <p><a href="#g5">G5</a> tests authority. <a href="#evals">G8 and eval cases</a> test the runtime and model contracts.</p>
 <p>Reject the design if acceptance retries duplicate work, later turns replace authority, terminal delivery duplicates, or cancellation requires another model response.</p>
-<p>Provider capacity can still delay the parent despite correct actor behavior. Resolve Q6 with a held-child capacity test.</p>
+<p>Verify that a held child does not block parent actor work or local status and cancellation.</p>
 <p>Exact event names, the owner-session adapter signature, snapshot compatibility, and admission acknowledgements require engineering checks before code starts.</p>
 <p>Private messages, peer discovery, and live steering remain deferred. This code proposal adds no new coordination capability.</p>
 </section>
@@ -638,7 +636,7 @@ At finalization completion or grace deadline:
 <p><strong>Common gate:</strong> Require automated tests at the real boundary, meaningful failure controls, applicable evals, required CI, and an independent evidence review.</p>
 <p>Require all scripted runtime cases to pass. The proposed model gate requires five successful trials per critical case on the selected model at the authorized eval host.</p>
 <p>Report missing or inconclusive evidence separately. A safe refusal does not prove task success, and a green average cannot hide a failed critical case.</p>
-<p><strong>Open before background runtime code:</strong> The owner must select the provider-capacity contract. The other listed design choices now use the accepted contracts.</p>
+<p><strong>Ready for background runtime code:</strong> The owner confirmed the implementation boundaries. The inference backend owns its request queues and capacity.</p>
 <p>Define restart continuity before any days-long durability claim. The initial background contract reports restart loss; it does not resume the same child.</p>
 
 <p>One architectural objective governs these steps. The first PR delivers detector changes, hard-budget removal, and evals.</p>
@@ -683,7 +681,7 @@ After:
 <p>Reject a candidate that restores a hidden lifetime cap or waits for a final model response before settlement.</p>
 <p><strong>Status:</strong> Accepted design direction. Thresholds and contract details still require evidence; implementation is not authorized by this plan update.</p>
 <h3>Second PR: responsive background runs with explicit supervision</h3>
-<p><strong>Depends on:</strong> The detector contract from the first PR. Resolve the provider capacity choice in Q6. Apply the accepted activation, grace, and continuation contracts.</p>
+<p><strong>Depends on:</strong> The detector contract from the first PR. Apply the accepted activation, grace, and continuation contracts.</p>
 <p>Establish the typed continuation and routed-skill contract. Do not require the first PR to implement background execution.</p>
 <p>The plan recommends background execution for both <code>spawn_agent</code> and routed <code>skill_load</code>, slash commands, and reminder skill activation.</p>
 <p>The accepted all-background direction rules out a permanent attached mode for those callers. Define their accepted-run response and later result behavior first.</p>
@@ -718,12 +716,12 @@ After:
 <p>The start response grants no extra authority. Explicit status and cancellation make a long run visible and controllable.</p>
 <p>Control simultaneous child admissions and stalled operations. Retain unresolved supervision evidence across internal continuations and recovery.</p>
 <p>A task has no mandatory lifetime ceiling. Longer exact cycles and repeated validator violations are candidates for focused protection.</p>
-<p><strong>Main concerns:</strong> A model can evade exact recurrence with new arguments or results. A child can occupy all provider capacity.</p>
+<p><strong>Main concerns:</strong> A model can evade exact recurrence with new arguments or results. Child results require durable delivery and original authority.</p>
 <p>A late result or stale approval can also act under the wrong turn. Durable admission and original requester checks must prevent that.</p>
 <p>Finalization can hang or write a misleading report. Bound its duration and output scope; preserve cancelled status and unconfirmed effects.</p>
 <p><strong>Required evidence:</strong> G1–G5 and G8, plus the existing replay and shadow gates. Reject erased supervision evidence and terminal paths that need another model response.</p>
-<p><strong>Remaining uncertainty:</strong> Broader semantic-loop policy, review failure, and provider capacity remain open. The accepted contracts define task continuity and activation.</p>
-<p>Exact protection can miss semantic loops. Capacity limits do not bound total cost across unlimited continuations. This safety case is not verified.</p>
+<p><strong>Remaining uncertainty:</strong> Broader semantic-loop policy and review failure remain open. The accepted contracts define task continuity and activation.</p>
+<p>Exact protection can miss semantic loops. This safety case is not verified.</p>
 
 <h3>Deferred PR: private messages, peer discovery, and steering</h3>
 <p><strong>Start condition:</strong> Verify the background model first. This slice needs a later scope decision; it is not required for initial delivery.</p>
@@ -892,8 +890,8 @@ Skip delegation when its cost exceeds the useful work.</pre>
 <p>Each variant must compile and execute the intended test. A setup error, missing test, or compiler failure does not detect the fault.</p>
 <p>Require each targeted fault to fail a behavior assertion. Review relevant Stryker targets under TOOLING.md's scope and CI cost limits.</p>
 <p>Do not run broad mutation analysis merely to raise a score. Add a narrow security target only when the deterministic test rejects its unsafe mutation.</p>
-<h4>Specification readiness: contracts recorded; capacity decision pending</h4>
-<p><strong>Current status:</strong> The first OpenSpec contract is frozen. The background lifecycle package passes strict validation. Its runtime work awaits the provider-capacity decision.</p>
+<h4>Specification readiness: implementation decisions confirmed</h4>
+<p><strong>Current status:</strong> The first OpenSpec contract retains its open proof gates. The owner confirmed the background runtime boundaries and model-owned recovery.</p>
 <p><strong>Resolved first-PR choices:</strong> The frozen OpenSpec package specifies thresholds, round accounting, identities, duplicate outcomes, repeat precedence, invalidation, retention, and final receipt failure.</p>
 <p>Distinct outcome tuples define the episode. Duplicate multiplicity remains separate correlation evidence and cannot reset recurrence.</p>
 <p>The trusted repeat exception precedes both exact guards. The test agent checks accepted, denied, malformed, terminal, and cancellation variants.</p>
@@ -901,11 +899,11 @@ Skip delegation when its cost exceeds the useful work.</pre>
 <p>The detector draft settles missing receipts with explicit partial evidence. Independent negative controls reject inferred success.</p>
 <p><strong>Background contracts:</strong> The lifecycle package specifies acceptance correlation, terminal precedence, delivery acknowledgement, retries, grace expiry, and cancellation compatibility.</p>
 <p>The package also specifies persistence failures, acknowledgement failures, and child dispatch closure. Restart reports loss; it does not resume the child.
-</p><p>Completion triggers and upgrade behavior use the accepted contracts. Resolve provider capacity before dependent runtime code.</p>
+</p><p>Completion triggers and upgrade behavior use the accepted contracts.</p>
 <p>For each dependent PR, add exact inputs, expected verdicts, allowed transitions, forbidden transitions, and durable commit points through OpenSpec skills.</p>
 <p>Resolve contract disagreement before code starts. Later-PR choices do not block independent preparation of first-PR fixtures.</p>
 <p><strong>Model eval boundary:</strong> Deterministic tests prove runtime invariants. Targeted evals at the authorized host assess model behavior and task success separately.</p>
-<p><strong>Independent readiness review:</strong> A separate agent identified the original gaps. The contract packages now address them; provider capacity remains a human decision.</p>
+<p><strong>Independent readiness review:</strong> A separate agent identified the original gaps. The contract packages now use the confirmed implementation decisions.</p>
 <p>Reuse <code>TurnStateTrackerTests</code>, <code>ToolCycleValidationTests</code>, and <code>ToolCycleUserInputTests</code> for detector rules and explicit provider barriers.</p>
 <p>Reuse <code>SubAgentActorTests</code>, <code>SubAgentSpawnIntegrationTests</code>, and <code>ParentSessionApprovalBridgeTests</code> for dispatch, recovery, and late-answer controls.</p>
 <p>The readiness review alone proves no runtime behavior. Current executed test and mutation receipts appear in the handoff status.</p>
@@ -915,7 +913,7 @@ Skip delegation when its cost exceeds the useful work.</pre>
 <p><strong>Pass:</strong> The parent completes the status turn before the fixture releases the child. No response claims a child result.</p>
 <p>Release the child and require one attributed result continuation. Confirm the terminal state and durable delivery correlation.</p>
 <p><strong>Control:</strong> On the baseline, the same held-child scenario cannot complete the status turn. This must fail a behavior assertion, not setup.</p>
-<p><strong>Limit:</strong> The fake proves actor and transport behavior. G8 tests real model behavior and capacity contention.</p>
+<p><strong>Limit:</strong> The fake proves actor and transport behavior. G8 tests real model behavior.</p>
 <h3 id="g2">G2. Cancellation, parent stop, and race settlement</h3>
 <p>Hold a child provider call; request cancellation through the real deferred control tool; observe token cancellation and child termination.</p>
 <p>Race cancellation against completion and a approval answer. Require one terminal state and no executable child call after terminal admission.</p>
@@ -954,8 +952,8 @@ Skip delegation when its cost exceeds the useful work.</pre>
 <p>Carry unresolved suspicion through compaction and automatic parent continuations. Require retained identity and evidence.</p>
 <p>Repeat an identical scheduled check under a new authorized task. Require that valid work to proceed.</p>
 <p>Compare varied invalid metadata with a valid repair through the real validator. Count decisions after feedback, not calls within one batch.</p>
-<p>Submit a burst of child starts. Require explicit accepted, queued, or rejected outcomes under the agreed capacity contract.</p>
-<p>Hold provider capacity, then request status and cancellation. Require usable controls and bounded queues.</p>
+<p>Submit child starts and verify durable acceptance before execution. Provider request queues remain backend-owned.</p>
+<p>Hold a child model request, then request status and cancellation. Require usable local controls.</p>
 <p>If renewal is selected, reach its boundary without a child request. Require the runtime to apply the agreed review state.</p>
 <p>Compare healthy renewals with reflexive renewal of unchanged failed work. Reject automatic approval based only on the child's progress claim.</p>
 <p>Inject a stalled or unavailable reviewer. Require explicit uncertainty and retained evidence; do not silently grant continuation.</p>
@@ -1013,7 +1011,7 @@ Skip delegation when its cost exceeds the useful work.</pre>
 <p>Report failures per case. Do not pool them into a category average or count missing evidence as a pass.</p>
 <p>Five trials can expose regressions. They cannot establish a general model failure-rate bound.</p>
 <p>Separate runtime safety, post-correction behavior, and task success. A safe refusal can still fail the requested task.</p>
-<p>Run one-slot and two-slot provider controls. Record provider queue delay separately from parent actor delay.</p>
+<p>Record actual parent and child requests. Verify that Netclaw sends them without a provider-slot coordinator.</p>
 <p>Run a multi-run soak in an isolated daemon. Observe child leaks, pending approvals, duplicate continuations, review states, operation timeouts, and cost.</p>
 <p>Soak duration, volume, and model targets remain engineering setup decisions. Establish them before claiming release readiness.</p>
 <h3 id="eval-target">Authorized eval target and suite scope</h3>
@@ -1132,7 +1130,7 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>The seed corpus cannot establish a false-block rate. Historical model results did not meet every strict task gate.</p>
 <h3>What could disprove the recommendation?</h3>
 <ul>
-<li>The parent still cannot obtain model capacity while a child runs. The responsiveness claim then needs a scheduling change or narrower scope.</li>
+<li>A child still blocks the parent actor or local controls. Inspect the accepted-start and mailbox boundaries.</li>
 <li>Recovered completion can disappear or replay a side effect. The proposed lifecycle records then need a stronger delivery contract.</li>
 <li>A healthy days-long task stops at a hidden age, token, or count ceiling. The implementation then violates the long-task objective.</li>
 <li>A review repeatedly grants continuation to unchanged failed work. The renewal mechanism then fails its purpose.</li>
@@ -1268,10 +1266,10 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>The separate fixture passes seventeen controls without skips. An authority fault uses the old requester; a snapshot-order fault stores an uncommitted state.</p>
 <p>Each intended control rejects its fault. Exact source and assembly restoration pass; task 4.4 remains open.</p>
 <p>The first branch passes thirty-seven targeted actor controls without skips. Slopwatch, headers, and diff checks pass.</p>
-<p><strong>Recovery policy question:</strong> A physical effect can precede its journal result. PR1 expands interrupted-task continuation across this existing uncertainty gap.</p>
-<p>The owner must choose the uncertain-effect recovery policy. Committed result preservation does not prove every physical effect occurs once.</p>
+<p><strong>Accepted recovery boundary:</strong> A physical effect can precede its journal result. The model decides the next action from the recorded session.</p>
+<p>The framework restores recorded evidence and imposes no retry or operator-review policy for uncertain effects. It does not promise exactly-once external effects.</p>
 <p><strong>Background contract:</strong> Strict OpenSpec validation passes for the lifecycle package. Four preparation tasks are complete.</p>
-<p>Runtime work awaits the capacity decision and integrated first-PR acceptance.</p>
+<p>Runtime work follows the confirmed decisions and retains the integrated first-PR proof requirements.</p>
 <p>The durable child ledger retains original parent detector evidence separately from child partial results. Equal authority cannot merge distinct detector tasks.</p>
 <p>A separate baseline capture supplies one real SQLite binding and a neutral workspace marker. The combined candidate passes 33 resolver cases without skips.</p>
 <p>The consumer preserves the original row and marker after a home move. The empty child ledger and integrated lifecycle recovery gate remains open.</p>
@@ -1314,8 +1312,8 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>This control does not prove every omitted barrier edit fails deterministically. The original hosted failure remains the baseline; its capture-time sender reference remains unrecorded.</p>
 <p>The native file oracle rejected an absent worker and a changed specialist. The prior combined local tests pass. The final combined repair passes ten seed cases and thirteen Python checks. One existing Windows-only seed case skips on Linux. Real-model discovery evals remain unpassed.</p>
 <p><strong>Background baseline:</strong> The held-child actor contract failed on the foreground baseline. The released-child control passed; neither test skipped.</p>
-<p><strong>Provider capacity question:</strong> Choose verified spare or separate model capacity, or add runtime preemption for single-slot providers. The owner response remains pending.</p>
-<p>The held-child real-model response gate remains unpassed. Actor responsiveness alone does not prove provider capacity. Tailscale Serve exposes only this plan file.</p>
+<p><strong>Confirmed implementation decisions:</strong> The inference backend owns capacity. The model owns uncertain-effect recovery from the recorded session.</p>
+<p>Real-model evals remain required. The corrected approved target is reachable. Tailscale Serve exposes only this plan file.</p>
 <h3>Instructions for a future implementation session</h3>
 <ul>
 <li>Compare its checkout with the pinned baseline and current PR heads. Preserve user changes and use isolated worktrees.</li>
