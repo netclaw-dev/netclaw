@@ -612,6 +612,94 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         Assert.Empty(_grants.Writes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_prior_pipeline_failure_cannot_cancel_a_fresh_effect(bool replayFailure)
+    {
+        ConfigureEffects();
+        InstallReplyCaptureMailbox();
+        var originalFailure = new InvalidOperationException("The execution preflight service failed.");
+        _ledger.PreflightFailure = originalFailure;
+        _client.PreserveCallIdsFromRequest = 1;
+        _client.Frames = [[Call("failed-preflight", 1)]];
+        var session = new SessionId("adversarial/effects");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await JoinSessionAsync(manager, subscriber, session, OutputFilter.Full | OutputFilter.ProcessingState);
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session, Content = "Execute the original effect.", Source = ApprovalRequester("operator-old")
+        }, FaultCeiling, TestContext.Current.CancellationToken);
+        var originalOutputs = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            originalOutputs.Add(message);
+            return message is ProcessingStateOutput { IsProcessing: false };
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        var captured = ReplyCaptureMailbox.Captures.GetOrCreateValue(Sys)
+            .Single(envelope => envelope.Message is ToolExecutionFailed);
+        var failed = Assert.IsType<ToolExecutionFailed>(captured.Message);
+        Assert.Same(originalFailure, failed.Cause);
+        Assert.True(failed.ExecutionToken.IsCancellationRequested);
+        Assert.Empty(_ledger.Effects);
+        Assert.Empty(_ledger.Executions);
+        Assert.Single(originalOutputs.OfType<ErrorOutput>());
+        var originalEvents = await ReadSessionEventsAsync(session);
+        var abandoned = Assert.Single(originalEvents.OfType<ToolBatchAbandoned>());
+        var abandonedResult = Assert.Single(abandoned.ToolResults);
+        Assert.Equal("failed-preflight", abandonedResult.ToolCallId?.Value);
+        Assert.Contains("not completed", abandonedResult.Content, StringComparison.Ordinal);
+
+        _ledger.PreflightFailure = null;
+        _ledger.HoldStep = 2;
+        _client.Frames = [[], [Call("current-effect", 2)]];
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session, Content = "Execute the fresh effect.", Source = ApprovalRequester("operator-new")
+        }, FaultCeiling, TestContext.Current.CancellationToken);
+        var currentToken = await _ledger.ApplicationEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+        var currentExecution = Assert.Single(_ledger.Executions);
+        Assert.Equal("current-effect", currentExecution.CallId);
+        Assert.Equal(TrustBoundary.Personal, currentExecution.Scope.Boundary);
+        Assert.NotEqual(failed.ExecutionToken, currentToken);
+        var owner = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(session.Value)}")
+            .ResolveOne(FaultCeiling, TestContext.Current.CancellationToken);
+        if (replayFailure)
+            owner.Tell(captured.Message, captured.Sender);
+        owner.Tell(new JoinSession(subscriber)
+        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, captured.Sender);
+        var observed = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            observed.Add(message);
+            return message is SessionJoined;
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.DoesNotContain(observed, message => message is ErrorOutput or TurnCompleted or ToolResultOutput);
+        Assert.False(currentToken.IsCancellationRequested);
+        Assert.Empty(_ledger.Effects);
+        var heldEvents = await ReadSessionEventsAsync(session);
+        Assert.Equal("operator-new", heldEvents.OfType<InputAdmitted>().Last().TurnContext.RequesterSenderId?.Value);
+        Assert.DoesNotContain(heldEvents.OfType<ToolCallRecorded>(), evt => evt.ToolResult.ToolCallId?.Value == "current-effect");
+        _ledger.ReleaseApplication.TrySetResult();
+        await subscriber.FishForMessageAsync<object>(message => message is TurnCompleted,
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.FishForMessageAsync<object>(message => message is ProcessingStateOutput { IsProcessing: false },
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(2, Assert.Single(_ledger.Effects));
+        Assert.Single(_ledger.Executions);
+        Assert.Equal("verified effect 2", await File.ReadAllTextAsync(_ledger.PathFor(2), TestContext.Current.CancellationToken));
+        Assert.Empty(_client.PairingErrors);
+        var finalEvents = await ReadSessionEventsAsync(session);
+        var actual = Assert.Single(finalEvents.OfType<ToolCallRecorded>(), evt => evt.ToolResult.ToolCallId?.Value == "current-effect");
+        Assert.Equal("verified effect 2", actual.ToolResult.Content);
+        var reply = Assert.Single(ReplyCaptureMailbox.Captures.GetOrCreateValue(Sys)
+            .Select(envelope => envelope.Message).OfType<ToolExecutionSingleCompleted>(),
+            message => message.Result.Message.ToolCallId?.Value == "current-effect");
+        Assert.Equal(currentExecution.AuthorizationAttemptId, reply.Result.AuthorizationAttemptId);
+        Assert.IsType<ToolInvocationReceipt.Succeeded>(reply.Result.Receipt);
+    }
+
     private static MessageSource ApprovalRequester(string sender) => new()
     {
         ChannelType = ChannelType.SignalR, SenderId = new SenderId(sender),
@@ -676,7 +764,8 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         public bool HasMessages => _inner.HasMessages;
         public void Enqueue(IActorRef receiver, Envelope envelope)
         {
-            if (envelope.Message is LlmResponseReceived or ToolExecutionSingleCompleted or ToolExecutionBatchCompleted or ToolExecutionCompleted or ToolExecutionApprovalRequested)
+            if (envelope.Message is LlmResponseReceived or ToolExecutionSingleCompleted or ToolExecutionBatchCompleted or ToolExecutionCompleted or ToolExecutionApprovalRequested or ToolExecutionFailed or SpawnChildActorRequest or ToolExecutionSubAgentActivity
+                || envelope.Message.GetType().Name is "RoutedSkillSubAgentActivity" or "RoutedSkillExecutionCompleted")
                 captured.Enqueue(envelope);
             _inner.Enqueue(receiver, envelope);
         }
@@ -873,6 +962,7 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         private readonly object _effectGate = new();
         public bool EmitReceipt { get; set; } = true;
         public bool RequireApproval { get; set; }
+        public Exception? PreflightFailure { get; set; }
         public bool HoldBeforeApply { get; set; }
         public int HoldStep { get; set; } = int.MaxValue;
         public TaskCompletionSource ReleaseApplication { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -913,6 +1003,14 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
 
     private sealed class EffectExecutor(EffectLedger ledger) : IToolExecutor
     {
+        public ToolCallInterpretation InterpretToolCall(FunctionCallContent call)
+        {
+            if (ledger.PreflightFailure is { } failure)
+                throw failure;
+            var (meta, cleaned) = ToolCallMetaExtractor.Extract(call);
+            return new ToolCallInterpretation(null, meta, cleaned);
+        }
+
         public async Task<string> ExecuteAsync(FunctionCallContent call, ToolExecutionContext context, CancellationToken ct = default)
         {
             if (ledger.RequireApproval && context.OneTimeApprovedToolName != call.Name)

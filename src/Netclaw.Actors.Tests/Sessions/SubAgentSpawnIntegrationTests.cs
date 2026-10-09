@@ -5,6 +5,8 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
+using Akka.Configuration;
+using Akka.Routing;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
@@ -1283,6 +1285,126 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.DoesNotContain(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.System
             && (m.Text?.Contains(AgentsLayerMarker, StringComparison.Ordinal) ?? false));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Settled_subagent_callbacks_cannot_spawn_a_child_or_settle_a_fresh_task(bool replayCallbacks, bool toolSpawn)
+    {
+        var ceiling = TimeSpan.FromSeconds(10);
+        var session = new SessionId("test-channel/routed-callback-replay");
+        Sys.Settings.InjectTopLevelFallback(ConfigurationFactory.ParseString(
+            $"routed-reply-capture {{ mailbox-type = \"{typeof(ToolRecurrenceAdversarialTests.ReplyCaptureMailbox).AssemblyQualifiedName}\" }}"));
+        ((ExtendedActorSystem)Sys).Provider.Deployer.SetDeploy(new Deploy(
+            $"/session-manager/{Uri.EscapeDataString(session.Value)}", Config.Empty, NoRouter.Instance, LocalScope.Instance,
+            Deploy.NoDispatcherGiven, "routed-reply-capture"));
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        if (toolSpawn)
+            _clientProvider.Main.ToolCallsOnFirstCall =
+            [CreateToolCall("original-spawn", "spawn_agent", new Dictionary<string, object?>
+            {
+                ["agent"] = "summarizer", ["task"] = "Check the original daemon."
+            })];
+        await JoinSessionAsync(manager, subscriber, session, OutputFilter.Full | OutputFilter.ProcessingState);
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session,
+            Content = toolSpawn ? "Use a sub-agent to check the original daemon." : "/ops-route check the original daemon",
+            Source = BuildPersonalSource()
+        }, ceiling, TestContext.Current.CancellationToken);
+        var initial = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            initial.Add(message);
+            return message is ProcessingStateOutput { IsProcessing: false };
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Single(initial.OfType<TurnCompleted>());
+        Assert.Contains(initial, message => message is SubAgentOutput { Phase: SubAgentPhase.Started });
+        Assert.Contains(initial, message => message is SubAgentOutput { Phase: SubAgentPhase.Completed });
+        Assert.Equal(1, _clientProvider.Compaction.CallCount);
+        var originalMainCalls = toolSpawn ? 2 : 0;
+        Assert.Equal(originalMainCalls, _clientProvider.Main.CallCount);
+        var envelopes = ToolRecurrenceAdversarialTests.ReplyCaptureMailbox.Captures.GetOrCreateValue(Sys)
+            .Where(envelope => envelope.Message is SpawnChildActorRequest or ToolExecutionSubAgentActivity
+                || envelope.Message.GetType().Name is "RoutedSkillSubAgentActivity" or "RoutedSkillExecutionCompleted").ToArray();
+        var spawn = Assert.IsType<SpawnChildActorRequest>(Assert.Single(envelopes,
+            envelope => envelope.Message is SpawnChildActorRequest).Message);
+        Assert.True(spawn.ExecutionToken.IsCancellationRequested);
+        if (toolSpawn)
+        {
+            var activity = envelopes.Select(envelope => envelope.Message).OfType<ToolExecutionSubAgentActivity>().ToArray();
+            var started = Assert.Single(activity);
+            Assert.Equal(SubAgentPhase.Started, started.Output.Phase);
+            Assert.Equal(spawn.ExecutionToken, started.ExecutionToken);
+            Assert.Equal(2, envelopes.Length);
+        }
+        else
+        {
+            Assert.Equal(2, envelopes.Count(envelope => envelope.Message.GetType().Name == "RoutedSkillSubAgentActivity"));
+            Assert.Single(envelopes, envelope => envelope.Message.GetType().Name == "RoutedSkillExecutionCompleted");
+            Assert.Equal(4, envelopes.Length);
+        }
+        var owner = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(session.Value)}")
+            .ResolveOne(ceiling, TestContext.Current.CancellationToken);
+        var childPath = $"{owner.Path}/{spawn.ActorName}";
+        await AwaitAssertAsync(async () =>
+        {
+            var identity = await Sys.ActorSelection(childPath).Ask<ActorIdentity>(new Identify("original-child"),
+                ceiling, TestContext.Current.CancellationToken);
+            Assert.Null(identity.Subject);
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _clientProvider.Main.NextResponseGate = gate;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session, Content = "Complete the fresh task without a sub-agent.", Source = BuildPersonalSource()
+        }, ceiling, TestContext.Current.CancellationToken);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(originalMainCalls + 1, _clientProvider.Main.CallCount);
+            return Task.CompletedTask;
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+        var observations = new List<object>();
+        for (var index = 0; index < envelopes.Length; index++)
+        {
+            var envelope = envelopes[index];
+            if (replayCallbacks)
+                owner.Tell(envelope.Message, envelope.Sender);
+            var filter = index % 2 == 0
+                ? (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming
+                : OutputFilter.Full | OutputFilter.ProcessingState;
+            owner.Tell(new JoinSession(subscriber) { SessionId = session, Filter = filter }, envelope.Sender);
+            var acknowledged = await subscriber.FishForMessageAsync<object>(message =>
+            {
+                observations.Add(message);
+                return message is SessionJoined;
+            }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(1, Assert.IsType<SessionJoined>(acknowledged).TurnCount);
+            var identity = await Sys.ActorSelection(childPath).Ask<ActorIdentity>(new Identify("replayed-child"),
+                ceiling, TestContext.Current.CancellationToken);
+            Assert.Null(identity.Subject);
+        }
+        Assert.DoesNotContain(observations, message => message is SubAgentOutput or TurnCompleted or TextOutput or ErrorOutput);
+        Assert.False(gate.Task.IsCompleted);
+        Assert.Equal(originalMainCalls + 1, _clientProvider.Main.CallCount);
+        Assert.Equal(1, _clientProvider.Compaction.CallCount);
+        gate.TrySetResult();
+        var final = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            final.Add(message);
+            return message is ProcessingStateOutput { IsProcessing: false };
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Single(final.OfType<TurnCompleted>());
+        Assert.Single(final.OfType<TextOutput>());
+        Assert.DoesNotContain(final, message => message is SubAgentOutput or ErrorOutput);
+        Assert.Equal(originalMainCalls + 1, _clientProvider.Main.CallCount);
+        Assert.Equal(1, _clientProvider.Compaction.CallCount);
     }
 
     // NOTE: routing the spawn lifecycle to session.log is no longer per-path-wired — the

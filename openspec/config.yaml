@@ -3,7 +3,7 @@ schema: spec-driven
 context: |
   Project: Netclaw
   Runtime: .NET 10, single-process host
-  Core architecture: Akka.NET actor sessions with PostgreSQL persistence
+  Core architecture: Akka.NET actor sessions with SQLite persistence through Akka.Persistence.Sql
   Primary channel: Slack Socket Mode
   Tool integration: local tools plus MCP server support in MVP
   Security posture: default deny ACL, fail-closed startup validation
