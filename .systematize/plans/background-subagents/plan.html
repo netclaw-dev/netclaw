@@ -1151,11 +1151,19 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p><strong>Native stack:</strong> Stack #2423 contains <a href="https://github.com/netclaw-dev/netclaw/pull/2420">#2420</a> → <a href="https://github.com/netclaw-dev/netclaw/pull/2421">#2421</a> → <a href="https://github.com/netclaw-dev/netclaw/pull/2422">#2422</a>. Each PR remains a draft.</p>
 <p><strong>Branch sequence:</strong> <code>feature/tool-recurrence</code> → <code>feature/background-subagents</code> → <code>feature/agent-coordination</code>.</p>
 <p><strong>Agent roles:</strong> One agent implements the frozen detector contract. A separate agent writes adversarial tests. A third agent prepares the background contract.</p>
-<p><strong>Eval prerequisite:</strong> The specified host currently fails the default DNS lookup. The system resolver route returns a TLS alert. Access details remain pending.</p>
+<p><strong>Eval prerequisite:</strong> The specified host fails DNS resolution through its CNAME chain. A direct address probe preserves the expected hostname and fails TLS.</p>
+<p>The probe retains normal certificate checks. It changes no DNS, host file, route, credential, or provider target. Live server configuration remains unverified.</p>
 <p>This HTML file owns the delivery sequence and verification plan. It links existing ideas, drafts, and normative specifications without replacing them.</p>
 <p><strong>Completed for this task:</strong> Baseline inspection, skill use, source map, delivery design, eval design, and explicit open questions.</p>
 <p><strong>Baseline proof:</strong> The independent actor suite now has 21 baseline cases. Four controls passed. Seventeen cases exposed specified runtime faults; none skipped.</p>
-<p><strong>Harness proof:</strong> All 55 cycle eval assertion tests pass after the terminal-contract update. They do not establish a model eval pass.</p>
+<p><strong>Harness proof:</strong> The cycle suite passes 70 test methods. It retains all 55 original methods and adds 15 independent adversarial methods.</p>
+<p>Root integration passes 94 Python oracle tests across all five eval test files, without failures or skips. These checks establish no model trial pass.</p>
+<p><strong>Targeted cycle cases:</strong> Add <code>tool_cycle_nonadjacent_correction</code> and <code>tool_cycle_nonadjacent_terminal</code> to the five existing cases. Keep the category opt-in.</p>
+<p>The sequence is <code>load, A, B, A, C, A(Correct)</code>. The terminal case adds <code>D, A(Stop)</code>.</p>
+<p>Ordered diagnostic receipts, exact call arguments, and separate file counters prove the scripted sequence. Recovery requires actual model-selected <code>file_read</code> results and accurate JSON.</p>
+<p>Both terminal cases reject every later provider request, including sidecars. The old relay forwards both sidecar types; independent regression controls expose that defect.</p>
+<p>Two oracle faults cause 20 and 35 behavioral assertion failures. The restored controls pass; malformed evidence remains distinct from failed semantic checks.</p>
+<p>Each critical case requires five real trials at 100 percent. Trial-count overrides remain available for diagnosis; fewer trials do not complete acceptance.</p>
 <p><strong>Archive inventory:</strong> The local archive contains 2,161 completed turns. Only 1,878 have unambiguous audit tool pairs. This archive cannot supply the 3,000-turn holdout.</p>
 <p>The audit logs also redact and truncate results. They omit receipt categories and feedback-round boundaries. Productive labels and exact runtime replay remain unproved.</p>
 <p><strong>Locked sequence:</strong> Detector, hard-budget removal, and evals first; background execution second; coordination workflows third; private messages later.</p>
@@ -1238,6 +1246,9 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>The combined <code>1eb81c158</code> Windows CLI suite passes 2,060 cases, with 33 platform skips. It includes both newline controls.</p>
 <p>All checks pass at that published head. Both native jobs pass 27 tapes and 10 scenarios, including worker and operator profile checks.</p>
 <p><strong>Published snapshot, 2026-10-09:</strong> Native stack #2423 contains <code>3924d9a32</code>, <code>c8c47cdf9</code>, and <code>70e5acf0c</code>. Their new CI runs remain separate.</p>
+<p>At <code>3924d9a32</code>, macOS tests pass. Windows reports two <code>RepositoryIdentityTests</code> failures when each test deletes its Git fixture directory.</p>
+<p>The fixture source matches the baseline exactly. The log does not identify the process that holds either directory or establish the initiating cause.</p>
+<p>No rerun, skip, waiver, or unrelated fixture edit occurs. The local coverage note and new eval changes remain unpublished while current CI continues.</p>
 <p>The native file oracle rejected an absent worker and a changed specialist. The prior combined local tests pass. The final combined repair passes ten seed cases and thirteen Python checks. One existing Windows-only seed case skips on Linux. Real-model discovery evals remain unpassed.</p>
 <p><strong>Background baseline:</strong> The held-child actor contract failed on the foreground baseline. The released-child control passed; neither test skipped.</p>
 <p><strong>Provider capacity question:</strong> Choose verified spare or separate model capacity, or add runtime preemption for single-slot providers. The owner response remains pending.</p>
