@@ -1378,7 +1378,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             var filter = index % 2 == 0
                 ? (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming
                 : OutputFilter.Full | OutputFilter.ProcessingState;
-            owner.Tell(new JoinSession(subscriber) { SessionId = session, Filter = filter }, envelope.Sender);
+            owner.Tell(new JoinSession(subscriber) { SessionId = session, Filter = filter }, subscriber.Ref);
             var acknowledged = await subscriber.FishForMessageAsync<object>(message =>
             {
                 observations.Add(message);
@@ -1472,7 +1472,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         owner.Tell(new JoinSession(subscriber)
         {
             SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming
-        }, captured.Sender);
+        }, subscriber.Ref);
         var observed = new List<object>();
         await subscriber.FishForMessageAsync<object>(message =>
         {
@@ -1493,6 +1493,46 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Single(final.OfType<TextOutput>());
         Assert.DoesNotContain(final, message => message is ErrorOutput or SubAgentOutput);
         Assert.Equal(1, _clientProvider.Main.CallCount);
+    }
+
+    [Fact]
+    public async Task Join_barrier_acknowledgement_stays_with_its_declared_subscriber()
+    {
+        var ceiling = TimeSpan.FromSeconds(10);
+        var session = new SessionId("test-channel/join-barrier-owner");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("join-barrier-subscriber");
+        var originalSender = CreateTestProbe("original-callback-sender");
+        manager.Tell(new JoinSession(subscriber) { SessionId = session, Filter = OutputFilter.Full }, subscriber.Ref);
+        await subscriber.ExpectMsgAsync<SessionJoined>(ceiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var owner = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(session.Value)}")
+            .ResolveOne(ceiling, TestContext.Current.CancellationToken);
+
+        // A borrowed callback sender receives a separate, legitimate join reply.
+        owner.Tell(new JoinSession(subscriber)
+        {
+            SessionId = session, Filter = OutputFilter.Full | OutputFilter.ProcessingState
+        }, originalSender.Ref);
+        var subscriberReply = await subscriber.ExpectMsgAsync<SessionJoined>(ceiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var borrowedReply = await originalSender.ExpectMsgAsync<SessionJoined>(ceiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(session, subscriberReply.SessionId);
+        Assert.Equal(session, borrowedReply.SessionId);
+
+        owner.Tell(new JoinSession(subscriber)
+        {
+            SessionId = session, Filter = OutputFilter.Full
+        }, subscriber.Ref);
+        var ownedReply = await subscriber.ExpectMsgAsync<SessionJoined>(ceiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(session, ownedReply.SessionId);
+        owner.Tell(new Identify("join-barrier-complete"), originalSender.Ref);
+        var identity = await originalSender.ExpectMsgAsync<ActorIdentity>(ceiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("join-barrier-complete", identity.MessageId);
+        Assert.Equal(owner, identity.Subject);
     }
 
     // NOTE: routing the spawn lifecycle to session.log is no longer per-path-wired — the
