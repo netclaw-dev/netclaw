@@ -43,6 +43,7 @@
     <None Include="../Netclaw.Security.Tests/Evidence/ToolFrictionEvidence/tool-friction-fixtures.json" Link="ToolFrictionEvidence/tool-friction-fixtures.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.html" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Sessions/Fixtures/LegacyPersistence/legacy-session-v0.json" Link="LegacyPersistence/legacy-session-v0.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
