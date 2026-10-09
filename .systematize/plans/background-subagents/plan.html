@@ -1246,6 +1246,11 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>The restored candidate passes all ten persistence cases. Source hashes verify complete production restoration; the test assembly remains exact.</p>
 <p>The combined stack passes all thirty persistence, replay, recipient, and passivation controls without skips. Slopwatch, headers, and diff checks pass.</p>
 <p>Task 4.4 remains open. These controls exclude an actual effect without a committed result and process or power-loss SQLite durability.</p>
+<p><strong>Result commit after owner loss:</strong> A further control holds the second actual result write, stops the owner, then releases a successful commit.</p>
+<p>Cold recovery preserves both exact provider pairs and two executor invocations. It emits one correction and the exact framework terminal result.</p>
+<p>The first branch passes thirty-one persistence, replay, recipient, and passivation controls without skips. Slopwatch, headers, and diff checks pass.</p>
+<p>A replay-only observation fault preserves the provider pairs but causes a third invocation. The new control rejects that behavior; exact source and assembly restoration pass.</p>
+<p>This control does not close task 4.4. Snapshot suffixes and uncertain external effects retain their separate proof requirements.</p>
 <p><strong>Recovery policy question:</strong> A physical effect can precede its journal result. PR1 expands interrupted-task continuation across this existing uncertainty gap.</p>
 <p>The owner must choose the uncertain-effect recovery policy. Committed result preservation does not prove every physical effect occurs once.</p>
 <p><strong>Background contract:</strong> Strict OpenSpec validation passes for the lifecycle package. Four preparation tasks are complete.</p>

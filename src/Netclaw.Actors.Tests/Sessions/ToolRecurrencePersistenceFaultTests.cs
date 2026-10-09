@@ -301,6 +301,93 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
     }
 
     [Fact]
+    public async Task A_successful_final_result_after_owner_death_reconstructs_the_round_without_its_live_callback()
+    {
+        var session = new SessionId("signalr/held-actual-result-cut");
+        var reached = NewSignal();
+        var release = NewSignal();
+        await Journal.OnWrite.FailIf(async representation =>
+        {
+            if (representation.Payload is not ToolCallRecorded { ToolResult.ToolCallId: { } id } || id.Value != "call-2")
+                return false;
+            reached.TrySetResult();
+            await release.Task.WaitAsync(TestContext.Current.CancellationToken);
+            return false;
+        });
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        var owner = await OwnerAsync(session);
+        var watcher = CreateTestProbe();
+        watcher.Watch(owner);
+        try
+        {
+            await StartAsync(manager, session);
+            await reached.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+            Assert.Equal(2, _executor.Count);
+            Assert.Equal(2, _main.Count);
+            Sys.Stop(owner);
+            await watcher.ExpectTerminatedAsync(owner, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        await Journal.OnWrite.Pass();
+        JournalEvidence? before = null;
+        await AwaitAssertAsync(async () =>
+        {
+            before = await ReadJournalAsync(session);
+            Assert.Equal(2, before.Events.OfType<ToolCallRecorded>().Count());
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(before);
+        Assert.Null(before.Snapshot);
+        Assert.Equal(2, before.Events.OfType<ToolBatchStarted>().Count());
+        Assert.Empty(before.Events.OfType<TurnRecorded>());
+        Assert.Equal(2, _main.Count);
+        var originalResults = before.Events.OfType<ToolCallRecorded>().ToArray();
+        Assert.All(originalResults, result =>
+        {
+            Assert.False(result.LoopObservation!.Synthetic);
+            Assert.Equal((int)ToolInvocationOutcomeCategory.Success, result.LoopObservation.Category);
+            Assert.Equal("same", result.ToolResult.Content);
+        });
+
+        subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        await manager.Ask<CommandAck>(Restart(session), FaultCeiling, TestContext.Current.CancellationToken);
+        await CompletedAsync(subscriber);
+        var resumed = _main.Requests[2];
+        var resumedCalls = resumed.SelectMany(message => message.Contents.OfType<FunctionCallContent>()).ToArray();
+        var resumedResults = resumed.SelectMany(message => message.Contents.OfType<FunctionResultContent>()).ToArray();
+        foreach (var result in originalResults)
+        {
+            var id = result.ToolResult.ToolCallId!.Value.Value;
+            Assert.Single(resumedCalls, call => call.CallId == id);
+            var pair = Assert.Single(resumedResults, item => item.CallId == id);
+            Assert.Equal(result.ToolResult.Content, pair.Result);
+        }
+        Assert.Equal(resumedCalls.Select(call => call.CallId).Order(), resumedResults.Select(result => result.CallId).Order());
+        Assert.Equal(2, _executor.Count);
+        Assert.Equal(4, _main.Count);
+        Assert.All(_executor.Requesters, requester => Assert.Equal("operator-a", requester));
+        var after = await ReadJournalAsync(session);
+        Assert.Equal(3, after.Events.OfType<ToolBatchStarted>().Count());
+        var results = after.Events.OfType<ToolCallRecorded>().ToArray();
+        Assert.Equal(3, results.Length);
+        var correction = Assert.Single(results, result => result.LoopObservation!.Synthetic);
+        Assert.Equal("call-3", correction.ToolResult.ToolCallId!.Value.Value);
+        Assert.Equal(ToolCycleMessages.Correction
+            + "\nNext action: choose a different action, load a missing tool, or finish the task.", correction.ToolResult.Content);
+        var feedback = Assert.Single(_main.Requests[^1].SelectMany(message => message.Contents.OfType<FunctionResultContent>()),
+            result => result.CallId == "call-3");
+        Assert.Equal(correction.ToolResult.Content, feedback.Result);
+        Assert.Empty(after.Events.OfType<ToolBatchAbandoned>());
+        var terminal = Assert.Single(after.Events.OfType<TurnRecorded>());
+        Assert.Equal(ToolCycleMessages.Final, terminal.AssistantReply.Content);
+    }
+
+    [Fact]
     public async Task A_successful_correction_admission_after_owner_death_replays_its_checkpoint_before_dispatch()
     {
         var session = new SessionId("signalr/held-correction-admission-cut");
