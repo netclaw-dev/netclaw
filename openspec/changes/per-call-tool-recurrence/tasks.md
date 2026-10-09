@@ -65,7 +65,7 @@
 
 - [x] 8.1 Run relevant .NET projects sequentially; verify restore, test discovery, and pass counts without shared output locks.
 - [x] 8.2 Run Slopwatch and header checks; verify no new violation or missing copyright header.
-- [ ] 8.3 Inspect changed complex methods with focused coverage analysis; verify no critical untested branch remains.
+- [x] 8.3 Inspect changed complex methods with focused coverage analysis; verify no critical untested branch remains.
 - [x] 8.4 Validate the OpenSpec change strictly and inspect the full diff; verify no private replay payload or operational target enters tracked metadata.
 - [ ] 8.5 Use OpenSpec verification and sync skills; verify implementation, canonical specifications, and completed tasks agree before closure.
 
@@ -108,7 +108,11 @@
 - The real job-manager integration proves output version and origin independently from persisted definition fields.
 - Separate version and origin omissions fail their output assertions. The restored combined producer selection passes nine cases.
 - Root integration passes 258 callback, checkpoint, and job cases without failures or skips.
-- Payload side fields and the remaining critical coverage combinations retain their open proof gates.
+- Independent review reconciles both focused coverage collections with the later routed, eviction, and producer fault receipts.
+- The review finds no remaining critical behavior without evidence in the approved first-PR scope.
+- Whole-envelope ownership checks precede payload effects. Actual callbacks exercise the common routed-activity handler.
+- The parent aggregate path has no runtime producer. History guards reject absent or ambiguous owners; record guards reject malformed internal data.
+- Task 8.3 is complete. Exhaustive crash cuts, private replay, holdout, model trials, and final contract reconciliation remain open.
 - The scoped mutation gate selected 13 tests and killed all five expected targets in 3m08s.
 - The fifth target admits stale callbacks through the final `OwnsToolExecution` false return. A separate equality-removal fault also fails behaviorally.
 - The restored thirteen-case control passes. Hosted CI for the new revision remains separate.
@@ -120,4 +124,4 @@
 - The repaired thirteen-case control passes. All five expected mutants remain Killed in 184.8 seconds.
 - Configuration tests passed six cases. Doctor tests passed 37 cases. This repair changes no configuration or CLI code.
 - Open tasks retain private replay, shadow, productive holdout, and exhaustive crash gates.
-- Open tasks also retain model trials, coverage analysis, hosted CI for later revisions, and final contract reconciliation.
+- Open tasks also retain model trials, hosted CI for later revisions, and final contract reconciliation.
