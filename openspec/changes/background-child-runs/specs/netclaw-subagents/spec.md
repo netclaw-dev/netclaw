@@ -118,3 +118,84 @@ Healthy task duration alone SHALL NOT cause terminal timeout.
 - **WHEN** operation inactivity would otherwise expire
 - **THEN** the legitimate approval wait remains open
 - **AND** explicit run cancellation can still settle it
+
+### Requirement: Configurable subagent timeouts
+
+The system SHALL use resolved subagent profile values for operation-health deadlines.
+`SubAgentProfile.TimeoutSeconds` SHALL control inactivity between model deltas after substantive output starts.
+`SubAgentProfile.PrefillTimeoutSeconds` SHALL override the shared wait for initial output when present.
+When absent, it SHALL inherit `SubAgentConfig.PrefillTimeoutSeconds` from the `SubAgents` section of `netclaw.json`.
+`SubAgentConfig.NoProgressTimeoutSeconds` SHALL bound time without substantive model output.
+Content-free keepalives SHALL NOT refresh that no-progress deadline.
+
+These values SHALL NOT define a wall-clock task-lifetime limit.
+The file definition loader SHALL reject profile `timeoutSeconds` outside 5–600 seconds.
+It SHALL reject profile `prefillTimeoutSeconds` outside 5–3600 seconds.
+This change SHALL NOT migrate configuration fields or alter their current defaults.
+
+#### Scenario: Custom timeout from configuration
+
+- **GIVEN** a valid agent profile has `timeoutSeconds: 300`
+- **WHEN** the spawner prepares that profile for the actual child actor
+- **THEN** the child uses 300 seconds for model inactivity after substantive output starts
+- **AND** healthy operations can continue beyond 300 seconds of total task duration
+
+#### Scenario: Missing config section uses defaults
+
+- **GIVEN** configuration omits the `SubAgents` section and the profile omits timeout overrides
+- **WHEN** the runtime resolves the child operation-health values
+- **THEN** it uses a 60-second profile inactivity value and a 1800-second initial-output value
+- **AND** its no-progress value is 1200 seconds
+- **AND** none of those values defines the child's total task duration
+
+#### Scenario: Invalid profile timeout is rejected before execution
+
+- **GIVEN** a file agent definition has `timeoutSeconds: -1`
+- **WHEN** the definition loader validates that profile
+- **THEN** it rejects that definition before a child can execute
+- **AND** it does not replace the invalid value with a default
+
+#### Scenario: Invalid timeout rejected by doctor
+
+- **GIVEN** `netclaw.json` contains `"SubAgents": { "PrefillTimeoutSeconds": -1 }`
+- **WHEN** the operator runs `netclaw doctor`
+- **THEN** doctor reports a validation error for the timeout value
+
+### Requirement: Subagent observability events
+
+`LlmSessionActor` SHALL emit structured `SubAgentOutput` events to session subscribers for accepted child runs.
+It SHALL emit `Started` only after the durable `Started` record commits.
+It SHALL emit `Completed` only after the durable terminal receipt commits.
+These events SHALL retain the `OutputFilter.ToolCalls` category and their existing payload fields.
+Start-tool acceptance SHALL NOT substitute for the child terminal event.
+
+The owner SHALL NOT require the completed start tool's activity callback to deliver later child events.
+Existing headless CLI and channel render rules SHALL remain unchanged.
+
+#### Scenario: Subagent start event emitted
+
+- **GIVEN** an accepted child start within the session owner
+- **WHEN** the owner commits `Started`
+- **THEN** it emits one `SubAgentOutput` with `Phase = Started`
+- **AND** that event includes the agent name and tool count
+- **AND** subscribers receive it under `OutputFilter.ToolCalls`
+
+#### Scenario: Subagent completion event emitted
+
+- **GIVEN** a child finishes after its start tool returns acceptance
+- **WHEN** the owner commits its terminal receipt
+- **THEN** it emits one `SubAgentOutput` with `Phase = Completed`
+- **AND** that event includes the existing success status, duration, and outcome fields
+
+#### Scenario: Headless CLI renders subagent events
+
+- **GIVEN** the headless CLI subscribes with `OutputFilter.Full`
+- **WHEN** a subagent starts and completes
+- **THEN** the CLI renders `[subagent:start] <name> (<N> tools)`
+- **AND** it renders `[subagent:done] <name> (<status>, <duration>)`
+
+#### Scenario: Slack adapter suppresses subagent events
+
+- **GIVEN** the Slack adapter subscribes to session output
+- **WHEN** a subagent starts and completes
+- **THEN** no subagent-specific messages are posted to Slack

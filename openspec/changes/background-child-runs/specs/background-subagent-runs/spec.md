@@ -56,6 +56,10 @@ Direct slash adapters SHALL use the same committed owner values for their accept
 Their human prose may differ. Their identifiers, state, and control name SHALL NOT differ.
 An acceptance body SHALL NOT contain a child's final output or claim successful task completion.
 The later terminal result SHALL remain a distinct owner delivery under its fresh result correlation.
+The adapter SHALL validate the typed owner reply before it records success or exposes acceptance.
+That validation SHALL match the prepared digest and agent, coherent recorded state, and valid owner identifiers.
+The stamped start wrapper SHALL also match the original full context, start key, and source operation.
+A valid duplicate MAY retain a different run ID from a new preparation proposal.
 
 #### Scenario: A held child produces one accepted tool body
 
@@ -72,6 +76,27 @@ The later terminal result SHALL remain a distinct owner delivery under its fresh
 - **THEN** it reports an invalid acceptance rather than a live accepted run
 - **AND** it cannot infer acceptance or launch another child from human prose or child output
 - **AND** a failed acceptance write still creates no child model request or task effect
+
+#### Scenario: A typed reply cannot replace the original requester
+
+- **GIVEN** a structurally valid owner reply with a foreign requester in its original context
+- **WHEN** the actual pipeline or slash wrapper validates that reply against its stamped start
+- **THEN** it rejects the reply before successful receipt or visible acceptance
+- **AND** no child text or later parent context supplies replacement authority
+
+#### Scenario: A typed reply cannot replace the stamped start key
+
+- **GIVEN** a structurally valid owner reply with a different original tool call or slash input key
+- **WHEN** the actual pipeline or slash wrapper validates that reply
+- **THEN** it rejects the reply before successful receipt or visible acceptance
+- **AND** it does not adopt the reply as the requested run
+
+#### Scenario: A typed reply cannot replace the source operation
+
+- **GIVEN** a structurally valid owner reply that identifies another source operation
+- **WHEN** the actual pipeline or slash wrapper validates that reply
+- **THEN** it rejects the reply before successful receipt or visible acceptance
+- **AND** it retains the original activation attribution
 
 ### Requirement: Start retries preserve one durable run identity
 
@@ -103,6 +128,14 @@ A conflicting digest under an accepted key SHALL fail explicitly and SHALL NOT a
 - **WHEN** the write commits
 - **THEN** both callers receive the same run ID
 - **AND** exactly one child starts
+
+#### Scenario: A valid current-state duplicate differs from the new proposal
+
+- **GIVEN** the original start key and canonical digest identify a recorded `Running` run
+- **AND** preparation proposes a new run ID for an equivalent retry
+- **WHEN** the owner returns the existing coherent run
+- **THEN** the adapter accepts the existing run ID and `Running` state
+- **AND** it creates no second child or requirement that both run IDs match
 
 ### Requirement: The run lifetime is independent of its start call
 
@@ -236,7 +269,9 @@ The result SHALL distinguish useful partial evidence from successful task comple
 The owner SHALL accept terminal messages only from the recorded child generation.
 The first committed terminal receipt SHALL win over later cancellation admission.
 Cancellation admission that commits first SHALL prevent later success from becoming the terminal outcome.
-The owner SHALL preserve safe evidence from a late child response without changing the cancelled outcome.
+Cancellation SHALL retain the last committed child checkpoint as partial evidence.
+The owner SHALL reject a late child terminal response as a replacement outcome after cancellation admission.
+It SHALL NOT merge that late response as successful parent activity.
 The child SHALL close task dispatch and retain its result until the owner acknowledges durable terminal receipt.
 Duplicate terminal messages SHALL receive the same acknowledgement without another delivery admission.
 Persistence failure SHALL NOT produce a successful terminal acknowledgement.
@@ -253,7 +288,7 @@ Persistence failure SHALL NOT produce a successful terminal acknowledgement.
 - **GIVEN** cancellation admission commits before a success receipt
 - **WHEN** the late success arrives
 - **THEN** the terminal outcome remains cancelled
-- **AND** safe recorded evidence can remain available as partial evidence
+- **AND** the last committed child checkpoint remains available as partial evidence
 
 #### Scenario: Terminal receipt persistence fails
 

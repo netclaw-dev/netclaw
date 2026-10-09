@@ -90,7 +90,9 @@ A start-tool timeout after acceptance does not cancel the accepted run.
 The parent explicitly loads `check_agent_run` for authorized status or cancellation.
 The owner commits cancellation admission before it reports that fact.
 The owner closes the run's local model, tool, and approval-retry admission gate.
+It requests token cancellation and waits for any synchronous dispatch prefix to exit.
 The owner then commits the dispatch closure fact.
+
 That committed fact proves that no new local task work can start.
 It does not prove that an earlier external effect stopped or that its outcome is known.
 
@@ -99,6 +101,10 @@ It can preserve confirmed checkpoints and atomically write a report inside the a
 It cannot request model output, run task tools, edit the project, call an external service, or create approval authority.
 A failed write or grace expiry preserves the last confirmed checkpoint and an explicit reason.
 Cancellation remains a failure outcome even when useful partial evidence exists.
+
+The owner commits any unresolved child prompt disposition before the terminal receipt.
+Token cancellation can resolve a prompt earlier. Durable closure does not require prompt resolution to commit first.
+A late child terminal payload cannot replace the last committed checkpoint or supply a successful parent activity merge.
 
 Positive example: cancellation returns confirmed file activity and an existing partial artifact without another model call.
 Negative example: late provider output or an approval answer cannot start task work after dispatch closure.
