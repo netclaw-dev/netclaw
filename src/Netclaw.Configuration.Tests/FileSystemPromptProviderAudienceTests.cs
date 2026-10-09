@@ -238,6 +238,8 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.True(embeddedIndex >= 0);
         Assert.True(headingIndex > embeddedIndex);
         Assert.True(playbookIndex > headingIndex);
+        Assert.Contains("Keep every tool call within the user's current objective and explicit action constraints.", prompt[..headingIndex]);
+        Assert.Contains("When the required evidence is complete, return the requested result without unrelated tool calls.", prompt[..headingIndex]);
         Assert.Contains(_paths.IdentityDirectory, prompt);
         Assert.DoesNotContain("{{IDENTITY_DIR}}", prompt);
     }
@@ -254,6 +256,8 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
 
         Assert.NotNull(rules);
         Assert.Contains("Operating Rules", rules);
+        Assert.Contains("Keep every tool call within the user's current objective and explicit action constraints.", rules);
+        Assert.Contains("When the required evidence is complete, return the requested result without unrelated tool calls.", rules);
         Assert.Contains("Use the deployment review checklist.", rules);
     }
 
