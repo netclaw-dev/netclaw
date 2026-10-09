@@ -278,6 +278,10 @@ The actor adopts one compatible prefix of buffered inputs.
 The actor preserves later inputs in arrival order.
 Each later prefix receives its own canonical requester after the previous prefix completes.
 Recovery uses the same authority comparison and prefix order.
+An internal compaction replay continues the existing adopted task before any later real input.
+The actor retains that task's active input IDs, authority, and recurrence evidence without a new adoption.
+After the old tool batch or terminal response completes, the actor adopts the next real input prefix in arrival order.
+The actor does not merge a replay into a later requester's task.
 Admission cannot change an in-flight attempt or its approval requester.
 
 The adoption consumer verifies the ordered canonical input prefix.

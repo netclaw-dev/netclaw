@@ -40,7 +40,7 @@ public sealed class PreChangePersistenceCompatibilityTests(ITestOutputHelper out
             Tuning = new SessionTuning { TitleGenerationInterval = 0, SnapshotInterval = 0 }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("Continue a neutral task."));
-        services.AddSingleton<IToolExecutor>(new ReceiptToolExecutor(_executor));
+        services.AddSingleton<IToolExecutor>(_executor);
         var registry = new ToolRegistry();
         registry.RegisterCore(AIFunctionFactory.Create((string command) => command, "shell_execute"), "builtin");
         registry.RegisterCore(AIFunctionFactory.Create((string path) => path, "read_file"), "builtin");
@@ -201,20 +201,6 @@ public sealed class PreChangePersistenceCompatibilityTests(ITestOutputHelper out
 
     private sealed record CapturedFixture(string Baseline, string SessionId, Dictionary<string, CapturedEntry> Entries);
     private sealed record CapturedEntry(int SerializerId, string Manifest, string Base64, string Sha256);
-
-    private sealed class ReceiptToolExecutor(ApprovalGateToolExecutor executor) : IToolExecutor
-    {
-        public Task AuthorizeAsync(FunctionCallContent call, ToolExecutionContext context, CancellationToken ct = default)
-            => executor.AuthorizeAsync(call, context, ct);
-
-        public async Task<string> ExecuteAsync(FunctionCallContent call, ToolExecutionContext context, CancellationToken ct = default)
-        {
-            var result = await executor.ExecuteAsync(call, context, ct);
-            if (!context.Outputs.TryComplete(new ToolInvocationReceipt.Succeeded([], null)))
-                throw new InvalidOperationException("The fake executor already emitted a dispatch receipt.");
-            return result;
-        }
-    }
 
     private sealed class FixtureSeeder : ReceivePersistentActor
     {

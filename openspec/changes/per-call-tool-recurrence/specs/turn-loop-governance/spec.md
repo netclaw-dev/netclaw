@@ -230,6 +230,14 @@ The parent MUST restore the checkpoint for that task after an automatic restart.
 - **THEN** the actor commits the U1 prefix before its continuation
 - **AND** the actor retains U2 for the next completed response and its own canonical adoption
 
+#### Scenario: Internal replay precedes fresh input after compaction
+
+- **GIVEN** context overflow buffers an internal replay before a later admitted request
+- **WHEN** the actor resumes after compaction
+- **THEN** the replay continues the existing task with its active input IDs, canonical authority, and recurrence evidence
+- **AND** the later request remains buffered until the old tool batch or terminal response completes
+- **AND** each real input consumes its canonical IDs once in arrival order under its own canonical requester
+
 ### Requirement: Background result delivery preserves its causal task evidence
 
 A new-format background job MUST persist its canonical origin `TurnId` and `ToolCallId` before process launch.

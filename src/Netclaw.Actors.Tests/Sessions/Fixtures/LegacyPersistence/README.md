@@ -28,9 +28,10 @@ The consumer decodes the captured bytes with the current real serializer.
 It then seeds the real journal and snapshot store through their normal actor interfaces.
 The normal session actor consumes those records after the seed actor stops.
 
-The shared approval fake omits typed dispatch receipts.
-The consumer keeps that fake's approval checks and effect counters.
-It emits the canonical success receipt only after the fake returns successfully.
+The baseline approval fake omitted typed dispatch receipts.
+The current shared fake retains its approval checks and effect counters.
+It emits the canonical success receipt only after confirmed successful execution.
+The consumer uses that shared executor without a second receipt wrapper.
 The candidate requires this receipt before a model continuation.
 
 The four cases cover journal replay and snapshot-plus-journal replay for both task states.

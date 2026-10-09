@@ -910,7 +910,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Exact_tool_cycle_gets_one_correction_then_stops_without_execution(bool violatesTextOnly)
+    public async Task Exact_tool_cycle_gets_one_correction_then_stops_without_execution(bool ignoresToolAvailability)
     {
         var diagnostics = CreateTestProbe();
         Sys.EventStream.Subscribe(diagnostics, typeof(Warning));
@@ -922,7 +922,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 new Dictionary<string, object?> { ["query"] = "browser" })
         ];
         _fakeChatClient.AlwaysReturnToolCalls = true;
-        _fakeChatClient.IgnoreToolAvailability = violatesTextOnly;
+        _fakeChatClient.IgnoreToolAvailability = ignoresToolAvailability;
         _fakeToolExecutor.Results["search_tools"] = "same result";
 
         var sessionId = new SessionId("channel-cycle/exact-stop");
@@ -952,19 +952,10 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 cancellationToken: TestContext.Current.CancellationToken));
         }
 
-        if (violatesTextOnly)
-        {
-            var error = await subscriber.ExpectMsgAsync<ErrorOutput>(
-                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-            Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
-            Assert.Contains("required text only", error.Message, StringComparison.Ordinal);
-            Assert.DoesNotContain("used all available tool iterations", error.Message, StringComparison.Ordinal);
-        }
-        else
-        {
-            await subscriber.ExpectMsgAsync<TextOutput>(
-                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        }
+        var partial = await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("The result is partial", partial.Text, StringComparison.Ordinal);
+        Assert.Contains("The last refused operation did not execute", partial.Text, StringComparison.Ordinal);
         await subscriber.ExpectMsgAsync<TurnCompleted>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
@@ -973,7 +964,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Equal("same result", results[1].Result);
         Assert.Contains("repeated action-and-outcome cycle", results[2].Result, StringComparison.Ordinal);
         Assert.Equal(2, _fakeToolExecutor.CallCount);
-        Assert.Equal(5, _fakeChatClient.CallCount);
+        Assert.Equal(4, _fakeChatClient.CallCount);
         for (var i = 0; i < 2; i++)
         {
             var diagnostic = await diagnostics.FishForMessageAsync<Warning>(
@@ -990,15 +981,12 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     [Fact]
     public async Task Parallel_cycle_correction_preserves_every_call_result_pair()
     {
-        _fakeChatClient.ToolCallsOnFirstCall =
-        [
-            new FunctionCallContent("cycle-a", "search_tools",
-                new Dictionary<string, object?> { ["query"] = "alpha" }),
-            new FunctionCallContent("cycle-b", "search_tools",
-                new Dictionary<string, object?> { ["query"] = "beta" }),
-            new FunctionCallContent("cycle-c", "search_tools",
-                new Dictionary<string, object?> { ["query"] = "gamma" })
-        ];
+        var calls = new[] { (Id: "cycle-a", Query: "alpha"), (Id: "cycle-b", Query: "beta"), (Id: "cycle-c", Query: "gamma") };
+        List<FunctionCallContent> CallsForRound(int round) => calls.Select(call =>
+            new FunctionCallContent($"{call.Id}-{round}", "search_tools",
+                new Dictionary<string, object?> { ["query"] = call.Query })).ToList();
+        _fakeChatClient.ToolCallsOnFirstCall = CallsForRound(1);
+        _fakeChatClient.AfterToolCallResponse = round => _fakeChatClient.ToolCallsOnFirstCall = CallsForRound(round + 1);
         _fakeChatClient.AlwaysReturnToolCalls = true;
         _fakeToolExecutor.Results["search_tools"] = "same result";
 
@@ -1036,16 +1024,26 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(
-            ["cycle-a", "cycle-b", "cycle-c"],
+            ["cycle-a-3", "cycle-b-3", "cycle-c-3"],
             correctionResults.Select(static result => result.CallId.Value)
                 .OrderBy(static callId => callId, StringComparer.Ordinal));
         Assert.All(correctionResults, static result =>
-            Assert.Contains("No requested call executed", result.Result, StringComparison.Ordinal));
+            Assert.Contains("This call did not execute", result.Result, StringComparison.Ordinal));
         Assert.Equal(6, _fakeToolExecutor.CallCount);
+        Assert.Equal(4, _fakeChatClient.CallCount);
+        var recordedResults = _fakeChatClient.ReceivedMessages[^1]
+            .SelectMany(static message => message.Contents.OfType<FunctionResultContent>()).ToArray();
+        Assert.Equal(9, recordedResults.Length);
+        var expectedIds = Enumerable.Range(1, 3).SelectMany(round => calls.Select(call => $"{call.Id}-{round}"))
+            .Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(expectedIds, recordedResults.Select(static result => result.CallId).Order(StringComparer.Ordinal));
+        var recordedCalls = _fakeChatClient.ReceivedMessages[^1]
+            .SelectMany(static message => message.Contents.OfType<FunctionCallContent>()).ToArray();
+        Assert.Equal(expectedIds, recordedCalls.Select(static call => call.CallId).Order(StringComparer.Ordinal));
     }
 
     [Fact]
-    public async Task Text_only_cycle_stop_survives_overflow_compaction_and_empty_retry()
+    public async Task Runtime_cycle_stop_retains_evidence_after_overflow_compaction_and_empty_retry()
     {
         _fakeChatClient.ToolCallsOnFirstCall =
         [
@@ -1055,9 +1053,11 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 new Dictionary<string, object?> { ["query"] = "browser" })
         ];
         _fakeChatClient.AlwaysReturnToolCalls = true;
+        foreach (var returnsTools in new[] { true, true, true, false, true })
+            _fakeChatClient.PlannedToolCallDecisions.Enqueue(returnsTools);
         _fakeChatClient.AfterToolCallResponse = callCount =>
         {
-            if (callCount == 4)
+            if (callCount == 3)
             {
                 _fakeChatClient.PlannedExceptions.Enqueue(new ProviderException(
                     "maximum context length exceeded",
@@ -1066,7 +1066,6 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             }
         };
         _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("Final partial report.")]);
         _fakeToolExecutor.Results["search_tools"] = "same result";
 
         var sessionId = new SessionId("channel-cycle/text-only-retry");
@@ -1102,10 +1101,13 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal("Final partial report.", text.Text);
+        Assert.Contains("The result is partial", text.Text, StringComparison.Ordinal);
+        Assert.Contains("The last refused operation did not execute", text.Text, StringComparison.Ordinal);
         Assert.Equal(2, _fakeToolExecutor.CallCount);
-        Assert.Equal(6, _fakeChatClient.CallCount);
-        Assert.All(_fakeChatClient.ReceivedToolNames.TakeLast(2), Assert.Empty);
+        Assert.Equal(5, _fakeChatClient.CallCount);
+        Assert.Contains("search_tools", _fakeChatClient.ReceivedToolNames[^1]);
+        Assert.Contains(_fakeChatClient.ReceivedMessages[^1], message =>
+            message.Text.Contains("You received tool results but did not respond", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -2605,20 +2607,20 @@ internal sealed class FakeChatClient : IChatClient
     /// When set, the first response returns these tool calls instead of text.
     /// Subsequent calls return normal text (simulating the LLM completing after tool results).
     /// When <see cref="AlwaysReturnToolCalls"/> is true, every call returns tool calls
-    /// as long as tools are available in options (for testing iteration limits).
+    /// as long as tools are available in options.
     /// </summary>
     public List<FunctionCallContent>? ToolCallsOnFirstCall { get; set; }
 
     /// <summary>
     /// When true, every call returns tool calls (from <see cref="ToolCallsOnFirstCall"/>)
     /// as long as <c>options.Tools</c> is non-empty. When tools are omitted from options
-    /// (circuit breaker fired), returns normal text instead.
+    /// returns normal text instead.
     /// </summary>
     public bool AlwaysReturnToolCalls { get; set; }
 
     /// <summary>
     /// When true, tool calls continue even if the caller omits tools from ChatOptions.
-    /// Simulates providers that hallucinate tool calls after the circuit breaker fires.
+    /// Simulates providers that emit tool calls when the request requires text only.
     /// </summary>
     public bool IgnoreToolAvailability { get; set; }
 
