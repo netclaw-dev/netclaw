@@ -288,6 +288,21 @@ the current daemon instance running. Valid changes SHALL trigger coordinated
 daemon restart: close new ingress, drain active sessions, restart, relaunch the
 sessions that were active, and resume from the last durable checkpoint.
 
+### FR-017 Background Child Delegation
+
+Netclaw shall return a durable accepted run identifier for explicit and routed child tasks before child completion.
+The parent shall accept other inputs and retain status and cancellation controls for its accepted children.
+Child results shall return later as attributed tool-origin content under the original requester authority.
+Child approval prompts shall remain valid for the live run after its start call ends.
+Cancellation shall stop new task dispatch and preserve recorded partial evidence through a five-second framework-only grace period.
+
+Restart shall report interrupted children as lost, retain terminal delivery, and expire child approval prompts without automatic child relaunch.
+The release shall prove a parent model response before a held child request completes under the selected supported provider capacity contract.
+Provider capacity remains an explicit delivery gate; actor acknowledgements alone do not prove model responsiveness.
+Private agent messages, peer discovery, questions, and live steering remain outside this delivery.
+
+See `openspec/changes/background-child-runs/` for the second PR's review contract.
+
 ## Operational Requirements
 
 - Daemon deploys as a user-level systemd service on `pi1` (no sudo required)
