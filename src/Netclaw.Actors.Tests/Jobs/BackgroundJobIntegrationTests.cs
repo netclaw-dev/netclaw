@@ -158,8 +158,9 @@ public class BackgroundJobIntegrationTests : TestKit, IAsyncDisposable
             "auto-ack-slack-gateway-completion");
         ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
 
+        var request = MakeStartCommand("echo integration-test-output");
         var started = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand("echo integration-test-output"),
+            request,
             TimeSpan.FromSeconds(5),
             TestContext.Current.CancellationToken);
 
@@ -178,6 +179,8 @@ public class BackgroundJobIntegrationTests : TestKit, IAsyncDisposable
         Assert.Equal("background-job", delivered.Source.Provenance.SourceKind?.Value);
         Assert.NotNull(delivered.Source.BackgroundJobId);
         Assert.StartsWith("bg-job:", delivered.Source.BackgroundJobId!.Value.Value);
+        Assert.Equal(1, delivered.Source.BackgroundJobLineageVersion);
+        Assert.Equal(request.Origin, delivered.Source.BackgroundJobOrigin);
 
         await AwaitAssertAsync(() =>
         {
@@ -185,6 +188,8 @@ public class BackgroundJobIntegrationTests : TestKit, IAsyncDisposable
             Assert.NotNull(def);
             Assert.Equal(BackgroundJobStatus.Completed, def!.Status);
             Assert.NotNull(def.CompletedAtMs);
+            Assert.Equal(1, def.LineageVersion);
+            Assert.Equal(request.Origin, def.Origin);
             return Task.CompletedTask;
         }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
     }

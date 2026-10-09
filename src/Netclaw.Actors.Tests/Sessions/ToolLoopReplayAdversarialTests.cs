@@ -217,6 +217,54 @@ public sealed class ToolLoopReplayAdversarialTests(ITestOutputHelper output) : T
         Assert.Equal("original-turn", completed.LoopCheckpoint.TaskId);
     }
 
+    [Fact]
+    public void Serialized_eviction_delta_removes_expired_evidence_and_preserves_pinned_decisions_after_snapshot()
+    {
+        const string task = "original-admitted-turn";
+        var tracker = new TurnStateTracker();
+        var corrected = ToolCycleSignatureFactory.Prepare([Call("corrected", "pinned", -1)], Executor);
+        var established = ToolCycleSignatureFactory.Prepare([Call("established", "pinned", -2)], Executor);
+        foreach (var batch in new[] { corrected, corrected, established, established })
+            tracker.ObserveCompleted(ToolCycleSignatureFactory.Complete(batch, batch.Calls.ToDictionary(
+                call => call.CallId.Value, _ => new ToolCycleResult(ToolInvocationOutcomeCategory.TransientFailure, "same failure"))));
+        Assert.Equal(ToolCycleDecisionKind.Correct, tracker.EvaluateBeforeDispatch(corrected).Kind);
+        var cold = Enumerable.Range(0, 257).Select(index => ToolCycleSignatureFactory.Prepare(
+            [Call($"cold-{index}", "cold", index)], Executor)).ToArray();
+        foreach (var batch in cold.Take(256))
+            tracker.ObserveCompleted(ToolCycleSignatureFactory.Complete(batch, batch.Calls.ToDictionary(
+                call => call.CallId.Value, _ => new ToolCycleResult(ToolInvocationOutcomeCategory.TransientFailure, "same failure"))));
+        var previous = tracker.CaptureCheckpoint(task);
+        tracker.ObserveCompleted(ToolCycleSignatureFactory.Complete(cold[256], cold[256].Calls.ToDictionary(
+            call => call.CallId.Value, _ => new ToolCycleResult(ToolInvocationOutcomeCategory.TransientFailure, "same failure"))));
+        var next = Prepare();
+        var admitted = new ToolBatchStarted
+        {
+            SessionId = Session,
+            LoopAdmission = new ToolLoopAdmission
+            {
+                TaskId = task, ActionHash = next.Action.Value,
+                Calls = next.Calls.Select(call => new ToolLoopPreparedCall(
+                    call.CallId.Value, call.ToolName.Value, call.ArgumentsHash, call.AllowsPendingJob)).ToArray()
+            },
+            LoopDelta = tracker.CaptureDelta(task, previous)
+        };
+        Assert.False(admitted.LoopDelta.Reset);
+        Assert.Single(admitted.LoopDelta.RemovedKeys);
+        var state = (SessionState.Empty with { LoopCheckpoint = previous }).ApplyLoopAdmission(RoundTrip(admitted));
+        var recovered = SessionState.FromSnapshot(RoundTrip(state.ToSnapshot()));
+        var restored = new TurnStateTracker();
+        restored.RestoreCheckpoint(recovered.LoopCheckpoint);
+
+        Assert.Equal(ToolCycleDecisionKind.Stop, restored.EvaluateBeforeDispatch(corrected).Kind);
+        Assert.Equal(ToolCycleDecisionKind.Correct, restored.EvaluateBeforeDispatch(established).Kind);
+        Assert.Equal(ToolCycleDecisionKind.Execute, restored.EvaluateBeforeDispatch(cold[0]).Kind);
+        restored.ObserveCompleted(ToolCycleSignatureFactory.Complete(cold[0], cold[0].Calls.ToDictionary(
+            call => call.CallId.Value, _ => new ToolCycleResult(ToolInvocationOutcomeCategory.TransientFailure, "same failure"))));
+        Assert.Equal(ToolCycleDecisionKind.Execute, restored.EvaluateBeforeDispatch(cold[0]).Kind);
+        Assert.Equal(256, recovered.LoopCheckpoint.ColdKeys.Count);
+        Assert.Equal(258, recovered.LoopCheckpoint.Entries.Count);
+    }
+
     private SessionState CompleteTwoRounds(SessionState state, string task)
     {
         var batch = Prepare();
