@@ -15,6 +15,11 @@ Preparation evidence:
 - The original `2e6bc4f` capture already supplies conversation, original requester, and parent approval facts.
 - Reuse `src/Netclaw.Actors.Tests/Sessions/Fixtures/LegacyPersistence/legacy-session-v0.json`; do not recapture or infer child records.
 - Its SHA-256 is `bf400d15ea1541d1a59b8be238705c99eb7f489413c863d93b17976ab1cfc94b`.
+- A separate baseline capture supplies one real SQLite storage binding and its neutral workspace marker.
+- Reuse `src/Netclaw.Daemon.Tests/Gateway/Fixtures/LegacyPersistence/legacy-storage-binding-v0.json` with its bundled capture source and provenance.
+- The original resolver creates the captured row. The consumer restores all four columns and the marker under a new home.
+- The combined candidate passes 33 storage-resolver cases without failures or skips.
+- Task 6.6 remains open for the new empty child ledger and the integrated lifecycle recovery proof.
 - These preparation tasks establish no background runtime or provider-capacity pass.
 
 ## 2. Durable acceptance and independent lifetime

@@ -1,0 +1,67 @@
+diff --git a/src/Netclaw.Daemon.Tests/Gateway/PreChangeStorageBindingCaptureTests.cs b/src/Netclaw.Daemon.Tests/Gateway/PreChangeStorageBindingCaptureTests.cs
+new file mode 100644
+index 000000000..cdd319a3c
+--- /dev/null
++++ b/src/Netclaw.Daemon.Tests/Gateway/PreChangeStorageBindingCaptureTests.cs
+@@ -0,0 +1,61 @@
++// -----------------------------------------------------------------------
++// <copyright file="PreChangeStorageBindingCaptureTests.cs" company="Petabridge, LLC">
++//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
++// </copyright>
++// -----------------------------------------------------------------------
++using System.Security.Cryptography;
++using System.Text;
++using System.Text.Json;
++using Microsoft.Extensions.Logging.Abstractions;
++using Microsoft.Extensions.Time.Testing;
++using Netclaw.Actors.Protocol;
++using Netclaw.Configuration;
++using Netclaw.Daemon.Gateway;
++using Netclaw.Daemon.Services;
++using Netclaw.Tests.Utilities;
++using Xunit;
++
++namespace Netclaw.Daemon.Tests.Gateway;
++
++public sealed class PreChangeStorageBindingCaptureTests
++{
++    [Fact]
++    public async Task Capture_one_neutral_binding_and_marker_through_the_original_resolver()
++    {
++        var outputPath = Environment.GetEnvironmentVariable("NETCLAW_STORAGE_FIXTURE_OUTPUT")
++            ?? throw new InvalidOperationException("Set NETCLAW_STORAGE_FIXTURE_OUTPUT to an owned artifact path.");
++        using var directory = new DisposableTempDir();
++        var paths = new NetclawPaths(directory.Path);
++        paths.EnsureDirectoriesExist();
++        try
++        {
++            await new SchemaMigrator(paths, NullLogger<SchemaMigrator>.Instance)
++                .MigrateAsync(paths.SqliteDbPath, TestContext.Current.CancellationToken);
++            var session = new SessionId("signalr/pre-change-persistence-proof");
++            var clock = new FakeTimeProvider(new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero));
++            var storage = new SqliteSessionStorageResolver(paths, clock).Resolve(session);
++            Assert.NotNull(storage.Binding);
++            var row = CapturedStorageRow.Read(paths);
++            Assert.Equal(storage.Binding.EnvelopeRoot.Value, row.EnvelopeRoot);
++            Assert.Equal(clock.GetUtcNow().ToUnixTimeMilliseconds(), row.CreatedAt);
++            Directory.CreateDirectory(storage.SessionDirectory.Value);
++            var markerPath = Path.Combine(storage.SessionDirectory.Value, "neutral-marker.txt");
++            await File.WriteAllBytesAsync(markerPath, Encoding.UTF8.GetBytes("The neutral session marker remains.\n"),
++                TestContext.Current.CancellationToken);
++            var markerBytes = await File.ReadAllBytesAsync(markerPath, TestContext.Current.CancellationToken);
++            var markerRelativePath = Path.GetRelativePath(row.EnvelopeRoot, markerPath).Replace(Path.DirectorySeparatorChar, '/');
++            var fixture = new CapturedStorageFixture(
++                "2e6bc4f014dc96b606566709df1bd11f90ecf34a", row, markerRelativePath,
++                Convert.ToBase64String(markerBytes), Convert.ToHexString(SHA256.HashData(markerBytes)));
++            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))
++                ?? throw new InvalidOperationException("The fixture needs a parent directory."));
++            await File.WriteAllTextAsync(outputPath,
++                JsonSerializer.Serialize(fixture, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }) + "\n",
++                TestContext.Current.CancellationToken);
++        }
++        finally
++        {
++            SqliteTestPools.Clear(paths);
++        }
++    }
++}
