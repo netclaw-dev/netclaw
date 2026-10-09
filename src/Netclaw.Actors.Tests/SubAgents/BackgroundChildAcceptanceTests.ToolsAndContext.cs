@@ -31,8 +31,9 @@ public sealed partial class BackgroundChildAcceptanceTests
         state = AdmittedTask("later", state);
         if (foreignRequester)
             state = state with { AdoptedTaskContext = state.AdoptedTaskContext! with { RequesterSenderId = new SenderId("other") } };
+        var sessionDirectory = Path.Combine(Path.GetTempPath(), "neutral-child-context");
         var input = new ContextAssemblyInput(state, [], false, null, null, null, Session,
-            SessionStoragePaths.CreateLegacy("/tmp/neutral-child-context", "/tmp/neutral-child-context/session", Session.Value), false, null, string.Empty,
+            SessionStoragePaths.CreateLegacy(sessionDirectory, Path.Combine(sessionDirectory, "session"), Session.Value), false, null, string.Empty,
             publicAudience ? TrustAudience.Public : TrustAudience.Personal);
         var context = SessionMessageAssembler.BuildVolatileContextBlock(input);
         if (publicAudience || foreignRequester)
