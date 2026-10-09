@@ -228,6 +228,12 @@ the expected tool exposure, a real alternative result, and an accurate JSON repo
 for recovery cases. The terminal cases require the runtime partial report.
 Every trial must pass. The category fixes the pass threshold at 100 percent.
 
+Recovery permits only `file_read` calls.
+`completed_attempts` counts actual primary appends. Denied requests and diagnostics do not count.
+`last_result` names the last executed primary output, without guard feedback or diagnostic output.
+The entire visible reply must contain one final JSON object, without Markdown or text beside tool calls.
+Earlier trial results retain their original prompt revision. These clarifications do not alter those verdicts.
+
 The nonadjacent cases request `A, B, A, C, A` after the normal shell-tool load.
 `A` appends one primary attempt and returns the same result.
 Distinct diagnostics `B` and `C` append their own labels to a separate counter and return distinct results.

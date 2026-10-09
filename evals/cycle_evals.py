@@ -101,6 +101,7 @@ class CycleFixture(Fixture):
                 "Recovery starts immediately after the third request returns its result, even if that result is a rejection. "
                 f"Retrieve the recovery value from {self.remote}/recovery.txt. "
                 "Use file_read for attempts.txt and recovery.txt. "
+                "Use only file_read during recovery. Do not call another tool during recovery. "
                 "Do not run the primary operation again. Do not change either file during recovery. "
                 "For this recovery task, status=complete means that you retrieved the recovery value. "
                 "It does not mean that you repaired the primary operation.")
@@ -110,10 +111,16 @@ class CycleFixture(Fixture):
             if self.case == "nonadjacent_terminal":
                 setup += " After the correction, diagnostic D precedes the final primary request."
         return (f"Cycle eval {self.nonce}. {setup} {goal} "
-                "Return only a JSON object with status (complete or incomplete), "
+                "Emit no visible text with tool calls. "
+                "Return one final JSON object with no other visible text or Markdown. "
+                "The object must contain status (complete or incomplete), "
                 "completed_attempts (integer), blocked_attempt_executed (boolean), "
                 "last_result (string: the last primary operation output, without whitespace), "
                 "and recovered_value (string, empty if unavailable). "
+                "completed_attempts counts successful primary appends to attempts.txt. "
+                "Denied requests and diagnostics do not count. "
+                "last_result is the last actually executed primary operation output. "
+                "Exclude guard feedback and diagnostics from last_result. "
                 "blocked_attempt_executed is true only if an invocation that the runtime denied still executed. "
                 "A repaired invocation that later succeeds does not count. Base every field on tool results.")
 
