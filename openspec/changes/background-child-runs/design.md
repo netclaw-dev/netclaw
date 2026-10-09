@@ -208,7 +208,9 @@ Do not replace the owner with a probe that emits the desired acceptance or termi
 The parent accepts terminal messages only from the current recorded child generation.
 The first committed terminal receipt wins over later cancellation requests.
 If cancellation admission commits first, later child success cannot become the terminal outcome.
-The parent can retain its confirmed evidence inside the cancelled result.
+The cancelled result retains the last committed child checkpoint as partial evidence.
+The owner ignores a late child terminal payload after cancellation admission.
+That payload cannot replace the cancelled outcome or supply a successful parent activity merge.
 Actor mailbox arrival alone is insufficient: journal commit determines the winner.
 
 The child closes normal dispatch, sends one terminal result, and waits for the owner acknowledgement.
@@ -227,6 +229,8 @@ Then it closes child work admission, cancels active calls, and settles run-owned
 Closure must cover pending thread-pool tool dispatch and queued provider requests, not just the actor mailbox.
 The child/runtime adapter sends an explicit dispatch-closure acknowledgement after no new task dispatch can start.
 The control response reports `dispatch_closed = false` until that acknowledgement exists.
+The owner commits any unresolved child prompt disposition before it commits the terminal receipt.
+Token cancellation can resolve a prompt earlier. Durable closure does not require prompt resolution to commit first.
 It must never describe cancellation admission alone as proof of stopped dispatch.
 
 Once closure is acknowledged, no fresh model request, tool launch, or approval retry can start for that run.

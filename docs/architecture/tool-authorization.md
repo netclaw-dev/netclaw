@@ -863,6 +863,15 @@ Normal tool policy, the owner session, and the original eligible requester defin
 Children cannot discover, load, or dispatch that control. A foreign caller receives no target details.
 The owner uses the original authority record. It does not copy requester or path authority into a second policy structure.
 Cancellation creates no authorization grant. A report path still requires ordinary file access policy.
+
+The owner commits cancellation admission before it reports `Cancelling`.
+It closes the live dispatch gate, requests token cancellation, and waits for any synchronous dispatch prefix to exit.
+It commits `DispatchClosed` before framework-only report finalization.
+It commits any unresolved child prompt disposition before the terminal receipt.
+
+Token cancellation can resolve a prompt earlier. Durable closure does not require prompt resolution to commit first.
+See [the operation-health specification](../spec/SPEC-016-tool-liveness-and-stall-detection.md#cancellation-and-partial-evidence) for the full cancellation sequence.
+
 After authorization, the control adapter obtains `log_path` and `artifact_directory` from the existing canonical child storage binding.
 These call-local output paths are data. They create no grant or separate durable authority.
 The parent uses normal file tools for log access. A denied control reveals neither path.

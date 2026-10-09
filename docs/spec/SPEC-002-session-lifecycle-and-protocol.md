@@ -160,6 +160,13 @@ The live dispatch gate also applies to that grant operation and the child retry.
 Cancellation, terminal settlement, and recovery expire unresolved child prompts.
 
 Cancellation admission, confirmed local dispatch closure, and terminal settlement are separate lifecycle facts.
+The owner commits cancellation admission before it reports `Cancelling`.
+It closes the live dispatch gate, requests token cancellation, and waits for any synchronous dispatch prefix to exit.
+It then commits `DispatchClosed` before it starts framework-only finalization.
+
+The owner commits any unresolved child prompt disposition before it commits the terminal receipt.
+Token cancellation can resolve a prompt earlier. Prompt resolution need not commit before `DispatchClosed`.
+
 After closure, framework-only finalization has a separate five-second deadline.
 It retains checkpoints and permits atomic report writes only inside the assigned run artifact directory.
 The complete report operation runs outside the actor thread, including path checks, directory creation, serialization, and file flushes.
@@ -269,7 +276,7 @@ A valid summary permits a zero-message retention window.
 A nonempty extractive window remains valid when the observer fails.
 The observer prompt directs the model to preserve the current response format and each field's definition, conditions, and exceptions.
 The observer call uses the existing provider intent to suppress extra model analysis.
-The provider adapter selects the supported wire representation. The sidecar timeout and task budgets do not change.
+The provider adapter selects the supported wire representation. The sidecar operation timeout does not change.
 
 During compaction, tool call/result pairs must remain atomic. Never orphan
 a tool call from its result. Tool interactions older than the retention window

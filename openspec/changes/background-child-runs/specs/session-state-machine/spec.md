@@ -110,3 +110,11 @@ Once restart-drain reaches `Passivating`, new user messages and approval prompt 
 - **WHEN** the owner closes dispatch and finalization reaches its bounded terminal result
 - **THEN** that cancelled result and prompt disposition remain durable
 - **AND** recovery cannot automatically relaunch the child
+
+#### Scenario: Coordinated restart settles an unanswered child approval prompt
+
+- **GIVEN** a real accepted child waits for its original requester's unanswered approval prompt
+- **WHEN** coordinated drain cancels the child and commits its terminal receipt
+- **THEN** the final snapshot retains that run's `Cancelled` outcome and exact prompt correlation
+- **AND** the prompt resolution is durable `Denied` before the terminal receipt
+- **AND** no child retry or reusable authorization grant results
