@@ -45,10 +45,12 @@ Type "e"
 Wait+Screen@5s /Grant all 6 tools on 'smoke-math' to team\?/
 Escape
 Wait+Screen@5s /\[ \] Server enabled for team/
+Wait+Screen@5s /\[E\] Enable all.*\[Enter\] Done/
 Type "e"
 Wait+Screen@5s /Grant all 6 tools on 'smoke-math' to team\?/
 Type "y"
 Wait+Screen@5s /\[✓\] Server enabled for team/
+Wait+Screen@5s /\[E\] Disable.*\[Enter\] Done/
 Enter
 Wait+Screen@5s /Enter\/Y.*Save/
 Enter
