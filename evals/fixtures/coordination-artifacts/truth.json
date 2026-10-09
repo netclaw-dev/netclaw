@@ -1,0 +1,101 @@
+{
+  "schema": "netclaw-coordination-artifact-truth-v1",
+  "revision": "sha256:461ed4a9e341951f1e05ff03ea2d87ace614a9facd625333960c53fd3db8e81b",
+  "source_files": {
+    "source/catalog.py": "f8f483b99d181c78441ad627c6126bc6751db5faa0bd74376356f9f8ee028193"
+  },
+  "evidence": {
+    "E1": {
+      "source": "source/catalog.py",
+      "start_line": 7,
+      "end_line": 8,
+      "excerpts": [
+        "self.records = candidate",
+        "self._validate_unique(candidate)"
+      ]
+    },
+    "E2": {
+      "source": "source/catalog.py",
+      "start_line": 16,
+      "end_line": 17,
+      "excerpts": [
+        "def read(self):",
+        "return self.records"
+      ]
+    }
+  },
+  "findings": {
+    "F1": {
+      "owner": "Catalog.refresh",
+      "evidence": [
+        "E1"
+      ],
+      "status": "confirmed"
+    },
+    "F2": {
+      "owner": "Catalog.read",
+      "evidence": [
+        "E2"
+      ],
+      "status": "confirmed"
+    }
+  },
+  "actions": {
+    "A1": {
+      "owner": "Catalog.refresh",
+      "findings": [
+        "F1"
+      ],
+      "acceptance": [
+        "C1"
+      ],
+      "required_identifiers": [
+        "Catalog.refresh",
+        "duplicate",
+        "before"
+      ]
+    },
+    "A2": {
+      "owner": "Catalog.read",
+      "findings": [
+        "F2"
+      ],
+      "acceptance": [
+        "C2"
+      ],
+      "required_identifiers": [
+        "Catalog.read",
+        "valid"
+      ]
+    }
+  },
+  "acceptance": {
+    "C1": {
+      "required_identifiers": [
+        "Catalog.refresh",
+        "duplicate",
+        "unchanged"
+      ]
+    },
+    "C2": {
+      "required_identifiers": [
+        "Catalog.read",
+        "valid",
+        "order"
+      ]
+    }
+  },
+  "risks": {
+    "R1": {
+      "checks": [
+        "C1",
+        "C2"
+      ]
+    }
+  },
+  "questions": {
+    "Q1": {
+      "owner": "User"
+    }
+  }
+}
