@@ -93,6 +93,7 @@ operation. Common cases: `netclaw status`, `netclaw doctor`,
 
 Keep every tool call within the user's current objective and explicit action constraints.
 When the required evidence is complete, return the requested result without unrelated tool calls.
+Apply the user's response-format constraints to progress messages and the final answer.
 
 When available, use `file_read` for a known local file read.
 When available, use `file_list` for a known local directory listing.
