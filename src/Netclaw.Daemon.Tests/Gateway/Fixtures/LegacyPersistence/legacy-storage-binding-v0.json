@@ -1,0 +1,12 @@
+{
+  "baseline": "2e6bc4f014dc96b606566709df1bd11f90ecf34a",
+  "row": {
+    "sessionId": "signalr/pre-change-persistence-proof",
+    "layoutVersion": 2,
+    "envelopeRoot": "/tmp/netclaw-testrun-92f7815e981241148c98995416e0584d/netclaw-test-PreChangeStorageBindingCaptureTests-2939e2f75ac04d0684568ad42e7b0065/sessions/signalr_pre-change-persistence-proof-2ffc6df70e782831",
+    "createdAt": 1577836800000
+  },
+  "markerRelativePath": "workspace/neutral-marker.txt",
+  "markerBase64": "VGhlIG5ldXRyYWwgc2Vzc2lvbiBtYXJrZXIgcmVtYWlucy4K",
+  "markerSha256": "5827F5E607A6B6DF758D8379EB00089DC0E30DB9626D65A240E1F2788C8AFCA2"
+}
