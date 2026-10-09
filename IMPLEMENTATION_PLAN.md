@@ -430,24 +430,34 @@ Done when:
 ### Priority: Stop Repeated Tool Cycles
 
 **PRDs:** `docs/prd/PRD-001-netclaw-mvp.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
-**Spec:** `openspec/changes/stop-repeated-tool-cycles/`
+**Spec:** `openspec/changes/per-call-tool-recurrence/`
+**Delivery plan:** [.systematize/plans/background-subagents/plan.html](.systematize/plans/background-subagents/plan.html)
 **Surface area:** turn state, tool results, compaction, parent and child actors
 **Verification:** standalone deterministic proof, private replay, L2, and observe-only evidence
 
 Active tool loops can produce valid model, tool, and actor activity. The static
 iteration limits stop productive work and stop exact cycles too late.
 
+The approved change supersedes the prior staged-limit-removal and final-model-response proposals.
+It removes both tool-call ceilings in the first runtime change. Merge activation still requires the retained proof gates.
+
 Done when:
 
-- [ ] Successful normal compaction preserves loaded deferred schemas.
-- [ ] LLM failure and context overflow evict loaded schemas.
-- [ ] A six-entry detector blocks exact periods one through three before execution.
-- [ ] The first block returns paired correction results without a side effect.
-- [ ] A repeated blocked action forces a truthful text-only response.
-- [ ] Parent and child actors produce equal decisions from equal histories.
-- [ ] Replay and observe-only evidence contain no confirmed false execution block.
-- [ ] The parent and child iteration limits are removed only after all gates pass.
-- [ ] Logs contain decisions and counts, but no arguments, results, hashes, or identities.
+- [x] Exact per-call recurrence detects equal prepared identities and trusted outcomes across separate feedback rounds.
+- [x] The adjacent period-one through period-three guard remains active outside the narrow trusted repeat exception.
+- [x] The first refusal returns paired correction results without an effect from the refused call.
+- [x] A further prohibited recurrence produces a framework partial report without another model request.
+- [x] Parent and child decisions agree. Useful tasks exceed the former ceilings.
+- [x] Journal and snapshot recovery retain canonical authority, committed results, and detector evidence.
+- [x] Unknown outcomes reach the model without automatic tool replay. Missing-receipt defects retain separate framework settlement.
+- [x] The parent configuration/schema key and child ceiling are removed. Operation health checks and explicit cancellation remain.
+- [x] Decision logs exclude arguments, results, hashes, and identities.
+- [ ] Private replay and shadow evidence contain no confirmed false execution block.
+- [ ] The independent 3,000-turn productive holdout supplies zero confirmed hard false blocks.
+- [ ] Each targeted real-model acceptance trial uses a fresh container and data home. Every strict case passes five trials.
+- [ ] Final verification, canonical spec sync, and activation review satisfy all retained gates.
+
+Local deterministic proof does not establish model acceptance, merge approval, or deployment.
 
 ### Priority: Prevent Native-Tool Shell Mistakes
 
