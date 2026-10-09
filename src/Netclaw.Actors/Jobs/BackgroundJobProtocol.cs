@@ -7,6 +7,7 @@ using Akka.Actor;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Jobs;
 
@@ -73,8 +74,10 @@ public static partial class BackgroundJobProtocol
     /// Request to start a background shell command. Sent from the pipeline to
     /// <see cref="BackgroundJobManagerActor"/> after approval has been granted.
     /// </summary>
-    public sealed record StartBackgroundJob : IBackgroundJobCommand
+    // This single-process request retains runtime authority; persisted definitions use canonical serializable data.
+    public sealed record StartBackgroundJob : IBackgroundJobCommand, INoSerializationVerificationNeeded
     {
+        public required BackgroundJobOrigin Origin { get; init; }
         public required Tools.ShellProcessLaunch Launch { get; init; }
         public string Command => Launch.Command;
         public string WorkingDirectory => Launch.WorkingDirectory;
@@ -190,10 +193,34 @@ internal sealed record BackgroundJobCompleted
 // ── Persistence ──
 
 /// <summary>
+/// Canonical parent task and tool call that started the job.
+/// </summary>
+public sealed record BackgroundJobOrigin(Protocol.TurnId TurnId, ToolCallId CallId)
+{
+    public void Validate()
+    {
+        if (string.IsNullOrWhiteSpace(TurnId.Value) || string.IsNullOrWhiteSpace(CallId.Value))
+            throw new InvalidDataException("A background job origin requires canonical turn and call identities.");
+    }
+}
+
+/// <summary>
 /// Job definition persisted to <c>~/.netclaw/jobs/{id}.json</c>.
 /// </summary>
 public sealed record BackgroundJobDefinition
 {
+    public int LineageVersion { get; init; }
+    public BackgroundJobOrigin? Origin { get; init; }
+
+    public void ValidateLineage()
+    {
+        if (LineageVersion == 0 && Origin is null)
+            return;
+        if (LineageVersion != 1 || Origin is null)
+            throw new InvalidDataException("A background job has invalid lineage format or missing mandatory origin.");
+        Origin.Validate();
+    }
+
     [JsonConverter(typeof(BackgroundJobIdJsonConverter))]
     public required BackgroundJobId Id { get; init; }
     public required string Command { get; init; }

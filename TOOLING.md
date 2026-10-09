@@ -31,7 +31,8 @@
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request, merge group, and `dev` push.
 The job has four Linux matrix groups that run in parallel with the normal test matrix.
-The groups hold about 13 to 14 minutes of gates each. The sum of all gates is about 59 minutes of runner time. The job timeout is 25 minutes.
+The baseline run at `2e6bc4f01` took 12m24s, 12m29s, 18m56s, and 20m14s across the four groups.
+The new task-adoption gate uses the lightest group, `shell-analysis`. The job timeout remains 25 minutes.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
 To add a gate, add its script name (`scripts/run-<name>-mutations.sh`) to the lightest group. Do not add a new job.
 
@@ -39,10 +40,34 @@ Focused mutation tests prove that deterministic tests reject a specific unsafe
 change at a security or authority boundary. They do not measure general code
 coverage. They do not replace positive and negative behavior tests.
 
+### Task Adoption Gate
+
+Run `./scripts/run-tool-task-adoption-mutations.sh` from the repository root.
+The gate uses the existing xUnit 2 harness and selects 12 tests through a temporary Stryker JSON configuration.
+The script deletes that configuration on exit.
+
+The gate targets four exact mutations:
+
+- Replace full task-authority equality.
+- Remove the ordered-prefix rejection.
+- Replace `Take` with `Skip` in the ordered prefix.
+- Replace actual-outcome equality in the recurrence tracker.
+
+Every expected mutant must exist and have the `Killed` status.
+The gate rejects expected compile errors, timeouts, survivors, and absent mutants.
+It also rejects extra executable mutants.
+Stryker can emit a non-target `Count`-to-`Sum` mutation that cannot compile for the typed input list.
+The exact-name check excludes that invalid mutation; it does not exclude an expected target error.
+
+The independent corrected run killed all four targets in 2m14s.
+CI runs this gate in `shell-analysis` and uploads `artifacts/stryker/tool-task-adoption` with the group reports.
+The local duration does not establish the combined CI duration.
+
 ### Current Targets
 
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
+| `SessionState` task adoption and `TurnStateTracker` actual outcomes | Full authority context and the ordered input prefix control adoption; changed actual outcomes do not trigger exact recurrence | 4 killed | `./scripts/run-tool-task-adoption-mutations.sh` |
 | `PathAccessPolicy.AddSessionRoots` and `PathAccessPolicy.IsReadableByAudience` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected | 4 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |

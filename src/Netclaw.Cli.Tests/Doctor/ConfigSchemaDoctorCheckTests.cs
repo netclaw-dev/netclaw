@@ -866,7 +866,7 @@ public sealed class ConfigSchemaDoctorCheckTests : IDisposable
     }
 
     [Fact]
-    public async Task ReturnsPass_WhenSessionMaxToolIterationsPerTurnSet()
+    public async Task ReturnsError_WhenRemovedToolIterationKeyIsPresent()
     {
         var basePath = CreateTempBasePath();
         var paths = new NetclawPaths(basePath);
@@ -877,7 +877,9 @@ public sealed class ConfigSchemaDoctorCheckTests : IDisposable
             {
               "configVersion": 1,
               "Session": {
-                "MaxToolIterationsPerTurn": 50
+                "MaxToolIterationsPerTurn": 50,
+                "ToolExecutionTimeoutSeconds": 125,
+                "KeepRecentToolResults": 7
               }
             }
             """, TestContext.Current.CancellationToken);
@@ -885,7 +887,18 @@ public sealed class ConfigSchemaDoctorCheckTests : IDisposable
         var check = new ConfigSchemaDoctorCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        var service = new DoctorFixService(paths, Path.Combine(basePath, "unused.service"), systemdEnabled: false);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        Assert.Single(plan.Fixes);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+        using var repaired = JsonDocument.Parse(await File.ReadAllTextAsync(paths.NetclawConfigPath,
+            TestContext.Current.CancellationToken));
+        var session = repaired.RootElement.GetProperty("Session");
+        Assert.False(session.TryGetProperty("MaxToolIterationsPerTurn", out _));
+        Assert.Equal(125, session.GetProperty("ToolExecutionTimeoutSeconds").GetInt32());
+        Assert.Equal(7, session.GetProperty("KeepRecentToolResults").GetInt32());
+        Assert.Equal(DoctorSeverity.Pass, (await check.RunAsync(TestContext.Current.CancellationToken)).Severity);
     }
 
     [Fact]

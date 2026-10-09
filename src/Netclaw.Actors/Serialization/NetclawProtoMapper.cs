@@ -33,6 +33,7 @@ internal static class NetclawProtoMapper
         TurnRecorded v => ToProto(v),
         InputAdmitted v => ToProto(v),
         InputClosed v => ToProto(v),
+        ToolTaskAdopted v => ToProto(v),
         SessionTitleSet v => ToProto(v),
         SessionCompacted v => ToProto(v),
         ToolBatchStarted v => ToProto(v),
@@ -193,8 +194,12 @@ internal static class NetclawProtoMapper
             SessionId = ToProto(evt.SessionId),
             InputId = evt.InputId.Value,
             UserMessage = ToProto(evt.UserMessage),
-            AdmittedAtMs = evt.AdmittedAtMs
+            AdmittedAtMs = evt.AdmittedAtMs,
+            BackgroundJobLineageVersion = evt.BackgroundJobLineageVersion,
+            BackgroundJobOrigin = evt.BackgroundJobOrigin is null ? null : ToProto(evt.BackgroundJobOrigin)
         };
+        if (evt.SourceBackgroundJobId is { } sourceJobId)
+            proto.SourceBackgroundJobId = sourceJobId.Value;
         if (evt.SourceMessageId is not null)
             proto.SourceMessageId = evt.SourceMessageId;
         if (evt.ExecutableText is not null)
@@ -213,7 +218,33 @@ internal static class NetclawProtoMapper
         TurnContext = proto.TurnContext is null
             ? throw new InvalidDataException("An admitted input has no turn context.")
             : FromProto(proto.TurnContext),
-        AdmittedAtMs = proto.AdmittedAtMs
+        AdmittedAtMs = proto.AdmittedAtMs,
+        SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : null,
+        BackgroundJobLineageVersion = proto.BackgroundJobLineageVersion,
+        BackgroundJobOrigin = proto.BackgroundJobOrigin is null ? null : FromProto(proto.BackgroundJobOrigin)
+    };
+
+    internal static Proto.ToolTaskAdoptedProto ToProto(ToolTaskAdopted evt)
+    {
+        var proto = new Proto.ToolTaskAdoptedProto
+        {
+            SessionId = ToProto(evt.SessionId), TurnContext = ToProto(evt.TurnContext), AdoptedAtMs = evt.AdoptedAtMs
+        };
+        proto.InputIds.AddRange(evt.InputIds.Select(static id => id.Value));
+        if (evt.ContinuedJobKey is not null)
+            proto.ContinuedJobKey = evt.ContinuedJobKey;
+        return proto;
+    }
+
+    internal static ToolTaskAdopted FromProto(Proto.ToolTaskAdoptedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        TurnContext = proto.TurnContext is null
+            ? throw new InvalidDataException("An adopted task has no authority context.")
+            : FromProto(proto.TurnContext),
+        InputIds = proto.InputIds.Select(static id => new InputId(id)).ToArray(),
+        AdoptedAtMs = proto.AdoptedAtMs,
+        ContinuedJobKey = proto.HasContinuedJobKey ? proto.ContinuedJobKey : null
     };
 
     internal static Proto.InputClosedProto ToProto(InputClosed evt)
@@ -221,9 +252,14 @@ internal static class NetclawProtoMapper
         var proto = new Proto.InputClosedProto
         {
             SessionId = ToProto(evt.SessionId),
-            ClosedAtMs = evt.ClosedAtMs
+            ClosedAtMs = evt.ClosedAtMs,
+            RejectedJobReport = evt.RejectedJobReport is null ? null : ToProto(evt.RejectedJobReport)
         };
         proto.InputIds.AddRange(evt.InputIds.Select(static id => id.Value));
+        if (evt.TaskId is not null)
+            proto.TaskId = evt.TaskId;
+        if (evt.SourceBackgroundJobId is { } sourceJobId)
+            proto.SourceBackgroundJobId = sourceJobId.Value;
         return proto;
     }
 
@@ -231,7 +267,10 @@ internal static class NetclawProtoMapper
     {
         SessionId = FromProto(proto.SessionId),
         InputIds = proto.InputIds.Select(static id => new InputId(id)).ToArray(),
-        ClosedAtMs = proto.ClosedAtMs
+        TaskId = proto.HasTaskId ? proto.TaskId : null,
+        SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : null,
+        ClosedAtMs = proto.ClosedAtMs,
+        RejectedJobReport = proto.RejectedJobReport is null ? null : FromProto(proto.RejectedJobReport)
     };
 
     // ── SessionTitleSet ──
@@ -284,9 +323,13 @@ internal static class NetclawProtoMapper
         var proto = new Proto.ToolBatchStartedProto
         {
             SessionId = ToProto(evt.SessionId),
+            MetadataOnly = evt.MetadataOnly,
+            LegacyTaskContext = evt.LegacyTaskContext is null ? null : ToProto(evt.LegacyTaskContext),
             UserMessage = ToProto(evt.UserMessage),
             AssistantMessage = ToProto(evt.AssistantMessage),
-            StartedAtMs = evt.StartedAtMs
+            StartedAtMs = evt.StartedAtMs,
+            LoopAdmission = evt.LoopAdmission is null ? null : ToProto(evt.LoopAdmission),
+            LoopDelta = evt.LoopDelta is null ? null : ToProto(evt.LoopDelta)
         };
         proto.ConsumedInputIds.AddRange(evt.ConsumedInputIds.Select(static id => id.Value));
         return proto;
@@ -295,9 +338,13 @@ internal static class NetclawProtoMapper
     internal static ToolBatchStarted FromProto(Proto.ToolBatchStartedProto proto) => new()
     {
         SessionId = FromProto(proto.SessionId),
+        MetadataOnly = proto.MetadataOnly,
+        LegacyTaskContext = proto.LegacyTaskContext is null ? null : FromProto(proto.LegacyTaskContext),
         UserMessage = FromProto(proto.UserMessage),
         AssistantMessage = FromProto(proto.AssistantMessage),
         StartedAtMs = proto.StartedAtMs,
+        LoopAdmission = proto.LoopAdmission is null ? null : FromProto(proto.LoopAdmission),
+        LoopDelta = proto.LoopDelta is null ? null : FromProto(proto.LoopDelta),
         ConsumedInputIds = proto.ConsumedInputIds.Select(static id => new InputId(id)).ToArray()
     };
 
@@ -305,14 +352,18 @@ internal static class NetclawProtoMapper
     {
         SessionId = ToProto(evt.SessionId),
         ToolResult = ToProto(evt.ToolResult),
-        RecordedAtMs = evt.RecordedAtMs
+        RecordedAtMs = evt.RecordedAtMs,
+        LoopObservation = evt.LoopObservation is null ? null : ToProto(evt.LoopObservation),
+        StartedBackgroundJob = evt.StartedBackgroundJob is null ? null : ToProto(evt.StartedBackgroundJob)
     };
 
     internal static ToolCallRecorded FromProto(Proto.ToolCallRecordedProto proto) => new()
     {
         SessionId = FromProto(proto.SessionId),
         ToolResult = FromProto(proto.ToolResult),
-        RecordedAtMs = proto.RecordedAtMs
+        RecordedAtMs = proto.RecordedAtMs,
+        LoopObservation = proto.LoopObservation is null ? null : FromProto(proto.LoopObservation),
+        StartedBackgroundJob = proto.StartedBackgroundJob is null ? null : FromProto(proto.StartedBackgroundJob)
     };
 
     internal static Proto.ToolApprovalRequestedProto ToProto(ToolApprovalRequested evt)
@@ -600,7 +651,11 @@ internal static class NetclawProtoMapper
     {
         var proto = new Proto.SessionSnapshotProto
         {
-            TurnCount = snap.TurnCount
+            TurnCount = snap.TurnCount,
+            LoopCheckpoint = snap.LoopCheckpoint is null ? null : ToProto(snap.LoopCheckpoint),
+            LoopAdmission = snap.LoopAdmission is null ? null : ToProto(snap.LoopAdmission),
+            AdoptedTaskContext = snap.AdoptedTaskContext is null ? null : ToProto(snap.AdoptedTaskContext),
+            LoopReceiptFailure = snap.LoopReceiptFailure
         };
         if (snap.Title is not null)
             proto.Title = snap.Title;
@@ -608,17 +663,27 @@ internal static class NetclawProtoMapper
             proto.EligibleDeliveryTurnNumber = snap.EligibleDeliveryTurnNumber.Value.Value;
         if (snap.WorkingContext is not null)
             proto.WorkingContext = ToProto(snap.WorkingContext);
+        proto.AdoptedTaskInputIds.AddRange(snap.AdoptedTaskInputIds.Select(static id => id.Value));
+        proto.ProcessedBackgroundJobIds.AddRange(snap.ProcessedBackgroundJobIds.Select(static id => id.Value));
         proto.History.AddRange(snap.History.Select(ToProto));
         proto.ActiveBackgroundJobs.AddRange(snap.ActiveBackgroundJobs.Select(ToProto));
         proto.AdoptedContextRecords.AddRange(snap.AdoptedContextRecords.Select(ToAdoptedContextSnapshotRecord));
         proto.PendingInputs.AddRange(snap.PendingInputs.Select(ToProto));
         proto.RecentSourceMessageKeys.AddRange(snap.RecentSourceMessageKeys);
+        proto.LoopObservations.AddRange(snap.LoopObservations.Select(ToProto));
         return proto;
     }
 
     internal static SessionSnapshot FromProto(Proto.SessionSnapshotProto proto) => new()
     {
         TurnCount = proto.TurnCount,
+        LoopCheckpoint = proto.LoopCheckpoint is null ? null : FromProto(proto.LoopCheckpoint),
+        LoopAdmission = proto.LoopAdmission is null ? null : FromProto(proto.LoopAdmission),
+        LoopObservations = proto.LoopObservations.Select(FromProto).ToArray(),
+        LoopReceiptFailure = proto.LoopReceiptFailure,
+        AdoptedTaskContext = proto.AdoptedTaskContext is null ? null : FromProto(proto.AdoptedTaskContext),
+        AdoptedTaskInputIds = proto.AdoptedTaskInputIds.Select(static id => new InputId(id)).ToArray(),
+        ProcessedBackgroundJobIds = proto.ProcessedBackgroundJobIds.Select(static id => new BackgroundJobId(id)).ToArray(),
         Title = proto.HasTitle ? proto.Title : null,
         EligibleDeliveryTurnNumber = proto.HasEligibleDeliveryTurnNumber
             ? new TurnNumber(proto.EligibleDeliveryTurnNumber)
@@ -945,11 +1010,20 @@ internal static class NetclawProtoMapper
         Proposals: proto.Proposals.Select(FromProto).ToList(),
         TimestampMs: proto.TimestampMs);
 
+    internal static Proto.BackgroundJobOriginProto ToProto(BackgroundJobOrigin origin)
+        => new() { TurnId = origin.TurnId.Value, CallId = origin.CallId.Value };
+    internal static BackgroundJobOrigin FromProto(Proto.BackgroundJobOriginProto origin)
+        => new(new TurnId(origin.TurnId), new ToolCallId(origin.CallId));
+
     // ── ActiveJobInfo ──
 
     internal static Proto.ActiveJobInfoProto ToProto(ActiveJobInfo job) => new()
     {
         JobId = job.JobId.Value,
+        LineageVersion = job.LineageVersion,
+        Origin = job.Origin is null ? null : ToProto(job.Origin),
+        OriginCheckpoint = job.OriginCheckpoint is null ? null : ToProto(job.OriginCheckpoint),
+        OriginReceiptFailure = job.OriginReceiptFailure,
         Command = job.Command,
         Rationale = job.Rationale,
         StartedAtMs = job.StartedAtMs,
@@ -962,6 +1036,10 @@ internal static class NetclawProtoMapper
     internal static ActiveJobInfo FromProto(Proto.ActiveJobInfoProto proto) => new()
     {
         JobId = new BackgroundJobId(proto.JobId),
+        LineageVersion = proto.LineageVersion,
+        Origin = proto.Origin is null ? null : FromProto(proto.Origin),
+        OriginCheckpoint = proto.OriginCheckpoint is null ? null : FromProto(proto.OriginCheckpoint),
+        OriginReceiptFailure = proto.OriginReceiptFailure,
         Command = proto.Command,
         Rationale = proto.Rationale,
         StartedAtMs = proto.StartedAtMs,
@@ -975,4 +1053,78 @@ internal static class NetclawProtoMapper
         ReapedAtMs = proto.ReapedAtMs == 0 ? null : proto.ReapedAtMs,
         OutputLogPath = string.IsNullOrEmpty(proto.OutputLogPath) ? null : proto.OutputLogPath
     };
+    internal static Proto.ToolLoopKeyProto ToProto(ToolLoopKey value) => new() { ToolName = value.ToolName, ArgumentsHash = value.ArgumentsHash };
+    internal static ToolLoopKey FromProto(Proto.ToolLoopKeyProto value) => new(value.ToolName, value.ArgumentsHash);
+
+    internal static Proto.ToolLoopAdjacentProto ToProto(ToolLoopAdjacent value) => new() { ActionHash = value.ActionHash, OutcomeHash = value.OutcomeHash };
+    internal static ToolLoopAdjacent FromProto(Proto.ToolLoopAdjacentProto value) => new(value.ActionHash, value.OutcomeHash);
+
+    internal static Proto.ToolLoopEntryProto ToProto(ToolLoopEntry value) => new() { ToolName = value.ToolName, ArgumentsHash = value.ArgumentsHash, OutcomeHash = value.OutcomeHash, EqualRounds = value.EqualRounds, Corrected = value.Corrected, PendingJob = value.PendingJob };
+    internal static ToolLoopEntry FromProto(Proto.ToolLoopEntryProto value) => new() { ToolName = value.ToolName, ArgumentsHash = value.ArgumentsHash, OutcomeHash = value.OutcomeHash, EqualRounds = value.EqualRounds, Corrected = value.Corrected, PendingJob = value.PendingJob };
+
+    internal static Proto.ToolLoopPreparedCallProto ToProto(ToolLoopPreparedCall value) => new() { CallId = value.CallId, ToolName = value.ToolName, ArgumentsHash = value.ArgumentsHash, AllowsPendingJob = value.AllowsPendingJob };
+    internal static ToolLoopPreparedCall FromProto(Proto.ToolLoopPreparedCallProto value) => new(value.CallId, value.ToolName, value.ArgumentsHash, value.AllowsPendingJob);
+
+    internal static Proto.ToolLoopObservationProto ToProto(ToolLoopObservation value) => new() { CallId = value.CallId, Category = value.Category, ResultHash = value.ResultHash, PendingJob = value.PendingJob, Synthetic = value.Synthetic, MissingReceipt = value.MissingReceipt };
+    internal static ToolLoopObservation FromProto(Proto.ToolLoopObservationProto value) => new() { CallId = value.CallId, Category = value.Category, ResultHash = value.ResultHash, PendingJob = value.PendingJob, Synthetic = value.Synthetic, MissingReceipt = value.MissingReceipt };
+
+    internal static Proto.ToolLoopCheckpointProto ToProto(ToolLoopCheckpoint value)
+    {
+        var proto = new Proto.ToolLoopCheckpointProto
+        { TaskId = value.TaskId };
+        proto.Entries.AddRange(value.Entries.Select(ToProto));
+        proto.ColdKeys.AddRange(value.ColdKeys.Select(ToProto));
+        proto.AdjacentHistory.AddRange(value.AdjacentHistory.Select(ToProto));
+        if (value.LastBlockedAction is not null)
+            proto.LastBlockedAction = value.LastBlockedAction;
+        return proto;
+    }
+    internal static ToolLoopCheckpoint FromProto(Proto.ToolLoopCheckpointProto value) => new()
+    {
+        TaskId = value.TaskId,
+        Entries = value.Entries.Select(FromProto).ToArray(),
+        ColdKeys = value.ColdKeys.Select(FromProto).ToArray(),
+        AdjacentHistory = value.AdjacentHistory.Select(FromProto).ToArray(),
+        LastBlockedAction = value.HasLastBlockedAction ? value.LastBlockedAction : null,
+    };
+
+    internal static Proto.ToolLoopDeltaProto ToProto(ToolLoopDelta value)
+    {
+        var proto = new Proto.ToolLoopDeltaProto
+        { TaskId = value.TaskId, Reset = value.Reset };
+        proto.Upserts.AddRange(value.Upserts.Select(ToProto));
+        proto.RemovedKeys.AddRange(value.RemovedKeys.Select(ToProto));
+        proto.ColdKeys.AddRange(value.ColdKeys.Select(ToProto));
+        proto.AdjacentHistory.AddRange(value.AdjacentHistory.Select(ToProto));
+        if (value.LastBlockedAction is not null)
+            proto.LastBlockedAction = value.LastBlockedAction;
+        return proto;
+    }
+    internal static ToolLoopDelta FromProto(Proto.ToolLoopDeltaProto value) => new()
+    {
+        TaskId = value.TaskId,
+        Reset = value.Reset,
+        Upserts = value.Upserts.Select(FromProto).ToArray(),
+        RemovedKeys = value.RemovedKeys.Select(FromProto).ToArray(),
+        ColdKeys = value.ColdKeys.Select(FromProto).ToArray(),
+        AdjacentHistory = value.AdjacentHistory.Select(FromProto).ToArray(),
+        LastBlockedAction = value.HasLastBlockedAction ? value.LastBlockedAction : null,
+    };
+
+    internal static Proto.ToolLoopAdmissionProto ToProto(ToolLoopAdmission value)
+    {
+        var proto = new Proto.ToolLoopAdmissionProto
+        { TaskId = value.TaskId, ActionHash = value.ActionHash };
+        proto.Calls.AddRange(value.Calls.Select(ToProto));
+        proto.RefusedCallIds.AddRange(value.RefusedCallIds);
+        return proto;
+    }
+    internal static ToolLoopAdmission FromProto(Proto.ToolLoopAdmissionProto value) => new()
+    {
+        TaskId = value.TaskId,
+        ActionHash = value.ActionHash,
+        Calls = value.Calls.Select(FromProto).ToArray(),
+        RefusedCallIds = value.RefusedCallIds.ToArray(),
+    };
+
 }

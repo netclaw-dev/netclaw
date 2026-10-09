@@ -62,6 +62,9 @@ public static partial class SessionProtocol
     /// </summary>
     public sealed record InputAdmitted : ISessionEvent
     {
+        public BackgroundJobId? SourceBackgroundJobId { get; init; }
+        public int BackgroundJobLineageVersion { get; init; }
+        public BackgroundJobOrigin? BackgroundJobOrigin { get; init; }
         public SessionId SessionId { get; init; }
 
         public InputId InputId { get; init; }
@@ -80,11 +83,23 @@ public static partial class SessionProtocol
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(AdmittedAtMs);
     }
 
-    /// <summary>
-    /// Closes admitted input when a turn ends without a recorded model reply.
-    /// </summary>
+    /// <summary>Commits canonical task authority before the next model request.</summary>
+    public sealed record ToolTaskAdopted : ISessionEvent
+    {
+        public string? ContinuedJobKey { get; init; }
+        public SessionId SessionId { get; init; }
+        public required TurnContextRecord TurnContext { get; init; }
+        public IReadOnlyList<InputId> InputIds { get; init; } = [];
+        public long AdoptedAtMs { get; init; }
+        public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(AdoptedAtMs);
+    }
+
+    /// <summary>Closes a task that ends without a recorded model reply.</summary>
     public sealed record InputClosed : ISessionEvent
     {
+        public SerializableChatMessage? RejectedJobReport { get; init; }
+        public BackgroundJobId? SourceBackgroundJobId { get; init; }
+        public string? TaskId { get; init; }
         public SessionId SessionId { get; init; }
 
         public IReadOnlyList<InputId> InputIds { get; init; } = [];
@@ -102,6 +117,11 @@ public static partial class SessionProtocol
     /// </summary>
     public sealed record ToolBatchStarted : ISessionEvent
     {
+        public bool MetadataOnly { get; init; }
+        public TurnContextRecord? LegacyTaskContext { get; init; }
+        public ToolLoopAdmission? LoopAdmission { get; init; }
+        public ToolLoopDelta? LoopDelta { get; init; }
+
         public SessionId SessionId { get; init; }
 
         public SerializableChatMessage UserMessage { get; init; } = new();
@@ -122,6 +142,9 @@ public static partial class SessionProtocol
     /// </summary>
     public sealed record ToolCallRecorded : ISessionEvent
     {
+        public ActiveJobInfo? StartedBackgroundJob { get; init; }
+        public ToolLoopObservation? LoopObservation { get; init; }
+
         public SessionId SessionId { get; init; }
 
         public SerializableChatMessage ToolResult { get; init; } = new();

@@ -77,6 +77,7 @@ public class BackgroundJobIntegrationTests : TestKit, IAsyncDisposable
 
     private StartBackgroundJob MakeStartCommand(string command, ChannelType channelType = ChannelType.Slack, string? workingDirectory = null) => new()
     {
+        Origin = new BackgroundJobOrigin(new Netclaw.Actors.Protocol.TurnId("test-parent"), new Netclaw.Tools.ToolCallId("test-call")),
         Launch = BackgroundShellLaunchFixture.Create(command, _dir.Path, "C0123ABC/1712000000.000001", TestShellEnvironment.Current, workingDirectory),
         Rationale = "integration test",
         OriginChannelType = channelType,
@@ -116,7 +117,7 @@ public class BackgroundJobIntegrationTests : TestKit, IAsyncDisposable
             context, submissionCancellation.Token);
         var request = new StartBackgroundJob
         {
-            Launch = launch,
+            Launch = launch, Origin = new BackgroundJobOrigin(new Netclaw.Actors.Protocol.TurnId("detached"), new ToolCallId("detached")),
             Rationale = "Verify detached lifetime.",
             OriginChannelType = ChannelType.Tui
         };

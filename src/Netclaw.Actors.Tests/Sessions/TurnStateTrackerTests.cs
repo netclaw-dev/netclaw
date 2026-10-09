@@ -36,7 +36,7 @@ public sealed class TurnStateTrackerTests
     {
         var tracker = new TurnStateTracker();
         if (phase == ToolPhase.AfterToolUse)
-            tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+            tracker.RecordToolCompletion(resultCount: 1);
 
         var action = tracker.EvaluateEmptyResponse(kind, truncated: false);
 
@@ -51,7 +51,7 @@ public sealed class TurnStateTrackerTests
     public void TruncatedThinkingOnly_GetsBrevityNudge_NotStopThinkingScold()
     {
         var tracker = new TurnStateTracker();
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1);
 
         // A length-truncated thinking-only response was cut off, not refused —
         // it must get the brevity nudge, never the "stop thinking" scold.
@@ -74,7 +74,7 @@ public sealed class TurnStateTrackerTests
         // toward the failure threshold — the consecutive counters reset on each
         // tool batch.
         var tracker = new TurnStateTracker();
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1);
 
         for (var i = 0; i < 10; i++)
         {
@@ -103,7 +103,7 @@ public sealed class TurnStateTrackerTests
     public void PostToolThinkingOnly_RetriesSeveralTimesBeforeFailing()
     {
         var tracker = new TurnStateTracker();
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1);
 
         // The first 8 consecutive thinking-only responses retry.
         for (var i = 0; i < 8; i++)
@@ -118,9 +118,8 @@ public sealed class TurnStateTrackerTests
     {
         var tracker = new TurnStateTracker();
 
-        var status = tracker.RecordToolCompletion(resultCount: 8, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 8);
 
-        Assert.IsType<ToolBudgetStatus.Ok>(status);
         Assert.Equal(1, tracker.ToolIterationCount);
         // ToolCallCount remains for telemetry only — it counts results, not iterations.
         Assert.Equal(8, tracker.ToolCallCount);
@@ -131,43 +130,31 @@ public sealed class TurnStateTrackerTests
     {
         var tracker = new TurnStateTracker();
 
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1);
+        tracker.RecordToolCompletion(resultCount: 1);
+        tracker.RecordToolCompletion(resultCount: 1);
 
         Assert.Equal(3, tracker.ToolIterationCount);
     }
 
     [Fact]
-    public void ReachingIterationCap_ReturnsExhausted()
+    public void Usage_counters_continue_past_former_ceiling()
     {
         var tracker = new TurnStateTracker();
-        const int cap = 4;
-
-        // First (cap - 1) iterations stay below the limit.
-        for (var i = 0; i < cap - 1; i++)
-        {
-            var status = tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: cap);
-            Assert.IsNotType<ToolBudgetStatus.Exhausted>(status);
-        }
-
-        // The cap-th iteration hits the limit.
-        var capped = tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: cap);
-        var exhausted = Assert.IsType<ToolBudgetStatus.Exhausted>(capped);
-        Assert.Contains("executive summary", exhausted.NudgeText, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Partial or Unknown", exhausted.NudgeText, StringComparison.Ordinal);
-        Assert.Equal(cap, tracker.ToolIterationCount);
+        for (var i = 0; i < 100; i++)
+            tracker.RecordToolCompletion(2);
+        Assert.Equal(100, tracker.ToolIterationCount);
+        Assert.Equal(200, tracker.ToolCallCount);
     }
 
     [Fact]
     public void RawCallVolume_DoesNotControlTheLimit()
     {
-        // 100 tool results delivered in a single iteration must NOT trigger the cap.
+        // Parallel result volume remains telemetry; one batch contributes one round.
         var tracker = new TurnStateTracker();
 
-        var status = tracker.RecordToolCompletion(resultCount: 100, maxToolIterationsPerTurn: 5);
+        tracker.RecordToolCompletion(resultCount: 100);
 
-        Assert.IsType<ToolBudgetStatus.Ok>(status);
         Assert.Equal(1, tracker.ToolIterationCount);
         Assert.Equal(100, tracker.ToolCallCount);
     }
@@ -275,7 +262,7 @@ public sealed class TurnStateTrackerTests
 
         var candidate = Prepare(Call("candidate", "sample/" + candidateAction));
 
-        var decision = tracker.EvaluateBeforeDispatch(candidate.Action);
+        var decision = tracker.EvaluateAdjacentBeforeDispatch(candidate.Action);
 
         Assert.Equal(ToolCycleDecisionKind.Correct, decision.Kind);
         Assert.Equal(expectedPeriod, decision.Period);
@@ -294,7 +281,7 @@ public sealed class TurnStateTrackerTests
             batch,
             ("call-1", ToolInvocationOutcomeCategory.Success, "second")));
 
-        var decision = tracker.EvaluateBeforeDispatch(batch.Action);
+        var decision = tracker.EvaluateAdjacentBeforeDispatch(batch.Action);
 
         Assert.Equal(ToolCycleDecisionKind.Execute, decision.Kind);
     }
@@ -315,7 +302,7 @@ public sealed class TurnStateTrackerTests
             ("call-a", ToolInvocationOutcomeCategory.Success, "same"),
             ("call-b", ToolInvocationOutcomeCategory.Success, "new")));
 
-        var decision = tracker.EvaluateBeforeDispatch(batch.Action);
+        var decision = tracker.EvaluateAdjacentBeforeDispatch(batch.Action);
 
         Assert.Equal(ToolCycleDecisionKind.Execute, decision.Kind);
     }
@@ -334,10 +321,10 @@ public sealed class TurnStateTrackerTests
 
         Assert.Equal(
             ToolCycleDecisionKind.Correct,
-            tracker.EvaluateBeforeDispatch(repeated.Action).Kind);
+            tracker.EvaluateAdjacentBeforeDispatch(repeated.Action).Kind);
         Assert.Equal(
             ToolCycleDecisionKind.Stop,
-            tracker.EvaluateBeforeDispatch(repeated.Action).Kind);
+            tracker.EvaluateAdjacentBeforeDispatch(repeated.Action).Kind);
 
         tracker.ObserveCompleted(Complete(
             other,
@@ -345,7 +332,7 @@ public sealed class TurnStateTrackerTests
 
         Assert.Equal(
             ToolCycleDecisionKind.Execute,
-            tracker.EvaluateBeforeDispatch(repeated.Action).Kind);
+            tracker.EvaluateAdjacentBeforeDispatch(repeated.Action).Kind);
     }
 
     [Fact]
@@ -361,14 +348,14 @@ public sealed class TurnStateTrackerTests
 
         Assert.Equal(
             ToolCycleDecisionKind.Correct,
-            tracker.EvaluateBeforeDispatch(batch.Action).Kind);
+            tracker.EvaluateAdjacentBeforeDispatch(batch.Action).Kind);
 
         tracker.ResetForNewTurn();
 
         Assert.Equal(0, tracker.CompletedCycleHistoryCount);
         Assert.Equal(
             ToolCycleDecisionKind.Execute,
-            tracker.EvaluateBeforeDispatch(batch.Action).Kind);
+            tracker.EvaluateAdjacentBeforeDispatch(batch.Action).Kind);
     }
 
     [Fact]

@@ -990,3 +990,21 @@ Pair remote devices and manage their access via the pairing flow. Full steps:
 
 To demo or kick the tires on Netclaw end-to-end locally:
 `skill_read_resource('netclaw-operations', 'references/demo-apphost.md')`.
+
+## Exact tool recurrence
+
+Netclaw permits useful tasks beyond the former parent and child tool iteration limits.
+Do not configure `Session.MaxToolIterationsPerTurn`. Validation rejects this removed property; doctor repair removes it.
+A repeated exact call with unchanged outcomes receives corrective feedback. A prohibited repeat after that feedback ends the task.
+The runtime settles the task without another model response. The result can be partial.
+Use a different valid approach or finish the task after corrective feedback. Do not claim that a refused call executed.
+An accessible Pending or Running job permits its exact noncancel status query. This exception grants no other authority.
+Prefer completion notices or useful independent work over repeated status queries.
+Exact protection can miss changed arguments or noisy results. Operation timeouts and cancellation remain active.
+
+A background result resumes its original exact recurrence evidence after a fresh user task or restart.
+A missing or invalid new-format job origin causes an explicit partial failure.
+The runtime records the known job result as data and preserves unrelated tasks.
+Do not treat that report as approval for another tool call.
+Before upgrade, back up the session journal, snapshots, and job directory.
+An old binary cannot read the new `tta-v1` task event; rollback requires the backup or a tested compatible reader.

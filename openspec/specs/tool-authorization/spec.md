@@ -159,6 +159,40 @@ except for a verified-automation principal.
 - **THEN** it uses `Team` without a string parse
 - **AND** it applies no parse-failure fallback
 
+A fresh buffered input SHALL adopt its canonical admitted turn context only at durable task consumption.
+The session SHALL persist that adoption before a new model request or tool dispatch.
+Old in-flight calls and approval prompts SHALL retain their original immutable requester and authority.
+Automatic continuations SHALL retain the original task context.
+The model SHALL NOT supply an adopted authority record.
+
+#### Scenario: Buffered input cannot change an in-flight approval requester
+
+- **GIVEN** an old tool attempt has an approval prompt for requester `U1`
+- **WHEN** the session admits fresh buffered input from requester `U2`
+- **THEN** the old attempt still requires its recorded `U1` authority
+- **AND** fresh input cannot answer or expand that old attempt
+
+#### Scenario: New work uses durable admitted authority
+
+- **GIVEN** the prior batch ends and the session consumes an admitted buffered request
+- **WHEN** the session starts the next model request
+- **THEN** durable adoption already names the canonical admitted requester and context
+- **AND** subsequent tool calls use the existing context deriver for that context
+
+
+A legacy approval redrive SHALL use its original canonical approval context.
+Its metadata-only baseline SHALL compare the full authority record with the existing approval owner.
+The existing adopted task context SHALL retain that same authority after the approval state expires.
+The baseline SHALL NOT create a requester, grant, or input activation.
+
+#### Scenario: Legacy redrive preserves the original authority
+
+- **GIVEN** a pre-change parked call has a canonical pending approval context for requester `U1`
+- **WHEN** the runtime commits the first redrive baseline
+- **THEN** the full persisted authority equals that original approval context
+- **AND** a different requester or source scope cannot replace it
+- **AND** snapshot recovery retains the original requester without a new input activation
+
 ### Requirement: TA-2 Schema exposure grants no authority
 
 The model SHALL see only policy-visible tool schemas. Schema exposure,

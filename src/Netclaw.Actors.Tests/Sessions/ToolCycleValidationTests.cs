@@ -41,10 +41,10 @@ public sealed class ToolCycleValidationTests
         Assert.Null(executor.InterpretToolCall(repaired).Rejection);
         var repairedBatch = ToolCycleSignatureFactory.Prepare([repaired], executor);
         Assert.NotEqual(batch.Action, repairedBatch.Action);
-        Assert.Equal(ToolCycleDecisionKind.Execute, tracker.EvaluateBeforeDispatch(repairedBatch.Action).Kind);
-        Assert.Equal(ToolCycleDecisionKind.Correct, tracker.EvaluateBeforeDispatch(batch.Action).Kind);
-        Assert.Equal(ToolCycleDecisionKind.Execute, tracker.EvaluateBeforeDispatch(repairedBatch.Action).Kind);
-        Assert.Equal(ToolCycleDecisionKind.Stop, tracker.EvaluateBeforeDispatch(batch.Action).Kind);
+        Assert.Equal(ToolCycleDecisionKind.Execute, tracker.EvaluateAdjacentBeforeDispatch(repairedBatch.Action).Kind);
+        Assert.Equal(ToolCycleDecisionKind.Correct, tracker.EvaluateAdjacentBeforeDispatch(batch.Action).Kind);
+        Assert.Equal(ToolCycleDecisionKind.Execute, tracker.EvaluateAdjacentBeforeDispatch(repairedBatch.Action).Kind);
+        Assert.Equal(ToolCycleDecisionKind.Stop, tracker.EvaluateAdjacentBeforeDispatch(batch.Action).Kind);
     }
 
     [Fact]

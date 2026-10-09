@@ -26,7 +26,7 @@ public sealed class BackgroundJobDefinitionStore
 
     private readonly string _directory;
     private readonly object _sync = new();
-    private readonly Dictionary<string, RejectedLegacyBackgroundJobDefinition> _rejectedLegacyDefinitions =
+    private readonly Dictionary<string, RejectedBackgroundJobDefinition> _rejectedDefinitions =
         new(StringComparer.Ordinal);
     private readonly ILogger _logger;
     private readonly Action<string, bool> _deleteDirectory;
@@ -55,7 +55,7 @@ public sealed class BackgroundJobDefinitionStore
         var missing = LegacyTrustFieldGuard.MissingTrustFields(text);
         if (missing.Count > 0)
         {
-            RecordRejectedLegacyDefinition(path, $"missing trust field(s): {string.Join(", ", missing)}");
+            RecordRejectedDefinition(path, $"missing trust field(s): {string.Join(", ", missing)}", null);
             _logger.LogError(
                 "Background job document {Path} predates issue #994 and is missing required "
                 + "trust field(s): {MissingFields}. The job will not be loaded — a job with no "
@@ -64,9 +64,20 @@ public sealed class BackgroundJobDefinitionStore
             return null;
         }
 
-        var definition = JsonSerializer.Deserialize<BackgroundJobDefinition>(text, JsonOptions);
-        if (definition is null)
+        BackgroundJobDefinition? definition = null;
+        try
+        {
+            definition = JsonSerializer.Deserialize<BackgroundJobDefinition>(text, JsonOptions);
+            if (definition is null)
+                throw new InvalidDataException("A background job document cannot be null.");
+            definition.ValidateLineage();
+        }
+        catch (Exception ex) when (ex is InvalidDataException or JsonException)
+        {
+            RecordRejectedDefinition(path, "invalid mandatory lineage or malformed document", definition);
+            _logger.LogError(ex, "Background job document {Path} is malformed or has invalid mandatory lineage and will not be loaded.", path);
             return null;
+        }
 
         // Reject ids that resolve to special directory entries ("." / "..") —
         // Uri.EscapeDataString does NOT escape dots, so such an id would make
@@ -116,18 +127,17 @@ public sealed class BackgroundJobDefinitionStore
     }
 
     /// <summary>
-    /// Returns and clears background job definitions rejected because they
-    /// predate the required trust-field schema.
+    /// Returns and clears diagnostics for rejected background job definitions.
     /// </summary>
-    public IReadOnlyList<RejectedLegacyBackgroundJobDefinition> ConsumeRejectedLegacyDefinitions()
+    public IReadOnlyList<RejectedBackgroundJobDefinition> ConsumeRejectedDefinitions()
     {
         lock (_sync)
         {
-            if (_rejectedLegacyDefinitions.Count == 0)
+            if (_rejectedDefinitions.Count == 0)
                 return [];
 
-            var snapshot = _rejectedLegacyDefinitions.Values.ToArray();
-            _rejectedLegacyDefinitions.Clear();
+            var snapshot = _rejectedDefinitions.Values.ToArray();
+            _rejectedDefinitions.Clear();
             return snapshot;
         }
     }
@@ -180,6 +190,7 @@ public sealed class BackgroundJobDefinitionStore
 
     public void Save(BackgroundJobDefinition definition)
     {
+        definition.ValidateLineage();
         lock (_sync)
         {
             Directory.CreateDirectory(_directory);
@@ -282,10 +293,16 @@ public sealed class BackgroundJobDefinitionStore
         return Path.Combine(_directory, $"{encoded}.json");
     }
 
-    private void RecordRejectedLegacyDefinition(string path, string reason)
+    public RejectedBackgroundJobDefinition? GetRejectedDefinition(BackgroundJobId id)
+    {
+        lock (_sync)
+            return _rejectedDefinitions.GetValueOrDefault(id.Value);
+    }
+
+    private void RecordRejectedDefinition(string path, string reason, BackgroundJobDefinition? definition)
     {
         var jobId = DecodeJobIdFromPath(path);
-        _rejectedLegacyDefinitions[jobId] = new RejectedLegacyBackgroundJobDefinition(jobId, reason);
+        _rejectedDefinitions[jobId] = new RejectedBackgroundJobDefinition(jobId, reason, definition?.SessionId, definition?.Audience, definition?.Boundary);
     }
 
     private static string DecodeJobIdFromPath(string path)
@@ -305,4 +322,5 @@ public sealed class BackgroundJobDefinitionStore
     }
 }
 
-public sealed record RejectedLegacyBackgroundJobDefinition(string JobId, string Reason);
+public sealed record RejectedBackgroundJobDefinition(
+    string JobId, string Reason, Protocol.SessionId? SessionId, TrustAudience? Audience, TrustBoundary? Boundary);
