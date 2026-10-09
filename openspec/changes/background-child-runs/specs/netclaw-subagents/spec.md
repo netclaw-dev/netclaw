@@ -199,3 +199,27 @@ Existing headless CLI and channel render rules SHALL remain unchanged.
 - **GIVEN** the Slack adapter subscribes to session output
 - **WHEN** a subagent starts and completes
 - **THEN** no subagent-specific messages are posted to Slack
+
+### Requirement: Sub-agent watchdog pauses during human approval
+
+The sub-agent inactivity watchdog SHALL treat parent approval waits as intentional suspension. While one or more approval waits are active, watchdog timeout ticks SHALL NOT complete the sub-agent as inactive. When the last approval wait settles, the watchdog SHALL be re-baselined so future inactivity is still bounded.
+
+#### Scenario: Slow approval does not trigger inactivity timeout
+- **GIVEN** a sub-agent with an active approval wait
+- **AND** the human approval decision takes longer than the sub-agent inactivity budget
+- **WHEN** the approval eventually arrives
+- **THEN** the sub-agent applies the approval outcome
+- **AND** the sub-agent is not failed for inactivity during the wait
+
+#### Scenario: Parent start completes before child approval
+- **GIVEN** the parent start call returns durable child acceptance
+- **AND** the child waits for human approval
+- **WHEN** the parent performs independent authorized work
+- **THEN** the child approval wait remains open and cancellable
+- **AND** the completed parent start call has no watchdog dependency on that wait
+
+#### Scenario: Parallel approval waits keep watchdog paused until all settle
+- **GIVEN** a sub-agent tool batch with two approval-gated calls
+- **WHEN** both calls are waiting for parent approval
+- **THEN** the watchdog remains paused until both approval waits have settled
+- **AND** the watchdog is re-armed only after the final wait completes
