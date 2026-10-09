@@ -638,7 +638,7 @@ At finalization completion or grace deadline:
 <p><strong>Common gate:</strong> Require automated tests at the real boundary, meaningful failure controls, applicable evals, required CI, and an independent evidence review.</p>
 <p>Require all scripted runtime cases to pass. The proposed model gate requires five successful trials per critical case on the selected model at the authorized eval host.</p>
 <p>Report missing or inconclusive evidence separately. A safe refusal does not prove task success, and a green average cannot hide a failed critical case.</p>
-<p><strong>Open before dependent code:</strong> Detector thresholds and valid repeats; activation; provider capacity; completion wake policy; grace duration; code workspace policy.</p>
+<p><strong>Open before background runtime code:</strong> The owner must select the provider-capacity contract. The other listed design choices now use the accepted contracts.</p>
 <p>Define restart continuity before any days-long durability claim. The initial background contract reports restart loss; it does not resume the same child.</p>
 
 <p>One architectural objective governs these steps. The first PR delivers detector changes, hard-budget removal, and evals.</p>
@@ -1148,6 +1148,7 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p><strong>Owner approval:</strong> The owner approved implementation and requested a native GitHub stack. The implementation goal is active.</p>
 <p><strong>Implementation baseline:</strong> <code>2e6bc4f014dc96b606566709df1bd11f90ecf34a</code> on upstream <code>dev</code>. Preserve the primary checkout and other worktrees.</p>
 <p><strong>Native stack tool:</strong> GitHub supplies <code>gh stack</code>. Use <code>gh stack link</code> for the three dependent PRs in <code>netclaw-dev/netclaw</code>.</p>
+<p><strong>Native stack:</strong> Stack #2423 contains <a href="https://github.com/netclaw-dev/netclaw/pull/2420">#2420</a> → <a href="https://github.com/netclaw-dev/netclaw/pull/2421">#2421</a> → <a href="https://github.com/netclaw-dev/netclaw/pull/2422">#2422</a>. Each PR remains a draft.</p>
 <p><strong>Branch sequence:</strong> <code>feature/tool-recurrence</code> → <code>feature/background-subagents</code> → <code>feature/agent-coordination</code>.</p>
 <p><strong>Agent roles:</strong> One agent implements the frozen detector contract. A separate agent writes adversarial tests. A third agent prepares the background contract.</p>
 <p><strong>Eval prerequisite:</strong> The specified host currently fails the default DNS lookup. The system resolver route returns a TLS alert. Access details remain pending.</p>
@@ -1162,21 +1163,24 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>The worker uses the existing Main role. Its canonical release asset supports explicit operator install or update without a new command.</p>
 <p>The real seed, loader, spawner, and child path now passes a Main-role request proof. The identity class passes 13 tests without skips.</p>
 <p>This preparation uses a scripted provider. Combined background behavior and model inference remain unproved.</p>
+<p><strong>Published detector draft:</strong> <a href="https://github.com/netclaw-dev/netclaw/pull/2420">PR #2420</a> targets <code>dev</code>. It remains unmerged.</p>
+<p><strong>Old-byte proof:</strong> The baseline serializer captured neutral journal and snapshot payloads. Four baseline controls and four isolated candidate cases passed.</p>
+<p>The integrated candidate also passed all four cases without skips. This proof excludes database import, live compaction, downgrade, and rollback.</p>
 <p><strong>Frozen first PR:</strong> Per-call identity, distinct outcome sets, two-round correction threshold, stop precedence, trusted pending-job exception, retention, and durable recovery.</p>
 <p><strong>Integrated test receipt:</strong> The first combined run executed 157 tests. It passed 155 and failed two. It skipped none.</p>
 <p>The independent v22 run passed all 67 cases without skips. Three legacy fixture identifiers then received canonical values.</p>
-<p>Those three legacy cases passed again. The other 64 cases retain their unchanged v22 proof. The current mutation run remains pending.</p>
+<p>Those three legacy cases passed again. The other 64 cases retain their unchanged v22 proof. The current mutation gate also passed.</p>
 <p>The million-sequence and 10,000-checkpoint deterministic checks passed. They do not replace independent productive holdout turns or model evals.</p>
-<p><strong>Pending first-PR proof:</strong> Final integrated actor tests, legacy approval continuity, private replay, holdout, and targeted model evals.</p>
+<p><strong>Pending first-PR proof:</strong> Private replay, holdout, targeted model evals, and required hosted CI.</p>
 <p>Cancellation grace belongs to the background PR. Resolve each dependent contract before its production edits.</p>
-<p><strong>Mutation receipt:</strong> The corrected independent gate selected 12 tests and killed four expected mutants in 2m14s. Its exit code was zero.</p>
+<p><strong>Mutation receipt:</strong> The current independent gate selected 12 tests and killed four expected mutants in 3m05s. Its exit code was zero.</p>
 <p>Earlier gates failed on discovery expectations. The corrected gate checks exact target names and rejects expected errors, survivors, timeouts, or absent targets.</p>
 <p>The gate excludes one invalid non-target Count-to-Sum compiler mutation. CI uses the existing lightest matrix group.</p>
 <p>Independent fault probes reject a survivor, timeout, target compiler error, absent target, and extra executable mutant.</p>
 <p>Separate counterfactual runs reject sibling evidence erasure, missing receipt acceptance, and parent or child dispatch after Stop.</p>
-<p>The dispatch fault reached real effects in both actors. The integrated pristine control remains pending.</p>
-<p><strong>Not run:</strong> Targeted model evals, hosted CI, release checks, or a live daemon experiment.</p>
-<p><strong>Background contract:</strong> Strict OpenSpec validation passes for the lifecycle package. Runtime work awaits the capacity decision and integrated first PR.</p>
+<p>The dispatch fault reached real effects in both actors. The restored 12-case control passed without skips.</p>
+<p><strong>Not run:</strong> Targeted model evals, release checks, or a live daemon experiment. Hosted CI found nine actor-test failures in draft PR #2420. Independent classification and repairs remain active.</p>
+<p><strong>Background contract:</strong> Strict OpenSpec validation passes for the lifecycle package. Runtime work awaits the capacity decision and integrated first-PR acceptance.</p>
 <p><strong>Third-PR preparation:</strong> The contract and seven skill files exist. Identity, profile loader, bundle, native seed, and 13 instrumentation checks pass locally.</p>
 <p>The native file oracle rejected an absent worker and a changed specialist. Combined-stack tests and real-model discovery evals remain unpassed.</p>
 <p><strong>Background baseline:</strong> The held-child actor contract failed on the foreground baseline. The released-child control passed; neither test skipped.</p>

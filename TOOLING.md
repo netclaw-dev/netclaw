@@ -59,7 +59,7 @@ It also rejects extra executable mutants.
 Stryker can emit a non-target `Count`-to-`Sum` mutation that cannot compile for the typed input list.
 The exact-name check excludes that invalid mutation; it does not exclude an expected target error.
 
-The independent corrected run killed all four targets in 2m14s.
+The current independent run killed all four targets in 3m05s.
 CI runs this gate in `shell-analysis` and uploads `artifacts/stryker/tool-task-adoption` with the group reports.
 The local duration does not establish the combined CI duration.
 
