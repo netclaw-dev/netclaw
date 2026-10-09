@@ -3,9 +3,18 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using System.Threading.Channels;
 using Akka.Actor;
+using Akka.Hosting;
+using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Channels;
+using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
@@ -17,6 +26,8 @@ using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
+using ModelChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
@@ -186,45 +197,110 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
         var pathPolicy = new ToolPathPolicy([]);
         var registry = new ToolRegistry();
         registry.Register(new FileReadTool(toolConfig, Context.Paths, pathPolicy));
-        var spawner = new SubAgentSpawner(provider, registry,
-            new ToolAccessPolicy(Context.Paths, toolConfig,
-                new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
-                new ShellCommandPolicy(), pathPolicy),
-            approvalService: null, NullSystemPromptProvider.Instance,
-            new WorkingContextSnapshotProvider(new GitWorkingContextInspector(TimeProvider.System),
-                NullLogger<WorkingContextSnapshotProvider>.Instance),
+        var policy = new ToolAccessPolicy(Context.Paths, toolConfig,
+            new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
+            new ShellCommandPolicy(), pathPolicy);
+        var snapshots = new WorkingContextSnapshotProvider(new GitWorkingContextInspector(TimeProvider.System),
+            NullLogger<WorkingContextSnapshotProvider>.Instance);
+        var spawner = new SubAgentSpawner(provider, registry, policy,
+            approvalService: null, NullSystemPromptProvider.Instance, snapshots,
             NullLogger<SubAgentSpawner>.Instance);
-        var system = ActorSystem.Create($"seeded-worker-{Guid.NewGuid():N}");
+        const string task = "Produce the complete plan for the assigned source revision.";
+        const string runtimeContext = "Inspect the source revision named neutral-revision.";
+        const string startCallId = "seeded-worker-start";
+        var parent = new FakeChatClient
+        {
+            ResponseText = "The parent received the worker result.",
+            ToolCallsOnFirstCall = [new FunctionCallContent(startCallId, "spawn_agent", new Dictionary<string, object?>
+            {
+                ["agent"] = worker.Name, ["task"] = task, ["context"] = runtimeContext,
+                ["_rationale"] = "Delegate the complete source revision plan."
+            })]
+        };
+        var definitions = new SubAgentDefinitionRegistry();
+        definitions.Register(worker);
+        registry.RegisterCore(new SpawnAgentTool(definitions, spawner, Context.Paths));
+        var sessionId = new SessionId("signalr/seeded-worker");
+        var sessionServices = new SessionServices(new SingleClientProvider(parent), NullSystemPromptProvider.Instance,
+            [], snapshots, TimeProvider.System, Context.Paths, new TestSessionStorageResolver(Context.Paths));
+        var tools = new SessionToolServices(new DispatchingToolExecutor(registry, policy), registry, policy,
+            TrustDeriver: null, SkillRegistry: null, SubAgentRegistry: definitions, SubAgentSpawner: spawner);
+        using var host = new HostBuilder().ConfigureServices(services =>
+            services.AddAkka($"seeded-worker-{Guid.NewGuid():N}", (akka, _) =>
+                akka.WithInMemoryJournal().WithInMemorySnapshotStore().WithNetclawSerialization()
+                    .StartActors((system, actors, _) =>
+                    {
+                        var owner = system.ActorOf(Props.Create(() => new LlmSessionActor(sessionId.Value,
+                            new ModelCapabilities { ModelId = "scripted-parent", ContextWindowTokens = 128000 },
+                            new SessionConfig { Tuning = new SessionTuning { TitleGenerationInterval = 0, SnapshotInterval = 1000 } },
+                            sessionServices, tools, null, null)), "seeded-worker-owner");
+                        actors.Register<SessionManagerActorKey>(owner);
+                    }))).Build();
+        await host.StartAsync(TestContext.Current.CancellationToken);
         try
         {
-            var storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(
-                Path.Combine(Context.Paths.SessionsDirectory, "seeded-worker")));
-            var context = TestToolExecutionContext.CreateBoundWithStorage("console/seeded-worker", storage,
-                new TestToolExecutionContextOptions
+            var system = host.Services.GetRequiredService<ActorSystem>();
+            var owner = ActorRegistry.For(system).Get<SessionManagerActorKey>();
+            var outputs = Channel.CreateUnbounded<SessionOutput>();
+            var subscriber = system.ActorOf(Props.Create(() => new SeededWorkerOutputCollector(outputs.Writer)));
+            var ceiling = TimeSpan.FromSeconds(30);
+            await owner.Ask<SessionJoined>(new JoinSession(subscriber)
+            { SessionId = sessionId, Filter = OutputFilter.Full }, ceiling, TestContext.Current.CancellationToken);
+            await owner.Ask<CommandAck>(new SendUserMessage
+            {
+                SessionId = sessionId, Content = task, Source = new MessageSource
                 {
-                    Audience = TrustAudience.Personal,
-                    SpawnChildActor = (props, name, _) => Task.FromResult<object>(system.ActorOf((Props)props, name))
-                });
-            const string task = "Produce the complete plan for the assigned source revision.";
-
-            var result = await spawner.SpawnAsync(worker, task, runtimeContext: null, context.Invocation,
-                TestContext.Current.CancellationToken);
-
+                    ChannelType = ChannelType.SignalR, SenderId = new SenderId("worker-test-operator"),
+                    Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal,
+                    Principal = PrincipalClassification.Operator,
+                    Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
+                }
+            }, ceiling, TestContext.Current.CancellationToken);
+            var observed = new List<SessionOutput>();
+            while (true)
+            {
+                var output = await outputs.Reader.ReadAsync(TestContext.Current.CancellationToken)
+                    .AsTask().WaitAsync(ceiling, TestContext.Current.CancellationToken);
+                observed.Add(output);
+                if (output is TurnCompleted
+                    && observed.OfType<SubAgentOutput>().Any(child => child.Phase == SubAgentPhase.Completed)
+                    && parent.ReceivedMessagesByCall.Any(messages => messages
+                        .SelectMany(message => message.Contents.OfType<FunctionResultContent>())
+                        .Any(result => result.CallId.StartsWith("child-result-", StringComparison.Ordinal))))
+                    break;
+            }
+            Assert.Empty(observed.OfType<ErrorOutput>());
+            var completion = Assert.Single(observed.OfType<SubAgentOutput>(), output => output.Phase == SubAgentPhase.Completed);
+            Assert.Equal(new AgentName("task-worker"), completion.AgentName);
+            Assert.True(completion.Success);
+            Assert.Equal(SubAgentRunOutcome.Completed, completion.Outcome);
             Assert.Equal([ModelRole.Main], provider.RequestedRoles);
             Assert.Equal(1, client.CallCount);
             var request = Assert.Single(client.ReceivedMessagesByCall);
-            // The actor trims whitespace at the profile end before it adds the tool index.
-            Assert.Contains(request, message => message.Role == ChatRole.System
+            // The actor trims the profile end before it adds the tool index.
+            Assert.Contains(request, message => message.Role == ModelChatRole.System
                 && message.Text.Contains(worker.SystemPrompt.TrimEnd(), StringComparison.Ordinal));
-            Assert.Contains(request, message => message.Role == ChatRole.User
+            Assert.Contains(request, message => message.Role == ModelChatRole.User
+                && message.Text.StartsWith($"Context:\n{runtimeContext}\n\n", StringComparison.Ordinal)
                 && message.Text.EndsWith($"\nTask:\n{task}", StringComparison.Ordinal));
-            Assert.True(result.Success);
-            Assert.Equal("The scripted worker result.", result.Output);
+            var results = parent.ReceivedMessagesByCall[^1]
+                .SelectMany(message => message.Contents.OfType<FunctionResultContent>()).ToArray();
+            var accepted = Assert.Single(results, result => result.CallId == startCallId);
+            using var acceptance = JsonDocument.Parse(Assert.IsType<string>(accepted.Result));
+            Assert.Equal("Accepted", acceptance.RootElement.GetProperty("state").GetString());
+            Assert.Equal("check_agent_run", acceptance.RootElement.GetProperty("control_tool").GetString());
+            var delivered = Assert.Single(results, result => result.CallId.StartsWith("child-result-", StringComparison.Ordinal));
+            using var terminal = JsonDocument.Parse(Assert.IsType<string>(delivered.Result));
+            Assert.Equal(acceptance.RootElement.GetProperty("run_id").GetString(), terminal.RootElement.GetProperty("run_id").GetString());
+            Assert.Equal(acceptance.RootElement.GetProperty("scope_id").GetString(), terminal.RootElement.GetProperty("scope_id").GetString());
+            Assert.Equal("Completed", terminal.RootElement.GetProperty("state").GetString());
+            Assert.Equal("Completed", terminal.RootElement.GetProperty("outcome").GetString());
+            Assert.Equal("The scripted worker result.", terminal.RootElement.GetProperty("output").GetString());
         }
         finally
         {
-            await system.Terminate();
+            await host.StopAsync(CancellationToken.None);
         }
     }
 
@@ -317,6 +393,12 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
         Assert.Equal("Detailed & casual", step.CommunicationStyle);
         Assert.Equal("Dana", step.UserName);
         Assert.Equal("UTC", step.UserTimezone);
+    }
+
+    private sealed class SeededWorkerOutputCollector : ReceiveActor
+    {
+        public SeededWorkerOutputCollector(ChannelWriter<SessionOutput> outputs)
+            => Receive<SessionOutput>(output => outputs.TryWrite(output));
     }
 
     private sealed class RoleRecordingClientProvider(IChatClientProvider inner) : IChatClientProvider
