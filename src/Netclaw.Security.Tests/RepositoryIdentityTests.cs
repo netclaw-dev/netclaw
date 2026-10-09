@@ -228,8 +228,8 @@ public sealed class RepositoryIdentityTests : IDisposable
         if (!process.StartInfo.RedirectStandardOutput || !process.StartInfo.RedirectStandardError)
             throw new ArgumentException("The test process must redirect both output streams.", nameof(process));
         Assert.True(process.Start(), $"Could not start {process.StartInfo.FileName}.");
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        using var operationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, operationDeadline.Token);
         var standardOutput = process.StandardOutput.ReadToEndAsync(deadline.Token);
         var standardError = process.StandardError.ReadToEndAsync(deadline.Token);
         var drains = Task.WhenAll(standardOutput, standardError);
@@ -243,10 +243,24 @@ public sealed class RepositoryIdentityTests : IDisposable
         {
             var failures = new List<Exception>
             {
-                deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested
+                operationDeadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested
                     ? new TimeoutException("The process exceeded the ten-second operation deadline.", failure)
                     : failure
             };
+            if (process.StartInfo.RedirectStandardInput)
+            {
+                try
+                {
+                    // EOF lets the Git wrapper wait for its child before the wrapper exits.
+                    process.StandardInput.Close();
+                    if (!operationDeadline.IsCancellationRequested)
+                        await process.WaitForExitAsync(operationDeadline.Token);
+                }
+                catch (Exception inputTeardownFailure)
+                {
+                    failures.Add(inputTeardownFailure);
+                }
+            }
             try
             {
                 if (!process.HasExited)
