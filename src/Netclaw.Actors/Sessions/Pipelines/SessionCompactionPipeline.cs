@@ -186,7 +186,15 @@ internal static class SessionCompactionPipeline
 
             // Carry the session id so the observer's chat-client diagnostics route to the
             // session's session.log and correlate in Seq/OTLP (replaces the deleted AsyncLocal).
-            var observerOptions = new SessionScopedChatOptions { SessionId = sessionId.Value };
+            var observerOptions = new SessionScopedChatOptions
+            {
+                SessionId = sessionId.Value,
+                // Reuse the provider intent so summaries spend the sidecar deadline on output.
+                AdditionalProperties = new AdditionalPropertiesDictionary
+                {
+                    [NetclawChatOptionKeys.SuppressReasoning] = true
+                }
+            };
             var result = await StreamingResponseReader.ReadAsync(
                 client, observerMessages, observerOptions, cts.Token);
             var text = result.Response.Text;
