@@ -33,6 +33,8 @@ namespace Netclaw.Actors.MutationTests;
 public sealed class LateToolReplyMutationTests : IAsyncLifetime
 {
     private static readonly TimeSpan FaultCeiling = TimeSpan.FromSeconds(2);
+    // Cold recovery uses the same ceiling as LlmSessionTestBase.JoinSessionAsync.
+    private static readonly TimeSpan StartupCeiling = TimeSpan.FromSeconds(30);
     private readonly NetclawPaths _paths = new(Path.Combine(Path.GetTempPath(), $"netclaw-late-reply-mutations-{Guid.NewGuid():N}"));
     private readonly ReplyClient _client = new();
     private readonly Channel<object> _outputs = Channel.CreateUnbounded<object>();
@@ -68,15 +70,15 @@ public sealed class LateToolReplyMutationTests : IAsyncLifetime
         _host = builder.Build();
         await _host.StartAsync();
         await _owner.Ask<SessionJoined>(new JoinSession(_observer) { SessionId = _session,
-            Filter = OutputFilter.Full | OutputFilter.ProcessingState }, FaultCeiling);
-        await ReadUntilAsync(message => message is SessionJoined);
+            Filter = OutputFilter.Full | OutputFilter.ProcessingState }, StartupCeiling);
+        await ReadUntilAsync(message => message is SessionJoined, StartupCeiling);
     }
 
     [Fact]
     public async Task A_captured_prior_result_cannot_complete_a_new_dispatch_with_the_same_provider_id()
     {
         await _owner.Ask<CommandAck>(new SendUserMessage { SessionId = _session, Content = "Execute the first task.", Source = Source("operator-old") }, FaultCeiling);
-        var first = await ReadUntilAsync(message => message is ProcessingStateOutput { IsProcessing: false });
+        var first = await ReadUntilAsync(message => message is ProcessingStateOutput { IsProcessing: false }, FaultCeiling);
         Assert.Single(first.OfType<TurnCompleted>());
         Assert.Equal(2, File.ReadAllLines(_executor.EffectPath).Length);
         Assert.Equal(4, _client.Count);
@@ -93,14 +95,14 @@ public sealed class LateToolReplyMutationTests : IAsyncLifetime
         _owner.Tell(prior.Message, prior.Sender);
         _owner.Tell(new JoinSession(_observer) { SessionId = _session,
             Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, prior.Sender);
-        var observed = await ReadUntilAsync(message => message is SessionJoined);
+        var observed = await ReadUntilAsync(message => message is SessionJoined, FaultCeiling);
         Assert.DoesNotContain(observed, message => message is ToolResultOutput or TurnCompleted or ToolInteractionRequest);
         Assert.False(current.Token.IsCancellationRequested);
         Assert.Equal(2, File.ReadAllLines(_executor.EffectPath).Length);
         Assert.Equal(5, _client.Count);
 
         _executor.Release.TrySetResult();
-        var completed = await ReadUntilAsync(message => message is ProcessingStateOutput { IsProcessing: false });
+        var completed = await ReadUntilAsync(message => message is ProcessingStateOutput { IsProcessing: false }, FaultCeiling);
         Assert.Single(completed.OfType<TurnCompleted>());
         Assert.Single(completed.OfType<ToolResultOutput>());
         Assert.Equal(3, File.ReadAllLines(_executor.EffectPath).Length);
@@ -111,9 +113,9 @@ public sealed class LateToolReplyMutationTests : IAsyncLifetime
         Assert.Single(latest.Skip(batch + 1).SelectMany(message => message.Contents.OfType<FunctionResultContent>()), result => result.CallId == current.CallId);
     }
 
-    private async Task<IReadOnlyList<object>> ReadUntilAsync(Func<object, bool> condition)
+    private async Task<IReadOnlyList<object>> ReadUntilAsync(Func<object, bool> condition, TimeSpan timeout)
     {
-        using var ceiling = new CancellationTokenSource(FaultCeiling);
+        using var ceiling = new CancellationTokenSource(timeout);
         var items = new List<object>();
         while (true)
         {

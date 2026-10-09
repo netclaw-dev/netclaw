@@ -29,7 +29,7 @@
 - [ ] 4.4 Reconstruct the suffix after the last checkpoint; verify every admission, result, and checkpoint crash cut point preserves completed effects once.
 - [x] 4.5 Inject checkpoint and snapshot failures; verify an explicit error and no silent detector reset or premature dispatch.
 - [x] 4.6 Load captured pre-change records; verify conversation recovery and an explicit detector baseline gap without fabricated receipt evidence.
-- [ ] 4.7 Test the rollback reader or document database restoration; verify new event variants cannot silently corrupt an older runtime.
+- [x] 4.7 Test the rollback reader or document database restoration; verify new event variants cannot silently corrupt an older runtime.
 
 - [x] 4.8 Persist canonical job origin and checkpoint on existing job records; verify the commit, task-switch, delivery, and removal order.
 - [x] 4.9 Verify fast completion, launch/receipt crash, duplicate delivery, two jobs, invalid origin, and explicit legacy evidence gaps.
@@ -81,6 +81,11 @@
 - `ToolTaskRecoveryAdversarialTests` proves actor recovery, job lineage, fast results, invalid deliveries, and legacy approval redrive.
 - `BackgroundJobLineageTests` proves two-job checkpoint retention, origin rejection, durable reports, and explicit legacy gaps.
 - `PreChangePersistenceCompatibilityTests` proves actual legacy journal bytes and registered-serializer snapshot bytes through actor recovery.
+- A disposable SQLite proof uses the actual SQL persistence plugin and the original registered readers.
+- Seven positive phases pass. The original reader and real baseline owner reject `tta-v1` explicitly before model or tool effects.
+- Backup restoration preserves all six original events, the sequence-2 snapshot, and the original job artifact exactly.
+- Both restored readers execute zero tools and zero model requests. The restored database matches the recorded backup bytes.
+- This closes task 4.7's bounded restoration alternative. It excludes live operational rollback, active jobs, transport state, compaction, and pruning.
 - `ToolRecurrencePersistenceFaultTests` passes five independent cases through the existing persistence test kit.
 - Failed admission and result writes stop the actor and emit an explicit error before further dispatch.
 - A failed snapshot emits an operator warning. Journal replay retains correction and Stop without a silent reset.
@@ -91,13 +96,19 @@
 - `ToolCycleUserInputTests` proves fresh-task reset at the existing batch boundary and preserved evidence without fresh input.
 - Twelve concrete late-reply controls cover parent model, single result, batch completion, child model, child aggregate result, and parent approval request.
 - Closed original approval answers return `PromptExpired` and produce no grant writes. The fresh task still completes.
-- Failure, spawn, activity, and routed callback consumers receive source review and retained normal-path tests, without separate captured replay cases.
+- Six further cases capture actual pipeline failure, spawn, tool activity, routed activity, and routed completion envelopes.
+- The independent retained-plus-new selection passes 39 cases without skips. It preserves every original sender and dispatch token.
+- Removal of the failure ownership check emits an old error and fails the fresh task. The new assertion rejects those actual outputs.
+- The restored six-case control passes. Private routed failure and payload side fields remain outside this bounded proof.
 - The scoped mutation gate selected 13 tests and killed all five expected targets in 3m08s.
 - The fifth target admits stale callbacks through the final `OwnsToolExecution` false return. A separate equality-removal fault also fails behaviorally.
 - The restored thirteen-case control passes. Hosted CI for the new revision remains separate.
 - The prior full non-native actor run passed 5,796 cases and found one fixture failure, with 40 existing skips.
-- The current full non-native actor run passes 5,814 cases with 40 existing platform skips and no failures.
-- Root integration passes 43 focused actor cases and thirteen mutation controls without skips.
+- The full non-native actor run at `0917e456` passes 5,814 cases with 40 existing platform skips and no failures.
+- Root integration passes 48 focused actor cases and one overflow control without skips. The mutation control selection passes thirteen cases.
+- A macOS fixture timeout occurs during initial recovery, before its behavioral test body. Its underlying startup delay remains unresolved.
+- The fixture repair uses the repository's 30-second cold-recovery deadline. Its behavioral deadline remains two seconds and all assertions remain unchanged.
+- The repaired thirteen-case control passes. All five expected mutants remain Killed in 184.8 seconds.
 - Configuration tests passed six cases. Doctor tests passed 37 cases. This repair changes no configuration or CLI code.
 - Open tasks retain private replay, shadow, productive holdout, and exhaustive crash gates.
-- Open tasks also retain executed rollback, model trials, coverage analysis, hosted CI, and final contract reconciliation.
+- Open tasks also retain model trials, coverage analysis, hosted CI for later revisions, and final contract reconciliation.
