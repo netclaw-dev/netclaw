@@ -76,6 +76,7 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
         services.AddSingleton<IToolExecutor>(_executor);
         var registry = new ToolRegistry();
         registry.RegisterCore(AIFunctionFactory.Create(() => "same", "recurrence_probe"), "builtin");
+        registry.RegisterCore(AIFunctionFactory.Create(() => "diagnostic", "diagnostic_probe"), "builtin");
         services.AddSingleton(registry);
         services.AddLlmSessionCompositeRecords();
     }
@@ -185,7 +186,7 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
     public async Task Failed_compaction_snapshot_reports_the_error_and_retains_journal_correction_without_reexecution()
     {
         var session = new SessionId("signalr/compaction-snapshot-failure");
-        _main.CompactOnCorrection = true;
+        _main.CompactionRequestNumber = 3;
         _main.HoldRequestNumber = 4;
         var reached = NewSignal();
         await Snapshots.OnSave.FailIf((persistenceId, _) =>
@@ -467,7 +468,7 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
     public async Task A_successful_compaction_snapshot_keeps_the_correction_after_owner_death()
     {
         var session = new SessionId("signalr/successful-compaction-snapshot-cut");
-        _main.CompactOnCorrection = true;
+        _main.CompactionRequestNumber = 3;
         _main.HoldRequestNumber = 4;
         var manager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe();
@@ -512,10 +513,201 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
         Assert.Single(after.Events.OfType<TurnRecorded>());
     }
 
-    private async Task<JournalEvidence> ReadJournalAsync(SessionId session)
+    [Fact]
+    public async Task A_failed_snapshot_cold_resumes_the_committed_compaction_without_reexecution()
+    {
+        var session = new SessionId("signalr/failed-snapshot-cold-cut");
+        _main.CompactionRequestNumber = 3;
+        _main.HoldRequestNumber = 4;
+        var reached = NewSignal();
+        await Snapshots.OnSave.FailIf((persistenceId, _) =>
+        {
+            if (persistenceId != $"session-{session.Value}") return false;
+            reached.TrySetResult();
+            return true;
+        });
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        await EventFilter.Warning(contains: "Snapshot failed:").ExpectOneAsync(async () =>
+        {
+            await StartAsync(manager, session);
+            await reached.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+            await _main.RequestEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+        var owner = await OwnerAsync(session);
+        var watcher = CreateTestProbe();
+        watcher.Watch(owner);
+        Sys.Stop(owner);
+        await watcher.ExpectTerminatedAsync(owner, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        var before = await ReadJournalAsync(session);
+        Assert.Null(before.Snapshot);
+        var compacted = Assert.Single(before.Events.OfType<SessionCompacted>());
+        Assert.Empty(before.Events.OfType<TurnRecorded>());
+        var results = before.Events.OfType<ToolCallRecorded>().ToArray();
+        Assert.Equal(3, results.Length);
+        Assert.Equal(2, results.Count(result => !result.LoopObservation!.Synthetic));
+        Assert.Single(results, result => result.LoopObservation!.Synthetic);
+        Assert.Equal(2, _executor.Count);
+        Assert.Equal(4, _main.Count);
+        Assert.Equal(1, _compaction.Count);
+
+        await Snapshots.OnSave.Pass();
+        subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        await manager.Ask<CommandAck>(Restart(session), FaultCeiling, TestContext.Current.CancellationToken);
+        await CompletedAsync(subscriber);
+        var resumed = _main.Requests[^1];
+        Assert.False(string.IsNullOrWhiteSpace(compacted.Summary));
+        foreach (var message in compacted.CompactedMessages)
+        {
+            var expected = ChatMessageConverter.ToAiMessage(message);
+            Assert.Single(resumed, actual => actual.Role == expected.Role && actual.Text == expected.Text);
+        }
+        var calls = resumed.SelectMany(message => message.Contents.OfType<FunctionCallContent>()).ToArray();
+        var pairs = resumed.SelectMany(message => message.Contents.OfType<FunctionResultContent>()).ToArray();
+        Assert.Equal(compacted.CompactedMessages.SelectMany(message => message.ToolCalls).Select(call => call.CallId.Value).Order(),
+            calls.Select(call => call.CallId).Order());
+        Assert.Equal(calls.Select(call => call.CallId).Order(), pairs.Select(pair => pair.CallId).Order());
+        Assert.Equal(2, _executor.Count);
+        Assert.Equal(5, _main.Count);
+        Assert.Equal(1, _compaction.Count);
+        Assert.All(_executor.Requesters, requester => Assert.Equal("operator-a", requester));
+        var after = await ReadJournalAsync(session);
+        Assert.Equal(3, after.Events.OfType<ToolBatchStarted>().Count());
+        Assert.Equal(3, after.Events.OfType<ToolCallRecorded>().Count());
+        Assert.Equal(ToolCycleMessages.Final, Assert.Single(after.Events.OfType<TurnRecorded>()).AssistantReply.Content);
+    }
+
+    [Fact]
+    public async Task A_snapshot_after_owner_death_replays_a_multicall_suffix_with_distinct_outcomes_and_duplicate_calls()
+    {
+        var session = new SessionId("signalr/snapshot-multicall-suffix-cut");
+        _main.CompactionRequestNumber = 1;
+        _main.HoldRequestNumber = 3;
+        _main.CallsByRequest[1] = [RepeatedClient.Call("a-1"), RepeatedClient.Call("a-1b"),
+            RepeatedClient.Call("a-1c"), new FunctionCallContent("b-1", "diagnostic_probe", new Dictionary<string, object?>())];
+        _main.CallsByRequest[2] = [RepeatedClient.Call("a-2"), RepeatedClient.Call("a-2b")];
+        _executor.ResultByCall["a-1b"] = "second";
+        _executor.ResultByCall["a-2b"] = "second";
+        _executor.ResultByCall["b-1"] = "diagnostic";
+        var reached = NewSignal();
+        var release = NewSignal();
+        long saveSequence = 0;
+        await Snapshots.OnSave.FailIf(async (persistenceId, criteria) =>
+        {
+            if (persistenceId != $"session-{session.Value}") return false;
+            saveSequence = criteria.MaxSequenceNr;
+            reached.TrySetResult();
+            await release.Task.WaitAsync(TestContext.Current.CancellationToken);
+            return false;
+        });
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        var owner = await OwnerAsync(session);
+        var watcher = CreateTestProbe();
+        watcher.Watch(owner);
+        JournalEvidence committed;
+        try
+        {
+            await StartAsync(manager, session);
+            await reached.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+            await _main.RequestEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+            committed = await ReadJournalAsync(session, new Recovery(SnapshotSelectionCriteria.None));
+            Assert.Null(committed.Snapshot);
+            Assert.Single(committed.Events.OfType<SessionCompacted>());
+            Assert.Equal(2, committed.Events.OfType<ToolBatchStarted>().Count());
+            Assert.Equal(6, committed.Events.OfType<ToolCallRecorded>().Count());
+            Assert.Equal(new[] { ("a-1", "same"), ("a-1b", "second"), ("a-1c", "same"),
+                    ("b-1", "diagnostic"), ("a-2", "same"), ("a-2b", "second") }.OrderBy(item => item.Item1),
+                committed.Events.OfType<ToolCallRecorded>()
+                    .Select(result => (result.ToolResult.ToolCallId!.Value.Value, result.ToolResult.Content)).OrderBy(item => item.Item1));
+            Assert.All(committed.Events.OfType<ToolCallRecorded>(), result =>
+            {
+                Assert.False(result.LoopObservation!.Synthetic);
+                Assert.Equal((int)ToolInvocationOutcomeCategory.Success, result.LoopObservation.Category);
+            });
+            Assert.Empty(committed.Events.OfType<TurnRecorded>());
+            Assert.Equal(6, _executor.Count);
+            Assert.Equal(3, _main.Count);
+            Sys.Stop(owner);
+            await watcher.ExpectTerminatedAsync(owner, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        await Snapshots.OnSave.Pass();
+        JournalEvidence? stored = null;
+        await AwaitAssertAsync(async () =>
+        {
+            stored = await ReadJournalAsync(session);
+            Assert.NotNull(stored.Snapshot);
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(stored);
+        Assert.Equal(saveSequence, stored.SnapshotSequenceNr);
+        Assert.True(stored.SnapshotSequenceNr > 0);
+        Assert.True(stored.LastSequenceNr > stored.SnapshotSequenceNr);
+        var snapshot = Assert.IsType<SessionSnapshot>(stored.Snapshot);
+        Assert.Equal("original", snapshot.LoopCheckpoint!.TaskId);
+        Assert.Equal("original", snapshot.AdoptedTaskContext!.TurnId);
+        Assert.Equal("operator-a", snapshot.AdoptedTaskContext.DefaultDeliveryTarget!.DestinationId);
+        Assert.Equal(1, Assert.Single(snapshot.LoopCheckpoint.Entries, entry => entry.ToolName == "recurrence_probe").EqualRounds);
+        Assert.Equal(1, Assert.Single(snapshot.LoopCheckpoint.Entries, entry => entry.ToolName == "diagnostic_probe").EqualRounds);
+        Assert.False(snapshot.LoopReceiptFailure);
+        var suffixBatch = Assert.Single(stored.Events.OfType<ToolBatchStarted>());
+        Assert.Equal(new[] { "a-2", "a-2b" }, suffixBatch.LoopAdmission!.Calls.Select(call => call.CallId));
+        Assert.Equal(2, stored.Events.OfType<ToolCallRecorded>().Count());
+        Assert.All(stored.Events.OfType<ToolCallRecorded>(), result => Assert.False(result.LoopObservation!.Synthetic));
+        var retained = await ReadJournalAsync(session, new Recovery(SnapshotSelectionCriteria.None));
+        Assert.Null(retained.Snapshot);
+        Assert.Equal(committed.Events, retained.Events);
+        Assert.Equal(committed.LastSequenceNr, retained.LastSequenceNr);
+
+        subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        await manager.Ask<CommandAck>(Restart(session), FaultCeiling, TestContext.Current.CancellationToken);
+        await CompletedAsync(subscriber);
+        var resumed = _main.Requests[3];
+        var calls = resumed.SelectMany(message => message.Contents.OfType<FunctionCallContent>()).ToArray();
+        var pairs = resumed.SelectMany(message => message.Contents.OfType<FunctionResultContent>()).ToArray();
+        foreach (var result in stored.Events.OfType<ToolCallRecorded>())
+        {
+            var id = result.ToolResult.ToolCallId!.Value.Value;
+            Assert.Single(calls, call => call.CallId == id);
+            Assert.Equal(result.ToolResult.Content, Assert.Single(pairs, pair => pair.CallId == id).Result);
+        }
+        foreach (var message in snapshot.History.Where(message => message.Role != Netclaw.Actors.Protocol.ChatRole.System))
+        {
+            var expected = ChatMessageConverter.ToAiMessage(message);
+            Assert.Single(resumed, actual => actual.Role == expected.Role && actual.Text == expected.Text);
+        }
+        Assert.Equal(snapshot.History.SelectMany(message => message.ToolCalls).Select(call => call.CallId.Value)
+            .Concat(suffixBatch.LoopAdmission.Calls.Select(call => call.CallId)).Order(), calls.Select(call => call.CallId).Order());
+        Assert.Equal(calls.Select(call => call.CallId).Order(), pairs.Select(pair => pair.CallId).Order());
+        Assert.Equal(6, _executor.Count);
+        Assert.Equal(5, _main.Count);
+        Assert.Equal(1, _compaction.Count);
+        Assert.All(_executor.Requesters, requester => Assert.Equal("operator-a", requester));
+        var after = await ReadJournalAsync(session);
+        Assert.Equal(stored.SnapshotSequenceNr, after.SnapshotSequenceNr);
+        Assert.Equal(2, after.Events.OfType<ToolBatchStarted>().Count());
+        var results = after.Events.OfType<ToolCallRecorded>().ToArray();
+        Assert.Equal(3, results.Length);
+        var correction = Assert.Single(results, result => result.LoopObservation!.Synthetic);
+        Assert.Equal("call-4", correction.ToolResult.ToolCallId!.Value.Value);
+        Assert.Equal(ToolCycleMessages.Correction
+            + "\nNext action: choose a different action, load a missing tool, or finish the task.", correction.ToolResult.Content);
+        Assert.Equal(ToolCycleMessages.Final, Assert.Single(after.Events.OfType<TurnRecorded>()).AssistantReply.Content);
+    }
+
+    private Task<JournalEvidence> ReadJournalAsync(SessionId session) => ReadJournalAsync(session, Recovery.Default);
+
+    private async Task<JournalEvidence> ReadJournalAsync(SessionId session, Recovery recovery)
     {
         var completed = new TaskCompletionSource<JournalEvidence>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var reader = Sys.ActorOf(Props.Create(() => new EvidenceReader($"session-{session.Value}", completed)));
+        var reader = Sys.ActorOf(Props.Create(() => new EvidenceReader($"session-{session.Value}", completed, recovery)));
         var evidence = await completed.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
         var watcher = CreateTestProbe();
         watcher.Watch(reader);
@@ -553,19 +745,26 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
         }
     };
 
-    private sealed record JournalEvidence(ISessionEvent[] Events, SessionSnapshot? Snapshot);
+    private sealed record JournalEvidence(ISessionEvent[] Events, SessionSnapshot? Snapshot, long SnapshotSequenceNr, long LastSequenceNr);
     private sealed class EvidenceReader : ReceivePersistentActor
     {
-        public EvidenceReader(string id, TaskCompletionSource<JournalEvidence> completed)
+        public EvidenceReader(string id, TaskCompletionSource<JournalEvidence> completed, Recovery recovery)
         {
             PersistenceId = id;
+            Recovery = recovery;
+            long snapshotSequence = 0;
             var events = new List<ISessionEvent>();
             SessionSnapshot? snapshot = null;
-            Recover<SnapshotOffer>(offer => snapshot = Assert.IsType<SessionSnapshot>(offer.Snapshot));
+            Recover<SnapshotOffer>(offer =>
+            {
+                snapshot = Assert.IsType<SessionSnapshot>(offer.Snapshot);
+                snapshotSequence = offer.Metadata.SequenceNr;
+            });
             Recover<ISessionEvent>(events.Add);
-            Recover<RecoveryCompleted>(_ => completed.TrySetResult(new JournalEvidence(events.ToArray(), snapshot)));
+            Recover<RecoveryCompleted>(_ => completed.TrySetResult(new JournalEvidence(events.ToArray(), snapshot, snapshotSequence, LastSequenceNr)));
         }
         public override string PersistenceId { get; }
+        public override Recovery Recovery { get; }
     }
     private sealed class ReceiptExecutor : IToolExecutor
     {
@@ -573,13 +772,14 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
         public int Count => Volatile.Read(ref _count);
         public List<string?> Requesters { get; } = [];
         public List<string> CallIds { get; } = [];
+        public Dictionary<string, string> ResultByCall { get; } = [];
         public Task<string> ExecuteAsync(FunctionCallContent call, ToolExecutionContext context, CancellationToken ct = default)
         {
             Interlocked.Increment(ref _count);
             CallIds.Add(call.CallId);
             Requesters.Add(context.RunScope.DefaultDeliveryTarget?.DestinationId);
             context.Outputs.TryComplete(new ToolInvocationReceipt.Succeeded([], null));
-            return Task.FromResult("same");
+            return Task.FromResult(ResultByCall.GetValueOrDefault(call.CallId, "same"));
         }
     }
     private sealed class RoleProvider(IChatClient main, IChatClient compaction) : IChatClientProvider
@@ -608,7 +808,8 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
     {
         private int _count;
         public int Count => Volatile.Read(ref _count);
-        public bool CompactOnCorrection { get; set; }
+        public int CompactionRequestNumber { get; set; }
+        public Dictionary<int, FunctionCallContent[]> CallsByRequest { get; } = [];
         public int HoldRequestNumber { get; set; }
         public TaskCompletionSource RequestEntered { get; } = NewSignal();
         public TaskCompletionSource ReleaseRequest { get; } = NewSignal();
@@ -624,9 +825,9 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
                 RequestEntered.TrySetResult();
                 await ReleaseRequest.Task.WaitAsync(cancellationToken);
             }
-            return new ChatResponse(new ChatMessage(ChatRole.Assistant, [Call($"call-{count}")]))
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, CallsByRequest.TryGetValue(count, out var calls) ? calls : [Call($"call-{count}")]))
             {
-                Usage = new UsageDetails { InputTokenCount = count == 3 && CompactOnCorrection ? 800 : 100, OutputTokenCount = 10 }
+                Usage = new UsageDetails { InputTokenCount = count == CompactionRequestNumber ? 800 : 100, OutputTokenCount = 10 }
             };
         }
     }
@@ -638,7 +839,7 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
             CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _count);
-            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "The original task remains active. Two equal calls completed.")));
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "The original task remains active.")));
         }
     }
     async ValueTask IAsyncDisposable.DisposeAsync()
