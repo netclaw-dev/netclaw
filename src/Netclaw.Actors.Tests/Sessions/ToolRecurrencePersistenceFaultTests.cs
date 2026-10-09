@@ -1003,6 +1003,110 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
         Assert.Empty(after.Events.OfType<ToolBatchAbandoned>());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_unknown_outcome_reaches_the_model_before_an_optional_authorized_retry(bool retry)
+    {
+        var session = new SessionId($"signalr/unknown-outcome-{retry}");
+        _main.CallsByRequest[1] =
+        [
+            new FunctionCallContent("committed-sibling", "diagnostic_probe", new Dictionary<string, object?>()),
+            RepeatedClient.Call("unknown-call")
+        ];
+        _main.HoldRequestNumber = 2;
+        _main.FinalRequestNumber = retry ? 3 : 2;
+        _main.CallsByRequest[2] = [RepeatedClient.Call("model-chosen-retry")];
+        _executor.ResultByCall["committed-sibling"] = "confirmed diagnostic";
+        _executor.ResultByCall["unknown-call"] = "uncommitted actual result";
+        var reached = NewSignal();
+        await Journal.OnWrite.FailIf(representation =>
+        {
+            if (representation.Payload is not ToolCallRecorded { ToolResult.ToolCallId: { } id }
+                || id.Value != "unknown-call") return false;
+            reached.TrySetResult();
+            return true;
+        });
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        var owner = await OwnerAsync(session);
+        var watcher = CreateTestProbe();
+        watcher.Watch(owner);
+        await EventFilter.Error(contains: "Failed to persist event type").ExpectOneAsync(async () =>
+        {
+            await StartAsync(manager, session);
+            await reached.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+            await watcher.ExpectTerminatedAsync(owner, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(2, _executor.Count);
+        Assert.Equal(new[] { "committed-sibling", "unknown-call" }, _executor.CallIds);
+        Assert.Equal(1, _main.Count);
+        var before = await ReadJournalAsync(session);
+        var sibling = Assert.Single(before.Events.OfType<ToolCallRecorded>());
+        Assert.Equal("committed-sibling", sibling.ToolResult.ToolCallId!.Value.Value);
+        Assert.Equal("confirmed diagnostic", sibling.ToolResult.Content);
+        Assert.False(sibling.LoopObservation!.Synthetic);
+        Assert.False(sibling.LoopObservation.MissingReceipt);
+        Assert.Equal((int)ToolInvocationOutcomeCategory.Success, sibling.LoopObservation.Category);
+        Assert.Empty(before.Events.OfType<TurnRecorded>());
+        var admitted = Assert.Single(before.Events.OfType<ToolBatchStarted>());
+        Assert.Equal(new[] { "committed-sibling", "unknown-call" }, admitted.LoopAdmission!.Calls.Select(call => call.CallId));
+
+        await Journal.OnWrite.Pass();
+        subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        await manager.Ask<CommandAck>(Restart(session), FaultCeiling, TestContext.Current.CancellationToken);
+        await _main.RequestEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.Equal(2, _main.Count);
+            Assert.Equal(2, _executor.Count);
+            var resumed = _main.Requests[1];
+            var calls = resumed.SelectMany(message => message.Contents.OfType<FunctionCallContent>()).ToArray();
+            var results = resumed.SelectMany(message => message.Contents.OfType<FunctionResultContent>()).ToArray();
+            Assert.Equal(new[] { "committed-sibling", "unknown-call" }, calls.Select(call => call.CallId));
+            Assert.Equal(calls.Select(call => call.CallId).Order(), results.Select(result => result.CallId).Order());
+            Assert.Equal(sibling.ToolResult.Content, Assert.Single(results, result => result.CallId == "committed-sibling").Result);
+            Assert.Equal("Tool call was not completed — the session restarted before the action completed.",
+                Assert.Single(results, result => result.CallId == "unknown-call").Result);
+            Assert.DoesNotContain(results, result => Equals(result.Result, "uncommitted actual result"));
+            var recovered = await ReadJournalAsync(session);
+            Assert.Equal(sibling, Assert.Single(recovered.Events.OfType<ToolCallRecorded>()));
+            var closure = Assert.Single(Assert.Single(recovered.Events.OfType<ToolBatchAbandoned>()).ToolResults);
+            Assert.Equal("unknown-call", closure.ToolCallId!.Value.Value);
+            Assert.Empty(recovered.Events.OfType<ToolApprovalRequested>());
+        }
+        finally
+        {
+            _main.ReleaseRequest.TrySetResult();
+        }
+        await CompletedAsync(subscriber);
+        Assert.Equal(retry ? 3 : 2, _executor.Count);
+        Assert.Equal(retry ? new[] { "committed-sibling", "unknown-call", "model-chosen-retry" }
+            : new[] { "committed-sibling", "unknown-call" }, _executor.CallIds);
+        Assert.Equal(retry ? 3 : 2, _main.Count);
+        Assert.All(_executor.Requesters, requester => Assert.Equal("operator-a", requester));
+        var after = await ReadJournalAsync(session);
+        Assert.Equal(sibling, Assert.Single(after.Events.OfType<ToolCallRecorded>(), result => result.ToolResult.ToolCallId!.Value.Value == "committed-sibling"));
+        Assert.DoesNotContain(after.Events.OfType<ToolCallRecorded>(), result => result.ToolResult.ToolCallId!.Value.Value == "unknown-call");
+        Assert.Equal(retry ? 2 : 1, after.Events.OfType<ToolCallRecorded>().Count());
+        if (retry)
+        {
+            var actual = Assert.Single(after.Events.OfType<ToolCallRecorded>(), result => result.ToolResult.ToolCallId!.Value.Value == "model-chosen-retry");
+            Assert.False(actual.LoopObservation!.Synthetic);
+            Assert.False(actual.LoopObservation.MissingReceipt);
+            Assert.Equal((int)ToolInvocationOutcomeCategory.Success, actual.LoopObservation.Category);
+            Assert.Equal("same", actual.ToolResult.Content);
+            Assert.Equal(actual.ToolResult.Content, Assert.Single(
+                _main.Requests[2].SelectMany(message => message.Contents.OfType<FunctionResultContent>()),
+                result => result.CallId == "model-chosen-retry").Result);
+        }
+        Assert.Equal(RepeatedClient.FinalReply, Assert.Single(after.Events.OfType<TurnRecorded>()).AssistantReply.Content);
+        Assert.Empty(after.Events.OfType<ToolApprovalRequested>());
+        Assert.Equal("original", Assert.Single(after.Events.OfType<ToolTaskAdopted>()).TurnContext.TurnId);
+    }
+
     private Task<JournalEvidence> ReadJournalAsync(SessionId session) => ReadJournalAsync(session, Recovery.Default);
 
     private async Task<JournalEvidence> ReadJournalAsync(SessionId session, Recovery recovery)
@@ -1110,6 +1214,8 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
     {
         private int _count;
         public int Count => Volatile.Read(ref _count);
+        public const string FinalReply = "I retain the recorded outcome and finish the task.";
+        public int FinalRequestNumber { get; set; }
         public int CompactionRequestNumber { get; set; }
         public Dictionary<int, FunctionCallContent[]> CallsByRequest { get; } = [];
         public int HoldRequestNumber { get; set; }
@@ -1127,6 +1233,8 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
                 RequestEntered.TrySetResult();
                 await ReleaseRequest.Task.WaitAsync(cancellationToken);
             }
+            if (count == FinalRequestNumber)
+                return new ChatResponse(new ChatMessage(ChatRole.Assistant, FinalReply));
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, CallsByRequest.TryGetValue(count, out var calls) ? calls : [Call($"call-{count}")]))
             {
                 Usage = new UsageDetails { InputTokenCount = count == CompactionRequestNumber ? 800 : 100, OutputTokenCount = 10 }
