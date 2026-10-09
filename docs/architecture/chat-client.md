@@ -104,6 +104,7 @@ The view-model applies page state before it publishes the same output to the tra
 The page reads that state and changes terminal nodes on the Termina loop.
 Escape, resize, usage, and turn completion no longer write view-model state from the page.
 Usage-log files remain view-model resources. A separate follow-up can extract their lifetime without changing the actor protocol.
+One view-model lock serializes resource disposal with callbacks. The existing Termina disposal flag rejects late callbacks.
 
 Stable `IWithTimers` keys own retry, RPC, and close deadlines.
 The two-second close limit covers all prior requests once.

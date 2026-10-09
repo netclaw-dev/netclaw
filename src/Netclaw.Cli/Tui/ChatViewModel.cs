@@ -41,6 +41,7 @@ public partial class ChatViewModel : ReactiveViewModel
 
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Queue<ToolInteractionRequest> _pendingInteractions = new();
+    private readonly Lock _lifetimeGate = new();
 
     /// <summary>
     /// True while an interaction response is in flight to the daemon. Guards
@@ -123,13 +124,14 @@ public partial class ChatViewModel : ReactiveViewModel
         _daemonOutputSubscription?.Dispose();
         _daemonConnectionSubscription?.Dispose();
         _daemonOutputSubscription = _daemonClient.SessionOutput.Subscribe(output =>
-            _ = InvokeAsync(() => ProcessOutput(output)));
+            _ = ApplyAsync(() => ProcessOutput(output)));
         _daemonConnectionSubscription = _daemonClient.ConnectionEvents.Subscribe(connection =>
-            _ = InvokeAsync(() =>
+            _ = ApplyAsync(() =>
             {
                 if (connection.SessionId is { } sessionId)
                 {
                     SessionIdDisplay.Value = sessionId;
+                    if (Subscriptions.IsDisposed) return;
                     OpenUsageLogIfNeeded(sessionId);
                 }
                 StatusMessage.Value = connection.State == DaemonConnectionState.Connected
@@ -169,7 +171,7 @@ public partial class ChatViewModel : ReactiveViewModel
         try { await request(); }
         catch (Exception error)
         {
-            await InvokeAsync(() =>
+            await ApplyAsync(() =>
             {
                 IsGenerating.Value = false;
                 StatusMessage.Value = error.Message;
@@ -191,11 +193,11 @@ public partial class ChatViewModel : ReactiveViewModel
         try
         {
             var receipt = await _daemonClient.CloseAsync();
-            await InvokeAsync(() => { _navigationState.CloseReceipt = receipt; StatusMessage.Value = receipt.Notice; Shutdown(); });
+            await ApplyAsync(() => { _navigationState.CloseReceipt = receipt; StatusMessage.Value = receipt.Notice; Shutdown(); });
         }
         catch (Exception error)
         {
-            await InvokeAsync(() => { StatusMessage.Value = error.Message; Shutdown(); });
+            await ApplyAsync(() => { StatusMessage.Value = error.Message; Shutdown(); });
         }
     }
 
@@ -378,21 +380,34 @@ public partial class ChatViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
-        _daemonOutputSubscription?.Dispose();
-        _daemonConnectionSubscription?.Dispose();
-        _outputSubject.Dispose();
-        _usageLog?.Dispose();
-        _usageLog = null;
+        lock (_lifetimeGate)
+        {
+            if (Subscriptions.IsDisposed) return;
+            base.Dispose();
+            _daemonOutputSubscription?.Dispose();
+            _daemonConnectionSubscription?.Dispose();
+            _outputSubject.Dispose();
+            _usageLog?.Dispose();
+            _usageLog = null;
 
-        IsGenerating.Dispose();
-        IsInputEnabled.Dispose();
-        StatusMessage.Dispose();
-        SessionIdDisplay.Dispose();
-        UsageDisplay.Dispose();
-        UiVersion.Dispose();
-        IsApprovalDetailVisible.Dispose();
-        base.Dispose();
+            IsGenerating.Dispose();
+            IsInputEnabled.Dispose();
+            StatusMessage.Dispose();
+            SessionIdDisplay.Dispose();
+            UsageDisplay.Dispose();
+            UiVersion.Dispose();
+            IsApprovalDetailVisible.Dispose();
+        }
     }
+
+    private Task ApplyAsync(Action action) => InvokeAsync(() =>
+    {
+        // Unbound callbacks run inline. Disposal must wait for their resource access.
+        lock (_lifetimeGate)
+        {
+            if (!Subscriptions.IsDisposed) action();
+        }
+    });
 
     private void ProcessOutput(SessionOutput output)
     {
@@ -449,7 +464,7 @@ public partial class ChatViewModel : ReactiveViewModel
         try
         {
             await _daemonClient.RespondToInteractionAsync(pending.CallId.Value, selectedKey);
-            await InvokeAsync(() =>
+            await ApplyAsync(() =>
             {
                 // Turn completion can clear the prompt before the RPC response arrives.
                 if (CurrentInteraction != pending) return;
@@ -462,14 +477,14 @@ public partial class ChatViewModel : ReactiveViewModel
         }
         catch (Exception error)
         {
-            await InvokeAsync(() =>
+            await ApplyAsync(() =>
             {
                 IsGenerating.Value = false;
                 StatusMessage.Value = $"Approval response failed: {error.Message}";
                 RequestRedraw();
             });
         }
-        finally { await InvokeAsync(() => _isSubmittingInteraction = false); }
+        finally { await ApplyAsync(() => _isSubmittingInteraction = false); }
     }
 
     private void RefreshApprovalOptions()

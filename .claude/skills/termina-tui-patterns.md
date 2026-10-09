@@ -218,6 +218,8 @@ Only the view-model writes chat page state. The page owns keys, focus, scroll, a
 See [the chat architecture](../../docs/architecture/chat-client.md) for the complete flow and lifetime rules.
 
 Unbound view-model tests apply `InvokeAsync` actions inline.
+`ChatViewModel.ApplyAsync` serializes these callbacks with resource disposal through one lock.
+The existing Termina disposal flag rejects late callbacks. No lock spans an await.
 `ChatAdmissionTests` uses a bound Termina host to check ordered output and state before transcript publication.
 Native smoke tapes verify the binary and terminal boundary.
 

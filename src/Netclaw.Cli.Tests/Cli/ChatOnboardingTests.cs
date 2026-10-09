@@ -147,6 +147,20 @@ public sealed class ChatOnboardingTests : IDisposable
     }
 
     [Fact]
+    public async Task Dispose_during_session_notification_does_not_reopen_the_usage_log()
+    {
+        await using var client = new DaemonClient("http://localhost", new FakeDaemonHubTransport(), reconnectDelays: [TimeSpan.Zero]);
+        using var chat = new ChatViewModel(client, TimeProvider.System, new ModelCapabilities { ModelId = "test" }, new ChatNavigationState(), _paths);
+        using var subscription = chat.SessionIdDisplay.Where(id => id is not null).Take(1).Subscribe(_ => chat.Dispose());
+        chat.OnActivated();
+        await client.SendAsync("trigger", TestContext.Current.CancellationToken);
+        await client.DisposeAsync();
+
+        Assert.True(chat.SessionIdDisplay.IsDisposed);
+        Assert.Empty(Directory.EnumerateFiles(_paths.LogsDirectory, "signalr-*.log"));
+    }
+
+    [Fact]
     public void DaemonUnavailableHint_points_an_onboarding_chat_at_the_flag()
     {
         var navigation = new ChatNavigationState();
