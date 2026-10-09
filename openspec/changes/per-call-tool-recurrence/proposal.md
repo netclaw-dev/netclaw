@@ -49,7 +49,10 @@ Normal ACL, path, approval prompt, and tool timeout gates still apply to admitte
 Detector feedback grants no authority and claims no successful execution.
 Diagnostics contain decisions, counts, and evidence-gap categories. They contain no private payload or digest.
 Private session persistence can retain detector digests; published artifacts cannot contain private replay data.
-Activation follows the proof gates. Rollback restores the previous binary and schema, without a daemon deployment in this task.
+Activation follows the proof gates. This task does not deploy the daemon.
+New `tta-v1` records require a compatible reader or a recorded pre-upgrade backup before a rollback to the prior binary.
+Backup restoration loses journal state after the backup and cannot undo external effects.
+The change does not claim an executed rollback procedure.
 
 ### Prior change reconciliation
 

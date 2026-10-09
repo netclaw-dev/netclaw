@@ -28,6 +28,9 @@ Contents:
 `InputAdmitted` stores the canonical `TurnContext` before the input acknowledgment.
 Admission does not change the active task or its tool approval authority.
 `LlmSessionActor` completes the old tool batch before it adopts fresh buffered input.
+After context overflow, an internal replay continues the original task before later real input.
+The actor retains the original active input IDs, authority, and recurrence evidence.
+It adopts the next real input prefix after the old tool batch or terminal response completes.
 The actor selects the next compatible prefix of admitted inputs.
 The actor retains later inputs in arrival order for a separate task.
 The actor commits `ToolTaskAdopted` before the next model request.

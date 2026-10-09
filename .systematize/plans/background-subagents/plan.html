@@ -722,7 +722,7 @@ After:
 <p>A late result or stale approval can also act under the wrong turn. Durable admission and original requester checks must prevent that.</p>
 <p>Finalization can hang or write a misleading report. Bound its duration and output scope; preserve cancelled status and unconfirmed effects.</p>
 <p><strong>Required evidence:</strong> G1–G5 and G8, plus the existing replay and shadow gates. Reject erased supervision evidence and terminal paths that need another model response.</p>
-<p><strong>Remaining uncertainty:</strong> Broader loop policy, review failure, provider capacity, task continuity, and activation remain open.</p>
+<p><strong>Remaining uncertainty:</strong> Broader semantic-loop policy, review failure, and provider capacity remain open. The accepted contracts define task continuity and activation.</p>
 <p>Exact protection can miss semantic loops. Capacity limits do not bound total cost across unlimited continuations. This safety case is not verified.</p>
 
 <h3>Deferred PR: private messages, peer discovery, and steering</h3>
@@ -892,23 +892,23 @@ Skip delegation when its cost exceeds the useful work.</pre>
 <p>Each variant must compile and execute the intended test. A setup error, missing test, or compiler failure does not detect the fault.</p>
 <p>Require each targeted fault to fail a behavior assertion. Review relevant Stryker targets under TOOLING.md's scope and CI cost limits.</p>
 <p>Do not run broad mutation analysis merely to raise a score. Add a narrow security target only when the deterministic test rejects its unsafe mutation.</p>
-<h4>Specification readiness: first contract frozen; background contract in review</h4>
-<p><strong>Current status:</strong> The first OpenSpec contract is frozen. The background contract remains in preparation. Each dependent PR requires its own contract review.</p>
+<h4>Specification readiness: contracts recorded; capacity decision pending</h4>
+<p><strong>Current status:</strong> The first OpenSpec contract is frozen. The background lifecycle package passes strict validation. Its runtime work awaits the provider-capacity decision.</p>
 <p><strong>Resolved first-PR choices:</strong> The frozen OpenSpec package specifies thresholds, round accounting, identities, duplicate outcomes, repeat precedence, invalidation, retention, and final receipt failure.</p>
 <p>Distinct outcome tuples define the episode. Duplicate multiplicity remains separate correlation evidence and cannot reset recurrence.</p>
 <p>The trusted repeat exception precedes both exact guards. The test agent checks accepted, denied, malformed, terminal, and cancellation variants.</p>
-<p>Current tests clear a blocked episode after another action completes. The proposed contract changes that rule; preserve valid repair through paired controls.</p>
-<p>Missing receipts currently leave an explicit evidence gap. Define the runtime outcome before removing the hard budgets; do not infer successful work.</p>
-<p><strong>Background blockers:</strong> Specify acceptance correlation, cancellation versus completion precedence, delivery acknowledgement, retry behavior, grace expiry, and cancelled-result compatibility.</p>
-<p>Also specify persistence failures, acknowledgement failures, and the child dispatch-stop acknowledgement. Keep restart loss distinct from durable child resumption.
-</p><p>Specify completion triggers, provider capacity claims, and upgrade/activation behavior before the dependent code starts.</p>
+<p>The baseline cleared a blocked episode after another action. The detector draft retains it; independent paired controls verify valid repair.</p>
+<p>The detector draft settles missing receipts with explicit partial evidence. Independent negative controls reject inferred success.</p>
+<p><strong>Background contracts:</strong> The lifecycle package specifies acceptance correlation, terminal precedence, delivery acknowledgement, retries, grace expiry, and cancellation compatibility.</p>
+<p>The package also specifies persistence failures, acknowledgement failures, and child dispatch closure. Restart reports loss; it does not resume the child.
+</p><p>Completion triggers and upgrade behavior use the accepted contracts. Resolve provider capacity before dependent runtime code.</p>
 <p>For each dependent PR, add exact inputs, expected verdicts, allowed transitions, forbidden transitions, and durable commit points through OpenSpec skills.</p>
 <p>Resolve contract disagreement before code starts. Later-PR choices do not block independent preparation of first-PR fixtures.</p>
 <p><strong>Model eval boundary:</strong> Deterministic tests prove runtime invariants. Targeted evals at the authorized host assess model behavior and task success separately.</p>
-<p><strong>Independent readiness review:</strong> A separate agent confirmed these contract gaps and checked existing detector, child, and approval prompt test fixtures.</p>
+<p><strong>Independent readiness review:</strong> A separate agent identified the original gaps. The contract packages now address them; provider capacity remains a human decision.</p>
 <p>Reuse <code>TurnStateTrackerTests</code>, <code>ToolCycleValidationTests</code>, and <code>ToolCycleUserInputTests</code> for detector rules and explicit provider barriers.</p>
 <p>Reuse <code>SubAgentActorTests</code>, <code>SubAgentSpawnIntegrationTests</code>, and <code>ParentSessionApprovalBridgeTests</code> for dispatch, recovery, and late-answer controls.</p>
-<p>No product tests or mutation checks ran during this plan update. The separate readiness review does not establish a runtime pass.</p>
+<p>The readiness review alone proves no runtime behavior. Current executed test and mutation receipts appear in the handoff status.</p>
 <h3 id="g1">G1. Parent reply before child completion</h3>
 <p><strong>Setup:</strong> Extend <code>SubAgentSpawnIntegrationTests</code>. Use the real session manager, a subscriber probe, and a child fake with an explicit release barrier.</p>
 <p><strong>Action:</strong> Send a spawn request; observe run acceptance; hold the child; send a user status request.</p>
@@ -1168,21 +1168,24 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>The integrated candidate also passed all four cases without skips. This proof excludes database import, live compaction, downgrade, and rollback.</p>
 <p><strong>Frozen first PR:</strong> Per-call identity, distinct outcome sets, two-round correction threshold, stop precedence, trusted pending-job exception, retention, and durable recovery.</p>
 <p><strong>Integrated test receipt:</strong> The first combined run executed 157 tests. It passed 155 and failed two. It skipped none.</p>
-<p>The independent v22 run passed all 67 cases without skips. Three legacy fixture identifiers then received canonical values.</p>
-<p>Those three legacy cases passed again. The other 64 cases retain their unchanged v22 proof. The current mutation gate also passed.</p>
+<p>The final independent candidate passed all 84 targeted cases without failures or skips. These include replay authority and input-order regressions.</p>
+<p>The full actor run passed 5,796 cases, failed one fixture, and recorded 40 existing skips. The repaired fixture class then passed seven cases.</p>
+<p>The unaffected full-suite results remain applicable. No complete full-suite rerun followed that fixture correction.</p>
 <p>The million-sequence and 10,000-checkpoint deterministic checks passed. They do not replace independent productive holdout turns or model evals.</p>
-<p><strong>Pending first-PR proof:</strong> Private replay, holdout, targeted model evals, and required hosted CI.</p>
+<p><strong>Pending first-PR proof:</strong> Twelve task gates remain open. These include laboratory, replay, shadow, holdout, exhaustive crash cuts, persistence failures, late replies, and rollback.</p>
+<p>Targeted model evals, coverage review, final contract reconciliation, and required hosted CI also remain open.</p>
 <p>Cancellation grace belongs to the background PR. Resolve each dependent contract before its production edits.</p>
-<p><strong>Mutation receipt:</strong> The current independent gate selected 12 tests and killed four expected mutants in 3m05s. Its exit code was zero.</p>
+<p><strong>Mutation receipt:</strong> The current independent gate selected 12 tests and killed four expected mutants in 2m18s. Its exit code was zero.</p>
 <p>Earlier gates failed on discovery expectations. The corrected gate checks exact target names and rejects expected errors, survivors, timeouts, or absent targets.</p>
 <p>The gate excludes one invalid non-target Count-to-Sum compiler mutation. CI uses the existing lightest matrix group.</p>
 <p>Independent fault probes reject a survivor, timeout, target compiler error, absent target, and extra executable mutant.</p>
 <p>Separate counterfactual runs reject sibling evidence erasure, missing receipt acceptance, and parent or child dispatch after Stop.</p>
 <p>The dispatch fault reached real effects in both actors. The restored 12-case control passed without skips.</p>
-<p><strong>Not run:</strong> Targeted model evals, release checks, or a live daemon experiment. Hosted CI found nine actor-test failures in draft PR #2420. Independent classification and repairs remain active.</p>
+<p><strong>Hosted failure disposition:</strong> Nine failures exposed one replay defect and eight fixture or assertion defects. The final local repair passes the independent gates.</p>
+<p>CI for the published repair remains a separate gate. Targeted model evals, release checks, and a live daemon experiment remain unrun.</p>
 <p><strong>Background contract:</strong> Strict OpenSpec validation passes for the lifecycle package. Runtime work awaits the capacity decision and integrated first-PR acceptance.</p>
 <p><strong>Third-PR preparation:</strong> The contract and seven skill files exist. Identity, profile loader, bundle, native seed, and 13 instrumentation checks pass locally.</p>
-<p>The native file oracle rejected an absent worker and a changed specialist. Combined-stack tests and real-model discovery evals remain unpassed.</p>
+<p>The native file oracle rejected an absent worker and a changed specialist. The prior combined local tests pass. The final repair requires a new combined asset check. Real-model discovery evals remain unpassed.</p>
 <p><strong>Background baseline:</strong> The held-child actor contract failed on the foreground baseline. The released-child control passed; neither test skipped.</p>
 <p><strong>Provider capacity question:</strong> Choose verified spare or separate model capacity, or add runtime preemption for single-slot providers. The owner response remains pending.</p>
 <p>The held-child real-model response gate remains unpassed. Actor responsiveness alone does not prove provider capacity. Tailscale Serve exposes only this plan file.</p>

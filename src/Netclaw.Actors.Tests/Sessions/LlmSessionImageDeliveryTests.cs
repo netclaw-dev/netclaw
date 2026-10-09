@@ -157,7 +157,9 @@ public class LlmSessionImageDeliveryTests : LlmSessionTestBase
             Netclaw.Tools.ToolExecutionContext? context = null,
             CancellationToken ct = default)
         {
-            context?.AddModelInputFile(imagePath, "diagram.png", "image/png");
+            ArgumentNullException.ThrowIfNull(context);
+            context.AddModelInputFile(imagePath, "diagram.png", "image/png");
+            context.Outputs.TryComplete(new Netclaw.Tools.ToolInvocationReceipt.Succeeded([], null));
             return Task.FromResult("Image loaded for model-visible inspection on the next LLM call.");
         }
     }

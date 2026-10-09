@@ -526,7 +526,7 @@ public sealed record SessionState
 
     /// <summary>
     /// Add a transient system nudge to the END of history to correct LLM
-    /// behavior mid-turn (empty-response retry, duplicate-tool, budget warning,
+    /// behavior mid-turn (empty-response retry, exact tool recurrence,
     /// delivery retry). These are course-correcting instructions: the model is
     /// meant to act on them, so they sit at the tail where the chat template
     /// treats them as the most recent input. Not persisted as a turn — just

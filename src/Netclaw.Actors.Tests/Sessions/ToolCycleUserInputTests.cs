@@ -161,11 +161,16 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         }
         _client.Inner.PlannedToolCallDecisions.Enqueue(true);
         if (newUserInput)
+        {
+            _client.Inner.PlannedToolCallDecisions.Enqueue(true);
             _client.Inner.PlannedToolCallDecisions.Enqueue(false);
+        }
         _client.ResumeCall.TrySetResult();
         await subscriber.FishForMessageAsync<object>(message => message is CompactionOutput,
             TimeSpan.FromSeconds(10), cancellationToken: ct);
         await ExpectTurnCompletedAsync(subscriber);
+        if (newUserInput)
+            await ExpectTurnCompletedAsync(subscriber);
 
         Assert.Equal(newUserInput ? 3 : 2, _executor.Count);
         if (newUserInput)

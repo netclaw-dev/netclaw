@@ -241,16 +241,16 @@ fix and re-issue once, do not retry the same shape:
 - **Ambiguous meta spelling** — supplying two keys that map to the same meta
   field (e.g. both `_timeout_seconds` and `TimeoutSeconds`) rejects; send one.
 
-A repeated action-and-outcome correction means that no requested call ran.
+An exact recurrence correction refuses the named call. Other eligible calls can proceed.
 Choose a different action or finish the task from the available evidence.
-Do not repeat the blocked batch.
-Netclaw disables tools for the turn if the same blocked batch appears again.
+Do not repeat the prohibited call.
+A repeated prohibited call ends the task with a framework partial result.
 Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
-A valid metadata repair is not the same rejected action. A new user message
-starts a fresh cycle window; compaction alone does not.
+A valid metadata repair is not the same rejected action.
+Fresh authorized task adoption starts new detector state. Compaction and internal replay preserve the current state.
 If a text-only response contains tool calls, Netclaw rejects those calls and reports a provider failure.
-This failure does not prove that the turn exhausted its tool budget.
+Netclaw uses no static parent or child tool-call budget.
 
 ## Large tool output
 

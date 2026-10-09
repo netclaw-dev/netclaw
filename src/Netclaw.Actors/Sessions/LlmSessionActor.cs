@@ -117,7 +117,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Self.Tell once compaction finishes and the phase transition has run.
     private IWithSessionId? _deferredApprovalResponse;
 
-    // Per-turn transient counters (tool budget, duplicate detection, empty-response retries)
+    // Exact recurrence evidence and per-turn counters for tool activity and empty-response retries.
     private readonly TurnStateTracker _turnState = new();
 
     private const string TextOnlyResponseViolationMessage =
@@ -2290,6 +2290,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void DrainBufferedUserMessages(Action continuation, Action afterRejectedInputs)
     {
+        // Internal replay retains the original task; later real inputs require their own durable adoption.
+        if (_buffer.Count > 0 && _buffer[0].IsReplay)
+        {
+            DrainAdoptedUserMessages(_buffer.TakeWhile(static buffered => buffered.IsReplay).Count(), continuation);
+            return;
+        }
         var prefixLength = 0;
         InputAdmitted? latest = null;
         TurnContext? prefixContext = null;
