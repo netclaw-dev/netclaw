@@ -162,6 +162,13 @@ Read the observer warning and the compaction error in the session log.
 Check provider health and response latency before you change the compaction configuration.
 Do not treat that error as a successful summary or assume that an external tool effect failed.
 
+### Compaction summary constraints
+
+An accepted summary can omit a task constraint even when compaction completes.
+Compare the original response requirements with the summary and the next model request.
+Check each required field's definition, conditions, and exceptions.
+The field name alone does not prove that its definition survives.
+
 ## Feature Kill Switches
 
 
