@@ -160,6 +160,8 @@ The model resumes with the original task and its recorded tool results.
 
 Read the observer warning and the compaction error in the session log.
 Check provider health and response latency before you change the compaction configuration.
+The observer uses the existing provider intent to suppress extra model analysis.
+Check whether the configured provider emits and honors that option. The intent does not extend the sidecar deadline.
 Do not treat that error as a successful summary or assume that an external tool effect failed.
 
 ### Compaction summary constraints

@@ -170,6 +170,8 @@ It does not commit `SessionCompacted` or create a compaction snapshot for that f
 A valid summary permits a zero-message retention window.
 A nonempty extractive window remains valid when the observer fails.
 The observer prompt directs the model to preserve the current response format and each field's definition, conditions, and exceptions.
+The observer call uses the existing provider intent to suppress extra model analysis.
+The provider adapter selects the supported wire representation. The sidecar timeout and task budgets do not change.
 
 During compaction, tool call/result pairs must remain atomic. Never orphan
 a tool call from its result. Tool interactions older than the retention window

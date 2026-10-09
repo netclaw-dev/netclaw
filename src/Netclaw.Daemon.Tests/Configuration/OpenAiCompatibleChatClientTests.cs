@@ -8,6 +8,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
+using Netclaw.Configuration;
+using Netclaw.Daemon.Configuration;
+using Netclaw.Providers;
 using Netclaw.Providers.SelfHosted;
 using Xunit;
 
@@ -125,6 +128,66 @@ data: [DONE]
         Assert.NotNull(body);
         Assert.DoesNotContain("SessionId", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("C123/167.42", body, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task StreamingSuppressionIntent_ReachesActualHttpPayload_WithoutInternalContext(bool? intent)
+    {
+        const string sessionId = "wire-control-session";
+        const string sse = """
+data: {"id":"summary","choices":[{"index":0,"delta":{"role":"assistant","content":"summary."}}]}
+
+data: {"id":"summary","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+""";
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var rawClient = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+        using var client = new ReasoningSuppressionChatClient(rawClient, ReasoningSuppressionDialect.ChatTemplateKwargs);
+        var options = new Netclaw.Actors.Sessions.SessionScopedChatOptions { SessionId = sessionId };
+        if (intent is not null)
+        {
+            options.AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                [NetclawChatOptionKeys.SuppressReasoning] = intent.Value
+            };
+        }
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "Summarize the task.")], options,
+            cancellationToken: TestContext.Current.CancellationToken))
+        {
+            updates.Add(update);
+        }
+
+        Assert.Contains(updates, update => update.Contents.OfType<TextContent>().Any(text => text.Text == "summary."));
+        Assert.Contains(updates, update => update.FinishReason == ChatFinishReason.Stop);
+        var body = Assert.Single(handler.RequestBodies);
+        Assert.DoesNotContain(NetclawChatOptionKeys.SuppressReasoning, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("SessionId", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(sessionId, body, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(body);
+        var payload = document.RootElement;
+        Assert.True(payload.GetProperty("stream").GetBoolean());
+        Assert.True(payload.GetProperty("stream_options").GetProperty("include_usage").GetBoolean());
+        if (intent is true)
+        {
+            Assert.False(payload.GetProperty("chat_template_kwargs").GetProperty("enable_thinking").GetBoolean());
+        }
+        else
+        {
+            Assert.False(payload.TryGetProperty("chat_template_kwargs", out _));
+        }
     }
 
     [Fact]
