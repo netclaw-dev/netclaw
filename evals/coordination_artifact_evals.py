@@ -286,7 +286,7 @@ def verify(contract, observer_receipt, events, eval_home, fixture_root):
             require(len(matches) == 1, "delivery: successful receipt lacks exactly one matching File output")
             checks["headless_file_delivery"] = True
         return report(checks)
-    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError) as error:
+    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError, AssertionError) as error:
         return report(checks, error)
 
 
