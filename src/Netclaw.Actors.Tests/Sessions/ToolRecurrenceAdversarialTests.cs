@@ -374,10 +374,10 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         }
 
         var captured = CapturedReply(replyKind);
-        // The original sender orders the exact old envelope before the actor acknowledgement.
+        // The local FIFO mailbox orders the old envelope before the subscriber acknowledgement.
         owner.Tell(captured.Message, captured.Sender);
         owner.Tell(new JoinSession(subscriber)
-        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, captured.Sender);
+        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, subscriber.Ref);
         var observed = new List<object>();
         var barrier = await subscriber.FishForMessageAsync<object>(message =>
         {
@@ -476,7 +476,7 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
             .ResolveOne(FaultCeiling, TestContext.Current.CancellationToken);
         owner.Tell(captured.Message, captured.Sender);
         owner.Tell(new JoinSession(subscriber)
-        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, captured.Sender);
+        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, subscriber.Ref);
         var observed = new List<object>();
         var barrier = await subscriber.FishForMessageAsync<object>(message =>
         {
@@ -579,7 +579,7 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         if (replayRequest)
             owner.Tell(captured.Message, captured.Sender);
         owner.Tell(new JoinSession(subscriber)
-        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, captured.Sender);
+        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, subscriber.Ref);
         var observed = new List<object>();
         var barrier = await subscriber.FishForMessageAsync<object>(message =>
         {
@@ -668,7 +668,7 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         if (replayFailure)
             owner.Tell(captured.Message, captured.Sender);
         owner.Tell(new JoinSession(subscriber)
-        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, captured.Sender);
+        { SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming }, subscriber.Ref);
         var observed = new List<object>();
         await subscriber.FishForMessageAsync<object>(message =>
         {
