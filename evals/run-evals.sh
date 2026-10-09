@@ -217,6 +217,10 @@ cleanup_eval_env() {
         kill "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
         wait "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
     fi
+    if [[ -n "${CHILD_FIXTURE_PID_SAVED:-}" ]]; then
+        kill "$CHILD_FIXTURE_PID_SAVED" 2>/dev/null || true
+        wait "$CHILD_FIXTURE_PID_SAVED" 2>/dev/null || true
+    fi
     # TMPDIR_EVAL only holds host-owned per-prompt stdout/stderr captures, so a
     # plain rm always succeeds — no force_rmrf fallback needed.
     if [[ -n "${TMPDIR_EVAL:-}" && -d "$TMPDIR_EVAL" ]]; then
@@ -277,6 +281,9 @@ archive_eval_run() {
         mkdir -p "$archive_dir/stdout"
         cp "$TMPDIR_EVAL"/stdout_*.txt "$archive_dir/stdout/" 2>/dev/null || true
         cp "$TMPDIR_EVAL"/stderr_*.txt "$archive_dir/stdout/" 2>/dev/null || true
+        if [[ -d "$TMPDIR_EVAL/child-runs" ]]; then
+            cp -r "$TMPDIR_EVAL/child-runs" "$archive_dir/child-runs"
+        fi
     fi
 
     # Write run metadata, including the immutable image identity so before/after
@@ -944,6 +951,27 @@ check_daemon_alive() {
 }
 
 
+child_result_consumer() {
+    case "${case_name:-$FILTER_CASE}" in
+        subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+observe_child_result() {
+    local prompt="$1" session="$2" output_format="$3" prompt_ordinal="${4:-1}"
+    CHILD_LAST_EVIDENCE="$TMPDIR_EVAL/child-runs/observer-$(date +%s%N)"
+    local prompt_file="$TMPDIR_EVAL/child-prompt-$(date +%s%N).txt"
+    printf '%s' "$prompt" > "$prompt_file"
+    python3 "$REPO_ROOT/evals/child_run_evals.py" collect --port "$CHILD_FIXTURE_PORT" \
+        --prompt-file "$prompt_file" --session "$session" --format "$output_format" --evidence "$CHILD_LAST_EVIDENCE" \
+        --case "${case_name:-$FILTER_CASE}" --prompt-ordinal "$prompt_ordinal"
+}
+
+assert_child_delivery_receipt() {
+    python3 "$REPO_ROOT/evals/child_run_evals.py" assert-delivery --evidence "$TMPDIR_EVAL/child-runs" --agent "${1:-}"
+}
+
 run_prompt() {
     local prompt="$1"
     local output_format="${2:-text}"
@@ -974,13 +1002,21 @@ run_prompt() {
     # "[error] Unknown output type from daemon: ...") to stderr, and a
     # trailing diagnostic line breaks jq's parse of the JSON envelope on
     # stdout, producing a false eval failure rather than a real one.
+    if child_result_consumer; then
+        [[ -n "${CHILD_FIXTURE_PORT:-}" ]] || { echo "ERROR: select this child case explicitly with RUNS=1." >&2; return 2; }
+        observe_child_result "$prompt" "" "$output_format" > "$STDOUT_FILE" 2> "$STDERR_FILE" || return $?
+    else
     NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
     NETCLAW_HOME="$EVAL_HOME" \
         timeout "$PROMPT_TIMEOUT" stdbuf -oL -eL "$NETCLAW_BIN" chat -p "${output_args[@]}" "$prompt" \
         > "$STDOUT_FILE" 2> "$STDERR_FILE" || true
 
-    # Brief pause for daemon log flush
-    sleep 2
+    fi
+
+    # Preserve the existing CLI flush path. The child adapter uses explicit evidence.
+    if ! child_result_consumer; then
+        sleep 2
+    fi
 }
 
 ## Runs a prompt against an existing (or new) named session via `chat -p --resume`.
@@ -993,6 +1029,8 @@ run_prompt_resume() {
     local session_id="$1"
     local prompt="$2"
     local output_format="${3:-text}"
+    local prompt_ordinal="${4:-1}"
+    local observer_exit=0
     local ts
     ts="$(date +%s%N)"
     local turn_file="$TMPDIR_EVAL/stdout_${ts}_turn.txt"
@@ -1028,11 +1066,17 @@ run_prompt_resume() {
         output_args+=(--json)
     fi
 
+    if child_result_consumer; then
+        [[ -n "${CHILD_FIXTURE_PORT:-}" ]] || { echo "ERROR: select this child case explicitly with RUNS=1." >&2; return 2; }
+        observe_child_result "$prompt" "$session_id" "$output_format" "$prompt_ordinal" > "$turn_file" 2> "$turn_stderr_file" || observer_exit=$?
+    else
     NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
     NETCLAW_HOME="$EVAL_HOME" \
         timeout "$PROMPT_TIMEOUT" stdbuf -oL -eL "$NETCLAW_BIN" chat -p --resume "$session_id" \
         "${output_args[@]}" "$prompt" \
         > "$turn_file" 2> "$turn_stderr_file" || true
+
+    fi
 
     # Append this turn's output to the shared files so assertions see all turns.
     cat "$turn_file" >> "$STDOUT_FILE"
@@ -1050,7 +1094,10 @@ run_prompt_resume() {
         LAST_TURN_USAGE_LINE=$(grep -ao '\[usage\].*' "$turn_file" 2>/dev/null | tail -1 || echo "")
     fi
 
-    sleep 2
+    if ! child_result_consumer; then
+        sleep 2
+    fi
+    return "$observer_exit"
 }
 
 ## Runs a named multi-turn case. Each prompt is sent via --resume against
@@ -1093,6 +1140,7 @@ run_multi_turn_case() {
         fi
 
         local turn=1
+        local prompt_failed=false
         local prompt
         for prompt in "${prompts[@]}"; do
             local rendered_prompt="$prompt"
@@ -1101,15 +1149,19 @@ run_multi_turn_case() {
             rendered_prompt="${rendered_prompt//\{\{TARGET_BRANCH\}\}/${CODING_CONTEXT_TARGET_BRANCH:-}}"
             rendered_prompt="${rendered_prompt//\{\{TARGET_FILE\}\}/${CODING_CONTEXT_TARGET_FILE:-}}"
             rendered_prompt="${rendered_prompt//\{\{DIRECT_ATTACHMENT_SOURCE\}\}/${DIRECT_ATTACHMENT_SOURCE_PATH:-}}"
-            run_prompt_resume "$session_id" "$rendered_prompt" "$output_format"
+            if ! run_prompt_resume "$session_id" "$rendered_prompt" "$output_format" "$turn"; then
+                prompt_failed=true
+                break
+            fi
             store_metrics "$case_name" "$run" "$turn" "$LAST_TURN_USAGE_LINE"
             turn=$((turn + 1))
         done
 
         local passed=0
         local details="fail"
+        [[ "$prompt_failed" == false ]] || details="observer_failed"
         EVAL_ASSERTION_DETAILS=""
-        if $assert_fn 2>/dev/null; then
+        if [[ "${prompt_failed:-false}" == false ]] && $assert_fn 2>/dev/null; then
             passed=1
             passes=$((passes + 1))
             details="pass"
@@ -1155,10 +1207,22 @@ stdout_not_contains() {
 }
 
 stdout_response_contains() {
+    if child_result_consumer; then
+        local child_final_response
+        child_final_response=$(python3 "$REPO_ROOT/evals/child_run_evals.py" final-response --evidence "${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}") || return 1
+        grep -qia "$1" <<< "$child_final_response"
+        return
+    fi
     grep -av '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qia "$1"
 }
 
 stdout_response_not_contains() {
+    if child_result_consumer; then
+        local child_final_response
+        child_final_response=$(python3 "$REPO_ROOT/evals/child_run_evals.py" final-response --evidence "${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}") || return 1
+        ! grep -qia "$1" <<< "$child_final_response"
+        return
+    fi
     if grep -av '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qia "$1"; then
         return 1
     fi
@@ -1832,7 +1896,7 @@ assert_deployment_mission_sales_email() {
 # Category 6b: Subagents
 assert_subagent_headless_ambiguous_task() {
     stdout_tool_called 'spawn_agent' && \
-        stdout_contains '\[subagent:done\] headless-analyst (completed' && \
+        assert_child_delivery_receipt headless-analyst && \
         stdout_response_contains 'assumption' && \
         stdout_response_not_contains 'which.*include' && \
         stdout_response_not_contains 'what.*include' && \
@@ -1842,7 +1906,7 @@ assert_subagent_headless_ambiguous_task() {
 
 assert_subagent_specialization_precedence() {
     stdout_tool_called 'spawn_agent' && \
-        stdout_contains '\[subagent:done\] headless-analyst (completed' && \
+        assert_child_delivery_receipt headless-analyst && \
         stdout_contains 'SPECIALIZED ANALYST BRIEF' && \
         stdout_response_contains '^Subject:' && \
         stdout_response_contains 'Would Tuesday or Wednesday work for a 15-minute call?'
@@ -1870,15 +1934,14 @@ printf "%s\n" "// changed" >> /home/netclaw/.netclaw/workspaces/project-scope-ta
 
 assert_subagent_project_scope_declaration() {
     stdout_tool_called 'spawn_agent' || return 1
-    stdout_contains '\[subagent:done\] project-scope-analyst (completed' || return 1
+    assert_child_delivery_receipt || return 1
     stdout_response_contains 'Project.csproj' || return 1
     stdout_response_contains 'src' || return 1
 
     local child_log
     local -a child_logs
-    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
-        -path '*/subagents/*/logs/session.log' \
-        -newer "$PROJECT_SCOPE_LOG_MARKER" 2>/dev/null)
+    mapfile -t child_logs < <(python3 "$REPO_ROOT/evals/child_run_evals.py" log-path \
+        --evidence "$TMPDIR_EVAL/child-runs" --agent project-scope-analyst)
     [[ "${#child_logs[@]}" -eq 1 ]] || return 1
     child_log="${child_logs[0]}"
 
@@ -1937,14 +2000,13 @@ setup_approval_natural_subagent_project_review() {
 assert_approval_natural_subagent_project_review() {
     stdout_tool_called 'spawn_agent' || return 1
     ! stdout_tool_called 'set_working_directory' || return 1
-    stdout_contains '\[subagent:done\] project-scope-analyst (completed' || return 1
+    assert_child_delivery_receipt || return 1
     stdout_response_contains 'Project.csproj' || return 1
 
     local child_log
     local -a child_logs
-    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
-        -path '*/subagents/*/logs/session.log' \
-        -newer "$PROJECT_SCOPE_LOG_MARKER" 2>/dev/null)
+    mapfile -t child_logs < <(python3 "$REPO_ROOT/evals/child_run_evals.py" log-path \
+        --evidence "$TMPDIR_EVAL/child-runs" --agent project-scope-analyst)
     [[ "${#child_logs[@]}" -eq 1 ]] || return 1
     child_log="${child_logs[0]}"
 
@@ -1998,6 +2060,7 @@ setup_subagent_session_scratch_disposable() {
 
 assert_subagent_session_scratch_disposable() {
     stdout_json_tool_called 'spawn_agent' || return 1
+    assert_child_delivery_receipt || return 1
 
     local spawn_call child_task child_log
     spawn_call=$(stdout_json_tool_call_arguments 'spawn_agent' | head -1)
@@ -2008,9 +2071,8 @@ assert_subagent_session_scratch_disposable() {
         <<<"$child_task" || return 1
 
     local child_relative expected_temp_dir
-    child_log=$(find "$EVAL_HOME/data/sessions" -type f \
-        -path '*/logs/session.log' \
-        -newer "$SUBAGENT_SCRATCH_LOG_MARKER" 2>/dev/null | head -1)
+    child_log=$(python3 "$REPO_ROOT/evals/child_run_evals.py" log-path \
+        --evidence "$TMPDIR_EVAL/child-runs" --agent disposable-diagnostic)
     [[ -n "$child_log" ]] || return 1
     grep -aq \
         'SubAgent \[disposable-diagnostic\] completed (success=True, outcome=Completed' \
@@ -2084,6 +2146,7 @@ setup_coding_context_worktree_handoff() {
 }
 
 assert_coding_context_worktree_handoff() {
+    assert_child_delivery_receipt || return 1
     if ! docker exec --user netclaw \
         -e "EVAL_FIRST=$CODING_CONTEXT_FIRST" \
         -e "EVAL_SECOND=$CODING_CONTEXT_SECOND" \
@@ -3042,11 +3105,15 @@ run_case() {
         rendered_prompt="${rendered_prompt//\{\{MANAGED_WORKTREE_BRANCH\}\}/${MANAGED_WORKTREE_BRANCH:-}}"
         rendered_prompt="${rendered_prompt//\{\{CYCLE_PROMPT\}\}/${CYCLE_PROMPT:-}}"
         rendered_prompt="${rendered_prompt//\{\{EVAL_REMINDER_TARGET\}\}/${EVAL_REMINDER_TARGET:-}}"
-        run_prompt "$rendered_prompt" "$output_format"
+        local prompt_failed=false
+        if ! run_prompt "$rendered_prompt" "$output_format"; then
+            prompt_failed=true
+        fi
 
         local passed=0
         local details="fail"
-        if $assert_fn 2>/dev/null; then
+        [[ "$prompt_failed" == false ]] || details="observer_failed"
+        if [[ "${prompt_failed:-false}" == false ]] && $assert_fn 2>/dev/null; then
             passed=1
             passes=$((passes + 1))
             details="pass"
@@ -3595,6 +3662,28 @@ main() {
         source "$REPO_ROOT/evals/cycle_evals.sh"
         start_cycle_fixture
         cycle_cases=true
+    fi
+    if child_result_consumer; then
+        [[ "$RUNS" == 1 && -f "${NETCLAW_CHILD_OBSERVER:-}" ]] || {
+            echo "ERROR: child consumers require RUNS=1 and NETCLAW_CHILD_OBSERVER." >&2
+            exit 2
+        }
+        [[ "$EVAL_PROVIDER_TYPE" == openai-compatible && "$EVAL_PROVIDER_ENDPOINT" == */v1 ]] || {
+            echo "ERROR: child consumers require the approved OpenAI-compatible target." >&2
+            exit 2
+        }
+        [[ "$EVAL_PROVIDER_API_KEY" != ENC:* && -z "$EVAL_DATA_PROTECTION_KEYS" ]] || {
+            echo "ERROR: the child relay requires a plain upstream key when authentication is needed." >&2
+            exit 2
+        }
+        export BACKGROUND_EVAL_UPSTREAM="$EVAL_PROVIDER_ENDPOINT" NETCLAW_EVAL_MODEL_ID="$EVAL_MODEL_ID" TMPDIR_EVAL
+        coproc CHILD_FIXTURE { exec python3 "$REPO_ROOT/evals/child_run_evals.py" serve; }
+        CHILD_FIXTURE_PID_SAVED=$CHILD_FIXTURE_PID
+        read -r -t 15 CHILD_FIXTURE_PORT <&"${CHILD_FIXTURE[0]}"
+        [[ "$CHILD_FIXTURE_PORT" =~ ^[0-9]+$ ]]
+        EVAL_PROVIDER_ENDPOINT="http://127.0.0.1:$CHILD_FIXTURE_PORT/v1"
+        EVAL_PROVIDER_API_KEY=""
+        export EVAL_HOME EVAL_PORT PROMPT_TIMEOUT NETCLAW_CHILD_OBSERVER TMPDIR_EVAL
     fi
     start_eval_daemon
     init_db

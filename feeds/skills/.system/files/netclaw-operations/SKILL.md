@@ -1,9 +1,9 @@
 ---
 name: netclaw-operations
-description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
+description: "REQUIRED when the user asks about schedules, reminders, cron jobs, timers, background jobs, or child status and cancellation. Also use for diagnostics, troubleshooting, MCP tools, daemon health, identity updates, Netclaw capabilities, and maintenance."
 metadata:
   author: netclaw
-  version: "2.108.1"
+  version: "2.109.0"
 ---
 
 # Netclaw Operations
@@ -22,6 +22,7 @@ a reference file — load the one matching the user's intent with
 | User intent | Where |
 |-------------|-------|
 | Schedule reminders/cron; run background shell jobs | `skill_read_resource('netclaw-operations', 'references/scheduling.md')` |
+| Start, inspect, or cancel a background child task | `skill_read_resource('netclaw-operations', 'references/child-runs.md')` |
 | How tool arguments are validated | [Tool argument validation](#tool-argument-validation) |
 | Handle very large tool output | [Large tool output](#large-tool-output) |
 | Understand approval prompts | [Approval Prompts](#approval-prompts) |
@@ -76,6 +77,7 @@ not know the name, and wait for its result before a shell call.
 | Inbound webhooks: list, create or change, delete | `list_webhooks`, `set_webhook`, `delete_webhook` |
 | Memories: search, read, save, change or delete | `find_memories`, `get_memories`, `store_memory`, `update_memory` |
 | Skills: load, read a bundled file, create or edit or delete | `skill_load`, `skill_read_resource`, `skill_manage` |
+| Child tasks: inspect an owned run or request its cancellation | `check_agent_run` |
 | Read `netclaw.json`, the saved shell grants (`tool-approvals.json`), or a log | `file_read` |
 
 A `netclaw` command for an operation in this table, such as `netclaw reminder list`
@@ -688,7 +690,7 @@ the operators `>|`, `>&`, and `<>`, and `x=1 y=2`, `a=(1 2)`, or `x+=1`. A
 prompt never shows an empty name. For an unknown program word (`$cmd > x`,
 `eval x`), it shows the full command text.
 
-**Prompts survive passivation and restart.** Pending approval prompts are
+**Parent task prompts survive passivation and restart.** Pending approval prompts are
 journaled with their requester and trust context, so if the session goes idle or
 the daemon restarts before the user clicks, the click is still honored when it
 arrives. Completed sibling tool results are journaled per call, so recovery
@@ -705,6 +707,12 @@ requester can approve it after restart. They can use its button or a text respon
 can temporarily lag the session state. Shutdown cancellation does not mean
 the approval expired.
 An active tool with a possible external effect keeps the bounded drain path.
+
+An accepted child's approval prompt belongs to that live run and its original requester.
+Start-call completion and ordinary later parent input do not abandon that prompt.
+Child cancellation or loss expires it. A late answer creates no grant or retry.
+Restart does not resume an interrupted child. Its old approval prompt expires visibly.
+Read `references/child-runs.md` for child cancellation and partial-result behavior.
 
 An interrupted model call can create a short-lived restart reminder. The
 session restores accepted input and its original authority from the journal.

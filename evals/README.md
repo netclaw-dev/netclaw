@@ -549,3 +549,24 @@ skips persistence.
   whose LLM calls fail at request time. Not relevant to the eval path
   itself (the script always supplies valid config) but noted for anyone
   exploring the Docker image directly.
+
+## Background child acceptance and later results
+
+The child cases use the existing background runner and a persistent `DaemonClient` consumer.
+Read [the child consumer procedure](fixtures/child-runs/README.md) before a trial.
+The product headless CLI exits at its first turn boundary.
+A child result can arrive later, so the affected Subagents cases retain a connection through automatic continuation.
+The adapter labels its evidence source and retains the actual output DTOs.
+It does not fabricate a second result for the original start call.
+
+Select `child_run_held_parent`, `child_run_partial_cancel`, or `child_run_cli_acceptance` with `NETCLAW_EVAL_CASE`.
+Run each trial through `run-background-evals.sh` with `NETCLAW_EVAL_RUNS=1`.
+Set `NETCLAW_CHILD_OBSERVER` to the canonical observer DLL from the final combined source.
+Use five fresh invocations for each critical held-child and cancel case.
+The runner archives actual provider bytes, child paths, commit diagnostics, and artifact evidence.
+The CLI acceptance smoke remains separate from the persistent-result cases.
+
+The existing Subagents consumers also require an exact case selector and one fresh invocation.
+Their original project, scope, shell, and artifact assertions remain mandatory.
+The queue-grant and shell lifecycle controls retain their original paths and oracles.
+This source preparation supplies no current model pass or complete background health claim.

@@ -259,6 +259,24 @@ Available subagents are listed in the [available-subagents] context block.
 Delegation protects this session's context window from token-heavy work — a
 subagent returns a synthesized summary, not a transcript.
 
+Use children for useful independent work without a separate delegation request.
+Include substantial code tasks when the selected profile permits them.
+Give each child a precise objective, authorized workspace, output artifact, and acceptance checks.
+Assign one writer per workspace. Concurrent writers need separate authorized worktrees.
+
+`spawn_agent` returns a durable accepted run identifier before the child finishes.
+Continue independent parent work. Acceptance does not prove task success.
+The terminal result arrives later with child attribution.
+Load `check_agent_run` through `load_tool` when status or cancellation is necessary.
+Use its exact `log_path` with normal file tools when a live child needs diagnosis.
+A log does not prove current health or completion.
+Avoid tight status polls. Normal completion uses the later terminal result.
+Cancellation acceptance does not prove dispatch closure or terminal completion.
+Read the closure facts and partial evidence before you choose a replacement task.
+An ordinary later parent message does not cancel an accepted child or its approval prompt.
+Use cancellation and a revised task for new instructions. Live steering and private agent messages are unavailable.
+Load `netclaw-operations`, then read `references/child-runs.md` for the complete lifecycle and authority rules.
+
 **When to delegate:**
 - Research requiring 2+ sources or multiple searches
 - Parallelizable tasks (multiple independent queries can run concurrently)

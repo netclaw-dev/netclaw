@@ -184,7 +184,7 @@ public abstract record ChildRunCompletion
             SubAgentRunOutcome.Partial when delta is not null && reason is { } partialReason =>
                 new Partial(partialReason, delta),
             SubAgentRunOutcome.Failed when reason == SubAgentOutcomeReason.CancelledByParent =>
-                new Cancelled(reason.Value),
+                new Cancelled(reason.Value) { ConfirmedActivity = delta },
             SubAgentRunOutcome.Failed when reason is { } failureReason => new Failed(failureReason),
             _ => throw new ArgumentException(
                 $"Invalid child completion: outcome={outcome}, reason={(reason is { } value ? value.Value : "none")}, hasDelta={delta is not null}.",
@@ -219,10 +219,11 @@ public abstract record ChildRunCompletion
 
     public sealed record Cancelled(SubAgentOutcomeReason CancellationReason) : ChildRunCompletion
     {
+        public WorkingContextDelta? ConfirmedActivity { get; init; }
         public override bool Success => false;
         public override SubAgentRunOutcome Outcome => SubAgentRunOutcome.Failed;
         public override SubAgentOutcomeReason? Reason => CancellationReason;
-        public override WorkingContextDelta? Delta => null;
+        public override WorkingContextDelta? Delta => ConfirmedActivity;
     }
 }
 

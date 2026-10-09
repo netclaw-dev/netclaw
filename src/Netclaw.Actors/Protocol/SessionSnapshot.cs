@@ -6,6 +6,7 @@
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.SubAgents;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Protocol;
@@ -61,6 +62,8 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     public IReadOnlyList<BackgroundJobId> ProcessedBackgroundJobIds { get; init; } = [];
     public Sessions.SessionProtocol.TurnContextRecord? AdoptedTaskContext { get; init; }
     public IReadOnlyList<InputId> AdoptedTaskInputIds { get; init; } = [];
+
+    public IReadOnlyList<BackgroundChildRun> ChildRuns { get; init; } = [];
 
     public int TurnCount { get; init; }
 

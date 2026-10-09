@@ -1,0 +1,639 @@
+"""Controls for child attribution, durable evidence, and actual-file oracles."""
+
+import copy
+from contextlib import contextmanager
+import json
+import hashlib
+import io
+import subprocess
+from contextlib import redirect_stdout
+import os
+import re
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import tempfile
+import threading
+import time
+import urllib.request
+import unittest
+from unittest.mock import patch
+
+from child_run_evals import (CHILD_CONTRACT, ChildFixture, acceptance, actual_file, bind_request,
+                             canonical_pairs, child_handler, committed_positions, consumed_deliveries, collect, legacy_observer_mode, validate_prompt_receipt, verified_final_response, verify_child_actions, verify_cli_acceptance, verify_trial, write_completed)
+
+ACCEPTED = {"run_id": "run-neutral", "scope_id": "scope-neutral", "state": "Accepted", "control_tool": "check_agent_run"}
+ROOT = "/home/netclaw/.netclaw/sessions/neutral/subagents/neutral"
+PATHS = {"session_dir": ROOT, "temp_dir": ROOT + "/tmp", "artifact_dir": ROOT + "/artifacts", "log_path": ROOT + "/logs/session.log"}
+STATUS = {**ACCEPTED, "state": "Running", "log_path": PATHS["log_path"], "artifact_directory": PATHS["artifact_dir"]}
+
+
+def child():
+    return {"messages": [{"role": "system", "content": CHILD_CONTRACT}, {"role": "user", "content":
+            "Context:\n[session]\n" + "\n".join(key + ": " + value for key, value in PATHS.items()) + "\nTask:\nTrial neutral-nonce."}]}
+
+
+def terminal(cancel=False):
+    return {"run_id": ACCEPTED["run_id"], "scope_id": ACCEPTED["scope_id"], "source_operation": "spawn_agent",
+            "state": "Cancelled" if cancel else "Completed", "outcome": "Failed" if cancel else "Completed",
+            "reason": "cancelled_by_parent" if cancel else None, "log_path": PATHS["log_path"],
+            "artifact_directory": PATHS["artifact_dir"],
+            "output": "The child was cancelled. The last durable partial report is at " + PATHS["artifact_dir"] + "/cancelled-results.json.",
+            "warning": None, "checkpoint": {"CompletedRound": 1, "Summary": "File written: partial-neutral-nonce.txt",
+                "ConfirmedActivity": {"ProjectDirectory": None, "Worktree": None, "Branch": None, "Head": None,
+                                      "ConfirmedChangedFiles": [PATHS["artifact_dir"] + "/partial-neutral-nonce.txt"],
+                                      "ReadFiles": [], "ObservedChangedFiles": []}} if cancel else None}
+
+
+def parent(value=None, identifier="delivery-neutral"):
+    return {"messages": [{"role": "assistant", "tool_calls": [{"id": identifier, "function": {
+                "name": "spawn_agent", "arguments": json.dumps({"run_id": ACCEPTED["run_id"], "source_operation": "spawn_agent"})}}]},
+            {"role": "tool", "tool_call_id": identifier, "content": json.dumps(value or terminal())}]}
+
+
+
+def child_after_write(cancel=False):
+    request = child()
+    filename = "/partial-neutral-nonce.txt" if cancel else "/complete-neutral-nonce.txt"
+    content = ("PARTIAL-" if cancel else "COMPLETE-") + "neutral-nonce"
+    request["messages"].extend([{"role": "assistant", "tool_calls": [{"id": "write-neutral", "function": {
+        "name": "file_write", "arguments": json.dumps({"Path": PATHS["artifact_dir"] + filename, "Content": content})}}]},
+        {"role": "tool", "tool_call_id": "write-neutral", "content": "File written"}])
+    return request
+
+def logs():
+    return "\n".join(f"child_run_{name} owner=session-neutral runId=run-neutral journalSequence={number}" +
+                     (" inputId=input-neutral callId=delivery-neutral" if name == "delivery_admitted" else "")
+                     for name, number in [("accepted", 1), ("terminal_recorded", 3), ("result_prepared", 4), ("delivery_admitted", 5)])
+
+
+class ChildAttributionControls(unittest.TestCase):
+    def test_acceptance_requires_canonical_fields_and_unique_keys(self):
+        self.assertEqual(ACCEPTED, acceptance(json.dumps(ACCEPTED)))
+        for value in [{**ACCEPTED, "scope_id": " "}, {**ACCEPTED, "state": "Completed"},
+                      {**ACCEPTED, "control_tool": "check_background_job"}]:
+            with self.subTest(value=value), self.assertRaises(AssertionError):
+                acceptance(json.dumps(value))
+        with self.assertRaises(AssertionError):
+            acceptance('{"run_id":"first",' + json.dumps(ACCEPTED)[1:])
+
+    def test_cancellation_wire_uses_reason_value_and_enum_names_for_state_and_outcome(self):
+        source = Path(__file__).resolve().parents[1] / "src/Netclaw.Tools.Abstractions/SubAgentRunMetadata.cs"
+        match = re.search(r'CancelledByParent\s*=\s*new\("([^"\n]+)"\)', source.read_text())
+        self.assertIsNotNone(match, "The canonical outcome-reason definition changed; review its wire value.")
+        wire = json.loads('{"state":"Cancelled","outcome":"Failed","reason":"cancelled_by_parent"}')
+        self.assertEqual(match.group(1), wire["reason"])
+        self.assertEqual(wire, {name: terminal(True)[name] for name in wire})
+
+    def test_binding_requires_actual_child_contract_nonce_and_returned_paths(self):
+        self.assertEqual(PATHS, bind_request(child(), ACCEPTED, STATUS, "neutral-nonce"))
+        mutations = [lambda r: r["messages"][0].update(content="ordinary parent prompt"),
+                     lambda r: r["messages"][0].update(content="Summarize memory"),
+                     lambda r: r["messages"][1].update(content=r["messages"][1]["content"].replace(ROOT, ROOT + "-foreign")),
+                     lambda r: r["messages"][1].update(content=r["messages"][1]["content"].replace("neutral-nonce", "foreign"))]
+        for mutate in mutations:
+            request = child()
+            mutate(request)
+            with self.subTest(request=request), self.assertRaises(AssertionError):
+                bind_request(request, ACCEPTED, STATUS, "neutral-nonce")
+        for key in ["run_id", "scope_id", "artifact_directory", "log_path"]:
+            with self.subTest(key=key), self.assertRaises(AssertionError):
+                bind_request(child(), ACCEPTED, {**STATUS, key: "foreign"}, "neutral-nonce")
+
+    def test_terminal_pair_needs_actual_parent_history_and_one_stable_call(self):
+        self.assertEqual(("delivery-neutral", terminal()), canonical_pairs([parent(), parent()], ACCEPTED, "start-neutral", "spawn_agent"))
+        for requests in [[], [child()], [parent(), parent(identifier="other")],
+                         [parent({**terminal(), "scope_id": "foreign"})],
+                         [parent({**terminal(), "source_operation": "shell_execute"})],
+                         [parent(), parent({**terminal(), "outcome": "Failed"})]]:
+            with self.subTest(requests=requests), self.assertRaises(AssertionError):
+                canonical_pairs(requests, ACCEPTED, "start-neutral", "spawn_agent")
+
+    def test_terminal_pair_requires_fresh_id_consistent_argument_source_and_assistant_role(self):
+        for mutate in [lambda r: r["messages"][0].update(role="user"),
+                       lambda r: r["messages"][0]["tool_calls"][0]["function"].update(arguments=json.dumps({"run_id": ACCEPTED["run_id"], "source_operation": "shell_execute"}))]:
+            request = parent()
+            mutate(request)
+            with self.subTest(request=request), self.assertRaises(AssertionError):
+                canonical_pairs([request], ACCEPTED, "start-neutral", "spawn_agent")
+        with self.assertRaises(AssertionError):
+            canonical_pairs([parent(identifier="start-neutral")], ACCEPTED, "start-neutral", "spawn_agent")
+        duplicated = parent()
+        duplicated["messages"].extend(copy.deepcopy(duplicated["messages"]))
+        with self.assertRaises(AssertionError):
+            canonical_pairs([duplicated], ACCEPTED, "start-neutral", "spawn_agent")
+
+    def test_consumption_accepts_first_response_and_compatible_siblings_in_one_response(self):
+        sibling = {**ACCEPTED, "run_id": "run-sibling", "scope_id": "scope-sibling"}
+        sibling_body = {**terminal(), "run_id": sibling["run_id"], "scope_id": sibling["scope_id"]}
+        sibling_request = parent(sibling_body, "delivery-sibling")
+        sibling_request["messages"][0]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+            {"run_id": sibling["run_id"], "source_operation": "spawn_agent"})
+        request = parent()
+        request["messages"].extend(sibling_request["messages"])
+        records = [{"request": request, "request_id": 1, "admitted_ns": 2,
+                    "response_first_payload_ns": 3, "response_payload_written": True}]
+        expected = [{"accepted": ACCEPTED, "call_id": "start-neutral", "source_operation": "spawn_agent"}]
+        self.assertTrue(consumed_deliveries(records, expected, 4)["complete"])
+        self.assertFalse(consumed_deliveries(records, [], 4)["complete"])
+        repeated = records + [{**records[0], "request_id": 2, "admitted_ns": 5, "response_first_payload_ns": 6}]
+        self.assertEqual(1, consumed_deliveries(repeated, expected, 7)["deliveries"][0]["request_id"])
+        expected.append({"accepted": sibling, "call_id": "start-sibling", "source_operation": "spawn_agent"})
+        result = consumed_deliveries(records, expected, 4)
+        self.assertTrue(result["complete"])
+        self.assertEqual(2, len(result["deliveries"]))
+        self.assertEqual({1}, {row["request_id"] for row in result["deliveries"]})
+        for rows, boundary in [([], 4), ([{**records[0], "response_first_payload_ns": 0}], 4),
+                               ([{**records[0], "response_payload_written": False}], 4), (records, 2)]:
+            with self.subTest(rows=rows, boundary=boundary):
+                self.assertFalse(consumed_deliveries(rows, expected, boundary)["complete"])
+
+    def test_final_response_requires_the_exact_current_prompt_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = root / "observer-0001"
+            current = root / "observer-0002"
+            old.mkdir(); current.mkdir()
+            data = {"Nonce": "prompt-four", "Mode": "turn", "InitialPrompt": "Report the actual final changed files.",
+                    "SessionId": "session-neutral"}
+            receipt = {"status": "observed", "prompt_nonce": data["Nonce"], "observer_mode": data["Mode"],
+                       "initial_prompt_sha256": hashlib.sha256(data["InitialPrompt"].encode()).hexdigest(),
+                       "session_id": "session-neutral", "last_reply": "Actual final response", "all_replies": ["REQUIRED-MARKER initial acknowledgement", "Actual final response"]}
+            (old / "verified-receipt.json").write_text(json.dumps({**receipt, "prompt_nonce": "prompt-three", "last_reply": "STALE REQUIRED-MARKER"}))
+            (current / "observer-input.json").write_text(json.dumps(data))
+            with self.assertRaises(FileNotFoundError):
+                verified_final_response(current)
+            (current / "verified-receipt.json").write_text((old / "verified-receipt.json").read_text())
+            with self.assertRaises(AssertionError):
+                verified_final_response(current)
+            (current / "verified-receipt.json").write_text(json.dumps(receipt))
+            self.assertEqual("Actual final response", verified_final_response(current))
+            self.assertNotIn("REQUIRED-MARKER", verified_final_response(current))
+            for fields in [{"status": "incomplete"}, {"observer_mode": "collect"}, {"initial_prompt_sha256": "foreign"},
+                           {"session_id": "foreign"}, {"session_id": ""}, {"last_reply": ""}, {"last_reply": None}]:
+                with self.subTest(fields=fields), self.assertRaises(AssertionError):
+                    validate_prompt_receipt({**receipt, **fields}, data)
+
+    def test_legacy_handoff_selects_only_its_child_prompt_for_terminal_collection(self):
+        self.assertEqual(["turn", "turn", "collect", "turn"],
+                         [legacy_observer_mode("coding_context_worktree_handoff", number) for number in range(1, 5)])
+        self.assertEqual("collect", legacy_observer_mode("subagent_specialization_precedence", 1))
+        for case, number in [("coding_context_worktree_handoff", 0), ("coding_context_worktree_handoff", 5),
+                             ("subagent_specialization_precedence", 2), ("foreign", 1)]:
+            with self.subTest(case=case, number=number), self.assertRaises(AssertionError):
+                legacy_observer_mode(case, number)
+        # These unit fixtures represent observer receipts, not actual CLI output.
+        for number in [1, 2, 4]:
+            with self.subTest(number=number), tempfile.TemporaryDirectory() as directory:
+                receipt = {"accepted_runs": [], "last_reply": f"Neutral parent reply {number}"}
+                with patch("child_run_evals.invoke_observer", return_value=(receipt, "neutral observer text")) as observer:
+                    with redirect_stdout(io.StringIO()):
+                        collect(1, "neutral task", "session-neutral", "text", directory, "coding_context_worktree_handoff", number)
+                    self.assertEqual("turn", observer.call_args.args[3])
+                saved = json.loads((Path(directory) / "verified-receipt.json").read_text())
+                self.assertEqual(number, saved["prompt_ordinal"])
+                self.assertEqual([], saved["verified_deliveries"])
+
+    def shell_functions(self, names):
+        source = (Path(__file__).resolve().parents[1] / "evals/run-evals.sh").read_text()
+        return "\n".join(re.search(r"^" + re.escape(name) + r"\(\) \{\n.*?^\}", source,
+                                    re.MULTILINE | re.DOTALL).group(0) for name in names)
+
+    def test_failed_current_observer_cannot_reuse_an_earlier_final_reply(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = root / "child-runs/observer-previous"
+            previous.mkdir(parents=True)
+            (previous / "verified-receipt.json").write_text(json.dumps({"last_reply": "STALE-ANSWER"}))
+            functions = self.shell_functions(["child_result_consumer", "observe_child_result", "run_prompt_resume",
+                                              "stdout_response_contains", "stdout_response_not_contains"])
+            script = functions + r"""
+set -euo pipefail
+case_name=coding_context_worktree_handoff
+resolve_daemon_log() { DAEMON_LOG=/missing-neutral-log; }
+CHILD_LAST_EVIDENCE="$TMPDIR_EVAL/child-runs/observer-previous"
+previous="$CHILD_LAST_EVIDENCE"
+if run_prompt_resume session-neutral 'Final neutral prompt.' text 4; then exit 41; fi
+[[ "$CHILD_LAST_EVIDENCE" != "$previous" ]]
+[[ -f "$CHILD_LAST_EVIDENCE/observer-input.json" ]]
+[[ ! -f "$CHILD_LAST_EVIDENCE/verified-receipt.json" ]]
+if stdout_response_contains STALE-ANSWER; then exit 42; fi
+if stdout_response_not_contains arbitrary; then exit 43; fi
+printf '%s' "$CHILD_LAST_EVIDENCE"
+"""
+            env = {**os.environ, "REPO_ROOT": str(Path(__file__).resolve().parents[1]), "TMPDIR_EVAL": directory,
+                   "NETCLAW_BIN": "/bin/true", "CHILD_FIXTURE_PORT": "1", "EVAL_PORT": "1", "PROMPT_TIMEOUT": "1",
+                   "NETCLAW_CHILD_OBSERVER": str(root / "missing-observer.dll"), "FILTER_CASE": "coding_context_worktree_handoff"}
+            result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr)
+            data = json.loads((Path(result.stdout) / "observer-input.json").read_text())
+            self.assertEqual("turn", data["Mode"])
+            self.assertEqual("Final neutral prompt.", data["InitialPrompt"])
+
+    def test_failed_fourth_prompt_blocks_the_legacy_case_assertion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = self.shell_functions(["run_multi_turn_case"]) + r"""
+set -euo pipefail
+CATEGORY_SKIPPED=false
+FILTER_CASE=coding_context_worktree_handoff
+RUNS=1
+THRESHOLD=1
+CATEGORY_CASES=0; TOTAL_CASES=0; FAILED_CASES=0; CATEGORY_PASSED=0; PASSED_CASES=0
+check_daemon_alive() { :; }
+setup_coding_context_worktree_handoff() { :; }
+# The control supplies return codes only. It supplies no CLI output.
+run_prompt_resume() { LAST_TURN_USAGE_LINE=""; [[ "$4" -lt 4 ]]; }
+store_metrics() { :; }
+store_result() { printf '%s' "$4" > "$CONTROL_ROOT/stored-pass"; printf '%s' "$5" > "$CONTROL_ROOT/stored-detail"; }
+assert_coding_context_worktree_handoff() { printf called > "$CONTROL_ROOT/assertion-called"; return 0; }
+run_multi_turn_case coding_context_worktree_handoff neutral one two three four
+[[ ! -f "$CONTROL_ROOT/assertion-called" ]]
+[[ "$(cat "$CONTROL_ROOT/stored-pass")" == 0 ]]
+[[ "$(cat "$CONTROL_ROOT/stored-detail")" == observer_failed ]]
+[[ "$FAILED_CASES" == 1 ]]
+"""
+            result = subprocess.run(["bash", "-c", script], env={**os.environ, "CONTROL_ROOT": directory},
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_consistent_terminal_source_still_must_equal_the_actual_start(self):
+        wrong = parent()
+        function = wrong["messages"][0]["tool_calls"][0]["function"]
+        function["name"] = "shell_execute"
+        function["arguments"] = json.dumps({"run_id": ACCEPTED["run_id"], "source_operation": "shell_execute"})
+        wrong["messages"][1]["content"] = json.dumps({**terminal(), "source_operation": "shell_execute"})
+        with self.assertRaises(AssertionError):
+            canonical_pairs([wrong], ACCEPTED, "start-neutral", "spawn_agent")
+        self.assertEqual("delivery-neutral", canonical_pairs([wrong], ACCEPTED, "start-neutral", "shell_execute")[0])
+        record = {"request": wrong, "request_id": 1, "admitted_ns": 1, "response_first_payload_ns": 2, "response_payload_written": True}
+        with self.assertRaises(AssertionError):
+            consumed_deliveries([record], [{"accepted": ACCEPTED, "call_id": "start-neutral", "source_operation": "spawn_agent"}], 3)
+
+    def test_post_commit_positions_reject_absence_duplicate_reorder_and_foreign_call(self):
+        self.assertEqual(5, committed_positions(logs(), "session-neutral", "run-neutral", "delivery-neutral")["delivery_admitted"])
+        for value in [logs().replace("child_run_result_prepared", "unobserved"), logs() + "\n" + logs(),
+                      logs().replace("journalSequence=4", "journalSequence=2"),
+                      logs().replace("callId=delivery-neutral", "callId=foreign")]:
+            with self.subTest(log=value), self.assertRaises(AssertionError):
+                committed_positions(value, "session-neutral", "run-neutral", "delivery-neutral")
+
+    @contextmanager
+    def actual_held_response(self, directory, partial=False, stream=False):
+        body = {**(child_after_write(True) if partial else child()), "stream": stream}
+        payload = b'data: {"actual":"held-neutral"}\n\ndata: [DONE]\n\n' if stream else b'{"actual":"held-neutral"}'
+        upstream_requests = []
+        first_client_byte = threading.Event()
+        received = []
+        errors = []
+        class Upstream(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                return
+            def do_POST(self):
+                upstream_requests.append(self.rfile.read(int(self.headers["Content-Length"])))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream" if stream else "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+        with ThreadingHTTPServer(("127.0.0.1", 0), Upstream) as upstream:
+            fixture = ChildFixture(f"http://127.0.0.1:{upstream.server_port}/v1", "neutral", "", Path(directory) / "relay")
+            fixture.control("child-setup", {"case": "child_run_partial_cancel" if partial else "child_run_held_parent", "nonce": "neutral-nonce"})
+            with ThreadingHTTPServer(("127.0.0.1", 0), child_handler(fixture)) as relay:
+                servers = [upstream, relay]
+                threads = [threading.Thread(target=server.serve_forever) for server in servers]
+                for thread in threads:
+                    thread.start()
+                def call():
+                    try:
+                        request = urllib.request.Request(f"http://127.0.0.1:{relay.server_port}/v1/chat/completions",
+                                                         data=json.dumps(body).encode())
+                        with urllib.request.urlopen(request, timeout=5) as response:
+                            first = response.read(1)
+                            first_client_byte.set()
+                            received.append(first + response.read())
+                    except Exception as error:
+                        errors.append(error)
+                worker = threading.Thread(target=call)
+                worker.start()
+                try:
+                    fixture.control("child-wait", {})
+                    self.assertEqual([json.dumps(body).encode()], upstream_requests)
+                    self.assertFalse(first_client_byte.is_set())
+                    self.assertTrue(worker.is_alive())
+                    row = fixture.snapshot()["requests"][0]
+                    self.assertGreater(row["upstream_first_payload_ns"], row["admitted_ns"])
+                    self.assertEqual(0, row["response_first_payload_ns"])
+                    self.assertFalse(row["response_payload_written"])
+                    self.assertTrue((fixture.evidence / "response-0001.wire").read_bytes().endswith(payload))
+                    yield fixture
+                finally:
+                    fixture.control("child-abort", {})
+                    worker.join(5)
+                    for server in servers:
+                        server.shutdown()
+                    for thread in threads:
+                        thread.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual([], errors)
+                self.assertEqual([payload], received)
+                self.assertTrue(first_client_byte.is_set())
+                fixture.control("child-drained", {})
+                self.assertTrue(fixture.snapshot()["requests"][0]["response_payload_written"])
+
+    def test_barrier_holds_actual_upstream_payload_then_requires_binding_before_release(self):
+        for stream in [False, True]:
+            with self.subTest(stream=stream), tempfile.TemporaryDirectory() as directory:
+                with self.actual_held_response(directory, stream=stream) as fixture:
+                    with self.assertRaises(AssertionError):
+                        fixture.control("child-release", {})
+                    snapshot = fixture.control("child-bind", {"accepted": ACCEPTED, "status": STATUS})
+                    self.assertEqual(1, snapshot["binding"]["request_id"])
+                    self.assertGreater(snapshot["binding"]["upstream_first_payload_ns"], snapshot["binding"]["arrived_ns"])
+                    with self.assertRaises(AssertionError):
+                        fixture.control("child-bind", {"accepted": ACCEPTED, "status": STATUS})
+                    fixture.control("child-release", {})
+
+    def test_partial_binding_checks_actual_file_before_parent_cancellation(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"EVAL_HOME": directory}):
+            path = actual_file(directory, PATHS["artifact_dir"] + "/partial-neutral-nonce.txt")
+            path.parent.mkdir(parents=True)
+            path.write_text("wrong bytes")
+            with self.actual_held_response(directory, partial=True) as fixture:
+                with self.assertRaises(AssertionError):
+                    fixture.control("child-bind", {"accepted": ACCEPTED, "status": STATUS})
+                self.assertIsNone(fixture.binding)
+                path.write_text("PARTIAL-neutral-nonce")
+                self.assertIsNotNone(fixture.control("child-bind", {"accepted": ACCEPTED, "status": STATUS})["binding"])
+                fixture.control("child-release", {})
+
+    def test_parent_sidecar_and_foreign_requests_do_not_consume_child_barrier(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = ChildFixture("http://127.0.0.1:1/v1", "neutral", "", Path(directory) / "relay")
+            fixture.control("child-setup", {"case": "child_run_held_parent", "nonce": "neutral-nonce"})
+            requests = [parent(), {"messages": [{"role": "system", "content": "memory distillation"},
+                                               {"role": "user", "content": "neutral-nonce"}]}, child()]
+            requests[-1]["messages"][1]["content"] = requests[-1]["messages"][1]["content"].replace("neutral-nonce", "foreign")
+            for request in requests:
+                self.assertIsNone(fixture.completion(request))
+            self.assertIsNone(fixture.candidate)
+            self.assertEqual(3, len(list((Path(directory) / "relay").glob("request-*.json"))))
+
+    def test_actual_forward_preserves_stream_and_json_bytes_and_captures_admission(self):
+        received = []
+        class Upstream(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                return
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                received.append(body)
+                parsed = json.loads(body)
+                stream = parsed["stream"]
+                if parsed.get("fail"):
+                    self.send_error(503, "Neutral upstream failure")
+                    return
+                reply = b'data: {"actual":"neutral"}\n\ndata: [DONE]\n\n' if stream else b'{"actual":"neutral"}'
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream" if stream else "application/json")
+                self.send_header("Content-Length", str(len(reply)))
+                self.end_headers()
+                self.wfile.write(reply)
+        with tempfile.TemporaryDirectory() as directory, ThreadingHTTPServer(("127.0.0.1", 0), Upstream) as upstream:
+            fixture = ChildFixture(f"http://127.0.0.1:{upstream.server_port}/v1", "neutral", "", Path(directory) / "relay")
+            with ThreadingHTTPServer(("127.0.0.1", 0), child_handler(fixture)) as relay:
+                threads = [threading.Thread(target=server.serve_forever) for server in [upstream, relay]]
+                for thread in threads:
+                    thread.start()
+                try:
+                    for stream in [False, True]:
+                        body = {**parent(), "stream": stream}
+                        request = urllib.request.Request(f"http://127.0.0.1:{relay.server_port}/v1/chat/completions",
+                                                         data=json.dumps(body).encode())
+                        with urllib.request.urlopen(request, timeout=2) as response:
+                            actual = response.read()
+                        expected = b'data: {"actual":"neutral"}\n\ndata: [DONE]\n\n' if stream else b'{"actual":"neutral"}'
+                        self.assertEqual(expected, actual)
+                        self.assertEqual(json.dumps(body).encode(), received[-1])
+                        index = len(received)
+                        self.assertEqual(body, json.loads((fixture.evidence / f"request-{index:04}.json").read_text()))
+                        wire = (fixture.evidence / f"response-{index:04}.wire").read_bytes()
+                        self.assertTrue(wire.endswith(expected))
+                        snapshot = fixture.control("snapshot", {})
+                        row = snapshot["requests"][-1]
+                        self.assertTrue(row["response_payload_written"])
+                        self.assertGreater(row["response_first_payload_ns"], row["admitted_ns"])
+                        consumed = fixture.control("child-consumed", {"expected": [
+                            {"accepted": ACCEPTED, "call_id": "start-neutral", "source_operation": "spawn_agent"}], "parent_boundary_ns": time.monotonic_ns()})
+                        self.assertTrue(consumed["complete"])
+                        self.assertEqual("delivery-neutral", consumed["deliveries"][0]["call_id"])
+                    failed = {**parent(), "stream": False, "fail": True}
+                    request = urllib.request.Request(f"http://127.0.0.1:{relay.server_port}/v1/chat/completions",
+                                                     data=json.dumps(failed).encode())
+                    with self.assertRaises(urllib.error.HTTPError) as error:
+                        urllib.request.urlopen(request, timeout=2)
+                    self.assertEqual(502, error.exception.code)
+                    error.exception.close()
+                    row = fixture.records[-1]
+                    self.assertEqual(0, row["upstream_first_payload_ns"])
+                    self.assertEqual(0, row["response_first_payload_ns"])
+                    self.assertFalse(row["response_payload_written"])
+                    self.assertFalse(consumed_deliveries([row], [{"accepted": ACCEPTED, "call_id": "start-neutral", "source_operation": "spawn_agent"}],
+                                                        time.monotonic_ns())["complete"])
+                finally:
+                    upstream.shutdown()
+                    relay.shutdown()
+                    for thread in threads:
+                        thread.join(2)
+
+    def test_partial_hold_needs_real_paired_write_result(self):
+        request = child()
+        request["messages"] += [{"role": "assistant", "tool_calls": [{"id": "write", "function": {
+            "name": "file_write", "arguments": json.dumps({"Path": PATHS["artifact_dir"] + "/partial-neutral-nonce.txt"})}}]}]
+        self.assertIsNone(write_completed(request, "partial-neutral-nonce.txt"))
+        request["messages"].append({"role": "tool", "tool_call_id": "foreign", "content": "Wrote file"})
+        self.assertIsNone(write_completed(request, "partial-neutral-nonce.txt"))
+        request["messages"].append({"role": "tool", "tool_call_id": "write", "content": "Wrote file"})
+        self.assertEqual("write", write_completed(request, "partial-neutral-nonce.txt")["call_id"])
+
+    def test_child_action_oracle_rejects_extra_shell_and_wrong_write(self):
+        verify_child_actions([child_after_write()], PATHS, "neutral-nonce", False)
+        repeated = child_after_write()
+        repeated["messages"].extend(copy.deepcopy(repeated["messages"][-2:]))
+        with self.assertRaises(AssertionError):
+            verify_child_actions([repeated], PATHS, "neutral-nonce", False)
+        for mutate in [lambda r: r["messages"][-2]["tool_calls"][0]["function"].update(name="shell_execute"),
+                       lambda r: r["messages"][-2]["tool_calls"][0]["function"].update(arguments=json.dumps({"Path": "/tmp/foreign", "Content": "wrong"}))]:
+            request = child_after_write()
+            mutate(request)
+            with self.subTest(request=request), self.assertRaises(AssertionError):
+                verify_child_actions([request], PATHS, "neutral-nonce", False)
+
+    def test_actual_cli_acceptance_requires_same_model_object_and_committed_start(self):
+        stdout = "[tool:result] spawn_agent → " + json.dumps(ACCEPTED) + "\nCLI-ACCEPTED-neutral-nonce\n"
+        request = {"messages": [{"role": "assistant", "tool_calls": [{"id": "start-neutral", "function": {
+            "name": "spawn_agent", "arguments": json.dumps({"Agent": "child-run-worker"})}}]},
+            {"role": "tool", "tool_call_id": "start-neutral", "content": json.dumps(ACCEPTED)}]}
+        self.assertTrue(verify_cli_acceptance(stdout, [request], logs(), "session-neutral", "neutral-nonce")["passed"])
+        for output, requests, log in [(stdout, [], logs()), (stdout, [request], ""),
+                                      (stdout.replace("Accepted", "Completed"), [request], logs()),
+                                      (stdout.replace("CLI-ACCEPTED-neutral-nonce", "no reply"), [request], logs()),
+                                      (stdout, [parent()], logs())]:
+            with self.subTest(output=output, requests=requests), self.assertRaises(AssertionError):
+                verify_cli_acceptance(output, requests, log, "session-neutral", "neutral-nonce")
+
+    def test_actual_file_rejects_foreign_paths_and_link_escapes(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as foreign:
+            root = Path(home) / "data"
+            root.mkdir()
+            (root / "escape").symlink_to(foreign)
+            for path in ["/tmp/outside", "/home/netclaw/.netclaw/../outside", "/home/netclaw/.netclaw/escape/file"]:
+                with self.subTest(path=path), self.assertRaises(AssertionError):
+                    actual_file(home, path)
+
+
+class TrialOracleControls(unittest.TestCase):
+    def sample(self, home, cancel=False):
+        for canonical in [PATHS["log_path"], PATHS["artifact_dir"] + ("/partial-neutral-nonce.txt" if cancel else "/complete-neutral-nonce.txt")]:
+            path = actual_file(home, canonical)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("actual neutral child log line" if canonical == PATHS["log_path"] else
+                            ("PARTIAL-" if cancel else "COMPLETE-") + "neutral-nonce")
+        calls = [{"id": "start-neutral", "name": "spawn_agent", "arguments": {"Agent": "child-run-worker"},
+                  "result": json.dumps(ACCEPTED), "success": True, "turn": 1},
+                 {"name": "load_tool", "arguments": {"Name": "check_agent_run"}, "success": True, "turn": 2},
+                 {"name": "check_agent_run", "arguments": {"RunId": ACCEPTED["run_id"], "Cancel": cancel}, "success": True, "turn": 2},
+                 {"name": "file_read", "arguments": {"Path": PATHS["log_path"]}, "success": True, "turn": 2, "result": "actual neutral child log line"},
+                 {"name": "file_read", "arguments": {"Path": PATHS["artifact_dir"] + ("/partial-neutral-nonce.txt" if cancel else "/complete-neutral-nonce.txt")},
+                  "success": True, "turn": 2 if cancel else 3, "observed_ns": 35 if cancel else 80,
+                  "result": ("PARTIAL-" if cancel else "COMPLETE-") + "neutral-nonce"}]
+        receipt = {"accepted_run": ACCEPTED, "status": "observed", "completed_turns": 3, "user_inputs": 2,
+                   "first_turn_ns": 10, "second_turn_ns": 40, "release_ns": 50, "session_id": "session-neutral",
+                   "calls": calls, "last_reply": ("PARTIAL-" if cancel else "COMPLETE-") + "neutral-nonce"}
+        snapshot = {"binding": {"accepted": ACCEPTED, "paths": PATHS, "request_id": 1, "arrived_ns": 5, "upstream_first_payload_ns": 6, "bound_ns": 30},
+                    "released": True, "release_ns": 49, "requests": [{"held": True, "child": True, "request_id": 1, "admitted_ns": 5, "upstream_first_payload_ns": 6, "response_first_payload_ns": 0, "response_payload_written": False},
+                        {"held": False, "child": False, "request_id": 2, "admitted_ns": 32 if cancel else 60,
+                         "response_first_payload_ns": 33 if cancel else 70, "response_payload_written": True}]}
+        receipt["delivery_observations"] = {"complete": True, "deliveries": [{"accepted": ACCEPTED,
+            "call_id": "delivery-neutral", "terminal": terminal(cancel), "request_id": 2,
+            "request_admitted_ns": 32 if cancel else 60, "response_first_payload_ns": 33 if cancel else 70,
+            "parent_boundary_ns": 40 if cancel else 90}]}
+        if cancel:
+            checkpoint = terminal(True)["checkpoint"]
+            report = {"run_id": ACCEPTED["run_id"], "state": "Cancelled", "summary": checkpoint["Summary"],
+                      "confirmed_activity": checkpoint["ConfirmedActivity"],
+                      "external_effects": "Recorded receipts describe known local results. They do not prove external effects stopped."}
+            actual_file(home, PATHS["artifact_dir"] + "/cancelled-results.json").write_text(json.dumps(report))
+        return receipt, snapshot
+
+    def test_valid_held_flow_requires_runtime_provider_and_actual_artifact_evidence(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home)
+            self.assertTrue(verify_trial(receipt, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)["passed"])
+            for mutate in [lambda r: r.update(user_inputs=3), lambda r: r.update(completed_turns=1),
+                           lambda r: r.update(first_turn_ns=0), lambda r: r.update(last_reply="imagined artifact"),
+                           lambda r: r["calls"].pop(), lambda r: r["calls"][3].update(success=False),
+                           lambda r: r["calls"][2]["arguments"].update(RunId="foreign"), lambda r: r["calls"][3].update(turn=3),
+                           lambda r: r["calls"][4].update(observed_ns=60), lambda r: r["calls"][4].update(observed_ns=100)]:
+                value = copy.deepcopy(receipt)
+                mutate(value)
+                with self.subTest(receipt=value), self.assertRaises(AssertionError):
+                    verify_trial(value, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)
+            for mutate in [lambda row: row["binding"].update(upstream_first_payload_ns=0),
+                           lambda row: row.update(release_ns=39),
+                           lambda row: row["binding"].update(request_id=2),
+                           lambda row: row["requests"][0].update(upstream_first_payload_ns=0)]:
+                invalid = copy.deepcopy(snapshot)
+                mutate(invalid)
+                with self.subTest(snapshot=invalid), self.assertRaises(AssertionError):
+                    verify_trial(receipt, [child_after_write(), parent()], invalid, logs(), home, "neutral-nonce", False)
+            actual_file(home, PATHS["artifact_dir"] + "/complete-neutral-nonce.txt").write_text("incorrect")
+            with self.assertRaises(AssertionError):
+                verify_trial(receipt, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)
+
+    def test_full_trial_requires_exact_unique_terminal_argument_keys(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home)
+            def check(arguments):
+                request = parent()
+                request["messages"][0]["tool_calls"][0]["function"]["arguments"] = arguments
+                return verify_trial(receipt, [child_after_write(), request], snapshot, logs(), home, "neutral-nonce", False)
+            self.assertTrue(check('  { "source_operation" : "spawn_agent",\n "run_id" : "run-neutral" }  ')["passed"])
+            for arguments in [
+                '{"run_id":"run-neutral","source_operation":"spawn_agent","unexpected_authority":"foreign"}',
+                '{"run_id":"foreign","run_id":"run-neutral","source_operation":"spawn_agent"}',
+                '{"run_id":"run-neutral","run_id":"foreign","source_operation":"spawn_agent"}',
+                '{"run_id":"run-neutral","run_id":"run-neutral","source_operation":"spawn_agent"}',
+                '{"run_id":"run-neutral","source_operation":"shell_execute","source_operation":"spawn_agent"}',
+                '{"run_id":"run-neutral","source_operation":"spawn_agent","source_operation":"spawn_agent"}',
+                '{"run_id":"run-neutral","source_operation":"spawn_agent","extra":{"scope":"foreign","scope":"owner"}}',
+                '{"run_id":"run-neutral","source_operation":{"name":"foreign","name":"spawn_agent"}}',
+            ]:
+                with self.subTest(arguments=arguments), self.assertRaises(AssertionError):
+                    check(arguments)
+
+    def test_full_trial_rejects_duplicate_terminal_body_keys_at_each_object_scope(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home)
+            for body in [
+                '{"run_id":"foreign",' + json.dumps(terminal())[1:],
+                json.dumps(terminal())[:-1] + ',"extra":{"scope":"foreign","scope":"owner"}}',
+            ]:
+                request = parent()
+                request["messages"][1]["content"] = body
+                observed = copy.deepcopy(receipt)
+                observed["delivery_observations"]["deliveries"][0]["terminal"] = json.loads(body)
+                with self.subTest(body=body), self.assertRaises(AssertionError):
+                    verify_trial(observed, [child_after_write(), request], snapshot, logs(), home, "neutral-nonce", False)
+
+    def test_cancel_consumption_can_complete_inside_second_probe_before_release(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home, True)
+            receipt["completed_turns"] = 2
+            receipt["last_reply"] += " PARENT-PROBE-neutral-nonce"
+            self.assertTrue(verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
+                                         logs(), home, "neutral-nonce", True)["passed"])
+
+    def test_partial_requires_exact_checkpoint_and_actual_run_local_report(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home, True)
+            original = terminal(True)
+            def check(body):
+                value = copy.deepcopy(receipt)
+                value["delivery_observations"]["deliveries"][0]["terminal"] = body
+                return verify_trial(value, [child_after_write(True), parent(body)], snapshot, logs(), home, "neutral-nonce", True)
+            self.assertTrue(check(original)["passed"])
+            for mutate in [lambda b: b.update(checkpoint=None),
+                           lambda b: b["checkpoint"].update(CompletedRound=0),
+                           lambda b: b["checkpoint"].update(Summary=""),
+                           lambda b: b["checkpoint"]["ConfirmedActivity"].update(ConfirmedChangedFiles=[]),
+                           lambda b: b.update(output=PATHS["artifact_dir"] + "/partial-neutral-nonce.txt"),
+                           lambda b: b.update(warning="The framework report failed. No report path is confirmed.")]:
+                body = copy.deepcopy(original)
+                mutate(body)
+                with self.subTest(body=body), self.assertRaises(AssertionError):
+                    check(body)
+            report_path = actual_file(home, PATHS["artifact_dir"] + "/cancelled-results.json")
+            report = json.loads(report_path.read_text())
+            for field, value in [("run_id", "foreign"), ("state", "Completed"), ("summary", "altered"),
+                                 ("confirmed_activity", {"ConfirmedChangedFiles": []}), ("external_effects", "remote provider stopped")]:
+                report_path.write_text(json.dumps({**report, field: value}))
+                with self.subTest(field=field), self.assertRaises(AssertionError):
+                    check(original)
+            report_path.unlink()
+            with self.assertRaises(FileNotFoundError):
+                check(original)
+
+    def test_cancel_requires_partial_evidence_and_rejects_later_child_admission(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home, True)
+            self.assertTrue(verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot, logs(), home, "neutral-nonce", True)["passed"])
+            snapshot["requests"].append({"held": False, "child": True, "request_id": 3})
+            with self.assertRaises(AssertionError):
+                verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot, logs(), home, "neutral-nonce", True)
+            snapshot["requests"].pop()
+            for fields in [{"reason": "Timeout"}, {"reason": "CancelledByParent"},
+                           {"state": "cancelled"}, {"outcome": "failed"}]:
+                with self.subTest(fields=fields), self.assertRaises(AssertionError):
+                    verify_trial(receipt, [child_after_write(True), parent({**terminal(True), **fields})], snapshot, logs(), home, "neutral-nonce", True)
+
+
+if __name__ == "__main__":
+    unittest.main()

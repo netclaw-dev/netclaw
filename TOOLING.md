@@ -43,21 +43,31 @@ coverage. They do not replace positive and negative behavior tests.
 ### Task Adoption Gate
 
 Run `./scripts/run-tool-task-adoption-mutations.sh` from the repository root.
-The gate uses the existing xUnit 2 harness and selects 13 tests through a temporary Stryker JSON configuration.
+The gate uses the existing xUnit 2 harness and selects 14 tests through a temporary Stryker JSON configuration.
+It runs the five prior targets with their 13 existing controls.
+It runs the child-authority target separately with its one owner test.
+An unrelated broken parent-input guard can prevent that owner test from starting a child.
+Separate filters keep each mutation with the tests that reject it.
 The script deletes that configuration on exit.
 
-The gate targets five exact mutations:
+The gate targets six exact mutations:
 
 - Replace full task-authority equality.
 - Remove the ordered-prefix rejection.
 - Replace `Take` with `Skip` in the ordered prefix.
 - Replace actual-outcome equality in the recurrence tracker.
 - Change stale-callback rejection to acceptance.
+- Remove the original-requester rejection for a child control call.
 
 The callback target changes the final `false` result in `OwnsToolExecution` to `true`.
 Its exact mutator name is `Boolean mutation`.
 The mailbox test replays a captured prior result during a new dispatch with the same provider call ID.
 The test verifies the current authority attempt, result pair, cancellation token, and confirmed disk effects.
+
+The child control target removes the `!` from `TurnContext.HasSameAuthority(original, current)`.
+Its exact mutator name is `LogicalNotExpression to un-LogicalNotExpression mutation`.
+The test uses a real owner with a held child and the actual status tool.
+It checks original-owner access, opaque foreign denial, canonical log paths, and normal file-policy rejection.
 
 Every expected mutant must exist and have the `Killed` status.
 The gate rejects expected compile errors, timeouts, survivors, and absent mutants.
@@ -65,9 +75,16 @@ It also rejects extra executable mutants.
 Stryker can emit a non-target `Count`-to-`Sum` mutation that cannot compile for the typed input list.
 The exact-name check excludes that invalid mutation; it does not exclude an expected target error.
 
-The current independent run killed all five targets in 187.564 seconds.
+The earlier independent run killed all five prior targets in 187.564 seconds.
 The prior four-target run took 3m05s.
+The first combined six-target run took 232.52 seconds and failed.
+Four targets were killed. The two ordered-prefix targets timed out.
+The gate correctly rejected those timeouts.
+The separate-filter run killed all six targets in 339.85 seconds.
+Its reports contain no tested timeout or survivor.
+The separate build adds 152.286 seconds over the earlier five-target run.
 CI runs this gate in `shell-analysis` and uploads `artifacts/stryker/tool-task-adoption` with the group reports.
+The `adoption` and `child-control` directories each retain their own mutation report.
 The local duration does not establish the combined CI duration.
 
 ### Current Targets
@@ -76,6 +93,7 @@ The local duration does not establish the combined CI duration.
 |--------|-----------------|------------------|---------|
 | `SessionState` task adoption and `TurnStateTracker` actual outcomes | Full authority context and the ordered input prefix control adoption; changed actual outcomes do not trigger exact recurrence | 4 killed | `./scripts/run-tool-task-adoption-mutations.sh` |
 | `LlmSessionActor.OwnsToolExecution` | A captured prior reply cannot affect the current dispatch, even when the provider call ID repeats | 1 killed | `./scripts/run-tool-task-adoption-mutations.sh` |
+| `LlmSessionActor.ChildRuns` original-requester check | Child controls retain the original authority; foreign callers receive no state or paths | 1 killed | `./scripts/run-tool-task-adoption-mutations.sh` |
 | `PathAccessPolicy.AddSessionRoots` and `PathAccessPolicy.IsReadableByAudience` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected | 4 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |

@@ -297,8 +297,8 @@ Child approval prompts shall remain valid for the live run after its start call 
 Cancellation shall stop new task dispatch and preserve recorded partial evidence through a five-second framework-only grace period.
 
 Restart shall report interrupted children as lost, retain terminal delivery, and expire child approval prompts without automatic child relaunch.
-The release shall prove a parent model response before a held child request completes under the selected supported provider capacity contract.
-Provider capacity remains an explicit delivery gate; actor acknowledgements alone do not prove model responsiveness.
+The release shall prove a parent model response before a held child request completes on the selected real backend.
+Actor acknowledgements alone do not prove model responsiveness. The inference backend owns capacity and request queues.
 Private agent messages, peer discovery, questions, and live steering remain outside this delivery.
 
 See `openspec/changes/background-child-runs/` for the second PR's review contract.

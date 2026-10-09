@@ -18,7 +18,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Serialization;
 
-internal static class NetclawProtoMapper
+internal static partial class NetclawProtoMapper
 {
     private const int NoAssignmentDigestWireKind = 1;
     private const int ExactAssignmentDigestWireKind = 2;
@@ -32,6 +32,8 @@ internal static class NetclawProtoMapper
         SerializableToolCall v => ToProto(v),
         TurnRecorded v => ToProto(v),
         InputAdmitted v => ToProto(v),
+        ChildRunAccepted v => ToProto(v),
+        ChildRunEvent v => ToProto(v),
         InputClosed v => ToProto(v),
         ToolTaskAdopted v => ToProto(v),
         SessionTitleSet v => ToProto(v),
@@ -198,6 +200,8 @@ internal static class NetclawProtoMapper
             BackgroundJobLineageVersion = evt.BackgroundJobLineageVersion,
             BackgroundJobOrigin = evt.BackgroundJobOrigin is null ? null : ToProto(evt.BackgroundJobOrigin)
         };
+        if (evt.SourceChildRunId is { } sourceChild)
+            proto.SourceChildRunId = sourceChild.Value;
         if (evt.SourceBackgroundJobId is { } sourceJobId)
             proto.SourceBackgroundJobId = sourceJobId.Value;
         if (evt.SourceMessageId is not null)
@@ -220,6 +224,7 @@ internal static class NetclawProtoMapper
             : FromProto(proto.TurnContext),
         AdmittedAtMs = proto.AdmittedAtMs,
         SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : null,
+        SourceChildRunId = proto.HasSourceChildRunId ? new SubAgentRunId(proto.SourceChildRunId) : null,
         BackgroundJobLineageVersion = proto.BackgroundJobLineageVersion,
         BackgroundJobOrigin = proto.BackgroundJobOrigin is null ? null : FromProto(proto.BackgroundJobOrigin)
     };
@@ -233,6 +238,8 @@ internal static class NetclawProtoMapper
         proto.InputIds.AddRange(evt.InputIds.Select(static id => id.Value));
         if (evt.ContinuedJobKey is not null)
             proto.ContinuedJobKey = evt.ContinuedJobKey;
+        if (evt.ContinuedChildRunId is { } child)
+            proto.ContinuedChildRunId = child.Value;
         return proto;
     }
 
@@ -244,7 +251,8 @@ internal static class NetclawProtoMapper
             : FromProto(proto.TurnContext),
         InputIds = proto.InputIds.Select(static id => new InputId(id)).ToArray(),
         AdoptedAtMs = proto.AdoptedAtMs,
-        ContinuedJobKey = proto.HasContinuedJobKey ? proto.ContinuedJobKey : null
+        ContinuedJobKey = proto.HasContinuedJobKey ? proto.ContinuedJobKey : null,
+        ContinuedChildRunId = proto.HasContinuedChildRunId ? new SubAgentRunId(proto.ContinuedChildRunId) : null
     };
 
     internal static Proto.InputClosedProto ToProto(InputClosed evt)
@@ -376,6 +384,8 @@ internal static class NetclawProtoMapper
             Audience = (Proto.TrustAudience)(int)evt.Audience,
             RequestedAtMs = evt.RequestedAtMs
         };
+        if (evt.SourceChildRunId is { } childRun) proto.SourceChildRunId = childRun.Value;
+        if (evt.OriginalChildCallId is { } childCall) proto.OriginalChildCallId = childCall.Value;
         proto.Patterns.AddRange(evt.Patterns);
         proto.CandidateVerbs.AddRange(evt.CandidateVerbs);
         if (evt.RequesterSenderId is not null)
@@ -408,7 +418,9 @@ internal static class NetclawProtoMapper
     internal static ToolApprovalRequested FromProto(Proto.ToolApprovalRequestedProto proto) => new()
     {
         SessionId = FromProto(proto.SessionId),
+        SourceChildRunId = proto.HasSourceChildRunId ? new SubAgentRunId(proto.SourceChildRunId) : null,
         CallId = proto.CallId,
+        OriginalChildCallId = proto.HasOriginalChildCallId ? new ToolCallId(proto.OriginalChildCallId) : null,
         ToolName = proto.ToolName,
         Patterns = proto.Patterns.ToArray(),
         CandidateVerbs = proto.CandidateVerbs.ToArray(),
@@ -452,12 +464,14 @@ internal static class NetclawProtoMapper
         };
         if (evt.AuthorizationAttemptId is not null)
             proto.AuthorizationAttemptId = evt.AuthorizationAttemptId;
+        if (evt.SourceChildRunId is { } childRun) proto.SourceChildRunId = childRun.Value;
         return proto;
     }
 
     internal static ToolApprovalResolved FromProto(Proto.ToolApprovalResolvedProto proto) => new()
     {
         SessionId = FromProto(proto.SessionId),
+        SourceChildRunId = proto.HasSourceChildRunId ? new SubAgentRunId(proto.SourceChildRunId) : null,
         CallId = proto.CallId,
         Decision = proto.Decision,
         AuthorizationAttemptId = proto.HasAuthorizationAttemptId
@@ -667,6 +681,7 @@ internal static class NetclawProtoMapper
         proto.ProcessedBackgroundJobIds.AddRange(snap.ProcessedBackgroundJobIds.Select(static id => id.Value));
         proto.History.AddRange(snap.History.Select(ToProto));
         proto.ActiveBackgroundJobs.AddRange(snap.ActiveBackgroundJobs.Select(ToProto));
+        proto.ChildRuns.AddRange(snap.ChildRuns.Select(ToProto));
         proto.AdoptedContextRecords.AddRange(snap.AdoptedContextRecords.Select(ToAdoptedContextSnapshotRecord));
         proto.PendingInputs.AddRange(snap.PendingInputs.Select(ToProto));
         proto.RecentSourceMessageKeys.AddRange(snap.RecentSourceMessageKeys);
@@ -691,6 +706,7 @@ internal static class NetclawProtoMapper
         WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
         History = proto.History.Select(FromProto).ToArray(),
         ActiveBackgroundJobs = proto.ActiveBackgroundJobs.Select(FromProto).ToArray(),
+        ChildRuns = proto.ChildRuns.Select(FromProto).ToArray(),
         AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray(),
         PendingInputs = proto.PendingInputs.Select(FromProto).ToArray(),
         RecentSourceMessageKeys = proto.RecentSourceMessageKeys.ToArray()

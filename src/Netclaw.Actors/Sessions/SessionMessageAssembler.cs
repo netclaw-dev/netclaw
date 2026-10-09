@@ -3,7 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -247,6 +249,10 @@ public static class SessionMessageAssembler
         if (!input.State.ActiveBackgroundJobs.IsEmpty && input.Audience != TrustAudience.Public)
             parts.Add(FormatActiveBackgroundJobs(input.State));
 
+        var childRuns = FormatBackgroundChildRuns(input);
+        if (childRuns.Length > 0)
+            parts.Add(childRuns);
+
         if (input.SlashCommandSkillContent is not null)
             parts.Add(input.SlashCommandSkillContent);
 
@@ -257,6 +263,35 @@ public static class SessionMessageAssembler
             parts.Add(input.TurnRestartNotice);
 
         return string.Join("\n\n", parts);
+    }
+
+    private static string FormatBackgroundChildRuns(ContextAssemblyInput input)
+    {
+        if (input.Audience == TrustAudience.Public || input.State.ChildRuns.Count == 0
+            || input.State.AdoptedTaskContext is not { } currentRecord)
+            return string.Empty;
+        if (!TurnContext.TryFromRecord(currentRecord, out var current, out var reason) || current is null)
+            throw new InvalidDataException($"The child context has invalid current authority: {reason}");
+        var pendingIds = input.State.PendingInputs.Select(static pending => pending.InputId).ToHashSet();
+        var visible = input.State.ChildRuns.Values
+            .Where(run => run.DeliveryInputId is null || pendingIds.Contains(run.DeliveryInputId.Value))
+            .Where(run =>
+        {
+            if (!TurnContext.TryFromRecord(run.OriginalContext, out var original, out var originalReason) || original is null)
+                throw new InvalidDataException($"The child context has invalid original authority: {originalReason}");
+            return TurnContext.HasSameAuthority(original, current);
+        }).OrderByDescending(static run => run.AcceptedAtMs).ThenBy(static run => run.RunId.Value, StringComparer.Ordinal)
+            .Take(8).Select(static run => new
+            {
+                run_id = run.RunId.Value, scope_id = run.ScopeId.Value, agent = run.AgentName.Value,
+                state = run.State.ToString(), cancellation_requested = run.CancellationRequestedAtMs is not null,
+                dispatch_closed = run.DispatchClosedAtMs is not null
+            }).ToArray();
+        if (visible.Length == 0)
+            return string.Empty;
+        return "[background-agent-runs]\n" + JsonSerializer.Serialize(visible)
+            + "\nThese are recorded lifecycle facts. They do not prove current remote activity."
+            + "\nResults arrive automatically. For a necessary status or cancel request, load_tool(name: \"check_agent_run\").";
     }
 
     private static string FormatActiveBackgroundJobs(SessionState state)

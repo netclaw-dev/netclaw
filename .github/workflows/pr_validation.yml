@@ -315,6 +315,7 @@ jobs:
           bash -n evals/run-background-evals.sh
           bash -n evals/cycle_evals.sh
           python3 -m unittest discover -s evals -p test_background_evals.py -v
+          python3 -m unittest discover -s evals -p test_child_run_evals.py -v
           python3 -m unittest discover -s evals -p test_cycle_evals.py -v
           python3 -m unittest discover -s evals -p test_cli_detector_evals.py -v
           python3 -m unittest discover -s evals -p test_spill_steer_evals.py -v

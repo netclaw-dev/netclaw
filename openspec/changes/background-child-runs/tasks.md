@@ -53,6 +53,7 @@ Preparation evidence:
 - [ ] 4.5 Add Deferred `check_agent_run(run_id, cancel=false)` through normal non-shell policy; verify explicit load, unchanged core, and direct ownership checks.
 - [ ] 4.6 Deny child, cross-session, and wrong-requester controls; verify no target details and keep the valid parent control operational.
 - [ ] 4.7 Add bounded recorded-run context with the exact control name; verify it cannot claim unobserved live provider state or expose hidden results.
+- [ ] 4.8 Return canonical live `log_path` and `artifact_directory` after owner authorization. Hold a real child, inspect the actual status JSON, and read its exact log with ordinary file tools. Verify foreign controls reveal no paths and returned paths cannot bypass file policy.
 
 ## 5. Cancellation, partial evidence, and approval prompts
 

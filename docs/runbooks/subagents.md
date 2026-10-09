@@ -1,11 +1,10 @@
 # Subagents
 
-Subagents are specialist workers that the main Netclaw agent can delegate tasks
-to. Each subagent runs autonomously with its own system prompt, inherited
-audience-scoped tool surface, and timeout — then returns a synthesized result to
-the main agent. The delegation protects the main session's context window from
-token-heavy work (deep research, broad exploration, long summarization) and lets
-the main agent stay focused on conversation and coordination.
+Subagents are workers that the main Netclaw agent can use for independent tasks.
+Each child has its own system prompt, inherited audience/profile tool policy, and operation health checks.
+The owner accepts the task durably before the child completes it.
+The parent can continue its work and accept later user input. A terminal child result arrives later.
+Use [the engineering glossary](../spec/GLOSSARY.md) for shared terms.
 
 ## How it works
 
@@ -89,20 +88,70 @@ first user message is just the raw task, identical to the pre-context protocol.
    policy, then `SubAgentToolPolicy` removes tools that are statically denied to
    subagents (`spawn_agent`). Agent definition `tools:` metadata is advisory and
    does not narrow runtime authorization.
-3. A `SubAgentActor` is spawned as a **child of the session actor** (supervised,
-   lifecycle-managed — stops when the session stops).
-4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
-5. A final response, exact recurrence stop, cancellation, or inactivity timeout
-   causes the subagent to return a terminal run result.
-6. The main agent receives the `spawn_agent` tool result as an explicit text
-   envelope: agent name, run id, outcome (`completed`, `partial`, or `failed`),
-   optional reason, diagnostics pointer, and either a `Summary:` or `Error:`
-   section containing the subagent's final text.
+3. The owner session commits the accepted run before it creates a `SubAgentActor` or returns acceptance.
+4. The first tool response contains `run_id`, `scope_id`, `state`, and `control_tool` as strings.
+5. The first state is `Accepted`. The control name is `check_agent_run`.
+6. The child executes its model/tool loop with its original authority and a run-owned lifetime.
+7. The owner records the terminal result before it acknowledges the child.
+8. The owner admits one attributed continuation with a fresh tool-call/result pair after the original start batch settles.
 
-Child creation is marshaled back onto the session actor thread, so supervision
-stays within Akka's actor-thread rules. If the parent tool call is cancelled or
-times out, the subagent is cancelled too. The timeout is an inactivity budget: a
-responsive subagent is not stopped merely because wall-clock time has elapsed.
+Acceptance proves admission. It does not prove successful task completion or the current live state.
+The tool output and model history contain the same canonical acceptance JSON.
+Routed `skill_load` uses the same contract. Direct slash activation uses a human acknowledgement from the same owner facts.
+Inline skills remain inline. A failed child route cannot silently execute inline.
+Durable adoption preserves the fresh child result pair if its first parent review fails before the next turn record.
+Owner recovery retains the pair without a child relaunch or duplicate result admission.
+
+Child creation occurs on the owner actor thread.
+Start-call completion, start-token cancellation after acceptance, and ordinary later parent input do not cancel the accepted child.
+Operation health checks still apply. A healthy child can continue without a total task-age or tool-count limit.
+
+### Status And Cancellation
+
+The parent explicitly calls `load_tool` for `check_agent_run` when status or cancellation is necessary.
+The control requires normal policy, the owning session, and the original eligible requester.
+Children and foreign callers receive a denial without target details.
+Run IDs and result paths grant no access authority.
+
+Cancellation has four separate steps:
+
+1. The owner commits cancellation admission.
+2. The owner closes new model, tool, and approval-retry admission, then cancels active calls.
+3. The owner confirms local closure after each admitted invocation returns its Task.
+4. The framework retains a terminal result with confirmed partial evidence.
+
+Cancellation admission alone does not prove dispatch closure.
+An admitted invocation can delay closure before it returns its Task. The parent must still accept status requests.
+Closure does not wait for that returned Task to complete. An external service can ignore its cancellation token.
+After closure, a separate five-second deadline permits framework checkpoint retention and atomic run-local report writes.
+The grace period permits no model request, task tool, project edit, external request, or approval action.
+A failed report write or grace expiry preserves the last confirmed checkpoint and an explicit reason.
+The deadline bounds the owner wait. It does not prove that an operating-system file operation stops.
+Cancellation cannot undo an earlier effect. An external service can ignore cancellation and leave that effect's outcome unknown.
+
+Cancelled completion retains `Success=false`, wire outcome `Failed`, and reason `CancelledByParent`.
+Confirmed partial evidence does not turn cancellation into success.
+The parent does not merge a working-context delta from a failed or cancelled child.
+The first durable terminal or cancellation admission determines the terminal outcome.
+
+### Approval Prompts And Recovery
+
+A live child's approval prompt retains its original requester, exact call, authorization attempt, and accepted run.
+The prompt can outlive the start call. Ordinary later parent input does not abandon it.
+Child cancellation or loss expires it. A late answer creates no grant or retry.
+
+Idle passivation defers live children and pending result admission.
+Explicit stop and coordinated drain use the same child cancellation path.
+Owner restart records unresolved accepted children as `Lost`. It does not resume or recreate them.
+Committed cancellation retains its cancelled outcome. Committed terminal facts and pending delivery survive recovery.
+The model chooses further work from the recorded evidence. The framework does not automatically replay uncertain effects.
+
+Use cancellation and a revised child task when instructions must change.
+Private agent messages, peer discovery, and live steering remain outside this release.
+
+Assign one writer per workspace. Concurrent writers need separate authorized worktrees.
+Preserve the operator's dirty checkout. Check child artifacts and verification evidence before the parent delivers them.
+Only the parent sends user messages and attaches files under normal policy.
 
 ### Observability
 
@@ -120,9 +169,8 @@ are suppressed in Slack.
 Completion events are emitted for every finished subagent run, even when the
 subagent returns no structured findings. In that case `FindingsCount` is `0`
 and the memory-decision fields are empty because there was nothing to review.
-The completion event carries the same terminal outcome and reason used by the
-tool-result envelope, so operators can distinguish a useful partial summary from
-a failed run.
+The completion event carries the recorded terminal outcome and reason.
+Operators can distinguish a successful partial summary from a failed or cancelled run.
 
 Structured findings are conservative, parent-reviewed durable-memory candidates.
 They should be emitted as explicit conclusion envelopes with review metadata,
@@ -243,27 +291,27 @@ Each child receives its own `temp_dir`, `artifact_dir`, and `log_path`.
 The child also receives the session `session_dir` as its workspace base.
 Project instructions come from the inherited project root.
 
-A successful `spawn_agent` result returns the child run identifier.
-It also returns the exact child log path and artifact directory.
-The parent can inspect that log with `file_read`, `file_list`, or `file_search`.
-The parent must not use a shell search to discover the log.
+A successful `spawn_agent` result returns durable acceptance and the child run identifier.
+The authorized `check_agent_run` response supplies the exact `log_path` and `artifact_directory` before terminal completion.
+The parent can inspect that log with `file_read` or `file_search` under normal file policy.
+Use bounded reads and targeted searches. Do not derive the path or search a global log tree.
+A log shows diagnostic evidence. It does not prove current health, dispatch closure, or task completion.
+Use the owner's recorded status and terminal result for lifecycle facts.
 
 Example: The parent passes the returned log path to `file_read`.
 
 Counterexample: The parent does not search a global log tree for the child.
 
-If a subagent hits an approval-gated tool, the prompt is routed through the
-parent session's approval channel and requester context. Human approval time does
-not count as subagent inactivity or parent `spawn_agent` tool inactivity; both
-watchdogs resume after the approval wait settles. If no parent approval bridge
-is available (an unattended parent), the authorizer denies the gated tool with
-`approval_required_unattended`. The tool does not run, and the subagent gets the
-denial as a tool result (decision D2). If the bridge has no requester
-authority context, the gated tool fails closed as a failed subagent run and is
-not executed. Subagent approval waits are live-only: if the
-daemon or parent session restarts before the user responds, the stale prompt is
-expired and the interrupted parent `spawn_agent` call is closed before the next
-turn continues.
+Before reuse in eval fixtures or shared reports, scrub personal data and secrets from a derived transcript copy.
+Preserve the original log unchanged. Use stable opaque replacements when correlation or equality matters.
+
+The parent session routes a child's approval prompt with the original requester and exact call context.
+Human approval time does not count as child inactivity. The child health check resumes after the approval wait settles.
+The accepted run owns that wait after the start call completes.
+A missing parent approval bridge or requester authority fails the run without tool execution.
+Cancellation or loss expires the prompt. A late answer creates no grant or retry.
+After owner restart, unresolved children become `Lost`; committed cancellation retains its cancelled outcome.
+See [Approval Prompts And Recovery](#approval-prompts-and-recovery) for the lifecycle contract.
 
 ## Built-in agents
 
@@ -344,3 +392,19 @@ Rollback requires a tested compatible reader or restoration of that recorded pre
 Backup restoration loses journal state after the backup.
 It cannot undo external effects from completed tools or jobs.
 The plan documents this rollback limit; no rollback procedure receives proof without an executed test.
+
+## Background Child Upgrade And Rollback
+
+Stop ingress and complete the coordinated drain before you take a pre-upgrade backup.
+Retain the session journal, snapshots, storage catalog, child logs, and run artifacts together.
+Record the binary revision, backup path, and backup time. Test restoration against a copy.
+
+New child events use registered manifests `cra-v1` and `cre-v1`.
+An old binary cannot assume it can read these events. A protobuf field that an old reader ignores does not prove compatibility.
+Direct binary rollback requires explicit reader proof. Otherwise, restore the recorded pre-upgrade backup before you start the prior binary.
+Backup restoration loses journal state after the backup and cannot undo external effects.
+
+After restart, inspect recorded `Lost` or cancelled runs and retained partial artifacts.
+Do not recreate a child merely because its acceptance response exists.
+The model decides whether to finish, revise the task, or request a new authorized attempt from the recorded session.
+Reader and restoration test receipts establish only their stated storage scope. They do not prove a live operational rollback.

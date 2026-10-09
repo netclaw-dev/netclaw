@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.4.1"
+  version: "1.5.0"
 ---
 
 # Subagent Authoring
@@ -151,11 +151,23 @@ Cancellation, inactivity timeout, authorization, and operation deadlines still a
 The runtime returns known partial results when it stops a recurrent run.
 It does not request another model response to produce the terminal result.
 
-The parent-facing `spawn_agent` result is an explicit terminal text envelope:
-agent name, run id, outcome (`completed`, `partial`, or `failed`), optional
-reason, diagnostics pointer, and a `Summary:` or `Error:` section. Structured
-findings, when enabled, are a separate parent-reviewed memory-candidate path;
-do not rely on them as the visible result returned to the parent model.
+`spawn_agent` returns durable acceptance before child completion.
+Its first JSON result contains `run_id`, `scope_id`, `state`, and `control_tool`.
+The first state is `Accepted`; the control is `check_agent_run`.
+Acceptance does not prove successful task completion.
+The owner later delivers the recorded terminal result through a fresh result correlation.
+Structured findings remain a separate memory-candidate path that the parent reviews.
+
+Start-tool completion and ordinary later parent input do not cancel an accepted child.
+Load `check_agent_run` through `load_tool` for parent status or cancellation.
+That control requires the owning session and original eligible requester under current policy.
+Children cannot use it to control peers.
+Cancellation admission, local dispatch closure, and terminal settlement are separate facts.
+The framework retains partial evidence during its five-second finalization grace period after closure.
+That grace period permits no model call, task tool, project edit, or approval action.
+An owner restart marks unresolved accepted runs `Lost`; it does not resume child execution.
+Child cancellation or loss expires its approval prompt. A late answer creates no grant or retry.
+Load `netclaw-operations`, then read `references/child-runs.md` for the full contract.
 
 ## Fail-loud loader behavior
 
