@@ -235,15 +235,17 @@ public sealed class DaemonClientReconnectTests
         // This subscriber blocks the event pump indefinitely.
         using var sub = client.ConnectionEvents.Subscribe(_ => release.Wait());
 
-        // Commands must still complete, because events are delivered off the
-        // owner thread. If they were on the owner thread, these would hang.
-        await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken)
-            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        await client.SendAsync("hi", TestContext.Current.CancellationToken)
-            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-
-        // Unblock the pump so DisposeAsync can drain it and finish.
-        release.Set();
+        try
+        {
+            await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await client.SendAsync("hi", TestContext.Current.CancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            var receipt = await client.CloseAsync()
+                .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.Empty(receipt.Inputs);
+        }
+        finally { release.Set(); }
     }
 
     // Simulates a hub RPC whose response never arrives: it completes only when

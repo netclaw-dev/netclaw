@@ -311,15 +311,9 @@ public partial class ChatViewModel : ReactiveViewModel
     /// <see cref="InitializeSessionAsync"/>. Used by <c>ChatPageTests</c> to
     /// exercise the Input-panel rendering without spinning up a daemon.
     /// </summary>
-    internal void SeedPendingInteractionForTesting(ToolInteractionRequest interaction)
-    {
-        _outputSubject.OnNext(interaction);
-        _pendingInteractions.Enqueue(interaction);
-        RefreshApprovalOptions();
-        IsGenerating.Value = false;
-        StatusMessage.Value = "Approval required";
-        RequestRedraw();
-    }
+    internal void SeedPendingInteractionForTesting(ToolInteractionRequest interaction) => ProcessOutput(interaction);
+
+    internal void NotifyViewportChanged() => UiVersion.Value++;
 
     internal void ProcessOutputForTesting(SessionOutput output) => ProcessOutput(output);
 
@@ -402,13 +396,15 @@ public partial class ChatViewModel : ReactiveViewModel
 
     private void ProcessOutput(SessionOutput output)
     {
-        _outputSubject.OnNext(output);
-
-        if (output is UsageOutput usage)
-            AppendUsageLog(usage);
-
         switch (output)
         {
+            case UsageOutput usage:
+                AppendUsageLog(usage);
+                var contextWindow = usage.ContextWindowTokens > 0 ? usage.ContextWindowTokens : ContextWindowTokens;
+                var percentage = usage.InputTokens.HasValue && contextWindow > 0
+                    ? $" ({(double)usage.InputTokens.Value / contextWindow:P0} ctx)" : "";
+                UsageDisplay.Value = $"in={usage.InputTokens ?? 0} out={usage.OutputTokens ?? 0}{percentage}";
+                break;
             case ToolInteractionRequest interaction:
                 _pendingInteractions.Enqueue(interaction);
                 RefreshApprovalOptions();
@@ -430,7 +426,19 @@ public partial class ChatViewModel : ReactiveViewModel
                 break;
         }
 
+        _outputSubject.OnNext(output);
         RequestRedraw();
+    }
+
+    internal Task CancelFromInputAsync()
+    {
+        if (HasPendingInteraction) return DenyPendingInteractionAsync();
+        if (IsGenerating.Value)
+        {
+            StatusMessage.Value = "Cancel generation is not supported yet.";
+            RequestRedraw();
+        }
+        return Task.CompletedTask;
     }
 
     protected virtual async Task SubmitInteractionSelectionAsync(string selectedKey)

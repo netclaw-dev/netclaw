@@ -112,7 +112,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
             .Subscribe(_ =>
             {
                 InvalidateLayout();
-                ViewModel.UiVersion.Value++;
+                ViewModel.NotifyViewportChanged();
             })
             .DisposeWith(Subscriptions);
     }
@@ -305,27 +305,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         // idle it's a no-op. Ctrl+Q is the only quit affordance.
         if (keyInfo.Key == ConsoleKey.Escape)
         {
-            // A pending approval prompt always takes precedence. IsGenerating
-            // is cleared when a ToolInteractionRequest arrives, but the UI
-            // thread can observe a stale value, so the prompt check must come
-            // first — otherwise Escape gets swallowed by the generation-cancel
-            // TODO branch and the user has to press it again.
-            if (ViewModel.HasPendingInteraction)
-            {
-                // Fire-and-forget is safe: SubmitInteractionSelectionAsync
-                // catches daemon exceptions internally and re-presents the
-                // prompt (or shows a reconnect status) on failure.
-                _ = ViewModel.DenyPendingInteractionAsync();
-            }
-            else if (ViewModel.IsGenerating.Value)
-            {
-                // TODO: cancel generation when supported (#1757 follow-up).
-                // For now, tell the user instead of silently eating the key.
-                ViewModel.StatusMessage.Value = "Cancel generation is not supported yet.";
-                ViewModel.RequestRedraw();
-            }
-            // else: idle — no-op. The status bar advertises [Ctrl+Q] Quit.
-
+            _ = ViewModel.CancelFromInputAsync();
             return;
         }
 
@@ -461,21 +441,6 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
 
                 break;
 
-            case UsageOutput msg:
-                // Prefer the daemon-reported context window (authoritative, auto-detected
-                // from the provider); fall back to the DI-injected value when absent.
-                var ctxWindow = msg.ContextWindowTokens > 0
-                    ? msg.ContextWindowTokens
-                    : ViewModel.ContextWindowTokens;
-                var usagePercent = msg.InputTokens.HasValue && ctxWindow > 0
-                    ? (double)msg.InputTokens.Value / ctxWindow
-                    : (double?)null;
-                var ctxPart = usagePercent.HasValue
-                    ? $" ({usagePercent.Value:P0} ctx)"
-                    : "";
-                ViewModel.UsageDisplay.Value = $"in={msg.InputTokens ?? 0} out={msg.OutputTokens ?? 0}{ctxPart}";
-                break;
-
             case ErrorOutput msg:
                 RemoveThinkingSpinner();
                 _chatHistory.AppendLine($"  [error] {msg.Message}", Color.Red);
@@ -502,7 +467,6 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
             case TurnCompleted:
                 RemoveThinkingSpinner();
                 FinalizeAssistantSegmentIfNeeded();
-                ViewModel.StatusMessage.Value = "Ready";
                 _chatHistory.ScrollToBottom();
                 break;
 

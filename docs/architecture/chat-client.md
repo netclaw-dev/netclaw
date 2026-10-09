@@ -10,9 +10,11 @@ The rules live in [netclaw-cli](../../openspec/specs/netclaw-cli/spec.md) and
 | Component | Decision | State lifetime |
 | --- | --- | --- |
 | `DaemonClient` | Create and dispose the local runtime; expose the client API | Process-local |
+| `SignalRDaemonHubTransport` | Map typed commands and notifications to SignalR; own callback registrations | Connection-local |
 | `ChatClientActor` | Select the session; order inputs; own transport operations and elapsed deadlines | Actor-local |
 | Event pump | Deliver immutable output and status outside the actor | Process-local |
-| `ChatViewModel` | Update the display through Termina `InvokeAsync` | Page-local |
+| `ChatViewModel` | Own page state and user actions through Termina `InvokeAsync` | Page-local |
+| `ChatPage` | Own keys, focus, scroll, and transcript nodes | Page-local |
 | `HealthCheckStepViewModel` | Capture daemon generation and confirm the identity reload before chat | Operation-local |
 | `SessionRegistry` | Check attachment, identity, and ingress before dispatch | Daemon-local |
 | `SessionPipeline` | Map canonical source data and carry `AckTarget` | Pipeline-local |
@@ -28,12 +30,14 @@ Host disposal stops the actor system and disposes the transport.
 ```mermaid
 sequenceDiagram
     participant UI as ChatPage
+    participant V as ChatViewModel
     participant C as ChatClientActor
     participant R as SessionRegistry
     participant P as SessionPipeline
     participant S as LlmSessionActor
     participant J as Journal
-    UI->>C: Enter: submit text
+    UI->>V: Enter: submit text
+    V->>C: SendText
     C->>R: EnsureSession if attachment is absent
     R-->>C: SessionId + TextAdmissionVersion
     C->>R: SendMessage
@@ -45,8 +49,9 @@ sequenceDiagram
     S-->>R: CommandAck
     R-->>C: Text RPC succeeds
     Note over S: Model work continues independently
-    UI->>C: Ctrl+Q: close
-    C-->>UI: Final receipt within two seconds
+    UI->>V: Ctrl+Q: close
+    V->>C: Close
+    C-->>V: Final receipt within two seconds
 ```
 
 A fresh page connects without a daemon session until text or its hidden initial input arrives.
@@ -75,11 +80,30 @@ The client actor retains its rule against automatic resend after an uncertain RP
 
 The actor permits one transport operation at a time.
 `PipeTo` returns task results as messages while control commands remain available.
-The actor uses `Become` for idle, operation, retry, and closed behaviors.
+The actor uses `Become` for idle, active RPC, retry, and cancelled RPC behaviors.
 Each behavior retains close, drop, and cancellation handlers.
 Operation identities reject stale results.
 Cancellation alone does not prove that transport side effects stopped.
 The actor waits for the old task before it starts another operation.
+
+`ChatClientProtocol` groups command, completion, control, and notification records.
+Each command carries only its required payload. Session commands return `SessionId`; other commands return no value.
+The transport converts `SessionId`, `ToolCallId`, and `ApprovalOptionKey` to wire strings at its boundary.
+The actor queue holds requests that await a transport operation.
+The typed event channel carries output and connection notifications to subscribers outside the actor.
+These collections serve different consumers and lifetimes.
+
+Records describe three independent state dimensions: session attachment, work, and close.
+An attached session always carries its identity. A retry retains its request but has no active RPC resources.
+A cancelled RPC retains its resource owner until the actual task ends. It retains no caller request to replay.
+The RPC owner disposes its cancellation source and caller registration once.
+Infrastructure fields remain separate from these state descriptors.
+Recovery intent survives a disconnected bind reply and caller cancellation until automatic attachment succeeds.
+
+The view-model applies page state before it publishes the same output to the transcript subscriber.
+The page reads that state and changes terminal nodes on the Termina loop.
+Escape, resize, usage, and turn completion no longer write view-model state from the page.
+Usage-log files remain view-model resources. A separate follow-up can extract their lifetime without changing the actor protocol.
 
 Stable `IWithTimers` keys own retry, RPC, and close deadlines.
 The two-second close limit covers all prior requests once.
@@ -115,6 +139,8 @@ Negative: cancellation after dispatch cannot authorize automatic resend.
 Its theories cover rejection, buffered admission, and disconnect before or during the model request.
 `ChatSessionSetupTests` uses virtual actor timers and controlled task results.
 `ChatAdmissionTests` drives typed Enter and repeated Ctrl+Q through Termina.
+Its bound-loop burst theories check delta payload order, usage state, approval state, and final Ready state.
+The actor theories count active transport tasks through their actual completion, including cancellation and timeout.
 The native `chat-admission-quit` tape checks the durable journal after immediate quit.
 
 Forced process termination has no admission guarantee.

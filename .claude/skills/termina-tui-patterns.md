@@ -169,8 +169,8 @@ Two non-obvious rules, both load-bearing:
 - **`InvokeAsync` is testable without a host.** Unbound (a `new`-ed view-model in a unit
   test) its default runs the action **inline**, so after `await vm.PendingProbe` the
   apply has already run — assert directly, no drain seam. `Post` is a *no-op* unbound, so
-  prefer `InvokeAsync` for anything a unit test must observe. The real loop-thread
-  marshaling is covered by the native smoke tapes, not xUnit.
+  prefer `InvokeAsync` for anything a unit test must observe. Bound `TerminaApplication`
+  tests and native smoke tapes verify the real loop boundary.
 
 Use the snapshot/lock/atomic patterns below instead when you only need to **publish a
 value** for render to read (no code to run on the loop) — e.g. streaming row snapshots.
@@ -201,21 +201,25 @@ This rule solves stale-writer ordering. It does **not** make the background task
 ordinary field writes safe while render/input can read them concurrently. Those
 fields still need locks, immutable replacement, atomics, or loop-owned mutation.
 
-## Streaming (the chat reference)
+## Chat output reference
 
-`netclaw chat` is the proof that async-to-front-end works. The daemon's
-server-side `IAsyncEnumerable<token>` arrives over SignalR as a callback push that
-is mapped onto an R3 `Subject`, and the page subscribes and appends:
+The chat path uses these owners in order:
 
-- `DaemonClient.cs:78` — `_connection.On<…>("ReceiveOutput", dto => _outputSubject.OnNext(...))`
-- `DaemonClient.cs:153` — `public Observable<SessionOutput> SessionOutput => _outputSubject.AsObservable();`
-- `ChatPage.cs:78` — subscribe in `OnBound`; `ChatPage.cs:394-402` — append the delta to the
-  `StreamingTextNode`; `ChatPage.cs:493` — `RequestRedraw()`.
+1. `SignalRDaemonHubTransport` maps the callback DTO to a typed output notification.
+2. `DaemonClient` places that output on its typed event channel.
+3. Its event pump publishes the output outside the actor through R3.
+4. `ChatViewModel` uses `InvokeAsync` to apply the output on the Termina loop.
+5. The view-model updates page state, publishes transcript output, and requests a redraw.
+6. `ChatPage` consumes that output and changes terminal nodes on the same loop.
 
-Do not generalize this into "any off-loop mutation is fine." Chat streaming is a
-dedicated push path whose page owns the append/redraw behavior. Before copying it,
-verify the target node or subscriber is thread-safe, or publish into synchronized
-state that the loop snapshots during render.
+The actor owns session selection, input order, retry, cancellation, and close.
+The event pump keeps subscriber code outside the actor.
+Only the view-model writes chat page state. The page owns keys, focus, scroll, and transcript nodes.
+See [the chat architecture](../../docs/architecture/chat-client.md) for the complete flow and lifetime rules.
+
+Unbound view-model tests apply `InvokeAsync` actions inline.
+`ChatAdmissionTests` uses a bound Termina host to check ordered output and state before transcript publication.
+Native smoke tapes verify the binary and terminal boundary.
 
 ## Publication patterns that are safe on ARM64
 

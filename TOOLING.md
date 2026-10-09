@@ -889,6 +889,12 @@ TUI code SHOULD run the harness before declaring a change done.
 `NETCLAW_SMOKE_DAEMON` if exported), installs `vhs`, starts a native
 `ollama serve`, and pulls the smoke models automatically.
 
+Local runs with limited disk space can share one binary extraction directory across tape homes.
+Set `DOTNET_BUNDLE_EXTRACT_BASE_DIR` to an absolute directory that the smoke run owns.
+Remove that directory after all smoke processes exit.
+For an active run, remove only completed tapes' `.net` directories after confirmation that no process uses those homes.
+Retain the tape logs and session data for review.
+
 Config-writing flow tapes (`init-wizard`, `provider-add`, `provider-rename`,
 and `config-*`) must have executable semantic assertion scripts under
 `tests/smoke/assertions/`. `run-native-tape.sh` fails these tapes when the

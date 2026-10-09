@@ -16,6 +16,7 @@ using Termina.Hosting;
 using Termina.Input;
 using Termina.Terminal;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Cli.Tests.Tui;
 
@@ -45,13 +46,7 @@ public sealed class ChatAdmissionTests : IDisposable
         var navigation = new ChatNavigationState();
         var input = new VirtualInputSource();
         using var chat = new ChatViewModel(client, TimeProvider.System, new ModelCapabilities { ModelId = "test" }, navigation, Paths);
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(new VirtualTerminal(100, 30));
-        services.AddTerminaVirtualInput(input);
-        services.AddTermina(ChatViewModel.Route, routes => routes.RegisterRoute<ChatPage, ChatViewModel>(
-            ChatViewModel.Route, provider => new ChatPage(provider.GetRequiredService<IAnsiTerminal>()),
-            _ => chat));
-        await using var provider = services.BuildServiceProvider();
+        await using var provider = CreateHost(chat, input, new VirtualTerminal(100, 30));
         input.EnqueueString("typed-before-quit");
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
@@ -71,6 +66,80 @@ public sealed class ChatAdmissionTests : IDisposable
             Assert.Equal("typed-before-quit", send.Args[1]);
         }
         finally { release.TrySetResult(); }
+    }
+
+    private static ServiceProvider CreateHost(ChatViewModel chat, VirtualInputSource input, VirtualTerminal terminal)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IAnsiTerminal>(terminal);
+        services.AddTerminaVirtualInput(input);
+        services.AddTermina(ChatViewModel.Route, routes => routes.RegisterRoute<ChatPage, ChatViewModel>(
+            ChatViewModel.Route, provider => new ChatPage(provider.GetRequiredService<IAnsiTerminal>()), _ => chat));
+        return services.BuildServiceProvider();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Output_bursts_apply_page_state_before_transcript_publication_and_preserve_order(bool approval)
+    {
+        SessionOutputDto Dto(string type) => new() { Type = type, SessionId = "fake/session" };
+        var burst = new List<SessionOutputDto>
+        {
+            Dto(SessionOutputTypes.TextDelta) with { Text = "burst-one " },
+            Dto(SessionOutputTypes.TextDelta) with { Text = "burst-two" },
+            Dto(SessionOutputTypes.Text) with { Text = "burst-one burst-two" },
+            Dto(SessionOutputTypes.Usage) with { InputTokens = 25, OutputTokens = 5, ContextWindowTokens = 100 }
+        };
+        if (approval) burst.Add(Dto(SessionOutputTypes.ToolInteraction) with
+        {
+            CallId = "call-1",
+            ToolName = "shell_execute",
+            InteractionDisplayText = "echo hello",
+            InteractionOptions = [new ToolInteractionOption(new ApprovalOptionKey("deny"), "Deny")]
+        });
+        burst.Add(Dto(SessionOutputTypes.TurnCompleted) with { TurnNumber = new TurnNumber(1) });
+        var transport = new FakeDaemonHubTransport();
+        transport.VoidInvokeHook = (_, _, _) =>
+        {
+            foreach (var output in burst) transport.PushOutput(output);
+            return Task.CompletedTask;
+        };
+        await using var client = new DaemonClient("http://localhost", transport, reconnectDelays: [TimeSpan.Zero]);
+        var input = new VirtualInputSource();
+        var terminal = new VirtualTerminal(120, 40);
+        using var chat = new ChatViewModel(client, TimeProvider.System, new ModelCapabilities { ModelId = "test" }, new ChatNavigationState(), Paths);
+        var observed = new List<(Type Type, string? Text, string Status, bool Pending, bool Generating, string? Usage)>();
+        using var subscription = chat.SessionOutput.Subscribe(output =>
+        {
+            var text = output switch { TextDeltaOutput delta => delta.Delta, TextOutput final => final.Text, _ => null };
+            observed.Add((output.GetType(), text, chat.StatusMessage.Value, chat.HasPendingInteraction, chat.IsGenerating.Value, chat.UsageDisplay.Value));
+            if (output is TurnCompleted) input.EnqueueKey(ConsoleKey.Q, false, false, true);
+        });
+        await using var provider = CreateHost(chat, input, terminal);
+        input.EnqueueString("start-burst");
+        input.EnqueueKey(ConsoleKey.Enter);
+        await provider.GetRequiredService<TerminaApplication>().RunAsync(TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(burst.Select(output => SessionOutputDtoMapper.FromDto(output).GetType()), observed.Select(output => output.Type));
+        Assert.Equal(["burst-one ", "burst-two", "burst-one burst-two"], observed.Where(output => output.Text is not null).Select(output => output.Text));
+        var usage = Assert.Single(observed, output => output.Type == typeof(UsageOutput));
+        Assert.Contains("in=25 out=5", usage.Usage);
+        Assert.Contains("ctx", usage.Usage);
+        if (approval)
+        {
+            var prompt = Assert.Single(observed, output => output.Type == typeof(ToolInteractionRequest));
+            Assert.True(prompt.Pending);
+            Assert.False(prompt.Generating);
+            Assert.Equal("Approval required", prompt.Status);
+        }
+        var completed = observed.Last();
+        Assert.Equal("Ready", completed.Status);
+        Assert.False(completed.Pending);
+        Assert.False(completed.Generating);
+        var screen = terminal.ToString();
+        Assert.Equal(1, screen.Split("burst-one burst-two", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain(transport.Invocations, call => call.Method == "RespondToInteraction");
     }
 
     [Theory]
