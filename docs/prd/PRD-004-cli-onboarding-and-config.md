@@ -217,6 +217,10 @@ context is persisted to `SOUL.md`; confirmed mission, recurring workflows,
 skill-selection rules, delegation practices, and review gates are persisted to
 `AGENTS.md` without overwriting an existing playbook during wizard setup.
 
+New installations SHALL seed one general `task-worker` profile with the existing Main model role when its destination is absent.
+The seed path SHALL preserve operator profile edits and the three existing specialist defaults.
+Existing deployments SHALL receive an explicit reviewed procedure to install or update the canonical release asset without identity regeneration.
+
 ### CLI-001B Post-Install Configuration
 
 `netclaw config` SHALL be the primary post-install settings surface. It SHALL:

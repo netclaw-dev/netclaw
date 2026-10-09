@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about schedules, reminders, cron jobs, timers, background jobs, or child status and cancellation. Also use for diagnostics, troubleshooting, MCP tools, daemon health, identity updates, Netclaw capabilities, and maintenance."
 metadata:
   author: netclaw
-  version: "2.111.0"
+  version: "2.112.0"
 ---
 
 # Netclaw Operations
@@ -31,6 +31,7 @@ a reference file — load the one matching the user's intent with
 | Discover MCP / available tools | `skill_read_resource('netclaw-operations', 'references/tools.md')` |
 | Authorize or diagnose an HTTP/SSE MCP server | [MCP OAuth](#mcp-oauth) |
 | Manage skills and sources | `skill_read_resource('netclaw-operations', 'references/skills.md')` |
+| Install or update the default task-worker profile | `skill_read_resource('netclaw-operations', 'references/agent-profiles.md')` |
 | Manage inbound webhooks / attachments | `skill_read_resource('netclaw-operations', 'references/webhooks.md')` |
 | Add/switch LLM or search provider, OAuth login | `skill_read_resource('netclaw-operations', 'references/providers.md')` |
 | Change a `Tools` list (audience tools, roots, attachments, HTTP allow list) | [Tool Lists in Config](#tool-lists-in-config) |

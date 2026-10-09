@@ -315,8 +315,12 @@ See [Approval Prompts And Recovery](#approval-prompts-and-recovery) for the life
 
 ## Built-in agents
 
-Three agents are seeded during `netclaw init`. They are regular file-based
+Four agents are seeded during `netclaw init`. They are regular file-based
 definitions — you can edit or delete them.
+
+**task-worker** — Scoped code execution and complete artifacts through the configured Main role.
+Timeout: 120s of inactivity. This is not a task lifetime budget.
+Tools retain the parent audience/profile policy.
 
 **research-assistant** — Deep web research with search and citation.
 Timeout: 120s. Tools are inherited from the parent audience/profile policy.
@@ -326,6 +330,27 @@ Timeout: 120s. Tools are inherited from the parent audience/profile policy.
 
 **summarizer** — Summarize documents and content concisely.
 Timeout: 60s. Tools are inherited from the parent audience/profile policy.
+
+### Existing deployment: install or update the worker
+
+The canonical release asset is `src/Netclaw.Cli/Resources/identity/task-worker.profile.md` in the exact release source.
+Init copies this asset to `task-worker.md` only when the ordinary destination file is absent.
+An upgrade does not replace an existing profile or deployment playbook.
+
+1. Identify the installed release and the configured agent directory through existing configuration and operator diagnostics.
+2. Obtain the asset from that release's source and review its content and revision.
+3. Inspect the destination under normal file policy. Stop on a directory, symbolic link, or unresolved path.
+4. Copy the asset only when the ordinary destination is absent.
+5. For an existing regular file, compare the asset and preserve the current file unless the operator explicitly authorizes an update.
+6. Inspect the next profile discovery or load. Verify the mission, Main role, visibility, and inactivity timeout.
+
+Preserve all unrelated identity files and other profiles.
+Do not repeat init as an update procedure. Init can regenerate unrelated identity files.
+There is no dedicated profile installer command.
+Runtime coordination uses `skill_load("agent-coordination")` and logical `skill_read_resource` calls.
+Operator agent-file diagnostics do not authorize physical skill-root access.
+The configured Main role keeps existing provider selection and permitted fallback behavior.
+Operator profiles remain separate from the binary-owned system-skill bundle during upgrade or rollback.
 
 ## Creating a custom agent
 
