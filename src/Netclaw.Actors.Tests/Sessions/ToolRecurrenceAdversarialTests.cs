@@ -765,7 +765,7 @@ public sealed class ToolRecurrenceAdversarialTests(ITestOutputHelper output) : L
         public void Enqueue(IActorRef receiver, Envelope envelope)
         {
             if (envelope.Message is LlmResponseReceived or ToolExecutionSingleCompleted or ToolExecutionBatchCompleted or ToolExecutionCompleted or ToolExecutionApprovalRequested or ToolExecutionFailed or SpawnChildActorRequest or ToolExecutionSubAgentActivity
-                || envelope.Message.GetType().Name is "RoutedSkillSubAgentActivity" or "RoutedSkillExecutionCompleted")
+                || envelope.Message.GetType().Name is "RoutedSkillSubAgentActivity" or "RoutedSkillExecutionCompleted" or "RoutedSkillExecutionFailed")
                 captured.Enqueue(envelope);
             _inner.Enqueue(receiver, envelope);
         }
