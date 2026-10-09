@@ -130,6 +130,30 @@ Missing or ambiguous canonical occurrence ownership SHALL fail explicitly.
 - **THEN** each callback carries that batch's current token
 - **AND** the actor preserves each result pair and continues once
 
+### Requirement: The model owns recovery decisions for uncertain effects
+
+Recovery SHALL restore the recorded session and committed call/result pairs before the next model request.
+An interrupted unanswered call SHALL retain the existing non-success closure and SHALL NOT acquire a fabricated successful result.
+The framework SHALL NOT automatically execute that unanswered call or require operator review because its external outcome is unknown.
+The model SHALL decide the next action from its recorded session.
+A model-chosen retry SHALL pass the ordinary tool policy and the existing recurrence contract.
+This requirement SHALL NOT claim exactly-once external effects.
+
+#### Scenario: A recorded result remains completed after recovery
+
+- **GIVEN** a tool result committed before owner loss
+- **WHEN** the owner restores the session
+- **THEN** the model receives the canonical committed result pair
+- **AND** recovery does not execute that completed call again
+
+#### Scenario: The model receives an unknown outcome before any retry
+
+- **GIVEN** an admitted tool call has no committed result after owner loss
+- **WHEN** the owner restores the session
+- **THEN** the model receives the recorded history and the non-success interrupted-call closure
+- **AND** the framework executes no retry before a new model decision
+- **AND** the framework requires no operator review solely for the unknown outcome
+
 ### Requirement: Explicit repeat exceptions preserve tool authority
 
 The initial exception SHALL apply only to a schema-valid noncancel status query for one accessible pending background job.
@@ -188,7 +212,7 @@ Usage count alone SHALL NOT terminate a useful task.
 - **GIVEN** durable correction evidence for an interrupted authorized task
 - **WHEN** the parent recovers and continues that same task
 - **THEN** a repeated prohibited identity reaches terminal settlement
-- **AND** recovery does not replay previously completed effects
+- **AND** recovery does not redispatch calls with committed results
 
 #### Scenario: A new scheduled task starts cleanly
 
@@ -409,7 +433,7 @@ A new-format batch MUST retain its existing admission and recurrence evidence.
 
 - **WHEN** a legacy redrive clears its approval state before a snapshot interrupts the unfinished task
 - **THEN** recovery restores its canonical adopted authority and original recurrence task
-- **AND** it preserves all completed effects and known results
+- **AND** it preserves all committed result pairs and confirmed file activity
 
 #### Scenario: Redrive completes its original admission
 

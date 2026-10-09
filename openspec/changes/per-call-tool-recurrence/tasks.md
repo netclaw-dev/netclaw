@@ -26,7 +26,7 @@
 - [x] 4.1 Add framework-safe admission, result, and checkpoint metadata; verify round-trip serialization and private digest exclusion from diagnostics.
 - [x] 4.2 Preserve retained state in session events and snapshots; verify snapshot recovery and journal replay produce equal decisions.
 - [x] 4.3 Add durable task adoption from canonical admitted context; verify old attempts retain authority and fresh consumption resets before continuation.
-- [ ] 4.4 Reconstruct the suffix after the last checkpoint; verify every admission, result, and checkpoint crash cut point preserves completed effects once.
+- [ ] 4.4 Reconstruct the suffix after the last checkpoint. Verify committed result pairs and detector evidence at every listed crash cut. Verify unknown outcomes reach the model without automatic tool replay or forced review.
 - [x] 4.5 Inject checkpoint and snapshot failures; verify an explicit error and no silent detector reset or premature dispatch.
 - [x] 4.6 Load captured pre-change records; verify conversation recovery and an explicit detector baseline gap without fabricated receipt evidence.
 - [x] 4.7 Test the rollback reader or document database restoration; verify new event variants cannot silently corrupt an older runtime.
