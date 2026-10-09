@@ -126,12 +126,13 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
     private async Task HandleStartAsync(StartBackgroundJob cmd)
     {
         ArgumentNullException.ThrowIfNull(cmd.Launch);
+        cmd.Origin.Validate();
         var jobId = new BackgroundJobId(Guid.NewGuid().ToString("N")[..12]);
         var now = _timeProvider.GetUtcNow();
 
         var definition = new BackgroundJobDefinition
         {
-            Id = jobId,
+            Id = jobId, LineageVersion = 1, Origin = cmd.Origin,
             Command = cmd.Command,
             WorkingDirectory = cmd.WorkingDirectory,
             ManagedTemporaryDirectory = cmd.ManagedTemporaryDirectory,
@@ -239,6 +240,9 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
         if (!_definitions.TryGetValue(cmd.JobId.Value, out var def))
             def = _store.Get(cmd.JobId);
 
+        if (def is null && RejectInvalidDefinition(cmd.JobId, cmd.SessionId, cmd.Audience, cmd.Boundary))
+            return;
+
         if (def is null
             || def.SessionId != cmd.SessionId
             || def.Audience != cmd.Audience
@@ -273,6 +277,15 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
         }
     }
 
+    private bool RejectInvalidDefinition(BackgroundJobId id, Protocol.SessionId session, TrustAudience audience, TrustBoundary boundary)
+    {
+        var rejected = _store.GetRejectedDefinition(id);
+        if (rejected is null || rejected.SessionId != session || rejected.Audience != audience || rejected.Boundary != boundary)
+            return false;
+        Sender.Tell(new Status.Failure(new InvalidDataException("The background job document has invalid mandatory lineage.")));
+        return true;
+    }
+
     private void HandleQuery(QueryBackgroundJob query)
     {
         if (!_definitions.TryGetValue(query.JobId.Value, out var def))
@@ -281,6 +294,9 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
             if (diskDef is not null)
                 def = diskDef;
         }
+
+        if (def is null && RejectInvalidDefinition(query.JobId, query.SessionId, query.Audience, query.Boundary))
+            return;
 
         if (def is null
             || def.SessionId != query.SessionId
@@ -343,7 +359,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
     private void HandleReconcile()
     {
         var persisted = _store.List();
-        EmitRejectedLegacyDefinitionAlerts();
+        EmitRejectedDefinitionAlerts();
 
         var reconciled = 0;
 
@@ -490,9 +506,9 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
         }, lost);
     }
 
-    private void EmitRejectedLegacyDefinitionAlerts()
+    private void EmitRejectedDefinitionAlerts()
     {
-        var rejected = _store.ConsumeRejectedLegacyDefinitions();
+        var rejected = _store.ConsumeRejectedDefinitions();
         if (rejected.Count == 0)
             return;
 
@@ -501,7 +517,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
             _timeProvider,
             "background-job.schema.legacy_rejected",
             AlertType.BackgroundJobSchemaDropped,
-            $"Rejected {rejected.Count} legacy background job definition(s) missing trust fields during startup. Repair or recreate job IDs: {rejectedIds}.",
+            $"Rejected {rejected.Count} background job definition(s) with invalid mandatory fields during startup. Repair or recreate job IDs: {rejectedIds}.",
             AlertSeverity.Warning,
             source: "startup",
             context: new Dictionary<string, string>
@@ -511,7 +527,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
             }));
 
         _log.Warning(
-            "Rejected {0} legacy background job definition(s) missing trust fields during startup: {1}",
+            "Rejected {0} background job definition(s) with invalid mandatory fields during startup: {1}",
             rejected.Count,
             rejectedIds);
     }
@@ -573,7 +589,8 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
                 SourceKind = new SourceKind(BackgroundJobManagerActor.SourceKind)
             },
             ReceivedAt = _timeProvider.GetUtcNow(),
-            BackgroundJobId = new BackgroundJobId(jobDeliveryKey)
+            BackgroundJobId = new BackgroundJobId(jobDeliveryKey),
+            BackgroundJobLineageVersion = def.LineageVersion, BackgroundJobOrigin = def.Origin
         };
 
         var deliverMsg = new DeliverTrustedSessionTurn(sessionId, content, source);

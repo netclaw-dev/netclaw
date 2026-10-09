@@ -92,8 +92,8 @@ first user message is just the raw task, identical to the pre-context protocol.
 3. A `SubAgentActor` is spawned as a **child of the session actor** (supervised,
    lifecycle-managed — stops when the session stops).
 4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
-5. After at most 30 tool iterations, a final response, or an inactivity timeout,
-   the subagent returns a terminal run result.
+5. A final response, exact recurrence stop, cancellation, or inactivity timeout
+   causes the subagent to return a terminal run result.
 6. The main agent receives the `spawn_agent` tool result as an explicit text
    envelope: agent name, run id, outcome (`completed`, `partial`, or `failed`),
    optional reason, diagnostics pointer, and either a `Summary:` or `Error:`
@@ -318,8 +318,9 @@ known-good version.
 - Subagents are **single-turn**: they receive a task, run their tool loop, and
   return a result. They do not maintain conversation history or support
   back-and-forth interaction with the user.
-- Subagents have a **maximum of 30 tool iterations** before being forced to
-  produce a text response.
+- Subagents have no static tool-round budget. The exact recurrence guard
+  refuses a call after two equal completed feedback rounds. A repeated refusal
+  ends the run with known partial results without another model response.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.
@@ -333,3 +334,13 @@ known-good version.
   three-slot `NetclawChatClientProvider` role system, which currently resolves
   to a single configured model for most installs. Per-agent model selection
   is tracked in a follow-on issue pending a multi-model provider architecture.
+
+## Exact recurrence upgrade and rollback
+
+Back up the session journal, snapshots, and job directory before activation.
+Record the backup path and the backup time.
+New `tta-v1` task events prevent a direct downgrade to the old binary.
+Rollback requires a tested compatible reader or restoration of that recorded pre-upgrade backup.
+Backup restoration loses journal state after the backup.
+It cannot undo external effects from completed tools or jobs.
+The plan documents this rollback limit; no rollback procedure receives proof without an executed test.

@@ -156,6 +156,8 @@ public sealed record MessageSource
     /// Format is <c>"bg-job:{jobId}"</c>. Null for regular user messages.
     /// </summary>
     public BackgroundJobId? BackgroundJobId { get; init; }
+    public int BackgroundJobLineageVersion { get; init; }
+    public BackgroundJobOrigin? BackgroundJobOrigin { get; init; }
 
     /// <summary>
     /// Optional reply target for ack-gated trusted deliveries. When set,

@@ -180,7 +180,8 @@ internal sealed class SessionToolPipelineTestFixture(
             _source);
         var runEnvironment = new SessionToolRunEnvironment
         {
-            Storage = SessionStoragePaths.CreateLegacy(
+            RecurrenceTaskId = new Netclaw.Actors.Protocol.TurnId("test-turn"),
+                Storage = SessionStoragePaths.CreateLegacy(
                 _sessionDirectory,
                 Path.Combine(Path.GetTempPath(), "netclaw-test-session-logs"),
                 "test-session"),

@@ -18,15 +18,6 @@ namespace Netclaw.Configuration;
 public sealed record SessionConfig
 {
     /// <summary>
-    /// Maximum number of LLM-to-tools-to-LLM iterations allowed per turn. One
-    /// LLM response that requests any number of parallel tool calls counts as
-    /// exactly one iteration. At ~75% of this limit a budget-awareness nudge
-    /// is injected; at 100% tools are stripped and the model is asked to
-    /// summarize its work (force-no-tools completion).
-    /// </summary>
-    public int MaxToolIterationsPerTurn { get; init; } = 60;
-
-    /// <summary>
     /// Idle seconds before the session memory observer triggers distillation.
     /// The observer watches the conversation stream and distills memories
     /// when the session goes quiet for this duration.
@@ -112,7 +103,6 @@ public sealed record SessionConfig
 
         return new SessionConfig
         {
-            MaxToolIterationsPerTurn = raw.MaxToolIterationsPerTurn,
             MemoryObserverIdleSeconds = raw.MemoryObserverIdleSeconds,
             IdleTimeout = raw.IdleTimeout,
             TurnLlmTimeout = turnLlmTimeout,
@@ -172,7 +162,6 @@ public sealed record SessionConfig
     /// </summary>
     private sealed record RawSessionConfig
     {
-        public int MaxToolIterationsPerTurn { get; init; } = 60;
         public int MemoryObserverIdleSeconds { get; init; } = 90;
         public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
         public int TurnLlmTimeoutSeconds { get; init; } = 180;

@@ -1,3 +1,6 @@
+> Contract update: `per-call-tool-recurrence` supersedes the remaining limit-removal and terminal-response design.
+> Completed repairs remain preserved behavior. Every unfinished proof obligation remains mandatory.
+
 ## Why
 
 PRD-001 and PRD-006 require reliable long agent turns and factual tool results.

@@ -105,13 +105,29 @@ message InputAdmittedProto {
   optional string executable_text = 5;
   ToolApprovalRequestedProto.TurnContextRecordProto turn_context = 6;
   int64 admitted_at_ms = 9;
+  optional string source_background_job_id = 10;
+  int32 background_job_lineage_version = 11;
+  BackgroundJobOriginProto background_job_origin = 12;
   reserved 7, 8;
+}
+
+message BackgroundJobOriginProto { string turn_id = 1; string call_id = 2; }
+
+message ToolTaskAdoptedProto {
+  SessionIdProto session_id = 1;
+  ToolApprovalRequestedProto.TurnContextRecordProto turn_context = 2;
+  repeated string input_ids = 3;
+  int64 adopted_at_ms = 4;
+  optional string continued_job_key = 5;
 }
 
 message InputClosedProto {
   SessionIdProto session_id = 1;
   repeated string input_ids = 2;
   int64 closed_at_ms = 3;
+  optional string task_id = 4;
+  optional string source_background_job_id = 5;
+  SerializableChatMessageProto rejected_job_report = 6;
 }
 
 message SessionTitleSetProto {
@@ -130,18 +146,52 @@ message SessionCompactedProto {
   WorkingContextProto working_context = 7;
 }
 
+message ToolLoopKeyProto { string tool_name = 1; string arguments_hash = 2; }
+message ToolLoopEntryProto {
+  string tool_name = 1; string arguments_hash = 2; string outcome_hash = 3;
+  int32 equal_rounds = 4; bool corrected = 5; bool pending_job = 6;
+}
+message ToolLoopAdjacentProto { string action_hash = 1; string outcome_hash = 2; }
+message ToolLoopCheckpointProto {
+  string task_id = 1; repeated ToolLoopEntryProto entries = 2;
+  repeated ToolLoopKeyProto cold_keys = 3; repeated ToolLoopAdjacentProto adjacent_history = 4;
+  optional string last_blocked_action = 5;
+}
+message ToolLoopDeltaProto {
+  string task_id = 1; bool reset = 2; repeated ToolLoopEntryProto upserts = 3;
+  repeated ToolLoopKeyProto removed_keys = 4; repeated ToolLoopKeyProto cold_keys = 5;
+  repeated ToolLoopAdjacentProto adjacent_history = 6; optional string last_blocked_action = 7;
+}
+message ToolLoopPreparedCallProto {
+  string call_id = 1; string tool_name = 2; string arguments_hash = 3; bool allows_pending_job = 4;
+}
+message ToolLoopAdmissionProto {
+  string task_id = 1; string action_hash = 2; repeated ToolLoopPreparedCallProto calls = 3;
+  repeated string refused_call_ids = 4;
+}
+message ToolLoopObservationProto {
+  string call_id = 1; int32 category = 2; string result_hash = 3;
+  bool pending_job = 4; bool synthetic = 5; bool missing_receipt = 6;
+}
+
 message ToolBatchStartedProto {
   SessionIdProto session_id = 1;
   SerializableChatMessageProto user_message = 2;
   SerializableChatMessageProto assistant_message = 3;
   int64 started_at_ms = 4;
   repeated string consumed_input_ids = 5;
+  ToolLoopAdmissionProto loop_admission = 7;
+  ToolLoopDeltaProto loop_delta = 8;
+  bool metadata_only = 9;
+  ToolApprovalRequestedProto.TurnContextRecordProto legacy_task_context = 10;
 }
 
 message ToolCallRecordedProto {
   SessionIdProto session_id = 1;
   SerializableChatMessageProto tool_result = 2;
   int64 recorded_at_ms = 3;
+  ToolLoopObservationProto loop_observation = 4;
+  ActiveJobInfoProto started_background_job = 5;
 }
 
 message ToolApprovalRequestedProto {
@@ -261,6 +311,10 @@ message ActiveJobInfoProto {
   // 0 = not reaped (proto3 cannot express absence for scalars).
   int64 reaped_at_ms = 7;
   string output_log_path = 8;
+  int32 lineage_version = 9;
+  BackgroundJobOriginProto origin = 10;
+  ToolLoopCheckpointProto origin_checkpoint = 11;
+  bool origin_receipt_failure = 12;
 }
 
 message SessionSnapshotProto {
@@ -295,6 +349,13 @@ message SessionSnapshotProto {
   reserved 9;
   repeated InputAdmittedProto pending_inputs = 10;
   repeated string recent_source_message_keys = 11;
+  ToolLoopCheckpointProto loop_checkpoint = 12;
+  ToolLoopAdmissionProto loop_admission = 13;
+  repeated ToolLoopObservationProto loop_observations = 14;
+  bool loop_receipt_failure = 15;
+  ToolApprovalRequestedProto.TurnContextRecordProto adopted_task_context = 16;
+  repeated string adopted_task_input_ids = 17;
+  repeated string processed_background_job_ids = 18;
 }
 
 // ── Session state ──

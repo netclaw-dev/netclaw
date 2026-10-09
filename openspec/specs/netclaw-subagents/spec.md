@@ -120,6 +120,11 @@ remain an isolated worker by default:
   future opt-in setting.
 - It SHALL inherit audience/boundary context from the launching invocation.
 
+
+The child SHALL use the shared exact recurrence, repeat exception, and feedback-round contracts in `turn-loop-governance`.
+The child SHALL retain its detector evidence for its actor-local task lifetime.
+It SHALL NOT substitute success for an absent receipt or create a durable child-resumption contract.
+
 #### Scenario: Subagent completes with text response and findings
 
 - **GIVEN** a `SubAgentDefinition` with a name, system prompt, and tool list
@@ -135,14 +140,29 @@ remain an isolated worker by default:
 - **WHEN** the subagent processes the response
 - **THEN** it executes the tool calls via `DispatchingToolExecutor`
 - **AND** sends tool results back to the LLM
-- **AND** continues until the LLM returns a text response
+- **AND** continues until a text response or an explicit runtime terminal decision
 
 #### Scenario: Subagent hits maximum tool iterations
 
-- **GIVEN** the subagent has executed 10 tool iterations
-- **WHEN** the LLM returns another tool call
-- **THEN** the subagent forces a final LLM call with tools omitted
-- **AND** returns the resulting text response
+- **GIVEN** a child completed more than the former tool iteration limit with useful work
+- **WHEN** the model requests another eligible tool call
+- **THEN** the removed iteration ceiling does not force a final model request
+- **AND** the child continues under the shared recurrence and operation contracts
+
+#### Scenario: Useful child work exceeds the former ceiling
+
+- **GIVEN** a child task requires more than 30 useful tool rounds
+- **WHEN** a deterministic provider drives that task through the real child loop
+- **THEN** no tool count or iteration count stops the task
+- **AND** independent artifact checks prove the required result
+
+#### Scenario: Child recurrence settles without another model response
+
+- **GIVEN** two equal completed call outcomes and a subsequent paired correction
+- **WHEN** the child requests the same prohibited identity again
+- **THEN** the child returns a Partial result with `ToolCycleStopped`
+- **AND** it retains confirmed file activity and accurate partial evidence
+- **AND** it requests no final model response
 
 #### Scenario: Default subagent cannot write durable memory directly
 

@@ -95,6 +95,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             turnContext,
             new SessionToolRunEnvironment
             {
+                RecurrenceTaskId = new Netclaw.Actors.Protocol.TurnId("test-turn"),
                 Storage = SessionStoragePaths.CreateLegacy(
                     Path.GetTempPath(),
                     Path.Combine(Path.GetTempPath(), "netclaw-test-session-logs"),

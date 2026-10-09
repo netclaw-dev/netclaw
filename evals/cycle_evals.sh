@@ -91,7 +91,7 @@ assert_tool_cycle_metadata_repair() { assert_cycle_case; }
 run_cycle_cases() {
     print_category "Tool cycles"
     run_case --json tool_cycle_correction "real model recovers after the runtime cycle correction" '{{CYCLE_PROMPT}}'
-    run_case --json tool_cycle_terminal "real model reports a truthful runtime text-only stop" '{{CYCLE_PROMPT}}'
+    run_case --json tool_cycle_terminal "runtime reports partial work without a final model request" '{{CYCLE_PROMPT}}'
     run_case --json tool_cycle_compaction "cycle state survives normal compaction before model recovery" '{{CYCLE_PROMPT}}'
     run_case --json tool_cycle_changed_result "changed results permit the third execution" '{{CYCLE_PROMPT}}'
     run_case --json tool_cycle_metadata_repair "valid metadata repair permits execution" '{{CYCLE_PROMPT}}'

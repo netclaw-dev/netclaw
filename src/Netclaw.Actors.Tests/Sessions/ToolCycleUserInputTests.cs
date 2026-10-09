@@ -22,7 +22,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 
 public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessionTestBase(output)
 {
-    private const int MaximumToolIterations = 10;
+    private const int LongTaskRounds = 10;
     private readonly PausedChatClient _client = new();
     private readonly PausedToolExecutor _executor = new();
 
@@ -32,7 +32,6 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         services.AddSingleton(new ModelCapabilities { ModelId = "fake-model", ContextWindowTokens = 1000 });
         services.AddSingleton(new SessionConfig
         {
-            MaxToolIterationsPerTurn = MaximumToolIterations,
             Tuning = new SessionTuning
             {
                 CompactionThreshold = 0.75,
@@ -72,7 +71,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
     }
 
     [Fact]
-    public async Task New_user_input_discards_the_exhausted_budget_from_the_completed_batch()
+    public async Task New_user_input_continues_after_a_long_completed_batch()
     {
         var ct = TestContext.Current.CancellationToken;
         static List<FunctionCallContent> DistinctCalls(int number)
@@ -86,46 +85,21 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         _client.Inner.AfterToolCallResponse = count =>
             _client.Inner.ToolCallsOnFirstCall = DistinctCalls(count + 1);
         _client.Inner.AlwaysReturnToolCalls = true;
-        _executor.PauseAtCall = MaximumToolIterations;
-        var sessionId = new SessionId("cycle-user-input/exhausted-budget");
+        _executor.PauseAtCall = LongTaskRounds;
+        var sessionId = new SessionId("cycle-user-input/long-task");
         var subscriber = await StartRequestAsync(sessionId);
 
         await _executor.CallPaused.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        Assert.Equal(MaximumToolIterations, _executor.Count);
+        Assert.Equal(LongTaskRounds, _executor.Count);
         await SendNewRequestAsync(sessionId);
         _client.Inner.PlannedToolCallDecisions.Enqueue(true);
         _client.Inner.PlannedToolCallDecisions.Enqueue(false);
         _executor.ResumeCall.TrySetResult();
         await ExpectTurnCompletedAsync(subscriber);
 
-        Assert.Equal(MaximumToolIterations + 1, _executor.Count);
-        Assert.Equal(MaximumToolIterations + 2, _client.Inner.CallCount);
-        Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[MaximumToolIterations]);
-    }
-
-    [Fact]
-    public async Task User_input_queued_during_terminal_reply_restores_tools_for_the_new_request()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        ConfigureRepeatedCalls();
-        _client.Inner.AlwaysReturnToolCalls = true;
-        _client.Pause = PausePoint.ToolFreeReply;
-        var sessionId = new SessionId("cycle-user-input/terminal-reply");
-        var subscriber = await StartRequestAsync(sessionId);
-
-        await _client.CallPaused.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        Assert.Equal(2, _executor.Count);
-        await SendNewRequestAsync(sessionId);
-        foreach (var decision in new[] { false, true, false })
-            _client.Inner.PlannedToolCallDecisions.Enqueue(decision);
-        _client.ResumeCall.TrySetResult();
-        await ExpectTurnCompletedAsync(subscriber);
-        await ExpectTurnCompletedAsync(subscriber);
-
-        Assert.Equal(3, _executor.Count);
-        Assert.Equal(7, _client.Inner.CallCount);
-        Assert.Empty(_client.Inner.ReceivedToolNames[4]);
-        Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[5]);
+        Assert.Equal(LongTaskRounds + 1, _executor.Count);
+        Assert.Equal(LongTaskRounds + 2, _client.Inner.CallCount);
+        Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[LongTaskRounds]);
     }
 
     [Theory]
@@ -158,7 +132,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Overflow_replay_preserves_text_only_state_unless_a_new_user_request_arrives(bool newUserInput)
+    public async Task Overflow_replay_preserves_recurrence_unless_a_new_user_request_arrives(bool newUserInput)
     {
         var ct = TestContext.Current.CancellationToken;
         var sessionId = new SessionId("cycle-user-input/overflow-replay");
@@ -172,7 +146,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         _client.Inner.AfterToolCallResponse = count =>
         {
             _client.Inner.ToolCallsOnFirstCall = Calls(count + 1);
-            if (++toolResponses == 4)
+            if (++toolResponses == 3)
             {
                 _client.Inner.PlannedExceptions.Enqueue(new ProviderException(
                     "maximum context length exceeded", "HTTP 400: maximum context length exceeded", statusCode: 400));
@@ -184,9 +158,10 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         if (newUserInput)
         {
             await SendNewRequestAsync(sessionId);
-            _client.Inner.PlannedToolCallDecisions.Enqueue(true);
         }
-        _client.Inner.PlannedToolCallDecisions.Enqueue(false);
+        _client.Inner.PlannedToolCallDecisions.Enqueue(true);
+        if (newUserInput)
+            _client.Inner.PlannedToolCallDecisions.Enqueue(false);
         _client.ResumeCall.TrySetResult();
         await subscriber.FishForMessageAsync<object>(message => message is CompactionOutput,
             TimeSpan.FromSeconds(10), cancellationToken: ct);
@@ -196,7 +171,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         if (newUserInput)
             Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[^1]);
         else
-            Assert.Empty(_client.Inner.ReceivedToolNames[^1]);
+            Assert.Equal(2, _executor.Count);
     }
 
     private void ConfigureRepeatedCalls()
@@ -236,7 +211,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         => subscriber.FishForMessageAsync<object>(message => message is TurnCompleted,
             TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-    private enum PausePoint { None, ToolFreeReply, Compaction }
+    private enum PausePoint { None, Compaction }
 
     private sealed class PausedChatClient : IChatClient
     {
@@ -255,7 +230,6 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
             var shouldPause = Pause switch
             {
                 PausePoint.Compaction => compaction,
-                PausePoint.ToolFreeReply => !compaction && options?.Tools is not { Count: > 0 },
                 _ => false
             };
             if (shouldPause && Interlocked.Exchange(ref _didPause, 1) == 0)
@@ -299,6 +273,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
                 CallPaused.TrySetResult();
                 await ResumeCall.Task.WaitAsync(ct);
             }
+            context.Outputs.TryComplete(new ToolInvocationReceipt.Succeeded([], null));
             return "same result";
         }
     }

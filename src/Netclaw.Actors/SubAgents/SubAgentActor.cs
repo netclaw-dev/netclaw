@@ -39,7 +39,6 @@ namespace Netclaw.Actors.SubAgents;
 /// </summary>
 public sealed class SubAgentActor : ReceiveActor, IWithTimers
 {
-    internal const int DefaultMaxToolIterations = 30;
 
     private const string EmptyResponseMarker = "(no response)";
     private const string MalformedFinalOutputMessage = "Subagent produced malformed final output: it emitted unexecuted tool calls as text. This was not a timeout.";
@@ -74,7 +73,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly IToolApprovalService? _approvalService;
     private readonly ILogger? _toolExecutorLogger;
     private readonly ISystemPromptProvider _promptProvider;
-    private readonly int _maxToolIterations;
 
     // Process-wide daily-stats sink (the same singleton the parent session records
     // to). Nullable because a hosting configuration without the daemon stats backend
@@ -91,6 +89,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly MemoryPolicyEvaluator _policyEvaluator = new();
     private readonly TurnStateTracker _turnState = new();
     private PreparedToolCycleBatch? _activeCycleBatch;
+    private readonly HashSet<string> _cycleRefusedCallIds = new(StringComparer.Ordinal);
 
     // Stopwatch tracking the total wall-clock duration of the sub-agent run.
     // Used for the summary log on completion (ProcessingWatchdog is only a
@@ -165,14 +164,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         => _toolExecutionContext
            ?? throw new InvalidOperationException("Sub-agent tool context is unavailable before a run is admitted.");
     private bool _malformedFinalOutputRepairAttempted;
-    private SubAgentOutcomeReason? _forcedFinalOutcomeReason;
 
     public SubAgentActor(
         SubAgentDefinition definition,
         IChatClient chatClient,
         ToolAccessPolicy toolAccessPolicy,
         IToolApprovalService? approvalService = null,
-        int maxToolIterations = DefaultMaxToolIterations,
         Telemetry.ISessionMetrics? sessionMetrics = null)
         : this(
             definition,
@@ -180,7 +177,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             toolAccessPolicy,
             NullSystemPromptProvider.Instance,
             approvalService,
-            maxToolIterations,
             sessionMetrics,
             coreToolNames: null,
             toolExecutorLogger: null)
@@ -193,15 +189,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ToolAccessPolicy toolAccessPolicy,
         ISystemPromptProvider promptProvider,
         IToolApprovalService? approvalService,
-        int maxToolIterations,
         Telemetry.ISessionMetrics? sessionMetrics,
         IReadOnlySet<string>? coreToolNames,
         ILogger? toolExecutorLogger)
     {
-        if (maxToolIterations <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maxToolIterations), maxToolIterations,
-                "Sub-agent tool iteration budget must be greater than zero.");
-
         // A sub-agent must run under a fully-wired access policy — never a
         // degraded default that drops the deny-list / protected-path checks.
         // Callers (SubAgentSpawner) inject the session's real policy; the
@@ -213,7 +204,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _promptProvider = promptProvider;
         _approvalService = approvalService;
         _toolExecutorLogger = toolExecutorLogger;
-        _maxToolIterations = maxToolIterations;
         _projectInstructions = definition.ProjectInstructions;
         _log = Context.GetLogger();
 
@@ -266,7 +256,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IChatClient chatClient,
         ToolAccessPolicy toolAccessPolicy,
         IToolApprovalService? approvalService = null,
-        int maxToolIterations = DefaultMaxToolIterations,
         Telemetry.ISessionMetrics? sessionMetrics = null)
     {
         return Props.Create(() => new SubAgentActor(
@@ -274,7 +263,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             chatClient,
             toolAccessPolicy,
             approvalService,
-            maxToolIterations,
             sessionMetrics));
     }
 
@@ -284,7 +272,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ToolAccessPolicy toolAccessPolicy,
         ISystemPromptProvider promptProvider,
         IToolApprovalService? approvalService = null,
-        int maxToolIterations = DefaultMaxToolIterations,
         Telemetry.ISessionMetrics? sessionMetrics = null,
         IReadOnlySet<string>? coreToolNames = null,
         ILogger? toolExecutorLogger = null)
@@ -296,7 +283,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             toolAccessPolicy,
             promptProvider,
             approvalService,
-            maxToolIterations,
             sessionMetrics,
             coreToolNames,
             toolExecutorLogger));
@@ -308,7 +294,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ToolAccessPolicy toolAccessPolicy,
         ISystemPromptProvider promptProvider,
         IToolApprovalService? approvalService,
-        int maxToolIterations,
         Telemetry.ISessionMetrics? sessionMetrics,
         IReadOnlySet<string>? coreToolNames,
         ILogger? toolExecutorLogger) : IIndirectActorProducer
@@ -322,7 +307,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 toolAccessPolicy,
                 promptProvider,
                 approvalService,
-                maxToolIterations,
                 sessionMetrics,
                 coreToolNames,
                 toolExecutorLogger);
@@ -468,17 +452,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
             if (analysis.Kind == LlmResponseKind.ToolCalls && _turnState.ForceNoToolsActive)
             {
-                _log.Warning(
-                    "SubAgent [{AgentName}] requested {ToolCallCount} tool(s) after tool execution was disabled (budgetUsed={BudgetUsed}, max={Max})",
-                    _definition.Name,
-                    analysis.ToolCalls.Count,
-                    _turnState.ToolCallCount,
-                    _maxToolIterations);
-                Complete(
-                    false,
-                    "Subagent exceeded its tool iteration budget and continued requesting tools after tools were disabled.",
-                    SubAgentRunOutcome.Failed,
-                    SubAgentOutcomeReason.ToolIterationBudgetExceededAfterDisable);
+                Complete(false, "The model requested tools after runtime termination.",
+                    SubAgentRunOutcome.Failed, SubAgentOutcomeReason.ToolCycleStopped);
                 return;
             }
 
@@ -562,8 +537,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             Complete(
                 true,
                 text,
-                _forcedFinalOutcomeReason.HasValue ? SubAgentRunOutcome.Partial : SubAgentRunOutcome.Completed,
-                _forcedFinalOutcomeReason);
+                SubAgentRunOutcome.Completed,
+                null);
         });
 
         Receive<ToolExecutionCompleted>(msg =>
@@ -571,23 +546,24 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
             RecordProgress("processing tool results");
 
-            if (_activeCycleBatch is { } cycleBatch)
+            var missingReceipt = msg.ToolResults.Any(result => result.ToolCallId is { } id
+                && !msg.ToolReceipts.ContainsKey(id.Value));
+            if (_activeCycleBatch is { } cycleBatch && !missingReceipt)
             {
-                var cycleResults = msg.ToolResults.ToDictionary(
-                    result => result.ToolCallId is { } callId
-                        ? callId.Value
-                        : throw new InvalidOperationException("A tool cycle result requires a call identity."),
-                    result =>
-                    {
-                        var callId = result.ToolCallId
-                            ?? throw new InvalidOperationException("A tool cycle result requires a call identity.");
-                        msg.ToolReceipts.TryGetValue(callId.Value, out var receipt);
-                        return new ToolCycleResult(
-                            receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
-                            result.Content ?? string.Empty);
-                    },
-                    StringComparer.Ordinal);
-                _turnState.ObserveCompleted(ToolCycleSignatureFactory.Complete(cycleBatch, cycleResults));
+                var actual = cycleBatch.Calls.Where(call => !_cycleRefusedCallIds.Contains(call.CallId.Value)).ToArray();
+                if (actual.Length > 0)
+                {
+                    var cycleResults = msg.ToolResults.Where(result => result.ToolCallId is { } id
+                            && !_cycleRefusedCallIds.Contains(id.Value)).ToDictionary(
+                        result => result.ToolCallId!.Value.Value,
+                        result => new ToolCycleResult(msg.ToolReceipts[result.ToolCallId!.Value.Value].Category,
+                            result.Content ?? string.Empty)
+                        { PendingJob = msg.ToolReceipts[result.ToolCallId!.Value.Value] is ToolInvocationReceipt.PendingBackgroundJob },
+                        StringComparer.Ordinal);
+                    _turnState.ObserveCompleted(ToolCycleSignatureFactory.Complete(
+                        new PreparedToolCycleBatch(cycleBatch.Action, actual), cycleResults)
+                        with { RecordAdjacent = _cycleRefusedCallIds.Count == 0 && !cycleResults.Values.Any(result => result.PendingJob) });
+                }
                 _activeCycleBatch = null;
             }
 
@@ -625,27 +601,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
             AddModelInputMediaNudge(msg.ModelInputMediaReferences);
 
-            var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _maxToolIterations);
-            switch (budgetStatus)
+            if (missingReceipt)
             {
-                case ToolBudgetStatus.Exhausted exhausted:
-                    _log.Warning("SubAgent [{AgentName}] hit tool iteration limit ({Count}), forcing text response",
-                        _definition.Name, _turnState.ToolIterationCount);
-                    _forcedFinalOutcomeReason = SubAgentOutcomeReason.ToolIterationBudgetExhausted;
-                    AddSystemNudge(exhausted.NudgeText);
-                    FireLlmCall(forceNoTools: true);
-                    return;
-                case ToolBudgetStatus.NudgeNeeded nudge:
-                    _log.Info(
-                        "SubAgent [{AgentName}] nearing tool iteration limit ({Used}/{Max}, remaining={Remaining})",
-                        _definition.Name,
-                        _turnState.ToolIterationCount,
-                        _maxToolIterations,
-                        nudge.Remaining);
-                    AddSystemNudge(nudge.NudgeText);
-                    break;
+                Complete(true, ToolCycleMessages.MissingReceipt, SubAgentRunOutcome.Partial,
+                    new SubAgentOutcomeReason("tool_receipt_missing"));
+                return;
             }
 
+            _turnState.RecordToolCompletion(msg.ToolResults.Count);
             _log.Debug("SubAgent [{AgentName}] tool iteration {Count}, continuing",
                 _definition.Name, _turnState.ToolIterationCount);
             FireLlmCall();
@@ -838,34 +801,35 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _approvalService,
                 _toolExecutorLogger);
         var preparedCycleBatch = ToolCycleSignatureFactory.Prepare(toolCalls, executor);
-        var cycleDecision = _turnState.EvaluateBeforeDispatch(preparedCycleBatch.Action);
+        var cycleDecision = _turnState.EvaluateBeforeDispatch(preparedCycleBatch);
         if (cycleDecision.Kind != ToolCycleDecisionKind.Execute)
         {
             Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
                 "Subagent tool cycle decision kind={DecisionKind} period={Period} repetitions={Repetitions}",
                 cycleDecision.Kind,
-                cycleDecision.Period,
-                cycleDecision.Repetitions);
+                0,
+                2);
         }
 
         if (cycleDecision.Kind == ToolCycleDecisionKind.Stop)
         {
-            _forcedFinalOutcomeReason = SubAgentOutcomeReason.ToolCycleStopped;
-            AddSystemNudge(ToolCycleMessages.Final);
-            FireLlmCall(forceNoTools: true);
+            Complete(true, ToolCycleMessages.Final, SubAgentRunOutcome.Partial, SubAgentOutcomeReason.ToolCycleStopped);
             return;
         }
 
         // Add assistant message (with tool calls) to history
         _history.Add(assistantMessage);
 
-        if (cycleDecision.Kind == ToolCycleDecisionKind.Correct)
+        _activeCycleBatch = preparedCycleBatch;
+        _cycleRefusedCallIds.Clear();
+        _cycleRefusedCallIds.UnionWith(cycleDecision.RefusedCallIds);
+        var refusedCalls = toolCalls.Where(call => _cycleRefusedCallIds.Contains(call.CallId)).ToList();
+        toolCalls = toolCalls.Where(call => !_cycleRefusedCallIds.Contains(call.CallId)).ToList();
+        if (toolCalls.Count == 0)
         {
-            EmitToolCycleCorrection(toolCalls);
+            EmitToolCycleCorrection(refusedCalls);
             return;
         }
-
-        _activeCycleBatch = preparedCycleBatch;
 
         var toolNames = string.Join(", ", toolCalls.Select(tc => tc.Name));
         RecordProgress($"running tools: {toolNames}");
@@ -894,7 +858,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _log,
             _definition.Name,
             _parentSessionId,
-            _subSessionId);
+            _subSessionId,
+            refusedCalls);
     }
 
     private void EmitToolCycleCorrection(IReadOnlyList<FunctionCallContent> toolCalls)
@@ -1463,7 +1428,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ILoggingAdapter logger,
         AgentName agentName,
         string? parentSessionId,
-        string? subSessionId)
+        string? subSessionId,
+        IReadOnlyList<FunctionCallContent> refusedCalls)
     {
         try
         {
@@ -1672,6 +1638,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             });
 
             var results = await Task.WhenAll(tasks);
+            results = results.Concat(refusedCalls.Select(call => new SubAgentToolCallResult(
+                new SerializableChatMessage
+                {
+                    Role = Protocol.ChatRole.Tool, ToolCallId = new ToolCallId(call.CallId),
+                    Name = call.Name, Content = ToolCycleMessages.Correction
+                }, [], null, new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle),
+                null, AuthorizationAttemptId.New()))).ToArray();
             for (var i = 0; i < results.Length; i++)
             {
                 var result = results[i];
@@ -1746,8 +1719,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 materialization.RequestedCount - materialization.MediaReferences.Count);
         }
 
-        var receipt = toolContext.Receipt
-            ?? new ToolInvocationReceipt.Succeeded([], null);
+        var receipt = toolContext.Receipt;
         return new SubAgentToolCallResult(
             new SerializableChatMessage
             {
