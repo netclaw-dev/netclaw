@@ -57,7 +57,7 @@
 - [x] 7.1 Integrate the independent test agent's assertions; verify each actual defect receives its failing test before the production fix.
 - [x] 7.2 Run named fault variants for reset, duplicate count, forged receipt, missing evidence, terminal model dependence, and scope; verify behavioral rejection.
 - [x] 7.3 Run focused Stryker gates for changed dispatch boundaries; verify expected mutants run and fail within the documented CI cost budget.
-- [ ] 7.4 Run only necessary tool-cycle and relevant subagent model cases at the approved target; verify strict independent assertions and retained raw trial evidence.
+- [ ] 7.4 Run only necessary tool-cycle and relevant subagent model cases at the approved target. Use a fresh container and data home for each independent trial. Verify strict independent assertions and retained raw evidence.
 - [ ] 7.5 Review every model failure; verify parser, prompt, capability, and infrastructure causes receive separate dispositions.
 - [ ] 7.6 Reconcile laboratory, replay, shadow, holdout, actor, and model evidence; verify every activation gate passes before merge approval.
 

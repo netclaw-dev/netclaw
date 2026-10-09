@@ -1326,6 +1326,13 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p><strong>Real-model trials:</strong> The targeted cycle trials are active. The first correction trial fails the strict report format after its runtime checks pass.</p>
 <p>The coordination discovery baseline passes two of five trials. One failed trial executes a forbidden shell command and falsely reports no commands.</p>
 <p>Terminal usage evidence and a compaction timeout need separate analysis. These results do not pass the eval gate.</p>
+<p><strong>Required trial isolation:</strong> Each independent trial uses a fresh container, data home, session state, and relay instance.</p>
+<p>Multiple turns inside one trial retain that trial's container. Trials can reuse the same immutable binary and image.</p>
+<p>The initial cycle and coordination batches reuse a daemon. Their results remain diagnostic evidence and do not satisfy isolated-trial acceptance.</p>
+<p>One prior trial's memory sidecar reaches a later terminal fixture. The fixture incorrectly counts it against the active trial.</p>
+<p>The repaired fixture checks trial ownership before that counter. Synthetic setup usage supplies actual runtime context-window telemetry without a final model request.</p>
+<p>All 73 Python controls pass. Two named faults fail six behavioral subcases; six restored controls pass. The strict result oracle remains unchanged.</p>
+<p>Fresh isolated trials remain required. The original output-contract, command-prohibition, and observer-timeout failures retain their raw evidence.</p>
 <p>The corrected approved target is reachable. Tailscale Serve exposes only this plan file.</p>
 <h3>Instructions for a future implementation session</h3>
 <ul>
