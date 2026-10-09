@@ -186,7 +186,7 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
     {
         var session = new SessionId("signalr/compaction-snapshot-failure");
         _main.CompactOnCorrection = true;
-        _main.HoldFourthRequest = true;
+        _main.HoldRequestNumber = 4;
         var reached = NewSignal();
         await Snapshots.OnSave.FailIf((persistenceId, _) =>
         {
@@ -201,11 +201,11 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
         {
             await StartAsync(manager, session);
             await reached.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
-            await _main.FourthEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+            await _main.RequestEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
         }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(2, _executor.Count);
         Assert.Equal(1, _compaction.Count);
-        _main.ReleaseFourth.TrySetResult();
+        _main.ReleaseRequest.TrySetResult();
         await CompletedAsync(subscriber);
         Assert.Equal(4, _main.Count);
         Assert.Equal(2, _executor.Count);
@@ -241,6 +241,190 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
             ToolCycleSignatureFactory.Prepare([RepeatedClient.Call("new-call")], _executor)).Kind);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task A_crash_after_committed_results_replays_the_suffix_without_repeating_completed_effects(int committedRounds)
+    {
+        var session = new SessionId($"signalr/committed-result-cut-{committedRounds}");
+        _main.HoldRequestNumber = committedRounds + 1;
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        await StartAsync(manager, session);
+        await _main.RequestEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+        var owner = await OwnerAsync(session);
+        var watcher = CreateTestProbe();
+        watcher.Watch(owner);
+        Sys.Stop(owner);
+        await watcher.ExpectTerminatedAsync(owner, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+
+        var before = await ReadJournalAsync(session);
+        Assert.Null(before.Snapshot);
+        Assert.Equal(committedRounds, before.Events.OfType<ToolBatchStarted>().Count());
+        var committedResults = before.Events.OfType<ToolCallRecorded>().ToArray();
+        Assert.Equal(committedRounds, committedResults.Length);
+        Assert.Equal(Math.Min(committedRounds, 2), _executor.Count);
+        Assert.Equal(Math.Min(committedRounds, 2), committedResults.Count(result => !result.LoopObservation!.Synthetic));
+        Assert.Equal(committedRounds == 3 ? 1 : 0, committedResults.Count(result => result.LoopObservation!.Synthetic));
+        Assert.Empty(before.Events.OfType<TurnRecorded>());
+
+        subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        await manager.Ask<CommandAck>(Restart(session), FaultCeiling, TestContext.Current.CancellationToken);
+        await CompletedAsync(subscriber);
+
+        Assert.Equal(2, _executor.Count);
+        Assert.Equal(5, _main.Count);
+        Assert.Equal(2, _executor.CallIds.Distinct().Count());
+        Assert.All(_executor.Requesters, requester => Assert.Equal("operator-a", requester));
+        var resumed = _main.Requests[committedRounds + 1];
+        foreach (var result in committedResults)
+        {
+            var pair = Assert.Single(resumed.SelectMany(message => message.Contents.OfType<FunctionResultContent>()),
+                item => item.CallId == result.ToolResult.ToolCallId!.Value.Value);
+            Assert.Equal(result.ToolResult.Content, pair.Result);
+        }
+        Assert.DoesNotContain(resumed, message => message.Role == ChatRole.User
+            && message.Text == "Resume the work that was interrupted by the daemon restart.");
+
+        var after = await ReadJournalAsync(session);
+        Assert.Equal(3, after.Events.OfType<ToolBatchStarted>().Count());
+        var finalResults = after.Events.OfType<ToolCallRecorded>().ToArray();
+        Assert.Equal(3, finalResults.Length);
+        Assert.Equal(2, finalResults.Count(result => !result.LoopObservation!.Synthetic));
+        Assert.Single(finalResults, result => result.LoopObservation!.Synthetic);
+        foreach (var result in committedResults)
+            Assert.Single(finalResults, item => item.ToolResult.ToolCallId == result.ToolResult.ToolCallId);
+        Assert.Single(after.Events.OfType<TurnRecorded>());
+    }
+
+    [Fact]
+    public async Task A_successful_correction_admission_after_owner_death_replays_its_checkpoint_before_dispatch()
+    {
+        var session = new SessionId("signalr/held-correction-admission-cut");
+        var reached = NewSignal();
+        var release = NewSignal();
+        await Journal.OnWrite.FailIf(async representation =>
+        {
+            if (representation.Payload is not ToolBatchStarted { LoopAdmission.RefusedCallIds.Count: > 0 }) return false;
+            reached.TrySetResult();
+            await release.Task.WaitAsync(TestContext.Current.CancellationToken);
+            return false;
+        });
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        var owner = await OwnerAsync(session);
+        var watcher = CreateTestProbe();
+        watcher.Watch(owner);
+        try
+        {
+            await StartAsync(manager, session);
+            await reached.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+            Assert.Equal(2, _executor.Count);
+            Assert.Equal(3, _main.Count);
+            Sys.Stop(owner);
+            await watcher.ExpectTerminatedAsync(owner, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        await Journal.OnWrite.Pass();
+
+        JournalEvidence? before = null;
+        await AwaitAssertAsync(async () =>
+        {
+            before = await ReadJournalAsync(session);
+            Assert.Equal(3, before.Events.OfType<ToolBatchStarted>().Count());
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(before);
+        Assert.Null(before.Snapshot);
+        var correction = before.Events.OfType<ToolBatchStarted>().Last();
+        Assert.Equal(["call-3"], correction.LoopAdmission!.RefusedCallIds);
+        Assert.Contains(correction.LoopDelta!.Upserts, entry => entry.EqualRounds == 2 && entry.Corrected);
+        Assert.Equal(2, before.Events.OfType<ToolCallRecorded>().Count());
+        Assert.Empty(before.Events.OfType<TurnRecorded>());
+
+        subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        await manager.Ask<CommandAck>(Restart(session), FaultCeiling, TestContext.Current.CancellationToken);
+        await CompletedAsync(subscriber);
+        Assert.Equal(2, _executor.Count);
+        Assert.Equal(4, _main.Count);
+        Assert.All(_executor.Requesters, requester => Assert.Equal("operator-a", requester));
+        var resumed = _main.Requests[^1];
+        var resumedCalls = resumed.SelectMany(message => message.Contents.OfType<FunctionCallContent>()).ToArray();
+        var resumedResults = resumed.SelectMany(message => message.Contents.OfType<FunctionResultContent>()).ToArray();
+        Assert.Single(resumedCalls, call => call.CallId == "call-3");
+        var closed = Assert.Single(resumedResults, result => result.CallId == "call-3");
+        Assert.Equal("Tool call was not completed — the session restarted before the action completed.", closed.Result);
+        foreach (var result in before.Events.OfType<ToolCallRecorded>())
+        {
+            var pair = Assert.Single(resumedResults, item => item.CallId == result.ToolResult.ToolCallId!.Value.Value);
+            Assert.Equal(result.ToolResult.Content, pair.Result);
+            Assert.False(result.LoopObservation!.Synthetic);
+        }
+        Assert.Equal(resumedCalls.Select(call => call.CallId).Order(), resumedResults.Select(result => result.CallId).Order());
+        var after = await ReadJournalAsync(session);
+        Assert.Equal(3, after.Events.OfType<ToolBatchStarted>().Count());
+        Assert.Equal(2, after.Events.OfType<ToolCallRecorded>().Count());
+        var abandoned = Assert.Single(after.Events.OfType<ToolBatchAbandoned>());
+        Assert.Equal("call-3", Assert.Single(abandoned.ToolResults).ToolCallId!.Value.Value);
+        Assert.Single(after.Events.OfType<TurnRecorded>());
+    }
+
+    [Fact]
+    public async Task A_successful_compaction_snapshot_keeps_the_correction_after_owner_death()
+    {
+        var session = new SessionId("signalr/successful-compaction-snapshot-cut");
+        _main.CompactOnCorrection = true;
+        _main.HoldRequestNumber = 4;
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        await StartAsync(manager, session);
+        await _main.RequestEntered.Task.WaitAsync(FaultCeiling, TestContext.Current.CancellationToken);
+        Assert.Equal(2, _executor.Count);
+        Assert.Equal(1, _compaction.Count);
+
+        JournalEvidence? stored = null;
+        await AwaitAssertAsync(async () =>
+        {
+            stored = await ReadJournalAsync(session);
+            Assert.NotNull(stored.Snapshot);
+        }, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(stored);
+        var snapshot = Assert.IsType<SessionSnapshot>(stored.Snapshot);
+        Assert.Equal("original", snapshot.LoopCheckpoint!.TaskId);
+        Assert.Contains(snapshot.LoopCheckpoint.Entries, entry => entry.EqualRounds == 2 && entry.Corrected);
+        Assert.Equal("original", snapshot.AdoptedTaskContext!.TurnId);
+        Assert.Equal("operator-a", snapshot.AdoptedTaskContext.DefaultDeliveryTarget!.DestinationId);
+        Assert.False(snapshot.LoopReceiptFailure);
+        Assert.Empty(stored.Events);
+        var owner = await OwnerAsync(session);
+        var watcher = CreateTestProbe();
+        watcher.Watch(owner);
+        Sys.Stop(owner);
+        await watcher.ExpectTerminatedAsync(owner, FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+
+        subscriber = CreateTestProbe();
+        await JoinAsync(manager, subscriber, session);
+        await manager.Ask<CommandAck>(Restart(session), FaultCeiling, TestContext.Current.CancellationToken);
+        await CompletedAsync(subscriber);
+        Assert.Equal(2, _executor.Count);
+        Assert.Equal(5, _main.Count);
+        Assert.Equal(1, _compaction.Count);
+        Assert.All(_executor.Requesters, requester => Assert.Equal("operator-a", requester));
+        var after = await ReadJournalAsync(session);
+        Assert.NotNull(after.Snapshot);
+        Assert.Empty(after.Events.OfType<ToolBatchStarted>());
+        Assert.Empty(after.Events.OfType<ToolCallRecorded>());
+        Assert.Single(after.Events.OfType<TurnRecorded>());
+    }
+
     private async Task<JournalEvidence> ReadJournalAsync(SessionId session)
     {
         var completed = new TaskCompletionSource<JournalEvidence>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -257,7 +441,7 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
         $"/user/session-manager/{Uri.EscapeDataString(session.Value)}").ResolveOne(FaultCeiling, TestContext.Current.CancellationToken);
     private static async Task JoinAsync(IActorRef manager, Akka.TestKit.TestProbe subscriber, SessionId session)
     {
-        manager.Tell(new JoinSession(subscriber) { SessionId = session, Filter = OutputFilter.Full });
+        manager.Tell(new JoinSession(subscriber) { SessionId = session, Filter = OutputFilter.Full }, subscriber.Ref);
         await subscriber.ExpectMsgAsync<SessionJoined>(FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
     }
     private static Task<CommandAck> StartAsync(IActorRef manager, SessionId session) => manager.Ask<CommandAck>(
@@ -338,9 +522,9 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
         private int _count;
         public int Count => Volatile.Read(ref _count);
         public bool CompactOnCorrection { get; set; }
-        public bool HoldFourthRequest { get; set; }
-        public TaskCompletionSource FourthEntered { get; } = NewSignal();
-        public TaskCompletionSource ReleaseFourth { get; } = NewSignal();
+        public int HoldRequestNumber { get; set; }
+        public TaskCompletionSource RequestEntered { get; } = NewSignal();
+        public TaskCompletionSource ReleaseRequest { get; } = NewSignal();
         public List<ChatMessage[]> Requests { get; } = [];
         public static FunctionCallContent Call(string id) => new(id, "recurrence_probe", new Dictionary<string, object?>());
         public override async Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
@@ -348,10 +532,10 @@ public sealed class ToolRecurrencePersistenceFaultTests(ITestOutputHelper output
         {
             var count = Interlocked.Increment(ref _count);
             Requests.Add(messages.ToArray());
-            if (count == 4 && HoldFourthRequest)
+            if (count == HoldRequestNumber)
             {
-                FourthEntered.TrySetResult();
-                await ReleaseFourth.Task.WaitAsync(cancellationToken);
+                RequestEntered.TrySetResult();
+                await ReleaseRequest.Task.WaitAsync(cancellationToken);
             }
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, [Call($"call-{count}")]))
             {
