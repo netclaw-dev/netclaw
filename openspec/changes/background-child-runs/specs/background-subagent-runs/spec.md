@@ -305,8 +305,22 @@ The pair SHALL represent framework result delivery, not a new tool request or au
 Child text SHALL NOT become trusted automation input, a user instruction, a grant, or an approval prompt answer.
 Progress and status changes SHALL NOT start parent model turns.
 Terminal results SHALL queue in journal order after the active parent turn or compaction.
-Only results with compatible original authority SHALL coalesce.
+Only results with compatible original authority and the same original detector task identity SHALL coalesce.
 Internal admission SHALL preserve PR 1's detector identity and retained evidence.
+The owner SHALL retain the parent `ToolLoopCheckpoint` and receipt-failure fact in the durable child run ledger.
+These facts SHALL remain separate from child partial-result checkpoints and actor-local child detector state.
+The checkpoint's `TaskId` SHALL identify the detector task independently from `TurnContextRecord.TurnId`.
+Committed parent admissions and results SHALL refresh outstanding runs that belong to the same detector task.
+For tool-based starts, continuation restoration SHALL wait until the original batch settles and commits its detector evidence.
+A normal batch SHALL include the start receipt and completed feedback round.
+A missing mandatory receipt SHALL retain the receipt-failure fact and invoke PR 1's terminal settlement without another model request.
+Direct activation SHALL retain canonical task evidence without a fabricated tool receipt.
+Parent completion and fresh input SHALL retain evidence required by outstanding child continuations.
+Sibling runs SHALL use the latest retained parent checkpoint for their task.
+Canonical continuation adoption SHALL validate the accepted run and commit restored evidence before the next model request.
+The synthetic delivery pair SHALL NOT clear receipt failure or reopen the completed start call.
+Delivery completion SHALL retain evidence required by another outstanding run.
+Recovery SHALL preserve these facts without child relaunch or a fresh-task reset.
 
 #### Scenario: Result delivery uses a fresh paired correlation
 
@@ -321,6 +335,49 @@ Internal admission SHALL preserve PR 1's detector identity and retained evidence
 - **WHEN** the parent receives that attributed report
 - **THEN** the text creates no grant or approval prompt answer
 - **AND** the actual pending approval prompt remains authoritative
+
+#### Scenario: Fresh parent input preserves a child's original detector task
+
+- **GIVEN** task A accepted a child and committed its start receipt and feedback round
+- **AND** the parent completed A and admitted fresh user task B
+- **WHEN** the owner adopts the child's later result continuation
+- **THEN** it commits A's latest retained checkpoint and receipt-failure fact before the next model request
+- **AND** it uses the child's original authority without a fresh detector task
+
+#### Scenario: Sibling results use the latest shared task evidence
+
+- **GIVEN** task A accepted two children and later committed additional detector evidence
+- **WHEN** either child result starts a continuation
+- **THEN** that continuation uses A's latest retained parent checkpoint
+- **AND** its completion retains evidence required by the other child
+
+#### Scenario: Equal authority cannot merge distinct detector tasks
+
+- **GIVEN** one requester owns child runs from distinct detector tasks A and B
+- **WHEN** their terminal results await parent continuation
+- **THEN** the owner keeps separate continuation groups and parent checkpoints
+- **AND** equal authority alone cannot merge or reset their detector evidence
+
+#### Scenario: Recovery cannot erase a retained receipt failure
+
+- **GIVEN** an outstanding child run retains its parent task's receipt-failure fact
+- **WHEN** recovery restores that run and admits its result continuation
+- **THEN** the original detector task and receipt failure remain authoritative
+- **AND** the delivery pair creates no execution receipt or child relaunch
+
+#### Scenario: An early terminal result waits for the start batch
+
+- **GIVEN** a tool-based child start commits acceptance before its parent batch settles
+- **WHEN** the child reports a terminal result before the original start receipt commits
+- **THEN** continuation restoration waits for the original batch's committed settlement
+- **AND** a missing mandatory receipt invokes terminal settlement without another model request
+
+#### Scenario: Direct slash activation creates no tool receipt
+
+- **GIVEN** direct slash activation accepted a child without a parent tool call
+- **WHEN** its terminal result admits a continuation
+- **THEN** the owner retains the canonical original detector evidence
+- **AND** it fabricates no start receipt or completed tool feedback round
 
 #### Scenario: A different speaker does not replace original authority
 

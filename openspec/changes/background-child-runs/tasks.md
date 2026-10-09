@@ -1,10 +1,21 @@
 ## 1. Freeze prerequisites and independent proof fixtures
 
-- [ ] 1.1 Rebase on PR 1 and reconcile its frozen types and deltas; verify the combined recurrence contract remains unchanged.
+- [x] 1.1 Rebase on PR 1 and reconcile its frozen types and deltas; verify the combined recurrence contract remains unchanged.
 - [ ] 1.2 Record the owner's pending capacity decision before dependent runtime edits; verify the selected admission and held-child model-response clauses are explicit.
-- [ ] 1.3 Have an independent test author derive lifecycle assertions from the delta; verify the author lists paired controls and deliberate faulty variants.
+- [x] 1.3 Have an independent test author derive lifecycle assertions from the delta; verify the author lists paired controls and deliberate faulty variants.
 - [ ] 1.4 Extend existing actor fixtures with start, provider, dispatch, terminal, and persistence barriers; verify assertions use acknowledgements rather than sleeps.
-- [ ] 1.5 Capture a pre-change journal/snapshot fixture with conversation and parent approval state; verify the fixture predates new lifecycle records.
+- [x] 1.5 Capture a pre-change journal/snapshot fixture with conversation and parent approval state; verify the fixture predates new lifecycle records.
+
+Preparation evidence:
+
+- The branch includes PR 1 at `893435238`. Its existing runtime types remain unchanged.
+- Design section 7 assigns retained parent detector evidence to the planned child run ledger.
+- An independent review derives sixteen assertion groups, paired controls, and named faults from the deltas.
+- The [approved plan](../../../.systematize/plans/background-subagents/plan.html) owns the adversarial method and acceptance gates.
+- The original `2e6bc4f` capture already supplies conversation, original requester, and parent approval facts.
+- Reuse `src/Netclaw.Actors.Tests/Sessions/Fixtures/LegacyPersistence/legacy-session-v0.json`; do not recapture or infer child records.
+- Its SHA-256 is `bf400d15ea1541d1a59b8be238705c99eb7f489413c863d93b17976ab1cfc94b`.
+- These preparation tasks establish no background runtime or provider-capacity pass.
 
 ## 2. Durable acceptance and independent lifetime
 
@@ -25,7 +36,7 @@
 - [ ] 3.5 Atomically persist delivery dedup and continuation input; crash before/after admission and verify one pending input without child replay.
 - [ ] 3.6 Materialize a fresh attributed provider tool-call/result pair; inspect actual messages and verify the original start call receives no second result.
 - [ ] 3.7 Preserve original authority and compatible journal-order queues; verify another speaker and active compaction cannot change result authority.
-- [ ] 3.8 Keep internal result admission inside PR 1's original detector task; verify retained recurrence evidence and current parent directory/project/branch survive.
+- [ ] 3.8 Retain and refresh parent detector checkpoints in the child run ledger. Verify committed start settlement and direct activation without fabricated receipts. Verify late results after fresh input, sibling checkpoint updates, distinct-task separation, receipt failure, and recovery. Preserve current parent directory/project/branch.
 - [ ] 3.9 Keep failed parent continuations visible; verify replay does not admit completed input or automatically restart external effects.
 
 ## 4. Every routed start and deferred parent controls
@@ -58,7 +69,7 @@
 - [ ] 6.3 Cancel children during coordinated drain with bounded finalization; verify parent snapshot retains terminal and prompt disposition.
 - [ ] 6.4 Recover accepted children as explicit `Lost` without relaunch; verify committed cancellation remains cancelled and stale success cannot win.
 - [ ] 6.5 Crash at acceptance, terminal persistence, enrichment, delivery preparation, and admission; verify no duplicate child or completed side-effect replay.
-- [ ] 6.6 Load the captured pre-change fixture; verify existing history, parent prompts, and storage bindings survive with an explicit empty child ledger.
+- [ ] 6.6 Load the captured pre-change fixture. Verify retained history, parent prompts, and an explicit empty child ledger. Capture a baseline SQLite storage binding and marker through the real resolver. Verify the candidate preserves that row and marker. The journal fixture alone supplies no storage-binding proof.
 - [ ] 6.7 Probe prior-reader compatibility against new events; verify rollback instructions require backup restoration when compatibility fails.
 
 ## 7. Integrated health, evals, and sensitive fault controls
@@ -75,7 +86,7 @@
 
 ## 8. Docs, operational guidance, and handoff
 
-- [ ] 8.1 Rename the glossary entry to approval prompt with a legacy-anchor alias; verify old links still resolve and exact code identifiers remain unchanged.
+- [x] 8.1 Rename the glossary entry to approval prompt with a legacy-anchor alias; verify old links still resolve and exact code identifiers remain unchanged.
 - [ ] 8.2 Update `SPEC-002`, `SPEC-016`, and the authorization architecture document; verify they describe implemented ownership and cancellation order.
 - [ ] 8.3 Add minimum runtime `AGENTS.md` guidance; verify it describes background acceptance, deferred control, partial result review, and cancel/recreate only.
 - [ ] 8.4 Update `subagent-authoring` and `netclaw-operations` versions; verify instructions advertise no deferred messages or restored tool ceilings.

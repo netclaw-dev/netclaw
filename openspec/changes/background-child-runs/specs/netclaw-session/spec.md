@@ -8,6 +8,9 @@ It SHALL identify recorded state and distinguish cancellation admission from loc
 It SHALL NOT expose hidden child task text, unsafe paths, or another session's run details.
 It SHALL NOT claim live provider state that the owner did not observe.
 Terminal child admission SHALL preserve the original task's recurrence state and current parent directory/project/branch facts.
+The durable child run ledger SHALL retain parent detector checkpoints independently from the session's current task checkpoint.
+Fresh input SHALL NOT replace evidence required by an outstanding child continuation.
+Continuation adoption SHALL restore the latest retained original-task checkpoint before the next model request.
 Confirmed child file activity SHALL merge through the existing working-context rules.
 
 #### Scenario: A later turn can inspect its earlier child
