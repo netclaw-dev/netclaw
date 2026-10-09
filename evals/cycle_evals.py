@@ -147,11 +147,6 @@ class CycleFixture(Fixture):
             call_ids += [m.get("tool_call_id", "") for m in messages if m.get("role") == "tool"]
             if any(i.startswith("cycle-") and not i.startswith(f"cycle-{self.nonce}-") for i in call_ids):
                 raise ValueError("A request from another trial cannot consume this trial's script.")
-            if ((self.case == "terminal" and self.phase >= 5)
-                    or (self.case == "nonadjacent_terminal" and self.phase >= 8)):
-                self.terminal_requests += 1
-                raise ValueError("The runtime terminal decision must not request a provider response.")
-            # Sidecars must not consume script stages or count as model recovery.
             compaction = system.startswith("You are a session summarizer.")
             distillation = system.startswith("You are a session memory distillation sidecar.")
             if compaction or distillation:
@@ -159,6 +154,12 @@ class CycleFixture(Fixture):
                 trial_markers.update(re.findall(re.escape(ROOT) + r"/([a-f0-9]{32})", all_text))
                 if tools or trial_markers != {self.nonce}:
                     raise ValueError("The sidecar request does not belong to this trial.")
+            if ((self.case == "terminal" and self.phase >= 5)
+                    or (self.case == "nonadjacent_terminal" and self.phase >= 8)):
+                self.terminal_requests += 1
+                raise ValueError("The runtime terminal decision must not request a provider response.")
+            # Sidecars must not consume script stages or count as model recovery.
+            if compaction or distillation:
                 self.sidecar_requests += 1
                 self.compaction_requests += int(compaction)
                 self.distillation_requests += int(distillation)
@@ -282,8 +283,12 @@ class CycleFixture(Fixture):
         if name == "load_tool":
             arguments = {**arguments, "_rationale": "Load the primary operation schema."}
         self.scripted_calls[call_id] = {"name": name, "arguments": json.dumps(arguments)}
-        return {"role": "assistant", "content": None, "tool_calls": [{"id": call_id, "type": "function",
-                "function": {"name": name, "arguments": json.dumps(arguments)}}]}
+        reply = {"role": "assistant", "content": None, "tool_calls": [{"id": call_id, "type": "function",
+                 "function": {"name": name, "arguments": json.dumps(arguments)}}]}
+        if name == "load_tool":
+            # Synthetic setup usage makes the runtime report its context window before a framework-only stop.
+            reply["_fixture_usage"] = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        return reply
 
 
 def primary_receipts(snapshot, headless_log):

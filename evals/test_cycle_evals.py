@@ -407,6 +407,19 @@ class CycleFixtureTests(unittest.TestCase):
                 for field in ("main_requests", "sidecar_requests", "model_requests", "scripted_ids", "tool_results"):
                     self.assertEqual(before[field], after[field], field)
 
+    def test_foreign_sidecars_after_stop_cannot_count_as_current_task_provider_requests(self):
+        for kind in ("compaction", "distillation"):
+            with self.subTest(kind=kind):
+                request = self.to_correction("terminal")
+                self.fixture.completion(request)
+                foreign = self.sidecar(kind)
+                for message in foreign["messages"]:
+                    message["content"] = message["content"].replace(self.fixture.nonce, "0" * 32)
+                before = copy.deepcopy(self.fixture.snapshot())
+                with self.assertRaisesRegex(ValueError, "does not belong to this trial"):
+                    self.fixture.completion(foreign)
+                self.assertEqual(before, self.fixture.snapshot())
+
     def test_terminal_without_the_stop_instruction_is_not_a_sidecar(self):
         request = self.to_correction("terminal")
         self.fixture.completion(request)
@@ -503,6 +516,7 @@ class CycleFixtureTests(unittest.TestCase):
     def test_compaction_does_not_replay_removed_script_ids(self):
         request = self.start("compaction")
         load = self.fixture.completion(request)
+        self.assertEqual({"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}, load["_fixture_usage"])
         self.acknowledge(request, load, "shell_execute", 0)
         first = self.fixture.completion(request)
         self.assertEqual(8000, first["_fixture_usage"]["prompt_tokens"])
@@ -585,6 +599,32 @@ class CycleFixtureTests(unittest.TestCase):
 
 
 class CycleUsageWireTests(unittest.TestCase):
+    def test_terminal_setup_emits_context_evidence_without_a_target_model_request(self):
+        for case in ("terminal", "nonadjacent_terminal"):
+            for stream in (False, True):
+                with self.subTest(case=case, stream=stream), tempfile.TemporaryDirectory() as home:
+                    fixture = CycleFixture("http://unused/v1", "unit-fixture", "", home, 10000)
+                    prompt = fixture.control("cycle", {"case": case})["prompt"]
+                    message = fixture.completion({"messages": [{"role": "user", "content": prompt}],
+                                                  "tools": [{"function": {"name": "load_tool"}}]})
+                    handler = object.__new__(handler_for(fixture))
+                    handler.wfile = io.BytesIO()
+                    handler.send_response = lambda *_: None
+                    handler.send_header = lambda *_: None
+                    handler.end_headers = lambda: None
+                    handler.reply({"stream": stream}, message)
+                    wire = handler.wfile.getvalue().decode()
+                    chunks = ([json.loads(line[6:]) for line in wire.splitlines()
+                               if line.startswith("data: ") and line != "data: [DONE]"]
+                              if stream else [json.loads(wire)])
+                    self.assertEqual([{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}],
+                                     [chunk["usage"] for chunk in chunks if chunk.get("usage") is not None])
+                    self.assertNotIn("_fixture_usage", wire)
+                    self.assertIn(fixture.scripted_ids[0], wire)
+                    self.assertEqual(0, fixture.model_requests)
+                    self.assertEqual(0, fixture.terminal_requests)
+                    self.assertIsNone(fixture.handoff)
+
     def test_usage_stays_out_of_the_message_and_has_one_accounting_record(self):
         fixture = type("FixtureIdentity", (), {"model": "unit-fixture"})()
         handler_type = handler_for(fixture)
@@ -748,6 +788,18 @@ class CycleCommandTests(unittest.TestCase):
                 self.assertEqual(1, code)
                 self.assertEqual("failed", report["status"])
                 self.assertFalse(report["groups"]["runtime_contract"]["passed"])
+
+    def test_terminal_requires_true_context_evidence_without_a_final_model_request(self):
+        for case in ("terminal", "nonadjacent_terminal"):
+            for replacement in ("", " context_window=32768", " context_window=131072"):
+                with self.subTest(case=case, replacement=replacement):
+                    documents = (self.documents(case) if case == "terminal"
+                                 else NonadjacentOracleTests().documents(terminal=True))
+                    documents["headless"] = documents["headless"].replace(" context_window=65536", replacement)
+                    code, report = self.invoke(documents)
+                    self.assertEqual(1, code)
+                    self.assertFalse(report["checks"]["context_window"])
+                    self.assertTrue(report["checks"]["no_terminal_model_request"])
 
     def test_missing_final_json_or_logs_produce_an_explicit_inconclusive_failure(self):
         for key, value in (("output", ""), ("output", "not-json"), ("output", "{}"),
