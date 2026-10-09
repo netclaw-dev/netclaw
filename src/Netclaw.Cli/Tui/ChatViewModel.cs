@@ -554,8 +554,10 @@ public partial class ChatViewModel : ReactiveViewModel
                     {
                         // Auto-send hidden trigger message (e.g., onboarding interview prompt).
                         // Not rendered as a user bubble — the LLM's greeting is the first visible thing.
+                        // Do not null _initialMessage here: the send below can fail. If it does, the
+                        // trigger stays set so the next reconnect's EnsureSessionAndFlushAsync retries it
+                        // instead of dropping the onboarding turn permanently.
                         next = trigger;
-                        _initialMessage = null;
                         found = isTrigger = true;
                         IsGenerating.Value = true;
                         StatusMessage.Value = "Generating...";
@@ -568,6 +570,8 @@ public partial class ChatViewModel : ReactiveViewModel
                     try
                     {
                         await _daemonClient.SendAsync(next!);
+                        if (isTrigger)
+                            _initialMessage = null;
                         triggerSent |= isTrigger;
                     }
                     catch (Exception ex)

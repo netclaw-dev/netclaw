@@ -208,4 +208,42 @@ public sealed class ChatSessionSetupTests : IDisposable
 
         Assert.Equal(["q1", "q2", "sentinel"], _sent.ToArray());
     }
+
+    // A transient failure sending the initial hidden trigger (e.g. the connection drops during
+    // the onboarding prompt) must NOT permanently drop it. The trigger is only consumed after a
+    // successful send, so a later set-up pass retries it — otherwise the onboarding interview
+    // never runs and the smoke tape 'init-redo-chat' hangs waiting for the assistant reply.
+    [Fact]
+    public async Task A_transient_trigger_send_failure_is_retried_on_the_next_setup()
+    {
+        var triggerAttempts = 0;
+        _sendGate = text =>
+        {
+            // The hidden trigger is the only message; fail its first send attempt only.
+            if (text == "the-trigger" && Interlocked.Increment(ref triggerAttempts) == 1)
+                throw new IOException("the connection dropped during the trigger send");
+
+            return Task.CompletedTask;
+        };
+        var navigation = new ChatNavigationState();
+        navigation.StartOnboarding("the-trigger");
+        var (chat, client) = await StartChatAsync(navigation);
+        using var _ = chat;
+        await using var __ = client;
+        var statuses = new ConcurrentQueue<string>();
+        using var subscription = chat.StatusMessage.Subscribe(statuses.Enqueue);
+
+        // First pass: the trigger send fails once. With the bug the trigger is consumed before
+        // the send, so it is dropped for good; with the fix it stays queued for the next pass.
+        _releaseFirstSetup.SetResult();
+        Assert.Contains(statuses, status =>
+            status.StartsWith("A message could not be sent and was dropped", StringComparison.Ordinal));
+
+        // The reconnect path invokes set-up again; the trigger must be re-sent this time.
+        await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        await WaitForSendsAsync(1);
+
+        Assert.Equal(["the-trigger"], _sent.ToArray());
+        Assert.True(triggerAttempts >= 2, $"Expected the trigger to be retried, but it was attempted {triggerAttempts} time(s).");
+    }
 }
