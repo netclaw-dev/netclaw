@@ -14,6 +14,15 @@ elif [[ $# != 0 ]]; then
 fi
 case "$FILTER_CASE" in
     ""|queued_grant_revoked) ;;
+    child_run_held_parent|child_run_partial_cancel|child_run_cli_acceptance)
+        [[ "${1:-}" != --runtime-only && "$RUNS" == 1 ]] || {
+            echo "ERROR: child cases require a real model and RUNS=1 per fresh invocation." >&2
+            exit 2
+        }
+        [[ -f "${NETCLAW_CHILD_OBSERVER:-}" ]] || {
+            echo "ERROR: set NETCLAW_CHILD_OBSERVER to the compiled canonical observer." >&2
+            exit 2
+        } ;;
     tool_background_job_lifecycle)
         if [[ "${1:-}" == --runtime-only ]]; then
             echo "ERROR: the lifecycle case requires a real model." >&2
@@ -35,7 +44,12 @@ build_local_image
 
 export BACKGROUND_EVAL_UPSTREAM="$EVAL_PROVIDER_ENDPOINT"
 export NETCLAW_EVAL_MODEL_ID="$EVAL_MODEL_ID"
-coproc BACKGROUND_FIXTURE { exec python3 "$REPO_ROOT/evals/background_evals.py" serve; }
+fixture_module=background_evals.py
+if [[ "$FILTER_CASE" == child_run_* ]]; then
+    fixture_module=child_run_evals.py
+fi
+export TMPDIR_EVAL EVAL_HOME
+coproc BACKGROUND_FIXTURE { exec python3 "$REPO_ROOT/evals/$fixture_module" serve; }
 fixture_pid=$BACKGROUND_FIXTURE_PID
 trap 'cleanup_eval_env; kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true' EXIT
 read -r -t 15 fixture_port <&"${BACKGROUND_FIXTURE[0]}"
@@ -57,9 +71,9 @@ FILTER_CATEGORY="Background launch"
 THRESHOLD=1
 NETCLAW_VER=$("$NETCLAW_BIN" --version)
 start_eval_daemon
-export EVAL_HOME EVAL_PORT EVAL_CONTAINER_NAME NETCLAW_BIN TMPDIR_EVAL RUNS PROMPT_TIMEOUT
+export EVAL_HOME EVAL_PORT EVAL_CONTAINER_NAME NETCLAW_BIN NETCLAW_IMAGE TMPDIR_EVAL RUNS PROMPT_TIMEOUT
 result=0
-python3 "$REPO_ROOT/evals/background_evals.py" run --port "$fixture_port" "$@" || result=$?
+python3 "$REPO_ROOT/evals/$fixture_module" run --port "$fixture_port" "$@" || result=$?
 report="$TMPDIR_EVAL/stdout_background-results.txt"
 if [[ -s "$report" ]]; then
     TOTAL_CASES=$(jq '[.runtime[], .model[]] | length' "$report")

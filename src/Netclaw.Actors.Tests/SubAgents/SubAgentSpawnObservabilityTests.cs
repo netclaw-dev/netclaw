@@ -59,10 +59,11 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
         // "subagent tried to spawn but never launched" failure shape.
         var context = TestToolExecutionContext.CreateBound(SessionId, null, TrustAudience.Personal);
 
-        var result = await spawner.SpawnAsync(
-            Profile("summarizer"), "do the work", null, context.Invocation, TestContext.Current.CancellationToken);
+        var result = await spawner.StartRunAsync(
+            Profile("summarizer"), "do the work", null, context.Invocation, TestContext.Current.CancellationToken, null);
 
-        Assert.False(result.Success);
+        Assert.Contains("no session context available", result, StringComparison.Ordinal);
+        Assert.Equal(ToolInvocationOutcomeCategory.TransientFailure, context.Receipt?.Category);
         // The spawn attempt and its failure are both logged under the session's id, so the
         // file-logger routes them to that session's session.log.
         var requested = Assert.Single(logger.Entries, e => e.Message.Contains("spawn requested", StringComparison.Ordinal));

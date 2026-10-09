@@ -14,6 +14,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Media;
@@ -551,6 +552,23 @@ internal sealed class SessionToolExecutionPipeline
             : null;
         var callScope = batch.RunScope with
         {
+            SpawnChildActor = async (argument, name, startToken) =>
+            {
+                var request = argument switch
+                {
+                    PreparedChildRun prepared => new StartBackgroundChildRun(prepared,
+                        new ChildRunStartKey.Tool(new ToolCallId(tc.CallId))
+                        { SessionId = batch.TurnContext.SessionId, TurnId = batch.TurnContext.TurnId },
+                        batch.TurnContext.ToRecord(), tc.Name, batch.CancellationToken),
+                    ChildControlRequest control => new ControlBackgroundChildRun(control,
+                        batch.TurnContext.ToRecord(), batch.CancellationToken),
+                    _ => argument
+                };
+                var response = await batch.RunScope.SpawnChildActor!(request, name, startToken).ConfigureAwait(false);
+                if (request is StartBackgroundChildRun start && response is ChildStartReply.Accepted accepted)
+                    accepted.Validate(start);
+                return response;
+            },
             InteractiveApproval = approvalBridge is null
                 ? new InteractiveApprovalCapability.Unavailable()
                 : new InteractiveApprovalCapability.Available(approvalBridge)
@@ -868,16 +886,7 @@ internal sealed class SessionToolExecutionPipeline
         {
             var stream = executor.ExecuteStreamAsync(toolCall, context, cancellationToken);
 
-            // Self-monitoring tools (spawn_agent) own their liveness end to end and
-            // always drive their stream to a terminal item, so the parent does not
-            // supervise them at all — it drains to that terminal item under caller
-            // (turn/user) cancellation only. For spawn_agent the terminal item is
-            // produced by SpawnAgentTool's stream, which completes when SpawnAsync
-            // returns; SpawnAsync's finally unconditionally completes the activity
-            // channel, and SubAgentActor.PostStop guarantees the reply that lets
-            // SpawnAsync return even on a crash. (Note: PostStop alone only unblocks
-            // the spawner Ask — the terminal stream item depends on that finally
-            // running.)
+            // A self-monitoring tool owns its terminal stream and its liveness policy.
             if (executor.GetLivenessMode(toolCall) == ToolLivenessMode.SelfMonitoring)
                 return await DrainToCompletionAsync(stream, toolCall.Name, cancellationToken);
 

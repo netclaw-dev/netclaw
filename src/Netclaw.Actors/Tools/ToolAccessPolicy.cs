@@ -12,6 +12,7 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
+using Netclaw.Actors.SubAgents;
 using ShellSyntaxTree;
 
 namespace Netclaw.Actors.Tools;
@@ -1505,7 +1506,7 @@ public sealed class ToolAccessPolicy
                 => !_featureGates.SearchEnabled,
             "skill_load" or "skill_read_resource"
                 => !_featureGates.SkillSyncEnabled,
-            "spawn_agent"
+            "spawn_agent" or CheckAgentRunTool.ToolName
                 => !_featureGates.SubAgentsEnabled,
             "set_reminder" or "cancel_reminder" or "list_reminders" or "get_reminder_history" or "run_reminder"
                 => !_featureGates.SchedulingEnabled,

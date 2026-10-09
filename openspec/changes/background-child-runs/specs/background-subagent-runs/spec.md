@@ -135,6 +135,10 @@ A child or mismatched session/requester SHALL receive a denial without target de
 The control SHALL NOT route through the shell-job manager or use shell authority merely because it resembles shell-job cancellation.
 Status SHALL expose cancellation admission separately from confirmed local dispatch closure.
 Repeated status or cancellation requests SHALL NOT create another child, terminal result, or model continuation.
+After authorization, status SHALL include the canonical `log_path` and `artifact_directory` before terminal completion.
+The adapter SHALL obtain these paths from the existing child storage binding without a separate durable path authority.
+The parent SHALL use ordinary file tools under normal file policy for diagnostic log access.
+A returned path SHALL NOT grant file authority or prove current health, dispatch closure, or completion.
 
 #### Scenario: Original parent inspects its live run
 
@@ -142,6 +146,22 @@ Repeated status or cancellation requests SHALL NOT create another child, termina
 - **WHEN** the parent loads and calls the control
 - **THEN** it receives the run ID, recorded state, and cancellation/dispatch-closure facts
 - **AND** the call does not wait for task completion
+
+#### Scenario: Parent reads a live child's exact log path
+
+- **GIVEN** an accepted child remains held before terminal completion
+- **WHEN** the original authorized requester calls the deferred status tool
+- **THEN** the response includes the exact canonical child log path and artifact directory
+- **AND** the parent can pass that path to ordinary file tools under normal file policy
+- **AND** the response does not claim a terminal outcome from log contents
+
+#### Scenario: A returned path does not bypass file policy
+
+- **GIVEN** an authorized status response supplies a child log path
+- **AND** current file policy denies the requested read
+- **WHEN** the parent calls a file tool with that path
+- **THEN** the file tool denies the read
+- **AND** the status response creates no file grant
 
 #### Scenario: Another session cannot inspect or cancel the run
 

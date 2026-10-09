@@ -1846,6 +1846,58 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
     }
 
     [Fact]
+    public async Task Background_terminal_closes_dispatch_before_the_owner_acknowledges_receipt()
+    {
+        var ceiling = TimeSpan.FromSeconds(30);
+        var dispatch = new ChildRunDispatch();
+        var admittedEntries = 0;
+        Assert.Equal(1, await dispatch.Enter(() => Task.FromResult(++admittedEntries)));
+        var runId = new SubAgentRunId("terminal-gate-run");
+        var scope = SubAgentTestScope.Create(
+            scopeId: "test-session/subagent/test-agent/terminal-gate-run",
+            sessionDirectory: TestPath("terminal", "dispatch-gate"));
+        var client = new FakeChatClient { ResponseText = "The assigned task is complete." };
+        var agent = await ChildActorOfAsync(
+            SubAgentActor.CreateProps(CreateDefinition(), client, PermissivePolicy()),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Watch(agent);
+        try
+        {
+            agent.Tell(new RunBackgroundSubAgent(runId, new RunSubAgent
+            {
+                Scope = scope, Task = "Return the neutral task result.", Timeout = ceiling
+            }, dispatch), TestActor);
+            var terminal = await ExpectMsgAsync<BackgroundChildTerminal>(ceiling,
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(agent, LastSender);
+            Assert.Equal(runId, terminal.RunId);
+            Assert.Equal(runId, terminal.Result.RunId);
+            Assert.Equal(scope.ScopeId, terminal.Result.ScopeId);
+            Assert.True(terminal.Result.Success);
+            Assert.Equal("The assigned task is complete.", terminal.Result.Output);
+            Assert.Equal(agent, await Sys.ActorSelection(agent.Path).ResolveOne(ceiling,
+                TestContext.Current.CancellationToken));
+            var lateEntries = 0;
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await dispatch.Enter(() =>
+                {
+                    ++lateEntries;
+                    return Task.CompletedTask;
+                }));
+            Assert.Equal(0, lateEntries);
+            Assert.Equal(1, admittedEntries);
+            Assert.Equal(1, client.CallCount);
+            agent.Tell(new BackgroundChildTerminalAck(runId), TestActor);
+            await ExpectTerminatedAsync(agent, ceiling,
+                cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            Sys.Stop(agent);
+        }
+    }
+
+    [Fact]
     public async Task Actor_stops_after_completion()
     {
         var fakeClient = new FakeChatClient();

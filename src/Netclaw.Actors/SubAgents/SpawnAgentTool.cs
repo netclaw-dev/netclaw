@@ -4,27 +4,23 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.ComponentModel;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Tools;
-using static Netclaw.Actors.SubAgents.SubAgentProtocol;
 
 namespace Netclaw.Actors.SubAgents;
 
 /// <summary>
 /// User-facing tool that delegates a task to a named subagent.
-/// The subagent runs autonomously with its own tools and returns a result.
+/// The subagent runs in the background and delivers its result to the parent.
 /// Only user-facing agents (not internal platform agents) are invocable.
 /// </summary>
 [NetclawTool("spawn_agent",
     "Delegate a task to a specialist subagent. "
-    + "The subagent runs autonomously with its own tools and returns a result. "
+    + "The subagent runs in the background and delivers its result to the parent. "
     + "Use the discovery context layer to see available subagents.",
     Grant = "builtin",
-    Liveness = ToolLivenessMode.SelfMonitoring)]
+    Liveness = ToolLivenessMode.Opaque)]
 public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
 {
     private readonly SubAgentDefinitionRegistry _registry;
@@ -65,73 +61,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         if (error is not null)
             return error;
 
-        var result = await _spawner.SpawnRunAsync(profile!, args.Task, args.Context, context, ct, systemPromptOverlay: null, activitySink: null);
-        return FormatResult(args.Agent, result);
-    }
-
-    /// <summary>
-    /// Streaming entry point: the sub-agent's liveness/progress activity is surfaced
-    /// as the tool call's stream for visibility. The parent applies NO watchdog to
-    /// this call — spawn_agent is self-monitoring, so the sub-agent owns its own
-    /// liveness and the parent simply drains the stream to its terminal item (see
-    /// <c>SessionToolExecutionPipeline</c>).
-    /// </summary>
-    public override async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
-        IDictionary<string, object?>? arguments,
-        ToolInvocationContext context,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        SubAgentProfile? profile = null;
-        if (TryParse(arguments, out var failure, out var args))
-            (failure, profile) = Resolve(args, context);
-
-        if (failure is not null)
-        {
-            yield return new ToolCompletedUpdate(failure);
-            yield break;
-        }
-
-        // The spawner writes the sub-agent's activity into this channel and
-        // completes it (even on failure) when the run ends.
-        var channel = Channel.CreateUnbounded<ToolActivityUpdate>();
-        var spawnTask = _spawner.SpawnRunAsync(
-            profile!, args!.Task, args.Context, context, ct, systemPromptOverlay: null, activitySink: channel.Writer);
-        try
-        {
-            await foreach (var activity in channel.Reader.ReadAllAsync(ct))
-                yield return activity;
-
-            yield return new ToolCompletedUpdate(FormatResult(args.Agent, await spawnTask));
-        }
-        finally
-        {
-            // Observe the spawn even when enumeration is abandoned (cancellation),
-            // so the sub-agent is stopped before this tool call returns.
-            await spawnTask;
-        }
-    }
-
-    private static string FormatResult(string agent, EnrichedChildRunResult enriched)
-    {
-        var result = enriched.Response;
-        var builder = new StringBuilder();
-        builder.AppendLine("Subagent run finished.");
-        builder.AppendLine($"Agent: {agent}");
-        if (result.RunId is { } runId)
-            builder.AppendLine($"RunId: {runId.Value}");
-        builder.AppendLine($"Outcome: {result.Outcome.ToString().ToLowerInvariant()}");
-        if (result.OutcomeReason is { } reason)
-            builder.AppendLine($"Reason: {reason.Value}");
-        if (enriched is EnrichedChildRunResult.SuccessfulRun success)
-        {
-            builder.AppendLine($"LogPath: {success.Locations.LogPath.Value}");
-            builder.AppendLine($"ArtifactDirectory: {success.Locations.ArtifactDirectory.Value}");
-        }
-
-        builder.AppendLine();
-        builder.AppendLine(result.Success ? "Summary:" : "Error:");
-        builder.Append(result.Output);
-        return builder.ToString();
+        return await _spawner.StartRunAsync(profile!, args.Task, args.Context, context, ct, systemPromptOverlay: null);
     }
 
     /// <summary>

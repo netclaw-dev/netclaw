@@ -165,6 +165,7 @@ internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
                 .ToList()
         }, persistApprovalState)
         {
+            OriginalChildCallId = persistApprovalState ? null : request.CallId,
             // Only a journaled wait can restore the managed temporary retry after passivation.
             ManagedTemporaryDirectory = persistApprovalState && approval.IsManagedTemporaryRetry
                 ? approval.ManagedTemporaryDirectory

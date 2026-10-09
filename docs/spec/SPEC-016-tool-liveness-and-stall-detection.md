@@ -2,222 +2,141 @@
 
 Source PRDs: `PRD-001`, `PRD-006`
 
-Status: Planning note for issue #1450. The corresponding OpenSpec artifacts must
-be updated through the OpenSpec workflow before implementation is closed.
-
-> **Superseded in part by #1472 / PR #1481 ("addition through subtraction").** The
-> "parent first-item startup guard for self-monitoring tools" described below was
-> removed. The parent no longer supervises self-monitoring tools at all — they own
-> their liveness end to end and are drained with no parent watchdog, bounded only by
-> their own internal watchdog or caller (turn/user) cancellation; an unanswered human
-> approval blocks the run until it is answered or the turn is cancelled. The
-> authoritative, reconciled spec is the `Per-call liveness by tool class` requirement
-> in the `streaming-tool-call-execution` OpenSpec change
-> (`specs/netclaw-tools/spec.md`). Treat the parent-startup-guard clauses below as
-> historical.
+Use [the engineering glossary](GLOSSARY.md) for shared terms.
+This document describes operation health and the background child lifecycle.
+Testable rules live in [netclaw-tools](../../openspec/specs/netclaw-tools/spec.md),
+[netclaw-subagents](../../openspec/specs/netclaw-subagents/spec.md),
+[background-subagent-runs](../../openspec/specs/background-subagent-runs/spec.md), and
+[turn-loop-governance](../../openspec/specs/turn-loop-governance/spec.md).
 
 ## Purpose
 
-Define the simplified stall-detection contract for tool calls. The goal is to
-make long-running tool calls reliable without adding another competing timeout or
-turning streamed output into a fake progress signal.
+Long tasks can continue while each operation remains healthy.
+Task age, token totals, and tool-call counts do not define a task-lifetime deadline.
+Explicit cancellation, operation health checks, authorization, and exact recurrence protection still apply.
 
-## Problem
+## Decision Owners
 
-`spawn_agent` is currently consumed through the same generic streaming-tool
-watchdog as ordinary tools. The parent session uses
-`Session.ToolExecutionTimeoutSeconds` as a reset-on-item inactivity budget. That
-means a healthy sub-agent can be killed when it opens a quiet window longer than
-the parent budget, even though the child actor has its own progress-aware
-watchdogs.
+| Owner | Decision | Data lifetime |
+| --- | --- | --- |
+| Tool execution pipeline | Apply the resolved tool's operation-health contract | Call-local |
+| `SubAgentActor` | Detect stalled child model/tool operations and close task dispatch | Actor-local |
+| `LlmSessionActor` | Commit acceptance, cancellation, dispatch closure, terminal receipt, and later result delivery | Durable journal and snapshots |
+| `ChildRunDispatch` | Reject new model and tool dispatch after local closure | Run-local; live-only |
+| `LlmSessionActor` child approval handler | Retain the request and resolution under the accepted run's original authority | Durable `BackgroundChildRun.Approvals` ledger |
+| `ParentSessionApprovalBridge` | Correlate a live child approval wait with its owner and original requester | Run-local waiter |
+| Inference backend | Queue and admit provider requests according to backend capacity | Backend-owned |
 
-The wrong abstraction is "did the stream emit anything?" The useful question is
-"who can actually tell whether this operation has stalled?"
+Netclaw adds no inference-slot limits, reservations, parent preemption, or cooperative provider scheduler.
+A held child request does not prevent the parent from issuing its own request.
+The backend can queue either request. Local parent status and cancellation do not require an inference slot.
 
-## Decision
+## Opaque Operations
 
-Tool calls SHALL use two liveness classes.
+Opaque tools retain a wall-clock operation deadline.
+Output does not extend that deadline.
+Most MCP calls, `web_fetch`, and `shell_execute` use this contract.
+For shell, `_timeout_seconds` or `Session.ToolExecutionTimeoutSeconds` bounds the process operation.
 
-### Opaque Tools
+Positive example: a quiet shell operation completes before its deadline.
+Negative example: a shell process prints forever but still stops at its operation deadline.
 
-An opaque tool does not expose reliable internal stall detection. The parent
-tool-execution pipeline SHALL apply one explicit wall-clock budget to the whole
-call. Streaming output, if any, is display-only and SHALL NOT extend the budget.
+## Child Operation Health
 
-Default/generated tools are opaque unless they opt into another mode.
+A child owns its operation health rather than the parent's generic tool watchdog.
+The pipeline does not add a first-item or inter-item watchdog for a self-monitoring operation.
+The child distinguishes:
 
-Examples:
+- Wait for the first substantive model output.
+- Inactivity between model deltas after output starts.
+- A no-progress deadline that content-free keepalives cannot refresh.
+- Tool operation deadlines and explicit cancellation.
+- An authorized approval wait, which is intentional suspension rather than a model stall.
 
-- MCP tools with no mapped MCP progress notification
-- most generated first-party tools
-- `web_fetch`
-- `shell_execute`
+A completed healthy operation can lead to another operation without a total task-time limit.
+A stalled operation returns an explicit failed terminal result through the owner.
+Exact recurrence can produce a partial terminal result without a final model request.
+No static parent or child tool-call ceiling remains.
 
-For `shell_execute`, stdout and stderr may still be streamed to subscribers as
-live output, but a command that prints forever is not making proven forward
-progress. `_timeout_seconds` or `Session.ToolExecutionTimeoutSeconds` remains the
-process wall-clock budget.
+Positive example: a child completes useful work through more than the former 30 feedback rounds.
+Negative example: heartbeat-only output cannot keep a child model operation alive indefinitely.
 
-### Self-Monitoring Tools
+## Acceptance And Lifetime
 
-A self-monitoring tool owns its own stall detection because the worker can see
-more than the parent can. The parent session SHALL keep ownership of
-cancellation, persistence, and final turn response, but it SHALL NOT run the
-generic inter-item inactivity watchdog after the tool has produced its first
-sign of life.
+All explicit and routed child starts use durable acceptance.
+The owner commits acceptance before child execution and before the accepted response.
+The response identifies the accepted run; it does not wait for child completion.
+After acceptance, a run-owned lifetime replaces dependence on the start call's token.
+An ordinary later parent message does not cancel that run or its approval prompt.
 
-The parent SHALL still apply a startup guard: a self-monitoring tool must produce
-its first stream item within the existing startup/first-item budget. This bounds
-the irreducibly blind window where the parent does not know whether the tool
-actually began executing.
+Schematic sequence; normal authorization and persistence gates remain required:
 
-`spawn_agent` is the first self-monitoring tool. Its child `SubAgentActor`
-already owns:
-
-- wait-for-first-delta prefill budget
-- inter-delta liveness budget after model output starts
-- keepalive-immune no-progress budget
-- approval-wait suspension and external cancellation
-- tool-iteration cap
-
-If a sub-agent stalls, the child actor SHALL complete the `spawn_agent` call with
-a failed `SubAgentResult`. The parent records that terminal tool result and
-continues the turn according to the normal tool-batch rules.
-
-## Non-Goals
-
-- No new coarse parent backstop in this change.
-- No new taxonomy of progress event records in this change.
-- No requirement for every tool to emit progress events.
-- No MCP progress mapping in this change.
-- No behavior where stdout, stderr, or heartbeat output extends an opaque tool's
-budget.
-
-## Runtime Contract
-
-`INetclawTool` SHOULD expose a liveness classification with an opaque default.
-
-```csharp
-public enum ToolLivenessMode
-{
-    Opaque,
-    SelfMonitoring
-}
+```text
+prepare the scoped start from its admitted input and call
+commit acceptance
+start the run-owned child
+return canonical accepted identifiers
+continue independent parent work
+receive and durably acknowledge the child's terminal result
+admit one attributed parent continuation after the original start batch settles
 ```
 
-For source-generated tools, the Roslyn generator may generate the overridden
-liveness property from `NetclawToolAttribute`, but the default remains `Opaque`.
-The generator can enforce that any generated first-party tool declaring
-`SelfMonitoring` also overrides `ExecuteStreamAsync`.
+A failed acceptance commit starts no child and returns no false acceptance.
+Equivalent start retries return the same run. A conflicting start digest fails without mutation.
+A start-tool timeout after acceptance does not cancel the accepted run.
 
-The tool-execution pipeline SHALL choose the watchdog shape from the resolved
-tool's liveness mode:
+## Cancellation And Partial Evidence
 
-- `Opaque`: wall-clock budget for the whole call. Stream items do not reset it.
-- `SelfMonitoring`: first-item startup guard only. After the first item, parent
-  liveness is disabled for that call and child/tool cancellation remains linked
-  to parent turn cancellation.
+The parent explicitly loads `check_agent_run` for authorized status or cancellation.
+The owner commits cancellation admission before it reports that fact.
+The owner closes the run's local model, tool, and approval-retry admission gate.
+The owner then commits the dispatch closure fact.
+That committed fact proves that no new local task work can start.
+It does not prove that an earlier external effect stopped or that its outcome is known.
 
-Approval waits remain intentional suspension owned by the layer that issued the
-approval request. For sub-agents, that is the live `SubAgentActor` run.
+After closure, framework-only finalization uses a separate token and a five-second grace deadline.
+It can preserve confirmed checkpoints and atomically write a report inside the assigned run artifact directory.
+It cannot request model output, run task tools, edit the project, call an external service, or create approval authority.
+A failed write or grace expiry preserves the last confirmed checkpoint and an explicit reason.
+Cancellation remains a failure outcome even when useful partial evidence exists.
 
-## Shell Example
+Positive example: cancellation returns confirmed file activity and an existing partial artifact without another model call.
+Negative example: late provider output or an approval answer cannot start task work after dispatch closure.
 
-`shell_execute` remains opaque.
+The first committed terminal or cancellation admission determines the terminal outcome.
+Duplicate child results create no second delivery or parent continuation.
+Terminal persistence failure produces no successful receipt acknowledgement.
 
-Expected stream shape:
+## Recovery, Passivation, And Drain
 
-1. Arguments and policy are validated.
-2. The process starts.
-3. Optional stdout/stderr chunks are streamed for user-visible output.
-4. The process exits, is killed by the wall-clock budget, or is cancelled.
-5. The terminal `ToolCompletedUpdate` carries the model-facing result.
+Idle passivation defers live children and pending delivery.
+Explicit parent stop and coordinated drain cancel children through the bounded closure path.
+Owner restart marks unresolved accepted runs `Lost`; it does not recreate or resume child execution.
+A prior durable cancellation retains its cancelled outcome.
+Committed terminal facts and pending delivery remain available through journal and snapshot recovery.
+Old child approval prompts expire visibly after loss or restart.
 
-The stdout/stderr chunks are not progress for stall detection. A command such as
-`while true; do echo .; sleep 1; done` must still be killed by the wall-clock
-budget.
+The framework restores committed evidence and truthful unknown outcomes.
+The model decides its next action from that recorded session.
+The framework does not automatically replay uncertain effects or impose an operator-review policy.
+No physical external exactly-once guarantee follows from local closure or journal recovery.
 
-## Sub-Agent Example
+## Verification
 
-`spawn_agent` is self-monitoring.
+Use deterministic provider and tool barriers. Do not use sleeps to infer closure.
+Required evidence includes:
 
-Expected stream shape:
+- Acceptance commit before execution or accepted output, including failed and held writes.
+- Equivalent start deduplication and conflicting-digest rejection.
+- A held child plus independent parent work and usable local controls.
+- Distinct cancellation-admission and dispatch-closure acknowledgements.
+- No late model, tool, grant, or approval retry after closure.
+- Confirmed partial evidence after report failure or grace expiry.
+- Both durable terminal/cancel race orders and duplicate terminal delivery.
+- Snapshot and journal recovery with explicit loss and no child relaunch.
+- Original authority and parent detector evidence across later input and sibling results.
+- Opaque wall-clock deadlines and child health checks that retain their distinct owners.
 
-1. The parent resolves the agent and asks the session actor to create the child.
-2. The child accepts `RunSubAgent` and emits the first stream item, such as
-   `calling the model`.
-3. The parent first-item guard is satisfied and parent inter-item liveness is no
-   longer applied to this call.
-4. The child watchdog governs prefill, model deltas, keepalive-only wedges,
-   tool-loop progress, approval waits, cancellation, and iteration exhaustion.
-5. The terminal `ToolCompletedUpdate` carries an explicit sub-agent run envelope
-   produced by the child: run id, outcome, optional reason, diagnostics pointer,
-   and the final summary or error text.
-
-## Validation Strategy
-
-Validation must prove the failure mode directly: a self-monitoring sub-agent can
-legitimately remain quiet longer than `Session.ToolExecutionTimeoutSeconds`
-without the parent killing it, while opaque tools remain bounded.
-
-### Unit And Contract Tests
-
-- `StreamingToolWatchdog` or its replacement SHALL have deterministic tests with
-  `FakeTimeProvider` proving opaque calls use wall-clock timeout, not
-  reset-on-output inactivity.
-- A chatty opaque stream SHALL still time out at the wall-clock budget even when
-  it emits output items before the budget expires.
-- A self-monitoring stream SHALL fail if no first item arrives before the startup
-  guard.
-- A self-monitoring stream SHALL remain alive after its first item even when no
-  later item arrives before the opaque default budget.
-- Parallel calls SHALL be independent: a self-monitoring call that disables its
-  parent inter-item liveness must not extend or disable an opaque sibling's
-  budget.
-- The tool generator SHALL prove generated tools default to `Opaque` and that
-  `spawn_agent` explicitly resolves as `SelfMonitoring`.
-
-### Actor Integration Tests
-
-- A `spawn_agent` call with `Session.ToolExecutionTimeoutSeconds` set shorter
-  than the child prefill budget SHALL not be cancelled by the parent after the
-  first child stream item.
-- A silent child prefill SHALL be terminated by the child prefill watchdog, and
-  the resulting `spawn_agent` tool result SHALL contain the child timeout reason,
-  not the parent generic `produced no activity` timeout.
-- A keepalive-only child stream SHALL be terminated by the child no-progress
-  watchdog.
-- A sub-agent approval wait longer than the parent tool timeout SHALL remain
-  pending until approval, denial, approval timeout, or parent cancellation.
-- Three parallel `spawn_agent` calls SHALL produce one terminal tool result per
-  call when one child stalls and the others complete.
-
-### Session And Persistence Tests
-
-- `ActiveToolBatchTracker` SHALL not complete the tool batch until every expected
-  call id has one recorded terminal tool result and the execution task has
-  finished.
-- A timed-out child sub-agent SHALL be recorded as a `ToolCallRecorded` event for
-  the `spawn_agent` call id, not as a whole-turn `ToolExecutionFailed`.
-- Recovery from `ToolBatchStarted` with missing tool results SHALL remain loud and
-  deterministic; side-effecting tools must not be silently re-run.
-
-### Diagnostics And Manual Repro
-
-- Logs SHALL correlate parent session id, sub-agent run id, child watchdog
-  reason, terminal outcome, and terminal `spawn_agent` result.
-- Manual repro should run parallel `spawn_agent` calls where one child opens a
-  quiet window longer than the parent tool timeout. The expected result is no
-  parent `produced no activity` failure; either the child completes or the child
-  watchdog reports the stall.
-
-## Implementation Order
-
-1. Add the liveness classification with opaque default.
-2. Mark `spawn_agent` as self-monitoring.
-3. Change the tool pipeline to apply wall-clock budget for opaque tools and
-   first-item-only guard for self-monitoring tools.
-4. Keep shell opaque and ensure streamed stdout/stderr does not reset the budget.
-5. Add the tests listed above.
-6. Update OpenSpec artifacts through the OpenSpec workflow and then sync stale
-   main specs that still describe tool timeouts as whole-batch failures.
+Targeted model evals supplement these deterministic contracts.
+Retain raw evidence and classify instrumentation, prompt, capability, and infrastructure failures separately.
+A model claim or an artifact path does not replace an independent effect or file-content check.

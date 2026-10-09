@@ -152,6 +152,23 @@ States are `Accepted`, `Running`, `Cancelling`, `Completed`, `Partial`, `Failed`
 These states are lifecycle facts. They do not expand `SubAgentRunOutcome` implicitly.
 Status includes the state, cancellation admission, dispatch-closure state, and the recorded terminal result when present.
 Accepted and live status outputs do not claim task completion.
+After owner authorization, the adapter supplies canonical `log_path` and `artifact_directory` through the existing child storage binding.
+The adapter uses `SessionStorage.ForChild(run.RunId, run.ScopeId)` or its existing owner equivalent.
+It adds no durable path field, path authority, or special log-reader tool.
+The parent passes the exact path to ordinary file tools under normal file policy.
+The log supports diagnosis. It does not establish current health, dispatch closure, or a terminal outcome.
+A denied control reveals neither path.
+
+Schematic diagnostic flow; normal tool and file authorization remain required:
+
+```text
+parent loads check_agent_run
+owner checks current caller against original child authority
+authorized adapter resolves the existing canonical child storage binding
+status returns recorded lifecycle facts and exact diagnostic paths
+parent reads a bounded portion of log_path through ordinary file tools
+parent uses recorded status and terminal evidence for lifecycle decisions
+```
 
 Preserve the existing wire outcome names `Completed`, `Partial`, and `Failed`.
 A cancelled completion keeps `Success = false`, wire outcome `Failed`, and reason `CancelledByParent`.
@@ -165,7 +182,7 @@ Add new reason fields and durable record variants through the framework schema a
 The table names current mechanisms. It does not prescribe new C# message types.
 New acknowledgements need the run correlation that a session-only `CommandAck` cannot carry.
 The owner acceptance and terminal records are durable. The JSON body is a call-local view of those committed facts.
-Child results, dispatch admission state, actor references, and cancellation sources remain live runtime state.
+Prepared child executions, dispatch admission gates, actor references, and cancellation sources remain live runtime state.
 
 | Boundary | Existing owner and mechanism | Required extension |
 | --- | --- | --- |

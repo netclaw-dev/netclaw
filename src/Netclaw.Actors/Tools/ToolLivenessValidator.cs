@@ -14,8 +14,7 @@ namespace Netclaw.Actors.Tools;
 /// <c>[NetclawTool(Liveness = …)]</c> attribute must also resolve to
 /// SelfMonitoring at runtime (<see cref="INetclawTool.LivenessMode"/>). A silent
 /// downgrade to <see cref="ToolLivenessMode.Opaque"/> would place the tool on a
-/// wall-clock watchdog — for <c>spawn_agent</c> that means killing a healthy,
-/// self-monitoring sub-agent mid-run. The source generator emits
+/// wall-clock watchdog. The source generator emits
 /// <c>LivenessMode</c> directly from the attribute, so a mismatch means stale
 /// generated code or a hand-rolled override; either way, fail loud at startup
 /// rather than mis-supervising at runtime. (No silent fallbacks.)

@@ -2917,7 +2917,7 @@ internal sealed class ControllableWorkingContextSnapshotProvider : IWorkingConte
 {
     public Exception? Failure { get; set; }
     public TaskCompletionSource<WorkingContextSnapshot>? Pending { get; set; }
-    public TaskCompletionSource InvocationStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource InvocationStarted { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public Task<WorkingContextSnapshot> CreateAsync(
         WorkingContext context,

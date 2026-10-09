@@ -86,6 +86,7 @@ public readonly record struct SubAgentOutcomeReason(string Value)
     public static readonly SubAgentOutcomeReason CancelledByParent = new("cancelled_by_parent");
     public static readonly SubAgentOutcomeReason NoSubstantiveOutputTimeout = new("no_substantive_output_timeout");
     public static readonly SubAgentOutcomeReason NoActivityTimeout = new("no_activity_timeout");
+    public static readonly SubAgentOutcomeReason OwnerRestartLost = new("owner_restart_lost");
     public static readonly SubAgentOutcomeReason ActorStopped = new("actor_stopped");
     public static readonly SubAgentOutcomeReason SpawnUnavailable = new("spawn_unavailable");
     public static readonly SubAgentOutcomeReason NoToolsAvailable = new("no_tools_available");
