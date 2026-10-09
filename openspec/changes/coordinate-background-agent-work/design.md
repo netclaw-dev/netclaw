@@ -211,7 +211,10 @@ None of these claims proves arbitrary model judgment or productive work for days
 3. Seed the worker only during the existing new-install path when its destination is absent.
 4. Give existing operators the explicit reviewed install/update procedure.
 5. Run targeted skill/model cases, seeded-file loader checks, and native init-wizard smoke before acceptance.
-6. On rollback, use the prior binary and bundle. Keep all operator-owned profiles and playbooks.
+6. Before rollback, follow the [subagent rollback runbook](../../../docs/runbooks/subagents.md#exact-recurrence-upgrade-and-rollback).
+   The inherited persistence contract requires a tested compatible reader or restoration of a recorded pre-upgrade backup.
+   Only then use the prior binary and bundle. Keep all operator-owned profiles and playbooks.
+   Backup restoration loses post-backup journal state and does not undo external effects. This plan does not prove an executed rollback.
 
 Independent asset and default-profile preparation can precede stack integration.
 Every dependent runtime and model gate still requires the combined first and second PRs.
