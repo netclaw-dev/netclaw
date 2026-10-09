@@ -36,5 +36,9 @@ Negative example: an agent follows a profile symlink or replaces a custom file w
 The binary owns the embedded coordination system-skill bundle.
 An operator profile remains separate from that managed bundle.
 Do not derive system-skill paths to copy a worker profile.
-Use the prior binary and its bundle for a binary rollback. Keep operator-owned profiles and playbooks.
+Before a binary rollback, follow the [subagent rollback runbook](https://github.com/netclaw-dev/netclaw/blob/dev/docs/runbooks/subagents.md#exact-recurrence-upgrade-and-rollback).
+The inherited `tta-v1` persistence contract requires a tested compatible reader or restoration of a recorded pre-upgrade backup.
+Only then use the prior binary and its bundle. Keep operator-owned profiles and playbooks.
+Backup restoration loses post-backup journal state and does not undo external effects.
+This procedure states a prerequisite; it does not prove an executed rollback.
 Legacy feed publication is a separate operator release action. Normal development pushes do not publish that feed.
