@@ -419,24 +419,20 @@ must be fixed or explicitly baselined with justification.
 
 ## Eval Suite
 
-Run the behavioral eval suite (`./evals/run-evals.sh`) when changing:
+Run the behavioral eval suite (`./evals/run-evals.sh`) only when changing
+the prompt or identity grounding that the agent reads:
 
 - Identity file templates (`SOUL.md`, `AGENTS.md`, `TOOLING.md` in init wizard)
 - System prompt assembly (`SystemPromptAssembler`, `FileSystemPromptProvider`)
 - Skill content (any `SKILL.md` under `feeds/skills/.system/files/`)
 - Skill matching logic (`SkillRegistry` keyword handling)
-- Memory pipeline (`SQLiteMemoryRecallCoordinator`, `MemoryProposalGate`,
-  checkpoint triggers)
-- Compaction logic (`ObservationPromptBuilder`, `ExtractiveSessionReducer`,
-  compaction behavior)
-- Tool definitions (new tools, changed tool schemas, grant categories)
-- Model/provider changes (switching models, changing context window config)
-- `SessionConfig` defaults
+
+Do not run the eval suite for other changes. For those changes, the normal
+test gates in Definition of Done apply.
 
 Update eval cases when:
 
 - Adding a new system skill — add a skill auto-load case
-- Adding a new tool — add a tool discovery/use case
 - Changing identity grounding rules — update identity assertion patterns
 - A production session exhibits a new failure pattern — add a regression case
 
@@ -499,7 +495,7 @@ Done means all of the following are true:
 - operational impact is documented (runbooks or CLI help)
 - OpenSpec artifacts are updated or archived appropriately
 - system skills updated if a mapped feature area was changed (see table above)
-- eval suite passes for changes to identity, skills, memory, or tools (see
+- eval suite passes for changes to identity or skill grounding (see
   Eval Suite section)
 - interactive tape harness passes for changes to Termina TUI surfaces
   (init wizard, model/provider/webhook pickers, chat page) — see
