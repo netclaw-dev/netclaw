@@ -7,10 +7,6 @@ Completely isolated from the operator's real `~/.netclaw` state.
 ## Quick Start
 
 ```bash
-# One-time: run netclaw init on the host so the eval script can borrow
-# your identity files (SOUL.md, AGENTS.md, TOOLING.md).
-netclaw init
-
 # Run the full suite against your preferred LLM endpoint.
 NETCLAW_EVAL_PROVIDER_TYPE=ollama \
 NETCLAW_EVAL_PROVIDER_ENDPOINT=http://my-gpu-server.tailnet.ts.net:11434 \
@@ -41,9 +37,9 @@ default provider.
    from that image with `docker run --rm --network host`, a throwaway
    `$EVAL_HOME` temp directory, and `NETCLAW_*` env vars that route it at
    your LLM endpoint.
-3. Identity files are **copied** from `~/.netclaw/identity/` into
-   `$EVAL_HOME/identity/` (never bind-mounted from the real location, so
-   the operator's real identity cannot be mutated).
+3. The harness copies repository identity templates into `$EVAL_HOME/identity/`.
+   `NETCLAW_EVAL_ASSET_ROOT` selects the checkout that supplies these templates and the skill assets.
+   The harness does not copy the operator's identity files.
 4. Daemon logs land in `$EVAL_HOME/logs/daemon-YYYY-MM-DD.log` via a
    writable bind-mount of `/root/.netclaw/logs`. Assertion helpers tail
    this file with per-prompt offsets, exactly like the pre-container
@@ -55,6 +51,26 @@ default provider.
 6. On exit (success, failure, or SIGINT) the container is stopped and
    `$EVAL_HOME` is deleted. A throwaway root-in-container cleanup step
    handles files the daemon wrote as UID 0.
+
+### Fresh Containers For Independent Trials
+
+The harness creates one container per invocation. Cases and repeat trials within that invocation share its daemon and data home.
+Use one invocation per independent acceptance trial. Set one exact case and `NETCLAW_EVAL_RUNS=1` for each invocation.
+Multiple conversation turns within that trial use the same container and session.
+
+For five independent trials, run this command five times:
+
+```bash
+NETCLAW_EVAL_CASE=tool_cycle_correction \
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 \
+NETCLAW_EVAL_TIMEOUT=180 \
+  ./evals/run-evals.sh
+```
+
+Set the provider variables before each command. Retain every result, including failures and trials that exceed the deadline.
+Record distinct container IDs, data homes, run IDs, and session IDs. Retain each archive before the next invocation.
+Aggregate the five strict verdicts after all five invocations. Five repeat trials inside one invocation do not establish this isolation.
+An immutable image and CLI binary can be reused with `NETCLAW_EVAL_NO_BUILD=1`, `NETCLAW_IMAGE`, and `NETCLAW_BIN`.
 
 The harness preloads `evals/fixtures/config/netclaw.json` into the ephemeral
 home before startup. It auto-approves tools and grants read/write access for the
@@ -177,15 +193,15 @@ NETCLAW_EVAL_CATEGORY='Built-in Tools' NETCLAW_EVAL_TIMEOUT=240 ./evals/run-eval
 
 The cycle cases use the existing harness and provider relay. They require an
 OpenAI-compatible endpoint with a `/v1` API base. The default suite excludes them.
-Select the category or one `tool_cycle_*` case explicitly.
+Select one `tool_cycle_*` case explicitly for an independent trial.
 The cases require Docker, Bash, Python 3, jq, and sqlite3.
 
 ```bash
 NETCLAW_EVAL_PROVIDER_TYPE=openai-compatible \
 NETCLAW_EVAL_PROVIDER_ENDPOINT=http://your-model-server:8000/v1 \
 NETCLAW_EVAL_MODEL_ID=your-model \
-NETCLAW_EVAL_CATEGORY='Tool cycles' \
-NETCLAW_EVAL_RUNS=5 \
+NETCLAW_EVAL_CASE=tool_cycle_correction \
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 \
 NETCLAW_EVAL_TIMEOUT=180 \
   ./evals/run-evals.sh
 ```
@@ -222,8 +238,9 @@ Exact CLI call arguments, ordered diagnostic receipts, and both counters establi
 Both terminal oracles reject any later provider request, including a sidecar request.
 This oracle check does not establish a runtime or model pass.
 
-Acceptance requires five trials per new case and a 100 percent pass rate.
-Select `NETCLAW_EVAL_CASE=tool_cycle_nonadjacent_correction` or `NETCLAW_EVAL_CASE=tool_cycle_nonadjacent_terminal` with `NETCLAW_EVAL_RUNS=5`.
+Acceptance requires five independent trials per new case and a 100 percent pass rate.
+Select `NETCLAW_EVAL_CASE=tool_cycle_nonadjacent_correction` or `NETCLAW_EVAL_CASE=tool_cycle_nonadjacent_terminal` with `NETCLAW_EVAL_RUNS=1`.
+Invoke the harness five times per case. Follow the fresh-container procedure above.
 Trial-count overrides remain available for diagnosis. Fewer trials do not complete acceptance.
 
 The compaction case reports synthetic token usage above the normal threshold.
@@ -520,9 +537,6 @@ skips persistence.
 - **No native ACL/authority eval mode yet**: the current scored runner exercises
   multi-turn attribution behavior, but it does not yet simulate restricted
   channel posture with distinct authorized vs unauthorized speakers.
-- **Identity is borrowed from host**: the container does not
-  self-bootstrap identity. CI will need a committed fixture under
-  `evals/fixtures/identity/` — tracked as a follow-up.
 - **Daemon does not fail fast on empty config**: a follow-up task will
   make `netclawd` refuse to start when identity or provider config is
   missing. Today, missing config produces a running-but-broken daemon
