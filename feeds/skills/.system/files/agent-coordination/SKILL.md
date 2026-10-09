@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Agent Coordination
@@ -65,6 +65,12 @@ Continue independent parent work. The terminal result arrives later with child a
 Load `check_agent_run` through `load_tool` only when status or cancellation is necessary.
 Do not create a tight status poll loop. Normal completion uses the terminal result.
 Status and cancellation retain the owner-session and original eligible requester boundary under current policy.
+For child diagnosis, read the authorized status response's exact `log_path` with ordinary file tools.
+Use bounded reads and targeted searches. Follow normal file policy.
+Do not derive paths or search a global log tree.
+A log does not prove current health, dispatch closure, or completion.
+Use recorded status and terminal evidence for lifecycle decisions.
+Load `netclaw-operations` and read `references/child-runs.md` for the full diagnostic and authority rules.
 
 A cancellation acceptance does not prove dispatch closure or terminal completion.
 Check explicit closure and terminal evidence before you treat the child as stopped.
