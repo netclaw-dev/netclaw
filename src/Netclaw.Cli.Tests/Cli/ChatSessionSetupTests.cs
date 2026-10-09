@@ -217,11 +217,18 @@ public sealed class ChatSessionSetupTests : IDisposable
     public async Task A_transient_trigger_send_failure_is_retried_on_the_next_setup()
     {
         var triggerAttempts = 0;
+        var firstAttempt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _sendGate = text =>
         {
             // The hidden trigger is the only message; fail its first send attempt only.
-            if (text == "the-trigger" && Interlocked.Increment(ref triggerAttempts) == 1)
-                throw new IOException("the connection dropped during the trigger send");
+            if (text == "the-trigger")
+            {
+                if (Interlocked.Increment(ref triggerAttempts) == 1)
+                {
+                    firstAttempt.TrySetResult();
+                    throw new IOException("the connection dropped during the trigger send");
+                }
+            }
 
             return Task.CompletedTask;
         };
@@ -230,19 +237,14 @@ public sealed class ChatSessionSetupTests : IDisposable
         var (chat, client) = await StartChatAsync(navigation);
         using var _ = chat;
         await using var __ = client;
-        var statuses = new ConcurrentQueue<string>();
-        using var subscription = chat.StatusMessage.Subscribe(statuses.Enqueue);
 
-        // First pass: the trigger send fails once. With the bug the trigger is consumed before
-        // the send, so it is dropped for good; with the fix it stays queued for the next pass.
+        // Release the first set-up. The connect loop re-runs set-up after the failed send and
+        // must re-send the trigger (the fix), not drop it. We wait for the first failed attempt
+        // before counting sends, so the assertion below cannot race the retry.
         _releaseFirstSetup.SetResult();
-        Assert.Contains(statuses, status =>
-            status.StartsWith("A message could not be sent and was dropped", StringComparison.Ordinal));
+        await firstAttempt.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
 
-        // The reconnect path invokes set-up again; the trigger must be re-sent this time.
-        await chat.EnsureSessionAndFlushAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken);
         await WaitForSendsAsync(1);
-
         Assert.Equal(["the-trigger"], _sent.ToArray());
         Assert.True(triggerAttempts >= 2, $"Expected the trigger to be retried, but it was attempted {triggerAttempts} time(s).");
     }
