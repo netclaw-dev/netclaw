@@ -1158,6 +1158,7 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p><strong>Baseline proof:</strong> The independent actor suite now has 21 baseline cases. Four controls passed. Seventeen cases exposed specified runtime faults; none skipped.</p>
 <p><strong>Harness proof:</strong> The cycle suite passes 70 test methods. It retains all 55 original methods and adds 15 independent adversarial methods.</p>
 <p>Root integration passes 94 Python oracle tests across all five eval test files, without failures or skips. These checks establish no model trial pass.</p>
+<p>The combined local stack passes 107 Python oracle tests, including thirteen coordination checks. Slopwatch and copyright-header checks also pass.</p>
 <p><strong>Targeted cycle cases:</strong> Add <code>tool_cycle_nonadjacent_correction</code> and <code>tool_cycle_nonadjacent_terminal</code> to the five existing cases. Keep the category opt-in.</p>
 <p>The sequence is <code>load, A, B, A, C, A(Correct)</code>. The terminal case adds <code>D, A(Stop)</code>.</p>
 <p>Ordered diagnostic receipts, exact call arguments, and separate file counters prove the scripted sequence. Recovery requires actual model-selected <code>file_read</code> results and accurate JSON.</p>
@@ -1183,8 +1184,8 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>The independent disposable laboratory passes 40 cases, including all fifteen historical shapes. It rejects eighteen named behavioral faults.</p>
 <p>Its 10,000 fixed-seed sequences pass 100,000 assertions. Prepared facts do not prove runtime authority or model behavior.</p>
 <p>The million-sequence and 10,000-checkpoint deterministic checks passed. They do not replace independent productive holdout turns or model evals.</p>
-<p><strong>Pending first-PR proof:</strong> Eight task gates remain open. These include replay, shadow, holdout, and exhaustive crash cuts.</p>
-<p>Targeted model evals, coverage review, final contract reconciliation, and required hosted CI also remain open.</p>
+<p><strong>Pending first-PR proof:</strong> Seven task gates remain open. These include replay, shadow, holdout, and exhaustive crash cuts.</p>
+<p>Targeted model evals, final evidence reconciliation, and contract verification remain open. Required hosted CI remains separate. Task 8.3's coverage review is complete.</p>
 <p>Cancellation grace belongs to the background PR. Resolve each dependent contract before its production edits.</p>
 <p><strong>Prior mutation receipt:</strong> The earlier independent gate selected 12 tests and killed four expected mutants in 2m18s. Its exit code was zero.</p>
 <p>Earlier gates failed on discovery expectations. The corrected gate checks exact target names and rejects expected errors, survivors, timeouts, or absent targets.</p>
