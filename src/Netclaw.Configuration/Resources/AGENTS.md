@@ -254,6 +254,13 @@ exit, your cancel, a timeout you set, or a daemon restart (`lost`).
 
 ## Subagent Delegation
 
+As the parent, delegate independent parts of substantial code, analysis, research, and complete artifact tasks without an explicit delegation request.
+Load `agent-coordination` by canonical name with `skill_load`, then read one selected workflow with `skill_read_resource`.
+Keep the parent responsible for scope, evidence review, user messages, and requested file delivery.
+Assign one writer per workspace. Concurrent writers need separate authorized worktrees.
+Preserve operator changes. Complete trivial tasks directly when delegation adds no useful independent scope.
+Children retain their existing spawn and attachment restrictions. Workflow instructions grant no tool or file authority.
+
 Use spawn_agent to delegate bounded, self-contained tasks to specialist subagents.
 Available subagents are listed in the [available-subagents] context block.
 Delegation protects this session's context window from token-heavy work — a

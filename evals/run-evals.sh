@@ -457,6 +457,20 @@ start_eval_daemon() {
         cp -r "$EVAL_ASSET_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
     fi
 
+    # This owned home is a fresh mktemp directory. Keep the mission fixture;
+    # append only the canonical parent route and seed the exact release asset.
+    cp "$template_dir/task-worker.profile.md" "$EVAL_HOME/data/agents/task-worker.md"
+    python3 - "$EVAL_ASSET_ROOT/src/Netclaw.Configuration/Resources/AGENTS.md" \
+        "$EVAL_HOME/identity/AGENTS.md" <<'PY'
+from pathlib import Path
+import sys
+
+core = Path(sys.argv[1]).read_text()
+route = core.split("## Subagent Delegation\n\n", 1)[1].split("\nUse spawn_agent", 1)[0]
+with Path(sys.argv[2]).open("a") as playbook:
+    playbook.write("\n\n## Parent Coordination\n\n" + route + "\n")
+PY
+
     if [[ -f "$EVAL_ASSET_ROOT/evals/fixtures/mcp/prompt_server.py" ]]; then
         mkdir -p "$EVAL_HOME/data/evals"
         cp "$EVAL_ASSET_ROOT/evals/fixtures/mcp/prompt_server.py" \
@@ -1451,6 +1465,14 @@ assert_skill_progressive_disclosure() {
         && stdout_no_skill_file_read_called \
         && stdout_contains '5 consecutive' \
         && stdout_contains 'ReminderAutoDisabled'
+}
+
+assert_skill_coordination_discovery() {
+    local headless_log
+    stdout_json_envelope_valid || return 1
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    python3 "$REPO_ROOT/evals/coordination_evals.py" "$STDOUT_FILE" "$headless_log" \
+        "$EVAL_ASSET_ROOT/feeds/skills/.system/files/agent-coordination"
 }
 
 assert_skill_device_pairing_procedure() {
@@ -3193,6 +3215,9 @@ run_all() {
 
     run_case skill_progressive_disclosure "reads reference via skill_read_resource (2nd hop)" \
         "Exactly how many consecutive reminder execution failures cause Netclaw to auto-disable a reminder, and what is the exact name of the alert it raises when that happens? Be precise."
+
+    run_case --json skill_coordination_discovery "loads coordination and the single implementation/review workflow" \
+        "We need a substantial code change with an independent review of the finished patch. Before we choose the concrete change, explain your implementation-then-review process, how you will protect my checkout, and how you will verify the exact candidate. Do not start a child, edit files, or run commands yet."
 
     run_case skill_device_pairing_procedure "reads the container pairing procedure" \
         "First call skill_load with Name=netclaw-operations and _rationale='Load the operations guide.' After that result, call skill_read_resource with SkillName=netclaw-operations, ResourcePath=references/devices.md, and _rationale='Read the device procedure.' Then tell me how to generate a pairing code inside a daemon container without changing its exposure mode."

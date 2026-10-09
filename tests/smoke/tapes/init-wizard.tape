@@ -16,6 +16,9 @@
 Output "/tmp/tape-init-wizard.gif"
 
 # ─── Launch ──────────────────────────────────────────────────────────
+Type `mkdir -p "$NETCLAW_HOME/agents" && { echo ---; echo 'name: summarizer'; echo 'description: Operator smoke profile'; echo 'modelRole: Compaction'; echo ---; echo 'Preserve operator profile.'; } > "$NETCLAW_HOME/agents/summarizer.md"`
+Enter
+Wait+Screen@10s /TAPE\$/
 Type "netclaw init"
 Enter
 
@@ -79,3 +82,4 @@ Enter
 Wait+Screen@60s /Configuration written/
 Wait+Screen@60s /System: Session started\./
 Ctrl+Q
+Wait+Screen@15s /TAPE\$/
