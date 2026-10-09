@@ -167,14 +167,19 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
         }
     }
 
-    [Fact]
-    public async Task Seeded_worker_requests_the_Main_client_through_the_real_spawner()
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public async Task Seeded_worker_requests_the_Main_client_through_the_real_spawner(string lineEnding)
     {
         using var step = new IdentityStepViewModel();
         step.SeedBuiltInAgents(Context.Paths);
+        var workerPath = Path.Combine(Context.Paths.AgentsDirectory, "task-worker.md");
+        File.WriteAllText(workerPath, File.ReadAllText(workerPath).ReplaceLineEndings(lineEnding));
         var profiles = new FileSubAgentDefinitionLoader(Context.Paths,
             NullLogger<FileSubAgentDefinitionLoader>.Instance).LoadAll();
         var worker = Assert.Single(profiles, profile => profile.Name == "task-worker");
+        Assert.EndsWith(lineEnding, worker.SystemPrompt, StringComparison.Ordinal);
         var client = new FakeChatClient { ResponseText = "The scripted worker result." };
         var provider = new RoleRecordingClientProvider(new SingleClientProvider(client));
         var toolConfig = new ToolConfig();
@@ -209,7 +214,9 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
             Assert.Equal([ModelRole.Main], provider.RequestedRoles);
             Assert.Equal(1, client.CallCount);
             var request = Assert.Single(client.ReceivedMessagesByCall);
-            Assert.Contains(request, message => message.Role == ChatRole.System && message.Text.Contains(worker.SystemPrompt));
+            // The actor trims whitespace at the profile end before it adds the tool index.
+            Assert.Contains(request, message => message.Role == ChatRole.System
+                && message.Text.Contains(worker.SystemPrompt.TrimEnd(), StringComparison.Ordinal));
             Assert.Contains(request, message => message.Role == ChatRole.User
                 && message.Text.EndsWith($"\nTask:\n{task}", StringComparison.Ordinal));
             Assert.True(result.Success);
