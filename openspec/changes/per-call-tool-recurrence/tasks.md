@@ -99,7 +99,16 @@
 - Six further cases capture actual pipeline failure, spawn, tool activity, routed activity, and routed completion envelopes.
 - The independent retained-plus-new selection passes 39 cases without skips. It preserves every original sender and dispatch token.
 - Removal of the failure ownership check emits an old error and fails the fresh task. The new assertion rejects those actual outputs.
-- The restored six-case control passes. Private routed failure and payload side fields remain outside this bounded proof.
+- The restored six-case control passes. That initial selection excludes private routed failure and payload side fields.
+- Later controls capture the actual private routed-failure envelope and the failed-child completion envelope.
+- The expanded independent callback selection passes 41 cases without skips.
+- Removal of the failure ownership check falsely fails fresh work. The restored controls pass.
+- A serialized cold-eviction delta preserves pinned decisions through journal application and snapshot recovery.
+- Omission of that eviction changes the expected Execute decision to Correct. The restored eight-case control passes.
+- The real job-manager integration proves output version and origin independently from persisted definition fields.
+- Separate version and origin omissions fail their output assertions. The restored combined producer selection passes nine cases.
+- Root integration passes 258 callback, checkpoint, and job cases without failures or skips.
+- Payload side fields and the remaining critical coverage combinations retain their open proof gates.
 - The scoped mutation gate selected 13 tests and killed all five expected targets in 3m08s.
 - The fifth target admits stale callbacks through the final `OwnsToolExecution` false return. A separate equality-removal fault also fails behaviorally.
 - The restored thirteen-case control passes. Hosted CI for the new revision remains separate.
