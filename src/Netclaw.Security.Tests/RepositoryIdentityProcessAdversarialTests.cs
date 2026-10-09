@@ -79,6 +79,7 @@ public sealed class RepositoryIdentityProcessAdversarialTests : IDisposable
             var aggregate = Assert.IsType<AggregateException>(error);
             Assert.IsAssignableFrom<OperationCanceledException>(aggregate.InnerExceptions[0]);
             Assert.True(process.HasExited, "Cancellation must not leave its Git process alive.");
+            Assert.Equal(0, process.ExitCode);
         }
         finally
         {
