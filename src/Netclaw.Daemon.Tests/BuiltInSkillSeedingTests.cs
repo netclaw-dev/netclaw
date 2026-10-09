@@ -184,7 +184,7 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         Assert.NotNull(skill);
         Assert.False(skill.HasSubagentRoutingMetadata);
         Assert.False(skill.DisableModelInvocation);
-        Assert.Equal("1.0.0", skill.Version);
+        Assert.Equal("1.0.1", skill.Version);
         Assert.Contains(registry.Search("code"), entry => entry.Name == skill.Name);
         string[] resources = [
             "assets/findings.md", "assets/plan.md", "references/analyze-plan.md",
