@@ -113,6 +113,9 @@ internal static class SessionCompactionPipeline
                     observationText.Length, Math.Max(0, discardStartIndex - systemOffset));
             }
 
+            if (compactedMessages.Count == 0 && history.Count > systemOffset)
+                throw new InvalidOperationException("Compaction cannot discard the entire task without a summary or retained messages.");
+
             self.Tell(new CompactionWorkCompleted
             {
                 OperationId = operationId,
