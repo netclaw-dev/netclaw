@@ -1236,6 +1236,13 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p><strong>Persistence-fault proof:</strong> Five independent cases pass on the integrated branch without skips. They use the existing persistence test kit.</p>
 <p>The cases cover a failed correction admission, a failed initial admission, a failed result write, and a failed snapshot.</p>
 <p>A control preserves correction and Stop. These cases do not prove every crash cut or physical effect occurs once.</p>
+<p><strong>Successful recovery cuts:</strong> Five additional controls stop the actual owner after committed results, corrective feedback, a held correction admission, and a natural compaction snapshot.</p>
+<p>The held admission returns a successful journal write only after owner termination. Replay verifies the committed correction record before recovery continues.</p>
+<p>The snapshot control reads an actual stored snapshot after journal pruning. Each control preserves the original authority and exactly two executor invocations.</p>
+<p>The resumed provider requests retain exact committed result text and canonical call/result pairs. An unanswered synthetic call receives the existing non-success restart closure.</p>
+<p>The ten-case persistence selection and twenty-case replay selection pass together at root without skips. All 31 original persistence assertions remain.</p>
+<p>The fixture reuses one model hold gate. Independent review verifies the source and ten actual result rows.</p>
+<p>Task 4.4 remains open. These controls exclude an actual effect without a committed result and process or power-loss SQLite durability.</p>
 <p><strong>Recovery policy question:</strong> A physical effect can precede its journal result. PR1 expands interrupted-task continuation across this existing uncertainty gap.</p>
 <p>The owner must choose the uncertain-effect recovery policy. Committed result preservation does not prove every physical effect occurs once.</p>
 <p><strong>Background contract:</strong> Strict OpenSpec validation passes for the lifecycle package. Four preparation tasks are complete.</p>
@@ -1267,6 +1274,7 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>Root passes all eight startup controls without skips. Each result retains actual child output; every assertion and the 90-second deadline remain.</p>
 <p>The crash-file diagnostic branch has source review only. The local repair does not establish a fresh Windows pass.</p>
 <p>No manual hosted rerun, skip, or waiver occurs. These repairs require fresh hosted proof; prior runs retain their original source revisions.</p>
+<p>At the later published first head <code>35e75e64d</code>, the macOS test job passes. The Windows job still runs; neither result verifies later local test changes.</p>
 <p><strong>Later Linux fixture failure:</strong> The old <code>70e5acf0c</code> actor run reports one passivation-test failure after 5,822 passes and 40 skips.</p>
 <p>The target actor returns to Ready. A replay fixture's join barrier then sends an extra acknowledgement to its borrowed callback sender.</p>
 <p>The repair directs six barrier replies to their subscriber. Every replay retains its original callback sender and payload; all 350 original assertion statements remain.</p>
