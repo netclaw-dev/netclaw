@@ -51,6 +51,4 @@ The first PR's frozen `per-call-tool-recurrence` contract is a dependency. This 
 
 Acceptance does not grant extra tool or path authority. Child output cannot answer an approval prompt or create a trusted automation input.
 New lifecycle records require upgrade and rollback proof. No actor reference, token, callback, or prepared actor property enters durable records.
-The current provider router has no capacity reservation or priority scheduler.
-The owner must resolve the capacity decision before implementation claims parent response under a held child request.
 Five seconds is the accepted initial framework-only cancellation grace default. This change adds no operator configuration knob.

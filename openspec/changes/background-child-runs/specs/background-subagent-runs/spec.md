@@ -454,24 +454,24 @@ No rollback procedure SHALL claim reversal of completed external effects.
 - **THEN** they require the pre-upgrade database backup and active-run settlement
 - **AND** they retain the warning that external effects remain
 
-### Requirement: Responsiveness evidence reaches the provider boundary
+### Requirement: Parent and child model requests remain independent
 
-The release SHALL prove a parent model response before release of a held child provider request under the selected supported capacity contract.
-An actor acknowledgement alone SHALL NOT satisfy that model-response claim.
-The capacity contract SHALL define admission outcomes and bounded queue behavior before dependent runtime implementation.
-Status and cancellation SHALL remain locally usable under provider contention.
-The runtime SHALL NOT silently add a provider scheduler, require unproven spare capacity, or weaken the response claim.
+The parent SHALL issue its model request without waiting for a live child's completion or a Netclaw provider-slot gate.
+The inference backend SHALL own its request queues and capacity.
+Netclaw SHALL NOT add provider-slot limits, capacity reservations, or parent/child inference preemption.
+Status and cancellation SHALL remain locally usable while a child request remains pending.
+An actor acknowledgement SHALL NOT substitute for required real-model evidence.
 
-#### Scenario: Held child permits a parent model response
+#### Scenario: A held child does not block the parent request
 
-- **GIVEN** the selected supported provider configuration and a held child request
-- **WHEN** the user submits a parent status question
-- **THEN** the parent returns its model response before child release
-- **AND** evidence records both provider requests and their barrier order
+- **GIVEN** a live child with a held model request
+- **WHEN** the user submits a parent question
+- **THEN** the parent's model request reaches the backend before child release
+- **AND** Netclaw does not wait for or allocate a provider slot
 
-#### Scenario: Single-slot starvation remains an unpassed gate
+#### Scenario: The backend owns a queued request
 
-- **GIVEN** a provider permits only the held child request
-- **WHEN** no chosen contract supplies parent capacity
-- **THEN** the model-response gate remains unpassed
-- **AND** local actor control success cannot replace that evidence
+- **GIVEN** the backend queues the parent's request behind a child request
+- **WHEN** Netclaw awaits the parent response
+- **THEN** Netclaw does not reserve capacity or preempt the child to change that order
+- **AND** local status and cancellation remain available

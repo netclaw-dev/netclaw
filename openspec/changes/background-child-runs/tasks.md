@@ -1,14 +1,14 @@
 ## 1. Freeze prerequisites and independent proof fixtures
 
-- [x] 1.1 Rebase on PR 1 and reconcile its frozen types and deltas; verify the combined recurrence contract remains unchanged.
-- [ ] 1.2 Record the owner's pending capacity decision before dependent runtime edits; verify the selected admission and held-child model-response clauses are explicit.
+- [x] 1.1 Rebase on PR 1 and reconcile its frozen types and deltas; verify the combined recurrence contract includes the confirmed model-owned recovery boundary.
+- [x] 1.2 Record the confirmed backend-owned capacity boundary. Remove provider-slot coordination and the pending approval gate. Verify independent request and local control clauses.
 - [x] 1.3 Have an independent test author derive lifecycle assertions from the delta; verify the author lists paired controls and deliberate faulty variants.
 - [ ] 1.4 Extend existing actor fixtures with start, provider, dispatch, terminal, and persistence barriers; verify assertions use acknowledgements rather than sleeps.
 - [x] 1.5 Capture a pre-change journal/snapshot fixture with conversation and parent approval state; verify the fixture predates new lifecycle records.
 
 Preparation evidence:
 
-- The branch includes PR 1 at `893435238`. Its existing runtime types remain unchanged.
+- The branch inherits PR 1. This contract reconciliation leaves its existing runtime types unchanged.
 - Design section 7 assigns retained parent detector evidence to the planned child run ledger.
 - An independent review derives sixteen assertion groups, paired controls, and named faults from the deltas.
 - The [approved plan](../../../.systematize/plans/background-subagents/plan.html) owns the adversarial method and acceptance gates.
@@ -20,7 +20,7 @@ Preparation evidence:
 - The original resolver creates the captured row. The consumer restores all four columns and the marker under a new home.
 - The combined candidate passes 33 storage-resolver cases without failures or skips.
 - Task 6.6 remains open for the new empty child ledger and the integrated lifecycle recovery proof.
-- These preparation tasks establish no background runtime or provider-capacity pass.
+- These preparation tasks establish no background runtime pass. The owner confirmed backend-owned capacity and model-owned recovery.
 
 ## 2. Durable acceptance and independent lifetime
 
@@ -42,7 +42,7 @@ Preparation evidence:
 - [ ] 3.6 Materialize a fresh attributed provider tool-call/result pair; inspect actual messages and verify the original start call receives no second result.
 - [ ] 3.7 Preserve original authority and compatible journal-order queues; verify another speaker and active compaction cannot change result authority.
 - [ ] 3.8 Retain and refresh parent detector checkpoints in the child run ledger. Verify committed start settlement and direct activation without fabricated receipts. Verify late results after fresh input, sibling checkpoint updates, distinct-task separation, receipt failure, and recovery. Preserve current parent directory/project/branch.
-- [ ] 3.9 Keep failed parent continuations visible; verify replay does not admit completed input or automatically restart external effects.
+- [ ] 3.9 Keep failed parent continuations visible. Verify committed input is not readmitted and the model receives retained loss facts before it chooses further work.
 
 ## 4. Every routed start and deferred parent controls
 
@@ -73,7 +73,7 @@ Preparation evidence:
 - [ ] 6.2 Retain shell-job reap behavior as a nearby control; run its existing integration cases and verify no child state enters shell-job records.
 - [ ] 6.3 Cancel children during coordinated drain with bounded finalization; verify parent snapshot retains terminal and prompt disposition.
 - [ ] 6.4 Recover accepted children as explicit `Lost` without relaunch; verify committed cancellation remains cancelled and stale success cannot win.
-- [ ] 6.5 Crash at acceptance, terminal persistence, enrichment, delivery preparation, and admission; verify no duplicate child or completed side-effect replay.
+- [ ] 6.5 Crash at acceptance, terminal persistence, enrichment, delivery preparation, and admission; verify no duplicate child, committed result loss, or framework tool execution during recovery.
 - [ ] 6.6 Load the captured pre-change fixture. Verify retained history, parent prompts, and an explicit empty child ledger. Capture a baseline SQLite storage binding and marker through the real resolver. Verify the candidate preserves that row and marker. The journal fixture alone supplies no storage-binding proof.
 - [ ] 6.7 Probe prior-reader compatibility against new events; verify rollback instructions require backup restoration when compatibility fails.
 
@@ -82,8 +82,8 @@ Preparation evidence:
 - [ ] 7.1 Extend the existing background relay with explicit parent/child request IDs and barriers; verify setup/sidecar calls cannot consume child script stages.
 - [ ] 7.2 Add targeted Subagents and background cases for acceptance, routed starts, controls, cancellation, prompts, and recovery; verify actual dispatch and artifact evidence.
 - [ ] 7.3 Preserve queued-grant revocation, shell lifecycle, and PR 1 long-task controls; verify the combined candidate passes those unchanged boundaries.
-- [ ] 7.4 Exercise the chosen admission contract under saturation; verify bounded queue state, explicit outcomes, and locally responsive status/cancel.
-- [ ] 7.5 Hold a child on the selected real provider and request a parent reply; verify that reply precedes child release in five critical-case trials.
+- [ ] 7.4 Hold several accepted child requests. Verify independent parent dispatch and locally responsive status/cancel without provider-capacity coordination.
+- [ ] 7.5 Hold a child on the selected real backend that accepts concurrent requests. Verify a parent reply before child release in five critical-case trials.
 - [ ] 7.6 Make provider output ignore cancellation or never finish; verify framework settlement without another model response and report remote-computation limits.
 - [ ] 7.7 Demonstrate rejection of duplicate start, early terminal acknowledgement, late dispatch, stale approval prompt, and delivery-reset mutants in isolation.
 - [ ] 7.8 Keep any new focused mutation target narrow and inside the documented CI budget; verify expected mutants execute and none survives.

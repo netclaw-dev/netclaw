@@ -16,7 +16,6 @@ Current code establishes these seams:
 - `SubAgentActor` stops immediately after its terminal reply. It has no durable resume state or compaction.
 - `SessionState.ActiveBackgroundJobs` belongs to shell jobs. Its delivery dedup is not a durable child-result contract.
 - `RoleBasedFailoverRouter` shares the main pipeline with compaction unless a distinct compaction model exists.
-- No provider admission scheduler, priority queue, or reserved parent inference slot exists.
 
 Relevant engineering references: `SPEC-002`, `SPEC-016`, and the [glossary](../../../docs/spec/GLOSSARY.md).
 The old subagent wall-clock timeout statement conflicts with the implemented per-operation watchdog.
@@ -37,7 +36,8 @@ This package changes that statement without introducing a task-lifetime ceiling.
 
 - A child that resumes after a daemon restart.
 - Agent messages, questions, peer discovery, or live steering.
-- A workflow engine, a general provider scheduler, or a new test platform.
+- A workflow engine or a new test platform.
+- Provider-slot limits, request-capacity reservations, or parent/child inference preemption.
 - Exactly-once external side effects from a model continuation that crashes midway.
 - Another tool-count, task-age, or task-token ceiling.
 
@@ -333,6 +333,9 @@ After recovery, an accepted run without a durable terminal receipt becomes `Lost
 A previously admitted cancellation remains `Cancelled` with retained evidence; recovery does not replace it with successful output.
 Recovered child prompts receive visible expired/cancelled disposition.
 No recovery branch recreates the child, replays task tools, or adopts the current requester.
+The parent model decides further work from the recorded session and the retained loss or partial-result facts.
+The framework imposes no retry or operator-review policy for uncertain external effects.
+A new model decision can start a new child under ordinary authority. It cannot revive a lost run or duplicate its acceptance key.
 
 Captured pre-change records contain no background child ledger.
 Read them as an explicit empty ledger and retain conversation, storage bindings, and parent approval state.
@@ -344,20 +347,7 @@ If the prior binary cannot read them, rollback requires the pre-upgrade database
 Stop new admissions and settle active runs before rollback. Restoring the database cannot undo external effects.
 This package authorizes no daemon restart, rollout, or data replacement.
 
-### 10. Blocking owner decision: provider capacity
-
-Root asked the owner to choose verified spare/separate capacity or runtime preemption for a single-slot provider.
-The decision remains pending. Do not weaken the held-child response gate to actor responsiveness.
-The actor can process controls while an inference server still delays the parent's model request.
-There is no inspected runtime mechanism that reserves or preempts provider capacity.
-
-Before dependent runtime edits, record the selected capacity contract and its admission consequences in this package.
-Do not invent a child concurrency limit or an unbounded accepted queue.
-The selected contract must define accepted, queued, and rejected starts, queue bounds, and response under saturation.
-The required real-model gate holds a child request and proves a parent response before child release.
-An actor probe proves local control response only. It cannot satisfy this model-server gate.
-
-### 11. Proof and delivery boundary
+### 10. Proof and delivery boundary
 
 PR 2 depends on PR 1. Validate the combined stack, not the old baseline alone.
 The runtime, every routed consumer, cancellation, prompt lifetime, and recovery form one coherent PR.
@@ -376,7 +366,6 @@ Require independent review of integrated evidence before the background behavior
 
 ## Risks / Trade-offs
 
-- [Single-slot starvation] -> Resolve the owner capacity decision; retain the held-child model gate as unpassed.
 - [Acceptance acknowledgement loss duplicates work] -> Persist one stamped start key and reject digest conflicts.
 - [A late dispatch follows cancellation] -> Acknowledge closure only after all local dispatch paths close.
 - [Cancellation loses useful results] -> Commit checkpoints during normal work and preserve them without another model call.
@@ -390,7 +379,7 @@ Require independent review of integrated evidence before the background behavior
 
 ## Migration Plan
 
-1. Root reviews this package and resolves provider capacity. Retain the accepted five-second framework-only grace default.
+1. Apply the confirmed implementation decisions. Retain the accepted five-second framework-only grace default.
 2. Rebase this branch on PR 1 and reconcile its frozen wire and detector contracts.
 3. Prepare independent lifecycle fixtures and captured pre-change records before runtime edits.
 4. Implement the complete background contract with the minimum runtime guidance.
