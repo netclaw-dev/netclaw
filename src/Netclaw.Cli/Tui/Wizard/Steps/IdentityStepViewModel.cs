@@ -263,6 +263,8 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
         var agentsDir = paths.AgentsDirectory;
         Directory.CreateDirectory(agentsDir);
 
+        SeedAgentFile(agentsDir, "task-worker.md", ReadEmbeddedTemplate("task-worker.profile.md"));
+
         SeedAgentFile(agentsDir, "research-assistant.md", """
             ---
             name: research-assistant

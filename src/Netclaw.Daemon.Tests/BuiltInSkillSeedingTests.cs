@@ -6,10 +6,13 @@
 using System.Runtime.Versioning;
 using System.Text.Json;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Services;
+using Netclaw.Security.Skills;
 using Netclaw.Tests.Utilities;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests;
@@ -165,6 +168,64 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         refresher.Refresh();
 
         Assert.Contains(registry.Search("diagnostics"), skill => skill.Name == "netclaw-operations");
+    }
+
+    [Fact]
+    public async Task Coordination_bundle_loads_inline_and_reads_all_resources_through_logical_tools()
+    {
+        var paths = CreatePaths();
+        EmbeddedSystemSkillRestorer.Restore(paths);
+        var registry = new SkillRegistry();
+        var refresher = new SkillInventoryRefresher(paths, new SkillFeedsConfig(), [], registry,
+            new SkillIndexPublisher(registry, new SkillIndexContextLayer(), static (_, _) => true));
+        refresher.Refresh();
+
+        var skill = registry.GetByName("agent-coordination");
+        Assert.NotNull(skill);
+        Assert.False(skill.HasSubagentRoutingMetadata);
+        Assert.False(skill.DisableModelInvocation);
+        Assert.Equal("1.0.0", skill.Version);
+        Assert.Contains(registry.Search("code"), entry => entry.Name == skill.Name);
+        string[] resources = [
+            "assets/findings.md", "assets/plan.md", "references/analyze-plan.md",
+            "references/diagnose-fix-verify.md", "references/implement-review.md", "references/parallel-research.md"
+        ];
+        Assert.Equal(resources.Order(StringComparer.Ordinal), skill.ResourcePaths!.Order(StringComparer.Ordinal));
+        var context = TestToolExecutionContext.CreateUnboundWithoutApproval(TrustAudience.Personal);
+        var load = new SkillLoadTool(registry, new NoOpSkillContentScanner(), new RejectUnexpectedPromptLoad());
+        var receipt = await load.ExecuteAsync(ToolInput.Create("Name", skill.Name), context,
+            TestContext.Current.CancellationToken);
+        Assert.Contains("Assign one writer", receipt);
+        Assert.Contains("A cancellation acceptance does not prove", receipt);
+        Assert.Contains("Only the parent sends user messages", receipt);
+        Assert.DoesNotContain(paths.SystemSkillsDirectory, receipt);
+        Assert.True(receipt.Length < new SessionTuning().MaxInlineToolResultChars);
+
+        var read = new SkillReadResourceTool(registry, new NoOpSkillContentScanner());
+        foreach (var resource in resources)
+        {
+            Assert.Contains(resource, receipt);
+            var result = await read.ExecuteAsync(
+                ToolInput.Create("SkillName", skill.Name, "ResourcePath", resource), context,
+                TestContext.Current.CancellationToken);
+            var resourcePath = Path.Combine(skill.SkillDirectory, resource.Replace('/', Path.DirectorySeparatorChar));
+            Assert.Equal($"path: {resourcePath}\n{File.ReadAllText(resourcePath)}", result);
+            Assert.True(result.Length < new SessionTuning().MaxInlineToolResultChars);
+        }
+
+        var deniedContext = TestToolExecutionContext.CreateUnbound();
+        Assert.Equal("Error: This tool is not available.", await load.ExecuteAsync(
+            ToolInput.Create("Name", skill.Name), deniedContext, TestContext.Current.CancellationToken));
+        Assert.Equal("Error: This tool is not available.", await read.ExecuteAsync(
+            ToolInput.Create("SkillName", skill.Name, "ResourcePath", resources[0]), deniedContext,
+            TestContext.Current.CancellationToken));
+    }
+
+    private sealed class RejectUnexpectedPromptLoad : IMcpPromptSkillLoader
+    {
+        public ValueTask<McpPromptSkillLoadResult> LoadAsync(McpPromptSkillSource source,
+            IReadOnlyDictionary<string, string>? arguments, ToolInvocationContext context, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("The inline file skill must not request an MCP prompt.");
     }
 
     [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),

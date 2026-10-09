@@ -14,6 +14,10 @@
 set -euo pipefail
 
 . "$(dirname "$0")/_lib.sh"
+. "$(dirname "$0")/_init-agent-profiles.sh"
+
+assert_init_agent_profiles "$NETCLAW_HOME" \
+  "$(dirname "$0")/../../../src/Netclaw.Cli/Resources/identity/task-worker.profile.md"
 
 assert_fail=0
 
