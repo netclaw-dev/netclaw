@@ -137,10 +137,17 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
             ReminderDeadline.Infinite,
             new ReminderPayload { Id = definition.Id }));
 
-    private async Task AwaitHistoryAsync(ReminderId id, int count)
+    private async Task AwaitHistoryAsync(IActorRef manager, ReminderId id, int count)
         => await AwaitAssertAsync(async () =>
-            Assert.Equal(count, (await _historyStore.ReadAsync(id, 50)).Count),
-            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        {
+            // The manager serializes this read with its history writes and settlement.
+            var history = await manager.Ask<ReminderHistoryResponse>(
+                new GetReminderHistoryQuery(id, 50,
+                    new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test")),
+                TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.True(history.Found);
+            Assert.Equal(count, history.Records.Count);
+        }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
     private int DeniedAlerts(ReminderId id)
         => _sink.Alerts.Count(a => a.Category == AlertType.ReminderExecutionFailed && a.Source == id.Value);
@@ -159,7 +166,7 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.True(saved.Success, saved.ErrorMessage);
 
-        await AwaitHistoryAsync(definition.Id, 1);
+        await AwaitHistoryAsync(manager, definition.Id, 1);
         // The retry backoff here is 25 ms: a nack would have run the model again long before this.
         await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(1500), TestContext.Current.CancellationToken);
 
@@ -188,7 +195,7 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
             new SaveReminderCommand(definition, Authorization: new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test")),
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.True(saved.Success, saved.ErrorMessage);
-        await AwaitHistoryAsync(definition.Id, 1);
+        await AwaitHistoryAsync(manager, definition.Id, 1);
         await AwaitAssertAsync(
             () => Assert.False(_definitionStore.Get(definition.Id)!.Enabled),
             TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
@@ -211,6 +218,7 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
     [Fact]
     public async Task A_recurring_reminder_stays_enabled_and_alerts_once_until_it_next_runs_ok()
     {
+        var manager = ActorRegistry.For(Sys).Get<ReminderManagerActorKey>();
         var definition = CreateDefinition(new ReminderSchedule
         {
             Type = ReminderScheduleType.Interval,
@@ -221,7 +229,7 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
         for (var run = 1; run <= 6; run++)
         {
             Fire(definition);
-            await AwaitHistoryAsync(definition.Id, run);
+            await AwaitHistoryAsync(manager, definition.Id, run);
         }
 
         var stored = _definitionStore.Get(definition.Id)!;
@@ -234,10 +242,10 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
 
         _deny = false;
         Fire(definition);
-        await AwaitHistoryAsync(definition.Id, 7);
+        await AwaitHistoryAsync(manager, definition.Id, 7);
         _deny = true;
         Fire(definition);
-        await AwaitHistoryAsync(definition.Id, 8);
+        await AwaitHistoryAsync(manager, definition.Id, 8);
 
         var rows = await _historyStore.ReadAsync(definition.Id, 50);
         Assert.Equal("ok", rows[6].Status);
