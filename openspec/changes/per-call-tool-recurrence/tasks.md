@@ -2,7 +2,7 @@
 
 - [x] 1.1 Obtain root review of the exact contract; verify every policy choice has an explicit disposition before production edits.
 - [x] 1.2 Reconcile the prior active draft through OpenSpec; verify completed repairs remain preserved and unfinished proof gates remain mandatory.
-- [ ] 1.3 Extend the disposable pure detector laboratory; verify all fifteen prior cases and the new nonadjacent controls pass.
+- [x] 1.3 Extend the disposable pure detector laboratory; verify all fifteen prior cases and the new nonadjacent controls pass.
 - [x] 1.4 Run at least 10,000 fixed-seed checks and one million deterministic fuzz sequences; verify reproducible outcomes and sensitivity controls.
 - [ ] 1.5 Produce private replay and shadow evidence without tool execution; verify every proposed block receives independent review.
 - [ ] 1.6 Assess the 3,000-turn independent productive holdout; verify zero confirmed hard false blocks and record absent data explicitly.
@@ -27,7 +27,7 @@
 - [x] 4.2 Preserve retained state in session events and snapshots; verify snapshot recovery and journal replay produce equal decisions.
 - [x] 4.3 Add durable task adoption from canonical admitted context; verify old attempts retain authority and fresh consumption resets before continuation.
 - [ ] 4.4 Reconstruct the suffix after the last checkpoint; verify every admission, result, and checkpoint crash cut point preserves completed effects once.
-- [ ] 4.5 Inject checkpoint and snapshot failures; verify an explicit error and no silent detector reset or premature dispatch.
+- [x] 4.5 Inject checkpoint and snapshot failures; verify an explicit error and no silent detector reset or premature dispatch.
 - [x] 4.6 Load captured pre-change records; verify conversation recovery and an explicit detector baseline gap without fabricated receipt evidence.
 - [ ] 4.7 Test the rollback reader or document database restoration; verify new event variants cannot silently corrupt an older runtime.
 
@@ -42,7 +42,7 @@
 - [x] 5.3 Preserve approval redrive correlation; verify one feedback observation and no duplicate execution or prompt authority.
 - [x] 5.4 Replace final model requests with framework settlement; verify one factual terminal parent result and one Partial child result.
 - [x] 5.5 Retain confirmed file activity and bounded partial evidence; verify a model claim cannot make a refused operation successful.
-- [ ] 5.6 Ignore late model or tool replies after settlement; verify no renewed dispatch, grant, or duplicated terminal outcome.
+- [x] 5.6 Ignore late model or tool replies after settlement; verify no renewed dispatch, grant, or duplicated terminal outcome.
 
 ## 6. Limit removal and operational contracts
 
@@ -71,19 +71,33 @@
 
 ## Local proof scope
 
+- The disposable BCL laboratory passes 40 cases, including all fifteen historical shapes with current-policy dispositions.
+- Independent execution passes 10,000 fixed-seed sequences, 100,000 assertions, and all eighteen named behavioral fault variants.
+- The laboratory models prepared facts. It does not prove runtime authority, private replay, or model behavior.
+
 - `ToolRecurrenceContractTests` proves the million-sequence corpus, 10,000 checkpoint sequences, outcome parity, and retention rules.
 - `ToolRecurrenceAdversarialTests` proves parent/child parity, exact effects, paired results, useful long tasks, and missing-receipt settlement.
 - `ToolLoopReplayAdversarialTests` proves result-cut reconstruction, canonical adoption, receipt defects, and duplicate reset rejection.
 - `ToolTaskRecoveryAdversarialTests` proves actor recovery, job lineage, fast results, invalid deliveries, and legacy approval redrive.
 - `BackgroundJobLineageTests` proves two-job checkpoint retention, origin rejection, durable reports, and explicit legacy gaps.
 - `PreChangePersistenceCompatibilityTests` proves actual legacy journal bytes and registered-serializer snapshot bytes through actor recovery.
+- `ToolRecurrencePersistenceFaultTests` passes five independent cases through the existing persistence test kit.
+- Failed admission and result writes stop the actor and emit an explicit error before further dispatch.
+- A failed snapshot emits an operator warning. Journal replay retains correction and Stop without a silent reset.
+- These cases exclude exhaustive crash cuts and a physical effect whose journal result never commits.
 - Task 4.10 includes duplicate redrive and the specific post-baseline serialized snapshot case with seeded actor recovery.
 - That snapshot case does not claim a live compaction save. The separate compaction actor cases prove live compaction behavior.
 - `ToolCompactionReplayAdversarialTests` proves original requester, exact input IDs, ordered effects, paired results, and result-before-adoption journal order.
 - `ToolCycleUserInputTests` proves fresh-task reset at the existing batch boundary and preserved evidence without fresh input.
-- The scoped mutation gate selected 12 tests and killed its four expected targets. The CI gate for the current head remains separate.
-- The full non-native actor run passed 5,796 cases and found one fixture failure. Its 40 existing skips remain explicit.
-- The repaired input class passed all seven cases. The independent current-candidate run remains separate.
+- Twelve concrete late-reply controls cover parent model, single result, batch completion, child model, child aggregate result, and parent approval request.
+- Closed original approval answers return `PromptExpired` and produce no grant writes. The fresh task still completes.
+- Failure, spawn, activity, and routed callback consumers receive source review and retained normal-path tests, without separate captured replay cases.
+- The scoped mutation gate selected 13 tests and killed all five expected targets in 3m08s.
+- The fifth target admits stale callbacks through the final `OwnsToolExecution` false return. A separate equality-removal fault also fails behaviorally.
+- The restored thirteen-case control passes. Hosted CI for the new revision remains separate.
+- The prior full non-native actor run passed 5,796 cases and found one fixture failure, with 40 existing skips.
+- The current full non-native actor run passes 5,814 cases with 40 existing platform skips and no failures.
+- Root integration passes 43 focused actor cases and thirteen mutation controls without skips.
 - Configuration tests passed six cases. Doctor tests passed 37 cases. This repair changes no configuration or CLI code.
-- Open tasks retain the laboratory, private replay, shadow, productive holdout, exhaustive crash, injected persistence failure, and late-reply gates.
+- Open tasks retain private replay, shadow, productive holdout, and exhaustive crash gates.
 - Open tasks also retain executed rollback, model trials, coverage analysis, hosted CI, and final contract reconciliation.
