@@ -37,8 +37,10 @@ default provider.
    from that image with `docker run --rm --network host`, a throwaway
    `$EVAL_HOME` temp directory, and `NETCLAW_*` env vars that route it at
    your LLM endpoint.
-3. The harness copies repository identity templates into `$EVAL_HOME/identity/`.
-   `NETCLAW_EVAL_ASSET_ROOT` selects the checkout that supplies these templates and the skill assets.
+3. The harness copies repository identity templates and the deployment mission fixture into `$EVAL_HOME/identity/`.
+   `NETCLAW_EVAL_ASSET_ROOT` selects the checkout that supplies these templates, skill assets, and the canonical worker profile.
+   The mission fixture retains its guidance and gains the short parent coordination route.
+   The worker profile populates only the agent directory in this fresh eval-owned home.
    The harness does not copy the operator's identity files.
 4. Daemon logs land in `$EVAL_HOME/logs/daemon-YYYY-MM-DD.log` via a
    writable bind-mount of `/root/.netclaw/logs`. Assertion helpers tail
@@ -94,7 +96,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Category | Cases | What It Validates |
 |----------|-------|-------------------|
 | Identity & Self-Awareness | 5 | Bot knows its name, version, repo, session ID, and routes all identity-file concerns without a skill dependency |
-| Skill Discovery and Activation | 20 | Models load relevant file, feed, and MCP prompt skills while they skip unrelated skills |
+| Skill Discovery and Activation | 21 | Models load relevant file, feed, and MCP prompt skills while they skip unrelated skills |
 | Memory Pipeline | 4 | Memory recall is active, identity-vs-memory routing is correct, explicit saves use memory tools, and automatic checkpointing still fires |
 | Tool Discovery & Use | 16 | Progressive discovery, structured workspace selection, web search, and timestamped webhook configuration |
 | Grounding & Alignment | 4 | Uses tools to verify facts, admits uncertainty, and resolves announced attachment paths from the authoritative session root |
@@ -119,6 +121,40 @@ phrasing — not just one magic prompt.
   `$EVAL_HOME/logs/daemon-$(date +%F).log`) for structured patterns like
   `turn_skill_auto_load`, `turn_memory_recall`, and
   `turn_memory_checkpoint_enqueued`.
+
+### Coordination Discovery Case
+
+`skill_coordination_discovery` asks for an implementation-then-review process without prescribed tool names.
+The prompt permits an explanation but forbids child starts, file edits, and command execution.
+The case requires a successful logical `agent-coordination` load followed by `references/implement-review.md`.
+It rejects other workflow resources and physical file or shell substitutes.
+The oracle matches runtime JSON call IDs and arguments with ordered headless call/result receipts.
+It checks the complete canonical skill body and workflow resource content.
+An explicit discovery-tool allowlist rejects edits and other action tools.
+Final response claims and skill activation alone cannot satisfy the oracle.
+
+Select this case after you configure an authorized eval provider:
+
+```bash
+NETCLAW_EVAL_CATEGORY='Skill Discovery' \
+NETCLAW_EVAL_CASE=skill_coordination_discovery \
+  ./evals/run-evals.sh
+```
+
+The fixture seed affects only the fresh eval-owned home.
+It preserves the existing mission fixture and copies the canonical release worker asset.
+It does not change operator profiles or playbooks.
+Combined-stack integration must recheck the route extraction after runtime guidance changes.
+
+This case proves discovery and progressive resource access.
+It does not prove workflow execution, child result quality, or artifact delivery.
+No real-model inference pass is recorded for the current preparation.
+The synthetic instrumentation checks passed: 10 coordination controls and three native profile-oracle controls.
+
+```bash
+python3 -m unittest discover -s evals -p test_coordination_evals.py -v
+python3 -m unittest discover -s evals -p test_init_agent_profiles.py -v
+```
 
 ### Memory Pipeline Semantics
 

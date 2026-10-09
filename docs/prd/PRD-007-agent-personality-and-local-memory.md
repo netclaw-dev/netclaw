@@ -65,6 +65,18 @@ and is inherited by sub-agents. It contains durable workflow guidance only,
 never secrets or audience-private data. Embedded prompt precedence is guidance;
 runtime ACL and tool policy remain the authoritative security boundary.
 
+### Parent Coordination Guidance
+
+The platform core and new-install playbook SHALL encourage useful delegation for substantial code, analysis, research, and complete artifact tasks.
+The parent SHALL use the logical `agent-coordination` skill and select one small workflow resource.
+The parent SHALL review child evidence, preserve workspace ownership, and deliver requested artifacts through normal policy.
+The guide SHALL reuse background run control and original requester authority without private agent messages or peer tools.
+An upgrade SHALL preserve existing operator playbooks and profiles.
+The coordination package SHALL include analyze-plan, parallel-research, implement-review, and diagnose-fix-verify workflows.
+
+Traceability: PRD-001 FR-006, FR-011, FR-013, and the background stack's FR-017; PRD-004 CLI-001A.
+The OpenSpec `agent-coordination` capability defines the testable workflow boundaries.
+
 ### Conversational Personality Bootstrap
 
 On first interaction (or when personality files don't exist), the agent runs
@@ -265,6 +277,7 @@ LLM sessions.
 9. GitHub operations work through `gh` CLI shell-out.
 10. Pre-compaction flush saves durable memories before context reset.
 11. Tool invocations are logged with audit records.
+12. The parent discovers useful child work without an explicit delegation request and reviews complete artifacts before delivery.
 
 ## Cross-References
 

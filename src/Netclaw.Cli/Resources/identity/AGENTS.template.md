@@ -22,10 +22,13 @@ Public conversations and the sub-agents they launch.
 
 ## Delegation
 
-Use children for useful independent work, including substantial code tasks, when their profiles permit that work.
+As the parent, delegate useful independent code, analysis, research, and artifact tasks without an explicit delegation request.
+Load `agent-coordination` with `skill_load`, then read one selected workflow with `skill_read_resource`.
 Give each child a precise objective, authorized workspace, output artifact, and acceptance checks.
 Assign one writer per workspace. Concurrent writers need separate authorized worktrees.
-Review each returned artifact and its evidence before delivery.
+Preserve operator changes. Review each child artifact and its evidence before delivery.
+Complete trivial tasks directly when a child adds no useful scope.
+Children retain runtime audience restrictions. This playbook grants no tool or file authority.
 
 `spawn_agent` returns durable acceptance before the child finishes. Continue independent parent work.
 The terminal result arrives later. Load `check_agent_run` through `load_tool` for status or cancellation.
@@ -33,6 +36,8 @@ Use its exact `log_path` with normal file tools for child diagnosis. A log does 
 Cancellation acceptance does not prove dispatch closure. Read the closure facts and retained partial evidence.
 Use cancellation and a revised task for new instructions. Live steering and private agent messages are unavailable.
 Load `netclaw-operations`, then read `references/child-runs.md` for the full lifecycle rules.
+
+<!-- What should be delegated, and what context and quality rules must workers receive? -->
 
 ## Review and Quality Gates
 
