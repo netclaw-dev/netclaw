@@ -197,26 +197,43 @@ NETCLAW_EVAL_TIMEOUT=180 \
 | `tool_cycle_compaction` | Normal compaction completes between executions one and two. The third request receives a correction. The model completes an alternative. |
 | `tool_cycle_changed_result` | The same command returns a different result each time. All three executions complete. |
 | `tool_cycle_metadata_repair` | Two requests lack required metadata. The corrected request executes once without a cycle correction. |
+| `tool_cycle_nonadjacent_correction` | Distinct diagnostics separate two equal primary results. Candidate three receives correction. The real model completes recovery through `file_read`. |
+| `tool_cycle_nonadjacent_terminal` | A further diagnostic follows correction. The next primary candidate receives runtime Stop. No further provider request or effect occurs. |
 
 The relay scripts only the initial tool requests. Each request has a fresh call ID.
 The real daemon executes tools and emits the intervention. The target model controls
-the alternative tool use in cases that permit recovery. The terminal case requires
+the alternative tool use in cases that permit recovery. The terminal cases require
 a runtime report and zero model requests after the stop candidate. The fixture never
 supplies a successful final answer.
 
 Each trial uses synthetic files in the isolated workspace. A separate counter
 checks actual side effects. Strict assertions require paired runtime results,
 the expected tool exposure, a real alternative result, and an accurate JSON report
-for recovery cases. The terminal case requires the runtime partial report.
+for recovery cases. The terminal cases require the runtime partial report.
 Every trial must pass. The category fixes the pass threshold at 100 percent.
+
+The nonadjacent cases request `A, B, A, C, A` after the normal shell-tool load.
+`A` appends one primary attempt and returns the same result.
+Distinct diagnostics `B` and `C` append their own labels to a separate counter and return distinct results.
+Candidate three of `A` must receive a paired runtime correction without an effect.
+The terminal case then requests `D, A`. Diagnostic `D` executes before the runtime refuses the final `A` candidate.
+These sequences avoid adjacent cycles of periods one through three.
+Exact CLI call arguments, ordered diagnostic receipts, and both counters establish the interleaved sequence.
+Both terminal oracles reject any later provider request, including a sidecar request.
+This oracle check does not establish a runtime or model pass.
+
+Acceptance requires five trials per new case and a 100 percent pass rate.
+Select `NETCLAW_EVAL_CASE=tool_cycle_nonadjacent_correction` or `NETCLAW_EVAL_CASE=tool_cycle_nonadjacent_terminal` with `NETCLAW_EVAL_RUNS=5`.
+Trial-count overrides remain available for diagnosis. Fewer trials do not complete acceptance.
 
 The compaction case reports synthetic token usage above the normal threshold.
 The real daemon must complete compaction and reduce history before the second
 execution. The isolated config retains one recent tool result and disables title
 requests. Production config and resource limits do not change.
 
-The relay permits at most eight main model requests and eight sidecar requests
-per trial. Compaction and memory-distillation requests share the sidecar limit.
+The relay permits at most 16 main requests per trial.
+At most eight of those requests can reach the target model.
+Compaction and memory-distillation requests share a separate limit of eight sidecar requests.
 Both require evidence that identifies the current synthetic trial.
 The common prompt timeout also applies. The relay accepts a plain API
 key through the existing environment variable. It does not accept encrypted keys.

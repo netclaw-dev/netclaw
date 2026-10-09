@@ -11,7 +11,7 @@ start_cycle_fixture() {
         exit 2
     fi
     case "$FILTER_CASE" in
-        ""|tool_cycle_correction|tool_cycle_terminal|tool_cycle_compaction|tool_cycle_changed_result|tool_cycle_metadata_repair) ;;
+        ""|tool_cycle_correction|tool_cycle_terminal|tool_cycle_compaction|tool_cycle_changed_result|tool_cycle_metadata_repair|tool_cycle_nonadjacent_correction|tool_cycle_nonadjacent_terminal) ;;
         *) echo "ERROR: unknown cycle case: $FILTER_CASE" >&2; exit 2 ;;
     esac
     command -v python3 >/dev/null
@@ -27,7 +27,7 @@ start_cycle_fixture() {
     EVAL_PROVIDER_ENDPOINT="http://127.0.0.1:$CYCLE_FIXTURE_PORT/v1"
     EVAL_PROVIDER_API_KEY=""
     EVAL_DATA_PROTECTION_KEYS=""
-    # Only the isolated eval config changes. Production limits remain intact.
+    # This edit changes only the isolated compaction and title settings.
     jq '.Session.Tuning.KeepRecentMessages=0 | .Session.Tuning.KeepRecentToolResults=1
         | .Session.Tuning.TitleGenerationInterval=0' \
         "${NETCLAW_EVAL_CONFIG_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/netclaw.json}" \
@@ -48,6 +48,8 @@ setup_tool_cycle_terminal() { setup_cycle_case terminal; }
 setup_tool_cycle_compaction() { setup_cycle_case compaction; }
 setup_tool_cycle_changed_result() { setup_cycle_case changed_result; }
 setup_tool_cycle_metadata_repair() { setup_cycle_case metadata_repair; }
+setup_tool_cycle_nonadjacent_correction() { setup_cycle_case nonadjacent_correction; }
+setup_tool_cycle_nonadjacent_terminal() { setup_cycle_case nonadjacent_terminal; }
 
 cycle_inconclusive() {
     python3 "$REPO_ROOT/evals/cycle_evals.py" inconclusive --case "$CYCLE_CASE" --reason "$1" > "$2"
@@ -87,6 +89,8 @@ assert_tool_cycle_terminal() { assert_cycle_case; }
 assert_tool_cycle_compaction() { assert_cycle_case; }
 assert_tool_cycle_changed_result() { assert_cycle_case; }
 assert_tool_cycle_metadata_repair() { assert_cycle_case; }
+assert_tool_cycle_nonadjacent_correction() { assert_cycle_case; }
+assert_tool_cycle_nonadjacent_terminal() { assert_cycle_case; }
 
 run_cycle_cases() {
     print_category "Tool cycles"
@@ -95,5 +99,7 @@ run_cycle_cases() {
     run_case --json tool_cycle_compaction "cycle state survives normal compaction before model recovery" '{{CYCLE_PROMPT}}'
     run_case --json tool_cycle_changed_result "changed results permit the third execution" '{{CYCLE_PROMPT}}'
     run_case --json tool_cycle_metadata_repair "valid metadata repair permits execution" '{{CYCLE_PROMPT}}'
+    run_case --json tool_cycle_nonadjacent_correction "interleaved diagnostics preserve correction before real model recovery" '{{CYCLE_PROMPT}}'
+    run_case --json tool_cycle_nonadjacent_terminal "an unrelated diagnostic cannot clear correction before runtime stop" '{{CYCLE_PROMPT}}'
     end_category
 }
