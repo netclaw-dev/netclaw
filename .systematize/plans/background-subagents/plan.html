@@ -446,10 +446,19 @@ Parent: review partial evidence → start replacement with revised task</pre>
 <p>Cancellation does not undo prior edits. The replacement task must identify existing work and avoid a duplicate external action.</p>
 <p>A daemon crash has no guaranteed grace period. Retained checkpoints support recovery; do not promise a final flush after process loss.</p>
 <h3>Proposed control tools</h3>
-<p>The background scope needs parent status and cancellation. The concrete proposal uses one deferred control tool; its name remains provisional.</p>
-<p>Use the <a href="#background-code">proposed child control</a>, analogous to the existing background-job interaction. The exact name remains an engineering check.</p>
+<p>The background scope uses one deferred control: <code>check_agent_run(run_id, cancel=false)</code>. The parent loads it through <code>load_tool</code>.</p>
+<p>The <a href="#background-code">child control</a> resembles background-job status and cancellation. Its owner and authorization remain separate from shell jobs.</p>
 <p>Child peer lookup and <code>send_message</code> remain deferred. Do not expose them or advertise them in the background change.</p>
 <p>A parent status query supplies its child identifiers, task summaries, states, and concise terminal outcomes. It does not enable child peer discovery.</p>
+<p><strong>Accepted diagnostic contract:</strong> Authorized status also supplies the exact <code>log_path</code> and <code>artifact_directory</code> before child completion.</p>
+<p>The adapter reuses the existing canonical child storage binding. It adds no durable path ledger, file grant, or special log-reader tool.</p>
+<p>The parent reads bounded log sections through <code>file_read</code> or <code>file_search</code> under normal file policy. It must not derive paths or search a global log tree.</p>
+<p>A log can explain a delay. It does not prove current health, dispatch closure, or completion. Future private messages do not replace this diagnostic path.</p>
+<p><strong>Verification:</strong> Hold a real child, inspect the actual authorized status JSON, and read its exact log through the existing file tool.</p>
+<p>Two owner tests now pass with a held child: original-requester live path access and foreign status/cancel denial without paths.</p>
+<p>The actual status JSON matches the canonical child storage. The existing file tool returns a successful read receipt before child release.</p>
+<p>The full source selection remains 46/62: sixteen old foreground integration expectations need migration. This narrow proof does not make that selection green.</p>
+<p>A returned path must not bypass file policy. Final integrated checks and an explicit denied-file negative remain open.</p>
 <p>In the later slice, <code>send_message</code> addresses an eligible run. The session assigns the sender identity; the model cannot forge it.</p>
 <p>The cancel control acknowledges a request separately from the terminal state. The parent holds cancellation authority.</p>
 <p>Do not add a new five-call polling cap from the earlier draft. Use events and loop protection rather than another arbitrary tool count.</p>
@@ -1127,6 +1136,8 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 </tbody></table>
 <p>Do not classify a long run as a loop from its duration or tool count alone. A request record does not prove dispatch.</p>
 <p>Reproduce cases with neutral fixture data. Keep private source pointers, raw prompts, commands, and results outside published evidence.</p>
+<p><strong>PII requirement:</strong> Before historical transcript reuse, scrub personal data and secrets from a derived copy. Preserve the original logs unchanged.</p>
+<p>Use stable opaque replacements when equality or correlation matters. Do not place raw historical payloads or identifying digests in fixtures or public reports.</p>
 <p>The seed corpus cannot establish a false-block rate. Historical model results did not meet every strict task gate.</p>
 <h3>What could disprove the recommendation?</h3>
 <ul>
@@ -1374,7 +1385,12 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>The final reply gives the wrong value. The denied call does not execute; runtime and recovery-tool checks pass.</p>
 <p>The local prompt repair requires current response formats, field definitions, conditions, and exceptions. It adds no case-specific answer.</p>
 <p>The intent alone retains the sentence cap. All 84 targeted compaction, persistence, and prompt checks pass without skips.</p>
-<p>The new prompt still needs fresh compaction trials. The earlier 35 verdicts remain unchanged.</p>
+<p>The new source and image freeze identifies <code>12e601f90</code>. Five fresh isolated compaction trials complete with the unchanged relay and strict oracle.</p>
+<p>None passes strict acceptance. All five remain inconclusive because the CLI produces no final JSON envelope within its fixed 180-second deadline.</p>
+<p>The first observer times out in each trial. The guard retains the original history; no accepted-summary quality or recovery pass follows.</p>
+<p>All five container, home, run, and session identities differ. Concrete daemon-log fields supply session identities because final envelopes are absent.</p>
+<p>All owned trial resources pass cleanup checks. The earlier 35 verdicts remain unchanged. Observer latency remains a separate defect.</p>
+<p>The prior image remains intact. Its original binaries retain their exact hashes in the prior evidence archive.</p>
 <p>In changed-result trial one, every actual request retains the command prohibition. The model nevertheless requests an extra shell command.</p>
 <p>The protected files retain their content. The extra tool action still fails the strict gate; no unchanged retry or waiver follows.</p>
 <p><strong>Compaction defect:</strong> An isolated observer timeout exposes an older path that commits an empty task window after summary failure.</p>
@@ -1394,9 +1410,17 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>A separate cold-recovery test exposes a lost child pair after the first review fails before a tool batch starts.</p>
 <p>The author repairs durable child-pair adoption. Its recovery selection passes 92 cases and fails one temporary phase expectation.</p>
 <p>The approved restart contract requires Lost instead of Accepted. Independent verification will check that expectation change and the repaired cold result pairs.</p>
+<p>The independent recovery and cancellation selection now passes 57 cases without skips. It retains one-child and coalesced cold result pairs after failed reviews.</p>
+<p>The restart control observes one durable Lost result under original authority, with no child relaunch.</p>
+<p>Actual checkpoint and dispatch-closure write barriers distinguish admission, closure, and terminal settlement. Real report success and failure retain the confirmed synthetic receipt.</p>
+<p>Four call-local report checks use virtual time and explicit operation-entry signals. The owner wait expires despite synchronous or ignored-token operation holds.</p>
+<p>Three narrow faults expose a missing replayed pair, a foreign requester result, and absent grace cancellation.</p>
+<p>The restored nine-case selection passes. All 969 production-file and 160 assembly hashes match the safe source and binaries exactly.</p>
+<p>The first live-pair fault reaches an existing guard and times out before its required barrier. It remains inconclusive; the later replay fault supplies behavioral sensitivity.</p>
 <p>The author approval selection passes 86 cases without skips. It checks original child authority after later parent input and cancellation before an answer.</p>
-<p>Independent approval, reusable-grant, cancellation, and grace-period checks remain incomplete. A synchronous report operation must not bypass the five-second deadline.</p>
-<p>Public starts still use the foreground path. The final public tool conversion, restart proof, and combined verification remain incomplete.</p>
+<p>Reusable-grant, pending-checkpoint cancellation, snapshot, and drain checks remain incomplete. The report proof does not establish universal operating-system I/O termination.</p>
+<p>The author converts public starts and removes the obsolete foreground spawner. These source changes still need their first compile and combined verification.</p>
+<p>The focused mutation review selects one original-requester guard for the existing xUnit 2 harness. Its new CI mutant and measured cost remain unproved.</p>
 <p>The corrected approved target is reachable. Tailscale Serve exposes only this plan file.</p>
 <h3>Instructions for a future implementation session</h3>
 <ul>
