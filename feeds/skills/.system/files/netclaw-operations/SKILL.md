@@ -254,17 +254,19 @@ This failure does not prove that the turn exhausted its tool budget.
 
 ## Large tool output
 
-Netclaw bounds each tool result to an inline budget
-(`Session.Tuning.MaxInlineToolResultChars`, default 12,000 characters;
-`shell_execute` uses 2,000). A longer result gives you its first part and its
-last part, not the whole text:
+Netclaw limits each inline tool result to a character budget.
+`Session.Tuning.MaxInlineToolResultChars` defaults to 12,000 characters.
+`shell_execute` uses 2,000 characters.
+A longer result contains only its tail, with a separator before the retained text.
+The shell tail retains the process exit status.
 
 - **Each tool, also `skill_load`, `skill_read_resource`, and MCP tools**: Netclaw
   keeps the full redacted result inside the current session. The last line of the
   result names `tool_output_read` and a `CallId`. Use `tool_output_read` with that
-  `CallId` and a `Start`/`Limit` window to read the middle.
+  `CallId` and a `Start`/`Limit` window to read the omitted prefix or middle.
+  Set `Start=0` to read from the start of the retained result.
   Do not request a path or rerun the source tool to read more.
-  If the last line says that Netclaw did not keep the full output, the middle is
+  If the last line says that Netclaw did not keep the full output, the omitted text is
   not available: narrow the call if the tool has a bound, or read one specific
   resource with `skill_read_resource`.
 - **`file_read`** on a large file returns the head and steers you to read a

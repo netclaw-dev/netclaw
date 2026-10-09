@@ -199,9 +199,9 @@ Render(state) → update text, controls, and transcript</code></pre></div>
 
 <section id="workflow-proof">
 <h2>Verification procedures and current evidence</h2>
-<p>The formatted code revision passes 2,136 CLI tests and 100 gateway tests. No selected case fails or skips.</p>
-<p>The 37-file source manifest has SHA256 <code>2d648eb3ad0267d5c57727c06bc9fb41aa88d31f68220620cd586d91e359d0df</code>.</p>
-<table aria-label="Current revision evidence"><thead><tr><th>Claim</th><th>Observed evidence</th><th>Limit</th></tr></thead><tbody>
+<p>Before the base update, the formatted code revision passes 2,136 CLI tests and 100 gateway tests. No selected case fails or skips.</p>
+<p>That 37-file source manifest has SHA256 <code>2d648eb3ad0267d5c57727c06bc9fb41aa88d31f68220620cd586d91e359d0df</code>.</p>
+<table aria-label="Record revision evidence before the base update"><thead><tr><th>Claim</th><th>Observed evidence</th><th>Limit</th></tr></thead><tbody>
 <tr><td data-label="Claim">Typed state and protocol</td><td data-label="Observed evidence">The build has zero warnings and errors. Existing public APIs and wire values retain their contracts.</td><td data-label="Limit">Private records constrain payloads and state data. C# does not enforce every transition statically.</td></tr>
 <tr><td data-label="Claim">Actual RPC lifetime</td><td data-label="Observed evidence">Three deliberately faulty overlap cases fail at peak concurrency two. Both lost-recovery cases fail at two binds instead of three.</td><td data-label="Limit">The temporary peak-control copy removes two earlier invocation guards so the unchanged peak assertions execute. Both source files restore before the final build.</td></tr>
 <tr><td data-label="Claim">Page ownership and order</td><td data-label="Observed evidence">Bound-loop theories check actual delta payload order, state before transcript publication, approval clearance, and one final transcript.</td><td data-label="Limit">Usage-log resources and daemon-readiness extraction remain separate follow-ups.</td></tr>
@@ -213,6 +213,8 @@ Render(state) → update text, controls, and transcript</code></pre></div>
 <p>The retained estimate uses the <a href="https://www.artima.com/weblogs/viewpost.jsp?thread=215899">original formula</a> with sequence coverage instead of basis-path coverage.</p>
 <p>Estimated scores are 50.01 for CompleteOperation, 30.85 for End, and 99.21 for ChatPage.HandleOutput. These values remain explicit review limits.</p>
 <p>The independent verifier accepts the cancellation order, fault controls, and source identity. Final acceptance also requires native and hosted results.</p>
+<p>The PR branch also imports the current dev changes for tail-only tool output. It retains both operations-skill sections at version 2.108.0.</p>
+<p>PR #2426 reports the combined candidate’s source identity and final proof. The earlier receipts retain their original source identity.</p>
 <table aria-label="Before and after acceptance"><thead><tr><th>Claim</th><th>Before</th><th>After and proof</th></tr></thead><tbody>
 <tr><td data-label="Claim">Typed contracts</td><td data-label="Before">Nullable generic requests and object results require branches and casts.</td><td data-label="After and proof">Specific record payloads and typed replies remove those casts. Inspect construction and all real consumers; build both test projects.</td></tr>
 <tr><td data-label="Claim">One page-state owner</td><td data-label="Before">Page and view-model both write status; the page writes usage display.</td><td data-label="After and proof">Only the view-model changes page state. Theory rows cover turn completion, usage, errors, approval, and close. Retain native node tests.</td></tr>

@@ -57,7 +57,8 @@ public sealed class ToolOutputSpillTests : IDisposable
             _sessionDir, "call_2", out _, out var spillPath));
         Assert.True(File.Exists(spillPath));
         Assert.Equal(input, await File.ReadAllTextAsync(spillPath, CancellationToken.None)); // full output on disk
-        Assert.StartsWith(new string('H', 50), result);                                      // inline head
+        Assert.Contains(new string('T', 100), result);                                       // inline tail only
+        Assert.DoesNotContain("H", result);                                                  // inline head dropped
         Assert.Contains("tool_output_read", result);
         Assert.Contains("CallId='call_2'", result);
         Assert.DoesNotContain(spillPath, result);
@@ -87,7 +88,9 @@ public sealed class ToolOutputSpillTests : IDisposable
         var result = await ToolOutputSpill.BoundAndSpillAsync(
             input, "call_5", budget: 100, ctx, NullLogger.Instance, CancellationToken.None);
 
-        Assert.StartsWith(new string('H', 50), result);    // inline still produced
+        var inline = result[..result.IndexOf("[output truncated", StringComparison.Ordinal)];
+        Assert.Contains(new string('T', 100), inline);     // inline tail still produced
+        Assert.DoesNotContain("H", inline);                // inline head dropped
         // No continuation, and the text says so. It does not offer a call id.
         Assert.Contains("did not keep the full output", result);
         Assert.DoesNotContain("CallId=", result);

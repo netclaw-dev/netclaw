@@ -36,10 +36,11 @@ internal static class ToolOutputSpill
 
     /// <summary>
     /// Returns <paramref name="redactedResult"/> unchanged if it fits
-    /// <paramref name="budget"/>; otherwise returns a <paramref name="budget"/>-char
-    /// head+tail window plus a steer, having spilled the full result to a session
-    /// file. The dispatcher resolves <paramref name="budget"/> from the tool's
-    /// per-tool override or the session content budget.
+    /// <paramref name="budget"/>; otherwise returns the last
+    /// <paramref name="budget"/> chars (the tail) plus a steer, having spilled
+    /// the full result to a session file. The model pulls the dropped head back
+    /// with <c>tool_output_read</c>. The dispatcher resolves <paramref name="budget"/>
+    /// from the tool's per-tool override or the session content budget.
     /// </summary>
     public static Task<string> BoundAndSpillAsync(
         string redactedResult, string? toolCallId, int budget, ToolInvocationContext context,
@@ -67,8 +68,8 @@ internal static class ToolOutputSpill
         var spill = await TryWriteSpillAsync(spillContent, toolCallId, context, ct);
         if (spill.FailureReason is { } reason)
         {
-            // The model loses the middle of this result and cannot read it again.
-            // The result text says so; this record tells the operator why.
+            // The model loses everything before the inline tail and cannot read
+            // it again. The result text says so; this record tells the operator why.
             logger.LogWarning(
                 "tool_output_spill_not_retained reason={Reason} sessionId={SessionId} callId={CallId} fullLength={FullLength} budget={Budget} detail={Detail}",
                 reason,
@@ -93,7 +94,7 @@ internal static class ToolOutputSpill
             return SpillOutcome.NotRetained(SpillFailureReason.UnusableCallId);
 
         // A failed (or cancelled) on-disk copy must not fail the tool call — the
-        // inline head+tail is always returned — so the write is decoupled from the
+        // inline tail is always returned — so the write is decoupled from the
         // request's CancellationToken (the body is bounded by the capture ceiling,
         // so the write is small and fast). The `ct` is kept in the signature for
         // symmetry / future use.
@@ -145,12 +146,13 @@ internal static class ToolOutputSpill
         }
         else
         {
-            // No silent fallback: the model must know that the middle is gone and
-            // that tool_output_read has nothing for this call. The text must be
-            // true for each tool, so it names a narrower bound only as an option.
-            // It names no path, and it must not send the model to the file system.
+            // No silent fallback: the model must know that everything before the
+            // inline tail is gone and that tool_output_read has nothing for this
+            // call. The text must be true for each tool, so it names a narrower
+            // bound only as an option. It names no path, and it must not send the
+            // model to the file system.
             sb.Append("; Netclaw did not keep the full output, so tool_output_read cannot continue this call ");
-            sb.Append("and the middle is not available. If the source tool has an output bound, call it again ");
+            sb.Append("and everything before the inline tail is not available. If the source tool has an output bound, call it again ");
             sb.Append("with a narrower bound. For a skill, read one specific resource with skill_read_resource");
         }
         sb.Append(']');

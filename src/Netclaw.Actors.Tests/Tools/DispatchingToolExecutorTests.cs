@@ -140,6 +140,53 @@ public partial class DispatchingToolExecutorTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(7, false)]
+    [InlineData(0, true)]
+    [InlineData(7, true)]
+    public async Task Oversized_shell_output_retains_exit_status_and_only_the_tail(int exitCode, bool stream)
+    {
+        const string head = "OUTPUT-HEAD";
+        const string tail = "OUTPUT-TAIL";
+        var output = head + new string('x', 3000) + tail;
+        var callId = $"call-exit-status-{exitCode}-{stream}";
+        var call = CreateToolCall(callId, "shell_execute",
+            ToolInput.Create("Command", $"echo '{output}'; exit {exitCode}"));
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/exit-status", BoundSessionDirectory, TrustAudience.Personal);
+
+        string? result = null;
+        if (stream)
+        {
+            await foreach (var update in _executor.ExecuteStreamAsync(call, context, TestContext.Current.CancellationToken))
+            {
+                if (update is ToolCompletedUpdate completed)
+                    result = completed.Result;
+            }
+        }
+        else
+        {
+            result = await _executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
+        }
+
+        Assert.NotNull(result);
+        Assert.Contains($"Exit code: {exitCode}", result, StringComparison.Ordinal);
+        Assert.StartsWith(BoundedOutputReader.Separator, result, StringComparison.Ordinal);
+        Assert.DoesNotContain(head, result, StringComparison.Ordinal);
+        Assert.Contains(tail, result, StringComparison.Ordinal);
+        Assert.Contains($"tool_output_read using CallId='{callId}'", result, StringComparison.Ordinal);
+
+        var inline = result[..result.IndexOf("[output truncated", StringComparison.Ordinal)];
+        Assert.EndsWith($"Exit code: {exitCode}", inline.TrimEnd(), StringComparison.Ordinal);
+        Assert.True(ToolOutputSpillLocation.TryResolve(BoundSessionDirectory, callId, out _, out var spill));
+        var retained = await File.ReadAllTextAsync(spill, TestContext.Current.CancellationToken);
+        Assert.StartsWith($"Exit code: {exitCode}{Environment.NewLine}", retained, StringComparison.Ordinal);
+        Assert.Contains(output, retained, StringComparison.Ordinal);
+        if (exitCode != 0)
+            Assert.DoesNotContain("Exit code: 0", result, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Spilled_output_is_redacted_before_write()
     {

@@ -125,7 +125,7 @@ public sealed class ToolOutputSpillFreshSessionTests : IDisposable
     private async Task AssertHiddenMiddleIsReadableAsync(
         string callId, string result, TrustAudience audience = TrustAudience.Personal)
     {
-        // The inline window has the head and the tail, not the middle.
+        // The inline tail omits the middle. The continuation must recover it.
         Assert.Contains("[output truncated to", result, StringComparison.Ordinal);
         Assert.DoesNotContain(HiddenRule, result, StringComparison.Ordinal);
         Assert.Contains($"tool_output_read using CallId='{callId}'", result, StringComparison.Ordinal);

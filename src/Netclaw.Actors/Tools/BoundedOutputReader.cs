@@ -9,24 +9,26 @@ using System.Text;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Bounds external tool output (process pipes, files) into a head+tail window of
-/// a fixed character budget, in bounded memory regardless of total output size.
-/// Extracted from <c>ShellTool.BoundedDrainAsync</c> (#1293) so the ring/window
-/// logic is reviewed and fixed once and reused by <c>shell_execute</c>,
+/// Bounds external tool output (process pipes, files) to the LAST
+/// <c>budget</c> chars of a fixed character budget, in bounded memory regardless
+/// of total output size. The dropped head is not kept inline: callers spill the
+/// full result and steer the model to <c>tool_output_read</c> for it. Extracted
+/// from <c>ShellTool.BoundedDrainAsync</c> (#1293) so the ring/window logic is
+/// reviewed and fixed once and reused by <c>shell_execute</c>,
 /// <c>background_job</c>, and <c>file_read</c>.
 /// </summary>
 /// <remarks>
 /// The reader is a pure leaf: it does no redaction and no file IO — callers
 /// redact (<c>SecretOutputRedactor</c>) and spill. Allocation is
 /// O(budget), not O(total output): the scratch read buffer is pooled, the tail
-/// ring is allocated only once the head fills, and reads go through the
+/// ring is allocated only once it first receives data, and reads go through the
 /// <see cref="ValueTask{T}"/> overload so a pipe that already has data buffered
 /// completes synchronously without a per-chunk <see cref="Task"/> allocation.
 /// </remarks>
 internal static class BoundedOutputReader
 {
     /// <summary>
-    /// Drains <paramref name="reader"/> into a head+tail window bounded by
+    /// Drains <paramref name="reader"/> into a tail-only window bounded by
     /// <paramref name="budget"/> chars. Chars beyond the budget are discarded but
     /// the source continues to be read so a still-running child never deadlocks on
     /// a full pipe buffer. A non-positive <paramref name="budget"/> disables the
@@ -91,25 +93,25 @@ internal static class BoundedOutputReader
     }
 
     /// <summary>
-    /// Head+tail window of an already-in-memory string to <paramref name="budget"/>
-    /// chars. Returns the string unchanged when it already fits (or the budget is
-    /// non-positive). Used to derive the inline window from a larger (redacted)
-    /// capture — see <c>ToolOutputSpill</c>.
+    /// Tail-only window of an already-in-memory string: the LAST
+    /// <paramref name="budget"/> chars plus a leading separator. Returns the
+    /// string unchanged when it already fits (or the budget is non-positive).
+    /// Used to derive the inline window from a larger (redacted) capture — see
+    /// <c>ToolOutputSpill</c>. The dropped head is only in the spill file; the
+    /// model pulls it back with <c>tool_output_read</c>.
     /// </summary>
     /// <remarks>
     /// <paramref name="budget"/> bounds the retained <i>content</i>, not the returned
     /// string length: a truncated result is <c>budget + Separator.Length</c> chars
-    /// (the head, the "…" separator, and the tail). Callers enforcing a hard
-    /// character ceiling must account for the separator.
+    /// (the separator and the tail). Callers enforcing a hard character ceiling
+    /// must account for the separator.
     /// </remarks>
     public static string Window(string text, int budget)
     {
         if (budget <= 0 || text.Length <= budget)
             return text;
 
-        var headCap = budget / 2 + budget % 2;
-        var tailCap = budget / 2;
-        return string.Concat(text.AsSpan(0, headCap), Separator, text.AsSpan(text.Length - tailCap));
+        return string.Concat(Separator, text.AsSpan(text.Length - budget));
     }
 
     internal static readonly string Separator = $"{Environment.NewLine}...{Environment.NewLine}";
@@ -163,17 +165,15 @@ internal static class BoundedOutputReader
 }
 
 /// <summary>
-/// Stateful head+tail accumulator that accepts incremental <c>Append</c> calls
-/// and produces the same bounded window as <see cref="BoundedOutputReader.DrainToWindowAsync"/>.
-/// Used by the streaming <c>ShellTool</c> path where pipe chunks must be fed to
-/// both the activity channel and the bounded capture simultaneously.
+/// Stateful tail-only accumulator that accepts incremental <c>Append</c> calls
+/// and produces the same bounded window as <see cref="BoundedOutputReader.DrainToWindowAsync"/>:
+/// the last <c>budget</c> chars, with a leading separator when truncated. Used by
+/// the streaming <c>ShellTool</c> path where pipe chunks must be fed to both the
+/// activity channel and the bounded capture simultaneously.
 /// </summary>
 internal sealed class BoundedOutputAccumulator
 {
     private readonly int _budget;
-    private readonly int _headCap;
-    private readonly int _tailCap;
-    private readonly StringBuilder _head;
     private char[]? _tailBuf;
     private int _tailStart;
     private int _tailLen;
@@ -182,37 +182,28 @@ internal sealed class BoundedOutputAccumulator
     public BoundedOutputAccumulator(int budget)
     {
         _budget = budget;
-        _headCap = budget / 2 + budget % 2;
-        _tailCap = budget / 2;
-        _head = new StringBuilder(Math.Min(_headCap, 4096));
     }
 
     public void Append(ReadOnlySpan<char> chunk)
     {
         _totalChars += chunk.Length;
-        var span = chunk;
-
-        if (_head.Length < _headCap)
-        {
-            var headChunk = Math.Min(_headCap - _head.Length, span.Length);
-            _head.Append(span[..headChunk]);
-            span = span[headChunk..];
-        }
-
-        if (span.IsEmpty || _tailCap == 0)
+        if (chunk.IsEmpty || _budget <= 0)
             return;
 
-        _tailBuf ??= new char[_tailCap];
-        BoundedOutputReader.AppendToTailRing(_tailBuf, span, ref _tailStart, ref _tailLen);
+        _tailBuf ??= new char[_budget];
+        BoundedOutputReader.AppendToTailRing(_tailBuf, chunk, ref _tailStart, ref _tailLen);
     }
 
     public (string Text, bool Truncated) Finish()
     {
         var truncated = _totalChars > _budget;
+        if (_tailBuf is null || _tailLen == 0)
+            return (string.Empty, truncated);
+
+        var sb = new StringBuilder(_tailLen + (truncated ? BoundedOutputReader.Separator.Length : 0));
         if (truncated)
-            _head.Append(BoundedOutputReader.Separator);
-        if (_tailBuf is not null && _tailLen > 0)
-            BoundedOutputReader.AppendRing(_head, _tailBuf, _tailStart, _tailLen);
-        return (_head.ToString(), truncated);
+            sb.Append(BoundedOutputReader.Separator);
+        BoundedOutputReader.AppendRing(sb, _tailBuf, _tailStart, _tailLen);
+        return (sb.ToString(), truncated);
     }
 }
