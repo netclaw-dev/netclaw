@@ -86,6 +86,49 @@ A receipt remediation code alone SHALL NOT prove synthetic-result provenance.
 - **WHEN** the actor did not record that call as a synthetic refusal
 - **THEN** the result does not advance an actor-issued refusal episode
 
+### Requirement: Local callbacks retain exact dispatch ownership
+
+The parent SHALL bind each local tool callback to its original dispatch cancellation token.
+It SHALL create that source before actual or synthetic-only feedback enters its mailbox.
+It SHALL check current ownership before persistence, output, state mutation, source cancellation, or a model continuation.
+An absent, canceled, or different active source SHALL reject the callback without those effects.
+A call identifier or durable task identity alone SHALL NOT establish dispatch ownership.
+The token SHALL remain actor-local and SHALL NOT enter journal records, snapshots, or public outputs.
+The system SHALL retain existing receipt and provider call-result pair checks after ownership validation.
+The system SHALL scope result pairs to the exact canonical assistant occurrence in ordered history.
+Distinct batches with equal assistant values SHALL retain separate occurrences.
+A prior occurrence's result SHALL NOT suppress or satisfy a later batch that reuses its provider call ID.
+Duplicate suppression SHALL remain within the same canonical batch.
+Missing or ambiguous canonical occurrence ownership SHALL fail explicitly.
+
+#### Scenario: A real prior result cannot contaminate fresh work
+
+- **GIVEN** a settled task and its captured original tool-result envelope
+- **WHEN** that envelope arrives during a fresh authorized model request
+- **THEN** the actor persists and emits no old result
+- **AND** the actor starts no extra model request or terminal outcome
+
+#### Scenario: Reused call identifiers do not establish ownership
+
+- **GIVEN** a new batch uses the same provider call identifier as an old batch
+- **WHEN** the old result arrives with its original dispatch token
+- **THEN** the actor rejects that result before current batch mutation
+- **AND** the new batch retains its own canonical authority and result
+
+#### Scenario: An old completion cannot cancel current work
+
+- **GIVEN** a fresh active dispatch and an old batch-completion envelope
+- **WHEN** the actor receives that old envelope
+- **THEN** the active source remains unchanged
+- **AND** the actor starts no premature model continuation
+
+#### Scenario: Synthetic-only feedback has a live owner
+
+- **GIVEN** every admitted call receives a cycle correction
+- **WHEN** the actor consumes the synthetic results and batch completion
+- **THEN** each callback carries that batch's current token
+- **AND** the actor preserves each result pair and continues once
+
 ### Requirement: Explicit repeat exceptions preserve tool authority
 
 The initial exception SHALL apply only to a schema-valid noncancel status query for one accessible pending background job.

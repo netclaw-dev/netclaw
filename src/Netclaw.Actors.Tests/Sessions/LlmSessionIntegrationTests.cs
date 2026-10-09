@@ -1104,7 +1104,13 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Contains("The result is partial", text.Text, StringComparison.Ordinal);
         Assert.Contains("The last refused operation did not execute", text.Text, StringComparison.Ordinal);
         Assert.Equal(2, _fakeToolExecutor.CallCount);
-        Assert.Equal(5, _fakeChatClient.CallCount);
+        var requests = _fakeChatClient.ReceivedMessages;
+        var summaries = requests.Where(request => request.FirstOrDefault(message =>
+                message.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text
+            .Contains("You are a session summarizer", StringComparison.Ordinal) == true).ToArray();
+        Assert.Single(summaries);
+        Assert.Equal(5, requests.Count - summaries.Length);
+        Assert.Equal(6, _fakeChatClient.CallCount);
         Assert.Contains("search_tools", _fakeChatClient.ReceivedToolNames[^1]);
         Assert.Contains(_fakeChatClient.ReceivedMessages[^1], message =>
             message.Text.Contains("You received tool results but did not respond", StringComparison.Ordinal));
@@ -2087,7 +2093,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
             .ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-        child.Tell(new ToolExecutionFailed { Cause = new IOException("cancel the pending turn") });
+        child.Tell(new LlmCallFailed(new IOException("cancel the pending turn")) { CallId = 1 });
 
         await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);

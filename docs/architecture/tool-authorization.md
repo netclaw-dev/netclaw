@@ -59,6 +59,38 @@ Back up the session journal, snapshots, and job directory before activation.
 Rollback requires the backup or a tested reader that accepts this manifest.
 Do not use an old binary against a journal with this event.
 
+## Local foreground callback authority
+
+`LlmSessionActor` owns each local foreground dispatch through its existing tool cancellation source.
+The actor creates that source before synthetic-only corrections or actual tool work.
+The pipeline copies the batch token onto its local result, failure, and completion envelopes.
+The actor validates the token before persistence, output, state mutation, or cancellation of the current source.
+A reused provider call ID cannot establish current dispatch ownership.
+Settlement, replacement, failure, and restart drain invalidate the old local source.
+These tokens never enter a journal record, snapshot, or public output.
+`ParkedToolBatchHistory` scopes results to the exact canonical assistant occurrence before the next assistant message.
+An old result cannot satisfy or suppress a new batch that reuses its provider call ID.
+Distinct assistant occurrences remain separate even when their values equal an earlier batch.
+The normal producer creates a fresh assistant object for each durable batch event.
+An already present object cannot prove durable duplicate-event identity and fails before a new admission changes state.
+Recovery applies each journal sequence once through the framework.
+The lookup rejects missing or ambiguous canonical ownership without another result ledger.
+
+The approval bridge keeps its existing options, authority, and internal request metadata.
+The batch callback binds that request to its original token before parent mailbox admission.
+An unbound public approval output cannot create an approval record or prompt.
+Durable approval answers retain their canonical pending context and existing requester and claimed-wait checks.
+A recovered durable approval can use the existing redrive path after the old source ends.
+That redrive preserves the original authority and authorization attempt and creates a new local dispatch source.
+
+Foreground child spawn requests carry the original parent token before child creation.
+The parent receives foreground child activity through a token-bound local mailbox envelope before public emission.
+Routed foreground skills use the same existing source for their spawn, activity, result, and failure callbacks.
+These checks change no public output format or transport protocol.
+Shell background job deliveries retain their separate durable origin and input-admission contract.
+Future accepted background children need their separate run owner after parent foreground settlement.
+See [TA-1](../../openspec/specs/tool-authorization/spec.md#requirement-ta-1-trust-context-is-explicit-and-fails-loud).
+
 ## Background job result authority
 
 The existing job record retains the original recurrence `TurnId` and checkpoint.

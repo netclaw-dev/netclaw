@@ -205,6 +205,105 @@ No further model response, tool dispatch, approval prompt, or new grant is neces
 The unadmitted terminal candidate creates no orphaned provider tool-call message.
 One terminal outcome wins; a late provider reply cannot reopen the turn.
 
+#### Local tool callback ownership
+
+`LlmSessionActor` owns the active local dispatch through its existing `_activeToolExecutionCts`.
+`SessionToolBatch.CancellationToken` already identifies that exact dispatch.
+The actor creates the source before actual or synthetic results can enter its mailbox.
+A correction-only batch receives the same ownership check as an actual batch.
+A routed foreground skill also uses this existing source for its local run.
+The repair adds no epoch, authority ledger, configuration, or durable execution token.
+This check covers foreground dispatch and routed foreground runs.
+Existing shell background deliveries retain their durable origin and input-admission contract.
+Future background children require their separately approved run owner after parent dispatch settlement.
+
+Every local result, failure, and batch-completion envelope carries the mandatory original dispatch token.
+The pipeline copies the batch token, not a per-tool timeout token.
+The actor checks token equality and cancellation before persistence, output, state changes, or source cancellation.
+Settlement, dispatch replacement, failure, and restart drain invalidate old callbacks through the existing source lifecycle.
+A reused provider call ID, recurrence task ID, or authorization attempt cannot prove current dispatch ownership.
+The normal result path retains its existing receipt, pair, and authority checks after the ownership check.
+
+The existing approval bridge emits an internal request with its canonical options and metadata.
+The batch callback wraps that request with its mandatory original dispatch token before mailbox admission.
+Only this bound local envelope can create a new approval wait or prompt.
+A public `ToolInteractionRequest` output or an unbound internal request cannot create approval state.
+The check precedes `ToolApprovalRequested` persistence and requester context selection.
+The existing bridge needs no additional authority state or token parameter.
+
+A durable approval answer does not represent a new local dispatch callback.
+Its existing canonical pending context, requester checks, and claimed live wait remain the decision owners.
+Restart can cancel the old source while a durable prompt remains valid.
+Cold redrive retains the original context and authorization attempt and creates a new local dispatch source.
+Already durable approval records never require the canceled original token for recovery.
+The existing restart-stop callback retains its exact `_activeToolWorkTask` reference check.
+
+Child spawn requests carry the original parent dispatch token.
+The parent checks ownership before `Context.ActorOf`, not after the child starts.
+Normal child-start activity currently bypasses the parent mailbox through a subscriber snapshot.
+One local token-bound activity envelope replaces only that bypass.
+The actor emits the same public output after the ownership check.
+Routed skill completion, failure, activity, and spawn callbacks carry the routed run's token.
+Their stale callbacks cannot settle, mutate, or emit output for another task.
+Ephemeral children retain their existing terminal stop contract.
+Shared child result producers supply their existing execution token; this repair adds no child resumption or dispatch ledger.
+
+Schematic pseudocode; normal authority, receipt, pair, and persistence gates still apply:
+
+```text
+dispatch calls or routed foreground work:
+  cancel and dispose the previous active tool source
+  create the existing active tool source
+  token = source.Token
+  create synthetic results and actual work with token
+
+consume local callback(token, payload):
+  if no active source or token differs or token is canceled:
+    record a bounded stale-callback diagnostic
+    return without persistence, output, grant, spawn, or continuation
+  apply the callback's existing authority and result contract
+  close this source only when its existing lifecycle ends
+
+consume durable approval answer:
+  restore the canonical pending approval
+  validate requester and offered option
+  claim the live wait, or use the existing cold-redrive path
+  preserve the original authority and attempt
+```
+
+Positive example: a correction-only batch records its paired refusal results and requests the next model round once.
+Negative example: an old real result reuses a current call ID; its different dispatch token rejects it before persistence.
+Negative example: an old batch-completion callback cannot cancel the current source or request another model response.
+Positive example: an answer to a durable parked approval creates a new dispatch without duplicate completed sibling effects.
+
+Source owners: `LlmMessages`, `SessionToolExecutionPipeline`, `LlmSessionActor`, and the local approval dispatch seam.
+The actor-local token never enters journal events, snapshots, public output, or a serializer contract.
+The implementation updates the canonical authorization document in the same diff after the source owner changes.
+Verification retains the captured original sender, payload, authorization attempt, and reused-current-call-ID adversarial controls.
+It also covers mixed correction, synthetic-only feedback, routed skills, durable approvals, and restart drain.
+Focused sensitivity must reject removal of the ownership check through a behavioral failure, not a compile error.
+
+#### Canonical assistant occurrence and result pairs
+
+`ParkedToolBatchHistory` owns result lookup within the existing assistant occurrence in ordered history.
+Provider call IDs can repeat in a later batch and do not identify a history occurrence.
+A result belongs after its canonical assistant occurrence and before the next assistant message.
+Current duplicate checks, parked approval redrive, and abandonment use that scoped result set.
+Global result lookup remains only for historical diagnostics.
+
+`ApplyToolBatchHistory` retains each distinct canonical assistant occurrence, even when its values equal an earlier batch.
+The normal producer creates a fresh assistant object for each durable batch event.
+Recovery receives one canonical object for each journal event and applies each sequence once through the framework.
+An already present object cannot prove durable duplicate-event identity.
+Its reuse in a normal admission fails explicitly before admission state changes.
+The lookup requires one exact canonical occurrence; missing or ambiguous ownership is an explicit contract failure.
+The framework journal order supplies occurrence identity during replay; the repair adds no persisted result ledger or generic duplicate-event claim.
+Metadata-only legacy baselines retain their separate validated idempotent path and append no assistant occurrence.
+
+Positive example: a fresh batch reuses an old call ID and retains its own actual result after its assistant message.
+Negative example: an old batch result cannot satisfy the new batch or suppress its current result.
+An existing result for the same canonical batch still prevents duplicate result history.
+
 Alternative: request a text-only final model response. A stalled or noncompliant model would retain control of termination.
 
 ### 7. Configuration migration and activation
