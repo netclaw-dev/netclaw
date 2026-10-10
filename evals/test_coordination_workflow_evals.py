@@ -62,6 +62,27 @@ def stage_evidence(root):
     return receipt, events, requests, setup, home
 
 
+def observer_calls(events):
+    calls, pending = [], {}
+    turn = 1
+    for event in events:
+        output = event["output"]
+        if output["Type"] == "tool_call":
+            row = {"id": output["CallId"], "name": output["ToolName"],
+                   "arguments": json.loads(output["ArgumentsJson"]), "turn": turn,
+                   "observed_ns": event["observed_ns"], "occurrence": len(calls) + 1}
+            pending[row["id"]] = row
+            calls.append(row)
+        elif output["Type"] == "tool_result":
+            row = pending.pop(output["CallId"])
+            row.update(result=output["Result"], failure_code=output.get("ToolFailureCode"),
+                       success=output.get("ToolFailureCode") is None)
+        elif output["Type"] == "turn_completed":
+            turn += 1
+    assert not pending
+    return calls
+
+
 class CoordinationWorkflowControls(unittest.TestCase):
     def test_selection_uses_collect_only_for_first_current_prompt(self):
         functions = shell_functions("child_result_consumer")
@@ -392,14 +413,14 @@ assert_coordination_analyze_plan 2>/dev/null
         records = [{"request": value, "request_id": index, "admitted_ns": index * 3,
                     "response_first_payload_ns": index * 3 + 1, "response_payload_written": True}
                    for index, value in enumerate((parent(), request), 1)]
-        self.assertFalse(consumed_deliveries([], starts[:1], 10)["complete"])
-        self.assertTrue(consumed_deliveries(records[:1], starts[:1], 10)["complete"])
-        self.assertFalse(consumed_deliveries(records[:1], starts, 10)["complete"])
-        result = consumed_deliveries(records, starts, 10)
+        self.assertFalse(consumed_deliveries([], starts[:1], 10, [])["complete"])
+        self.assertTrue(consumed_deliveries(records[:1], starts[:1], 10, [])["complete"])
+        self.assertFalse(consumed_deliveries(records[:1], starts, 10, [])["complete"])
+        result = consumed_deliveries(records, starts, 10, [])
         self.assertTrue(result["complete"])
         self.assertEqual([1, 2], [row["request_id"] for row in result["deliveries"]])
         third = {**ACCEPTED, "run_id": "run-extra", "scope_id": "scope-extra"}
-        self.assertFalse(consumed_deliveries(records, starts + [{**starts[0], "accepted": third}], 10)["complete"])
+        self.assertFalse(consumed_deliveries(records, starts + [{**starts[0], "accepted": third}], 10, [])["complete"])
 
 
 if __name__ == "__main__":
