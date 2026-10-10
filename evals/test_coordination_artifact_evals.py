@@ -365,6 +365,77 @@ class CoordinationArtifactControls(unittest.TestCase):
         self.refresh_reads()
         self.assert_valid()
 
+    def test_wider_source_citations_preserve_actual_required_statements(self):
+        self.assert_valid()
+        original = self.findings.read_text()
+        for citation in ["source/catalog.py:6-8@", "source/catalog.py:5-8@",
+                         "`source/catalog.py:5-8`; "]:
+            with self.subTest(citation=citation):
+                self.findings.write_text(original.replace("source/catalog.py:7-8@", citation))
+                self.refresh_reads()
+                self.assert_valid()
+
+    def test_source_citations_require_one_canonical_in_bounds_cover(self):
+        self.assert_valid()
+        original = self.findings.read_text()
+        invalid = ["source/catalog.py:8-8@", "source/catalog.py:5-7@",
+                   "source/catalog.py:8-7@", "source/catalog.py:0-8@",
+                   "source/catalog.py:5-18@", "other/source/catalog.py:7-8@",
+                   "/source/catalog.py:7-8@", "../source/catalog.py:7-8@",
+                   "source/catalog.py:7-8 source/catalog.py:5-8@"]
+        for citation in invalid:
+            with self.subTest(citation=citation):
+                self.findings.write_text(original.replace("source/catalog.py:7-8@", citation))
+                self.refresh_reads()
+                self.assert_rejected()
+        self.findings.write_text(original)
+        self.refresh_reads()
+        self.assert_valid()
+
+    def test_nested_check_receipts_remain_valid(self):
+        self.assert_valid()
+        original = self.findings.read_text()
+        checks = next(line for line in original.splitlines() if line.startswith("- Checks: "))
+        for indent in ["  ", "\t"]:
+            with self.subTest(indent=repr(indent)):
+                nested = "- Checks:\n" + indent + "- " + checks.removeprefix("- Checks: ")
+                self.findings.write_text(original.replace(checks, nested))
+                self.refresh_reads()
+                self.assert_valid()
+
+    def test_empty_or_duplicate_checks_cannot_borrow_sibling_receipts(self):
+        self.assert_valid()
+        original = self.findings.read_text()
+        checks = next(line for line in original.splitlines() if line.startswith("- Checks: "))
+        for replacement in ["- Checks:", "- Checks:   \n\n", "- Checks:\n- Source inspection passed.",
+                            "- Checks:\n  - ", checks + "\n" + checks]:
+            with self.subTest(replacement=replacement):
+                self.findings.write_text(original.replace(checks, replacement))
+                self.refresh_reads()
+                self.assert_rejected()
+        self.findings.write_text(original)
+        self.refresh_reads()
+        self.assert_valid()
+
+    def test_empty_scalar_cannot_borrow_the_source_revision(self):
+        self.assert_valid()
+        self.change_artifact(self.findings, lambda text: re.sub(
+            r"(?m)^- Accepted objective:.*$", "- Accepted objective:", text))
+        self.assert_rejected()
+
+    def test_nested_receipt_field_cannot_replace_a_required_sibling(self):
+        self.assert_valid()
+        original = self.findings.read_text()
+        checks = next(line for line in original.splitlines() if line.startswith("- Checks: "))
+        nested = "- Checks:\n  - Source inspection passed."
+        changed = original.replace(checks, nested).replace("- Confirmed effects:", "  - Confirmed effects:")
+        self.findings.write_text(changed)
+        self.refresh_reads()
+        self.assert_rejected()
+        self.findings.write_text(original)
+        self.refresh_reads()
+        self.assert_valid()
+
     def test_invented_evidence_identifier_fails(self):
         self.assert_valid()
         self.change_artifact(self.findings, lambda text: re.sub(r"\bE1\b", "E99", text))

@@ -83,9 +83,29 @@ def sections(text, names):
 
 
 def field(section, label):
-    matches = re.findall(r"^\s*-\s*" + re.escape(label) + r":\s*(.+)$", section, re.MULTILINE | re.IGNORECASE)
-    require(len(matches) == 1 and matches[0].strip(), "artifact: required field: " + label)
-    return matches[0].strip()
+    lines = section.splitlines()
+    pattern = re.compile(r"([ \t]*)-[ \t]*" + re.escape(label) + r":[ \t]*(.*)", re.IGNORECASE)
+    matches = [(index, match) for index, line in enumerate(lines) if (match := pattern.fullmatch(line))]
+    require(len(matches) == 1, "artifact: required field: " + label)
+    index, match = matches[0]
+    indent = len(match[1].expandtabs())
+    list_indents = [len(item[1].expandtabs()) for line in lines
+                    if (item := re.match(r"([ \t]*)-[ \t]*\S", line))]
+    require(indent == min(list_indents), "artifact: misplaced field: " + label)
+    if match[2].strip():
+        return match[2].strip()
+    require(label.casefold() == "checks", "artifact: required field: " + label)
+    children = []
+    for line in lines[index + 1:]:
+        if not line.strip():
+            continue
+        if len(line[:len(line) - len(line.lstrip(" \t"))].expandtabs()) <= indent:
+            break
+        children.append(line)
+    require(children and re.match(r"^[ \t]+-[ \t]+\S", children[0])
+            and not any(re.fullmatch(r"[ \t]*-[ \t]*", line) for line in children),
+            "artifact: required field: " + label)
+    return "\n".join(children).strip()
 
 
 def table(section, columns):
@@ -141,10 +161,16 @@ def check_artifacts(fixture_root, findings_path, plan_path):
             "artifact: evidence identities are missing or repeated")
     for row in rows:
         expected = truth["evidence"][row["ID"]]
-        location = f'{expected["source"]}:{expected["start_line"]}-{expected["end_line"]}'
-        require(location in row["Source and revision"] and revision in row["Source and revision"],
+        citations = re.findall(r"(?:^|[ \t])([^ \t;@]+):(\d+)-(\d+)(?=$|[ \t;@])",
+                               row["Source and revision"].replace("`", ""))
+        require(len(citations) == 1 and citations[0][0] == expected["source"]
+                and revision in row["Source and revision"],
                 "artifact: evidence source differs")
-        lines = (fixture_root / expected["source"]).read_text().splitlines()[expected["start_line"] - 1:expected["end_line"]]
+        start, end = map(int, citations[0][1:])
+        source_lines = (fixture_root / expected["source"]).read_text().splitlines()
+        require(1 <= start <= expected["start_line"] <= expected["end_line"] <= end <= len(source_lines),
+                "artifact: evidence range differs")
+        lines = source_lines[start - 1:end]
         require(all(excerpt in "\n".join(lines) and excerpt in row["Observation"] for excerpt in expected["excerpts"]),
                 "artifact: evidence lacks the actual source excerpts")
     rows = table(fs["findings"], ["ID", "Finding", "Component owner", "Evidence IDs", "Status"])
