@@ -146,7 +146,7 @@ def verify(setup, receipt, events, requests, home):
     parent_requests = [r for r in requests if context_paths(r) is None]
     require(parent_requests, "The parent provider evidence is absent.")
     pairs = paired_call_occurrences(parent_requests)
-    declarations = project_declarations(parent_requests, {setup["root"]})
+    declarations = project_declarations(parent_requests, {setup["root"]}, [])
     require(declarations == {(c["id"], *signature(c["name"], c["arguments"], c["result"])[1:])
                              for c in calls if c["name"] == "set_working_directory"},
             "The parent project declaration differs between the actual DTO and provider pair.")
@@ -175,7 +175,7 @@ def verify(setup, receipt, events, requests, home):
     children = [r for r in requests if (paths := context_paths(r)) is not None
                 and paths["log_path"] == terminal["log_path"] and paths["artifact_dir"] == terminal["artifact_directory"]]
     require(children, "The copy child lacks its original attributed provider context.")
-    project_declarations(children, {setup["root"]})
+    project_declarations(children, {setup["root"]}, [])
     required = [setup["nonce"], setup["root"], *[path for row in setup["reports"].values() for path in row.values()]]
     assignment = start["arguments"].get("Task", "") + "\n" + (start["arguments"].get("Context") or "")
     require(all(value in assignment for value in required), "The actual copy task lacks its original path scope.")
