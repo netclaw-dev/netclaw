@@ -1,7 +1,7 @@
 ## 1. Combined-stack contracts
 
 - [ ] 1.1 Include PR 1 and PR 2 before final integration and dependent checks. Verify their frozen contracts remain intact.
-- [ ] 1.2 Reconcile PRD traceability and the canonical plan location. Verify every package link resolves on the combined stack.
+- [x] 1.2 Reconcile PRD traceability and the canonical plan location. Verify every package link resolves on the combined stack.
 - [x] 1.3 Record backend-owned capacity. Verify this PR preserves the held-child parent-response gate without a provider scheduler.
 
 ## 2. Small inline skill
@@ -77,7 +77,7 @@ Operator procedure evidence:
 - [ ] 6.8 Run five independent trials per critical real-model case. Report every failure and rerun only after a justified change.
 - [x] 6.9 Check instrumentation before model attribution. Verify actual parsed tool receipts and file content rather than final-response regex alone.
 - [x] 6.10 Run `./scripts/smoke/run-smoke.sh init-wizard` on the combined stack. Verify native wizard completion and preserved custom profile files.
-- [ ] 6.11 Preserve all required init typed-key checks and applicable light smoke gates. Report proof gaps separately from successful headless checks.
+- [x] 6.11 Preserve all required init typed-key checks and applicable light smoke gates. Report proof gaps separately from successful headless checks.
 
 Native init evidence at `6d0d7501`:
 
@@ -88,6 +88,15 @@ Native init evidence at `6d0d7501`:
 - This is historical evidence with source equivalence. Deleted helper executables and external VHS binaries lack recorded hashes.
 - Task 6.11 remains open. This tape does not establish all light smoke gates, model behavior, or deployment success.
 
+Native light evidence at `915601da`:
+
+- The [hosted smoke run](https://github.com/netclaw-dev/netclaw/actions/runs/38028265717) passes on Linux and macOS.
+- Each platform passes all 29 required tapes and all 10 scenarios. Each scenario suite reports 67 successful assertions and no failures.
+- Both init-wizard assertions prove canonical worker bytes and preservation of the custom specialist profile.
+- The required typed-key test sources remain unchanged. The current CLI assembly passes all 2,164 tests without skips.
+- Current hosted logs report assembly totals. They do not supply named successful typed-key test rows.
+- This proof closes task 6.11. It does not prove real-model workflow quality, merge, release, or deployment.
+
 Negative model observations at `3dd2c1a3`:
 
 - Five fresh trivial-task trials pass. Two of five fresh unavailable-profile trials pass.
@@ -97,9 +106,28 @@ Negative model observations at `3dd2c1a3`:
 
 ## 7. Review and completion evidence
 
-- [ ] 7.1 Run the required focused .NET tests after implementation. Verify discovery and pass counts for changed seed, loader, routing, and skill boundaries.
+- [x] 7.1 Run the required focused .NET tests after implementation. Verify discovery and pass counts for changed seed, loader, routing, and skill boundaries.
 - [x] 7.2 Run `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1 -Verify` after code changes. Verify no new violations.
-- [ ] 7.3 Review security mutation scope. Document why unchanged policy gates require no new target, or prove a narrow unsafe mutant is rejected.
+- [x] 7.3 Review security mutation scope. Document why unchanged policy gates require no new target, or prove a narrow unsafe mutant is rejected.
 - [ ] 7.4 Run strict OpenSpec validation and implementation verification. Verify each requirement links to current source and claim-specific evidence.
 - [ ] 7.5 Report implementation, deterministic proof, model evals, native smoke, CI, rollout, and user delivery as separate states.
 - [ ] 7.6 Retain PR 2's held-child parent-response gate. Never infer days-long productivity from these workflow cases.
+
+Combined test and mutation evidence at `915601da`:
+
+- The [hosted validation run](https://github.com/netclaw-dev/netclaw/actions/runs/38028265716) passes all three platform test jobs.
+- Linux reports 768 Configuration passes and 2,164 CLI passes without skips.
+- Linux reports 5,970 Actors passes with 40 skips, and 1,397 Daemon passes with 39 skips.
+- Named focused proof remains historical with reviewed source equality. Current assembly summaries do not list each successful test.
+- All four mutation groups pass below 25 minutes. All fourteen existing gates execute once.
+- Selected outcomes total 604 Killed, two Timeout, and zero Survived. Both timeouts affect `CollapseDotSegments` nontermination mutations.
+- The unchanged gate script accepts those timeout dispositions. This evidence does not prove 606 assertion failures.
+- This PR changes no authorization owner or policy gate. The scope review requires no additional mutation target.
+- These test and mutation results do not complete task 6.11 or any model gate.
+
+Traceability reconciliation after `915601da`:
+
+- The three active packages retain their PRD mappings and use the canonical plan.
+- The plan now names the settled FR-017 requirement. The first package now links the same canonical plan.
+- The package link audit resolves all local links and the current approval-prompt glossary anchor.
+- Six architecture code links predate this PR. They remain separate defects outside this reconciliation.
