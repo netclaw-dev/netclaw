@@ -16,7 +16,7 @@ from child_run_evals import (require_observed_rejections, REQUIRED_RATIONALE_ERR
                              is_unexecuted_rationale_rejection, require, validate_prompt_receipt)
 from coordination_artifact_evals import load_json, occurrences
 from coordination_implement_review_evals import (paired_call_occurrences, paired_calls, project_declarations,
-                                                reads_after_terminal, signature)
+                                                reads_after_terminal, signature, spawn_argument)
 from coordination_stale_incomplete_evals import full_read
 
 CASE = "coordination_conflicting_evidence"
@@ -176,7 +176,7 @@ def verify(setup, receipt, events, requests, home):
     require(len(receipt["verified_deliveries"]) == 2, "Both analyst terminals must be verified.")
     candidates = []
     for start in starts:
-        require(str(start["arguments"].get("Agent", "")).casefold() == "code-analyst", "The report lacks the canonical analyst profile.")
+        require(str(spawn_argument(start["arguments"], "Agent")).casefold() == "code-analyst", "The report lacks the canonical analyst profile.")
         accepted = acceptance(start["result"])
         require(accepted["run_id"] not in {a["run_id"] for a in accepted_runs}, "One child run cannot prove both independent sources.")
         accepted_runs.append(accepted)
@@ -197,7 +197,7 @@ def verify(setup, receipt, events, requests, home):
         require(accepted["run_id"] not in used_runs, "One analyst cannot write both independent reports.")
         used_runs.add(accepted["run_id"])
         required = [setup["nonce"], setup["source_revision"], setup["root"], setup["manifest"], row["input"], row["output"]]
-        assignment = start["arguments"].get("Task", "") + "\n" + (start["arguments"].get("Context") or "")
+        assignment = spawn_argument(start["arguments"], "Task") + "\n" + (spawn_argument(start["arguments"], "Context") or "")
         require(all(value in assignment for value in required), "The analyst start omits its exact evidence scope.")
         require(any(all(value in "\n".join(message_text(m.get("content")) for m in r["messages"] if m.get("role") == "user")
                         for value in required) for r in children), "The attributed analyst context differs from its accepted task.")

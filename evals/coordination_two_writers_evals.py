@@ -15,7 +15,7 @@ from child_run_evals import (REQUIRED_RATIONALE_ERROR, acceptance, actual_file, 
                              is_unexecuted_rationale_rejection, legacy_observer_mode, pair_matches, require, require_observed_rejections, validate_prompt_receipt)
 from coordination_artifact_evals import load_json, occurrences
 from coordination_implement_review_evals import (FIXTURE, checkout_snapshot, paired_call_occurrences, paired_calls,
-                                                project_declarations, sha, signature)
+                                                project_declarations, sha, signature, spawn_argument)
 from coordination_negative_evals import provider_arguments
 
 CASE = "coordination_two_writers"
@@ -363,9 +363,9 @@ def verify(setup, receipt, events, requests, home, check_candidate):
     terminals, attributed, final = set(), set(), []
     for writer, row in setup["writers"].items():
         start, run, terminal_id, terminal, child_requests = runs_by_writer[writer]
-        require(str(start["arguments"].get("Agent", "")).casefold() == "task-worker", "A writer uses the wrong actual profile.")
+        require(str(spawn_argument(start["arguments"], "Agent")).casefold() == "task-worker", "A writer uses the wrong actual profile.")
         required = [setup["nonce"], row["root"], row["source"], row["report"], setup["base_commit"], commands(setup, writer)["check"]]
-        assignment = start["arguments"].get("Task", "") + "\n" + (start["arguments"].get("Context") or "")
+        assignment = spawn_argument(start["arguments"], "Task") + "\n" + (spawn_argument(start["arguments"], "Context") or "")
         require(all(value in assignment for value in required), "A writer start lacks its exact original task scope.")
         terminals.add(terminal_id)
         require(child_requests and terminal["log_path"] not in attributed, "The writer provider context is absent or shared.")

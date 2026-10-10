@@ -74,6 +74,106 @@ def remove_pair(request, identifier):
 
 
 class ProductiveParentChildControls(unittest.TestCase):
+
+    def change_spawn_fields(self, args, change):
+        identifiers = set()
+        for event in args[2]:
+            dto = event["output"]
+            if dto["Type"] == "tool_call" and dto.get("ToolName") == "spawn_agent":
+                identifiers.add(dto["CallId"])
+                dto["ArgumentsJson"] = json.dumps(change(json.loads(dto["ArgumentsJson"])))
+        for request in args[3]:
+            for message in request["messages"]:
+                for call in message.get("tool_calls", []):
+                    function = call["function"]
+                    if call["id"] in identifiers:
+                        function["arguments"] = json.dumps(change(json.loads(function["arguments"])))
+        args[1]["calls"] = observer_calls(args[2])
+
+    def spawn_fields(self, spellings):
+        args = copy.deepcopy(self.args)
+        def change(value):
+            task = original = value.pop("Task")
+            task = args[0]["child_output"]
+            context = original.replace(task, "")
+            value[spellings[0]] = value.pop("Agent")
+            value[spellings[1]] = task
+            value[spellings[2]] = context
+            return value
+        self.change_spawn_fields(args, change)
+        return args
+
+    def test_spawn_aliases_preserve_complete_verification_and_raw_evidence(self):
+        for spellings in (("agent", "task", "context"), ("aGeNt", "tAsK", "cOnTeXt"),
+                          ("a-g_e.n t", "t-a_s.k", "c-o_n.t e x t"), ("Agent", "task", "Context")):
+            args = self.spawn_fields(spellings)
+            before = copy.deepcopy(args[1:4])
+            with self.subTest(spellings=spellings):
+                self.assertTrue(verify(*args)["passed"])
+                self.assertEqual(before, args[1:4])
+
+    def test_spawn_alias_precedence_preserves_canonical_and_first_matches(self):
+        args = self.spawn_fields(("Agent", "Task", "Context"))
+        self.change_spawn_fields(args, lambda v: {"Tas\u212a": "wrong", **v, "agent": "wrong", "task": "wrong", "context": "wrong"})
+        self.assertTrue(verify(*args)["passed"])
+        args = self.spawn_fields(("aGeNt", "tAsK", "cOnTeXt"))
+        self.change_spawn_fields(args, lambda v: {"a_gent": "wrong", "t_ask": "wrong", "con_text": "wrong", **v})
+        self.assertTrue(verify(*args)["passed"])
+        args = self.spawn_fields(("a_gent", "t_ask", "con_text"))
+        self.change_spawn_fields(args, lambda v: {**v, "a-gent": "wrong", "t-ask": "wrong", "con-text": "wrong"})
+        self.assertTrue(verify(*args)["passed"])
+        for field in ("Agent", "Task", "Context"):
+            args = self.spawn_fields(("agent", "task", "context"))
+            self.change_spawn_fields(args, lambda v: {**v, field: "wrong"})
+            with self.subTest(canonical_field=field), self.assertRaises(AssertionError):
+                verify(*args)
+        for field in ("agent", "task", "context"):
+            args = self.spawn_fields(("aGeNt", "tAsK", "cOnTeXt"))
+            self.change_spawn_fields(args, lambda v: {field: "wrong", **v})
+            with self.subTest(first_case_match=field), self.assertRaises(AssertionError):
+                verify(*args)
+        for field in ("a-gent", "t-ask", "con-text"):
+            args = self.spawn_fields(("a_gent", "t_ask", "con_text"))
+            self.change_spawn_fields(args, lambda v: {field: "wrong", **v})
+            with self.subTest(first_normalized_match=field), self.assertRaises(AssertionError):
+                verify(*args)
+
+    def test_spawn_unicode_aliases_cannot_replace_required_scope(self):
+        valid = self.spawn_fields(("Agent", "Task", "Context"))
+        self.assertTrue(verify(*valid)["passed"])
+        for alias in ("Tas\u212a", "Ta\u017fk"):
+            args = copy.deepcopy(valid)
+            def rename(value):
+                value[alias] = value.pop("Task")
+                return value
+            self.change_spawn_fields(args, rename)
+            with self.subTest(alias=alias), self.assertRaises(AssertionError):
+                verify(*args)
+            args = copy.deepcopy(valid)
+            self.change_spawn_fields(args, lambda v: {alias: "wrong", **v})
+            with self.subTest(canonical_precedence=alias):
+                self.assertTrue(verify(*args)["passed"])
+
+    def test_lowercase_spawn_keeps_the_terminal_review_barrier(self):
+        args = self.spawn_fields(("agent", "task", "context"))
+        self.assertTrue(verify(*args)["passed"])
+        messages = args[3][0]["messages"]
+        result = next(message for message in messages
+                      if message.get("tool_call_id", "").startswith(("delivery-", "terminal")))
+        messages.remove(result)
+        messages.append(result)
+        with self.assertRaises(AssertionError):
+            verify(*args)
+
+    def test_lowercase_spawn_values_do_not_replace_required_profile_or_scope(self):
+        valid = self.spawn_fields(("agent", "task", "context"))
+        self.assertTrue(verify(*valid)["passed"])
+        for field in ("agent", "task", "context"):
+            args = copy.deepcopy(valid)
+            self.change_spawn_fields(args, lambda v: {**v, field: "wrong"})
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                verify(*args)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="productive-catalog-control-")
         self.addCleanup(self.temp.cleanup)

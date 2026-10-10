@@ -14,6 +14,7 @@ from background_fixture import message_text
 from child_run_evals import (require_observed_rejections, acceptance, actual_file, canonical_pairs, context_paths,
                              evidence_requests, is_unexecuted_rationale_rejection, require, validate_prompt_receipt)
 from coordination_artifact_evals import load_json, occurrences
+from coordination_implement_review_evals import spawn_argument
 
 CASE = "productive_parent_child"
 ROUNDS = {"parent": 65, "child": 35}
@@ -148,7 +149,7 @@ def provider_pairs(requests, setup, owner, child_bytes, terminal_id):
                 require(result.encode() == child_bytes, "The parent provider lacks the complete actual child output.")
                 if terminal_before_call:
                     artifact_reads.add(signature)
-            elif name == "spawn_agent" and "Agent" in args:
+            elif name == "spawn_agent" and spawn_argument(args, "Agent"):
                 starts.add(signature)
             elif name == "set_working_directory":
                 require(result == setup["root"], "A catalog declaration lacks its canonical successful result.")
@@ -181,10 +182,10 @@ def verify(setup, receipt, events, requests, eval_home):
     attempts = [call for call in calls if call["name"] == "spawn_agent"]
     starts = [call for call in attempts if not is_unexecuted_rationale_rejection(call["failure"], call["result"])]
     require(len(starts) == 1 and starts[0]["failure"] is None
-            and str(starts[0]["arguments"].get("Agent", "")).casefold() == "task-worker",
+            and str(spawn_argument(starts[0]["arguments"], "Agent")).casefold() == "task-worker",
             "The catalog requires one actual task-worker start.")
     start = starts[0]
-    task = start["arguments"].get("Task", "") + "\n" + (start["arguments"].get("Context") or "")
+    task = spawn_argument(start["arguments"], "Task") + "\n" + (spawn_argument(start["arguments"], "Context") or "")
     require(all(value in task for value in (setup["nonce"], setup["chains"]["child"][0]["path"], setup["child_output"])),
             "The child assignment lacks its actual catalog scope.")
     accepted = acceptance(start["result"])
