@@ -143,7 +143,7 @@ def verify_observed(receipt, events, requests, skill_directory, observer_input):
     require(seen == expected_pairs, "An actual discovery DTO lacks its exact provider occurrence.")
     loads, resources = [], []
     body = (skill_directory / "SKILL.md").read_bytes().decode("utf-8").split("---", 2)[2].strip()
-    workflow = (skill_directory / RESOURCE).read_bytes().decode("utf-8").rstrip("\n")
+    workflow = (skill_directory / RESOURCE).read_bytes().decode("utf-8")
     for call in calls:
         name, arguments = call["name"], call["arguments"]
         require(name in DISCOVERY_TOOLS, "Discovery uses a forbidden physical tool or action tool.")
