@@ -221,6 +221,66 @@ run_all
                 with self.subTest(fault=index), self.assertRaises(AssertionError):
                     workflow_stages(receipt, events, requests, setup, home)
 
+    def test_shared_runtime_context_selects_one_worker_and_rejects_wrong_or_duplicate_profiles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt, events, requests, setup, home = stage_evidence(Path(directory))
+            for event in (events[0], events[2]):
+                args = json.loads(event["output"]["ArgumentsJson"])
+                args["Context"] = "Runtime artifact paths:\n" + setup["findings_path"] + "\n" + setup["plan_path"]
+                event["output"]["ArgumentsJson"] = json.dumps(args)
+            workflow_stages(receipt, events, requests, setup, home)
+            original = copy.deepcopy(events)
+            args = json.loads(events[2]["output"]["ArgumentsJson"])
+            args["Agent"] = "headless-analyst"
+            events[2]["output"]["ArgumentsJson"] = json.dumps(args)
+            with self.assertRaisesRegex(AssertionError, "distinct assignment"):
+                workflow_stages(receipt, events, requests, setup, home)
+            events = copy.deepcopy(original)
+            duplicate = copy.deepcopy(events[2:])
+            for event in duplicate:
+                event["output"]["CallId"] = "duplicate-worker"
+            events.extend(duplicate)
+            for sequence, event in enumerate(events, 1):
+                event["sequence"] = sequence
+                event["observed_ns"] = sequence
+            with self.assertRaisesRegex(AssertionError, "plan_path"):
+                workflow_stages(receipt, events, requests, setup, home)
+
+    def test_coordination_assertion_retains_each_python_error_despite_outer_stderr_discard(self):
+        function = shell_functions("assert_coordination_analyze_plan")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for failed_stage in ("contract", "artifact"):
+                evidence = root / failed_stage
+                evidence.mkdir()
+                script = function + r'''
+python3() {
+    if [[ "$2" == contract ]]; then
+        echo "contract diagnostic" >&2
+        if [[ "$FAILED_STAGE" == contract ]]; then return 7; fi
+        echo '{}'
+    else
+        echo "artifact diagnostic" >&2
+        return 8
+    fi
+}
+assert_coordination_analyze_plan 2>/dev/null
+'''
+                env = {**os.environ, "CHILD_LAST_EVIDENCE": str(evidence), "FAILED_STAGE": failed_stage,
+                       "REPO_ROOT": str(ROOT), "EVAL_ASSET_ROOT": str(ROOT), "EVAL_HOME": str(root),
+                       "COORDINATION_CASE_EVIDENCE": str(root), "TMPDIR_EVAL": str(root),
+                       "case_name": "coordination_analyze_plan"}
+                result = subprocess.run(["bash", "-eu", "-c", script], env=env, capture_output=True, text=True)
+                with self.subTest(stage=failed_stage):
+                    self.assertEqual(1 if failed_stage == "contract" else 8, result.returncode)
+                    expected = "contract diagnostic\n"
+                    if failed_stage == "artifact":
+                        expected += "artifact diagnostic\n"
+                    diagnostic = evidence / "coordination-assertion.stderr"
+                    self.assertTrue(diagnostic.is_file(), "The case loses its assertion diagnostic.")
+                    self.assertEqual(expected, diagnostic.read_text())
+                    self.assertEqual("", result.stderr)
+
     def test_source_edit_restore_and_unrelated_actions_fail_despite_unchanged_final_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = stage_evidence(Path(directory))

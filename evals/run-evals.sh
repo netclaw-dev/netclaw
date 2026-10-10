@@ -1500,12 +1500,12 @@ assert_coordination_analyze_plan() {
     python3 "$REPO_ROOT/evals/coordination_workflow_evals.py" contract \
         --case "$case_name" --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
         --eval-home "$EVAL_HOME" --setup-directory "$COORDINATION_CASE_EVIDENCE" \
-        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" > "$evidence/coordination-contract.json" || return 1
+        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" > "$evidence/coordination-contract.json" 2> "$evidence/coordination-assertion.stderr" || return 1
     python3 "$REPO_ROOT/evals/coordination_artifact_evals.py" \
         --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
         --eval-home "$EVAL_HOME" --contract "$evidence/coordination-contract.json" \
         --receipt "$evidence/observer-receipt.json" --events "$evidence/session-output.jsonl" \
-        > "$evidence/coordination-verdict.json"
+        > "$evidence/coordination-verdict.json" 2>> "$evidence/coordination-assertion.stderr"
 }
 
 assert_coordination_attachment_blocked() {
