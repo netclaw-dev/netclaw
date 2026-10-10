@@ -30,12 +30,19 @@
 
 ## 4. Operator procedure and rollout documents
 
-- [ ] 4.1 Document the canonical release asset install procedure. Verify its absent-file example changes no unrelated identity or configuration file.
-- [ ] 4.2 Document reviewed updates and path conflicts. Verify examples preserve existing files and stop for symbolic links or directories.
+- [x] 4.1 Document the canonical release asset install procedure. Verify its absent-file example changes no unrelated identity or configuration file.
+- [x] 4.2 Document reviewed updates and path conflicts. Verify examples preserve existing files and stop for symbolic links or directories.
 - [x] 4.3 Update `netclaw-operations` and its version. Verify operator diagnostics remain distinct from logical runtime skill access.
 - [x] 4.4 Update the subagent runbook for the fourth new-install profile. Verify it describes existing-deployment installation without a new command.
 - [x] 4.5 Add the coordination feature to the system-skill sync map. Verify version updates match the actual skill changes.
 - [x] 4.6 Document binary bundle rollout and rollback. Verify no procedure requires local legacy manifest generation or automatic operator file replacement.
+
+Operator procedure evidence:
+
+- Seven disposable walkthroughs pass for installation, file preservation, reviewed updates, and four path conflict cases.
+- Three actual profile-loader checks verify the installed asset, preserved custom profile, and reviewed update. All unrelated files retain exact bytes.
+- The asset matches the embedded resource and native producer. All owned temporary paths are absent; the compiled closure remains unchanged.
+- These checks prove the documented operator procedure. They do not prove automatic installer refusal, a deployed release update, or live-session refresh.
 
 ## 5. Deterministic proof and adversarial controls
 
