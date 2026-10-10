@@ -430,6 +430,93 @@ class ImplementReviewControls(unittest.TestCase):
         args[3].append(copy.deepcopy(args[3][0]))
         self.assertTrue(verify(*args)["passed"])
 
+    def test_actual_prepared_coding_prompt_reaches_run_prompt_without_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"; fake_bin.mkdir()
+            docker = fake_bin / "docker"
+            docker.write_text('''#!/usr/bin/env python3
+import os,subprocess,sys
+assert sys.argv[1:]==['exec','-i','--user','netclaw','owned-control','bash','-s'],sys.argv
+script=sys.stdin.read().replace('/home/netclaw/.netclaw/',os.environ['EVAL_HOME']+'/data/')
+raise SystemExit(subprocess.run(['bash','-s'],input=script,text=True).returncode)
+''')
+            docker.chmod(0o755)
+            script = shell_functions("setup_coordination_implement_review", "run_case", "run_all") + r'''
+print_category() { :; }; end_category() { :; }; run_multi_turn_case() { :; }
+check_daemon_alive() { :; }
+pick_variant() { printf '%s' "$1"; }
+run_prompt() { printf '%s' "$1" > "$CAPTURE"; printf '%s' "$2" > "$CAPTURE.format"; }
+assert_coordination_implement_review() { return 0; }
+store_result() { :; }; store_metrics() { :; }
+CATEGORY_SKIPPED=false; CATEGORY_CASES=0; TOTAL_CASES=0
+CATEGORY_PASSED=0; PASSED_CASES=0; FAILED_CASES=0
+RUNS=1; THRESHOLD=1; FILTER_CATEGORY=""
+run_all
+'''
+            env = {**os.environ, "FILTER_CASE": CASE, "REPO_ROOT": str(ROOT), "EVAL_HOME": str(root / "home"),
+                   "TMPDIR_EVAL": str(root / "temporary"), "CAPTURE": str(root / "actual-prompt"),
+                   "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"], "EVAL_CONTAINER_NAME": "owned-control",
+                   "PYTHONDONTWRITEBYTECODE": "1"}
+            result = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            setup = json.loads((root / "temporary/child-runs/implement-review-case/setup.json").read_text())
+            expected = prompt(setup).encode()
+            actual = (root / "actual-prompt").read_bytes()
+            self.assertEqual(expected, actual)
+            self.assertIn(commands(setup)["commit"].encode(), actual)
+            self.assertEqual(b"json", (root / "actual-prompt.format").read_bytes())
+
+    def test_single_prompt_replacements_preserve_literal_ampersands_and_newlines(self):
+        variables = {"MANAGED_WORKTREE_BRANCH": "MANAGED_WORKTREE_BRANCH", "CYCLE_PROMPT": "CYCLE_PROMPT",
+                     "EVAL_REMINDER_TARGET": "EVAL_REMINDER_TARGET", "COORDINATION_PROMPT": "COORDINATION_PROMPT",
+                     "PRODUCTIVE_PROMPT": "PRODUCTIVE_PROMPT", "IMPLEMENT_REVIEW_PROMPT": "IMPLEMENT_REVIEW_PROMPT",
+                     "REPORT_REVIEW_PROMPT": "REPORT_REVIEW_PROMPT", "CONFLICT_REVIEW_PROMPT": "CONFLICT_REVIEW_PROMPT"}
+        script = shell_functions("run_case") + r'''
+check_daemon_alive() { :; }; pick_variant() { printf '%s' "$1"; }
+run_prompt() { printf '%s' "$1" > "$CAPTURE"; }
+assert_literal_control() { return 0; }; store_result() { :; }; store_metrics() { :; }
+CATEGORY_SKIPPED=false; FILTER_CASE=literal_control; RUNS=1; THRESHOLD=1
+CATEGORY_CASES=0; TOTAL_CASES=0; CATEGORY_PASSED=0; PASSED_CASES=0; FAILED_CASES=0
+run_case literal_control 'literal value' "$TEMPLATE"
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for token, variable in variables.items():
+                for value in ("ordinary value", 'alpha & beta && gamma\n/neutral/a&b "quoted" $literal `unexecuted`\n'):
+                    with self.subTest(token=token, value=value):
+                        env = {**os.environ, **{name: "" for name in variables.values()}, variable: value,
+                               "CAPTURE": str(root / "prompt"), "TEMPLATE": "before {{" + token + "}} after"}
+                        result = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+                        self.assertEqual(0, result.returncode, result.stderr)
+                        self.assertEqual(("before " + value + " after").encode(), (root / "prompt").read_bytes())
+
+    def test_multi_turn_path_replacements_preserve_literal_values(self):
+        variables = {"FIRST_WORKTREE": "CODING_CONTEXT_FIRST_WORKTREE", "SECOND_WORKTREE": "CODING_CONTEXT_SECOND_WORKTREE",
+                     "TARGET_BRANCH": "CODING_CONTEXT_TARGET_BRANCH", "TARGET_FILE": "CODING_CONTEXT_TARGET_FILE",
+                     "DIRECT_ATTACHMENT_SOURCE": "DIRECT_ATTACHMENT_SOURCE_PATH"}
+        script = shell_functions("run_multi_turn_case") + r'''
+check_daemon_alive() { :; }
+run_prompt_resume() { printf '%s' "$2" > "$CAPTURE.$4"; printf '%s' "$3" > "$CAPTURE.format"; }
+assert_literal_control() { return 0; }; store_result() { :; }; store_metrics() { :; }
+CATEGORY_SKIPPED=false; FILTER_CASE=literal_control; RUNS=1; THRESHOLD=1
+CATEGORY_CASES=0; TOTAL_CASES=0; CATEGORY_PASSED=0; PASSED_CASES=0; FAILED_CASES=0
+run_multi_turn_case --json literal_control 'literal paths' "$TEMPLATE" "second $TEMPLATE"
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for token, variable in variables.items():
+                for value in ("/neutral/path", "/neutral/a&b\nchild&&literal"):
+                    with self.subTest(token=token, value=value):
+                        env = {**os.environ, **{name: "" for name in variables.values()}, variable: value,
+                               "CAPTURE": str(root / "prompt"), "TEMPLATE": "before {{" + token + "}} after"}
+                        result = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+                        self.assertEqual(0, result.returncode, result.stderr)
+                        expected = "before " + value + " after"
+                        self.assertEqual(expected.encode(), (root / "prompt.1").read_bytes())
+                        self.assertEqual(("second " + expected).encode(), (root / "prompt.2").read_bytes())
+                        self.assertEqual(b"json", (root / "prompt.format").read_bytes())
+
     def test_actual_case_selection_uses_collect_and_excludes_default(self):
         self.assertEqual("collect", legacy_observer_mode(CASE, 1))
         functions = shell_functions("child_result_consumer", "run_all")
