@@ -82,12 +82,12 @@ Preparation evidence:
 
 - [x] 7.1 Extend the existing background relay with explicit parent/child request IDs and barriers; verify setup/sidecar calls cannot consume child script stages.
 - [ ] 7.2 Add targeted Subagents and background cases for acceptance, routed starts, controls, cancellation, prompts, and recovery; verify actual dispatch and artifact evidence.
-- [ ] 7.3 Preserve queued-grant revocation, shell lifecycle, and PR 1 long-task controls; verify the combined candidate passes those unchanged boundaries.
+- [x] 7.3 Preserve queued-grant revocation, shell lifecycle, and PR 1 long-task controls; verify the combined candidate passes those unchanged boundaries.
 - [x] 7.4 Hold several accepted child requests. Verify independent parent dispatch and locally responsive status/cancel without provider-capacity coordination.
 - [x] 7.5 Hold a child on the selected real backend that accepts concurrent requests. Verify a parent reply before child release in five critical-case trials.
 - [x] 7.6 Make provider output ignore cancellation or never finish; verify framework settlement without another model response and report remote-computation limits.
 - [x] 7.7 Demonstrate rejection of duplicate start, early terminal acknowledgement, late dispatch, stale approval prompt, and delivery-reset mutants in isolation.
-- [ ] 7.8 Keep any new focused mutation target narrow and inside the documented CI budget; verify expected mutants execute and none survives.
+- [x] 7.8 Keep any new focused mutation target narrow and inside the documented CI budget; verify expected mutants execute and none survives.
 - [ ] 7.9 Require an independent verifier to inspect integrated results and assertions; verify no skipped cases, weakened gates, or author-only pass claims remain.
 
 Bounded relay and response-order evidence:
@@ -99,6 +99,19 @@ Bounded relay and response-order evidence:
 - Full strict results remain pass, fail, pass, pass, pass. The second trial fails the later artifact-response check.
 - Recorder completion follows downstream writes. These observations prove no independent upstream EOF time or simultaneous GPU work.
 - This closes tasks 7.1 and 7.5 only. Full critical-case acceptance remains open, and every original verdict stays unchanged.
+
+Combined boundary and mutation evidence at `153d9223`:
+
+- All three hosted platform test jobs pass. Their actual merge checkout has the exact combined source tree.
+- The included controls preserve revoked queued grants, shell approval lifecycle, session-owned reap, and the prior long-task assertions.
+- The long-task controls require actual file effects after 65 parent steps and 35 child steps.
+- Hosted logs report assembly totals and skips. They supply no separate named pass counts for these controls.
+- All fourteen mutation gates execute once. All six expected task-adoption and child-authority mutants have `Killed` status.
+- The narrow gate discovers thirteen adoption tests and one child-authority test. No expected target survives, times out, or disappears.
+- The four groups finish in 16m51s, 23m14s, 15m11s, and 21m01s. Each stays below the 25-minute limit.
+- The `8aba7cb1` assignment group also passes in 24m52s. Its margin is eight seconds.
+- Two unrelated shell-config-read mutations retain their timeout dispositions. They supply no assertion-kill claim for this gate.
+- Independent review approves tasks 7.3 and 7.8. These checks prove no detector activation, days-long productivity, or full model acceptance.
 
 ## 8. Docs, operational guidance, and handoff
 
