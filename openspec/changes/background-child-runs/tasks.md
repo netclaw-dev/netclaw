@@ -160,8 +160,19 @@ Live child-adoption regression at `f6685d5f`:
 - [x] 8.4 Update `subagent-authoring` and `netclaw-operations` versions; verify instructions advertise no deferred messages or restored tool ceilings.
 - [x] 8.5 Run targeted identity/tool/skill evals for those changed instructions; verify selected resource and control receipts satisfy the actual task.
 - [ ] 8.6 Run applicable builds, required tests, Slopwatch, and copyright-header verification; retain exact candidate and meaningful test counts.
-- [ ] 8.7 Validate the OpenSpec change strictly and sync implemented deltas through the appropriate skill; verify the PRD and active plan trace to the final contract.
+- [x] 8.7 Validate the OpenSpec change strictly and sync implemented deltas through the appropriate skill; verify the PRD and active plan trace to the final contract.
 - [x] 8.8 Prepare rollback and evidence handoff for the combined PR; verify no merge, rollout, publication, or database replacement is implied by local passes.
+
+Contract reconciliation at `94c63470`:
+
+- All three active changes pass strict validation. The ordered sync audit covers 15 delta files and 11 canonical capabilities.
+- Independent review verifies 50 final requirements and 209 scenarios. The dependency order preserves durable child acknowledgement and the canonical child-consumption window.
+- The obsolete approval iteration-limit clause is corrected. The complete delta retains the other three approval scenarios unchanged.
+- FR-017 and the active plan describe accepted runs, original authority, independent parent requests, controls, cancellation evidence, approval lifetime, and explicit restart loss.
+- The proposal links the other owner-session, output, policy, and schedule requirements to their existing PRDs.
+- Independent receipt SHA is `a842a428c3e3e92da16c97a5e487f43553befc30c196d0e014b48ddec7aee072`. Root verifies all 32 source document pins.
+- This closes task 8.7 only. Tasks 7.9 and 8.6 remain open, along with broader model, private replay, shadow, and holdout gates.
+- No archive, merge, rollout, live publication, or database operation follows from this document proof.
 
 Rollback instructions and evidence handoff at `a3488e95`:
 
