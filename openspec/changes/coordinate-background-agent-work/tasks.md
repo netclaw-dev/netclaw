@@ -72,7 +72,7 @@ Operator procedure evidence:
 - [x] 5.7 Supply conflicting analyst reports and failed environment checks. Verify explicit uncertainty instead of majority acceptance or repair claims.
 - [x] 5.8 Use a dirty source checkout and two writer requests. Verify isolated scopes or serialized writes without cleanup or shared-write assumptions.
 - [x] 5.9 Use a blocked attachment receipt. Verify the parent reports a delivery limit and never claims the file reached the user.
-- [ ] 5.10 Pair each adversarial fixture with a valid task. Verify controls allow completed plans, current revisions, and permitted artifact delivery.
+- [x] 5.10 Pair each adversarial fixture with a valid task. Verify controls allow completed plans, current revisions, and permitted artifact delivery.
 
 Scripted workflow evidence at `8a57fbf5`:
 
@@ -125,6 +125,14 @@ Scripted attachment evidence at `728f232e`:
 - This closes task 5.9 only. The permitted case supplies one subcontrol for task 5.10; that aggregate task remains open.
 - These scripts prove no model judgment, remote upload, user receipt, or independent parent work while a child remains active.
 
+Aggregate paired-fixture review at `f48e9fbe`:
+
+- Independent review maps each task 5.4–5.9 to an actual valid task and meaningful adverse controls.
+- The positive cases allow complete plans, current candidate revisions, and an attributed permitted File DTO with exact plan bytes.
+- Review SHA `ff41e8796289b7261cb7b0d70ab1188df73980459697788116620ab33ddfd86c` binds the source, receipt map, and separate fault evidence.
+- This closes task 5.10's paired-fixture criterion. Earlier per-task notes retain their historical aggregate-open state before this separate review.
+- Historical runtime identities and false verdicts remain unchanged. No guide 1.0.3 model acceptance, remote user receipt, or five-trial acceptance follows.
+
 ## 6. Targeted model and native init gates
 
 - [x] 6.1 Add a skill discovery case for substantial code work without an explicit child request. Verify canonical load and selected resource receipts.
@@ -173,6 +181,35 @@ Coordination guide 1.0.3 evidence after `0da400bb`:
 - The guide receives no model-compliance credit before a fresh daemon producer embeds version 1.0.3 and the relevant observation runs.
 - This note closes no additional task. All broader model gates remain open.
 
+Fresh guide 1.0.3 observation at `f48e9fbe`:
+
+- The first fresh code-workflow trial remains false. The observer reaches its 300-second deadline with zero completed turns and zero accepted children.
+- The actual model input includes guide 1.0.3, its current workflow resource, both required profiles, and the deferred tool instructions.
+- Two successful parent commands violate the task's exact command list before the deadline. A longer deadline cannot correct those violations.
+- One parent provider request takes 178.086 seconds. The next takes 81.557 seconds and completes after the observer cutoff.
+- A concurrent request serves memory distillation. It is not a child request. The capture shows no guard refusal or child adoption.
+- Independent review SHA `d3950787ceff6481d998c1eefaf1904fded82c71bd88bed7d84fe28c1945b5a1` binds the failure, command pairs, current guide, and provider intervals.
+- All 73 archived artifact hashes match. The source freeze and actual teardown pass. The remaining four code-workflow trials do not start.
+- The failure justifies no runtime or oracle change. A narrow workflow clarification can condition preparation on permitted commands and supplied workspaces.
+- This observation closes no task and supplies no model-compliance credit. Every original false result remains unchanged.
+
+Coordination guide 1.0.4 clarification after `f48e9fbe`:
+
+- The code workflow now uses supplied checkout state and worktrees. Missing facts and workspace preparation require task-permitted commands.
+- The parent reports a constraint when no permitted tool can obtain a required fact. The extra-command restriction remains conditional on an exact list.
+- Existing supplied operators and ordinary authorized workflows remain permitted. The eval prompt, oracle, and runtime behavior remain unchanged.
+- Both rebuilt embedded loader and dispatcher tests pass without skips. Slopwatch, copyright headers, and whitespace checks pass.
+- Independent review SHA `9458fb1b2b85bfd90b183e870cdee474ab0862cf1264f5c6c97d0e06aa6255cc` binds the final patch, actual tests, and executed embedded resource bytes.
+- The original guide already states exact command limits. This clarification supplies no proven model cure or new model acceptance.
+
+Fresh analyze-plan observation at `f48e9fbe`:
+
+- The first trial remains false. The observer finishes before its 900-second deadline; no instrumentation error occurs.
+- The parent resumes after the analyst result and starts the plan worker. Independent failure diagnosis remains pending.
+- All 265 indexed archive hashes match. The full source freeze and actual resource teardown pass.
+- Actual receipt SHA `7e1bff9c64180d2958d8be7433f0fa86c3966f88b9d6265b718e66e044a3957a` preserves this result. The remaining four trials do not start.
+- This observation closes no model gate. Its runtime contains guide 1.0.3, not the later 1.0.4 clarification.
+
 ## 7. Review and completion evidence
 
 - [x] 7.1 Run the required focused .NET tests after implementation. Verify discovery and pass counts for changed seed, loader, routing, and skill boundaries.
@@ -181,6 +218,12 @@ Coordination guide 1.0.3 evidence after `0da400bb`:
 - [ ] 7.4 Run strict OpenSpec validation and implementation verification. Verify each requirement links to current source and claim-specific evidence.
 - [ ] 7.5 Report implementation, deterministic proof, model evals, native smoke, CI, rollout, and user delivery as separate states.
 - [x] 7.6 Retain PR 2's held-child parent-response gate. Never infer days-long productivity from these workflow cases.
+
+Hosted checks at `f48e9fbe`:
+
+- All 29 hosted checks pass for this exact head. Both native smoke logs report 29 tapes and 10 scenarios passed.
+- These checks precede the later specification repair and guide 1.0.4. They do not establish hosted acceptance for a later stack head.
+- Hosted success supplies no model-workflow acceptance, merge, release, or deployment proof.
 
 Combined test and mutation evidence at `915601da`:
 

@@ -8,8 +8,8 @@ An exact list permits its own operators. Do not combine separate listed commands
 When no exact list exists, use the authorized tools that the workflow requires.
 
 1. Record the accepted behavior, source revision, preserved behavior, and required checks.
-2. Inspect the operator checkout state without changes.
-3. Prepare an authorized isolated worktree with existing git and shell tools when source edits need isolation.
+2. Use the supplied checkout state. Inspect missing state only through task-permitted commands and without changes.
+3. Reuse supplied worktrees. If isolation is absent, prepare an authorized worktree only through task-permitted commands.
 4. Assign one available `task-worker` the implementation scope, permitted files, worktree, and acceptance checks.
 5. Give the worker a distinct report path for patch details, test evidence, known effects, and incomplete work.
 6. Start other writers only in separate authorized worktrees with distinct scope.
@@ -22,6 +22,8 @@ When no exact list exists, use the authorized tools that the workflow requires.
 13. Check the patch before integration through the existing authorized repository workflow.
 14. Report code changes, local checks, model evals, CI, and release state separately.
 
+If no permitted tool can obtain a required fact, report that constraint.
+If the task supplies an exact command list, do not add shell commands.
 Preserve dirty operator checkout changes. Do not reset or stash them to prepare the task.
 If isolation is unavailable, serialize permitted edits or report the constraint.
 The reviewer must not edit the candidate patch.
