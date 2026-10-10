@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.0.4"
+  version: "1.0.5"
 ---
 
 # Agent Coordination
@@ -48,6 +48,7 @@ Give each child:
 - The acceptance checks and required evidence.
 - The facts and constraints that the child must not infer.
 
+Copy the supplied source identity unchanged into the child assignment, including its type or algorithm prefix.
 When a child must use a template, give its exact fields and columns through `Task` or `Context`.
 Alternatively, require the child to load that exact canonical skill resource through `skill_read_resource`.
 Name the skill and resource explicitly. Load only the resources that the assigned task needs.

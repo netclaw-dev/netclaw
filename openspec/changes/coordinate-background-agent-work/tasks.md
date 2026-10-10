@@ -205,10 +205,27 @@ Coordination guide 1.0.4 clarification after `f48e9fbe`:
 Fresh analyze-plan observation at `f48e9fbe`:
 
 - The first trial remains false. The observer finishes before its 900-second deadline; no instrumentation error occurs.
-- The parent resumes after the analyst result and starts the plan worker. Independent failure diagnosis remains pending.
+- Both children complete. The parent consumes their results, reads both complete artifacts, and attaches the exact plan bytes.
 - All 265 indexed archive hashes match. The full source freeze and actual resource teardown pass.
 - Actual receipt SHA `7e1bff9c64180d2958d8be7433f0fa86c3966f88b9d6265b718e66e044a3957a` preserves this result. The remaining four trials do not start.
 - This observation closes no model gate. Its runtime contains guide 1.0.3, not the later 1.0.4 clarification.
+
+Independent analyze-plan diagnosis after `f48e9fbe`:
+
+- The original prompt supplies a source identity with a `sha256:` prefix. Both parent child assignments omit that prefix.
+- Both artifacts copy the altered identity. The exact source-identity check fails before later artifact checks.
+- The parent also transfers table columns as bullet rows. The findings artifact retains those rows instead of the required Markdown tables.
+- Repeated status polls receive guard corrections. Both children still complete, and the parent resumes after each result.
+- Independent review SHA `1930925b1820cba004a5ed888e89c3db2b91853c1fdc53b2630f46db24b34c99` binds the actual source, tool pairs, artifact bytes, and delivery.
+- No timeout, observer failure, parser fault, or transport failure explains the first artifact assertion. The original false verdict remains unchanged.
+
+Coordination guide 1.0.5 transfer clarification:
+
+- The parent must copy the supplied source identity unchanged into the child assignment, including its type or algorithm prefix.
+- Both rebuilt embedded loader and dispatcher tests pass without skips. Slopwatch, copyright headers, and whitespace checks pass.
+- Independent review SHA `03542987e23b2a1378e0a43486954c830ac1b359394bfaa398625e9fc3241870` binds the exact delta and executed embedded resource bytes.
+- The prior guide 1.0.4 proof and all original analyze and code trial files remain exact.
+- This instruction change supplies no model-cure proof. It changes no eval prompt, oracle, policy, threshold, or deadline.
 
 ## 7. Review and completion evidence
 
