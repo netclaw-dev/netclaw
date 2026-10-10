@@ -288,6 +288,8 @@ public partial class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, _clientProvider.Main.CallCount);
+        await _clientProvider.Compaction.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Assert.Equal(1, _clientProvider.Compaction.CallCount);
         Assert.False(childRelease.Task.IsCompleted);
         childRelease.TrySetResult();
