@@ -1018,7 +1018,7 @@ check_daemon_alive() {
 
 child_result_consumer() {
     case "${case_name:-$FILTER_CASE}" in
-        skill_coordination_discovery) [[ "$FILTER_CASE" == skill_coordination_discovery ]] ;;
+        skill_coordination_discovery|skill_activation_subagent_authoring) [[ "$FILTER_CASE" == "${case_name:-$FILTER_CASE}" ]] ;;
         subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff|coordination_analyze_plan|coordination_attachment_blocked|productive_parent_child|coordination_implement_review|coordination_stale_incomplete|coordination_conflicting_evidence|coordination_two_writers) return 0 ;;
         *) return 1 ;;
     esac
@@ -1739,6 +1739,13 @@ assert_skill_activation_run_reminder() {
 }
 
 assert_skill_activation_subagent_authoring() {
+    if [[ "$FILTER_CASE" == skill_activation_subagent_authoring ]]; then
+        local evidence="${CHILD_LAST_EVIDENCE:?The current author-guide evidence path is absent.}"
+        python3 "$REPO_ROOT/evals/subagent_authoring_evals.py" verify "$evidence" \
+            "$TMPDIR_EVAL/child-runs/relay" "$EVAL_ASSET_ROOT/feeds/skills/.system/files" \
+            > "$evidence/author-guide-verdict.json" 2> "$evidence/author-guide-assertion.stderr"
+        return $?
+    fi
     daemon_log_skill_loaded_via_skill_tool 'subagent-authoring' \
         && stdout_no_skill_file_read_called
 }
@@ -3293,7 +3300,11 @@ run_case() {
     local run
     for ((run = 1; run <= RUNS; run++)); do
         local prompt
-        prompt=$(pick_variant "${prompts[@]}")
+        if [[ "$FILTER_CASE" == skill_activation_subagent_authoring && "$case_name" == "$FILTER_CASE" ]]; then
+            prompt="${prompts[0]}"
+        else
+            prompt=$(pick_variant "${prompts[@]}")
+        fi
 
         local setup_fn="setup_${case_name}"
         if declare -f "$setup_fn" >/dev/null 2>&1; then
@@ -3486,10 +3497,17 @@ run_all() {
         "Run the disk-cleanup-weekly reminder once here before it fires on its schedule." \
         "I want to try the weekly cleanup reminder and save approvals for it."
 
+    if [[ "$FILTER_CASE" == skill_activation_subagent_authoring ]]; then
+        local author_prompt
+        author_prompt=$(python3 "$REPO_ROOT/evals/subagent_authoring_evals.py" prompt)
+        author_prompt+=$'\n'
+        run_case --json skill_activation_subagent_authoring "uses the current author guide and background contract" "$author_prompt"
+    else
     run_case skill_activation_subagent_authoring "skill loaded" \
         "How do I create a custom subagent in Netclaw?" \
         "Walk me through authoring a new file-based subagent." \
         "What goes in a Netclaw agent definition file?"
+    fi
 
     # User skills (non-system, loaded from eval fixtures)
     run_case skill_activation_user_coding "skill loaded" \

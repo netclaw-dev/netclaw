@@ -96,10 +96,10 @@ def verify(envelope, log, skill_directory):
                for load in accepted for resource in accepted)
 
 
-def verify_observed(receipt, events, requests, skill_directory, observer_input):
+def observed_explanation_calls(receipt, events, requests, observer_input):
     """Bind logical discovery to actual DTO occurrences and provider history."""
     validate_prompt_receipt(receipt, observer_input)
-    require(receipt["case"] == "skill_coordination_discovery" and receipt["observer_mode"] == "turn"
+    require(receipt["observer_mode"] == "turn"
             and type(receipt["prompt_ordinal"]) is int and receipt["prompt_ordinal"] == 1
             and type(receipt["completed_turns"]) is int and receipt["completed_turns"] == 1
             and type(receipt["user_inputs"]) is int and receipt["user_inputs"] == 1
@@ -141,6 +141,13 @@ def verify_observed(receipt, events, requests, skill_directory, observer_input):
                     "A provider history lacks a distinct actual discovery occurrence.")
         seen |= current
     require(seen == expected_pairs, "An actual discovery DTO lacks its exact provider occurrence.")
+    return calls
+
+
+def verify_observed(receipt, events, requests, skill_directory, observer_input):
+    """Bind logical discovery to actual DTO occurrences and provider history."""
+    require(receipt["case"] == "skill_coordination_discovery", "Discovery has another case identifier.")
+    calls = observed_explanation_calls(receipt, events, requests, observer_input)
     loads, resources = [], []
     body = (skill_directory / "SKILL.md").read_bytes().decode("utf-8").split("---", 2)[2].strip()
     workflow = (skill_directory / RESOURCE).read_bytes().decode("utf-8")
@@ -172,6 +179,13 @@ def verify_observed(receipt, events, requests, skill_directory, observer_input):
             resources.append(call)
     require(loads and len(resources) == 1 and any(load["result_sequence"] < resources[0]["call_sequence"] for load in loads),
             "Discovery lacks its ordered full skill load and single successful workflow.")
+    observed_explanation_reply(receipt, events)
+    return {"passed": True, "session_id": receipt["session_id"], "calls": len(calls),
+            "rejected_attempts": sum(is_unexecuted_rationale_rejection(c["failure"], c["result"]) for c in calls)}
+
+
+def observed_explanation_reply(receipt, events):
+    """Require the actual visible answer at one completed parent boundary."""
     reply, has_delta, boundaries = [], False, []
     for event in events:
         dto = event["output"]
@@ -190,8 +204,7 @@ def verify_observed(receipt, events, requests, skill_directory, observer_input):
             and events[-1]["output"]["Type"] == "turn_completed"
             and "".join(reply).strip() and "".join(reply) == receipt["last_reply"],
             "Discovery lacks its actual visible answer at the completed parent boundary.")
-    return {"passed": True, "session_id": receipt["session_id"], "calls": len(calls),
-            "rejected_attempts": sum(is_unexecuted_rationale_rejection(c["failure"], c["result"]) for c in calls)}
+    return receipt["last_reply"]
 
 
 if __name__ == "__main__":

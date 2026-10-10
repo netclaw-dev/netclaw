@@ -122,6 +122,29 @@ phrasing — not just one magic prompt.
   `turn_skill_auto_load`, `turn_memory_recall`, and
   `turn_memory_checkpoint_enqueued`.
 
+### Subagent Author Guide Case
+
+An explicit `NETCLAW_EVAL_CASE=skill_activation_subagent_authoring` selection uses one fixed structured prompt.
+The broad suite retains its three general variants and legacy assertion.
+The selected case uses the existing typed `turn` observer and actual provider call/result pairs.
+The oracle requires the full current guide through logical tools and a completed final answer with the current background contract.
+The task permits logical reads only. It forbids child starts, file changes, and shell commands.
+
+Replace the provider placeholders with values that your operator authorizes:
+
+```bash
+NETCLAW_EVAL_PROVIDER_TYPE='<authorized-provider-type>' \
+NETCLAW_EVAL_PROVIDER_ENDPOINT='<authorized-provider-endpoint>' \
+NETCLAW_EVAL_MODEL_ID='<authorized-model-id>' \
+NETCLAW_EVAL_CASE=skill_activation_subagent_authoring \
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 \
+  ./evals/run-evals.sh
+```
+
+The default external observation deadline is 60 seconds.
+This case checks guide use and the contract explanation.
+It does not prove actual cancellation, owner restart, profile installation, or long-task completion.
+
 ### Coordination Discovery Case
 
 `skill_coordination_discovery` asks for an implementation-then-review process without prescribed tool names.
