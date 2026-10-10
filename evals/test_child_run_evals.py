@@ -18,7 +18,7 @@ import urllib.request
 import unittest
 from unittest.mock import patch
 
-from child_run_evals import (CHILD_CONTRACT, ChildFixture, acceptance, actual_file, bind_request,
+from child_run_evals import (CHILD_CONTRACT, REQUIRED_RATIONALE_ERROR, ChildFixture, acceptance, accepted_start_calls, actual_file, bind_request,
                              canonical_pairs, child_handler, committed_positions, consumed_deliveries, collect, legacy_observer_mode, session_logs, validate_prompt_receipt, verified_final_response, verify_child_actions, verify_cli_acceptance, verify_trial, write_completed)
 
 ACCEPTED = {"run_id": "run-neutral", "scope_id": "scope-neutral", "state": "Accepted", "control_tool": "check_agent_run"}
@@ -67,6 +67,40 @@ def logs():
 
 
 class ChildAttributionControls(unittest.TestCase):
+    def test_collect_retains_rejected_attempt_before_two_accepted_children(self):
+        sibling = {**ACCEPTED, "run_id": "run-sibling", "scope_id": "scope-sibling"}
+        rejected = {"id": "rejected", "name": "spawn_agent", "success": False,
+                    "failure_code": "invalid_rationale", "result": REQUIRED_RATIONALE_ERROR}
+        starts = [rejected] + [{"id": identifier, "name": "spawn_agent", "success": True,
+                               "failure_code": None, "result": json.dumps(value)}
+                              for identifier, value in [("start-neutral", ACCEPTED), ("start-sibling", sibling)]]
+        sibling_body = {**terminal(), "run_id": sibling["run_id"], "scope_id": sibling["scope_id"]}
+        sibling_request = parent(sibling_body, "delivery-sibling")
+        sibling_request["messages"][0]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+            {"run_id": sibling["run_id"], "source_operation": "spawn_agent"})
+        receipt = {"session_id": "session-neutral", "accepted_runs": [ACCEPTED, sibling],
+                   "calls": starts, "delivery_observations": {"complete": True}}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"TMPDIR_EVAL": directory, "EVAL_HOME": directory}):
+            with patch("child_run_evals.invoke_observer", return_value=(receipt, "neutral observer output")), \
+                 patch("child_run_evals.evidence_requests", return_value=[parent(), sibling_request]), \
+                 patch("child_run_evals.session_logs", return_value=logs() + "\n" + logs().replace("run-neutral", "run-sibling").replace("delivery-neutral", "delivery-sibling")), \
+                 redirect_stdout(io.StringIO()):
+                collect(1, "neutral task", "session-neutral", "json", directory, "subagent_specialization_precedence", 1)
+            saved = json.loads((Path(directory) / "verified-receipt.json").read_text())
+            self.assertEqual([ACCEPTED, sibling], [row["accepted"] for row in saved["verified_deliveries"]])
+            self.assertEqual(rejected, saved["calls"][0])
+
+    def test_start_classifier_rejects_untrusted_failure_shapes(self):
+        rejected = {"name": "spawn_agent", "success": False, "failure_code": "invalid_rationale",
+                    "result": REQUIRED_RATIONALE_ERROR}
+        self.assertEqual([], accepted_start_calls([rejected]))
+        for changed in [{**rejected, "success": 0}, {**rejected, "success": True},
+                        {**rejected, "failure_code": None}, {**rejected, "failure_code": "unknown_agent"},
+                        {**rejected, "result": REQUIRED_RATIONALE_ERROR + " suffix"},
+                        {**rejected, "result": json.dumps(ACCEPTED)}]:
+            with self.subTest(changed=changed), self.assertRaises((AssertionError, ValueError)):
+                accepted_start_calls([changed])
+
     def test_acceptance_requires_canonical_fields_and_unique_keys(self):
         self.assertEqual(ACCEPTED, acceptance(json.dumps(ACCEPTED)))
         for value in [{**ACCEPTED, "scope_id": " "}, {**ACCEPTED, "state": "Completed"},
@@ -549,6 +583,29 @@ run_multi_turn_case coding_context_worktree_handoff neutral one two three four
 
 
 class TrialOracleControls(unittest.TestCase):
+    def test_repaired_initial_start_preserves_complete_held_and_cancel_flow(self):
+        for cancel in [False, True]:
+            with self.subTest(cancel=cancel), tempfile.TemporaryDirectory() as home:
+                receipt, snapshot = self.sample(home, cancel)
+                rejected = {"id": "rejected-start", "name": "spawn_agent", "arguments": {"Agent": "child-run-worker"},
+                            "result": REQUIRED_RATIONALE_ERROR, "success": False,
+                            "failure_code": "invalid_rationale", "turn": 1}
+                receipt["calls"].insert(0, rejected)
+                self.assertTrue(verify_trial(receipt, [child_after_write(cancel), parent(terminal(cancel))], snapshot,
+                                             logs(), home, "neutral-nonce", cancel)["passed"])
+                self.assertEqual(False, receipt["calls"][0]["success"])
+                for change in [lambda r: r["calls"].pop(1),
+                               lambda r: r["calls"].append(copy.deepcopy(r["calls"][1])),
+                               lambda r: r["calls"][1].update(turn=2),
+                               lambda r: r["calls"][0].update(failure_code="unknown_agent"),
+                               lambda r: r["calls"][0].update(result=REQUIRED_RATIONALE_ERROR + " suffix"),
+                               lambda r: r["calls"][0].update(success=0)]:
+                    changed = copy.deepcopy(receipt)
+                    change(changed)
+                    with self.assertRaises((AssertionError, ValueError)):
+                        verify_trial(changed, [child_after_write(cancel), parent(terminal(cancel))], snapshot,
+                                     logs(), home, "neutral-nonce", cancel)
+
     def sample(self, home, cancel=False):
         for canonical in [PATHS["log_path"], PATHS["artifact_dir"] + ("/partial-neutral-nonce.txt" if cancel else "/complete-neutral-nonce.txt")]:
             path = actual_file(home, canonical)
