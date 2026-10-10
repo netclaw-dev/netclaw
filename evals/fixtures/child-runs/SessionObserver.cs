@@ -79,8 +79,7 @@ internal static class SessionObserver
             }
             else if (input.Mode != "turn")
             {
-                Require(protocol.Acceptance is not null && !string.IsNullOrWhiteSpace(protocol.LastReply),
-                    "The initial parent turn lacks acceptance or a visible reply.");
+                protocol.RequireHeldAcceptance(acceptances.Count);
                 // This acknowledgement proves candidate arrival only. Status binds ownership below.
                 using var candidate = await ControlAsync("child-wait", new { });
                 await SendAsync(input.ProbePrompt.Replace("{{RUN_ID}}", protocol.Acceptance!.RunId, StringComparison.Ordinal));
@@ -211,7 +210,8 @@ internal static class SessionObserver
                 status_bodies = statusBodies, error,
                 calls = calls.Select(call => new
                     { id = call.Id, occurrence = call.Occurrence, observed_ns = call.ObservedNs,
-                        name = call.Name, arguments = call.Arguments, turn = call.Turn, success = call.Success, result = call.Result }),
+                        name = call.Name, arguments = call.Arguments, turn = call.Turn, success = call.Success,
+                        failure_code = call.FailureCode, result = call.Result }),
                 limit = "Post-commit diagnostics, actual provider history, and files require the separate Python oracle."
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
@@ -262,13 +262,15 @@ internal static class SessionObserver
         public JsonElement Arguments { get; } = arguments;
         public string Result { get; set; } = "";
         public bool Success { get; set; }
+        public string? FailureCode { get; private set; }
 
         public JsonElement? CompleteResult(SessionOutputDto output)
         {
             Require(output.Type == SessionOutputTypes.ToolResult && output.CallId == Id && output.ToolName == Name,
                 "The result differs from its attributed call.");
             Result = output.Result ?? "";
-            Success = output.ToolFailureCode is null;
+            FailureCode = output.ToolFailureCode;
+            Success = FailureCode is null;
             if (Name != "check_agent_run" || !Success)
                 return null;
             var status = ParseControlStatus(Result);
