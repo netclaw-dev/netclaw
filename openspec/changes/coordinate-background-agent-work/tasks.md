@@ -13,9 +13,17 @@
 - [x] 2.5 Add `references/implement-review.md`. Verify separate workspaces, one writer per workspace, exact revision review, and parent integration checks.
 - [x] 2.6 Add `references/diagnose-fix-verify.md`. Verify baseline counterexample, candidate revision, independent checks, and environment-failure distinction.
 - [ ] 2.7 Add `assets/findings.md` and `assets/plan.md`. Verify required fields and finding references through representative completed artifacts.
-- [ ] 2.8 Preserve logical resource use and normal spill behavior. Verify no index or skill instruction teaches physical-root derivation.
-- [ ] 2.9 Measure actual wrapped load/resource responses. Verify essential content survives the default inline limit and smaller-limit spill receipts.
+- [x] 2.8 Preserve logical resource use and normal spill behavior. Verify no index or skill instruction teaches physical-root derivation.
+- [x] 2.9 Measure actual wrapped load/resource responses. Verify essential content survives the default inline limit and smaller-limit spill receipts.
 - [x] 2.10 Verify the existing daemon resource wildcard packages all seven files. Inspect the restored binary bundle, not a source-only listing.
+
+Resource proof at `05c28825`:
+
+- Both existing coordination tests pass after an isolated restore and build. No test is skipped; the assembly cleanup guard passes.
+- The real dispatcher preserves all seven complete responses at the default 12,000-character limit.
+- At a 512-character limit, bounded continuations reconstruct each complete response. Foreign-session and Public access checks pass.
+- All seven embedded assets match source bytes. Source review confirms logical access guidance; the selected tests do not assert the full index text.
+- These tests use a no-op content scanner. They do not prove model comprehension or every scanner decision.
 
 ## 3. Runtime route and default worker
 
