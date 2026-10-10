@@ -183,7 +183,8 @@ Owner restart marks unresolved accepted children `Lost` and never recreates them
 The model decides its next action from the recorded evidence. The framework does not automatically retry uncertain effects.
 
 Idle passivation defers live children and pending delivery.
-Explicit stop and coordinated drain cancel children through the bounded closure path.
+`PrepareForDaemonRestart` admits child cancellation and waits for bounded framework finalization before the drain acknowledgement.
+An abrupt actor stop closes live dispatch and requests token cancellation without a durable finalization guarantee.
 The inference backend owns request queues and capacity. Netclaw adds no parent or child slot coordinator.
 
 Positive example: a held child stays live while the parent answers later input, then delivers one attributed result.
