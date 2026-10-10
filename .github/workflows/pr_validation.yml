@@ -320,6 +320,8 @@ jobs:
           python3 -m unittest discover -s evals -p test_init_agent_profiles.py -v
           python3 -m unittest discover -s evals -p test_coordination_artifact_evals.py -v
           python3 -m unittest discover -s evals -p test_coordination_workflow_evals.py -v
+          python3 -m unittest discover -s evals -p test_coordination_negative_evals.py -v
+          python3 -m unittest discover -s evals -p test_productive_parent_child_evals.py -v
           python3 -m unittest discover -s evals -p test_cycle_evals.py -v
           python3 -m unittest discover -s evals -p test_cli_detector_evals.py -v
           python3 -m unittest discover -s evals -p test_spill_steer_evals.py -v

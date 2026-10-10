@@ -684,3 +684,42 @@ The existing Subagents consumers also require an exact case selector and one fre
 Their original project, scope, shell, and artifact assertions remain mandatory.
 The queue-grant and shell lifecycle controls retain their original paths and oracles.
 This source preparation supplies no current model pass or complete background health claim.
+
+### Productive parent and child catalog case
+
+`productive_parent_child` requires 65 useful parent feedback rounds and 35 useful child feedback rounds.
+The case stays outside the default suite. It uses the existing `collect` observer and child relay.
+
+```bash
+NETCLAW_EVAL_CASE=productive_parent_child \
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 \
+NETCLAW_EVAL_TIMEOUT=900 \
+NETCLAW_CHILD_OBSERVER="$PWD/evals/fixtures/child-runs/bin/Release/net10.0/SessionObserver.dll" \
+  ./evals/run-evals.sh
+```
+
+Use the approved provider configuration and frozen image, CLI, and helper.
+Run one fresh invocation for each of the five acceptance trials. Preserve every failed trial.
+The 900-second eval observation deadline permits 100 sequential model feedback rounds.
+It adds no runtime task budget. The existing default harness and operation deadlines remain unchanged.
+
+Each trial creates two neutral catalogs with distinct opaque record paths and values.
+The prompt supplies only each catalog's entry path. Each actual `file_read` result reveals the next path.
+The parent reads 65 records itself. One canonical `task-worker` child reads 35 other records.
+The child writes its exact ordered catalog. The parent reads that complete artifact after attributed terminal delivery.
+The parent then writes the complete combined catalog and reports its actual path and counts.
+The case forbids shell calls, directory scans, source edits, path guesses, and substituted summaries.
+
+The oracle compares source and output bytes, ordered parent DTO pairs, and attributed child provider pairs.
+It requires each next record call after the prior record result. Parallel calls cannot satisfy this gate.
+It retains the accepted run, terminal consumption, journal positions, complete outputs, and assertion diagnostics.
+A full direct text read and a complete `file_write` are required for this narrow case.
+Deterministic controls prove oracle sensitivity. They do not prove live model behavior or general catalog comprehension.
+
+Parent DTO events prove one read occurrence per parent record in the observed session.
+Child captures prove at least 35 distinct useful record feedback rounds and reject repeats within one history.
+Compaction can hide identical child call reuse across captures. This oracle cannot prove one global execution per child record or output write.
+Repeated cumulative captures and completed call-ID reuse across distinct records remain valid.
+
+The assertion archives existing actual outputs before it checks their values. It records missing outputs explicitly and rejects linked paths.
+An observer failure before the assertion can still prevent artifact capture. Retain that instrumentation limit with the failed trial.
