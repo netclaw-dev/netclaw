@@ -670,7 +670,10 @@ def prompts(nonce, cancel):
                "Acknowledge the accepted child immediately with a brief visible reply. Do not wait for its result. "
                "When its later result arrives, read its artifact with file_read and report the actual content. "
                "If the child is cancelled, fully read cancelled-results.json from its confirmed artifact directory. "
-               "Read the confirmed partial artifact. Then check its status once to confirm dispatch closure and the cancelled terminal. "
+               "Read the confirmed partial artifact. For this eval's status API coverage, follow these steps. "
+               "After both file reads, call `check_agent_run` once with the accepted `RunId` and `Cancel: false`. "
+               "Use its actual result to confirm `state: Cancelled`, `cancellation_requested: true`, `dispatch_closed: true`, and the matching terminal. "
+               "Do not substitute the background run index, the report, or a prose claim for this tool call. "
                "Cancellation admission alone does not prove either fact. Local closure does not prove external effects stopped. "
                "Report the actual content and the local cancellation state.")
     probe = ("For accepted child {{RUN_ID}}, inspect its current state and its authorized log path. "
