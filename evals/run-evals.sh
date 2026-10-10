@@ -1512,6 +1512,30 @@ assert_coordination_attachment_blocked() {
     assert_coordination_analyze_plan
 }
 
+setup_coordination_trivial_task() {
+    COORDINATION_CASE_EVIDENCE="$TMPDIR_EVAL/child-runs/coordination-negative"
+    COORDINATION_PROMPT=$(python3 "$REPO_ROOT/evals/coordination_negative_evals.py" prepare \
+        --case "$case_name" --eval-home "$EVAL_HOME" --evidence "$COORDINATION_CASE_EVIDENCE")
+}
+
+setup_coordination_unavailable_profile() {
+    setup_coordination_trivial_task "$1"
+}
+
+assert_coordination_trivial_task() {
+    local headless_log
+    stdout_json_envelope_valid || return 1
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    python3 "$REPO_ROOT/evals/coordination_negative_evals.py" verify \
+        --case "$case_name" --eval-home "$EVAL_HOME" --evidence "$COORDINATION_CASE_EVIDENCE" \
+        --stdout "$STDOUT_FILE" --log "$headless_log" --relay "$TMPDIR_EVAL/child-runs/relay" \
+        > "$COORDINATION_CASE_EVIDENCE/verdict.json" 2> "$COORDINATION_CASE_EVIDENCE/assertion.stderr"
+}
+
+assert_coordination_unavailable_profile() {
+    assert_coordination_trivial_task
+}
+
 assert_skill_device_pairing_procedure() {
     daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
         && stdout_tool_called 'skill_read_resource' \
@@ -3261,6 +3285,10 @@ run_all() {
         run_case --json coordination_analyze_plan "reviews child findings and delivers the complete plan" '{{COORDINATION_PROMPT}}'
     elif [[ "$FILTER_CASE" == coordination_attachment_blocked ]]; then
         run_case --json coordination_attachment_blocked "reviews the plan and retains actual attachment denial" '{{COORDINATION_PROMPT}}'
+    elif [[ "$FILTER_CASE" == coordination_trivial_task ]]; then
+        run_case --json coordination_trivial_task "corrects one typo without a child" '{{COORDINATION_PROMPT}}'
+    elif [[ "$FILTER_CASE" == coordination_unavailable_profile ]]; then
+        run_case --json coordination_unavailable_profile "reports an absent profile without a substitute" '{{COORDINATION_PROMPT}}'
     fi
 
     run_case skill_device_pairing_procedure "reads the container pairing procedure" \
@@ -3732,13 +3760,17 @@ main() {
         start_cycle_fixture
         cycle_cases=true
     fi
-    if child_result_consumer; then
-        [[ "$RUNS" == 1 && -f "${NETCLAW_CHILD_OBSERVER:-}" ]] || {
-            echo "ERROR: child consumers require RUNS=1 and NETCLAW_CHILD_OBSERVER." >&2
+    if child_result_consumer || [[ "$FILTER_CASE" == coordination_trivial_task || "$FILTER_CASE" == coordination_unavailable_profile ]]; then
+        [[ "$RUNS" == 1 ]] || {
+            echo "ERROR: provider evidence requires one selected case with RUNS=1." >&2
             exit 2
         }
+        if child_result_consumer && [[ ! -f "${NETCLAW_CHILD_OBSERVER:-}" ]]; then
+            echo "ERROR: child consumers require NETCLAW_CHILD_OBSERVER." >&2
+            exit 2
+        fi
         [[ "$EVAL_PROVIDER_TYPE" == openai-compatible && "$EVAL_PROVIDER_ENDPOINT" == */v1 ]] || {
-            echo "ERROR: child consumers require the approved OpenAI-compatible target." >&2
+            echo "ERROR: provider evidence requires an OpenAI-compatible target." >&2
             exit 2
         }
         [[ "$EVAL_PROVIDER_API_KEY" != ENC:* && -z "$EVAL_DATA_PROTECTION_KEYS" ]] || {
