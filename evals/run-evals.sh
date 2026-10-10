@@ -428,6 +428,32 @@ seed_eval_agents() {
     esac
 }
 
+seed_eval_approvals() {
+    local source="${NETCLAW_EVAL_APPROVALS_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/tool-approvals.json}"
+    local destination="$EVAL_HOME/data/config/tool-approvals.json"
+    if [[ -n "${NETCLAW_EVAL_APPROVALS_FILE:-}" ]]; then
+        cp "$source" "$destination"
+        return
+    fi
+    case "$FILTER_CASE" in
+        coordination_implement_review|coordination_two_writers)
+            python3 - "$source" "$destination" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
+
+policy = json.loads(Path(sys.argv[1]).read_bytes())
+policy["audiences"]["personal"]["shell_execute"].extend([
+    {"verb": "git add", "directory": "/home/netclaw/.netclaw/workspaces"},
+    {"verb": "git commit", "directory": "/home/netclaw/.netclaw/workspaces"},
+])
+Path(sys.argv[2]).write_text(json.dumps(policy, indent=2) + "\n")
+PYTHON
+            ;;
+        *) cp "$source" "$destination" ;;
+    esac
+}
+
 start_eval_daemon() {
     # Use identity templates from the repo source, not the host's ~/.netclaw/identity
     # — host files can be contaminated with user-specific names (e.g., "ArdyBot")
@@ -518,8 +544,7 @@ PY
     # Personal audience. Exposure, filesystem, and command-deny rules remain in force.
     cp "${NETCLAW_EVAL_CONFIG_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/netclaw.json}" \
         "$EVAL_HOME/data/config/netclaw.json"
-    cp "${NETCLAW_EVAL_APPROVALS_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/tool-approvals.json}" \
-        "$EVAL_HOME/data/config/tool-approvals.json"
+    seed_eval_approvals
 
     # If shell execution reaches this fixture, it writes a marker. The native
     # tool with the same name never invokes this executable.
