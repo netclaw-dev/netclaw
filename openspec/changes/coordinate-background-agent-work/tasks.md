@@ -67,12 +67,12 @@ Operator procedure evidence:
 
 ## 6. Targeted model and native init gates
 
-- [ ] 6.1 Add a skill discovery case for substantial code work without an explicit child request. Verify canonical load and selected resource receipts.
+- [x] 6.1 Add a skill discovery case for substantial code work without an explicit child request. Verify canonical load and selected resource receipts.
 - [ ] 6.2 Add an analyze-plan case. Verify evidence IDs, complete file content, parent inspection, and successful user attachment receipts.
 - [ ] 6.3 Add an implement-review case. Verify a task worker, distinct reviewer, actual candidate checks, and the parent result.
 - [ ] 6.4 Add a parallel-research or defect case with deliberate conflicting evidence. Verify the parent reports the real unresolved issue.
 - [ ] 6.5 Add a trivial-task negative control and unavailable-profile case. Verify no forced delegation, invented profile, or authority bypass.
-- [ ] 6.6 Add a background cancellation case. Verify deferred control load, partial-result inspection, and no private message or peer tool claim.
+- [x] 6.6 Add a background cancellation case. Verify deferred control load, partial-result inspection, and no private message or peer tool claim.
 - [ ] 6.7 Run only affected identity, skill discovery/use, and subagent cases with the existing eval harness. Record model, revision, receipts, and artifacts.
 - [ ] 6.8 Run five independent trials per critical real-model case. Report every failure and rerun only after a justified change.
 - [x] 6.9 Check instrumentation before model attribution. Verify actual parsed tool receipts and file content rather than final-response regex alone.
@@ -142,3 +142,15 @@ Held-child evidence review at `d0377373`:
 - Native inputs match. The historical helper differs from the current helper, which does not execute this offline replay.
 - This evidence preserves the existing held-response gate. It proves neither concurrent backend inference nor days-long productivity.
 - Cancellation, fresh current-helper execution, and the productive false-block gate remain separate requirements.
+
+Discovery and cancellation scope review at `4a9b7505`:
+
+- Five discovery observations prove the canonical inline skill and selected logical resource receipts.
+- Three observations execute at `f64e0ea4`; two execute at `2c043a93`. Their actual prompt, native bundle, helper, skill, and resource bytes match.
+- The original discovery results remain pass, pass, fail, pass, pass. An unsupported extra-skill restriction causes the third failure.
+- Separate replay through the current oracle accepts all five archives. The original third result remains false.
+- This closes task 6.1's discovery claim. It does not prove autonomous child execution or five fresh current-source trials.
+- Five fresh cancellation observations pass with distinct containers and complete teardown.
+- Independent review checks deferred control load, canonical terminal pairs, durable consumption, partial report bytes, full parent reads, and local closure.
+- Current changes preserve the cancellation definitions and their native, helper, skill, and prompt inputs.
+- This closes task 6.6. The broader model gate, task 6.8, and the productive false-block correction remain open.
