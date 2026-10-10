@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.0.8"
+  version: "1.0.9"
 ---
 
 # Agent Coordination
@@ -51,6 +51,11 @@ Give each child:
 When the task supplies a closed command or action list, copy its complete restriction block unchanged into `Task` or `Context`.
 Use a `User constraints` section. Keep the child's role and any narrower scope in a separate section.
 Do not replace the restriction block with examples or optional methods.
+
+Before delegation, compare the draft `Task` and `Context` with the original task.
+Check the copied restriction block against the original text.
+Map each required fact to a permitted action and the actual result field that supplies it.
+Remove role instructions that require actions outside the original scope.
 
 Copy the supplied source identity unchanged into the child assignment, including its type or algorithm prefix.
 When a child must use a template, give its exact fields and columns through `Task` or `Context`.
@@ -106,6 +111,8 @@ There are no private agent messages, child questions, peer tools, or live steeri
 ## Check Evidence And Deliver
 
 Read the complete returned artifact before you assign the next stage.
+Wait for each required tool result before dependent checks or child dispatch.
+Separate tool calls in one batch do not establish this boundary.
 Check every required field, column, source identity, and evidence excerpt against the task and actual source.
 Check the task scope and acceptance evidence.
 A success flag, artifact path, or model agreement does not prove completion.
