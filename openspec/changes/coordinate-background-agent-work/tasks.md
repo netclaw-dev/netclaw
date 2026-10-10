@@ -59,11 +59,22 @@ Operator procedure evidence:
 - [x] 5.3 Exercise logical discovery, inline load, and all resource names through the real skill loader. Verify audience denial remains effective.
 - [ ] 5.4 Exercise a scripted accepted-run workflow on the combined stack. Verify independent parent work and later attributed artifact review.
 - [ ] 5.5 Exercise cancellation guidance with scripted receipts. Verify acceptance alone never counts as dispatch closure or terminal completion.
-- [ ] 5.6 Supply stale evidence and an incomplete template. Verify the workflow marks missing proof rather than accepting success claims.
+- [x] 5.6 Supply stale evidence and an incomplete template. Verify the workflow marks missing proof rather than accepting success claims.
 - [ ] 5.7 Supply conflicting analyst reports and failed environment checks. Verify explicit uncertainty instead of majority acceptance or repair claims.
 - [ ] 5.8 Use a dirty source checkout and two writer requests. Verify isolated scopes or serialized writes without cleanup or shared-write assumptions.
 - [ ] 5.9 Use a blocked attachment receipt. Verify the parent reports a delivery limit and never claims the file reached the user.
 - [ ] 5.10 Pair each adversarial fixture with a valid task. Verify controls allow completed plans, current revisions, and permitted artifact delivery.
+
+Scripted stale-report evidence at `153d9223`:
+
+- Two actual observations pass the unchanged canonical oracle. Each uses a fresh container and a local scripted provider.
+- Each child copies both supplied reports unchanged. The parent reads the source, findings, and both copies after the canonical terminal.
+- The deficient reports retain their unsupported complete declarations. The parent rejects their exact stale revision and unresolved placeholder.
+- The valid control returns `accepted: true` and no gaps for both current complete reports.
+- Independent review verifies canonical journal and consumption records, database results, exact file bytes, distinct identities, source freezes, and actual cleanup.
+- Both actual-archive baselines pass. Three altered answers fail the required final-answer assertion without setup errors.
+- Every original result and archive stays unchanged. The script supplies the decisions; these observations prove no model judgment.
+- This closes task 5.6 only. The other adversarial fixtures, task 5.10, and the live-model acceptance gates remain open.
 
 ## 6. Targeted model and native init gates
 
