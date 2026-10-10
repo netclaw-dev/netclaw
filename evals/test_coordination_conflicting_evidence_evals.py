@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -382,6 +383,30 @@ class ConflictingEvidenceControls(unittest.TestCase):
             main()
         self.assertEqual(wrong, (observer / "audit-a.json").read_bytes())
         self.assertEqual({"state": "captured", "sha256": sha(wrong)}, json.loads((observer / "analyst-report-artifacts.json").read_text())["audit-a"])
+
+    def test_actual_shell_dispatch_sends_the_complete_prepared_prompt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = shell_functions("setup_coordination_conflicting_evidence", "run_case", "run_all") + r'''
+print_category() { :; }; end_category() { :; }; run_multi_turn_case() { :; }
+check_daemon_alive() { :; }
+pick_variant() { printf '%s' "$1"; }
+run_prompt() { printf '%s' "$1" > "$CAPTURE"; printf '%s' "$2" > "$CAPTURE.format"; }
+assert_coordination_conflicting_evidence() { return 0; }
+store_result() { :; }; store_metrics() { :; }
+CATEGORY_SKIPPED=false; CATEGORY_CASES=0; TOTAL_CASES=0
+CATEGORY_PASSED=0; PASSED_CASES=0; FAILED_CASES=0
+RUNS=1; THRESHOLD=1; FILTER_CATEGORY=""
+run_all
+'''
+            env = {**os.environ, "FILTER_CASE": CASE, "REPO_ROOT": str(Path(__file__).resolve().parents[1]),
+                   "EVAL_HOME": str(root / "home"), "TMPDIR_EVAL": str(root / "temporary"),
+                   "CAPTURE": str(root / "actual-prompt"), "PYTHONDONTWRITEBYTECODE": "1"}
+            result = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            setup = json.loads((root / "temporary/child-runs/conflict-review-case/setup.json").read_text())
+            self.assertEqual(prompt(setup).encode(), (root / "actual-prompt").read_bytes())
+            self.assertEqual(b"json", (root / "actual-prompt.format").read_bytes())
 
     def test_case_uses_collect_only_at_explicit_first_prompt(self):
         self.assertEqual("collect", legacy_observer_mode(CASE, 1))
