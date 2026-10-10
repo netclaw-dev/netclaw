@@ -141,6 +141,85 @@ class AuthorGuideControls(unittest.TestCase):
         operations.append(("skill_load", {"Name": "subagent-authoring"}, GUIDE, "guide", None))
         self.assertTrue(self.passes(author_fixture(operations)))
 
+    def optional_operations_spill(self):
+        front, body = (SKILLS / "netclaw-operations/SKILL.md").read_text().split("---", 2)[1:]
+        version = next(line.split('"')[1] for line in front.splitlines() if line.strip().startswith("version:"))
+        full = "## Netclaw Operations\nVersion: " + version + "\n\n" + body.strip() + "\n"
+        budget = 12000
+        self.assertGreater(len(full), budget)
+        result = full[-budget:] + ("\n\n[output truncated to " + str(budget) + " chars of " + str(len(full))
+            + "; continue with tool_output_read using CallId='operations' and a bounded Start/Limit window instead of re-running]")
+        self.assertFalse(result.startswith("## "))
+        return ("skill_load", {"Name": "netclaw-operations"}, result, "operations", None)
+
+    def test_optional_canonical_tail_spill_needs_no_header_or_full_continuation(self):
+        optional = self.optional_operations_spill()
+        required = ("skill_load", {"Name": "subagent-authoring"}, GUIDE, "guide", None)
+        for operations in ([optional, required], [required, optional]):
+            with self.subTest(order=[operation[3] for operation in operations]):
+                self.assertTrue(self.passes(author_fixture(operations)))
+
+    def test_optional_canonical_tail_spill_gives_no_required_author_credit(self):
+        self.rejects(author_fixture([self.optional_operations_spill()]))
+
+    def test_optional_tail_spill_does_not_hide_changed_or_partial_required_guide(self):
+        for result in (GUIDE[:100], GUIDE.replace("Version: 1.5.0", "Version: 1.4.0"),
+                       GUIDE.replace("No static tool-call", "A static tool-call")):
+            with self.subTest(result=result[:80]):
+                operations = [("skill_load", {"Name": "subagent-authoring"}, result, "guide", None),
+                              self.optional_operations_spill()]
+                self.rejects(author_fixture(operations), "full current canonical body")
+
+    def test_optional_tail_spill_retains_attribution_resource_failure_and_read_only_gates(self):
+        required = ("skill_load", {"Name": "subagent-authoring"}, GUIDE, "guide", None)
+        optional = self.optional_operations_spill()
+        fixture = author_fixture([required, optional]); fixture[0]["calls"][1]["result"] += " changed"
+        self.rejects(fixture, "metadata")
+        fixture = author_fixture([required, optional]); fixture[2][0]["messages"][-1]["content"] += " changed"
+        self.rejects(fixture, "discovery occurrence")
+        failed = (*optional[:4], "invalid_input")
+        self.rejects(author_fixture([required, failed]), "tool fails")
+        self.rejects(author_fixture([required, ("skill_load", {"Name": "netclaw-operations"},
+                     REQUIRED_RATIONALE_ERROR, "operations", None)]), "trusted code")
+        resource = "references/child-runs.md"
+        text = (SKILLS / "netclaw-operations" / resource).read_text()
+        for result in ("path: /owned/skills/netclaw-operations/" + resource + "\n" + text[:-1],
+                       "path: /owned/skills/foreign/" + resource + "\n" + text):
+            with self.subTest(resource_result=result[:70]):
+                self.rejects(author_fixture([required, ("skill_read_resource",
+                    {"SkillName": "netclaw-operations", "ResourcePath": resource}, result, "resource", None), optional]),
+                    "canonical bytes")
+        forbidden = ("file_read", {"Path": "/synthetic/SKILL.md"}, REQUIRED_RATIONALE_ERROR,
+                     "physical", "invalid_rationale")
+        self.rejects(author_fixture([required, forbidden, optional]), "physical tool or an action tool")
+        fixture = author_fixture([required, optional]); fixture[0]["accepted_runs"] = [{"run_id": "synthetic-child"}]
+        self.rejects(fixture, "without a child")
+        from test_child_run_evals import child
+        fixture = author_fixture([required, optional]); fixture[2].append(child())
+        self.rejects(fixture, "child provider")
+        fixture = author_fixture([required, optional])
+        fixture[2][0]["messages"].extend(copy.deepcopy(fixture[2][0]["messages"][-2:]))
+        self.rejects(fixture, "distinct actual")
+
+    def test_optional_tail_spill_does_not_allow_child_acceptance_or_malformed_json(self):
+        accepted = {"run_id": "synthetic-child", "scope_id": "synthetic-scope", "state": "Accepted",
+                    "control_tool": "check_agent_run"}
+        results = [json.dumps(accepted), " \n\t" + json.dumps(accepted),
+                   json.dumps(accepted)[:-1] + ', "scope_id": "duplicate"}',
+                   json.dumps({key: value for key, value in accepted.items() if key != "scope_id"}),
+                   '{"run_id": "synthetic-child",']
+        for result in results:
+            with self.subTest(result=result[:90]):
+                operations = [("skill_load", {"Name": "subagent-authoring"}, GUIDE, "guide", None),
+                              self.optional_operations_spill(),
+                              ("skill_load", {"Name": "routed-guide", "Task": "Read context"}, result, "routed", None)]
+                self.rejects(author_fixture(operations))
+        operations = [("skill_load", {"Name": "subagent-authoring"}, GUIDE, "guide", None),
+                      self.optional_operations_spill(),
+                      ("skill_load", {"Name": "another-inline-guide", "Task": "Read context"},
+                       "## Another Inline Guide\nA Task argument does not create a child.", "inline", None)]
+        self.assertTrue(self.passes(author_fixture(operations)))
+
     def test_actual_optional_resource_requires_exact_current_bytes(self):
         path = "references/child-runs.md"
         content = (SKILLS / "netclaw-operations" / path).read_bytes().decode()
@@ -226,7 +305,7 @@ class AuthorGuideControls(unittest.TestCase):
     def spilled(self, gap=False, changed=False, wrong_owner=False, partial=False):
         marker = ("\n\n[output truncated to 100 chars of " + str(len(GUIDE)) + "; continue with tool_output_read "
                   "using CallId='guide' and a bounded Start/Limit window instead of re-running]")
-        operations = [("skill_load", {"Name": "subagent-authoring"}, GUIDE[:100] + marker, "guide", None)]
+        operations = [("skill_load", {"Name": "subagent-authoring"}, GUIDE[-100:] + marker, "guide", None)]
         chunks = [(0, GUIDE[:4000]), (4001 if gap else 4000, GUIDE[4000:])]
         if partial:
             chunks.pop()
