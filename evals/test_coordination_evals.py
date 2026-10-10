@@ -226,14 +226,61 @@ class ObservedCoordinationReceiptTests(unittest.TestCase):
         self.fixture[1][1]["output"]["ToolFailureCode"] = None
         self.reject()
 
-    def test_executed_foreign_skill_or_forged_error_text_rejects(self):
-        for failure, result in ((None, "## Netclaw Operations\nActual foreign guidance"),
-                                (None, REQUIRED_RATIONALE_ERROR), ("invalid_rationale", "Error: Missing rationale")):
+    def test_extra_inline_skill_preserves_required_coordination_receipts(self):
+        self.fixture = observed_fixture()
+        observed_pair(self.fixture, "skill_load", {"Name": "netclaw-projects"},
+                      "## Netclaw Projects\nWorkspace guidance", "projects")
+        self.add_required()
+        observed_complete(self.fixture)
+        self.assertTrue(self.passes())
+
+    def test_extra_skill_cannot_replace_required_load_or_resource(self):
+        for missing in ("load", "read"):
+            with self.subTest(missing=missing):
+                self.fixture = observed_fixture()
+                observed_pair(self.fixture, "skill_load", {"Name": "netclaw-projects"},
+                              "## Agent Coordination\n" + BODY, "projects")
+                if missing != "load":
+                    observed_pair(self.fixture, "skill_load", {"Name": SKILL},
+                                  "## Agent Coordination\n" + BODY, "load")
+                if missing != "read":
+                    observed_pair(self.fixture, "skill_read_resource",
+                                  {"SkillName": SKILL, "ResourcePath": RESOURCE},
+                                  HEADER + RAW_WORKFLOW, "read")
+                observed_complete(self.fixture)
+                self.reject()
+
+    def test_extra_skill_retains_failure_and_child_boundaries(self):
+        for failure, result in ((None, REQUIRED_RATIONALE_ERROR),
+                                ("execution_failed", "Error: Access denied."),
+                                ("invalid_rationale", "Error: Missing rationale")):
             with self.subTest(failure=failure, result=result):
                 self.fixture = observed_fixture()
                 observed_pair(self.fixture, "skill_load", {"Name": "netclaw-operations"}, result, "foreign", failure)
                 self.add_required(); observed_complete(self.fixture)
                 self.reject()
+        self.fixture = observed_fixture()
+        observed_pair(self.fixture, "skill_load", {"Name": "netclaw-projects"},
+                      "## Netclaw Projects\nWorkspace guidance", "projects")
+        self.add_required()
+        observed_complete(self.fixture)
+        self.fixture[0]["accepted_runs"] = [{"run_id": "unexpected"}]
+        self.reject()
+        self.fixture[0]["accepted_runs"] = []
+        self.fixture[2].append({"messages": [
+            {"role": "system", "content": "[Subagent Execution Contract]"},
+            {"role": "user", "content": "session_dir: /child\ntemp_dir: /child/tmp\n"
+             "artifact_dir: /child/artifacts\nlog_path: /child/logs/session.log"}]})
+        self.reject()
+
+    def test_extra_skill_does_not_permit_another_resource(self):
+        self.fixture = observed_fixture()
+        self.add_required()
+        observed_pair(self.fixture, "skill_read_resource",
+                      {"SkillName": "netclaw-projects", "ResourcePath": "references/workspace.md"},
+                      "path: /skills/netclaw-projects/references/workspace.md\nOther resource", "projects")
+        observed_complete(self.fixture)
+        self.reject()
 
     def test_optional_logical_tools_require_typed_canonical_feedback(self):
         for name, arguments in (("load_tool", {"ToolName": "skill_load"}),
