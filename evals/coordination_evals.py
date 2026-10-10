@@ -157,8 +157,11 @@ def verify_observed(receipt, events, requests, skill_directory, observer_input):
             continue
         require(call["failure"] is None, "A discovery call fails without the canonical typed metadata rejection.")
         if name == "skill_load":
-            require(isinstance(arguments.get("Name"), str) and arguments["Name"].lower() == SKILL,
-                    "Discovery executes a foreign skill.")
+            require(isinstance(arguments.get("Name"), str) and arguments["Name"].strip(),
+                    "Discovery skill name is absent or malformed.")
+            # Other inline guides earn no coordination credit. The task permits their use.
+            if arguments["Name"].lower() != SKILL:
+                continue
             require(call["result"].startswith("## Agent Coordination\n") and body in call["result"],
                     "The successful skill load lacks the full current canonical body.")
             loads.append(call)
