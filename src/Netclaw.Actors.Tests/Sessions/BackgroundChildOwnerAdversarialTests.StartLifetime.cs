@@ -204,7 +204,11 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
     [Fact]
     public async Task A_child_provider_that_ignores_cancellation_cannot_delay_owner_terminal_settlement()
     {
-        var provider = new UncooperativeChildClient(_child);
+        var providerCancelled = NewSignal();
+        var provider = new UncooperativeChildClient(_child)
+        {
+            CancellationCallback = () => providerCancelled.TrySetResult()
+        };
         Assert.IsType<RoleProvider>(Host.Services.GetRequiredService<IChatClientProvider>()).Child = provider;
         var path = Path.Combine(_directory!.Path, "confirmed-before-uncooperative-provider.txt");
         var calls = 0;
@@ -254,6 +258,7 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
             Assert.Equal(SubAgentOutcomeReason.CancelledByParent, terminal.Terminal.Result.OutcomeReason);
             var completion = Assert.IsType<ChildRunCompletion.Cancelled>(terminal.Terminal.Result.Completion);
             Assert.Equal(path, Assert.Single(completion.ConfirmedActivity!.ReadFiles));
+            await providerCancelled.Task.WaitAsync(Ceiling, TestContext.Current.CancellationToken);
             Assert.True(provider.Token.IsCancellationRequested);
             Assert.False(provider.Pending.Task.IsCompleted);
             Assert.Equal(2, provider.Count);
