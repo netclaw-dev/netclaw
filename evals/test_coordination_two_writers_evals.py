@@ -14,7 +14,7 @@ from child_run_evals import REQUIRED_RATIONALE_ERROR, actual_file, legacy_observ
 from coordination_two_writers_evals import (CASE, WRITERS, checkout_snapshot, commands, git, initialization_script,
                                            main, prepare, prompt, run_check, sha, snapshot, verify)
 from test_child_run_evals import ACCEPTED, ROOT as CHILD_ROOT, child, parent, terminal
-from test_coordination_workflow_evals import shell_functions
+from test_coordination_workflow_evals import observer_calls, shell_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -90,6 +90,7 @@ def evidence(root, line_ending="\n"):
             pair(p, events, "shell_execute", {"Command": commands(setup, writer)[key]}, "Exit code: 0\n" + result, "parent-" + key + "-" + writer)
     receipt["last_reply"] = json.dumps({"nonce": setup["nonce"], "candidates": final, "operator_preserved": True,
                                         "unresolved_findings": [], "integration": "not_performed"})
+    receipt["calls"] = observer_calls(events)
     return setup, receipt, events, [p, *children], home, lambda writer: run_check(home, setup, writer)
 
 
@@ -133,6 +134,7 @@ class TwoWriterControls(unittest.TestCase):
                 c["id"] = "completed-child-id"
         requests.append(copy.deepcopy(p))
         requests.append(copy.deepcopy(requests[1]))
+        self.args[1]["calls"] = observer_calls(self.args[2])
         self.assertTrue(verify(*self.args)["passed"])
 
     def test_shared_original_context_does_not_merge_distinct_writer_reports(self):
@@ -146,6 +148,7 @@ class TwoWriterControls(unittest.TestCase):
                     for e in self.args[2]:
                         if e["output"]["Type"] == "tool_call" and e["output"]["CallId"] == c["id"]:
                             e["output"]["ArgumentsJson"] = json.dumps(args)
+        self.args[1]["calls"] = observer_calls(self.args[2])
         self.assertTrue(verify(*self.args)["passed"])
 
     def test_wrong_or_missing_actual_profile_rejects(self):
@@ -170,14 +173,94 @@ class TwoWriterControls(unittest.TestCase):
                     for e in self.args[2]:
                         if e["output"]["Type"] == "tool_call" and e["output"]["CallId"] == c["id"]:
                             e["output"]["ArgumentsJson"] = json.dumps({**args, "_timeout_seconds": 30, "_background": False})
+        self.args[1]["calls"] = observer_calls(self.args[2])
         self.assertTrue(verify(*self.args)["passed"])
 
     def test_exact_unexecuted_rationale_attempt_does_not_count_as_writer(self):
         pair(self.args[3][0], self.args[2], "spawn_agent", {"Agent": "task-worker", "Task": "not executed"},
              REQUIRED_RATIONALE_ERROR, "invalid-rationale", "invalid_rationale")
+        self.args[1]["calls"] = observer_calls(self.args[2])
         self.assertTrue(verify(*self.args)["passed"])
         self.args[2][-1]["output"]["ToolFailureCode"] = "execution_failed"
         self.reject()
+
+    def test_parent_typed_rejections_retain_exact_occurrences_without_success_credit(self):
+        original = copy.deepcopy(self.args[:4])
+        for name, args in (("spawn_agent", {"Agent": "task-worker", "Task": "not executed"}),
+                           ("skill_load", {"Name": "another-skill"}),
+                           ("set_working_directory", {"Path": "/foreign-unexecuted-root"})):
+            with self.subTest(name=name):
+                current = copy.deepcopy(original)
+                pair(current[3][0], current[2], name, args, REQUIRED_RATIONALE_ERROR, "rejected", "invalid_rationale")
+                current[1]["calls"] = observer_calls(current[2])
+                self.assertTrue(verify(*current, *self.args[4:])["passed"])
+                for code in (None, "execution_failed"):
+                    changed = copy.deepcopy(current)
+                    changed[2][-1]["output"]["ToolFailureCode"] = code
+                    changed[1]["calls"] = observer_calls(changed[2])
+                    with self.assertRaises(AssertionError): verify(*changed, *self.args[4:])
+                for field, value in (("success", None), ("success", 0), ("success", True),
+                                     ("failure_code", None), ("occurrence", True), ("occurrence", 1), ("id", "foreign")):
+                    changed = copy.deepcopy(current)
+                    if value is None: changed[1]["calls"][-1].pop(field)
+                    else: changed[1]["calls"][-1][field] = value
+                    with self.assertRaises(AssertionError): verify(*changed, *self.args[4:])
+
+    def test_parent_rejection_multiplicity_preserves_completed_reuse_and_cumulative_history(self):
+        for _ in range(2):
+            pair(self.args[3][0], self.args[2], "skill_load", {"Name": "another-skill"},
+                 REQUIRED_RATIONALE_ERROR, "reused-rejection", "invalid_rationale")
+        self.args[1]["calls"] = observer_calls(self.args[2])
+        self.args[3].append(copy.deepcopy(self.args[3][0]))
+        self.assertTrue(verify(*self.args)["passed"])
+        messages = self.args[3][-1]["messages"]
+        messages.extend(copy.deepcopy(messages[-2:]))
+        with self.assertRaisesRegex(AssertionError, "distinct actual DTO occurrences"):
+            verify(*self.args)
+        del messages[-2:]
+        for request in (self.args[3][0], self.args[3][-1]):
+            del request["messages"][-2:]
+        with self.assertRaisesRegex(AssertionError, "provider call/result occurrence"):
+            verify(*self.args)
+
+    def test_terminal_shaped_rejected_start_cannot_replace_the_real_delivery(self):
+        run = self.args[1]["accepted_runs"][0]
+        pair(self.args[3][0], self.args[2], "spawn_agent", {"run_id": run["run_id"], "source_operation": "spawn_agent"},
+             REQUIRED_RATIONALE_ERROR, "rejected-terminal-shape", "invalid_rationale")
+        self.args[1]["calls"] = observer_calls(self.args[2])
+        self.assertTrue(verify(*self.args)["passed"])
+        self.args[3][0]["messages"] = [m for m in self.args[3][0]["messages"]
+            if m.get("tool_call_id") != "delivery-writer-a" and not any(c["id"] == "delivery-writer-a" for c in m.get("tool_calls", []))]
+        with self.assertRaisesRegex(AssertionError, "exactly one attributed terminal"):
+            verify(*self.args)
+
+    def test_failed_parent_physical_actions_and_child_declarations_remain_strict(self):
+        original = copy.deepcopy(self.args[:4])
+        for name, args in (("shell_execute", {"Command": commands(self.args[0], "writer-a")["check"]}),
+                           ("file_read", {"Path": self.args[0]["writers"]["writer-a"]["source"]})):
+            with self.subTest(name=name):
+                current = copy.deepcopy(original)
+                pair(current[3][0], current[2], name, args, REQUIRED_RATIONALE_ERROR, "physical-rejection", "invalid_rationale")
+                current[1]["calls"] = observer_calls(current[2])
+                with self.assertRaises(AssertionError): verify(*current, *self.args[4:])
+        for root in (self.args[0]["writers"]["writer-a"]["root"], "/foreign"):
+            current = copy.deepcopy(original)
+            pair(current[3][1], None, "set_working_directory", {"Path": root}, REQUIRED_RATIONALE_ERROR, "child-rejection")
+            with self.assertRaises(AssertionError): verify(*current, *self.args[4:])
+
+    def test_additional_parent_provider_pair_requires_an_actual_dto_occurrence(self):
+        row = self.args[0]["writers"]["writer-a"]
+        content = actual_file(self.args[4], row["source"]).read_bytes().decode()
+        pair(self.args[3][0], None, "file_read", {"Path": row["source"]}, content, "provider-only-read")
+        with self.assertRaisesRegex(AssertionError, "lacks its actual DTO occurrence"):
+            verify(*self.args)
+
+    def test_successful_parent_pair_multiplicity_requires_distinct_actual_occurrences(self):
+        p = self.args[3][0]
+        index = next(n for n, m in enumerate(p["messages"]) if any(c["id"] == "read-source-writer-a" for c in m.get("tool_calls", [])))
+        p["messages"][index:index] = copy.deepcopy(p["messages"][index:index + 2])
+        with self.assertRaisesRegex(AssertionError, "distinct actual DTO occurrences"):
+            verify(*self.args)
 
     def test_one_writer_or_unconsumed_terminal_rejects(self):
         for value in (False, 1, 1.0, "true"):
@@ -355,6 +438,7 @@ class TwoWriterControls(unittest.TestCase):
         row = self.args[0]["writers"]["writer-a"]
         pair(self.args[3][0], self.args[2], "set_working_directory", {"Path": row["root"]}, row["root"], "parent-project")
         pair(self.args[3][1], None, "set_working_directory", {"Path": row["root"]}, row["root"], "child-project")
+        self.args[1]["calls"] = observer_calls(self.args[2])
         self.assertTrue(verify(*self.args)["passed"])
         self.args[2][-1]["output"]["Result"] = "foreign"
         self.reject()

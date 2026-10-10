@@ -1,6 +1,7 @@
 """Check two isolated writer candidates and an unchanged dirty operator checkout."""
 
 import argparse
+from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -10,8 +11,8 @@ import subprocess
 import uuid
 
 from background_fixture import message_text
-from child_run_evals import (acceptance, actual_file, canonical_pairs, context_paths, evidence_requests,
-                             is_unexecuted_rationale_rejection, legacy_observer_mode, require, validate_prompt_receipt)
+from child_run_evals import (REQUIRED_RATIONALE_ERROR, acceptance, actual_file, canonical_pairs, context_paths, evidence_requests,
+                             is_unexecuted_rationale_rejection, legacy_observer_mode, pair_matches, require, require_observed_rejections, validate_prompt_receipt)
 from coordination_artifact_evals import load_json, occurrences
 from coordination_implement_review_evals import (FIXTURE, checkout_snapshot, paired_call_occurrences, paired_calls,
                                                 project_declarations, sha, signature)
@@ -183,11 +184,11 @@ def provider_calls(requests):
                 yield call["id"], call["function"]["name"], load_json(call["function"]["arguments"])
 
 
-def allowed_actions(requests, setup, writer=None):
+def allowed_actions(requests, setup, observed_calls, writer=None):
     roots = {row["root"] for row in setup["writers"].values()} | {setup["operator"]}
     if writer:
         roots = {setup["writers"][writer]["root"]}
-    project_declarations(requests, roots)
+    project_declarations(requests, roots, observed_calls)
     permitted_commands = set()
     for name in (WRITERS if writer is None else [writer]):
         permitted_commands.update(value for key, value in commands(setup, name).items() if writer or key != "commit")
@@ -304,15 +305,32 @@ def verify(setup, receipt, events, requests, home, check_candidate):
                 "A writer report is stale or names false checks.")
     require(len({c["candidate_commit"] for c in candidates.values()}) == 2, "The two isolated candidates lack distinct revisions.")
     calls, _ = occurrences(events, receipt["session_id"])
+    require_observed_rejections(receipt["calls"], calls)
+    for ordinal, call in enumerate(calls, 1):
+        if call["name"] in {"spawn_agent", "skill_load", "set_working_directory"} and call["result"] == REQUIRED_RATIONALE_ERROR:
+            require(is_unexecuted_rationale_rejection(call["failure"], call["result"]),
+                    "The canonical parent rejection lacks its trusted failure code.")
+            require(any(type(row.get("occurrence")) is int and row["occurrence"] == ordinal
+                        and row.get("success") is False and row.get("failure_code") == call["failure"]
+                        and pair_matches((call["id"], call["name"], call["arguments"], call["result"]), row)
+                        for row in receipt["calls"]), "The rejected parent action lacks its exact observer occurrence.")
     parent_requests = [r for r in requests if context_paths(r) is None]
-    allowed_actions(parent_requests, setup)
-    parent_pairs = paired_call_occurrences(parent_requests)
-    require(all((c["failure"] is None or c["name"] == "spawn_agent" and is_unexecuted_rationale_rejection(c["failure"], c["result"]))
-                and (c["id"], *signature(c["name"], c["arguments"], c["result"])) in parent_pairs for c in calls),
-            "A parent DTO lacks its exact successful provider call/result pair.")
-    declarations = project_declarations(parent_requests, {setup["operator"], *(r["root"] for r in setup["writers"].values())})
+    allowed_actions(parent_requests, setup, receipt["calls"])
+    expected_pairs = Counter((c["id"], *signature(c["name"], c["arguments"], c["result"])) for c in calls)
+    seen = Counter()
+    for request in parent_requests:
+        current = paired_call_occurrences([request])
+        for pair, count in current.items():
+            if pair in expected_pairs:
+                require(count <= expected_pairs[pair], "A parent history repeats a pair without distinct actual DTO occurrences.")
+        seen |= current
+    require(all((c["failure"] is None or c["name"] in {"spawn_agent", "skill_load", "set_working_directory"}
+                 and is_unexecuted_rationale_rejection(c["failure"], c["result"])) for c in calls)
+            and all(seen[pair] == count for pair, count in expected_pairs.items()),
+            "A parent DTO lacks its exact provider call/result occurrence.")
+    declarations = project_declarations(parent_requests, {setup["operator"], *(r["root"] for r in setup["writers"].values())}, receipt["calls"])
     require(declarations == {(c["id"], json.dumps(provider_arguments(c["arguments"]), sort_keys=True), c["result"])
-                             for c in calls if c["name"] == "set_working_directory"}, "A parent project declaration lacks exact DTO attribution.")
+                             for c in calls if c["name"] == "set_working_directory" and c["failure"] is None}, "A parent project declaration lacks exact DTO attribution.")
     starts = [c for c in calls if c["name"] == "spawn_agent" and not is_unexecuted_rationale_rejection(c["failure"], c["result"])]
     require(len(starts) == 2, "The case requires two actual accepted writer starts.")
     accepted = [acceptance(c["result"]) for c in starts]
@@ -327,7 +345,7 @@ def verify(setup, receipt, events, requests, home, check_candidate):
     runs_by_writer = {}
     for index, start in enumerate(starts):
         run = accepted[index]
-        terminal_id, terminal = canonical_pairs(requests, run, start["id"], "spawn_agent")
+        terminal_id, terminal = canonical_pairs(requests, run, start["id"], "spawn_agent", receipt["calls"])
         deliveries = [d for d in receipt["verified_deliveries"] if d["accepted"] == run]
         require(len(deliveries) == 1 and json.dumps(deliveries[0]["terminal"], sort_keys=True)
                 == json.dumps(terminal, sort_keys=True) and terminal["outcome"] == "Completed",
@@ -338,6 +356,10 @@ def verify(setup, receipt, events, requests, home, check_candidate):
         matching = [name for name, row in setup["writers"].items() if row["report"] in outputs]
         require(len(matching) == 1 and matching[0] not in runs_by_writer, "An actual writer lacks one distinct assigned report producer.")
         runs_by_writer[matching[0]] = (start, run, terminal_id, terminal, child_requests)
+    require(all(pair in expected_pairs or any(pair[0] == row[2] and pair[1] == "spawn_agent"
+                and load_json(pair[2]) == {"run_id": row[1]["run_id"], "source_operation": "spawn_agent"}
+                and load_json(pair[3]) == row[3] for row in runs_by_writer.values()) for pair in seen),
+            "A parent provider pair lacks its actual DTO occurrence or canonical framework delivery.")
     terminals, attributed, final = set(), set(), []
     for writer, row in setup["writers"].items():
         start, run, terminal_id, terminal, child_requests = runs_by_writer[writer]
@@ -350,7 +372,7 @@ def verify(setup, receipt, events, requests, home, check_candidate):
         attributed.add(terminal["log_path"])
         require(any(all(v in "\n".join(message_text(m.get("content")) for m in r.get("messages", []) if m.get("role") == "user") for v in required)
                     for r in child_requests), "The child provider request lacks the original writer scope.")
-        allowed_actions(child_requests, setup, writer)
+        allowed_actions(child_requests, setup, [], writer)
         require_writer_feedback_order(child_requests, setup, writer)
         pairs = paired_calls(child_requests)
         source = actual_file(home, row["source"]).read_bytes()
