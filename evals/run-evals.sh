@@ -3385,7 +3385,7 @@ run_all() {
         "Exactly how many consecutive reminder execution failures cause Netclaw to auto-disable a reminder, and what is the exact name of the alert it raises when that happens? Be precise."
 
     run_case --json skill_coordination_discovery "loads coordination and the single implementation/review workflow" \
-        "We need a substantial code change with an independent review of the finished patch. Before we choose the concrete change, explain your implementation-then-review process, how you will protect my checkout, and how you will verify the exact candidate. Do not start a child, edit files, or run commands yet."
+        "We need a substantial code change with an independent review of the finished patch. Before we choose the concrete change, explain your implementation-then-review process, how you will protect my checkout, and how you will verify the exact candidate. Do not start a child, edit files, or execute shell commands yet."
 
     if [[ "$FILTER_CASE" == productive_parent_child ]]; then
         run_case --json productive_parent_child "reconstructs catalogs through 65 parent and 35 child feedback rounds" '{{PRODUCTIVE_PROMPT}}'
