@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import sys
 
-from child_run_evals import (REQUIRED_RATIONALE_ERROR, evidence_requests,
+from child_run_evals import (REQUIRED_RATIONALE_ERROR, acceptance, evidence_requests,
                              is_unexecuted_rationale_rejection, require)
 from coordination_artifact_evals import load_json
 from coordination_evals import DISCOVERY_TOOLS, observed_explanation_calls, observed_explanation_reply
@@ -158,9 +158,12 @@ def verify(receipt, events, requests, skill_root, observer_input):
         require(call["failure"] is None, "An author tool fails without the exact typed nonexecution feedback.")
         if name == "skill_load":
             require(isinstance(args.get("Name"), str) and args["Name"].strip(), "The logical guide name is absent.")
-            require(call["result"].startswith("## "), "The logical load does not return an inline guide.")
+            if call["result"].lstrip().startswith("{"):
+                acceptance(call["result"])
+                require(False, "The logical load starts a child instead of returning an inline guide.")
             if args["Name"].strip().lower() == SKILL:
                 content = retained_result(call, prior_calls)
+                require(content.startswith("## "), "The logical load does not return an inline guide.")
                 require(content.startswith("## Subagent Authoring\nVersion: 1.5.0\n\n") and body in content,
                         "The author load lacks the full current canonical body.")
                 if call["result_sequence"] < answer_sequence:
