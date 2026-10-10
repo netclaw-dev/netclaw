@@ -3259,6 +3259,7 @@ run_case() {
         rendered_prompt="${rendered_prompt//\{\{PRODUCTIVE_PROMPT\}\}/${PRODUCTIVE_PROMPT:-}}"
         rendered_prompt="${rendered_prompt//\{\{IMPLEMENT_REVIEW_PROMPT\}\}/${IMPLEMENT_REVIEW_PROMPT:-}}"
         rendered_prompt="${rendered_prompt//\{\{REPORT_REVIEW_PROMPT\}\}/${REPORT_REVIEW_PROMPT:-}}"
+        rendered_prompt="${rendered_prompt//\{\{CONFLICT_REVIEW_PROMPT\}\}/${CONFLICT_REVIEW_PROMPT:-}}"
         local prompt_failed=false
         if ! run_prompt "$rendered_prompt" "$output_format"; then
             prompt_failed=true
