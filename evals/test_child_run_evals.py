@@ -19,7 +19,7 @@ import unittest
 from unittest.mock import patch
 
 from child_run_evals import (CHILD_CONTRACT, ChildFixture, acceptance, actual_file, bind_request,
-                             canonical_pairs, child_handler, committed_positions, consumed_deliveries, collect, legacy_observer_mode, validate_prompt_receipt, verified_final_response, verify_child_actions, verify_cli_acceptance, verify_trial, write_completed)
+                             canonical_pairs, child_handler, committed_positions, consumed_deliveries, collect, legacy_observer_mode, session_logs, validate_prompt_receipt, verified_final_response, verify_child_actions, verify_cli_acceptance, verify_trial, write_completed)
 
 ACCEPTED = {"run_id": "run-neutral", "scope_id": "scope-neutral", "state": "Accepted", "control_tool": "check_agent_run"}
 ROOT = "/home/netclaw/.netclaw/sessions/neutral/subagents/neutral"
@@ -275,6 +275,65 @@ run_multi_turn_case coding_context_worktree_handoff neutral one two three four
                       logs().replace("callId=delivery-neutral", "callId=foreign")]:
             with self.subTest(log=value), self.assertRaises(AssertionError):
                 committed_positions(value, "session-neutral", "run-neutral", "delivery-neutral")
+
+    def test_parent_log_reader_uses_the_owned_partition_and_excludes_child_logs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            parent = home / "data/sessions/opaque-parent/logs/session.log"
+            child = home / "data/sessions/opaque-parent/subagents/neutral-child/logs/session.log"
+            daemon = home / "logs/daemon.log"
+            foreign = home / "data/sessions/opaque-foreign/logs/session.log"
+            for path, text in [(parent, logs()), (child, logs()), (daemon, logs()),
+                               (foreign, logs().replace("session-neutral", "session-foreign"))]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+            log = session_logs(home, "session-neutral", ["run-neutral"])
+            self.assertEqual(logs(), log)
+            self.assertEqual(5, committed_positions(log, "session-neutral", "run-neutral", "delivery-neutral")["delivery_admitted"])
+
+    def test_daemon_diagnostics_alone_cannot_supply_parent_commit_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            daemon = Path(directory) / "logs/daemon.log"
+            daemon.parent.mkdir()
+            daemon.write_text(logs())
+            with self.assertRaises(AssertionError):
+                session_logs(directory, "session-neutral", ["run-neutral"])
+
+    def test_parent_log_reader_rejects_foreign_owner_run_and_missing_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "data/sessions/opaque-parent/logs/session.log"
+            path.parent.mkdir(parents=True)
+            for text in [logs().replace("session-neutral", "session-foreign"),
+                         logs().replace("run-neutral", "run-foreign"),
+                         logs().replace("child_run_accepted", "unobserved")]:
+                with self.subTest(log=text):
+                    path.write_text(text)
+                    with self.assertRaises(AssertionError):
+                        session_logs(directory, "session-neutral", ["run-neutral"])
+
+    def test_parent_log_reader_rejects_duplicate_partitions_and_preserves_duplicate_record_rejection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "data/sessions/opaque-first/logs/session.log"
+            second = Path(directory) / "data/sessions/opaque-second/logs/session.log"
+            for path in [first, second]:
+                path.parent.mkdir(parents=True)
+                path.write_text(logs())
+            with self.assertRaises(AssertionError):
+                session_logs(directory, "session-neutral", ["run-neutral"])
+            second.unlink()
+            first.write_text(logs() + "\n" + logs())
+            with self.assertRaises(AssertionError):
+                committed_positions(session_logs(directory, "session-neutral", ["run-neutral"]),
+                                    "session-neutral", "run-neutral", "delivery-neutral")
+
+    def test_parent_log_reader_retains_all_runs_in_one_parent_partition(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "data/sessions/opaque-parent/logs/session.log"
+            path.parent.mkdir(parents=True)
+            path.write_text(logs() + "\n" + logs().replace("run-neutral", "run-sibling"))
+            log = session_logs(directory, "session-neutral", ["run-neutral", "run-sibling"])
+            for run_id in ["run-neutral", "run-sibling"]:
+                self.assertEqual(5, committed_positions(log, "session-neutral", run_id, "delivery-neutral")["delivery_admitted"])
 
     @contextmanager
     def actual_held_response(self, directory, partial=False, stream=False):
