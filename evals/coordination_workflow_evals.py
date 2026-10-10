@@ -1,6 +1,7 @@
 """Prepare two eval-owned coordination cases for the existing collect path."""
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import os
@@ -10,13 +11,16 @@ import stat
 import uuid
 
 from background_fixture import message_text
-from child_run_evals import CHILD_CONTRACT, acceptance, actual_file, canonical_pairs, context_paths, evidence_requests, pair_matches, parent_call_pairs, require, validate_prompt_receipt
+from child_run_evals import (CHILD_CONTRACT, REQUIRED_RATIONALE_ERROR, acceptance, actual_file, canonical_pairs, context_paths,
+                             evidence_requests, is_unexecuted_rationale_rejection, pair_matches, parent_call_pairs,
+                             require, require_observed_rejections, validate_prompt_receipt)
+from coordination_implement_review_evals import paired_call_occurrences, project_declarations, signature
 from coordination_artifact_evals import occurrences
 
 
 CHILD_TOOLS = {"load_tool", "search_tools", "file_list", "file_read", "file_search", "file_write",
                "tool_output_read", "skill_load", "skill_read_resource"}
-PARENT_TOOLS = (CHILD_TOOLS - {"file_write"}) | {"spawn_agent", "check_agent_run", "attach_file"}
+PARENT_TOOLS = (CHILD_TOOLS - {"file_write"}) | {"spawn_agent", "check_agent_run", "attach_file", "set_working_directory"}
 
 
 CASES = {"coordination_analyze_plan": "delivered", "coordination_attachment_blocked": "blocked"}
@@ -85,6 +89,9 @@ Use A2/C2 for the valid-record order check, owned by Catalog.read and linked to 
 Use R1 for the risk to prior state and valid order. Link it to C1 and C2.
 Use Q1 for the unresolved identifier case rule, with decision owner User.
 State actual checks and their limits. A plan does not prove implementation, CI, release, or deployment.
+The parent may read authorized case files, inspect status, assign stages, and attach the plan.
+The parent may declare only this named project root.
+The parent must not edit source or artifact files or use shell commands.
 Keep the parent responsible for evidence review and user delivery.
 """.rstrip("\n")
 
@@ -104,6 +111,43 @@ def workflow_stages(receipt, events, requests, setup, eval_home):
     calls, _ = occurrences(events, receipt["session_id"])
     require(all(call["name"] in PARENT_TOOLS for call in calls),
             "The parent calls an action outside the assigned workflow.")
+    require_observed_rejections(receipt["calls"], calls)
+    parent_requests = [request for request in requests if context_paths(request) is None]
+    declarations = project_declarations(parent_requests, {setup["source_root"]}, receipt["calls"])
+    require(declarations == {(call["id"], *signature(call["name"], call["arguments"], call["result"])[1:])
+                             for call in calls if call["name"] == "set_working_directory" and call["failure"] is None
+                             and call["result"] != REQUIRED_RATIONALE_ERROR},
+            "The parent declaration differs between its actual DTO and provider pair.")
+    for ordinal, call in enumerate(calls, 1):
+        if call["name"] != "set_working_directory":
+            continue
+        if call["result"] == REQUIRED_RATIONALE_ERROR:
+            require(is_unexecuted_rationale_rejection(call["failure"], call["result"])
+                    and any(type(row.get("occurrence")) is int and row["occurrence"] == ordinal
+                            and row.get("success") is False and row.get("failure_code") == call["failure"]
+                            and pair_matches((call["id"], call["name"], call["arguments"], call["result"]), row)
+                            for row in receipt["calls"]),
+                    "The rejected declaration lacks its exact typed observer occurrence.")
+        else:
+            require(call["failure"] is None, "The parent declaration did not succeed.")
+            require(any(type(row.get("occurrence")) is int and row["occurrence"] == ordinal
+                        and row.get("success") is True and row.get("failure_code") is None
+                        and pair_matches((call["id"], call["name"], call["arguments"], call["result"]), row)
+                        for row in receipt["calls"]),
+                    "The successful declaration lacks its exact observer occurrence.")
+        require(any(pair_matches(pair, call) for request in parent_requests for pair in parent_call_pairs(request)),
+                "The parent declaration lacks its actual provider pair.")
+    expected = Counter((call["id"], *signature(call["name"], call["arguments"], call["result"]))
+                       for call in calls if call["name"] == "set_working_directory")
+    # Cumulative captures use maximum counts. Identical IDs split by compaction lack sufficient occurrence evidence.
+    seen = Counter()
+    for request in parent_requests:
+        current = Counter({pair: count for pair, count in paired_call_occurrences([request]).items()
+                           if pair[1] == "set_working_directory"})
+        require(all(count <= expected[pair] for pair, count in current.items()),
+                "The provider repeats a declaration without distinct actual DTO occurrences.")
+        seen |= current
+    require(seen == expected, "A declaration DTO lacks sufficient provider occurrence evidence.")
     starts = [call for call in calls if call["name"] == "spawn_agent" and call["failure"] is None]
     stages = []
     for key in ("findings_path", "plan_path"):
