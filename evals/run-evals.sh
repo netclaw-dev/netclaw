@@ -160,7 +160,7 @@ check_prerequisites() {
     fi
     DAEMON_LOG="$EVAL_HOME/logs/daemon-$(date +%F).log"
 
-    trap 'cleanup_eval_env' EXIT
+    trap 'eval_exit=$?; cleanup_eval_env || eval_exit=$?; exit "$eval_exit"' EXIT
 }
 
 resolve_eval_target() {
@@ -207,7 +207,8 @@ resolve_eval_target() {
 
 cleanup_eval_env() {
     # Archive logs and results to a persistent location before teardown.
-    archive_eval_run
+    local archive_exit=0
+    archive_eval_run || archive_exit=$?
 
     # Container is launched with --rm, so `docker stop` also removes it.
     if [[ -n "${EVAL_CONTAINER_NAME:-}" ]]; then
@@ -231,6 +232,7 @@ cleanup_eval_env() {
     if [[ -n "${EVAL_HOME:-}" && -d "$EVAL_HOME" ]]; then
         force_rmrf "$EVAL_HOME"
     fi
+    return "$archive_exit"
 }
 
 # Archive daemon logs, results DB, and stdout captures to evals/runs/<run-id>/
@@ -240,7 +242,19 @@ archive_eval_run() {
     if [[ -z "${RUN_ID:-}" ]]; then return 0; fi
 
     local archive_dir="$REPO_ROOT/evals/runs/$RUN_ID"
-    mkdir -p "$archive_dir"
+    mkdir -p "$archive_dir" || return $?
+    local archive_exit=0
+    if [[ -n "${COORDINATION_CASE_EVIDENCE:-}" ]]; then
+        case "${FILTER_CASE:-}" in
+            coordination_analyze_plan|coordination_attachment_blocked)
+                python3 "$REPO_ROOT/evals/coordination_workflow_evals.py" archive \
+                    --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
+                    --eval-home "$EVAL_HOME" --setup-directory "$COORDINATION_CASE_EVIDENCE" \
+                    --observers-directory "$TMPDIR_EVAL/child-runs" \
+                    2> "$COORDINATION_CASE_EVIDENCE/archive.stderr" || archive_exit=$?
+                ;;
+        esac
+    fi
 
     # Copy daemon log
     if [[ -f "${DAEMON_LOG:-}" ]]; then
@@ -282,7 +296,7 @@ archive_eval_run() {
         cp "$TMPDIR_EVAL"/stdout_*.txt "$archive_dir/stdout/" 2>/dev/null || true
         cp "$TMPDIR_EVAL"/stderr_*.txt "$archive_dir/stdout/" 2>/dev/null || true
         if [[ -d "$TMPDIR_EVAL/child-runs" ]]; then
-            cp -r "$TMPDIR_EVAL/child-runs" "$archive_dir/child-runs"
+            cp -r "$TMPDIR_EVAL/child-runs" "$archive_dir/child-runs" || archive_exit=$?
         fi
     fi
 
@@ -315,6 +329,7 @@ passed:    ${PASSED_CASES:-0}/${TOTAL_CASES:-0}
 RUNEOF
 
     echo "Archived: $archive_dir"
+    return "$archive_exit"
 }
 
 # Remove a directory even if it contains files owned by a different user

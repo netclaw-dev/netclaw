@@ -3,12 +3,14 @@
 import argparse
 import hashlib
 import json
+import os
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import stat
 import uuid
 
 from background_fixture import message_text
-from child_run_evals import acceptance, actual_file, context_paths, evidence_requests, require, validate_prompt_receipt
+from child_run_evals import CHILD_CONTRACT, acceptance, actual_file, canonical_pairs, context_paths, evidence_requests, pair_matches, parent_call_pairs, require, validate_prompt_receipt
 from coordination_artifact_evals import occurrences
 
 
@@ -202,12 +204,180 @@ def contract(case, fixture_root, eval_home, setup_directory, observer_directory,
             "findings_path": setup["findings_path"], "plan_path": setup["plan_path"], "delivery": CASES[case]}
 
 
+
+def archive_read(home, canonical):
+    require(isinstance(canonical, str) and str(PurePosixPath(canonical)) == canonical,
+            "The archive source path is not canonical.")
+    target = actual_file(home, canonical)
+    descriptor = os.open(target.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for component in target.parts[1:-1]:
+            try:
+                child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            except FileNotFoundError:
+                return None
+            os.close(descriptor)
+            descriptor = child
+        try:
+            source = os.open(target.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+        except FileNotFoundError:
+            return None
+        with os.fdopen(source, "rb") as stream:
+            require(stat.S_ISREG(os.fstat(stream.fileno()).st_mode), "The archive source is not a regular file.")
+            return stream.read()
+    finally:
+        os.close(descriptor)
+
+
+def archive_delivery_workspace(receipt, calls, requests, home):
+    starts = [call for call in calls if call["name"] == "spawn_agent" and call.get("failure") is None
+              and "result" in call]
+    directories = set()
+    run_ids = []
+    for start in starts:
+        accepted = acceptance(start["result"])
+        require(any(pair_matches(pair, start) for request in requests if context_paths(request) is None
+                    for pair in parent_call_pairs(request)), "The archive start lacks its actual parent provider pair.")
+        require(accepted in receipt["accepted_runs"], "The archive start lacks its observer acceptance.")
+        _, terminal = canonical_pairs(requests, accepted, start["id"], start["name"], receipt["calls"])
+        root = PurePosixPath(terminal["log_path"]).parent.parent
+        require(root.name == accepted["run_id"] and root.parent.name == "subagents"
+                and str(root.parent.parent.parent) == "/home/netclaw/.netclaw/sessions"
+                and terminal["log_path"] == str(root / "logs/session.log")
+                and terminal["artifact_directory"] == str(root / "artifacts"),
+                "The archive child does not use the canonical session layout.")
+        workspace = str(root.parent.parent / "workspace")
+        require(any((paths := context_paths(request)) is not None and paths["session_dir"] == workspace
+                    and paths["log_path"] == terminal["log_path"]
+                    and paths["artifact_dir"] == terminal["artifact_directory"] for request in requests),
+                "The archive lacks the actual child storage context.")
+        directories.add(workspace)
+        run_ids.append(accepted["run_id"])
+    require(len(directories) == 1, "The archive lacks one attributed parent workspace.")
+    workspace = directories.pop()
+    log = archive_read(home, str(PurePosixPath(workspace).parent / "logs/session.log"))
+    require(log is not None and all(re.search(r"child_run_accepted owner=" + re.escape(receipt["session_id"])
+            + r" runId=" + re.escape(run_id) + r" journalSequence=\d+(?:\s|$)", log.decode("utf-8"))
+            for run_id in run_ids), "The archive parent log lacks its actual owner and accepted runs.")
+    return workspace
+
+
+def archive_runtime_files(fixture_root, home, setup_directory, observers_directory):
+    setup = json.loads((setup_directory / "setup.json").read_text())
+    hashes, revision = source_identity(fixture_root)
+    source_root = setup["source_root"]
+    require(re.fullmatch(r"/home/netclaw/\.netclaw/workspaces/coordination-[0-9a-f]{32}", source_root),
+            "The archive workspace is not a case-owned source root.")
+    require(setup["source_hashes"] == hashes and setup["revision"] == revision,
+            "The archive setup belongs to another source fixture.")
+    require(all(setup[key] == source_root + "/" + name for key, name in
+                (("findings_path", "findings.md"), ("plan_path", "plan.md"))),
+            "The archive artifact path leaves its assigned workspace.")
+    destination = setup_directory / "runtime-files"
+    for part in (destination, *destination.parents):
+        require(not part.is_symlink(), "The archive destination contains a link.")
+    destination.mkdir(exist_ok=False)
+    inventory = {"schema": "netclaw-coordination-runtime-files-v1", "source_root": source_root,
+                 "revision": revision, "capture_complete": False, "files": [], "observers": []}
+
+    def capture(canonical, relative, kind, expected=None, attribution=None):
+        content = archive_read(home, canonical)
+        entry = {"kind": kind, "canonical_path": canonical, "archive_path": relative, "present": content is not None}
+        if attribution is not None:
+            entry["attribution"] = attribution
+        inventory["files"].append(entry)
+        if not entry["present"]:
+            return
+        output = destination / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("xb") as stream:
+            stream.write(content)
+        entry.update(length=len(content), sha256=hashlib.sha256(content).hexdigest())
+        if expected is not None:
+            entry.update(expected_sha256=expected, matches_expected=entry["sha256"] == expected)
+
+    try:
+        for name, expected in hashes.items():
+            require(str(PurePosixPath(name)) == name and not PurePosixPath(name).is_absolute()
+                    and ".." not in PurePosixPath(name).parts, "The archive source name escapes its fixture.")
+            capture(source_root + "/" + name, "workspace/" + name, "source", expected)
+        for key in ("findings_path", "plan_path"):
+            capture(setup[key], "workspace/" + PurePosixPath(setup[key]).name, key)
+        for observer in sorted(observers_directory.glob("observer-*")):
+            require(not observer.is_symlink() and observer.is_dir(), "The archive observer path is not an owned directory.")
+            row = {"directory": observer.name, "receipt_present": (observer / "observer-receipt.json").exists(),
+                   "events_present": (observer / "session-output.jsonl").exists()}
+            inventory["observers"].append(row)
+            if not row["receipt_present"] or not row["events_present"]:
+                continue
+            receipt = json.loads((observer / "observer-receipt.json").read_text())
+            data = json.loads((observer / "observer-input.json").read_text())
+            require(receipt.get("status") in {"observed", "incomplete"}
+                    and receipt.get("prompt_nonce") == data["Nonce"]
+                    and receipt.get("observer_mode") == data["Mode"]
+                    and receipt.get("initial_prompt_sha256") == hashlib.sha256(data["InitialPrompt"].encode()).hexdigest(),
+                    "The archive receipt belongs to another prompt invocation.")
+            require(not data["SessionId"] or receipt.get("session_id") == data["SessionId"],
+                    "The archive receipt has another resumed session.")
+            require(data["Mode"] == "collect" and data["InitialPrompt"] == prompt(setup),
+                    "The archive observer belongs to another workflow.")
+            row.update(session_id=receipt["session_id"], prompt_nonce=receipt["prompt_nonce"], status=receipt["status"])
+            events = [json.loads(line) for line in (observer / "session-output.jsonl").read_text().splitlines() if line.strip()]
+            require(all(type(event.get("sequence")) is int and event["sequence"] == index
+                        and event["output"]["SessionId"] == receipt["session_id"]
+                        for index, event in enumerate(events, 1)),
+                    "The archive contains a foreign or unordered parent output.")
+            file_events = [event for event in events if event["output"]["Type"] == "file"]
+            row["file_outputs"] = len(file_events)
+            if not file_events:
+                continue
+            calls, files = occurrences(events[:file_events[-1]["sequence"]], receipt["session_id"])
+            requests = evidence_requests(observers_directory / "relay")
+            require(all(context_paths(request) is not None or not any(
+                        CHILD_CONTRACT in message_text(message.get("content"))
+                        for message in request.get("messages", []) if message.get("role") == "system")
+                        for request in requests), "The archive child request lacks its actual storage context.")
+            workspace = archive_delivery_workspace(receipt, calls, requests, home)
+            for sequence, dto in files:
+                path, name, mime = dto.get("FilePath"), dto.get("FileName"), dto.get("MimeType")
+                require(all(isinstance(value, str) and value for value in (path, name, mime)),
+                        "The archive File output is incomplete.")
+                copied = path != setup["plan_path"]
+                require(not copied or (str(PurePosixPath(path).parent) == workspace + "/attachments"
+                        and re.fullmatch(r"plan(?:-[1-9][0-9]*)?\.md", PurePosixPath(path).name)),
+                        "The archive File output leaves its assigned delivery location.")
+                expected = f"File attached: {name} ({mime}) at {path}" + (" (copied into current session)" if copied else "")
+                matched = [call for call in calls if call["name"] == "attach_file"
+                           and call["arguments"].get("Path") == setup["plan_path"] and call.get("failure") is None
+                           and call.get("result") == expected and call["result_sequence"] < sequence]
+                require(len(matched) == 1, "The archive File output lacks one exact successful attachment pair.")
+                attached = matched[0]
+                require(any(pair_matches(pair, attached) for request in requests if context_paths(request) is None
+                            for pair in parent_call_pairs(request)),
+                        "The archive attachment lacks its actual parent provider pair.")
+                capture(path, "deliveries/" + observer.name + "/" + str(sequence) + ".bin", "delivery",
+                        attribution={"session_id": receipt["session_id"], "call_id": attached["id"],
+                                     "call_sequence": attached["call_sequence"], "result_sequence": attached["result_sequence"],
+                                     "file_sequence": sequence, "file_name": name, "mime_type": mime,
+                                     "receipt": attached["result"]})
+        inventory["capture_complete"] = True
+    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError, AssertionError) as error:
+        inventory["error"] = str(error)
+        raise
+    finally:
+        (destination / "inventory.json").write_text(json.dumps(inventory, indent=2))
+    return inventory
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
     setup = commands.add_parser("prepare")
     for name in ("fixture-root", "eval-home", "evidence"):
         setup.add_argument("--" + name, type=Path, required=True)
+    archive = commands.add_parser("archive")
+    for name in ("fixture-root", "eval-home", "setup-directory", "observers-directory"):
+        archive.add_argument("--" + name, type=Path, required=True)
     denied = commands.add_parser("blocked-config")
     for name in ("source", "destination"):
         denied.add_argument("--" + name, type=Path, required=True)
@@ -218,6 +388,8 @@ def main():
     args = parser.parse_args()
     if args.action == "prepare":
         print(prompt(prepare(args.fixture_root, args.eval_home, args.evidence)), end="")
+    elif args.action == "archive":
+        archive_runtime_files(args.fixture_root, args.eval_home, args.setup_directory, args.observers_directory)
     elif args.action == "blocked-config":
         blocked_config(args.source, args.destination)
     else:
