@@ -928,6 +928,10 @@ It checks each exact revision, diff, and candidate result before its final JSON 
 The oracle repeats both checks and compares the final candidate and operator states.
 The oracle archives actual source and report bytes before a verifier failure.
 An observer failure before verifier entry can prevent this later archive.
+Parent `spawn_agent`, `skill_load`, and `set_working_directory` attempts can retain exact typed nonexecution feedback.
+The oracle requires each rejection's actual DTO occurrence and provider pair. It gives that attempt no success credit.
+Child declarations remain strict. Every executed declaration must name its assigned root and return the canonical result.
+Parent provider pair counts require distinct actual DTO occurrences. Repeated cumulative captures do not create additional credit.
 
 The deterministic controls reject missing writers, shared worktrees, false receipts, foreign identities, and unauthorized actions.
 They also reject changed operator bytes, checker changes, later candidate commits, and incomplete parent review.
