@@ -1004,7 +1004,7 @@ check_daemon_alive() {
 child_result_consumer() {
     case "${case_name:-$FILTER_CASE}" in
         skill_coordination_discovery) [[ "$FILTER_CASE" == skill_coordination_discovery ]] ;;
-        subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff|coordination_analyze_plan|coordination_attachment_blocked|productive_parent_child|coordination_implement_review|coordination_stale_incomplete|coordination_conflicting_evidence) return 0 ;;
+        subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff|coordination_analyze_plan|coordination_attachment_blocked|productive_parent_child|coordination_implement_review|coordination_stale_incomplete|coordination_conflicting_evidence|coordination_two_writers) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1526,6 +1526,20 @@ prepare_coordination_config() {
         --source "${NETCLAW_EVAL_CONFIG_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/netclaw.json}" \
         --destination "$denied_config"
     export NETCLAW_EVAL_CONFIG_FILE="$denied_config"
+}
+
+setup_coordination_two_writers() {
+    TWO_WRITERS_EVIDENCE="$TMPDIR_EVAL/child-runs/two-writers-case"
+    TWO_WRITERS_PROMPT=$(python3 "$REPO_ROOT/evals/coordination_two_writers_evals.py" prepare \
+        --eval-home "$EVAL_HOME" --evidence "$TWO_WRITERS_EVIDENCE" --container "$EVAL_CONTAINER_NAME")
+}
+
+assert_coordination_two_writers() {
+    local evidence="${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}"
+    python3 "$REPO_ROOT/evals/coordination_two_writers_evals.py" verify \
+        --eval-home "$EVAL_HOME" --evidence "$TWO_WRITERS_EVIDENCE" --container "$EVAL_CONTAINER_NAME" \
+        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" \
+        > "$evidence/two-writers-verdict.json" 2> "$evidence/two-writers-assertion.stderr"
 }
 
 setup_coordination_conflicting_evidence() {
@@ -3293,6 +3307,7 @@ run_case() {
         rendered_prompt="${rendered_prompt//\{\{IMPLEMENT_REVIEW_PROMPT\}\}/"${IMPLEMENT_REVIEW_PROMPT:-}"}"
         rendered_prompt="${rendered_prompt//\{\{REPORT_REVIEW_PROMPT\}\}/"${REPORT_REVIEW_PROMPT:-}"}"
         rendered_prompt="${rendered_prompt//\{\{CONFLICT_REVIEW_PROMPT\}\}/"${CONFLICT_REVIEW_PROMPT:-}"}"
+        rendered_prompt="${rendered_prompt//\{\{TWO_WRITERS_PROMPT\}\}/"${TWO_WRITERS_PROMPT:-}"}"
         local prompt_failed=false
         if ! run_prompt "$rendered_prompt" "$output_format"; then
             prompt_failed=true
@@ -3387,6 +3402,9 @@ run_all() {
 
     if [[ "$FILTER_CASE" == productive_parent_child ]]; then
         run_case --json productive_parent_child "reconstructs catalogs through 65 parent and 35 child feedback rounds" '{{PRODUCTIVE_PROMPT}}'
+    fi
+    if [[ "$FILTER_CASE" == coordination_two_writers ]]; then
+        run_case --json coordination_two_writers "checks two isolated writer candidates and preserves the dirty operator checkout" '{{TWO_WRITERS_PROMPT}}'
     fi
     if [[ "$FILTER_CASE" == coordination_conflicting_evidence ]]; then
         run_case --json coordination_conflicting_evidence "reconciles distinct analyst claims and reports an actual unavailable check" '{{CONFLICT_REVIEW_PROMPT}}'
