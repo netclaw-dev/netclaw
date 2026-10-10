@@ -414,6 +414,20 @@ seed_disk_cleanup_reminder() {
     write_eval_reminder "disk-cleanup-weekly" "Weekly disk space cleanup" "0 3 * * 0"
 }
 
+seed_eval_agents() {
+    if [[ -d "$EVAL_ASSET_ROOT/evals/fixtures/agents" ]]; then
+        cp -r "$EVAL_ASSET_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
+    fi
+    cp "$EVAL_ASSET_ROOT/src/Netclaw.Cli/Resources/identity/task-worker.profile.md" \
+        "$EVAL_HOME/data/agents/task-worker.md"
+    case "$FILTER_CASE" in
+        coordination_implement_review|coordination_conflicting_evidence)
+            cp "$EVAL_ASSET_ROOT/evals/fixtures/coordination-agents/code-analyst.md" \
+                "$EVAL_HOME/data/agents/code-analyst.md"
+            ;;
+    esac
+}
+
 start_eval_daemon() {
     # Use identity templates from the repo source, not the host's ~/.netclaw/identity
     # — host files can be contaminated with user-specific names (e.g., "ArdyBot")
@@ -453,13 +467,10 @@ start_eval_daemon() {
 
     # Copy eval-only subagent definitions into the mounted NETCLAW_HOME so
     # spawn_agent behavior can be exercised without touching the host install.
-    if [[ -d "$EVAL_ASSET_ROOT/evals/fixtures/agents" ]]; then
-        cp -r "$EVAL_ASSET_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
-    fi
+    seed_eval_agents
 
     # This owned home is a fresh mktemp directory. Keep the mission fixture;
-    # append only the canonical parent route and seed the exact release asset.
-    cp "$template_dir/task-worker.profile.md" "$EVAL_HOME/data/agents/task-worker.md"
+    # append only the canonical parent route.
     python3 - "$EVAL_ASSET_ROOT/src/Netclaw.Configuration/Resources/AGENTS.md" \
         "$EVAL_HOME/identity/AGENTS.md" <<'PY'
 from pathlib import Path
