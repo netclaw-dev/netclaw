@@ -48,4 +48,4 @@ Extend relevant skill/subagent cases and preserve seeded-file loader checks plus
 Workflow text and profile tool metadata create no new authority. Every file, shell, profile, and control action retains ordinary runtime policy.
 Child results remain attributed under PR 2's original requester contract. Cancellation uses its five-second framework-only partial-result contract.
 Concurrent writers receive separate authorized worktrees or serialize their edits. A workflow cannot grant shared-checkout write permission.
-The parent's provider capacity gate remains owned by PR 2. This content change cannot resolve or waive it.
+The inference backend owns capacity. This change preserves PR 2's held-child parent-response gate.
