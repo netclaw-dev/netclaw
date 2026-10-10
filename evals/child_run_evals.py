@@ -763,6 +763,24 @@ def validate_prompt_receipt(receipt, data):
         require(receipt.get("session_id") == data["SessionId"], "The observer receipt has another resumed session.")
 
 
+def workflow_delivery(receipt, accepted, start, requests):
+    identifier, terminal = canonical_pairs(requests, accepted, start["id"], start["name"], receipt["calls"])
+    completed = terminal.get("state") == terminal.get("outcome") == "Completed"
+    failed = terminal.get("state") == terminal.get("outcome") == "Failed" and isinstance(terminal.get("reason"), str) and terminal["reason"].strip()
+    require(completed or failed, "The workflow terminal is neither Completed nor an explicit Failed attempt.")
+    observations = receipt["delivery_observations"]
+    require(observations.get("complete") is True, "The workflow lacks complete canonical terminal consumption.")
+    matches = [row for row in observations["deliveries"] if row["accepted"] == accepted]
+    require(len(matches) == 1, "The workflow terminal lacks one attributed consumption record.")
+    consumed = matches[0]
+    require(consumed["call_id"] == identifier and json.dumps(consumed["terminal"], sort_keys=True) == json.dumps(terminal, sort_keys=True),
+            "The workflow consumption differs from its canonical terminal pair.")
+    times = [start["observed_ns"], consumed["request_admitted_ns"], consumed["response_first_payload_ns"], consumed["parent_boundary_ns"]]
+    require(all(type(value) is int and value > 0 for value in times) and times == sorted(set(times)),
+            "The workflow terminal lacks ordered start, consumption, and parent boundary evidence.")
+    return identifier, terminal, consumed
+
+
 def collect(port, prompt, session, output_format, evidence, case, prompt_ordinal):
     mode = legacy_observer_mode(case, prompt_ordinal)
     receipt, output = invoke_observer(port, prompt, evidence, mode, uuid.uuid4().hex, session=session,
@@ -784,8 +802,11 @@ def collect(port, prompt, session, output_format, evidence, case, prompt_ordinal
     for accepted in receipt["accepted_runs"]:
         starts = [call for call in accepted_starts if acceptance(call["result"]) == accepted]
         require(len(starts) == 1, "The legacy terminal lacks the exact original start occurrence.")
-        call_id, terminal = canonical_pairs(requests, accepted, starts[0]["id"], starts[0]["name"], receipt["calls"])
-        require(terminal.get("outcome") == "Completed", "A legacy child did not complete normally.")
+        if case in {"coordination_analyze_plan", "coordination_attachment_blocked"}:
+            call_id, terminal, _ = workflow_delivery(receipt, accepted, starts[0], requests)
+        else:
+            call_id, terminal = canonical_pairs(requests, accepted, starts[0]["id"], starts[0]["name"], receipt["calls"])
+            require(terminal.get("outcome") == "Completed", "A legacy child did not complete normally.")
         positions = committed_positions(log, receipt["session_id"], accepted["run_id"], call_id)
         deliveries.append({"accepted": accepted, "terminal": terminal, "journal_positions": positions})
     receipt["verified_deliveries"] = deliveries
