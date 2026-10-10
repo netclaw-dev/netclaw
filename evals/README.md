@@ -659,6 +659,14 @@ The adapter labels its evidence source and retains the actual output DTOs.
 It does not fabricate a second result for the original start call.
 
 Select `child_run_held_parent`, `child_run_partial_cancel`, or `child_run_cli_acceptance` with `NETCLAW_EVAL_CASE`.
+
+The observer records the exact child-status cycle correction as non-success, without status or ownership evidence.
+Other malformed status text remains an error. A correction does not authorize child release or prove completion.
+To replay the captured status sequence through the helper controls, append its `session-output.jsonl` path:
+
+```bash
+dotnet evals/fixtures/child-runs/bin/Release/net10.0/SessionObserver.dll --protocol-controls /path/to/session-output.jsonl
+```
 Run each trial through `run-background-evals.sh` with `NETCLAW_EVAL_RUNS=1`.
 Set `NETCLAW_CHILD_OBSERVER` to the canonical observer DLL from the final combined source.
 Use five fresh invocations for each critical held-child and cancel case.
