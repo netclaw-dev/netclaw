@@ -76,8 +76,24 @@ Operator procedure evidence:
 - [ ] 6.7 Run only affected identity, skill discovery/use, and subagent cases with the existing eval harness. Record model, revision, receipts, and artifacts.
 - [ ] 6.8 Run five independent trials per critical real-model case. Report every failure and rerun only after a justified change.
 - [x] 6.9 Check instrumentation before model attribution. Verify actual parsed tool receipts and file content rather than final-response regex alone.
-- [ ] 6.10 Run `./scripts/smoke/run-smoke.sh init-wizard` on the combined stack. Verify native wizard completion and preserved custom profile files.
+- [x] 6.10 Run `./scripts/smoke/run-smoke.sh init-wizard` on the combined stack. Verify native wizard completion and preserved custom profile files.
 - [ ] 6.11 Preserve all required init typed-key checks and applicable light smoke gates. Report proof gaps separately from successful headless checks.
+
+Native init evidence at `6d0d7501`:
+
+- The retained command at `690aa6a0` passes one actual native init tape and its external profile assertions.
+- Independent review verifies 20 relevant source and build inputs against the current combined stack.
+- The native producer has unchanged production inputs. Retained helper DLLs match their PDB identities and source checksums.
+- The actual log proves canonical worker creation, custom specialist preservation, exit zero, and removal of the owned temporary paths.
+- This is historical evidence with source equivalence. Deleted helper executables and external VHS binaries lack recorded hashes.
+- Task 6.11 remains open. This tape does not establish all light smoke gates, model behavior, or deployment success.
+
+Negative model observations at `3dd2c1a3`:
+
+- Five fresh trivial-task trials pass. Two of five fresh unavailable-profile trials pass.
+- Three unavailable-profile trials add prose to the required JSON. Their strict results remain failures.
+- Those three trials reach the final response check after the file, profile, authority, and provider-history checks pass.
+- These ten planned observations do not complete the broader model gate or authorize retries without a justified change.
 
 ## 7. Review and completion evidence
 
