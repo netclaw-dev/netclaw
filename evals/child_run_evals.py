@@ -421,7 +421,8 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
         held = next(row for row in snapshot["requests"] if row["held"])
         actual_write = write_completed(requests[held["request_id"] - 1], f"partial-{nonce}.txt")
         require(actual_write is not None, "The held request lacks its actual partial write result.")
-        verify_partial_report(terminal, home, accepted, artifact, actual_write["result"])
+        report_path = verify_partial_report(terminal, home, accepted, artifact, actual_write["result"])
+        verify_cancellation_review(calls, accepted, terminal, consumed, home, report_path)
         require(not any(row["child"] and row["request_id"] > held["request_id"] for row in snapshot["requests"]),
                 "The child entered a new provider operation after the cancellation barrier.")
     require(any(row["name"] == "file_read" and row["arguments"].get("Path", row["arguments"].get("path")) == artifact
@@ -457,15 +458,62 @@ def verify_partial_report(terminal, home, accepted, artifact, confirmed_write_re
             "The partial report omits the canonical external-effect limit.")
     return report_path
 
+
+def verify_cancellation_review(calls, accepted, terminal, consumed, home, report_path):
+    require(any(row["name"] == "skill_load" and row.get("success") and row["turn"] == 1
+                and row["arguments"].get("Name", row["arguments"].get("name")) == "agent-coordination"
+                and "A cancellation acceptance does not prove dispatch closure or terminal completion."
+                in row.get("result", "") for row in calls),
+            "The parent lacks actual coordination guidance before the cancellation turn.")
+    body = actual_file(home, report_path).read_bytes().decode("utf-8")
+    require(any(row["name"] == "file_read" and row.get("success")
+                and row["arguments"].get("Path", row["arguments"].get("path")) == report_path
+                and row["arguments"].get("StartLine", row["arguments"].get("startLine")) in (None, 0)
+                and row["arguments"].get("Limit", row["arguments"].get("limit")) in (None, 0)
+                and row.get("result") == body
+                and consumed["response_first_payload_ns"] < row["observed_ns"] < consumed["parent_boundary_ns"]
+                for row in calls), "The parent lacks a full actual partial-report read after terminal consumption.")
+    controls = []
+    for row in calls:
+        if row["name"] != "check_agent_run" or not row.get("success"):
+            continue
+        args = row["arguments"]
+        if args.get("RunId", args.get("runId")) != accepted["run_id"]:
+            continue
+        status = json.loads(row.get("result", ""), object_pairs_hook=unique_object)
+        require(isinstance(status, dict) and status.get("run_id") == accepted["run_id"]
+                and status.get("scope_id") == accepted["scope_id"], "The cancellation status has a foreign owner.")
+        if args.get("Cancel", args.get("cancel", False)) is True:
+            require(status.get("cancellation_requested") is True and type(status.get("dispatch_closed")) is bool
+                    and status.get("state") in {"Cancelling", "Cancelled"},
+                    "The cancellation result lacks distinct admission and closure facts.")
+            if not status["dispatch_closed"]:
+                require(status.get("state") == "Cancelling" and status.get("terminal") is None,
+                        "Cancellation admission falsely claims terminal completion before dispatch closure.")
+            if status.get("state") == "Cancelled":
+                require(status["dispatch_closed"] and status.get("terminal") == terminal,
+                        "The cancellation result lacks the actual cancelled terminal.")
+        controls.append((row, status))
+    require(any(row["arguments"].get("Cancel", row["arguments"].get("cancel", False)) is False
+                and status.get("cancellation_requested") is True and status.get("dispatch_closed") is True
+                and status.get("state") == "Cancelled" and status.get("terminal") == terminal
+                and consumed["response_first_payload_ns"] < row["observed_ns"] < consumed["parent_boundary_ns"]
+                for row, status in controls),
+            "The parent lacks explicit dispatch closure and the actual cancelled terminal status.")
+
+
 def prompts(nonce, cancel):
     kind = "partial" if cancel else "complete"
     content = ("PARTIAL-" if cancel else "COMPLETE-") + nonce
     task = (f"Trial {nonce}. Write exactly {content}, without a newline, to {kind}-{nonce}.txt in your runtime artifact_dir. "
             "Use file_write. Use no shell command. Return the full artifact path and its content in your final result.")
-    initial = (f"Delegate this task once to child-run-worker: {task} "
+    initial = (("Load agent-coordination by canonical name before this task. " if cancel else "")
+               + f"Delegate this task once to child-run-worker: {task} "
                "Acknowledge the accepted child immediately with a brief visible reply. Do not wait for its result. "
                "When its later result arrives, read its artifact with file_read and report the actual content. "
-               "If the child is cancelled, inspect its report and read the confirmed partial artifact. "
+               "If the child is cancelled, fully read cancelled-results.json from its confirmed artifact directory. "
+               "Read the confirmed partial artifact. Then check its status once to confirm dispatch closure and the cancelled terminal. "
+               "Cancellation admission alone does not prove either fact. Local closure does not prove external effects stopped. "
                "Report the actual content and the local cancellation state.")
     probe = ("For accepted child {{RUN_ID}}, inspect its current state and its authorized log path. "
              "Read that log with file_read. Use the deferred child control through normal tool discovery. "
