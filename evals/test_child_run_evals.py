@@ -134,13 +134,13 @@ class ChildAttributionControls(unittest.TestCase):
                 bind_request(child(), ACCEPTED, {**STATUS, key: "foreign"}, "neutral-nonce")
 
     def test_terminal_pair_needs_actual_parent_history_and_one_stable_call(self):
-        self.assertEqual(("delivery-neutral", terminal()), canonical_pairs([parent(), parent()], ACCEPTED, "start-neutral", "spawn_agent"))
+        self.assertEqual(("delivery-neutral", terminal()), canonical_pairs([parent(), parent()], ACCEPTED, "start-neutral", "spawn_agent", []))
         for requests in [[], [child()], [parent(), parent(identifier="other")],
                          [parent({**terminal(), "scope_id": "foreign"})],
                          [parent({**terminal(), "source_operation": "shell_execute"})],
                          [parent(), parent({**terminal(), "outcome": "Failed"})]]:
             with self.subTest(requests=requests), self.assertRaises(AssertionError):
-                canonical_pairs(requests, ACCEPTED, "start-neutral", "spawn_agent")
+                canonical_pairs(requests, ACCEPTED, "start-neutral", "spawn_agent", [])
 
     def test_terminal_pair_requires_fresh_id_consistent_argument_source_and_assistant_role(self):
         for mutate in [lambda r: r["messages"][0].update(role="user"),
@@ -148,13 +148,13 @@ class ChildAttributionControls(unittest.TestCase):
             request = parent()
             mutate(request)
             with self.subTest(request=request), self.assertRaises(AssertionError):
-                canonical_pairs([request], ACCEPTED, "start-neutral", "spawn_agent")
+                canonical_pairs([request], ACCEPTED, "start-neutral", "spawn_agent", [])
         with self.assertRaises(AssertionError):
-            canonical_pairs([parent(identifier="start-neutral")], ACCEPTED, "start-neutral", "spawn_agent")
+            canonical_pairs([parent(identifier="start-neutral")], ACCEPTED, "start-neutral", "spawn_agent", [])
         duplicated = parent()
         duplicated["messages"].extend(copy.deepcopy(duplicated["messages"]))
         with self.assertRaises(AssertionError):
-            canonical_pairs([duplicated], ACCEPTED, "start-neutral", "spawn_agent")
+            canonical_pairs([duplicated], ACCEPTED, "start-neutral", "spawn_agent", [])
 
     def test_consumption_accepts_first_response_and_compatible_siblings_in_one_response(self):
         sibling = {**ACCEPTED, "run_id": "run-sibling", "scope_id": "scope-sibling"}
@@ -167,19 +167,19 @@ class ChildAttributionControls(unittest.TestCase):
         records = [{"request": request, "request_id": 1, "admitted_ns": 2,
                     "response_first_payload_ns": 3, "response_payload_written": True}]
         expected = [{"accepted": ACCEPTED, "call_id": "start-neutral", "source_operation": "spawn_agent"}]
-        self.assertTrue(consumed_deliveries(records, expected, 4)["complete"])
-        self.assertFalse(consumed_deliveries(records, [], 4)["complete"])
+        self.assertTrue(consumed_deliveries(records, expected, 4, [])["complete"])
+        self.assertFalse(consumed_deliveries(records, [], 4, [])["complete"])
         repeated = records + [{**records[0], "request_id": 2, "admitted_ns": 5, "response_first_payload_ns": 6}]
-        self.assertEqual(1, consumed_deliveries(repeated, expected, 7)["deliveries"][0]["request_id"])
+        self.assertEqual(1, consumed_deliveries(repeated, expected, 7, [])["deliveries"][0]["request_id"])
         expected.append({"accepted": sibling, "call_id": "start-sibling", "source_operation": "spawn_agent"})
-        result = consumed_deliveries(records, expected, 4)
+        result = consumed_deliveries(records, expected, 4, [])
         self.assertTrue(result["complete"])
         self.assertEqual(2, len(result["deliveries"]))
         self.assertEqual({1}, {row["request_id"] for row in result["deliveries"]})
         for rows, boundary in [([], 4), ([{**records[0], "response_first_payload_ns": 0}], 4),
                                ([{**records[0], "response_payload_written": False}], 4), (records, 2)]:
             with self.subTest(rows=rows, boundary=boundary):
-                self.assertFalse(consumed_deliveries(rows, expected, boundary)["complete"])
+                self.assertFalse(consumed_deliveries(rows, expected, boundary, [])["complete"])
 
     def test_final_response_requires_the_exact_current_prompt_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -296,11 +296,11 @@ run_multi_turn_case coding_context_worktree_handoff neutral one two three four
         function["arguments"] = json.dumps({"run_id": ACCEPTED["run_id"], "source_operation": "shell_execute"})
         wrong["messages"][1]["content"] = json.dumps({**terminal(), "source_operation": "shell_execute"})
         with self.assertRaises(AssertionError):
-            canonical_pairs([wrong], ACCEPTED, "start-neutral", "spawn_agent")
-        self.assertEqual("delivery-neutral", canonical_pairs([wrong], ACCEPTED, "start-neutral", "shell_execute")[0])
+            canonical_pairs([wrong], ACCEPTED, "start-neutral", "spawn_agent", [])
+        self.assertEqual("delivery-neutral", canonical_pairs([wrong], ACCEPTED, "start-neutral", "shell_execute", [])[0])
         record = {"request": wrong, "request_id": 1, "admitted_ns": 1, "response_first_payload_ns": 2, "response_payload_written": True}
         with self.assertRaises(AssertionError):
-            consumed_deliveries([record], [{"accepted": ACCEPTED, "call_id": "start-neutral", "source_operation": "spawn_agent"}], 3)
+            consumed_deliveries([record], [{"accepted": ACCEPTED, "call_id": "start-neutral", "source_operation": "spawn_agent"}], 3, [])
 
     def test_post_commit_positions_reject_absence_duplicate_reorder_and_foreign_call(self):
         self.assertEqual(5, committed_positions(logs(), "session-neutral", "run-neutral", "delivery-neutral")["delivery_admitted"])
@@ -513,7 +513,7 @@ run_multi_turn_case coding_context_worktree_handoff neutral one two three four
                         row = snapshot["requests"][-1]
                         self.assertTrue(row["response_payload_written"])
                         self.assertGreater(row["response_first_payload_ns"], row["admitted_ns"])
-                        consumed = fixture.control("child-consumed", {"expected": [
+                        consumed = fixture.control("child-consumed", {"observed_calls": [], "expected": [
                             {"accepted": ACCEPTED, "call_id": "start-neutral", "source_operation": "spawn_agent"}], "parent_boundary_ns": time.monotonic_ns()})
                         self.assertTrue(consumed["complete"])
                         self.assertEqual("delivery-neutral", consumed["deliveries"][0]["call_id"])
@@ -529,7 +529,7 @@ run_multi_turn_case coding_context_worktree_handoff neutral one two three four
                     self.assertEqual(0, row["response_first_payload_ns"])
                     self.assertFalse(row["response_payload_written"])
                     self.assertFalse(consumed_deliveries([row], [{"accepted": ACCEPTED, "call_id": "start-neutral", "source_operation": "spawn_agent"}],
-                                                        time.monotonic_ns())["complete"])
+                                                        time.monotonic_ns(), [])["complete"])
                 finally:
                     upstream.shutdown()
                     relay.shutdown()
@@ -681,6 +681,25 @@ class TrialOracleControls(unittest.TestCase):
                     with self.assertRaises((AssertionError, ValueError)):
                         self.verify(changed, [child_after_write(cancel), parent(terminal(cancel))], snapshot,
                                      logs(), home, "neutral-nonce", cancel)
+
+    def test_later_rejected_terminal_shaped_start_preserves_held_and_cancel_flow(self):
+        for cancel in [False, True]:
+            with self.subTest(cancel=cancel), tempfile.TemporaryDirectory() as home:
+                receipt, snapshot = self.sample(home, cancel)
+                rejected = {"id": "rejected-terminal", "name": "spawn_agent", "arguments": {
+                    "run_id": ACCEPTED["run_id"], "source_operation": "spawn_agent"},
+                    "result": REQUIRED_RATIONALE_ERROR, "success": False, "failure_code": "invalid_rationale",
+                    "occurrence": 5, "turn": 2, "observed_ns": 28}
+                receipt["calls"].append(rejected)
+                self.provider_rows.append(copy.deepcopy(rejected))
+                requests = [child_after_write(cancel), parent(terminal(cancel))]
+                self.assertTrue(self.verify(receipt, requests, snapshot, logs(), home, "neutral-nonce", cancel)["passed"])
+                self.assertEqual(rejected, receipt["calls"][-1])
+                for field, value in [("failure_code", None), ("result", REQUIRED_RATIONALE_ERROR + " changed"), ("success", 0)]:
+                    changed = copy.deepcopy(receipt)
+                    changed["calls"][-1][field] = value
+                    with self.subTest(field=field), self.assertRaises((AssertionError, ValueError)):
+                        self.verify(changed, requests, snapshot, logs(), home, "neutral-nonce", cancel)
 
     def provider_requests(self, requests, rows=None):
         requests = copy.deepcopy(requests)

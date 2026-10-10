@@ -8,7 +8,7 @@ import re
 import uuid
 
 from background_fixture import message_text
-from child_run_evals import (acceptance, actual_file, canonical_pairs, context_paths, evidence_requests,
+from child_run_evals import (require_observed_rejections, acceptance, actual_file, canonical_pairs, context_paths, evidence_requests,
                              is_unexecuted_rationale_rejection, require, validate_prompt_receipt)
 from coordination_artifact_evals import check_artifacts, field, load_json, occurrences, table
 from coordination_implement_review_evals import (paired_call_occurrences, paired_calls, project_declarations,
@@ -142,6 +142,7 @@ def verify(setup, receipt, events, requests, home):
     for path, digest in setup["input_hashes"].items():
         require(sha(actual_file(home, path).read_bytes()) == digest, "An original source, findings, or supplied report changed.")
     calls, _ = occurrences(events, receipt["session_id"])
+    require_observed_rejections(receipt["calls"], calls)
     parent_requests = [r for r in requests if context_paths(r) is None]
     require(parent_requests, "The parent provider evidence is absent.")
     pairs = paired_call_occurrences(parent_requests)
@@ -168,7 +169,7 @@ def verify(setup, receipt, events, requests, home):
                 for r in parent_requests for m in r.get("messages", [])), "The worker lacks actual runtime profile discovery.")
     accepted = acceptance(start["result"])
     require(receipt["accepted_runs"] == [accepted], "The child acceptance differs from the observed run.")
-    identifier, terminal = canonical_pairs(requests, accepted, start["id"], "spawn_agent")
+    identifier, terminal = canonical_pairs(requests, accepted, start["id"], "spawn_agent", receipt["calls"])
     require(len(receipt["verified_deliveries"]) == 1 and receipt["verified_deliveries"][0]["accepted"] == accepted
             and receipt["verified_deliveries"][0]["terminal"] == terminal and terminal["outcome"] == "Completed", "The copy task lacks one actual completed terminal.")
     children = [r for r in requests if (paths := context_paths(r)) is not None

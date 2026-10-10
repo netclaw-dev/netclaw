@@ -189,7 +189,8 @@ internal static class SessionObserver
                         expected = acceptances.Values.Select(accepted => new
                             { accepted = AcceptanceBody(accepted), call_id = starts[accepted.RunId].Id,
                                 source_operation = starts[accepted.RunId].Name }),
-                        parent_boundary_ns = output.ObservedNs
+                        parent_boundary_ns = output.ObservedNs,
+                        observed_calls = calls.Select(CallBody)
                     });
                     deliveryObservations = consumption.RootElement.Clone();
                 }
@@ -208,10 +209,7 @@ internal static class SessionObserver
                 first_turn_ns = firstTurnNs, second_turn_ns = secondTurnNs, release_ns = releaseNs,
                 last_reply = protocol?.LastReply, all_replies = replies, delivery_observations = deliveryObservations,
                 status_bodies = statusBodies, error,
-                calls = calls.Select(call => new
-                    { id = call.Id, occurrence = call.Occurrence, observed_ns = call.ObservedNs,
-                        name = call.Name, arguments = call.Arguments, turn = call.Turn, success = call.Success,
-                        failure_code = call.FailureCode, result = call.Result }),
+                calls = calls.Select(CallBody),
                 limit = "Post-commit diagnostics, actual provider history, and files require the separate Python oracle."
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
@@ -251,6 +249,13 @@ internal static class SessionObserver
             Require(!string.IsNullOrWhiteSpace(input.ProbeMarker)
                 && input.ProbePrompt.Contains(input.ProbeMarker, StringComparison.Ordinal), "The probe lacks its reply marker.");
     }
+
+    internal static object CallBody(ObservedCall call) => new
+    {
+        id = call.Id, occurrence = call.Occurrence, observed_ns = call.ObservedNs,
+        name = call.Name, arguments = call.Arguments, turn = call.Turn, success = call.Success,
+        failure_code = call.FailureCode, result = call.Result
+    };
 
     internal sealed class ObservedCall(string id, string name, JsonElement arguments, int turn, long observedNs, int occurrence)
     {
