@@ -734,6 +734,9 @@ def session_logs(home, session, run_ids):
 
 def legacy_observer_mode(case, prompt_ordinal):
     require(isinstance(prompt_ordinal, int) and not isinstance(prompt_ordinal, bool), "The prompt ordinal is invalid.")
+    if case == "skill_coordination_discovery":
+        require(prompt_ordinal == 1, "Discovery requires its one original prompt.")
+        return "turn"
     if case == "coding_context_worktree_handoff":
         require(1 <= prompt_ordinal <= 4, "The worktree handoff prompt ordinal is outside its four-prompt contract.")
         return "collect" if prompt_ordinal == 3 else "turn"

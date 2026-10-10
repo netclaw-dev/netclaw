@@ -95,7 +95,7 @@ class CoordinationWorkflowControls(unittest.TestCase):
                                      "bash", case], capture_output=True, text=True)
             self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotEqual(0, subprocess.run(["bash", "-c", functions +
-                            '\nFILTER_CASE=skill_coordination_discovery; child_result_consumer']).returncode)
+                            '\nFILTER_CASE=; child_result_consumer']).returncode)
 
     def test_setup_copies_only_neutral_source_with_unique_owned_roots(self):
         with tempfile.TemporaryDirectory() as directory:
