@@ -443,6 +443,17 @@ netclaw status      # daemon connector health, including MCP
 can probe connectivity but cannot verify SDK-managed OAuth; start the daemon for
 an authoritative auth result.
 
+When an audience uses `McpServersMode=All`, a per-server tool snapshot does not
+limit access by itself. Use the live catalog to review the snapshot, then add
+explicit Deny overrides for tools that should stay unavailable:
+
+```bash
+netclaw mcp tools <server> --revoke <tool> --audience <name>
+```
+
+Repeat the command for each exposed tool, or switch the audience to `Allowlist`
+when the grant list should be the complete set of tools that can run.
+
 OAuth failures return safe structured errors with an `error`, an `operation`,
 and, when known, an HTTP `status`. The CLI prints the useful message rather than
 raw JSON. A blank provider body still produces a structured daemon error from its
