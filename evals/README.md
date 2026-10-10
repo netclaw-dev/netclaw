@@ -665,6 +665,13 @@ Use five fresh invocations for each critical held-child and cancel case.
 The runner archives actual provider bytes, child paths, commit diagnostics, and artifact evidence.
 The CLI acceptance smoke remains separate from the persistent-result cases.
 
+The cancel case requires an actual `agent-coordination` load in the first parent turn.
+The parent loads the deferred control in the second turn.
+The oracle checks cancellation admission and dispatch closure as separate status facts.
+After terminal consumption, the parent must fully read the actual framework report and the confirmed partial artifact.
+The parent must also obtain explicit dispatch closure and the matching cancelled terminal through status.
+These checks prove local receipts and file access. They do not prove that external effects stopped.
+
 The existing Subagents consumers also require an exact case selector and one fresh invocation.
 Their original project, scope, shell, and artifact assertions remain mandatory.
 The queue-grant and shell lifecycle controls retain their original paths and oracles.
