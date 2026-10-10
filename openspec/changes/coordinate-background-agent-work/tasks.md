@@ -111,7 +111,7 @@ Negative model observations at `3dd2c1a3`:
 - [x] 7.3 Review security mutation scope. Document why unchanged policy gates require no new target, or prove a narrow unsafe mutant is rejected.
 - [ ] 7.4 Run strict OpenSpec validation and implementation verification. Verify each requirement links to current source and claim-specific evidence.
 - [ ] 7.5 Report implementation, deterministic proof, model evals, native smoke, CI, rollout, and user delivery as separate states.
-- [ ] 7.6 Retain PR 2's held-child parent-response gate. Never infer days-long productivity from these workflow cases.
+- [x] 7.6 Retain PR 2's held-child parent-response gate. Never infer days-long productivity from these workflow cases.
 
 Combined test and mutation evidence at `915601da`:
 
@@ -131,3 +131,14 @@ Traceability reconciliation after `915601da`:
 - The plan now names the settled FR-017 requirement. The first package now links the same canonical plan.
 - The package link audit resolves all local links and the current approval-prompt glossary anchor.
 - Six architecture code links predate this PR. They remain separate defects outside this reconciliation.
+
+Held-child evidence review at `d0377373`:
+
+- All five original held-child trials pass a separate replay through the current verifier.
+- The replay reads actual archived provider requests and observer records. It uses copied session logs and artifact bytes.
+- Original trial records and complete artifact inventories remain unchanged. An altered artifact fails the current content check.
+- The parent completes a fresh probe before the fixture releases the held child response.
+- The canonical terminal, durable journal positions, actual parent consumption, and exact artifact bytes retain their original attribution.
+- Native inputs match. The historical helper differs from the current helper, which does not execute this offline replay.
+- This evidence preserves the existing held-response gate. It proves neither concurrent backend inference nor days-long productivity.
+- Cancellation, fresh current-helper execution, and the productive false-block gate remain separate requirements.
