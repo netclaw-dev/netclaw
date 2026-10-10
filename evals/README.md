@@ -192,6 +192,33 @@ python3 -m unittest discover -s evals -p test_coordination_workflow_evals.py -v
 python3 -m unittest discover -s evals -p test_coordination_artifact_evals.py -v
 ```
 
+### Coordination Negative Controls
+
+These targeted cases use ordinary parent turns and the existing provider relay.
+They require an OpenAI-compatible provider and one trial per fresh container, home, and session.
+They do not require the child observer or an accepted child.
+
+```bash
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 NETCLAW_EVAL_CASE=coordination_trivial_task ./evals/run-evals.sh
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 NETCLAW_EVAL_CASE=coordination_unavailable_profile ./evals/run-evals.sh
+```
+
+The trivial case asks for one exact typo correction without a prescribed workflow.
+The fixture requires `file_edit` or `file_write` for the correction and forbids shell commands.
+Its oracle requires exact file bytes, an actual edit receipt, and zero child attempts.
+The unavailable case requests a unique profile absent from the actual runtime index.
+It forbids a substitute profile and any file change.
+The parent can report the limitation directly or after an actual unknown-profile rejection.
+The oracle checks the index from actual provider requests and pairs tool receipts with the parent log.
+Both cases reject child requests, profile changes, unrelated actions, and claims without actual file evidence.
+The runner archives the setup, relay requests, parent log, and verdict through its normal evidence path.
+Both cases stay outside the default suite. A failed trial remains a failure.
+These deterministic controls do not establish model behavior:
+
+```bash
+python3 -m unittest discover -s evals -p test_coordination_negative_evals.py -v
+```
+
 ### Memory Pipeline Semantics
 
 The memory category intentionally separates three behaviors that used to be
