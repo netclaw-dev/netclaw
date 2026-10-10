@@ -893,6 +893,83 @@ def run(port):
 
 
 
+def verify_scratch(receipt, data, requests, log):
+    validate_prompt_receipt(receipt, data)
+    require(receipt.get("case") == "subagent_session_scratch_disposable" and data["Mode"] == "collect",
+            "The scratch receipt belongs to another case or observer mode.")
+    for request in requests:
+        has_child_contract = any(message.get("role") == "system" and CHILD_CONTRACT in message_text(message.get("content", ""))
+                                 for message in request.get("messages", []))
+        require(not has_child_contract or context_paths(request) is not None,
+                "A scratch child request lacks its canonical context.")
+    starts = accepted_start_calls(receipt["calls"])
+    require(len(starts) == 1, "The scratch case requires one accepted child.")
+    start = starts[0]
+    arguments = start["arguments"]
+    require(arguments.get("Agent", arguments.get("agent")) == "disposable-diagnostic"
+            and not any(key.casefold() == "context" for key in arguments),
+            "The scratch child profile or Context differs.")
+    task = arguments.get("Task", arguments.get("task"))
+    require(isinstance(task, str) and task.strip() and not re.search(
+        r"session_dir|/tmp|temporary|working.?directory|set_working_directory|(^|[^a-z])cwd([^a-z]|$)", task, re.I),
+        "The scratch task is absent or contains a path hint.")
+    accepted = acceptance(start["result"])
+    require(receipt["accepted_runs"] == [accepted] and receipt["accepted_run"] == accepted
+            and accepted["scope_id"] == receipt["session_id"] + "/subagent/disposable-diagnostic/" + accepted["run_id"],
+            "The scratch acceptance has another owner or run.")
+    require(any(pair_matches(pair, start) for request in requests if context_paths(request) is None
+                for pair in parent_call_pairs(request)), "The scratch start lacks its exact provider pair.")
+    call_id, terminal = canonical_pairs(requests, accepted, start["id"], start["name"], receipt["calls"])
+    require(terminal.get("state") == "Completed" and terminal.get("outcome") == "Completed",
+            "The scratch child did not complete normally.")
+    positions = committed_positions(log, receipt["session_id"], accepted["run_id"], call_id)
+    require(receipt["verified_deliveries"] == [{"accepted": accepted, "terminal": terminal, "journal_positions": positions}],
+            "The scratch verified delivery differs from the canonical terminal.")
+    consumption = receipt["delivery_observations"]
+    require(consumption.get("complete") is True and len(consumption["deliveries"]) == 1,
+            "The parent did not consume the scratch terminal.")
+    consumed = consumption["deliveries"][0]
+    require(consumed["accepted"] == accepted and consumed["terminal"] == terminal and consumed["call_id"] == call_id
+            and 0 < consumed["request_admitted_ns"] < consumed["response_first_payload_ns"] < consumed["parent_boundary_ns"],
+            "The scratch consumption has another terminal or response boundary.")
+    request_id = consumed["request_id"]
+    require(type(request_id) is int and 0 < request_id <= len(requests)
+            and canonical_pairs([requests[request_id - 1]], accepted, start["id"], start["name"], receipt["calls"])
+            == (call_id, terminal), "The scratch consumption names another provider request.")
+    child_requests = [request for request in requests if context_paths(request) is not None]
+    require(child_requests, "The scratch child context is absent.")
+    paths = context_paths(child_requests[0])
+    child_root = PurePosixPath(terminal["log_path"]).parent.parent
+    require(str(child_root / "logs/session.log") == terminal["log_path"] and child_root.is_absolute()
+            and ".." not in child_root.parts and child_root.name == accepted["run_id"]
+            and child_root.parent.name == "subagents"
+            and str(child_root.parent.parent.parent) == "/home/netclaw/.netclaw/sessions",
+            "The scratch log has another managed child root.")
+    expected = {"session_dir": str(child_root.parent.parent / "workspace"), "temp_dir": str(child_root / "tmp"),
+                "artifact_dir": str(child_root / "artifacts"), "log_path": terminal["log_path"]}
+    require(paths == expected and terminal["artifact_directory"] == paths["artifact_dir"]
+            and all(context_paths(request) == paths for request in child_requests),
+            "The scratch context differs from its terminal storage.")
+    identities = set()
+    command = "python3 -c 'import tempfile; print(tempfile.gettempdir())'"
+    for request in child_requests:
+        pairs = parent_call_pairs(request)
+        calls = [call for message in request.get("messages", []) if message.get("role") == "assistant"
+                 for call in message.get("tool_calls", [])]
+        require(len(calls) == len(pairs) and len(pairs) <= 1,
+                "The scratch child has an extra or unpaired tool call.")
+        for identifier, name, args, result, *_ in pairs:
+            require(name == "shell_execute" and args.get("Command") == command
+                    and set(args) <= {"Command", "_rationale", "_timeout_seconds", "_background"}
+                    and result == "Exit code: 0\n" + paths["temp_dir"] + "\n",
+                    "The scratch command or successful result differs.")
+            identities.add((identifier, name, json.dumps(args, sort_keys=True), result))
+    require(len(identities) == 1, "The scratch child lacks one stable diagnostic pair.")
+    require(paths["temp_dir"] in terminal.get("output", "") and paths["temp_dir"] in receipt["last_reply"],
+            "The child or parent reply lacks the exact managed temp path.")
+    return paths["temp_dir"]
+
+
 def verified_final_response(evidence):
     directory = Path(evidence)
     data = json.loads((directory / "observer-input.json").read_text())
@@ -903,7 +980,7 @@ def verified_final_response(evidence):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["serve", "run", "collect", "assert-delivery", "log-path", "final-response"])
+    parser.add_argument("action", choices=["serve", "run", "collect", "assert-delivery", "log-path", "final-response", "assert-scratch"])
     parser.add_argument("--port", type=int)
     parser.add_argument("--prompt-file")
     parser.add_argument("--session", default="")
@@ -913,6 +990,16 @@ def main():
     parser.add_argument("--case", default="")
     parser.add_argument("--prompt-ordinal", type=int, default=1)
     args = parser.parse_args()
+    if args.action == "assert-scratch":
+        directories = list(Path(args.evidence).glob("observer-*"))
+        require(len(directories) == 1, "The scratch case requires one observer invocation.")
+        directory = directories[0]
+        receipt = json.loads((directory / "verified-receipt.json").read_text())
+        data = json.loads((directory / "observer-input.json").read_text())
+        log = session_logs(os.environ["EVAL_HOME"], receipt["session_id"],
+                           [row["run_id"] for row in receipt["accepted_runs"]])
+        print(verify_scratch(receipt, data, evidence_requests(Path(args.evidence) / "relay"), log))
+        return 0
     if args.action == "final-response":
         print(verified_final_response(args.evidence), end="")
         return 0
