@@ -747,6 +747,10 @@ An observer failure before the assertion can still prevent artifact capture. Ret
 ### Isolated implementation and independent review
 
 `coordination_implement_review` stays outside the default suite. It uses the existing `collect` observer and child relay.
+The eval home includes the default `code-analyst` profile for this case and `coordination_conflicting_evidence` only.
+The fixture retains the existing default profile fields and instructions.
+The other cases keep their prior profile catalog, including the canonical `task-worker`.
+The profile controls execute the seed path and load the reviewer through the runtime loader and parent index.
 
 ```bash
 NETCLAW_EVAL_CASE=coordination_implement_review \
