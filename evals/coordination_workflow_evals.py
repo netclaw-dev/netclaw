@@ -13,7 +13,7 @@ import uuid
 from background_fixture import message_text
 from child_run_evals import (CHILD_CONTRACT, REQUIRED_RATIONALE_ERROR, acceptance, actual_file, canonical_pairs, context_paths,
                              evidence_requests, is_unexecuted_rationale_rejection, pair_matches, parent_call_pairs,
-                             require, require_observed_rejections, validate_prompt_receipt)
+                             require, require_observed_rejections, validate_prompt_receipt, workflow_delivery)
 from coordination_implement_review_evals import paired_call_occurrences, project_declarations, signature
 from coordination_artifact_evals import occurrences
 
@@ -68,7 +68,7 @@ Accepted objective: reject duplicate identifiers before publication and preserve
 Keep exact identifier equality. The User owns any later decision about case-insensitive identifiers.
 Use the available coordination guidance and its analyze-plan workflow and artifact templates.
 Assign one source analysis task to an available analyst, then assign one complete plan task to task-worker.
-Use exactly these two child runs.
+Complete these two distinct stages. A justified replacement may follow an attributed failed attempt.
 Discover the actual profiles. Give each child its explicit source scope and its distinct artifact path.
 The findings path is {setup['findings_path']}.
 The plan path is {setup['plan_path']}.
@@ -107,7 +107,12 @@ def blocked_config(source, destination):
 
 
 def workflow_stages(receipt, events, requests, setup, eval_home):
-    require(len(receipt["accepted_runs"]) == 2, "The workflow requires exactly two accepted child runs.")
+    accepted_runs = receipt["accepted_runs"]
+    require(len(accepted_runs) >= 2 and len({row["run_id"] for row in accepted_runs}) == len(accepted_runs),
+            "The workflow lacks distinct accepted run identities.")
+    require(len(receipt["verified_deliveries"]) == len(accepted_runs)
+            and len(receipt["delivery_observations"]["deliveries"]) == len(accepted_runs),
+            "The workflow lacks one verified delivery and consumption per accepted run.")
     calls, _ = occurrences(events, receipt["session_id"])
     require(all(call["name"] in PARENT_TOOLS for call in calls),
             "The parent calls an action outside the assigned workflow.")
@@ -150,6 +155,7 @@ def workflow_stages(receipt, events, requests, setup, eval_home):
     require(seen == expected, "A declaration DTO lacks sufficient provider occurrence evidence.")
     starts = [call for call in calls if call["name"] == "spawn_agent" and call["failure"] is None]
     stages = []
+    assigned_runs = set()
     for key in ("findings_path", "plan_path"):
         path = setup[key]
         assigned = [call for call in starts if path in (call["arguments"].get("Task", "") + "\n" +
@@ -161,61 +167,116 @@ def workflow_stages(receipt, events, requests, setup, eval_home):
                         if str(call["arguments"].get("Agent", "")).lower() == "task-worker"
                         and setup["findings_path"] in (
                             call["arguments"].get("Task", "") + "\n" + (call["arguments"].get("Context") or ""))]
-        require(len(assigned) == 1, "The workflow lacks one distinct assignment for " + key + ".")
-        start = assigned[0]
-        agent = start["arguments"].get("Agent")
-        require(isinstance(agent, str) and agent, "The child assignment lacks its actual profile name.")
-        if key == "plan_path":
-            require(agent.lower() == "task-worker", "The plan does not use the canonical task-worker profile.")
-        else:
-            discovery = []
-            for request in requests:
-                if context_paths(request) is not None:
-                    continue
-                for message in request.get("messages", []):
-                    text = message_text(message.get("content"))
-                    # The runtime puts the current profile index in a volatile user nudge.
-                    contextual = message.get("role") == "system" or (
-                        message.get("role") == "user" and text.startswith("[system: ") and text.endswith("]"))
-                    if contextual and "[available-subagents" in text:
-                        discovery.extend(re.findall(r"^## " + re.escape(agent) + r"\n([^\n]+)", text, re.MULTILINE | re.IGNORECASE))
-            require(any("analyst" in (agent + " " + description).lower()
-                        or "analysis" in description.lower() for description in discovery),
-                    "The analyst profile lacks actual parent discovery evidence.")
-        accepted = acceptance(start["result"])
-        require(accepted in receipt["accepted_runs"], "The stage lacks the observed canonical acceptance.")
-        verified = [row for row in receipt["verified_deliveries"] if row["accepted"] == accepted]
-        require(len(verified) == 1, "The stage lacks one verified child terminal delivery.")
-        terminal = verified[0]["terminal"]
-        child_requests = [request for request in requests if (paths := context_paths(request)) is not None
-                          and paths["log_path"] == terminal["log_path"]
-                          and paths["artifact_dir"] == terminal["artifact_directory"]]
-        require(child_requests, "The stage lacks its actual attributed child provider captures.")
-        content = actual_file(eval_home, path).read_bytes()
-        writes = set()
-        for request in child_requests:
-            pending = {}
-            for message in request.get("messages", []):
-                for call in message.get("tool_calls", []) if message.get("role") == "assistant" else []:
-                    function = call.get("function", {})
-                    require(function.get("name") in CHILD_TOOLS,
-                            "The child calls an action outside its assigned artifact task.")
-                    if function.get("name") == "file_write":
-                        args = json.loads(function["arguments"])
-                        require(args.get("Path") == path, "The child writes outside its assigned artifact.")
-                        require(call.get("id") and call["id"] not in pending,
-                                "The child reuses an unresolved artifact write identifier.")
-                        pending[call["id"]] = args
-                if message.get("role") == "tool" and message.get("tool_call_id") in pending:
-                    args = pending.pop(message["tool_call_id"])
-                    expected = f"Successfully wrote {len(content)} bytes to {path}"
-                    if message_text(message.get("content")) == expected and args.get("Content", "").encode() == content:
-                        writes.add(message["tool_call_id"])
-        require(len(writes) == 1, "The stage lacks one paired full artifact write with exact bytes.")
+        require(assigned, "The workflow lacks one distinct assignment for " + key + ".")
+        completed_stages = []
+        previous = None
+        for start in assigned:
+            validate_profile(start, key, requests)
+            accepted = acceptance(start["result"])
+            require(accepted in accepted_runs and accepted["run_id"] not in assigned_runs,
+                    "The workflow assignment repeats a run or lacks its canonical acceptance.")
+            assigned_runs.add(accepted["run_id"])
+            original = [row for row in receipt["calls"] if row.get("success") is True and row.get("failure_code") is None
+                        and type(row.get("occurrence")) is int and row["occurrence"] == calls.index(start) + 1
+                        and row.get("observed_ns") == events[start["call_sequence"] - 1]["observed_ns"]
+                        and pair_matches((start["id"], start["name"], start["arguments"], start["result"]), row)]
+            require(len(original) == 1, "The workflow assignment lacks its exact actual observer occurrence.")
+            _, terminal, consumed = workflow_delivery(receipt, accepted, original[0], requests)
+            verified = [row for row in receipt["verified_deliveries"] if row["accepted"] == accepted]
+            require(len(verified) == 1 and json.dumps(verified[0]["terminal"], sort_keys=True) == json.dumps(terminal, sort_keys=True),
+                    "The stage lacks one verified canonical child terminal delivery.")
+            if previous is not None:
+                require(previous[0]["outcome"] == "Failed" and previous[1]["response_first_payload_ns"] < original[0]["observed_ns"],
+                        "The distinct assignment replacement precedes failed-terminal consumption or follows a Completed stage.")
+            previous = (terminal, consumed)
+            if terminal["outcome"] == "Completed":
+                completed_stages.append(start)
+            validate_attempt(accepted, terminal, requests, setup[key], eval_home, receipt["session_id"])
+        require(len(completed_stages) == 1 and previous[0]["outcome"] == "Completed",
+                "The workflow lacks one distinct assignment with a Completed result for " + key + ".")
+        start = completed_stages[0]
         stages.append(start)
     require(acceptance(stages[0]["result"])["run_id"] != acceptance(stages[1]["result"])["run_id"]
             and stages[0]["result_sequence"] < stages[1]["call_sequence"],
             "The workflow does not preserve distinct ordered child stages.")
+
+    require(assigned_runs == {row["run_id"] for row in accepted_runs}, "The workflow contains an unrelated accepted child.")
+    return stages
+
+
+def validate_profile(start, key, requests):
+    agent = start["arguments"].get("Agent")
+    require(isinstance(agent, str) and agent, "The child assignment lacks its actual profile name.")
+    if key == "plan_path":
+        require(agent.lower() == "task-worker", "The plan does not use the canonical task-worker profile.")
+    else:
+        discovery = []
+        for request in requests:
+            if context_paths(request) is not None:
+                continue
+            for message in request.get("messages", []):
+                text = message_text(message.get("content"))
+                # The runtime puts the current profile index in a volatile user nudge.
+                contextual = message.get("role") == "system" or (
+                    message.get("role") == "user" and text.startswith("[system: ") and text.endswith("]"))
+                if contextual and "[available-subagents" in text:
+                    discovery.extend(re.findall(r"^## " + re.escape(agent) + r"\n([^\n]+)", text, re.MULTILINE | re.IGNORECASE))
+        require(any("analyst" in (agent + " " + description).lower()
+                    or "analysis" in description.lower() for description in discovery),
+                "The analyst profile lacks actual parent discovery evidence.")
+
+
+def attempt_requests(accepted, terminal, requests, eval_home, session):
+    child_requests = []
+    for request in requests:
+        paths = context_paths(request)
+        require(paths is not None or not any(CHILD_CONTRACT in message_text(message.get("content"))
+                    for message in request.get("messages", []) if message.get("role") == "system"),
+                "The child request lacks its actual runtime storage context.")
+        if paths is None:
+            continue
+        if terminal["outcome"] == "Completed":
+            attributed = paths["log_path"] == terminal["log_path"] and paths["artifact_dir"] == terminal["artifact_directory"]
+        else:
+            suffix = "/subagents/" + accepted["run_id"] + "/logs/session.log"
+            attributed = paths["log_path"].endswith(suffix) and paths["artifact_dir"] == paths["log_path"][:-len("logs/session.log")] + "artifacts"
+            if attributed:
+                require(terminal["log_path"] in (None, paths["log_path"])
+                        and terminal["artifact_directory"] in (None, paths["artifact_dir"]),
+                        "The failed child terminal supplies foreign storage paths.")
+                owner_log = actual_file(eval_home, paths["log_path"][:-len(suffix)] + "/logs/session.log")
+                require(re.search(r"child_run_accepted owner=" + re.escape(session) + r" runId=" + re.escape(accepted["run_id"]) +
+                                  r" journalSequence=\d+", owner_log.read_text()),
+                        "The failed child context lacks its canonical parent acceptance.")
+        if attributed:
+            child_requests.append(request)
+    require(child_requests, "The stage lacks its actual attributed child provider captures.")
+    return child_requests
+
+
+def validate_attempt(accepted, terminal, requests, path, eval_home, session):
+    child_requests = attempt_requests(accepted, terminal, requests, eval_home, session)
+    content = actual_file(eval_home, path).read_bytes() if terminal["outcome"] == "Completed" else None
+    writes = set()
+    for request in child_requests:
+        pending = {}
+        for message in request.get("messages", []):
+            for call in message.get("tool_calls", []) if message.get("role") == "assistant" else []:
+                function = call.get("function", {})
+                require(function.get("name") in CHILD_TOOLS,
+                        "The child calls an action outside its assigned artifact task.")
+                if function.get("name") == "file_write":
+                    args = json.loads(function["arguments"])
+                    require(args.get("Path") == path, "The child writes outside its assigned artifact.")
+                    require(call.get("id") and call["id"] not in pending,
+                            "The child reuses an unresolved artifact write identifier.")
+                    pending[call["id"]] = args
+            if message.get("role") == "tool" and message.get("tool_call_id") in pending:
+                args = pending.pop(message["tool_call_id"])
+                expected = f"Successfully wrote {len(content)} bytes to {path}" if content is not None else None
+                if content is not None and message_text(message.get("content")) == expected and args.get("Content", "").encode() == content:
+                    writes.add(message["tool_call_id"])
+    require(content is None or len(writes) == 1, "The stage lacks one paired full artifact write with exact bytes.")
 
 
 def contract(case, fixture_root, eval_home, setup_directory, observer_directory, relay_directory):
@@ -277,6 +338,7 @@ def archive_delivery_workspace(receipt, calls, requests, home):
     starts = [call for call in calls if call["name"] == "spawn_agent" and call.get("failure") is None
               and "result" in call]
     directories = set()
+    failed_directories = set()
     run_ids = []
     for start in starts:
         accepted = acceptance(start["result"])
@@ -284,20 +346,33 @@ def archive_delivery_workspace(receipt, calls, requests, home):
                     for pair in parent_call_pairs(request)), "The archive start lacks its actual parent provider pair.")
         require(accepted in receipt["accepted_runs"], "The archive start lacks its observer acceptance.")
         _, terminal = canonical_pairs(requests, accepted, start["id"], start["name"], receipt["calls"])
-        root = PurePosixPath(terminal["log_path"]).parent.parent
-        require(root.name == accepted["run_id"] and root.parent.name == "subagents"
-                and str(root.parent.parent.parent) == "/home/netclaw/.netclaw/sessions"
-                and terminal["log_path"] == str(root / "logs/session.log")
-                and terminal["artifact_directory"] == str(root / "artifacts"),
-                "The archive child does not use the canonical session layout.")
-        workspace = str(root.parent.parent / "workspace")
-        require(any((paths := context_paths(request)) is not None and paths["session_dir"] == workspace
-                    and paths["log_path"] == terminal["log_path"]
-                    and paths["artifact_dir"] == terminal["artifact_directory"] for request in requests),
-                "The archive lacks the actual child storage context.")
-        directories.add(workspace)
+        if terminal["outcome"] == "Failed":
+            original = [row for row in receipt["calls"] if row.get("success") is True and row.get("failure_code") is None
+                        and type(row.get("occurrence")) is int and row["occurrence"] == calls.index(start) + 1
+                        and pair_matches((start["id"], start["name"], start["arguments"], start["result"]), row)]
+            require(len(original) == 1, "The archive failed start lacks its exact observer occurrence.")
+            _, terminal, _ = workflow_delivery(receipt, accepted, original[0], requests)
+            contexts = [context_paths(request) for request in attempt_requests(
+                accepted, terminal, requests, home, receipt["session_id"])]
+            storage = {(paths["log_path"], paths["artifact_dir"]) for paths in contexts}
+        else:
+            require(terminal["outcome"] == "Completed", "The archive child lacks a supported terminal outcome.")
+            storage = {(terminal["log_path"], terminal["artifact_directory"])}
+        for log_path, artifact_directory in storage:
+            root = PurePosixPath(log_path).parent.parent
+            require(root.name == accepted["run_id"] and root.parent.name == "subagents"
+                    and str(root.parent.parent.parent) == "/home/netclaw/.netclaw/sessions"
+                    and log_path == str(root / "logs/session.log")
+                    and artifact_directory == str(root / "artifacts"),
+                    "The archive child does not use the canonical session layout.")
+            workspace = str(root.parent.parent / "workspace")
+            require(any((paths := context_paths(request)) is not None and paths["session_dir"] == workspace
+                        and paths["log_path"] == log_path and paths["artifact_dir"] == artifact_directory for request in requests),
+                    "The archive lacks the actual child storage context.")
+            (failed_directories if terminal["outcome"] == "Failed" else directories).add(workspace)
         run_ids.append(accepted["run_id"])
-    require(len(directories) == 1, "The archive lacks one attributed parent workspace.")
+    require(len(directories) == 1 and failed_directories <= directories,
+            "The archive lacks one attributed parent workspace.")
     workspace = directories.pop()
     log = archive_read(home, str(PurePosixPath(workspace).parent / "logs/session.log"))
     require(log is not None and all(re.search(r"child_run_accepted owner=" + re.escape(receipt["session_id"])
