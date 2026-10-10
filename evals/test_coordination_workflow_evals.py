@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from child_run_evals import actual_file, consumed_deliveries, legacy_observer_mode
+from child_run_evals import REQUIRED_RATIONALE_ERROR, actual_file, consumed_deliveries, legacy_observer_mode
 from coordination_workflow_evals import archive_read, archive_runtime_files, blocked_config, contract, prepare, prompt, workflow_stages
 from test_child_run_evals import ACCEPTED, PATHS, child, parent, terminal
 
@@ -64,6 +64,7 @@ def stage_evidence(root):
         requests.append(request)
     requests.append({"messages": [{"role": "user", "content":
         "[system: [available-subagents — use spawn_agent to delegate]\n\n## headless-analyst\nA source analyst.\n]"}]})
+    receipt["calls"] = observer_calls(events)
     return receipt, events, requests, setup, home
 
 
@@ -86,6 +87,32 @@ def observer_calls(events):
             turn += 1
     assert not pending
     return calls
+
+
+def declaration_evidence(root, rejected=False, repeated=False):
+    receipt, events, requests, setup, home = stage_evidence(root)
+    args = {"Path": setup["source_root"], "_rationale": "Declare the assigned source project."}
+    pair = [
+        {"output": {"Type": "tool_call", "SessionId": receipt["session_id"],
+                    "CallId": "declaration", "ToolName": "set_working_directory", "ArgumentsJson": json.dumps(args)}},
+        {"output": {"Type": "tool_result", "SessionId": receipt["session_id"],
+                    "CallId": "declaration", "ToolName": "set_working_directory",
+                    "Result": REQUIRED_RATIONALE_ERROR if rejected else setup["source_root"],
+                    "ToolFailureCode": "invalid_rationale" if rejected else None}}]
+    events[:0] = [copy.deepcopy(event) for _ in range(2 if repeated else 1) for event in pair]
+    for index, event in enumerate(events, 1):
+        event.update(sequence=index, observed_ns=index)
+    receipt["calls"] = observer_calls(events)
+    history = []
+    for event in events:
+        output = event["output"]
+        if output["Type"] == "tool_call":
+            history.append({"role": "assistant", "tool_calls": [{"id": output["CallId"], "function": {
+                "name": output["ToolName"], "arguments": output["ArgumentsJson"]}}]})
+        else:
+            history.append({"role": "tool", "tool_call_id": output["CallId"], "content": output["Result"]})
+    requests.append({"messages": history})
+    return receipt, events, requests, setup, home
 
 
 
@@ -430,6 +457,131 @@ check_prerequisites
 
 
 class CoordinationWorkflowControls(unittest.TestCase):
+    def test_named_root_declaration_preserves_cumulative_history_and_completed_id_reuse(self):
+        for rejected in (False, True):
+            for repeated in (False, True):
+                with self.subTest(rejected=rejected, repeated=repeated), tempfile.TemporaryDirectory() as directory:
+                    evidence = declaration_evidence(Path(directory), rejected, repeated)
+                    evidence[2].append(copy.deepcopy(evidence[2][-1]))
+                    workflow_stages(*evidence)
+
+    def test_declaration_rejects_wrong_root_and_noncanonical_result(self):
+        for fault in ("root", "result", "failure"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                receipt, events, requests, setup, home = declaration_evidence(Path(directory))
+                if fault == "root":
+                    args = {"Path": setup["source_root"] + "/source"}
+                    events[0]["output"]["ArgumentsJson"] = json.dumps(args)
+                    requests[-1]["messages"][0]["tool_calls"][0]["function"]["arguments"] = json.dumps(args)
+                else:
+                    events[1]["output"].update(Result="Project declaration denied.",
+                                             ToolFailureCode="access_denied" if fault == "failure" else None)
+                    requests[-1]["messages"][1]["content"] = events[1]["output"]["Result"]
+                receipt["calls"] = observer_calls(events)
+                with self.assertRaises(AssertionError):
+                    workflow_stages(receipt, events, requests, setup, home)
+
+    def test_declaration_requires_actual_owner_and_complete_dto_provider_identity(self):
+        for fault in ("dto-id", "provider-id", "arguments", "owner", "dto-absent", "provider-absent", "result-absent"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                receipt, events, requests, setup, home = declaration_evidence(Path(directory))
+                if fault == "dto-id":
+                    for event in events[:2]:
+                        event["output"]["CallId"] = "foreign-id"
+                elif fault == "provider-id":
+                    requests[-1]["messages"][0]["tool_calls"][0]["id"] = "foreign-id"
+                    requests[-1]["messages"][1]["tool_call_id"] = "foreign-id"
+                elif fault == "arguments":
+                    requests[-1]["messages"][0]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+                        {"Path": setup["source_root"], "_rationale": "A different intent."})
+                elif fault == "owner":
+                    events[0]["output"]["SessionId"] = "foreign-owner"
+                elif fault == "dto-absent":
+                    del events[:2]
+                    for index, event in enumerate(events, 1):
+                        event.update(sequence=index, observed_ns=index)
+                elif fault == "provider-absent":
+                    requests.pop()
+                else:
+                    del requests[-1]["messages"][1]
+                receipt["calls"] = observer_calls(events)
+                with self.assertRaises((AssertionError, ValueError)):
+                    workflow_stages(receipt, events, requests, setup, home)
+
+    def test_declaration_requires_exact_typed_observer_metadata(self):
+        for rejected in (False, True):
+            for fault in ("missing", "success", "numeric-success", "ordinal", "boolean-ordinal", "code"):
+                with self.subTest(rejected=rejected, fault=fault), tempfile.TemporaryDirectory() as directory:
+                    receipt, events, requests, setup, home = declaration_evidence(Path(directory), rejected)
+                    row = receipt["calls"][0]
+                    if fault == "missing":
+                        del receipt["calls"][0]
+                    elif fault == "success":
+                        row["success"] = rejected
+                    elif fault == "numeric-success":
+                        row["success"] = 0 if rejected else 1
+                    elif fault == "ordinal":
+                        row["occurrence"] = 2
+                    elif fault == "boolean-ordinal":
+                        row["occurrence"] = True
+                    else:
+                        row["failure_code"] = None if rejected else "invalid_rationale"
+                    with self.assertRaises(AssertionError):
+                        workflow_stages(receipt, events, requests, setup, home)
+
+    def test_declaration_provider_multiplicity_requires_distinct_actual_occurrences(self):
+        for rejected in (False, True):
+            with self.subTest(rejected=rejected), tempfile.TemporaryDirectory() as directory:
+                evidence = declaration_evidence(Path(directory), rejected)
+                history = evidence[2][-1]["messages"]
+                history[2:2] = copy.deepcopy(history[:2])
+                with self.assertRaises(AssertionError):
+                    workflow_stages(*evidence)
+
+    def test_declaration_dto_multiplicity_requires_provider_coverage(self):
+        for rejected in (False, True):
+            with self.subTest(rejected=rejected), tempfile.TemporaryDirectory() as directory:
+                evidence = declaration_evidence(Path(directory), rejected, repeated=True)
+                del evidence[2][-1]["messages"][2:4]
+                with self.assertRaisesRegex(AssertionError, "sufficient provider occurrence"):
+                    workflow_stages(*evidence)
+
+    def test_distinct_declarations_can_use_split_and_cumulative_provider_histories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt, events, requests, setup, home = declaration_evidence(Path(directory), repeated=True)
+            for event in events[2:4]:
+                event["output"]["CallId"] = "second-declaration"
+            history = requests.pop()["messages"]
+            history[2]["tool_calls"][0]["id"] = "second-declaration"
+            history[3]["tool_call_id"] = "second-declaration"
+            receipt["calls"] = observer_calls(events)
+            requests.extend([{"messages": history[:2]}, {"messages": history[2:]}])
+            requests.append(copy.deepcopy(requests[-1]))
+            workflow_stages(receipt, events, requests, setup, home)
+
+    def test_identical_id_fragmentation_reports_insufficient_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = declaration_evidence(Path(directory), repeated=True)
+            history = evidence[2].pop()["messages"]
+            evidence[2].extend([{"messages": history[:2]}, {"messages": history[2:]}])
+            with self.assertRaisesRegex(AssertionError, "sufficient provider occurrence"):
+                workflow_stages(*evidence)
+
+    def test_declaration_rejection_cannot_authorize_shell_attempts(self):
+        for code, result in (("invalid_rationale", REQUIRED_RATIONALE_ERROR),
+                             ("access_denied", "Tool access denied: shell_execute needs approval.")):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as directory:
+                receipt, events, requests, setup, home = declaration_evidence(Path(directory))
+                args = json.dumps({"Command": "sha256sum source/catalog.py"})
+                events[0]["output"].update(ToolName="shell_execute", ArgumentsJson=args)
+                events[1]["output"].update(ToolName="shell_execute", ToolFailureCode=code, Result=result)
+                function = requests[-1]["messages"][0]["tool_calls"][0]["function"]
+                function.update(name="shell_execute", arguments=args)
+                requests[-1]["messages"][1]["content"] = result
+                receipt["calls"] = observer_calls(events)
+                with self.assertRaisesRegex(AssertionError, "outside the assigned workflow"):
+                    workflow_stages(receipt, events, requests, setup, home)
+
     def test_selection_uses_collect_only_for_first_current_prompt(self):
         functions = shell_functions("child_result_consumer")
         for case in CASES:
