@@ -100,6 +100,70 @@ def observer_calls(events):
     return calls
 
 
+def artifact_pipeline_evidence(root, case):
+    receipt, events, requests, setup, home = stage_evidence(root)
+    contents = {}
+    for index, key in enumerate(("findings_path", "plan_path"), 1):
+        contents[key] = (FIXTURE / "artifacts" / ("findings-complete.md" if index == 1 else "plan-complete.md")).read_bytes().decode("utf-8")
+        actual_file(home, setup[key]).write_bytes(contents[key].encode("utf-8"))
+        for request in requests:
+            for message in request["messages"]:
+                for call in message.get("tool_calls", []):
+                    if call["id"] == f"write-{index}":
+                        call["function"]["arguments"] = json.dumps({"Path": setup[key], "Content": contents[key]})
+                if message.get("tool_call_id") == f"write-{index}":
+                    message["content"] = f"Successfully wrote {len(contents[key].encode('utf-8'))} bytes to {setup[key]}"
+
+    def pair(name, identifier, args, result, failure=None):
+        return [{"output": {"Type": "tool_call", "SessionId": receipt["session_id"], "CallId": identifier,
+                            "ToolName": name, "ArgumentsJson": json.dumps(args)}},
+                {"output": {"Type": "tool_result", "SessionId": receipt["session_id"], "CallId": identifier,
+                            "ToolName": name, "Result": result, "ToolFailureCode": failure}}]
+
+    events[2:2] = pair("file_read", "read-findings", {"Path": setup["findings_path"]}, contents["findings_path"])
+    events.extend(pair("file_read", "read-plan", {"Path": setup["plan_path"]}, contents["plan_path"]))
+    blocked = case == "coordination_attachment_blocked"
+    attachment = ("Error: Personal trust context does not allow attach access to local files." if blocked else
+                  f"File attached: plan.md (text/markdown) at {setup['plan_path']}")
+    events.extend(pair("attach_file", "attach-plan", {"Path": setup["plan_path"], "DisplayName": "plan.md"},
+                       attachment, "access_denied" if blocked else None))
+    if not blocked:
+        events.append({"output": {"Type": "file", "SessionId": receipt["session_id"],
+                                  "FileName": "plan.md", "MimeType": "text/markdown", "FilePath": setup["plan_path"]}})
+    for index, event in enumerate(events, 1):
+        event.update(sequence=index, observed_ns=index * 100)
+    receipt["calls"] = observer_calls(events)
+    for index, delivery in enumerate(receipt["delivery_observations"]["deliveries"], 1):
+        start = next(call for call in receipt["calls"] if call["id"] == f"start-{index}")
+        delivery.update(request_admitted_ns=start["observed_ns"] + 110,
+                        response_first_payload_ns=start["observed_ns"] + 120)
+    history = []
+    for event in events:
+        dto = event["output"]
+        if dto["Type"] == "tool_call":
+            history.append({"role": "assistant", "tool_calls": [{"id": dto["CallId"], "function": {
+                "name": dto["ToolName"], "arguments": dto["ArgumentsJson"]}}]})
+        elif dto["Type"] == "tool_result":
+            history.append({"role": "tool", "tool_call_id": dto["CallId"], "content": dto["Result"]})
+    requests.append({"messages": history})
+    receipt.update(status="observed", prompt_nonce="pipeline-nonce", observer_mode="collect",
+                   initial_prompt_sha256=hashlib.sha256(prompt(setup).encode()).hexdigest(),
+                   last_reply="The parent reviewed the plan.", case=case, prompt_ordinal=1)
+    receipt["verified_deliveries"] = copy.deepcopy(receipt["verified_deliveries"])
+    observer, relay = root / "observer", root / "child-runs/relay"
+    observer.mkdir(); relay.mkdir(parents=True)
+    data = {"Nonce": receipt["prompt_nonce"], "Mode": "collect", "InitialPrompt": prompt(setup),
+            "SessionId": receipt["session_id"]}
+    (observer / "observer-input.json").write_text(json.dumps(data))
+    (observer / "session-output.jsonl").write_text("\n".join(json.dumps(event) for event in events))
+    raw = {key: value for key, value in receipt.items() if key not in {"verified_deliveries", "case", "prompt_ordinal"}}
+    (observer / "observer-receipt.json").write_text(json.dumps(raw))
+    (observer / "verified-receipt.json").write_text(json.dumps(receipt))
+    for index, request in enumerate(requests, 1):
+        (relay / f"request-{index:04}.json").write_text(json.dumps(request))
+    return receipt, home, observer
+
+
 def declaration_evidence(root, rejected=False, repeated=False):
     receipt, events, requests, setup, home = stage_evidence(root)
     args = {"Path": setup["source_root"], "_rationale": "Declare the assigned source project."}
@@ -762,6 +826,43 @@ check_prerequisites
 
 
 class CoordinationWorkflowControls(unittest.TestCase):
+    def run_artifact_pipeline(self, root, case, mutation=None):
+        receipt, home, observer = artifact_pipeline_evidence(root, case)
+        if mutation is not None:
+            mutation(receipt)
+            (observer / "verified-receipt.json").write_text(json.dumps(receipt))
+        env = {**os.environ, "CHILD_LAST_EVIDENCE": str(observer), "REPO_ROOT": str(ROOT),
+               "EVAL_ASSET_ROOT": str(ROOT), "EVAL_HOME": str(home), "TMPDIR_EVAL": str(root),
+               "COORDINATION_CASE_EVIDENCE": str(root / "setup"), "case_name": case,
+               "PYTHONDONTWRITEBYTECODE": "1"}
+        result = subprocess.run(["bash", "-eu", "-c",
+                                 shell_functions("assert_coordination_analyze_plan") + "\nassert_coordination_analyze_plan"],
+                                env=env, capture_output=True, text=True)
+        return result, observer
+
+    def test_actual_shell_artifact_pipeline_uses_verified_receipt(self):
+        for case in CASES:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                result, observer = self.run_artifact_pipeline(Path(directory), case)
+                verdict = json.loads((observer / "coordination-verdict.json").read_text())
+                self.assertEqual(0, result.returncode, verdict)
+                self.assertTrue(verdict["passed"], verdict)
+                self.assertNotIn("verified_deliveries", json.loads((observer / "observer-receipt.json").read_text()))
+
+    def test_actual_shell_artifact_pipeline_rejects_invalid_verified_delivery(self):
+        mutations = {
+            "missing": lambda receipt: receipt["verified_deliveries"].pop(),
+            "foreign": lambda receipt: receipt["verified_deliveries"][-1]["accepted"].update(scope_id="foreign-owner"),
+            "corrupt": lambda receipt: receipt["verified_deliveries"][-1]["terminal"].update(outcome="Failed"),
+        }
+        for case in CASES:
+            for name, mutation in mutations.items():
+                with self.subTest(case=case, fault=name), tempfile.TemporaryDirectory() as directory:
+                    result, observer = self.run_artifact_pipeline(Path(directory), case, mutation)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertFalse((observer / "coordination-verdict.json").exists())
+                    self.assertTrue((observer / "coordination-assertion.stderr").read_text())
+
     def test_named_root_declaration_preserves_cumulative_history_and_completed_id_reuse(self):
         for rejected in (False, True):
             for repeated in (False, True):
