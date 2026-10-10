@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Akka.Configuration;
+using Akka.Dispatch;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence;
@@ -25,6 +27,7 @@ public sealed class SubscriberDeathDuringPersistenceTests(ITestOutputHelper outp
     : PersistenceTestKit(output: output), IAsyncDisposable
 {
     private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(10);
+    private const string DispatcherName = "subscriber-death-dispatcher";
     private readonly FakeChatClient _model = new();
     private TestSessionTempDirectory? _directory;
 
@@ -36,8 +39,13 @@ public sealed class SubscriberDeathDuringPersistenceTests(ITestOutputHelper outp
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
         base.ConfigureAkka(builder, provider);
-        builder.WithNetclawSerialization().AddHocon(
-            "akka.scheduler.implementation = \"Akka.TestKit.TestScheduler, Akka.TestKit\"", HoconAddMode.Prepend);
+        builder.WithNetclawSerialization().AddHocon($$"""
+            akka.scheduler.implementation = "Akka.TestKit.TestScheduler, Akka.TestKit"
+            {{DispatcherName}} {
+                type = "{{typeof(CompletionDispatcherConfigurator).AssemblyQualifiedName}}"
+                throughput = 2147483647
+            }
+            """, HoconAddMode.Prepend);
     }
 
     [Fact]
@@ -48,7 +56,7 @@ public sealed class SubscriberDeathDuringPersistenceTests(ITestOutputHelper outp
         var owner = CreateOwner(session);
         var subscriberOutput = CreateTestProbe();
         var subscriber = Sys.ActorOf(Props.Create(() => new Subscriber(subscriberOutput.Ref))
-            .WithDispatcher(CallingThreadDispatcher.Id));
+            .WithDispatcher(DispatcherName));
         await JoinAsync(owner, subscriber, session);
         await JoinAsync(owner, outputs.Ref, session);
         await subscriberOutput.ExpectMsgAsync<SessionJoined>(Ceiling, cancellationToken: TestContext.Current.CancellationToken);
@@ -71,9 +79,14 @@ public sealed class SubscriberDeathDuringPersistenceTests(ITestOutputHelper outp
             Assert.False(send.IsCompleted);
             Assert.Equal(0, _model.CallCount);
 
-            // Both actors drain their mailboxes on the caller thread.
-            // Death reaches the held Persist before this barrier returns.
+            // A completed runnable releases the dispatcher acknowledgement.
+            // The journal hold excludes a persistence acknowledgement between these barriers.
+            var subscriberWatcher = CreateTestProbe();
+            subscriberWatcher.Watch(subscriber);
+            await DispatcherIdleAsync();
             Sys.Stop(subscriber);
+            await DispatcherIdleAsync();
+            await subscriberWatcher.ExpectTerminatedAsync(subscriber, Ceiling, cancellationToken: TestContext.Current.CancellationToken);
             await BarrierAsync(owner);
             Assert.False(release.Task.IsCompleted);
             Assert.False(send.IsCompleted);
@@ -105,14 +118,18 @@ public sealed class SubscriberDeathDuringPersistenceTests(ITestOutputHelper outp
         var owner = CreateOwner(session);
         var subscriberOutput = CreateTestProbe();
         var subscriber = Sys.ActorOf(Props.Create(() => new Subscriber(subscriberOutput.Ref))
-            .WithDispatcher(CallingThreadDispatcher.Id));
+            .WithDispatcher(DispatcherName));
         await JoinAsync(owner, subscriber, session);
         await JoinAsync(owner, outputs.Ref, session);
         await JoinAsync(owner, subscriber, session, changeFilter ? OutputFilter.Full : OutputFilter.TextOnly);
         owner.Tell(new LeaveSession(subscriber) { SessionId = session });
         await BarrierAsync(owner);
+        var subscriberWatcher = CreateTestProbe();
+        subscriberWatcher.Watch(subscriber);
+        await DispatcherIdleAsync();
         Sys.Stop(subscriber);
         await BarrierAsync(owner);
+        await subscriberWatcher.ExpectTerminatedAsync(subscriber, Ceiling, cancellationToken: TestContext.Current.CancellationToken);
         await owner.Ask<CommandAck>(Input(session, "after-explicit-leave"), Ceiling, TestContext.Current.CancellationToken);
         await outputs.FishForMessageAsync<SessionOutput>(message => message is TurnCompleted, Ceiling,
             cancellationToken: TestContext.Current.CancellationToken);
@@ -133,19 +150,23 @@ public sealed class SubscriberDeathDuringPersistenceTests(ITestOutputHelper outp
             new ModelCapabilities { ModelId = "fake-model", ContextWindowTokens = 128_000 },
             new SessionConfig { IdleTimeout = TimeSpan.Zero, Tuning = new SessionTuning
                 { TitleGenerationInterval = 0, SnapshotInterval = 1000 } }, services, null, null, null))
-            .WithDispatcher(CallingThreadDispatcher.Id));
+            .WithDispatcher(DispatcherName));
     }
 
     private static Task<SessionJoined> JoinAsync(IActorRef owner, IActorRef subscriber, SessionId session,
         OutputFilter filter = OutputFilter.TextOnly) => owner.Ask<SessionJoined>(
         new JoinSession(subscriber) { SessionId = session, Filter = filter }, Ceiling, TestContext.Current.CancellationToken);
 
-    private static async Task BarrierAsync(IActorRef owner)
+    private async Task BarrierAsync(IActorRef owner)
     {
         var identity = await owner.Ask<ActorIdentity>(new Identify("subscriber-death-barrier"), Ceiling,
             TestContext.Current.CancellationToken);
         Assert.Equal(owner, identity.Subject);
+        await DispatcherIdleAsync();
     }
+
+    private Task DispatcherIdleAsync() => Assert.IsType<CompletionDispatcher>(Sys.Dispatchers.Lookup(DispatcherName))
+        .WhenIdle().WaitAsync(Ceiling, TestContext.Current.CancellationToken);
 
     private async Task PassivateAsync(IActorRef owner, IActorRef outputs, SessionId session)
     {
@@ -189,6 +210,42 @@ public sealed class SubscriberDeathDuringPersistenceTests(ITestOutputHelper outp
     private sealed class Subscriber : ReceiveActor
     {
         public Subscriber(IActorRef output) => Receive<SessionOutput>(message => output.Tell(message));
+    }
+
+    public sealed class CompletionDispatcherConfigurator : MessageDispatcherConfigurator
+    {
+        private readonly CompletionDispatcher _dispatcher;
+        public CompletionDispatcherConfigurator(Config config, IDispatcherPrerequisites prerequisites)
+            : base(config, prerequisites) => _dispatcher = new CompletionDispatcher(this);
+        public override MessageDispatcher Dispatcher() => _dispatcher;
+    }
+
+    public sealed class CompletionDispatcher(MessageDispatcherConfigurator configurator) : CallingThreadDispatcher(configurator)
+    {
+        private readonly object _sync = new();
+        private int _pending;
+        private TaskCompletionSource _idle = NewSignal();
+
+        public Task WhenIdle()
+        {
+            lock (_sync) return _pending == 0 ? Task.CompletedTask : _idle.Task;
+        }
+
+        protected override void ExecuteTask(IRunnable run)
+        {
+            lock (_sync)
+            {
+                if (_pending++ == 0) _idle = NewSignal();
+            }
+            try { base.ExecuteTask(run); }
+            finally
+            {
+                lock (_sync)
+                {
+                    if (--_pending == 0) _idle.TrySetResult();
+                }
+            }
+        }
     }
 
     private sealed class EventReader : ReceivePersistentActor
