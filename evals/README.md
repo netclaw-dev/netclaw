@@ -156,6 +156,42 @@ python3 -m unittest discover -s evals -p test_coordination_evals.py -v
 python3 -m unittest discover -s evals -p test_init_agent_profiles.py -v
 ```
 
+### Coordination Artifact Cases
+
+These targeted cases use the existing persistent observer and its `collect` mode.
+The observer collects each accepted child and its attributed terminal consumption.
+The case requires one analyst child and one distinct canonical `task-worker` child.
+The parent reviews the complete findings before the plan assignment.
+The parent reviews the complete plan before the normal attachment action.
+The artifact oracle checks source evidence, traceability, actual reads, and delivery receipts.
+It does not infer comprehension from a file read or a successful skill load.
+
+Select one case in each fresh container, home, and session:
+
+```bash
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 NETCLAW_EVAL_CASE=coordination_analyze_plan ./evals/run-evals.sh
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 NETCLAW_EVAL_CASE=coordination_attachment_blocked ./evals/run-evals.sh
+```
+
+Both cases stay outside the default suite.
+Acceptance requires five independent trials for each case, with a 100 percent pass threshold.
+No actual model trial is recorded for this case adapter.
+The blocked case derives its eval-owned config before daemon startup.
+It permits file reads and denies attachments through `Personal.AttachFiles.Mode=None`.
+Normal cases retain their original config.
+The case archives the neutral source, actual artifacts, observer evidence, and oracle report before teardown.
+It never gives the model the trusted truth file or the complete example artifacts.
+Each child must use `file_write` for its complete artifact in this narrow case.
+The adapter binds exact write receipts and bytes to the verified child contexts.
+A workflow that uses only `file_edit` does not satisfy this bounded proof.
+Discovery text proves profile availability. Existing native profile controls prove the canonical Main role.
+A settled but incomplete workflow fails the artifact oracle. The harness does not retry or steer the model.
+
+```bash
+python3 -m unittest discover -s evals -p test_coordination_workflow_evals.py -v
+python3 -m unittest discover -s evals -p test_coordination_artifact_evals.py -v
+```
+
 ### Memory Pipeline Semantics
 
 The memory category intentionally separates three behaviors that used to be
