@@ -26,6 +26,10 @@ internal static class SessionObserver
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args is ["--project-process-journal", var database, var session, var output])
+            return await ChildProcessJournal.RunAsync(database, session, output);
+        if (args is ["--process-projection-controls"])
+            return await ProcessJournalControls.RunAsync();
         if (args is ["--protocol-controls"])
             return ProtocolControls.Run(null);
         if (args is ["--protocol-controls", var transcriptPath])
@@ -34,6 +38,8 @@ internal static class SessionObserver
             throw new ArgumentException("Supply one observer input JSON file or --protocol-controls.");
         var input = JsonSerializer.Deserialize<ObserverInput>(await File.ReadAllTextAsync(args[0]))
             ?? throw new InvalidDataException("Observer input is null.");
+        if (ProcessCaseObserver.Supports(input.Mode))
+            return await ProcessCaseObserver.RunAsync(input);
         Validate(input);
         Directory.CreateDirectory(input.EvidenceDirectory);
         var receiptPath = Path.Combine(input.EvidenceDirectory, "observer-receipt.json");

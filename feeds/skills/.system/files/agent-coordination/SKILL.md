@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.0.7"
+  version: "1.0.8"
 ---
 
 # Agent Coordination
@@ -47,6 +47,10 @@ Give each child:
 - A distinct output path and the expected complete artifact.
 - The acceptance checks and required evidence.
 - The facts and constraints that the child must not infer.
+
+When the task supplies a closed command or action list, copy its complete restriction block unchanged into `Task` or `Context`.
+Use a `User constraints` section. Keep the child's role and any narrower scope in a separate section.
+Do not replace the restriction block with examples or optional methods.
 
 Copy the supplied source identity unchanged into the child assignment, including its type or algorithm prefix.
 When a child must use a template, give its exact fields and columns through `Task` or `Context`.

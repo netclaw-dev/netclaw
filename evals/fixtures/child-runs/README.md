@@ -72,6 +72,37 @@ The existing queue-grant and shell lifecycle paths stay separate.
 The CLI smoke proves initial acceptance only.
 The persistent cases prove later result observation separately.
 
+## Local process cases
+
+Four fixed scripted cases use the same harness with `--runtime-only`.
+They use no upstream inference route.
+Set `NETCLAW_CHILD_OBSERVER` to the helper built from the candidate source.
+Set `NETCLAW_EVAL_RUNS=1` and select one exact case for each fresh invocation.
+Use the existing image, CLI, assets, timeout, archive, and owned resource variables.
+
+| Case | Required process evidence |
+| --- | --- |
+| `child_run_routed_skill` | Routed acceptance, actual child overlay, one file write, terminal consumption, and full parent read |
+| `child_run_approval_once` | Real TUI prompt, durable resolution, exact pending child call, one local effect, and no persistent grant |
+| `child_run_owner_recovery` | Actual partial bytes, owned daemon SIGKILL, same-session resume, Lost consumption, and no child relaunch |
+| `child_run_approval_cancel` | Real open prompt, durable refusal and closure, full partial report review, final status, and fresh stale-answer notice |
+
+The fixture retains a SQLite backup before teardown.
+The helper checks the journal schema and uses the canonical event serializer.
+The verifier binds authority to the first actual parent ingress.
+The archive retains actual file bytes, provider response bytes, observer actions, and process identities.
+The existing harness owns container, home, relay, and temporary directory cleanup.
+An archive or verifier failure does not bypass that cleanup.
+Journal candidates remain captured facts; the fixed command, actual prompt, and pending call identify the consent subject.
+These cases do not prove model judgment or remote effect certainty.
+They do not close task 7.2 before reviewed runtime observations.
+
+Run the canonical serializer and SQLite boundary controls with the isolated helper:
+
+```bash
+dotnet "$NETCLAW_CHILD_OBSERVER" --process-projection-controls
+```
+
 The six affected cases in `run-evals.sh` use the persistent consumer.
 Select each case explicitly with one fresh invocation.
 The adapter emits an eval response envelope; it does not claim to emit the CLI envelope.

@@ -11,11 +11,13 @@ When no exact list exists, use the authorized tools that the workflow requires.
 2. Use the supplied checkout state. Inspect missing state only through task-permitted commands and without changes.
 3. Reuse supplied worktrees. If isolation is absent, prepare an authorized worktree only through task-permitted commands.
 4. Assign one available `task-worker` the implementation scope, permitted files, worktree, and acceptance checks.
+   Include the verbatim `User constraints` section from the common assignment rule.
 5. Give the worker a distinct report path for patch details, test evidence, known effects, and incomplete work.
 6. Start other writers only in separate authorized worktrees with distinct scope.
 7. Read the terminal result and inspect the exact candidate revision and patch.
 8. Confirm that the worker stops source edits before independent review.
 9. Assign a separate read-only reviewer the candidate revision, original acceptance checks, and worker evidence.
+   Keep the same original restrictions. Name the allowed checks and the facts that their results supply.
 10. Require defect evidence, preserved-behavior checks, authority concerns, and explicit proof gaps.
 11. Use an authorized isolated workspace for review commands that create build output.
 12. Resolve review findings. If the patch changes, verify the new revision and update any stale review.

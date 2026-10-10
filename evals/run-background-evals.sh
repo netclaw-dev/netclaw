@@ -23,6 +23,14 @@ case "$FILTER_CASE" in
             echo "ERROR: set NETCLAW_CHILD_OBSERVER to the compiled canonical observer." >&2
             exit 2
         } ;;
+    child_run_routed_skill|child_run_approval_once|child_run_owner_recovery|child_run_approval_cancel)
+        [[ "${1:-}" == --runtime-only && "$RUNS" == 1 && -f "${NETCLAW_CHILD_OBSERVER:-}" ]] || {
+            echo "ERROR: process cases require --runtime-only, RUNS=1, and the compiled process observer." >&2
+            exit 2
+        }
+        EVAL_MODEL_ID=background-process-fixture
+        export NETCLAW_EVAL_MODEL_ID="$EVAL_MODEL_ID"
+        ;;
     tool_background_job_lifecycle)
         if [[ "${1:-}" == --runtime-only ]]; then
             echo "ERROR: the lifecycle case requires a real model." >&2
@@ -48,10 +56,15 @@ fixture_module=background_evals.py
 if [[ "$FILTER_CASE" == child_run_* ]]; then
     fixture_module=child_run_evals.py
 fi
-export TMPDIR_EVAL EVAL_HOME
+case "$FILTER_CASE" in
+    child_run_routed_skill|child_run_approval_once|child_run_owner_recovery|child_run_approval_cancel)
+        fixture_module=background_process_fixture.py
+        ;;
+esac
+export TMPDIR_EVAL EVAL_HOME EVAL_CONTAINER_NAME RUNS
 coproc BACKGROUND_FIXTURE { exec python3 "$REPO_ROOT/evals/$fixture_module" serve; }
 fixture_pid=$BACKGROUND_FIXTURE_PID
-trap 'cleanup_eval_env; kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true' EXIT
+trap 'eval_exit=$?; cleanup_status=0; cleanup_eval_env || cleanup_status=$?; kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true; if [[ "$eval_exit" == 0 ]]; then eval_exit=$cleanup_status; fi; exit "$eval_exit"' EXIT
 read -r -t 15 fixture_port <&"${BACKGROUND_FIXTURE[0]}"
 [[ "$fixture_port" =~ ^[0-9]+$ ]]
 EVAL_PROVIDER_ENDPOINT="http://127.0.0.1:$fixture_port/v1"
@@ -65,6 +78,9 @@ for executable in hold_job queued_marker; do
     cp "$REPO_ROOT/evals/fixtures/background-jobs/job.py" "$EVAL_HOME/data/evals/$executable"
     chmod a+rx "$EVAL_HOME/data/evals/$executable"
 done
+if [[ "$fixture_module" == background_process_fixture.py ]]; then
+    python3 "$REPO_ROOT/evals/$fixture_module" prepare
+fi
 RUN_ID="background-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 STARTED_AT=$(date -u +%FT%TZ)
 FILTER_CATEGORY="Background launch"
