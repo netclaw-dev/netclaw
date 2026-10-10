@@ -117,8 +117,11 @@ internal static class SessionObserver
 
         async Task<JsonDocument> ControlAsync(string action, object body)
         {
-            using var response = await http.PostAsJsonAsync(
-                input.FixtureEndpoint.TrimEnd('/') + "/control/" + action, body, token);
+            using var content = JsonContent.Create(body);
+            // The bounded fixture parser requires a known Content-Length.
+            await content.LoadIntoBufferAsync(token);
+            using var response = await http.PostAsync(
+                input.FixtureEndpoint.TrimEnd('/') + "/control/" + action, content, token);
             var text = await response.Content.ReadAsStringAsync(token);
             Require(response.IsSuccessStatusCode, "The fixture rejected the control: " + text);
             return JsonDocument.Parse(text);
