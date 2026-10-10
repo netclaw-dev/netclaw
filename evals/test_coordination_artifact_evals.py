@@ -177,6 +177,42 @@ class CoordinationArtifactControls(unittest.TestCase):
         report = self.oracle.verify_artifacts(self.fixture, self.findings, self.plan)
         self.assertIs(report["passed"], True, report)
 
+    def test_shared_runtime_context_preserves_distinct_analyst_and_worker_assignments(self):
+        self.assert_valid()
+        worker = self.outputs("tool_call", "plan-start")[0]
+        args = json.loads(worker["ArgumentsJson"])
+        args["Agent"] = "TASK-WORKER"
+        args["Context"] = "Runtime artifact paths:\n" + self.findings_runtime + "\n" + self.plan_runtime
+        worker["ArgumentsJson"] = json.dumps(args)
+        self.pair("spawn_agent", "analysis-start", {
+            "Agent": "headless-analyst", "Task": "Write findings at " + self.findings_runtime,
+            "Context": args["Context"]}, json.dumps({
+                "run_id": "run-analysis", "scope_id": "scope-analysis",
+                "state": "Accepted", "control_tool": "check_agent_run"}))
+        self.events = self.events[-2:] + self.events[:-2]
+        self.assert_valid()
+
+    def test_wrong_plan_profile_cannot_supply_the_handoff(self):
+        self.assert_valid()
+        worker = self.outputs("tool_call", "plan-start")[0]
+        args = json.loads(worker["ArgumentsJson"])
+        args["Agent"] = "headless-analyst"
+        worker["ArgumentsJson"] = json.dumps(args)
+        rejected = self.assert_rejected()
+        self.assertIn("one actual plan assignment", rejected["errors"][0])
+
+    def test_two_worker_assignments_cannot_supply_one_plan_handoff(self):
+        self.assert_valid()
+        duplicate = copy.deepcopy(self.events[2:4])
+        for event in duplicate:
+            event["output"]["CallId"] = "second-worker"
+        accepted = json.loads(duplicate[1]["output"]["Result"])
+        accepted.update(run_id="run-second-worker", scope_id="scope-second-worker")
+        duplicate[1]["output"]["Result"] = json.dumps(accepted)
+        self.events[4:4] = duplicate
+        rejected = self.assert_rejected()
+        self.assertIn("one actual plan assignment", rejected["errors"][0])
+
     def test_cli_consumes_raw_jsonl_and_returns_the_success_report(self):
         self.assert_valid()
         completed = self.invoke_cli()
