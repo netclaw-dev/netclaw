@@ -2972,8 +2972,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!isReJoin)
             {
                 _subscribers.AddOrUpdate(cmd.Subscriber, cmd.Filter);
-                Context.WatchWith(cmd.Subscriber,
-                    new LeaveSession(cmd.Subscriber) { SessionId = _sessionId });
+                // A custom death notification can lose its type in the persistence stash.
+                Context.Watch(cmd.Subscriber);
 
                 _log.Info("{Subscriber} joined (filter={Filter})", cmd.Subscriber, cmd.Filter);
             }
@@ -3018,13 +3018,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
         });
 
-        Command<LeaveSession>(cmd =>
+        Command<Terminated>(terminated => RemoveSubscriber(terminated.ActorRef),
+            terminated => _subscribers.Contains(terminated.ActorRef));
+        Command<LeaveSession>(cmd => RemoveSubscriber(cmd.Subscriber));
+    }
+
+    private void RemoveSubscriber(IActorRef subscriber)
+    {
+        if (_subscribers.Remove(subscriber))
         {
-            if (_subscribers.Remove(cmd.Subscriber))
-            {
-                _log.Info("{Subscriber} left", cmd.Subscriber);
-            }
-        });
+            Context.Unwatch(subscriber);
+            _log.Info("{Subscriber} left", subscriber);
+        }
     }
 
     private void CommandSnapshotMessages()

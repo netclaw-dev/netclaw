@@ -22,6 +22,8 @@ internal sealed class SessionSubscriberManager
 
     public int Count => _subscribers.Count;
 
+    public bool Contains(IActorRef subscriber) => _subscribers.ContainsKey(subscriber);
+
     public bool IsReJoin(IActorRef subscriber, OutputFilter filter)
         => _subscribers.TryGetValue(subscriber, out var existingFilter)
            && existingFilter == filter;
