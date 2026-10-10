@@ -793,6 +793,10 @@ It repeats the acceptance check inside the existing eval container under the exi
 It checks operator and checker preservation after that command and before success.
 Only the exact unexecuted `invalid_rationale` start rejection can precede a later accepted start.
 The model owns any correction. The harness retains each attempt and requires its actual DTO and provider pair.
+A rejected model call can use the same argument shape as a framework terminal input.
+The observer supplies its typed call metadata to the relay control and the final oracle.
+The oracle excludes only an exact attributed `invalid_rationale` rejection. It gives that attempt no terminal or delivery credit.
+Other observed model calls cannot supply a framework terminal. All accepted children still require their actual terminal evidence.
 The oracle rejects all other failed starts and visible source edits after the candidate commit.
 Compaction can hide identical restored actions across captures. The case does not prove absence of every transient edit.
 The assertion preserves actual report bytes before later checks. An earlier observer failure can still prevent that archive.

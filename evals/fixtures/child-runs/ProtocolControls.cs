@@ -215,7 +215,18 @@ internal static class ProtocolControls
         AddTurn(multiple, 1, "Two children were accepted.");
         Check(multiple.CompletedTurns == 1 && multiple.Acceptance == accepted);
         Reject(() => multiple.RequireHeldAcceptance(2));
+        using var terminalArguments = JsonDocument.Parse("{\"run_id\":\"owner-run\",\"source_operation\":\"spawn_agent\"}");
+        var rejectedTerminal = new SessionObserver.ObservedCall("rejected-terminal", "spawn_agent",
+            terminalArguments.RootElement.Clone(), 2, 20, 2);
+        var terminalRejection = rejectedResult with { CallId = "rejected-terminal" };
+        var terminalProtocol = New();
+        AddAcceptance(terminalProtocol);
+        terminalProtocol.Observe(Call() with { CallId = "rejected-terminal", ArgumentsJson = terminalArguments.RootElement.GetRawText() });
+        terminalProtocol.Observe(terminalRejection);
+        Check(rejectedTerminal.CompleteResult(terminalRejection) is null && !rejectedTerminal.Success
+            && terminalProtocol.Acceptance == accepted);
         Console.WriteLine(JsonSerializer.Serialize(new { passed = count, failed = 0, replay,
+            terminal_rejection_call = SessionObserver.CallBody(rejectedTerminal),
             scope = "protocol/barrier controls; no model or daemon proof" }));
         return 0;
 

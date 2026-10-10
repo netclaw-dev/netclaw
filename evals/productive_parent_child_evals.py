@@ -11,7 +11,7 @@ from pathlib import Path
 import uuid
 
 from background_fixture import message_text
-from child_run_evals import (acceptance, actual_file, canonical_pairs, context_paths,
+from child_run_evals import (require_observed_rejections, acceptance, actual_file, canonical_pairs, context_paths,
                              evidence_requests, is_unexecuted_rationale_rejection, require, validate_prompt_receipt)
 from coordination_artifact_evals import load_json, occurrences
 
@@ -177,6 +177,7 @@ def verify(setup, receipt, events, requests, eval_home):
             expected_next = setup["chains"][owner][index + 1]["path"] if index + 1 < ROUNDS[owner] else None
             require(load_json(row["content"])["next"] == expected_next, "The fixture chain is not canonical.")
     calls, _ = occurrences(events, receipt["session_id"])
+    require_observed_rejections(receipt["calls"], calls)
     attempts = [call for call in calls if call["name"] == "spawn_agent"]
     starts = [call for call in attempts if not is_unexecuted_rationale_rejection(call["failure"], call["result"])]
     require(len(starts) == 1 and starts[0]["failure"] is None
@@ -192,7 +193,7 @@ def verify(setup, receipt, events, requests, eval_home):
     deliveries = receipt["verified_deliveries"]
     require(len(deliveries) == 1 and deliveries[0]["accepted"] == accepted,
             "The child catalog lacks its verified terminal attribution.")
-    terminal_id, terminal = canonical_pairs(requests, accepted, start["id"], "spawn_agent")
+    terminal_id, terminal = canonical_pairs(requests, accepted, start["id"], "spawn_agent", receipt["calls"])
     require(terminal == deliveries[0]["terminal"] and terminal["outcome"] == "Completed",
             "The child catalog did not complete under its actual terminal pair.")
     child_requests = [request for request in requests if (paths := context_paths(request)) is not None

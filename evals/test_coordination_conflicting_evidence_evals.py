@@ -13,7 +13,7 @@ from unittest.mock import patch
 from child_run_evals import REQUIRED_RATIONALE_ERROR, actual_file, legacy_observer_mode
 from coordination_conflicting_evidence_evals import CASE, command, main, prepare, prompt, run_check, sha, verify
 from test_child_run_evals import ACCEPTED, PATHS, child, parent, terminal
-from test_coordination_workflow_evals import shell_functions
+from test_coordination_workflow_evals import observer_calls, shell_functions
 
 
 def pair(request, events, session, name, arguments, result, identifier, failure=None):
@@ -69,6 +69,7 @@ def evidence(root, resolved=False):
     conflicts = [] if resolved else [{"measurement": "active_record_count", "claims": claims}]
     receipt["last_reply"] = json.dumps({"nonce": setup["nonce"], "source_revision": setup["source_revision"], "reports": reports,
         "conflicts": conflicts, "verification": json.loads(checked.stdout), "conclusion": "resolved_verified" if resolved else "unresolved_evidence", "repair": "not_performed"})
+    receipt["calls"] = observer_calls(events)
     return setup, receipt, events, [p, *children], home
 
 

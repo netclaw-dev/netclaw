@@ -12,7 +12,7 @@ from unittest.mock import patch
 from child_run_evals import REQUIRED_RATIONALE_ERROR, actual_file, legacy_observer_mode
 from coordination_stale_incomplete_evals import CASE, FIXTURE, main, prepare, prompt, report_gaps, sha, verify
 from test_child_run_evals import ACCEPTED, child, parent, terminal
-from test_coordination_workflow_evals import shell_functions
+from test_coordination_workflow_evals import observer_calls, shell_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -61,6 +61,7 @@ def evidence(root, valid=False):
         gaps = report_gaps(actual_file(home, row["output"]).read_bytes().decode(), setup["revision"])
         reports[key] = {"path": row["output"], "declared_status": "complete", "accepted": not gaps, "gaps": gaps}
     receipt["last_reply"] = json.dumps({"nonce": setup["nonce"], "source_revision": setup["revision"], "reports": reports})
+    receipt["calls"] = observer_calls(events)
     return setup, receipt, events, [p, c], home
 
 

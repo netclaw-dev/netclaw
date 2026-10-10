@@ -12,7 +12,7 @@ import sys
 import uuid
 
 from background_fixture import message_text
-from child_run_evals import (REQUIRED_RATIONALE_ERROR, acceptance, actual_file, canonical_pairs, context_paths, evidence_requests,
+from child_run_evals import (require_observed_rejections, REQUIRED_RATIONALE_ERROR, acceptance, actual_file, canonical_pairs, context_paths, evidence_requests,
                              is_unexecuted_rationale_rejection, require, validate_prompt_receipt)
 from coordination_artifact_evals import load_json, occurrences
 from coordination_implement_review_evals import (paired_call_occurrences, paired_calls, project_declarations,
@@ -137,6 +137,7 @@ def require_report_order(requests, row, setup, home):
 def verify(setup, receipt, events, requests, home):
     preserve_inputs(home, setup)
     calls, _ = occurrences(events, receipt["session_id"])
+    require_observed_rejections(receipt["calls"], calls)
     parents = [r for r in requests if context_paths(r) is None]
     pairs = paired_call_occurrences(parents)
     require(parents, "The parent provider evidence is absent.")
@@ -179,7 +180,7 @@ def verify(setup, receipt, events, requests, home):
         accepted = acceptance(start["result"])
         require(accepted["run_id"] not in {a["run_id"] for a in accepted_runs}, "One child run cannot prove both independent sources.")
         accepted_runs.append(accepted)
-        identifier, terminal = canonical_pairs(requests, accepted, start["id"], "spawn_agent")
+        identifier, terminal = canonical_pairs(requests, accepted, start["id"], "spawn_agent", receipt["calls"])
         require(terminal["outcome"] == "Completed" and any(d["accepted"] == accepted and d["terminal"] == terminal
                 for d in receipt["verified_deliveries"]), "An analyst lacks its actual completed terminal.")
         identifiers.append(identifier)

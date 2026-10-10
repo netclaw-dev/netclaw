@@ -12,7 +12,7 @@ import unittest
 
 from child_run_evals import REQUIRED_RATIONALE_ERROR, actual_file, legacy_observer_mode
 from productive_parent_child_evals import CASE, archive_outputs, encode, prepare, prompt, records, verify
-from test_coordination_workflow_evals import shell_functions
+from test_coordination_workflow_evals import observer_calls, shell_functions
 from test_child_run_evals import ACCEPTED, child, parent, terminal
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +59,7 @@ def evidence(root):
     pair(parent_request, "file_read", {"Path": setup["child_output"]}, child_content, "review", True)
     pair(parent_request, "file_write", {"Path": setup["combined_output"], "Content": combined_content},
          f"Successfully wrote {len(combined_content.encode())} bytes to {setup['combined_output']}", "combined", True)
+    receipt["calls"] = observer_calls(events)
     return setup, receipt, events, [parent_request, child_request], home
 
 

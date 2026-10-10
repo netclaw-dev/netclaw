@@ -160,12 +160,12 @@ class ChildFixture(Fixture):
             elif action == "child-consumed":
                 pending = [row for row in self.records if row["response_first_payload_ns"]
                            and not row["response_payload_written"] and not row["forward_complete"]
-                           and any(terminal_pairs([row["request"]], start["accepted"], start["call_id"], start["source_operation"])
+                           and any(terminal_pairs([row["request"]], start["accepted"], start["call_id"], start["source_operation"], data["observed_calls"])
                                    for start in data["expected"])]
                 if pending and not self.condition.wait_for(
                         lambda: all(row["response_payload_written"] or row["forward_complete"] for row in pending), timeout=30):
                     raise TimeoutError("A provider payload write lacks its local acknowledgement.")
-                return consumed_deliveries(self.records, data["expected"], data["parent_boundary_ns"])
+                return consumed_deliveries(self.records, data["expected"], data["parent_boundary_ns"], data["observed_calls"])
             elif action == "child-abort":
                 self.abort = True
                 self.condition.notify_all()
@@ -260,7 +260,24 @@ def child_handler(fixture):
     return Handler
 
 
-def terminal_pairs(requests, accepted, original_start_call_id, original_start_operation):
+def require_observed_rejections(observed_calls, dto_calls):
+    require(isinstance(observed_calls, list) and all(isinstance(row, dict) for row in observed_calls),
+            "The attributed observer calls are absent or malformed.")
+    for row in observed_calls:
+        if not is_unexecuted_rationale_rejection(row.get("failure_code"), row.get("result")):
+            continue
+        ordinal = row.get("occurrence")
+        require(type(ordinal) is int and 0 < ordinal <= len(dto_calls),
+                "The rejected model call lacks its actual DTO occurrence.")
+        actual = dto_calls[ordinal - 1]
+        require(row.get("success") is False and actual.get("failure") == row["failure_code"]
+                and pair_matches((actual["id"], actual["name"], actual["arguments"], actual["result"]), row),
+                "The rejected observer call differs from its actual DTO occurrence.")
+
+
+def terminal_pairs(requests, accepted, original_start_call_id, original_start_operation, observed_calls):
+    require(isinstance(observed_calls, list) and all(isinstance(row, dict) for row in observed_calls),
+            "The attributed observer calls are absent or malformed.")
     require(isinstance(original_start_operation, str) and original_start_operation, "The actual start operation is absent.")
     pairs = {}
     for request in requests:
@@ -268,6 +285,7 @@ def terminal_pairs(requests, accepted, original_start_call_id, original_start_op
             continue
         calls = {}
         delivered_in_request = set()
+        rejected_in_request = {}
         for message in request.get("messages", []):
             for call in message.get("tool_calls", []):
                 function = call.get("function", {})
@@ -281,13 +299,30 @@ def terminal_pairs(requests, accepted, original_start_call_id, original_start_op
                             "The terminal source differs from the actual original start operation.")
                     require(call["id"] != original_start_call_id, "The terminal call reused the original start identifier.")
                     require(call["id"] not in calls, "The terminal call repeats within an unresolved occurrence.")
-                    calls[call["id"]] = function["name"]
+                    calls[call["id"]] = (function["name"], arguments)
             if message.get("role") == "tool" and message.get("tool_call_id") in calls:
                 identifier = message["tool_call_id"]
+                source, arguments = calls.pop(identifier)
+                result = message_text(message.get("content"))
+                ordinary = [row for row in observed_calls if row.get("id") == identifier]
+                if ordinary:
+                    matched = [row for row in ordinary if pair_matches((identifier, source, arguments, result), row)]
+                    require(matched, "The terminal-shaped model call differs from its attributed observer pair.")
+                    occurrences = [row.get("occurrence") for row in matched]
+                    require(all(type(value) is int and value > 0 for value in occurrences)
+                            and len(set(occurrences)) == len(occurrences),
+                            "The rejected model call lacks distinct actual occurrence ordinals.")
+                    require(all(row.get("success") is False and is_unexecuted_rationale_rejection(
+                                row.get("failure_code"), row.get("result")) for row in matched),
+                            "An ordinary model call cannot prove a framework terminal delivery.")
+                    pair = (identifier, source, json.dumps(arguments, sort_keys=True), result)
+                    rejected_in_request[pair] = rejected_in_request.get(pair, 0) + 1
+                    require(rejected_in_request[pair] <= len(matched),
+                            "The provider history repeats a rejection without a distinct actual occurrence.")
+                    continue
                 require(identifier not in delivered_in_request, "The terminal pair repeats inside one provider history.")
                 delivered_in_request.add(identifier)
-                source = calls.pop(identifier)
-                body = json.loads(message_text(message.get("content")), object_pairs_hook=unique_object)
+                body = json.loads(result, object_pairs_hook=unique_object)
                 require(isinstance(body, dict), "The terminal body is not a JSON object.")
                 require(body.get("run_id") == accepted["run_id"] and body.get("scope_id") == accepted["scope_id"],
                         "The terminal pair has a foreign owner.")
@@ -298,13 +333,13 @@ def terminal_pairs(requests, accepted, original_start_call_id, original_start_op
     return pairs
 
 
-def canonical_pairs(requests, accepted, original_start_call_id, original_start_operation):
-    pairs = terminal_pairs(requests, accepted, original_start_call_id, original_start_operation)
+def canonical_pairs(requests, accepted, original_start_call_id, original_start_operation, observed_calls):
+    pairs = terminal_pairs(requests, accepted, original_start_call_id, original_start_operation, observed_calls)
     require(len(pairs) == 1, "The accepted run lacks exactly one attributed terminal call/result pair.")
     return next(iter(pairs.items()))
 
 
-def consumed_deliveries(records, expected, parent_boundary_ns):
+def consumed_deliveries(records, expected, parent_boundary_ns, observed_calls):
     if not expected:
         return {"complete": False, "deliveries": []}
     result = []
@@ -312,9 +347,9 @@ def consumed_deliveries(records, expected, parent_boundary_ns):
         accepted = acceptance(json.dumps(start["accepted"]))
         require(isinstance(start.get("call_id"), str) and start["call_id"], "The original start call identifier is absent.")
         observations = []
-        all_pairs = terminal_pairs([row["request"] for row in records], accepted, start["call_id"], start["source_operation"])
+        all_pairs = terminal_pairs([row["request"] for row in records], accepted, start["call_id"], start["source_operation"], observed_calls)
         for row in records:
-            pairs = terminal_pairs([row["request"]], accepted, start["call_id"], start["source_operation"])
+            pairs = terminal_pairs([row["request"]], accepted, start["call_id"], start["source_operation"], observed_calls)
             payload_ns = row.get("response_first_payload_ns", 0)
             if pairs and row.get("response_payload_written") and 0 < row["admitted_ns"] < payload_ns < parent_boundary_ns:
                 identifier, terminal = next(iter(pairs.items()))
@@ -478,7 +513,7 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
     start_calls = accepted_start_calls(receipt["calls"])
     require(len(start_calls) == 1 and acceptance(start_calls[0]["result"]) == accepted
             and start_calls[0]["turn"] == 1, "The terminal lacks the one original initial-turn acceptance.")
-    call_id, terminal = canonical_pairs(requests, accepted, start_calls[0]["id"], start_calls[0]["name"])
+    call_id, terminal = canonical_pairs(requests, accepted, start_calls[0]["id"], start_calls[0]["name"], receipt["calls"])
     positions = committed_positions(log, receipt["session_id"], accepted["run_id"], call_id)
     consumed = consumption["deliveries"][0]
     require(consumed["accepted"] == accepted and consumed["call_id"] == call_id and consumed["terminal"] == terminal
@@ -490,7 +525,7 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
             and observed_request["response_first_payload_ns"] == consumed["response_first_payload_ns"],
             "The consumption receipt differs from the actual relay request record.")
     require(0 < consumed["request_id"] <= len(requests), "The consumed request is absent from raw capture.")
-    require(canonical_pairs([requests[consumed["request_id"] - 1]], accepted, start_calls[0]["id"], start_calls[0]["name"]) == (call_id, terminal),
+    require(canonical_pairs([requests[consumed["request_id"] - 1]], accepted, start_calls[0]["id"], start_calls[0]["name"], receipt["calls"]) == (call_id, terminal),
             "The consumption receipt names a request without the actual terminal pair.")
     require(terminal.get("outcome") == ("Failed" if cancel else "Completed"), "The child terminal outcome differs.")
     if cancel:
@@ -499,7 +534,7 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
     require(terminal.get("log_path") == binding["paths"]["log_path"]
             and terminal.get("artifact_directory") == binding["paths"]["artifact_dir"], "The terminal paths differ from bound child storage.")
     calls = receipt["calls"]
-    starts = [row for row in calls if row["name"] == "spawn_agent"]
+    starts = start_calls
     require(all(row["turn"] == 1 and row["arguments"].get("Agent", row["arguments"].get("agent")) == "child-run-worker"
                 for row in starts),
             "The fixed flow did not start the assigned child exactly once.")
@@ -743,7 +778,7 @@ def collect(port, prompt, session, output_format, evidence, case, prompt_ordinal
     for accepted in receipt["accepted_runs"]:
         starts = [call for call in accepted_starts if acceptance(call["result"]) == accepted]
         require(len(starts) == 1, "The legacy terminal lacks the exact original start occurrence.")
-        call_id, terminal = canonical_pairs(requests, accepted, starts[0]["id"], starts[0]["name"])
+        call_id, terminal = canonical_pairs(requests, accepted, starts[0]["id"], starts[0]["name"], receipt["calls"])
         require(terminal.get("outcome") == "Completed", "A legacy child did not complete normally.")
         positions = committed_positions(log, receipt["session_id"], accepted["run_id"], call_id)
         deliveries.append({"accepted": accepted, "terminal": terminal, "journal_positions": positions})
