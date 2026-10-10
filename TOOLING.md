@@ -39,7 +39,10 @@ The same mutation inputs passed the earlier `832ebff8` job in 20m25s.
 
 The destination group took 13m13s to 16m49s across four retained hosted runs.
 It took 14m53s in the `fa6aad73` run. The complete gate moves without target or test changes.
-Hosted verification of the new distribution remains pending.
+The [combined `153d9223` hosted run](https://github.com/netclaw-dev/netclaw/actions/runs/38045919693) verifies the new distribution.
+Its four groups pass in 16m51s, 23m14s, 15m11s, and 21m01s.
+Each group stays below the 25-minute limit. All six expected task-adoption and child-authority targets have `Killed` status.
+The `8aba7cb1` assignment group passes in 24m52s, with eight seconds of margin.
 See [the cancelled job](https://github.com/netclaw-dev/netclaw/actions/runs/38020934971/job/114121548608)
 and [the prior successful job](https://github.com/netclaw-dev/netclaw/actions/runs/38014833252/job/114102687127).
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
