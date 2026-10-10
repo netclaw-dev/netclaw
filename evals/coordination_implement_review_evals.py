@@ -180,7 +180,7 @@ def signature(name, arguments, result):
     return name, json.dumps(provider_arguments(arguments), sort_keys=True), result
 
 
-def paired_calls(requests):
+def paired_call_occurrences(requests):
     paired = set()
     for request in requests:
         pending = {}
@@ -192,8 +192,12 @@ def paired_calls(requests):
                 pending[identifier] = (function["name"], load_json(function["arguments"]))
             if message.get("role") == "tool" and message.get("tool_call_id") in pending:
                 name, args = pending.pop(message["tool_call_id"])
-                paired.add(signature(name, args, message_text(message.get("content"))))
+                paired.add((message["tool_call_id"], *signature(name, args, message_text(message.get("content")))))
     return paired
+
+
+def paired_calls(requests):
+    return {row[1:] for row in paired_call_occurrences(requests)}
 
 
 def reads_after_terminal(requests, terminal_id):
@@ -214,8 +218,28 @@ def reads_after_terminal(requests, terminal_id):
     return result
 
 
+def project_declarations(requests, roots):
+    required = set()
+    for request in requests:
+        for message in request.get("messages", []):
+            for call in message.get("tool_calls", []) if message.get("role") == "assistant" else []:
+                function = call["function"]
+                if function["name"] != "set_working_directory":
+                    continue
+                args = load_json(function["arguments"])
+                require(args.get("Path") in roots, "The project declaration leaves the actor's named task roots.")
+                required.add((call["id"], json.dumps(provider_arguments(args), sort_keys=True)))
+    paired = {(identifier, raw, result) for identifier, name, raw, result in paired_call_occurrences(requests)
+              if name == "set_working_directory"}
+    require(all(result == load_json(raw)["Path"] for _, raw, result in paired),
+            "The project declaration lacks its exact canonical successful result.")
+    require(required == {row[:2] for row in paired}, "A project declaration lacks its actual provider call/result pair.")
+    return paired
+
+
 def allowed_actions(requests, setup, stage):
     candidate = setup["worker"] + "/source/catalog.py"
+    project_declarations(requests, {setup["worker"]})
     allowed_writes = {setup["worker_report"], candidate} if stage == "worker" else {setup["review_report"]}
     allowed_shell = set(commands(setup).values())
     if stage != "worker":
@@ -226,7 +250,7 @@ def allowed_actions(requests, setup, stage):
             for call in message.get("tool_calls", []) if message.get("role") == "assistant" else []:
                 function = call["function"]
                 name, args = function["name"], load_json(function["arguments"])
-                require(name in READ_TOOLS | {"file_write", "file_edit", "shell_execute"}, "The child uses a forbidden action.")
+                require(name in READ_TOOLS | {"file_write", "file_edit", "shell_execute", "set_working_directory"}, "The child uses a forbidden action.")
                 if name in {"file_write", "file_edit"}:
                     require(args.get("Path") in allowed_writes and (name != "file_edit" or args["Path"] == candidate),
                             "The child writes outside its assigned scope.")
@@ -275,11 +299,15 @@ def verify(setup, receipt, events, requests, home, check_candidate):
     calls, _ = occurrences(events, receipt["session_id"])
     require(all((c["failure"] is None or (c["name"] == "spawn_agent"
                 and is_unexecuted_rationale_rejection(c["failure"], c["result"])))
-                and c["name"] in READ_TOOLS | {"spawn_agent", "shell_execute"} for c in calls),
+                and c["name"] in READ_TOOLS | {"spawn_agent", "shell_execute", "set_working_directory"} for c in calls),
             "The parent uses an unsuccessful or forbidden workflow action.")
     parent_requests = [r for r in requests if context_paths(r) is None]
-    parent_pairs = paired_calls(parent_requests)
-    require(all(signature(c["name"], c["arguments"], c["result"]) in parent_pairs for c in calls),
+    parent_pairs = paired_call_occurrences(parent_requests)
+    parent_declarations = project_declarations(parent_requests, {setup["operator"], setup["worker"]})
+    require(parent_declarations == {(c["id"], json.dumps(provider_arguments(c["arguments"]), sort_keys=True), c["result"])
+                                    for c in calls if c["name"] == "set_working_directory"},
+            "The parent project declaration differs between the actual DTO and provider pair.")
+    require(all((c["id"], *signature(c["name"], c["arguments"], c["result"])) in parent_pairs for c in calls),
             "A parent receipt lacks its actual provider pair.")
     parent_shell = {commands(setup)[key] for key in ("check", "revision", "diff", "status")}
     for request in parent_requests:
@@ -287,7 +315,7 @@ def verify(setup, receipt, events, requests, home, check_candidate):
             for call in message.get("tool_calls", []) if message.get("role") == "assistant" else []:
                 function = call["function"]
                 name, arguments = function["name"], load_json(function["arguments"])
-                require(name in READ_TOOLS | {"spawn_agent", "shell_execute"}, "The parent provider capture contains a forbidden action.")
+                require(name in READ_TOOLS | {"spawn_agent", "shell_execute", "set_working_directory"}, "The parent provider capture contains a forbidden action.")
                 if name == "shell_execute":
                     require(arguments.get("Command") in parent_shell, "The parent provider capture contains an out-of-scope command.")
     starts = [c for c in calls if c["name"] == "spawn_agent"
