@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import subprocess
 import threading
 import time
@@ -443,8 +444,8 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
         held = next(row for row in snapshot["requests"] if row["held"])
         actual_write = write_completed(requests[held["request_id"] - 1], f"partial-{nonce}.txt")
         require(actual_write is not None, "The held request lacks its actual partial write result.")
-        report_path = verify_partial_report(terminal, home, accepted, artifact, actual_write["result"])
-        verify_cancellation_review(calls, accepted, terminal, consumed, home, report_path)
+        report_path, report_bytes = verify_partial_report(terminal, home, accepted, artifact, actual_write["result"])
+        verify_cancellation_review(calls, accepted, terminal, consumed, report_path, report_bytes)
         require(not any(row["child"] and row["request_id"] > held["request_id"] for row in snapshot["requests"]),
                 "The child entered a new provider operation after the cancellation barrier.")
     require(any(row["name"] == "file_read" and row["arguments"].get("Path", row["arguments"].get("path")) == artifact
@@ -456,6 +457,25 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
             "artifact_sha256": hashlib.sha256(contents.encode()).hexdigest(),
             "limit": "Local cancellation does not prove that an external provider stopped its accepted operation."}
 
+
+
+def read_cancellation_report(home, report_path, artifact_directory):
+    require(report_path == artifact_directory + "/cancelled-results.json"
+            and str(PurePosixPath(report_path)) == report_path,
+            "The report path differs from the exact confirmed artifact path.")
+    target = actual_file(home, report_path)
+    root = Path(home).resolve() / "data"
+    for path in [target, *target.parents]:
+        require(not path.is_symlink(), "The cancellation report path contains a link.")
+        if path == root:
+            break
+    require(stat.S_ISREG(target.stat().st_mode), "The cancellation report is not a regular file.")
+    result = subprocess.run(["docker", "exec", "--user", "netclaw", os.environ["EVAL_CONTAINER_NAME"],
+                             "cat", "--", report_path], capture_output=True, check=True, timeout=30)
+    capture = Path(os.environ["TMPDIR_EVAL"]) / "child-runs/actual-cancelled-results.json"
+    capture.parent.mkdir(parents=True, exist_ok=True)
+    capture.write_bytes(result.stdout)
+    return result.stdout
 
 
 def verify_partial_report(terminal, home, accepted, artifact, confirmed_write_result):
@@ -472,22 +492,24 @@ def verify_partial_report(terminal, home, accepted, artifact, confirmed_write_re
     report_path = terminal["artifact_directory"] + "/cancelled-results.json"
     require(report_path in terminal.get("output", "") and not terminal.get("warning"),
             "The fixed local-report case lacks a confirmed framework report.")
-    report = json.loads(actual_file(home, report_path).read_bytes())
+    report_bytes = read_cancellation_report(home, report_path, terminal["artifact_directory"])
+    report = json.loads(report_bytes.decode("utf-8"), object_pairs_hook=unique_object)
+    require(isinstance(report, dict), "The actual partial report is not an object.")
     require(report.get("run_id") == accepted["run_id"] and report.get("state") == "Cancelled"
             and report.get("summary") == summary and report.get("confirmed_activity") == activity,
             "The actual partial report differs from the durable terminal checkpoint.")
     require(report.get("external_effects") == "Recorded receipts describe known local results. They do not prove external effects stopped.",
             "The partial report omits the canonical external-effect limit.")
-    return report_path
+    return report_path, report_bytes
 
 
-def verify_cancellation_review(calls, accepted, terminal, consumed, home, report_path):
+def verify_cancellation_review(calls, accepted, terminal, consumed, report_path, report_bytes):
     require(any(row["name"] == "skill_load" and row.get("success") and row["turn"] == 1
                 and row["arguments"].get("Name", row["arguments"].get("name")) == "agent-coordination"
                 and "A cancellation acceptance does not prove dispatch closure or terminal completion."
                 in row.get("result", "") for row in calls),
             "The parent lacks actual coordination guidance before the cancellation turn.")
-    body = actual_file(home, report_path).read_bytes().decode("utf-8")
+    body = report_bytes.decode("utf-8")
     require(any(row["name"] == "file_read" and row.get("success")
                 and row["arguments"].get("Path", row["arguments"].get("path")) == report_path
                 and row["arguments"].get("StartLine", row["arguments"].get("startLine")) in (None, 0)
@@ -505,6 +527,17 @@ def verify_cancellation_review(calls, accepted, terminal, consumed, home, report
         status = json.loads(row.get("result", ""), object_pairs_hook=unique_object)
         require(isinstance(status, dict) and status.get("run_id") == accepted["run_id"]
                 and status.get("scope_id") == accepted["scope_id"], "The cancellation status has a foreign owner.")
+        terminal_body = status.get("terminal")
+        require("terminal" in status and (terminal_body is None or isinstance(terminal_body, str)),
+                "The status terminal does not use the canonical JSON-string representation.")
+        if terminal_body is None:
+            require(status.get("state") in {"Accepted", "Running", "Cancelling"},
+                    "A terminal status lacks its canonical terminal JSON string.")
+        else:
+            status["terminal"] = json.loads(terminal_body, object_pairs_hook=unique_object)
+            require(isinstance(status["terminal"], dict) and status["terminal"] == terminal
+                    and status.get("state") == terminal.get("state"),
+                    "The status terminal differs from the actual consumed terminal.")
         if args.get("Cancel", args.get("cancel", False)) is True:
             require(status.get("cancellation_requested") is True and type(status.get("dispatch_closed")) is bool
                     and status.get("state") in {"Cancelling", "Cancelled"},

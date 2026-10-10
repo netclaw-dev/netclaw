@@ -682,6 +682,13 @@ The parent loads the deferred control in the second turn.
 The oracle checks cancellation admission and dispatch closure as separate status facts.
 After terminal consumption, the parent must fully read the actual framework report and the confirmed partial artifact.
 The parent must also obtain explicit dispatch closure and the matching cancelled terminal through status.
+The oracle reads the confirmed regular report as the container user `netclaw`.
+The oracle rejects links and foreign paths before the container read.
+The runner archives the exact report bytes in `child-runs/actual-cancelled-results.json`.
+The report check and the parent-read check use that same byte payload.
+The status oracle decodes the canonical JSON string in `terminal` and rejects object input.
+It compares that terminal with the actual consumed result.
+A failed owner read or an eval timeout fails the trial.
 These checks prove local receipts and file access. They do not prove that external effects stopped.
 
 The existing Subagents consumers also require an exact case selector and one fresh invocation.
