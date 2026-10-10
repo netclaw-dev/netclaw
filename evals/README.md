@@ -188,6 +188,16 @@ The blocked case derives its eval-owned config before daemon startup.
 It permits file reads and denies attachments through `Personal.AttachFiles.Mode=None`.
 Normal cases retain their original config.
 The case archives the neutral source, actual artifacts, observer evidence, and oracle report before teardown.
+The archive includes `child-runs/coordination-case/runtime-files/inventory.json`.
+The inventory maps each canonical runtime path to its actual bytes, byte length, and SHA-256 hash.
+It retains only the setup-owned source files, findings, plan, and an attributed attachment target.
+A copied attachment retains its original File DTO path and exact tool receipt.
+The hook records absent files and partial workflows without acceptance credit.
+It also retains altered source and artifact bytes for later review.
+The hook rejects foreign paths, owners, links, and unpaired File DTOs.
+An archive error fails the harness after it removes the owned container, relay processes, home, and temporary files.
+The archive never copies the general session workspace or private files.
+The live artifact oracle remains authoritative. Archive capture alone proves no workflow criterion.
 It never gives the model the trusted truth file or the complete example artifacts.
 Each child must use `file_write` for its complete artifact in this narrow case.
 The adapter binds exact write receipts and bytes to the verified child contexts.

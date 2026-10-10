@@ -1,18 +1,23 @@
 """Controls for the case adapter and cumulative child consumption."""
 
 import copy
+from contextlib import closing
 import hashlib
 import json
 import os
+import shutil
+import sqlite3
+import errno
 from pathlib import Path
 import re
 import stat
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from child_run_evals import actual_file, consumed_deliveries, legacy_observer_mode
-from coordination_workflow_evals import blocked_config, contract, prepare, prompt, workflow_stages
+from coordination_workflow_evals import archive_read, archive_runtime_files, blocked_config, contract, prepare, prompt, workflow_stages
 from test_child_run_evals import ACCEPTED, PATHS, child, parent, terminal
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +86,347 @@ def observer_calls(events):
             turn += 1
     assert not pending
     return calls
+
+
+
+class CoordinationArchiveControls(unittest.TestCase):
+    def fixture(self, root, copied=True):
+        home = root / "home"
+        evidence = root / "child-runs"
+        setup_dir = evidence / "coordination-case"
+        setup = prepare(FIXTURE, home, setup_dir)
+        actual_file(home, setup["findings_path"]).write_bytes(b"actual findings\r\n")
+        actual_file(home, setup["plan_path"]).write_bytes(b"actual plan\r\n")
+        observer = evidence / "observer-neutral"
+        observer.mkdir()
+        relay = evidence / "relay"
+        relay.mkdir()
+        data = {"Nonce": "neutral-archive", "Mode": "collect", "InitialPrompt": prompt(setup), "SessionId": "session-neutral"}
+        receipt = {"session_id": data["SessionId"], "prompt_nonce": data["Nonce"], "observer_mode": data["Mode"],
+                   "initial_prompt_sha256": hashlib.sha256(data["InitialPrompt"].encode()).hexdigest(),
+                   "status": "observed", "accepted_runs": [], "calls": []}
+        events, requests = [], []
+        def emit(kind, **values):
+            index = len(events) + 1
+            events.append({"sequence": index, "observed_ns": index, "output": {
+                "Type": kind, "SessionId": data["SessionId"], **values}})
+        history = {"messages": []}
+        for index in (1, 2):
+            accepted = {**ACCEPTED, "run_id": "run-" + str(index), "scope_id": "scope-" + str(index)}
+            receipt["accepted_runs"].append(accepted)
+            arguments = {"Agent": "task-worker", "Task": "A neutral assigned artifact."}
+            emit("tool_call", CallId="start-" + str(index), ToolName="spawn_agent", ArgumentsJson=json.dumps(arguments))
+            emit("tool_result", CallId="start-" + str(index), ToolName="spawn_agent", Result=json.dumps(accepted))
+            history["messages"].extend([
+                {"role": "assistant", "tool_calls": [{"id": "start-" + str(index), "function": {
+                    "name": "spawn_agent", "arguments": json.dumps(arguments)}}]},
+                {"role": "tool", "tool_call_id": "start-" + str(index), "content": json.dumps(accepted)}])
+            child_root = "/home/netclaw/.netclaw/sessions/neutral/subagents/" + accepted["run_id"]
+            paths = {"session_dir": "/home/netclaw/.netclaw/sessions/neutral/workspace",
+                     "temp_dir": child_root + "/tmp", "artifact_dir": child_root + "/artifacts",
+                     "log_path": child_root + "/logs/session.log"}
+            request = child()
+            request["messages"][1]["content"] = "Context:\n" + "\n".join(k + ": " + v for k, v in paths.items())
+            requests.append(request)
+            body = {**terminal(), "run_id": accepted["run_id"], "scope_id": accepted["scope_id"],
+                    "log_path": paths["log_path"], "artifact_directory": paths["artifact_dir"]}
+            delivery = parent(body, "delivery-" + str(index))
+            delivery["messages"][0]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+                {"run_id": accepted["run_id"], "source_operation": "spawn_agent"})
+            history["messages"].extend(delivery["messages"])
+        target = ("/home/netclaw/.netclaw/sessions/neutral/workspace/attachments/plan-1.md" if copied else setup["plan_path"])
+        actual_file(home, target).parent.mkdir(parents=True, exist_ok=True)
+        actual_file(home, target).write_bytes(actual_file(home, setup["plan_path"]).read_bytes())
+        result = "File attached: plan.md (text/markdown) at " + target + (" (copied into current session)" if copied else "")
+        arguments = {"Path": setup["plan_path"]}
+        emit("tool_call", CallId="attach-neutral", ToolName="attach_file", ArgumentsJson=json.dumps(arguments))
+        emit("tool_result", CallId="attach-neutral", ToolName="attach_file", Result=result)
+        emit("file", FilePath=target, FileName="plan.md", MimeType="text/markdown")
+        history["messages"].extend([
+            {"role": "assistant", "tool_calls": [{"id": "attach-neutral", "function": {
+                "name": "attach_file", "arguments": json.dumps(arguments)}}]},
+            {"role": "tool", "tool_call_id": "attach-neutral", "content": result}])
+        requests.append(history)
+        receipt["calls"] = observer_calls(events)
+        log = actual_file(home, "/home/netclaw/.netclaw/sessions/neutral/logs/session.log")
+        log.parent.mkdir(parents=True)
+        log.write_text("\n".join("child_run_accepted owner=session-neutral runId=run-" + str(index) + " journalSequence=" + str(index)
+                                for index in (1, 2)))
+        def save():
+            (observer / "observer-input.json").write_text(json.dumps(data))
+            (observer / "observer-receipt.json").write_text(json.dumps(receipt))
+            (observer / "session-output.jsonl").write_text("\n".join(json.dumps(row) for row in events))
+            for index, request in enumerate(requests):
+                (relay / f"request-{index:04}.json").write_text(json.dumps(request))
+        save()
+        return home, evidence, setup, observer, receipt, events, requests, target, save
+
+    def archive(self, home, evidence):
+        return archive_runtime_files(FIXTURE, home, evidence / "coordination-case", evidence)
+
+    def test_retains_actual_sources_artifacts_and_both_delivery_locations(self):
+        for copied in (False, True):
+            with self.subTest(copied=copied), tempfile.TemporaryDirectory() as directory:
+                home, evidence, setup, _, _, _, _, target, _ = self.fixture(Path(directory), copied)
+                actual_file(home, target).write_bytes(b"actual delivered bytes\x00\r\n")
+                inventory = self.archive(home, evidence)
+                self.assertIs(inventory["capture_complete"], True)
+                self.assertEqual(setup["source_root"], inventory["source_root"])
+                self.assertEqual(4, len(inventory["files"]))
+                for row in inventory["files"]:
+                    content = (evidence / "coordination-case/runtime-files" / row["archive_path"]).read_bytes()
+                    self.assertEqual(actual_file(home, row["canonical_path"]).read_bytes(), content)
+                    self.assertEqual(len(content), row["length"])
+                    self.assertEqual(hashlib.sha256(content).hexdigest(), row["sha256"])
+                delivery = inventory["files"][-1]
+                self.assertEqual(target, delivery["canonical_path"])
+                self.assertEqual("attach-neutral", delivery["attribution"]["call_id"])
+                self.assertNotIn("passed", inventory)
+                if copied:
+                    self.assertNotEqual(inventory["files"][2]["sha256"], delivery["sha256"])
+
+    def test_preserves_missing_altered_and_partial_workflow_facts_without_credit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, evidence, setup, _, receipt, events, _, _, save = self.fixture(Path(directory))
+            actual_file(home, setup["source_root"] + "/source/catalog.py").write_bytes(b"altered actual source\r\n")
+            actual_file(home, setup["findings_path"]).unlink()
+            actual_file(home, setup["plan_path"]).write_bytes(b"partial plan")
+            receipt["status"] = "incomplete"
+            receipt["last_reply"] = ""
+            events.clear()
+            save()
+            inventory = self.archive(home, evidence)
+            self.assertIs(inventory["files"][0]["matches_expected"], False)
+            self.assertIs(inventory["files"][1]["present"], False)
+            self.assertNotIn("sha256", inventory["files"][1])
+            self.assertEqual(b"partial plan", (evidence / "coordination-case/runtime-files/workspace/plan.md").read_bytes())
+            self.assertEqual("incomplete", inventory["observers"][0]["status"])
+            self.assertEqual(0, inventory["observers"][0]["file_outputs"])
+
+    def test_preserves_no_observer_and_missing_source_facts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home, evidence = root / "home", root / "child-runs"
+            setup = prepare(FIXTURE, home, evidence / "coordination-case")
+            actual_file(home, setup["source_root"] + "/source/catalog.py").unlink()
+            inventory = self.archive(home, evidence)
+            self.assertEqual([], inventory["observers"])
+            self.assertTrue(all(row["present"] is False for row in inventory["files"]))
+
+    def test_missing_delivery_target_remains_an_explicit_file_fact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, evidence, _, _, _, _, _, target, _ = self.fixture(Path(directory))
+            actual_file(home, target).unlink()
+            inventory = self.archive(home, evidence)
+            delivery = inventory["files"][-1]
+            self.assertEqual("delivery", delivery["kind"])
+            self.assertIs(delivery["present"], False)
+            self.assertNotIn("sha256", delivery)
+            self.assertNotIn("passed", inventory)
+
+    def test_rejects_foreign_root_artifact_scope_and_links(self):
+        for fault in ("root", "artifact", "source-link", "inside-link", "dangling-link", "parent-link", "destination-link"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                home, evidence, setup, _, _, _, _, _, _ = self.fixture(root)
+                path = actual_file(home, setup["findings_path"])
+                if fault in ("root", "artifact"):
+                    setup["source_root" if fault == "root" else "findings_path"] = "/home/netclaw/.netclaw/workspaces/foreign"
+                    (evidence / "coordination-case/setup.json").write_text(json.dumps(setup))
+                elif fault == "parent-link":
+                    source_dir = actual_file(home, setup["source_root"] + "/source")
+                    source_dir.rename(root / "source-copy")
+                    source_dir.symlink_to(root / "source-copy", target_is_directory=True)
+                elif fault == "destination-link":
+                    (evidence / "coordination-case/runtime-files").symlink_to(root / "outside")
+                else:
+                    if fault == "source-link":
+                        path = actual_file(home, setup["source_root"] + "/source/catalog.py")
+                    path.unlink()
+                    target = (actual_file(home, setup["plan_path"]) if fault == "inside-link" else root / "outside")
+                    if fault != "dangling-link" and fault != "inside-link":
+                        target.write_bytes(b"outside marker")
+                    path.symlink_to(target)
+                with self.assertRaises((AssertionError, OSError)):
+                    self.archive(home, evidence)
+
+    def test_rejects_foreign_owner_unpaired_failed_and_arbitrary_delivery(self):
+        for fault in ("owner", "provider-id", "failure", "result", "foreign-session", "private-path", "unknown-name", "child-context", "malformed-context", "start-provider-id", "event-order", "log-owner"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                home, evidence, setup, _, receipt, events, requests, target, save = self.fixture(root)
+                if fault == "owner":
+                    receipt["session_id"] = "foreign-owner"
+                elif fault == "provider-id":
+                    requests[-1]["messages"][-2]["tool_calls"][0]["id"] = "foreign-call"
+                    requests[-1]["messages"][-1]["tool_call_id"] = "foreign-call"
+                elif fault == "failure":
+                    events[-2]["output"]["ToolFailureCode"] = "access_denied"
+                elif fault == "result":
+                    events[-2]["output"]["Result"] = "File attached: unsupported"
+                elif fault == "foreign-session":
+                    events[-1]["output"]["SessionId"] = "foreign-owner"
+                elif fault in ("private-path", "unknown-name"):
+                    replacement = target.replace("/neutral/", "/foreign/") if fault == "private-path" else target.replace("plan-1.md", "private.md")
+                    events[-1]["output"]["FilePath"] = replacement
+                    events[-2]["output"]["Result"] = events[-2]["output"]["Result"].replace(target, replacement)
+                    requests[-1]["messages"][-1]["content"] = events[-2]["output"]["Result"]
+                elif fault == "child-context":
+                    requests[0]["messages"][1]["content"] = requests[0]["messages"][1]["content"].replace("workspace", "foreign")
+                elif fault == "malformed-context":
+                    requests[0]["messages"][1]["content"] = "Context without runtime paths."
+                elif fault == "start-provider-id":
+                    requests[-1]["messages"][0]["tool_calls"][0]["id"] = "foreign-start"
+                    requests[-1]["messages"][1]["tool_call_id"] = "foreign-start"
+                elif fault == "event-order":
+                    events[-1]["sequence"] = True
+                else:
+                    actual_file(home, "/home/netclaw/.netclaw/sessions/neutral/logs/session.log").write_text("foreign owner")
+                save()
+                with self.assertRaises((AssertionError, ValueError)):
+                    self.archive(home, evidence)
+
+    def test_delivery_links_and_read_or_copy_errors_fail_loudly(self):
+        for fault in ("link", "read", "write"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                home, evidence, _, _, _, _, _, target, _ = self.fixture(root)
+                if fault == "link":
+                    actual_file(home, target).unlink()
+                    outside = root / "outside"
+                    outside.write_bytes(b"outside marker")
+                    actual_file(home, target).symlink_to(outside)
+                    with self.assertRaises((AssertionError, OSError)):
+                        self.archive(home, evidence)
+                else:
+                    if fault == "read":
+                        original = os.open
+                        def fail(name, flags, *args, **kwargs):
+                            if name == "plan-1.md":
+                                raise OSError("owned archive read failure")
+                            return original(name, flags, *args, **kwargs)
+                        with patch("coordination_workflow_evals.os.open", side_effect=fail), self.assertRaises(OSError):
+                            self.archive(home, evidence)
+                    else:
+                        original = Path.open
+                        def fail(path, *args, **kwargs):
+                            if args == ("xb",) and "runtime-files" in path.parts:
+                                raise OSError("owned archive write failure")
+                            return original(path, *args, **kwargs)
+                        with patch.object(Path, "open", fail), self.assertRaises(OSError):
+                            self.archive(home, evidence)
+                inventory = json.loads((evidence / "coordination-case/runtime-files/inventory.json").read_text())
+                self.assertIs(inventory["capture_complete"], False)
+                self.assertTrue(inventory["error"])
+
+    def test_ancestor_swap_cannot_redirect_the_actual_read(self):
+        for swap_after_open in (False, True):
+            with self.subTest(swap_after_open=swap_after_open), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                home, evidence, setup, _, _, _, _, _, _ = self.fixture(root)
+                source = actual_file(home, setup["source_root"] + "/source")
+                outside = root / "outside"
+                outside.mkdir()
+                (outside / "catalog.py").write_bytes(b"private outside marker")
+                expected = (source / "catalog.py").read_bytes()
+                original = os.open
+                swapped = False
+                def open_and_swap(name, flags, *args, **kwargs):
+                    nonlocal swapped
+                    if name == "source" and not swapped:
+                        swapped = True
+                        if swap_after_open:
+                            descriptor = original(name, flags, *args, **kwargs)
+                        source.rename(source.with_name("detached-source"))
+                        source.symlink_to(outside, target_is_directory=True)
+                        if swap_after_open:
+                            return descriptor
+                    return original(name, flags, *args, **kwargs)
+                with patch("coordination_workflow_evals.os.open", side_effect=open_and_swap):
+                    if swap_after_open:
+                        self.assertEqual(expected, archive_read(home, setup["source_root"] + "/source/catalog.py"))
+                    else:
+                        with self.assertRaises(OSError) as error:
+                            archive_read(home, setup["source_root"] + "/source/catalog.py")
+                        self.assertIn(error.exception.errno, (errno.ELOOP, errno.ENOTDIR))
+                self.assertTrue(swapped)
+                self.assertEqual(b"private outside marker", (outside / "catalog.py").read_bytes())
+
+    def test_nonregular_source_fails_without_an_open_that_waits_for_a_writer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, evidence, setup, _, _, _, _, _, _ = self.fixture(Path(directory))
+            source = actual_file(home, setup["findings_path"])
+            source.unlink()
+            os.mkfifo(source)
+            with self.assertRaisesRegex(AssertionError, "regular file"):
+                self.archive(home, evidence)
+
+    def test_actual_archive_hook_retains_bytes_and_failure_still_cleans_owned_resources(self):
+        for fault in (False, True):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                home, evidence, setup, _, _, _, _, _, _ = self.fixture(root)
+                repo = root / "repo"
+                (repo / "evals").mkdir(parents=True)
+                shutil.copyfile(ROOT / "evals/coordination_workflow_evals.py", repo / "evals/coordination_workflow_evals.py")
+                if fault:
+                    supplied = actual_file(home, setup["findings_path"])
+                    supplied.unlink()
+                    supplied.symlink_to(root / "missing")
+                command = shell_functions("check_prerequisites", "archive_eval_run", "cleanup_eval_env") + r"""
+set -euo pipefail
+docker() { printf '%s\n' "docker $*" >> "$ACTION_LOG"; if [[ "$1" == image ]]; then echo synthetic-image; fi; }
+kill() { printf '%s\n' "kill $*" >> "$ACTION_LOG"; }
+wait() { printf '%s\n' "wait $*" >> "$ACTION_LOG"; }
+force_rmrf() { printf '%s\n' "home cleanup" >> "$ACTION_LOG"; rm -rf "$1"; }
+resolve_eval_target() { :; }
+mktemp() {
+    case "$*" in
+        *netclaw-eval-home-*) printf '%s\n' "$OWNED_HOME" ;;
+        *netclaw-eval-tmp-*) printf '%s\n' "$OWNED_TEMP" ;;
+        *) return 1 ;;
+    esac
+}
+check_prerequisites
+"""
+                env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(ROOT / "evals"),
+                       "REPO_ROOT": str(repo), "EVAL_ASSET_ROOT": str(ROOT), "EVAL_HOME": str(home),
+                       "TMPDIR_EVAL": str(evidence.parent), "COORDINATION_CASE_EVIDENCE": str(evidence / "coordination-case"),
+                       "ACTION_LOG": str(root / "actions"), "RUN_ID": "owned-test", "NETCLAW_IMAGE": "synthetic-image",
+                       "EVAL_CONTAINER_NAME": "owned-test", "CYCLE_FIXTURE_PID_SAVED": "11", "CHILD_FIXTURE_PID_SAVED": "12",
+                       "FILTER_CASE": CASES[0], "RUNS": "1", "OWNED_HOME": str(home)}
+                # The real temp root contains child-runs. Keep the operator root outside teardown.
+                temp = root / "temp"
+                temp.mkdir()
+                evidence.rename(temp / "child-runs")
+                env["TMPDIR_EVAL"] = str(temp)
+                env["OWNED_TEMP"] = str(temp)
+                env["COORDINATION_CASE_EVIDENCE"] = str(temp / "child-runs/coordination-case")
+                database = home / "evals/results.db"
+                database.parent.mkdir(parents=True)
+                with closing(sqlite3.connect(database)) as connection:
+                    connection.execute("CREATE TABLE eval_results (passed INTEGER, details TEXT)")
+                    connection.execute("INSERT INTO eval_results VALUES (1, 'pass')")
+                    connection.commit()
+                result = subprocess.run(["bash", "-c", command], env=env, text=True, capture_output=True)
+                self.assertEqual(1 if fault else 0, result.returncode, result.stderr)
+                self.assertFalse(home.exists())
+                self.assertFalse(temp.exists())
+                actions = (root / "actions").read_text()
+                self.assertIn("docker stop owned-test", actions)
+                self.assertIn("kill 11", actions)
+                self.assertIn("wait 12", actions)
+                self.assertTrue(actions.rstrip().endswith("home cleanup"))
+                with closing(sqlite3.connect(repo / "evals/runs/owned-test/results.db")) as connection:
+                    self.assertEqual([(1, "pass")], connection.execute("SELECT passed, details FROM eval_results").fetchall())
+                archive = repo / "evals/runs/owned-test/child-runs/coordination-case/runtime-files"
+                inventory = json.loads((archive / "inventory.json").read_text())
+                self.assertIs(inventory["capture_complete"], not fault)
+                self.assertTrue((archive / "workspace/source/catalog.py").is_file())
+                if fault:
+                    self.assertIn("link", (archive.parent / "archive.stderr").read_text())
+                else:
+                    self.assertEqual(b"actual plan\r\n", (archive / "workspace/plan.md").read_bytes())
 
 
 class CoordinationWorkflowControls(unittest.TestCase):
