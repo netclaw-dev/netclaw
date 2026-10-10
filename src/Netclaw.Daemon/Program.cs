@@ -954,7 +954,7 @@ static IReadOnlyList<string> ConfigureDaemonServices(
     services.AddSingleton<ISystemPromptProvider>(promptProvider);
 
     // Model capability resolution chain:
-    // [Ollama →] [OpenAI-compat →] OpenRouter oracle → HuggingFace → text-only default.
+    // [Ollama →] [OpenAI Codex OAuth →] [OpenAI-compat →] OpenRouter oracle → HuggingFace → text-only default.
     // When the main provider is Ollama, query it first — it knows the true context window
     // for locally hosted models that may not be indexed by external oracles.
     services.AddHttpClient<OpenRouterOracleResolver>().AddNetclawHeaders("capability-probe");
@@ -982,17 +982,39 @@ static IReadOnlyList<string> ConfigureDaemonServices(
     // Covers Main + optional Compaction independently so multi-provider
     // deployments resolve each model's capabilities against the right backend.
     var modelProviderLookup = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+    var modelProviderNameLookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     if (!string.IsNullOrWhiteSpace(models.Main.ModelId))
+    {
         modelProviderLookup[models.Main.ModelId] = mainProviderType;
+        modelProviderNameLookup[models.Main.ModelId] = models.Main.Provider;
+    }
     if (models.Compaction is { ModelId: { Length: > 0 } compactionId } &&
         providers.TryGetValue(models.Compaction.Provider, out var compactionProvider))
+    {
         modelProviderLookup[compactionId] = compactionProvider.Type;
+        modelProviderNameLookup[compactionId] = models.Compaction.Provider;
+    }
+
+    var hasOpenAiOAuthModel = modelProviderNameLookup.Values.Any(providerName =>
+        providers.TryGetValue(providerName, out var provider)
+        && string.Equals(provider.Type, "openai", StringComparison.OrdinalIgnoreCase)
+        && (provider.AuthMethod is AuthMethod.OAuthDevice or AuthMethod.OAuthPkce));
+
+    if (hasOpenAiOAuthModel)
+    {
+        services.AddSingleton(sp => new OpenAiCodexCapabilityResolver(
+            sp.GetRequiredService<IConfiguredProviderProbe>(),
+            providers,
+            modelProviderNameLookup));
+    }
 
     services.AddSingleton<IModelCapabilityResolver>(sp =>
     {
         var resolvers = new List<IModelCapabilityResolver>();
         if (ollamaEndpoint is not null)
             resolvers.Add(sp.GetRequiredService<OllamaCapabilityResolver>());
+        if (hasOpenAiOAuthModel)
+            resolvers.Add(sp.GetRequiredService<OpenAiCodexCapabilityResolver>());
         if (openAiCompatibleEndpoint is not null)
             resolvers.Add(sp.GetRequiredService<OpenAiCompatibleCapabilityResolver>());
         resolvers.Add(sp.GetRequiredService<OpenRouterOracleResolver>());
