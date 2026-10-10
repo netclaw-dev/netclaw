@@ -778,4 +778,9 @@ The assertion preserves actual report bytes before later checks. An earlier obse
 
 This case proves one isolated writer and a later read-only review. It does not prove two concurrent writers or integration.
 Actual reads prove access. Deterministic controls do not prove model comprehension, general review quality, CI, release, or deployment.
+Project declarations remain actor-scoped. The parent may declare only the named operator or isolated worker root.
+Both child roles may declare only the worker root. Each declaration needs its exact successful path result.
+Parent declaration DTOs and provider call/result identities must match. Other roots, failures, and unpaired declarations fail.
+The declaration changes no file, index, revision, writer, or shell-command requirement.
+
 Stale, incomplete, and conflicting evidence gates remain separate obligations.
