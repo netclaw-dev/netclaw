@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.0.1"
+  version: "1.0.2"
 ---
 
 # Agent Coordination
@@ -38,11 +38,16 @@ Do not invent a missing profile or override an operator's profile through assump
 Give each child:
 
 - The concrete question or code objective.
-- The source revision and relevant evidence.
+- The source revision or supplied source identity, its stated meaning, and relevant evidence.
 - The permitted workspace, read/write scope, and forbidden edits.
 - A distinct output path and the expected complete artifact.
 - The acceptance checks and required evidence.
 - The facts and constraints that the child must not infer.
+
+When a child must use a template, give its exact fields and columns through `Task` or `Context`.
+Alternatively, require the child to load that exact canonical skill resource through `skill_read_resource`.
+Name the skill and resource explicitly. Load only the resources that the assigned task needs.
+Preserve supplied source identities exactly in required artifact fields.
 
 Paths and instructions grant no authority. Every tool and file action retains normal runtime policy.
 If a required capability is unavailable, report the limitation. Do not bypass audience or profile policy.
@@ -82,7 +87,9 @@ There are no private agent messages, child questions, peer tools, or live steeri
 
 ## Check Evidence And Deliver
 
-Read the returned artifacts. Check the source revision, task scope, and acceptance evidence.
+Read the complete returned artifact before you assign the next stage.
+Check every required field, column, source identity, and evidence excerpt against the task and actual source.
+Check the task scope and acceptance evidence.
 A success flag, artifact path, or model agreement does not prove completion.
 Report evidence conflicts, incomplete work, stale results, and unavailable verification accurately.
 Only the parent sends user messages and delivers files through `attach_file` under normal policy.
