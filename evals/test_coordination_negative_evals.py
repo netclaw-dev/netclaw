@@ -83,6 +83,57 @@ class NegativeCoordinationControls(unittest.TestCase):
     def test_actual_targeted_edit_passes(self):
         self.assertTrue(self.check(self.evidence())["passed"])
 
+    def with_read(self, evidence, result):
+        setup, envelope, log, requests = evidence
+        raw = json.dumps({"Path": setup["path"]})
+        envelope["toolCalls"].insert(0, {"toolName": "file_read", "callId": "read", "argumentsJson": raw})
+        log = (f"[2026-10-10T00:00:00+00:00] TOOL_CALL: file_read call_id=read args={raw}\n"
+               f"[2026-10-10T00:00:01+00:00] TOOL_RESULT: file_read call_id=read result={result}\n") + log
+        requests[0]["messages"][2:2] = [
+            {"role": "assistant", "tool_calls": [{"id": "read", "function": {"name": "file_read", "arguments": raw}}]},
+            {"role": "tool", "tool_call_id": "read", "content": result}]
+        return setup, envelope, log, requests
+
+    def test_multiline_read_preserves_exact_result_newlines(self):
+        original = self.evidence()
+        for ending in ("", "\n", "\n\n", "\r\n", "\r"):
+            with self.subTest(ending=repr(ending)):
+                evidence = copy.deepcopy(original)
+                result = evidence[0]["original"].rstrip("\n") + ending
+                self.assertTrue(self.check(self.with_read(evidence, result))["passed"])
+
+    def test_changed_result_newline_and_unterminated_entry_fail(self):
+        evidence = self.evidence()
+        result = evidence[0]["original"]
+        evidence = self.with_read(evidence, result)
+        for replacement in (result.rstrip("\n"), result + "\n", result.replace("\n", "\r\n")):
+            changed = copy.deepcopy(evidence)
+            changed[3][0]["messages"][3]["content"] = replacement
+            with self.subTest(replacement=repr(replacement)), self.assertRaisesRegex(
+                    AssertionError, "provider result differs"):
+                self.check(changed)
+        with self.assertRaisesRegex(AssertionError, "final delimiter"):
+            self.check((*evidence[:2], evidence[2][:-1], evidence[3]))
+
+    def test_cli_preserves_carriage_returns_in_result(self):
+        evidence = self.evidence()
+        evidence = self.with_read(evidence, evidence[0]["original"].replace("\n", "\r\n"))
+        setup, envelope, log, requests = evidence
+        relay = self.root / "relay"
+        relay.mkdir()
+        (relay / "request-0001.json").write_text(json.dumps(requests[0]))
+        stdout = self.root / "stdout.json"
+        stdout.write_text(json.dumps(envelope))
+        session_log = self.root / "session.log"
+        session_log.write_bytes(log.encode())
+        result = subprocess.run([sys.executable, str(ROOT / "evals/coordination_negative_evals.py"),
+                                 "verify", "--case", TRIVIAL, "--eval-home", str(self.home),
+                                 "--evidence", str(self.root / "setup"), "--stdout", str(stdout),
+                                 "--log", str(session_log), "--relay", str(relay)],
+                                capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(json.loads(result.stdout)["passed"])
+
     def test_exact_full_write_passes(self):
         self.assertTrue(self.check(self.evidence(name="file_write"))["passed"])
 
