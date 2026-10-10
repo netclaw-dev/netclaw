@@ -5,7 +5,7 @@ import argparse
 from contextlib import closing
 import hashlib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sqlite3
@@ -16,7 +16,7 @@ from http.server import ThreadingHTTPServer
 
 from background_fixture import handler_for, message_text
 from background_process_evals import CASES, RATIONALE
-from child_run_evals import (CHILD_CONTRACT, ChildFixture, acceptance, bind_request,
+from child_run_evals import (CHILD_CONTRACT, ChildFixture, acceptance, actual_file, bind_request,
                              context_paths, parent_call_pairs, require, write_completed,
                              control, evidence_requests, invoke_observer, observer_command, session_logs,
                              verify_partial_report)
@@ -149,12 +149,11 @@ class ProcessFixture(ChildFixture):
         kind, prefix = ("partial", "PARTIAL-") if partial else ("complete", "COMPLETE-")
         artifact = paths["artifact_dir"] + f"/{kind}-{self.nonce}.txt"
         content = prefix + self.nonce
-        # The approval positive reaches its real prompt before any task effect.
-        if partial or self.case == "child_run_routed_skill":
-            response, result = self.step(request, pairs, "artifact", "file_write", {"Path": artifact, "Content": content})
-            if response:
-                return response
-            require(result == f"Successfully wrote {len(content.encode())} bytes to {artifact}", "The actual artifact write failed.")
+        # The protected effect stays absent until the actual approval.
+        response, result = self.step(request, pairs, "artifact", "file_write", {"Path": artifact, "Content": content})
+        if response:
+            return response
+        require(result == f"Successfully wrote {len(content.encode())} bytes to {artifact}", "The actual artifact write failed.")
         if self.case in {"child_run_approval_once", "child_run_approval_cancel"}:
             effect = paths["artifact_dir"] + f"/effect-{self.nonce}.txt"
             arguments = {"Command": f"{EXECUTABLE} {effect} {self.nonce}", "WorkingDirectory": paths["session_dir"]}
@@ -163,11 +162,6 @@ class ProcessFixture(ChildFixture):
                 return response
             require(result == "Exit code: 0\n" + self.nonce + "\n\n[approval: once]",
                     "The protected command lacks its exact approved result.")
-            if not partial:
-                response, result = self.step(request, pairs, "artifact", "file_write", {"Path": artifact, "Content": content})
-                if response:
-                    return response
-                require(result == f"Successfully wrote {len(content.encode())} bytes to {artifact}", "The actual artifact write failed.")
         return {"role": "assistant", "content": artifact + "\n" + content}
 
     def parent_response(self, request, pairs):
@@ -412,6 +406,68 @@ def read_lines(path):
     return [json.loads(line) for line in path.read_text().splitlines() if line]
 
 
+def private_archive_read(home, canonical, artifact_directory, nonce, container_id, evidence):
+    require(isinstance(nonce, str) and nonce.isalnum()
+            and canonical in {artifact_directory + "/effect-" + nonce + ".txt",
+                              artifact_directory + "/cancelled-results.json"}
+            and str(PurePosixPath(canonical)) == canonical,
+            "The private capture path differs from the assigned child artifact.")
+    actual_file(home, canonical)
+    container = os.environ["EVAL_CONTAINER_NAME"]
+    require(container.startswith("netclaw-eval-") and isinstance(container_id, str)
+            and re.fullmatch(r"[0-9a-f]{64}", container_id), "The private capture lacks an owned container identity.")
+    inspected = json.loads(subprocess.check_output(["docker", "inspect", container]))
+    require(len(inspected) == 1, "The private capture does not name exactly one container.")
+    owned = inspected[0]
+    image = subprocess.check_output(["docker", "image", "inspect", os.environ["NETCLAW_IMAGE"],
+                                     "--format", "{{.Id}}"], text=True).strip()
+    mounts = [mount for mount in owned["Mounts"]
+              if PurePosixPath(canonical).is_relative_to(mount["Destination"])]
+    require(owned["Id"] == container_id and owned["Image"] == image
+            and owned["Config"]["Image"] == os.environ["NETCLAW_IMAGE"]
+            and len(mounts) == 1 and mounts[0]["Type"] == "bind"
+            and mounts[0]["Destination"] == "/home/netclaw/.netclaw"
+            and Path(mounts[0]["Source"]).resolve() == Path(home).resolve() / "data",
+            "The private capture container, image, or owned mount changed.")
+    # The runtime owns these mode-0600 files. The host must not change their permissions.
+    reader = r'''import hashlib, json, os, pathlib, stat, sys
+path = pathlib.PurePosixPath(sys.argv[1])
+descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    try:
+        for component in path.parts[1:-1]:
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        source = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+    except FileNotFoundError:
+        print(json.dumps({"path": str(path), "exists": False}))
+    else:
+        with os.fdopen(source, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+                raise ValueError("The private capture is not a regular file owned by the runtime user.")
+            contents = stream.read()
+        print(json.dumps({"path": str(path), "exists": True, "uid": metadata.st_uid, "gid": metadata.st_gid,
+                          "mode": stat.S_IMODE(metadata.st_mode), "size": metadata.st_size,
+                          "sha256": hashlib.sha256(contents).hexdigest(), "hex_bytes": contents.hex()}))
+finally:
+    os.close(descriptor)
+'''
+    result = subprocess.run(["docker", "exec", "--interactive", "--user", "netclaw", container_id,
+                             "python3", "-", canonical], input=reader.encode(), capture_output=True, check=True, timeout=30)
+    record = json.loads(result.stdout)
+    require(type(record) is dict and record["path"] == canonical and type(record["exists"]) is bool,
+            "The private capture receipt differs from its assigned path.")
+    (evidence / ("private-file-" + PurePosixPath(canonical).name + ".json")).write_bytes(result.stdout)
+    if not record["exists"]:
+        return None
+    contents = bytes.fromhex(record["hex_bytes"])
+    require(len(contents) == record["size"] and hashlib.sha256(contents).hexdigest() == record["sha256"],
+            "The private capture bytes differ from their file receipt.")
+    return contents
+
+
 def capture_journal(root, session):
     database = Path(os.environ["EVAL_HOME"]) / "data/netclaw.db"
     retained = root / "journal-backup.sqlite"
@@ -445,7 +501,20 @@ def run(port):
               "image_reference": os.environ["NETCLAW_IMAGE"], "zero_forward_route": True}
     error = None
     try:
-        receipt, _ = invoke_observer(port, initial, root / "observer", modes[case], nonce, probe)
+        try:
+            receipt, _ = invoke_observer(port, initial, root / "observer", modes[case], nonce, probe)
+        except (AssertionError, KeyError, ValueError, OSError, subprocess.SubprocessError):
+            try:
+                failed_receipt = json.loads((root / "observer/observer-receipt.json").read_text())
+                require(type(failed_receipt) is dict, "The failed observer receipt is not an actual receipt object.")
+                failed_session = failed_receipt["session_id"]
+                require(type(failed_session) is str and bool(failed_session.strip()),
+                        "The failed observer receipt lacks an actual session ID for journal retention.")
+                report["session_id"] = failed_session
+                capture_journal(root, failed_session)
+            except (AssertionError, KeyError, ValueError, OSError, subprocess.SubprocessError, sqlite3.Error) as retention_failure:
+                report["journal_retention_error"] = type(retention_failure).__name__ + ": " + str(retention_failure)
+            raise
         report["session_id"] = receipt["session_id"]
         snapshot = control(port, "snapshot")
         snapshot["response_wires"] = [{"request_id": int(path.stem.split("-")[1]), "wire": path.read_bytes().decode()}
@@ -461,7 +530,8 @@ def run(port):
         for label, path in [("artifact", artifact), ("effect", effect), ("grants-after", GRANTS),
                             ("child-log", paths["log_path"]),
                             ("cancelled-results", paths["artifact_dir"] + "/cancelled-results.json")]:
-            contents = archive_read(os.environ["EVAL_HOME"], path)
+            contents = (private_archive_read(os.environ["EVAL_HOME"], path, paths["artifact_dir"], nonce, identifier, root)
+                        if label in {"effect", "cancelled-results"} else archive_read(os.environ["EVAL_HOME"], path))
             captures[path] = contents
             if contents is not None:
                 (root / ("actual-" + label + ".bin")).write_bytes(contents)
@@ -499,7 +569,7 @@ def run(port):
             verify_partial_report(terminal, os.environ["EVAL_HOME"], receipt["accepted_run"], artifact,
                                   f"Successfully wrote {len(content.encode())} bytes to {artifact}")
         (root / "setup.json").write_text(json.dumps(setup, default=lambda value: {"hex_bytes": value.hex()}, indent=2))
-    except (AssertionError, KeyError, ValueError, OSError, subprocess.SubprocessError) as failure:
+    except (AssertionError, KeyError, ValueError, OSError, subprocess.SubprocessError, sqlite3.Error) as failure:
         error = type(failure).__name__ + ": " + str(failure)
         report.update(passed=False, error=error)
     finally:
@@ -509,7 +579,7 @@ def run(port):
             control(port, "child-abort")
         (root / "trial-receipt.json").write_text(json.dumps(report, indent=2))
         (Path(os.environ["TMPDIR_EVAL"]) / "stdout_background-results.txt").write_text(json.dumps(
-            {"runtime": [report], "model": [], "errors": [error] if error else [], "passed": report["passed"]}, indent=2))
+            {"runtime": [report], "model": [], "errors": [value for value in (error, report.get("journal_retention_error")) if value], "passed": report["passed"]}, indent=2))
     return 0 if report["passed"] else 1
 
 

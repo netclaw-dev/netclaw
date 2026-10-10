@@ -324,6 +324,7 @@ jobs:
           python3 -m unittest discover -s evals -p test_process_auxiliary_titles.py -v
           python3 -m unittest discover -s evals -p test_process_terminal_stages.py -v
           python3 -m unittest discover -s evals -p test_process_prompt_wire.py -v
+          python3 -m unittest discover -s evals -p test_process_failure_retention.py -v
           python3 -m unittest discover -s evals -p test_terminal_rejection_evals.py -v
           python3 -m unittest discover -s evals -p test_coordination_evals.py -v
           python3 -m unittest discover -s evals -p test_subagent_authoring_evals.py -v
