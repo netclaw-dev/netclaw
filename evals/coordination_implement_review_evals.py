@@ -1,6 +1,7 @@
 """Check one isolated implementation and a separate revision-bound review."""
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import os
@@ -12,7 +13,7 @@ import sys
 import uuid
 
 from background_fixture import message_text
-from child_run_evals import (require_observed_rejections, acceptance, actual_file, canonical_pairs, context_paths,
+from child_run_evals import (REQUIRED_RATIONALE_ERROR, pair_matches, require_observed_rejections, acceptance, actual_file, canonical_pairs, context_paths,
                              evidence_requests, is_unexecuted_rationale_rejection, require, validate_prompt_receipt)
 from coordination_artifact_evals import load_json, occurrences
 from coordination_negative_evals import provider_arguments
@@ -181,7 +182,7 @@ def signature(name, arguments, result):
 
 
 def paired_call_occurrences(requests):
-    paired = set()
+    paired = Counter()
     for request in requests:
         pending = {}
         for message in request.get("messages", []):
@@ -192,7 +193,7 @@ def paired_call_occurrences(requests):
                 pending[identifier] = (function["name"], load_json(function["arguments"]))
             if message.get("role") == "tool" and message.get("tool_call_id") in pending:
                 name, args = pending.pop(message["tool_call_id"])
-                paired.add((message["tool_call_id"], *signature(name, args, message_text(message.get("content")))))
+                paired[(message["tool_call_id"], *signature(name, args, message_text(message.get("content"))))] += 1
     return paired
 
 
@@ -218,7 +219,13 @@ def reads_after_terminal(requests, terminal_id):
     return result
 
 
-def project_declarations(requests, roots):
+def project_declarations(requests, roots, observed_calls):
+    paired = {(identifier, raw, result) for identifier, name, raw, result in paired_call_occurrences(requests)
+              if name == "set_working_directory"}
+    rejected = {pair for pair in paired if any(row.get("success") is False
+                and is_unexecuted_rationale_rejection(row.get("failure_code"), row.get("result"))
+                and pair_matches((pair[0], "set_working_directory", load_json(pair[1]), pair[2]), row)
+                for row in observed_calls)}
     required = set()
     for request in requests:
         for message in request.get("messages", []):
@@ -227,19 +234,20 @@ def project_declarations(requests, roots):
                 if function["name"] != "set_working_directory":
                     continue
                 args = load_json(function["arguments"])
-                require(args.get("Path") in roots, "The project declaration leaves the actor's named task roots.")
-                required.add((call["id"], json.dumps(provider_arguments(args), sort_keys=True)))
-    paired = {(identifier, raw, result) for identifier, name, raw, result in paired_call_occurrences(requests)
-              if name == "set_working_directory"}
-    require(all(result == load_json(raw)["Path"] for _, raw, result in paired),
-            "The project declaration lacks its exact canonical successful result.")
+                identity = (call["id"], json.dumps(provider_arguments(args), sort_keys=True))
+                if identity not in {row[:2] for row in rejected}:
+                    require(args.get("Path") in roots, "The project declaration leaves the actor's named task roots.")
+                required.add(identity)
+    executed = paired - rejected
+    require(all(load_json(raw).get("Path") in roots and result == load_json(raw)["Path"] for _, raw, result in executed),
+            "The project declaration lacks its exact named root and canonical successful result.")
     require(required == {row[:2] for row in paired}, "A project declaration lacks its actual provider call/result pair.")
-    return paired
+    return executed
 
 
 def allowed_actions(requests, setup, stage):
     candidate = setup["worker"] + "/source/catalog.py"
-    project_declarations(requests, {setup["worker"]})
+    project_declarations(requests, {setup["worker"]}, [])
     allowed_writes = {setup["worker_report"], candidate} if stage == "worker" else {setup["review_report"]}
     allowed_shell = set(commands(setup).values())
     if stage != "worker":
@@ -298,15 +306,32 @@ def verify(setup, receipt, events, requests, home, check_candidate):
             "The review findings lack explicit source evidence.")
     calls, _ = occurrences(events, receipt["session_id"])
     require_observed_rejections(receipt["calls"], calls)
-    require(all((c["failure"] is None or (c["name"] == "spawn_agent"
+    for ordinal, call in enumerate(calls, 1):
+        if call["name"] in {"spawn_agent", "skill_load", "set_working_directory"} and call["result"] == REQUIRED_RATIONALE_ERROR:
+            require(is_unexecuted_rationale_rejection(call["failure"], call["result"]),
+                    "The canonical parent rejection lacks its trusted failure code.")
+            require(any(type(row.get("occurrence")) is int and row["occurrence"] == ordinal
+                        and row.get("success") is False and row.get("failure_code") == call["failure"]
+                        and pair_matches((call["id"], call["name"], call["arguments"], call["result"]), row)
+                        for row in receipt["calls"]), "The rejected parent action lacks its exact observer occurrence.")
+    require(all((c["failure"] is None or (c["name"] in {"spawn_agent", "skill_load", "set_working_directory"}
                 and is_unexecuted_rationale_rejection(c["failure"], c["result"])))
                 and c["name"] in READ_TOOLS | {"spawn_agent", "shell_execute", "set_working_directory"} for c in calls),
             "The parent uses an unsuccessful or forbidden workflow action.")
     parent_requests = [r for r in requests if context_paths(r) is None]
     parent_pairs = paired_call_occurrences(parent_requests)
-    parent_declarations = project_declarations(parent_requests, {setup["operator"], setup["worker"]})
+    for request in parent_requests:
+        for pair, count in paired_call_occurrences([request]).items():
+            matched = [row for row in receipt["calls"] if row.get("success") is False
+                       and row.get("name") in {"spawn_agent", "skill_load", "set_working_directory"}
+                       and is_unexecuted_rationale_rejection(row.get("failure_code"), row.get("result"))
+                       and pair_matches((pair[0], pair[1], load_json(pair[2]), pair[3]), row)]
+            if matched:
+                require(count <= len({row["occurrence"] for row in matched}),
+                        "The parent history repeats a rejection without distinct actual DTO occurrences.")
+    parent_declarations = project_declarations(parent_requests, {setup["operator"], setup["worker"]}, receipt["calls"])
     require(parent_declarations == {(c["id"], json.dumps(provider_arguments(c["arguments"]), sort_keys=True), c["result"])
-                                    for c in calls if c["name"] == "set_working_directory"},
+                                    for c in calls if c["name"] == "set_working_directory" and c["failure"] is None},
             "The parent project declaration differs between the actual DTO and provider pair.")
     require(all((c["id"], *signature(c["name"], c["arguments"], c["result"])) in parent_pairs for c in calls),
             "A parent receipt lacks its actual provider pair.")
