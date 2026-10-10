@@ -13,6 +13,10 @@ internal sealed record AcceptedRun(string RunId, string ScopeId);
 
 internal sealed class HeldChildProtocol(string sessionId)
 {
+    // ToolCallMetaExtractor returns this exact pre-dispatch rejection. It is not child acceptance.
+    internal const string RequiredRationaleError =
+        "Error: Required meta argument '_rationale' must be a non-empty string. " +
+        "Supply one sentence that states the tool call intent. The tool was NOT executed.";
     private readonly Dictionary<string, string> _calls = new(StringComparer.Ordinal);
     private readonly StringBuilder _text = new();
     private bool _hasDelta;
@@ -40,6 +44,8 @@ internal sealed class HeldChildProtocol(string sessionId)
                     "A tool result lacks one matching call or repeats a result.");
                 if (output.ToolName == "spawn_agent")
                 {
+                    if (IsUnexecutedRationaleRejection(output))
+                        break;
                     Require(output.ToolFailureCode is null, "The child start failed.");
                     Acceptance ??= ParseAcceptance(output.Result ?? "");
                 }
@@ -67,6 +73,15 @@ internal sealed class HeldChildProtocol(string sessionId)
                 throw new InvalidDataException("The daemon emitted an error: " + output.ErrorMessage);
         }
     }
+
+    internal static bool IsUnexecutedRationaleRejection(SessionOutputDto output) =>
+        output.ToolName == "spawn_agent" && output.ToolFailureCode == "invalid_rationale"
+        && output.Result == RequiredRationaleError;
+
+    public void RequireHeldAcceptance(int acceptedRunCount) =>
+        Require(CompletedTurns == 1 && acceptedRunCount == 1 && Acceptance is not null
+            && !string.IsNullOrWhiteSpace(LastReply),
+            "The initial parent turn requires exactly one accepted child and a visible reply.");
 
     public void ConfirmHeld(JsonElement snapshot, string nonce, string slot)
     {
