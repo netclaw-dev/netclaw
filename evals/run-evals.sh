@@ -1633,7 +1633,7 @@ assert_coordination_analyze_plan() {
     python3 "$REPO_ROOT/evals/coordination_artifact_evals.py" \
         --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
         --eval-home "$EVAL_HOME" --contract "$evidence/coordination-contract.json" \
-        --receipt "$evidence/observer-receipt.json" --events "$evidence/session-output.jsonl" \
+        --receipt "$evidence/verified-receipt.json" --events "$evidence/session-output.jsonl" \
         > "$evidence/coordination-verdict.json" 2>> "$evidence/coordination-assertion.stderr"
 }
 
