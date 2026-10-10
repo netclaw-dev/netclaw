@@ -204,8 +204,6 @@ def verify(case, home, setup, envelope, log, requests):
     else:
         require(contents == setup["original"].encode(), "The unavailable-profile case changed the source.")
         response = envelope["response"].strip()
-        if response.startswith("```json\n") and response.endswith("\n```"):
-            response = response[8:-4]
         report = json.loads(response)
         require(isinstance(report, dict) and report.get("delegated") is False
                 and report == {"profile": setup["profile"], "status": "unavailable", "delegated": False},

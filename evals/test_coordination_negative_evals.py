@@ -161,6 +161,28 @@ class NegativeCoordinationControls(unittest.TestCase):
     def test_unavailable_profile_report_without_spawn_passes(self):
         self.assertTrue(self.check(self.evidence(UNAVAILABLE))["passed"])
 
+    def test_unavailable_profile_plain_json_with_outer_whitespace_passes(self):
+        evidence = self.evidence(UNAVAILABLE, rejection=True)
+        evidence[1]["response"] = " \n\t" + evidence[1]["response"] + "\r\n "
+        self.assertTrue(self.check(evidence)["passed"])
+
+    def test_unavailable_profile_fenced_json_fails_complete_verification(self):
+        original = self.evidence(UNAVAILABLE, rejection=True)
+        for prefix, suffix in (("```json\n", "\n```"), ("```\n", "\n```")):
+            with self.subTest(prefix=prefix), self.assertRaises(json.JSONDecodeError):
+                evidence = copy.deepcopy(original)
+                evidence[1]["response"] = prefix + evidence[1]["response"] + suffix
+                self.check(evidence)
+
+    def test_unavailable_profile_prose_fails_complete_verification(self):
+        original = self.evidence(UNAVAILABLE)
+        for prefix, suffix in (("The profile is unavailable.\n", ""),
+                               ("", "\nNo child starts.")):
+            with self.subTest(prefix=prefix, suffix=suffix), self.assertRaises(json.JSONDecodeError):
+                evidence = copy.deepcopy(original)
+                evidence[1]["response"] = prefix + evidence[1]["response"] + suffix
+                self.check(evidence)
+
     def test_canonical_null_tool_calls_also_pass_without_spawn(self):
         evidence = self.evidence(UNAVAILABLE)
         evidence[1]["toolCalls"] = None
