@@ -722,6 +722,14 @@ Their original project, scope, shell, and artifact assertions remain mandatory.
 The queue-grant and shell lifecycle controls retain their original paths and oracles.
 This source preparation supplies no current model pass or complete background health claim.
 
+The two coordination plan cases permit model-owned replacements after attributed failed attempts.
+Every accepted attempt retains its canonical terminal, durable positions, and actual consumption evidence.
+Each replacement must follow the failed terminal's consumption and retain its assigned scope.
+The workflow still requires exactly one Completed analysis stage and one Completed plan stage.
+A failed attempt supplies no successful artifact-write credit. Unrelated runs and extra Completed stages fail.
+The parent must fully review the findings before every plan attempt and the plan before attachment.
+This case-specific rule does not change other collect consumers or create harness retries.
+
 ### Productive parent and child catalog case
 
 `productive_parent_child` requires 65 useful parent feedback rounds and 35 useful child feedback rounds.

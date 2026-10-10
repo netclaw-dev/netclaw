@@ -247,17 +247,29 @@ def verify(contract, observer_receipt, events, eval_home, fixture_root):
                   and str(call["arguments"].get("Agent", "")).lower() == "task-worker"
                   and all(path in (call["arguments"].get("Task", "") + "\n" + (call["arguments"].get("Context") or ""))
                           for path in (findings_path, plan_path))]
-        require(len(starts) == 1, "missing-proof: one actual plan assignment is required")
-        accepted = load_json(starts[0]["result"])
-        require(isinstance(accepted, dict) and accepted.get("state") in {"Accepted", "Running"}
-                and isinstance(accepted.get("run_id"), str) and accepted["run_id"], "missing-proof: plan assignment lacks acceptance")
+        completed = []
+        for start in starts:
+            accepted = load_json(start["result"])
+            require(isinstance(accepted, dict) and accepted.get("state") == "Accepted"
+                    and isinstance(accepted.get("run_id"), str) and accepted["run_id"], "missing-proof: plan assignment lacks acceptance")
+            deliveries = [row for row in observer_receipt["verified_deliveries"] if row["accepted"] == accepted]
+            require(len(deliveries) == 1, "missing-proof: one actual plan assignment requires its verified delivery")
+            terminal = deliveries[0]["terminal"]
+            require(terminal.get("run_id") == accepted["run_id"] and terminal.get("scope_id") == accepted["scope_id"]
+                    and terminal.get("source_operation") == "spawn_agent", "missing-proof: plan terminal has another owner")
+            if terminal.get("state") == terminal.get("outcome") == "Completed":
+                completed.append(start)
+            else:
+                require(terminal.get("state") == terminal.get("outcome") == "Failed",
+                        "missing-proof: plan attempt lacks a Completed or Failed terminal")
+        require(len(completed) == 1, "missing-proof: one actual plan assignment with a Completed result is required")
         def full_read(path, content, before):
             return any(call["name"] == "file_read" and call["arguments"].get("Path") == path
                        and call["arguments"].get("StartLine") in (None, 0) and call["arguments"].get("Limit") in (None, 0)
                        and call["failure"] is None and call["result"] == content
                        and call["call_sequence"] < call["result_sequence"] < before
                        for call in calls)
-        require(full_read(findings_path, findings, starts[0]["call_sequence"]),
+        require(all(full_read(findings_path, findings, start["call_sequence"]) for start in starts),
                 "missing-proof: complete findings read must precede the plan assignment")
         attaches = [call for call in calls if call["name"] == "attach_file" and call["arguments"].get("Path") == plan_path]
         require(len(attaches) == 1, "delivery: one actual plan attachment attempt is required")
