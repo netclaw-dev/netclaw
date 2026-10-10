@@ -163,9 +163,9 @@ jobs:
           - group: shell-analysis
             gates: shell-command-analysis tool-authorizer-order mcp-artifact-admission
           - group: shell-assignment-and-paths
-            gates: shell-assignment shell-config-read path-access tool-task-adoption
+            gates: shell-assignment shell-config-read path-access tool-task-adoption literal-twin
           - group: verb-chain-and-reminder
-            gates: exact-verb-chain reminder-execution literal-twin
+            gates: exact-verb-chain reminder-execution
           - group: approval-and-authorization
             gates: tool-authorization approval-directory skill-manage-guard no-program
 
