@@ -713,6 +713,8 @@ The parent reads 65 records itself. One canonical `task-worker` child reads 35 o
 The child writes its exact ordered catalog. The parent reads that complete artifact after attributed terminal delivery.
 The parent then writes the complete combined catalog and reports its actual path and counts.
 The case forbids shell calls, directory scans, source edits, path guesses, and substituted summaries.
+An actor can declare only the exact catalog project root with `set_working_directory`.
+The oracle requires its canonical success result. Each parent declaration also needs matching DTO and provider receipts.
 
 The oracle compares source and output bytes, ordered parent DTO pairs, and attributed child provider pairs.
 It requires each next record call after the prior record result. Parallel calls cannot satisfy this gate.
