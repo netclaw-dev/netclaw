@@ -967,7 +967,7 @@ check_daemon_alive() {
 
 child_result_consumer() {
     case "${case_name:-$FILTER_CASE}" in
-        subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff|coordination_analyze_plan|coordination_attachment_blocked|productive_parent_child) return 0 ;;
+        subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff|coordination_analyze_plan|coordination_attachment_blocked|productive_parent_child|coordination_implement_review) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1482,6 +1482,20 @@ prepare_coordination_config() {
         --source "${NETCLAW_EVAL_CONFIG_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/netclaw.json}" \
         --destination "$denied_config"
     export NETCLAW_EVAL_CONFIG_FILE="$denied_config"
+}
+
+setup_coordination_implement_review() {
+    IMPLEMENT_REVIEW_EVIDENCE="$TMPDIR_EVAL/child-runs/implement-review-case"
+    IMPLEMENT_REVIEW_PROMPT=$(python3 "$REPO_ROOT/evals/coordination_implement_review_evals.py" prepare \
+        --eval-home "$EVAL_HOME" --evidence "$IMPLEMENT_REVIEW_EVIDENCE" --container "$EVAL_CONTAINER_NAME")
+}
+
+assert_coordination_implement_review() {
+    local evidence="${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}"
+    python3 "$REPO_ROOT/evals/coordination_implement_review_evals.py" verify \
+        --eval-home "$EVAL_HOME" --evidence "$IMPLEMENT_REVIEW_EVIDENCE" --container "$EVAL_CONTAINER_NAME" \
+        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" \
+        > "$evidence/implement-review-verdict.json" 2> "$evidence/implement-review-assertion.stderr"
 }
 
 setup_productive_parent_child() {
@@ -3204,6 +3218,7 @@ run_case() {
         rendered_prompt="${rendered_prompt//\{\{EVAL_REMINDER_TARGET\}\}/${EVAL_REMINDER_TARGET:-}}"
         rendered_prompt="${rendered_prompt//\{\{COORDINATION_PROMPT\}\}/${COORDINATION_PROMPT:-}}"
         rendered_prompt="${rendered_prompt//\{\{PRODUCTIVE_PROMPT\}\}/${PRODUCTIVE_PROMPT:-}}"
+        rendered_prompt="${rendered_prompt//\{\{IMPLEMENT_REVIEW_PROMPT\}\}/${IMPLEMENT_REVIEW_PROMPT:-}}"
         local prompt_failed=false
         if ! run_prompt "$rendered_prompt" "$output_format"; then
             prompt_failed=true
@@ -3298,6 +3313,9 @@ run_all() {
 
     if [[ "$FILTER_CASE" == productive_parent_child ]]; then
         run_case --json productive_parent_child "reconstructs catalogs through 65 parent and 35 child feedback rounds" '{{PRODUCTIVE_PROMPT}}'
+    fi
+    if [[ "$FILTER_CASE" == coordination_implement_review ]]; then
+        run_case --json coordination_implement_review "repairs an isolated candidate and reviews its exact revision while preserving operator changes" '{{IMPLEMENT_REVIEW_PROMPT}}'
     fi
 
     if [[ "$FILTER_CASE" == coordination_analyze_plan ]]; then
