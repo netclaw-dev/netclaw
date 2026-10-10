@@ -116,7 +116,8 @@ Terminal persistence failure produces no successful receipt acknowledgement.
 ## Recovery, Passivation, And Drain
 
 Idle passivation defers live children and pending delivery.
-Explicit parent stop and coordinated drain cancel children through the bounded closure path.
+`PrepareForDaemonRestart` admits child cancellation and waits for bounded framework finalization before the drain acknowledgement.
+An abrupt actor stop closes live dispatch and requests token cancellation without a durable finalization guarantee.
 Owner restart marks unresolved accepted runs `Lost`; it does not recreate or resume child execution.
 A prior durable cancellation retains its cancelled outcome.
 Committed terminal facts and pending delivery remain available through journal and snapshot recovery.
