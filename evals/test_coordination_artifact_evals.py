@@ -77,6 +77,10 @@ class CoordinationArtifactControls(unittest.TestCase):
             json.dumps({"run_id": "run-neutral", "scope_id": "scope-neutral",
                         "state": "Accepted", "control_tool": "check_agent_run"}),
         )
+        accepted = json.loads(self.outputs("tool_result", "plan-start")[0]["Result"])
+        self.receipt["verified_deliveries"] = [{"accepted": accepted, "terminal": {
+            "run_id": accepted["run_id"], "scope_id": accepted["scope_id"], "source_operation": "spawn_agent",
+            "state": "Completed", "outcome": "Completed"}}]
         self.pair("file_read", "plan-read", {"Path": self.plan_runtime}, self.plan.read_text())
         self.pair("attach_file", "plan-attach", {"Path": self.plan_runtime, "DisplayName": "plan.md"},
                   self.attachment_receipt(self.plan_runtime))
@@ -212,6 +216,41 @@ class CoordinationArtifactControls(unittest.TestCase):
         self.events[4:4] = duplicate
         rejected = self.assert_rejected()
         self.assertIn("one actual plan assignment", rejected["errors"][0])
+
+    def add_failed_plan_attempt(self):
+        failed_pair = copy.deepcopy(self.events[2:4])
+        for event in failed_pair:
+            event["output"]["CallId"] = "failed-plan-start"
+        accepted = json.loads(failed_pair[1]["output"]["Result"])
+        accepted.update(run_id="failed-plan-run", scope_id="failed-plan-scope")
+        failed_pair[1]["output"]["Result"] = json.dumps(accepted)
+        self.events[2:2] = failed_pair
+        self.receipt["verified_deliveries"].insert(0, {"accepted": accepted, "terminal": {
+            "run_id": accepted["run_id"], "scope_id": accepted["scope_id"], "source_operation": "spawn_agent",
+            "state": "Failed", "outcome": "Failed", "reason": "no_activity_timeout"}})
+
+    def test_failed_plan_attempt_preserves_completed_worker_and_full_review(self):
+        self.assert_valid()
+        self.add_failed_plan_attempt()
+        self.assert_valid()
+        for fault in ("full-read", "foreign-owner", "extra-completed"):
+            events, receipt = copy.deepcopy(self.events), copy.deepcopy(self.receipt)
+            if fault == "full-read":
+                self.outputs("tool_result", "plan-read")[0]["Result"] = "A summary instead of the full plan."
+            elif fault == "foreign-owner":
+                self.receipt["verified_deliveries"][0]["terminal"]["scope_id"] = "foreign-scope"
+            else:
+                self.receipt["verified_deliveries"][0]["terminal"].update(state="Completed", outcome="Completed")
+            with self.subTest(fault=fault):
+                self.assert_rejected()
+            self.events, self.receipt = events, receipt
+
+    def test_findings_review_precedes_every_plan_attempt(self):
+        self.assert_valid()
+        self.add_failed_plan_attempt()
+        self.events[:4] = self.events[2:4] + self.events[:2]
+        rejected = self.assert_rejected()
+        self.assertIn("complete findings read", rejected["errors"][0])
 
     def test_cli_consumes_raw_jsonl_and_returns_the_success_report(self):
         self.assert_valid()
