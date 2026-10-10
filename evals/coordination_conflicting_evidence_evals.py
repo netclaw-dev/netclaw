@@ -12,7 +12,7 @@ import sys
 import uuid
 
 from background_fixture import message_text
-from child_run_evals import (acceptance, actual_file, canonical_pairs, context_paths, evidence_requests,
+from child_run_evals import (REQUIRED_RATIONALE_ERROR, acceptance, actual_file, canonical_pairs, context_paths, evidence_requests,
                              is_unexecuted_rationale_rejection, require, validate_prompt_receipt)
 from coordination_artifact_evals import load_json, occurrences
 from coordination_implement_review_evals import (paired_call_occurrences, paired_calls, project_declarations,
@@ -149,8 +149,10 @@ def verify(setup, receipt, events, requests, home):
         require(c["name"] in allowed, "The parent attempts an action outside evidence reconciliation.")
         require((c["id"], *signature(c["name"], c["arguments"], c["result"])) in pairs,
                 "A parent DTO lacks its exact provider call/result identity.")
-        require(c["failure"] is None or (c["name"] == "spawn_agent" and is_unexecuted_rationale_rejection(c["failure"], c["result"])),
-                "A parent action fails outside the exact rejected-start contract.")
+        require(c["failure"] is None or is_unexecuted_rationale_rejection(c["failure"], c["result"]),
+                "A parent action fails outside the exact unexecuted metadata contract.")
+        require(c["result"] != REQUIRED_RATIONALE_ERROR or is_unexecuted_rationale_rejection(c["failure"], c["result"]),
+                "Canonical metadata feedback lacks its actual failure-code DTO.")
     for r in parents:
         for m in r.get("messages", []):
             for invocation in m.get("tool_calls", []) if m.get("role") == "assistant" else []:
@@ -239,7 +241,8 @@ def verify(setup, receipt, events, requests, home):
     checked = run_check(home, setup)
     require(checked.returncode in (0, 2) and not checked.stderr, "The actual dependency check failed outside its defined unavailable result.")
     result = "Exit code: " + str(checked.returncode) + "\n" + checked.stdout
-    checks = [c for c in calls if c["name"] == "shell_execute"]
+    checks = [c for c in calls if c["name"] == "shell_execute"
+              and not is_unexecuted_rationale_rejection(c["failure"], c["result"])]
     require(len(checks) == 1 and checks[0]["arguments"].get("Command") == command(setup) and checks[0]["result"] == result,
             "The parent lacks exactly one actual canonical dependency-check receipt.")
     verification = load_json(checked.stdout)
