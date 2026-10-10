@@ -141,7 +141,7 @@ def verify(setup, receipt, events, requests, home):
     parents = [r for r in requests if context_paths(r) is None]
     pairs = paired_call_occurrences(parents)
     require(parents, "The parent provider evidence is absent.")
-    declarations = project_declarations(parents, {setup["root"]})
+    declarations = project_declarations(parents, {setup["root"]}, [])
     require(declarations == {(c["id"], *signature(c["name"], c["arguments"], c["result"])[1:])
                             for c in calls if c["name"] == "set_working_directory"}, "A parent project declaration lacks its exact DTO pair.")
     allowed = READ_TOOLS | {"spawn_agent", "shell_execute", "set_working_directory"}
@@ -201,7 +201,7 @@ def verify(setup, receipt, events, requests, home):
         require(all(value in assignment for value in required), "The analyst start omits its exact evidence scope.")
         require(any(all(value in "\n".join(message_text(m.get("content")) for m in r["messages"] if m.get("role") == "user")
                         for value in required) for r in children), "The attributed analyst context differs from its accepted task.")
-        project_declarations(children, {setup["root"]})
+        project_declarations(children, {setup["root"]}, [])
         for r in children:
             for m in r.get("messages", []):
                 for invocation in m.get("tool_calls", []) if m.get("role") == "assistant" else []:

@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from child_run_evals import REQUIRED_RATIONALE_ERROR, actual_file, legacy_observer_mode
 from coordination_implement_review_evals import (CASE, FIXTURE, checkout_snapshot, commands, git,
-                                                initialization_script, main, prepare, prompt, run_check, verify)
+                                                initialization_script, main, prepare, project_declarations, prompt, run_check, verify)
 from test_child_run_evals import child, parent, terminal, ROOT as CHILD_ROOT
 from test_coordination_workflow_evals import observer_calls, shell_functions
 
@@ -312,6 +312,7 @@ class ImplementReviewControls(unittest.TestCase):
         requests[0]["messages"][2:2] = [
             {"role": "assistant", "tool_calls": [{"id": "rejected-start", "function": {"name": "spawn_agent", "arguments": json.dumps(arguments)}}]},
             {"role": "tool", "tool_call_id": "rejected-start", "content": REQUIRED_RATIONALE_ERROR}]
+        args[1]["calls"] = observer_calls(events)
         self.assertTrue(verify(*args)["passed"])
         for failure, result in (("invalid_rationale", "different text"), ("authorization_denied", REQUIRED_RATIONALE_ERROR), (None, REQUIRED_RATIONALE_ERROR)):
             changed = copy.deepcopy(args)
@@ -347,6 +348,110 @@ class ImplementReviewControls(unittest.TestCase):
         changed = copy.deepcopy(args)
         changed[2][-1]["output"]["ToolFailureCode"] = None
         self.reject(changed)
+
+    def append_parent_pair(self, args, identifier, name, arguments, result, failure=None):
+        receipt, events, requests = args[1:4]
+        requests[0]["messages"].extend([
+            {"role": "assistant", "tool_calls": [{"id": identifier, "function": {"name": name, "arguments": json.dumps(arguments)}}]},
+            {"role": "tool", "tool_call_id": identifier, "content": result}])
+        for output in [{"Type": "tool_call", "CallId": identifier, "ToolName": name, "ArgumentsJson": json.dumps(arguments)},
+                       {"Type": "tool_result", "CallId": identifier, "ToolName": name, "Result": result, "ToolFailureCode": failure}]:
+            ordinal = len(events) + 1
+            events.append({"sequence": ordinal, "observed_ns": ordinal, "output": {**output, "SessionId": receipt["session_id"]}})
+        receipt["calls"] = observer_calls(events)
+
+    def repaired_parent(self):
+        args = copy.deepcopy(self.args)
+        self.append_parent_pair(args, "rejected-load", "skill_load", {"Name": "agent-coordination"},
+                                REQUIRED_RATIONALE_ERROR, "invalid_rationale")
+        self.append_parent_pair(args, "rejected-declaration", "set_working_directory", {"Path": args[0]["root"]},
+                                REQUIRED_RATIONALE_ERROR, "invalid_rationale")
+        return args
+
+    def test_exact_parent_metadata_rejections_allow_correction_without_declaration_credit(self):
+        args = self.repaired_parent()
+        self.assertTrue(verify(*args)["passed"])
+        roots = {args[0]["worker"], args[0]["operator"]}
+        self.assertEqual(set(), project_declarations([args[3][0]], roots, args[1]["calls"]))
+        self.append_parent_pair(args, "actual-declaration", "set_working_directory", {"Path": args[0]["worker"]}, args[0]["worker"])
+        self.assertTrue(verify(*args)["passed"])
+        self.assertEqual({("actual-declaration", json.dumps({"Path": args[0]["worker"]}, sort_keys=True), args[0]["worker"])},
+                         project_declarations([args[3][0]], roots, args[1]["calls"]))
+        self.assertEqual([False, False, True], [row["success"] for row in args[1]["calls"][-3:]])
+
+    def test_parent_rejection_needs_typed_dto_provider_and_exact_occurrence_evidence(self):
+        args = self.repaired_parent()
+        for index in [-2, -1]:
+            for field, value in [("failure_code", None), ("failure_code", "unknown_agent"), ("success", 0),
+                                 ("occurrence", 1), ("id", "foreign"), ("result", REQUIRED_RATIONALE_ERROR + " changed")]:
+                changed = copy.deepcopy(args)
+                changed[1]["calls"][index][field] = value
+                with self.subTest(index=index, field=field):
+                    self.reject(changed)
+        for field, value in [("ToolFailureCode", None), ("ToolFailureCode", "unknown_agent"),
+                             ("Result", REQUIRED_RATIONALE_ERROR + " changed"), ("SessionId", "foreign")]:
+            changed = copy.deepcopy(args)
+            changed[2][-1]["output"][field] = value
+            with self.subTest(field=field):
+                self.reject(changed)
+        changed = copy.deepcopy(args)
+        changed[3][0]["messages"][-1]["content"] = "Different provider bytes."
+        self.reject(changed)
+
+    def test_canonical_parent_feedback_without_typed_code_is_not_success(self):
+        args = self.repaired_parent()
+        for name in ["skill_load", "set_working_directory"]:
+            for failure in [None, "unknown_agent"]:
+                changed = copy.deepcopy(args)
+                result = next(e["output"] for e in changed[2] if e["output"]["Type"] == "tool_result"
+                              and e["output"]["ToolName"] == name and e["output"]["Result"] == REQUIRED_RATIONALE_ERROR)
+                result["ToolFailureCode"] = failure
+                changed[1]["calls"] = observer_calls(changed[2])
+                with self.subTest(name=name, failure=failure):
+                    self.reject(changed)
+        self.append_parent_pair(args, "actual-load", "skill_load", {"Name": "agent-coordination"},
+                                "The coordination workflow describes an implementation and an independent review.")
+        self.assertTrue(verify(*args)["passed"])
+        self.assertIs(args[1]["calls"][-1]["success"], True)
+
+    def test_rejected_parent_calls_need_distinct_occurrences_only_within_one_history(self):
+        args = self.repaired_parent()
+        args[3].append(copy.deepcopy(args[3][0]))
+        self.assertTrue(verify(*args)["passed"])
+        args[3].pop()
+        duplicate_pair = copy.deepcopy(args[3][0]["messages"][-2:])
+        args[3][0]["messages"].extend(duplicate_pair)
+        self.reject(args)
+        args[3][0]["messages"] = args[3][0]["messages"][:-2]
+        self.append_parent_pair(args, "rejected-declaration", "set_working_directory", {"Path": args[0]["root"]},
+                                REQUIRED_RATIONALE_ERROR, "invalid_rationale")
+        self.assertTrue(verify(*args)["passed"])
+
+    def test_executed_base_declaration_and_rejected_required_reads_stay_strict(self):
+        args = self.repaired_parent()
+        self.append_parent_pair(args, "actual-base-declaration", "set_working_directory", {"Path": args[0]["root"]}, args[0]["root"])
+        self.reject(args)
+        args = self.repaired_parent()
+        self.append_parent_pair(args, "failed-read", "file_read", {"Path": args[0]["worker_report"]},
+                                REQUIRED_RATIONALE_ERROR, "invalid_rationale")
+        self.reject(args)
+        args = self.repaired_parent()
+        self.append_parent_pair(args, "failed-shell", "shell_execute", {"Command": commands(args[0])["check"]},
+                                REQUIRED_RATIONALE_ERROR, "invalid_rationale")
+        self.reject(args)
+
+    def test_actual_combined_parent_command_shapes_stay_outside_the_case_contract(self):
+        args = self.repaired_parent()
+        setup = args[0]
+        worker, operator, base = setup["worker"], setup["operator"], setup["base_commit"]
+        combined = [f"git -C {worker} rev-parse HEAD && git -C {worker} status --porcelain=v1",
+                    f"git -C {operator} status --porcelain=v1 && git -C {operator} rev-parse HEAD && git -C {operator} branch --show-current",
+                    f"git -C {worker} rev-parse HEAD && git -C {worker} diff {base} HEAD -- source/catalog.py && git -C {worker} status --porcelain=v1"]
+        for command in combined:
+            changed = copy.deepcopy(args)
+            self.append_parent_pair(changed, "forbidden-combined", "shell_execute", {"Command": command}, "Exit code: 0\n")
+            with self.subTest(command=command):
+                self.reject(changed)
 
     def test_terminal_must_precede_report_review(self):
         args = copy.deepcopy(self.args)

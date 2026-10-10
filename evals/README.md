@@ -793,6 +793,10 @@ It repeats the acceptance check inside the existing eval container under the exi
 It checks operator and checker preservation after that command and before success.
 Only the exact unexecuted `invalid_rationale` start rejection can precede a later accepted start.
 The model owns any correction. The harness retains each attempt and requires its actual DTO and provider pair.
+For this case, the parent can also correct that exact rejection for `skill_load` and `set_working_directory`.
+The oracle checks the actual DTO occurrence and provider pair. A rejected declaration supplies no project context or success credit.
+Each executed declaration still needs an exact named root and successful canonical path result.
+The command list stays exact. A rejected load cannot replace a required successful read, check, or report.
 A rejected model call can use the same argument shape as a framework terminal input.
 The observer supplies its typed call metadata to the relay control and the final oracle.
 The oracle excludes only an exact attributed `invalid_rationale` rejection. It gives that attempt no terminal or delivery credit.
