@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.0.2"
+  version: "1.0.3"
 ---
 
 # Agent Coordination
@@ -12,6 +12,10 @@ As the parent, use children for useful independent work without an explicit dele
 Use this skill for substantial code work, architecture analysis, research, and complete plan artifacts.
 Complete trivial tasks directly when a child adds no useful independent scope.
 You own the task scope, evidence review, user messages, and artifact delivery.
+
+Task-specific limits take precedence over workflow preparation suggestions.
+If the task gives an exact permitted-command list, use each command exactly, including its existing operators.
+Do not add commands or combine separate listed commands.
 
 ## Select One Workflow
 
@@ -39,7 +43,7 @@ Give each child:
 
 - The concrete question or code objective.
 - The source revision or supplied source identity, its stated meaning, and relevant evidence.
-- The permitted workspace, read/write scope, and forbidden edits.
+- The permitted workspace, read/write scope, exact command limits, and forbidden edits.
 - A distinct output path and the expected complete artifact.
 - The acceptance checks and required evidence.
 - The facts and constraints that the child must not infer.
@@ -94,3 +98,6 @@ A success flag, artifact path, or model agreement does not prove completion.
 Report evidence conflicts, incomplete work, stale results, and unavailable verification accurately.
 Only the parent sends user messages and delivers files through `attach_file` under normal policy.
 An artifact on disk is not proof of delivery. Report a blocked attachment as a delivery limitation.
+Follow the requested final response schema and field types.
+Use artifact paths in path fields. Do not substitute report contents.
+If the task requires JSON only, return one JSON value without prose or code fences.

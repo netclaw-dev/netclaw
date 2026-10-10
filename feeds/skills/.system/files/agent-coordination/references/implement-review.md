@@ -3,6 +3,10 @@
 Use this workflow for substantial code work with useful independent review.
 Follow the common scope, authority, workspace, cancellation, and delivery rules in the base skill.
 
+Apply task-specific command limits before the steps below. Preserve those limits in each child assignment.
+An exact list permits its own operators. Do not combine separate listed commands.
+When no exact list exists, use the authorized tools that the workflow requires.
+
 1. Record the accepted behavior, source revision, preserved behavior, and required checks.
 2. Inspect the operator checkout state without changes.
 3. Prepare an authorized isolated worktree with existing git and shell tools when source edits need isolation.
