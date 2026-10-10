@@ -227,6 +227,21 @@ class ChildAttributionControls(unittest.TestCase):
                 self.assertEqual(number, saved["prompt_ordinal"])
                 self.assertEqual([], saved["verified_deliveries"])
 
+    def test_discovery_uses_one_turn_without_a_child_wait(self):
+        self.assertEqual("turn", legacy_observer_mode("skill_coordination_discovery", 1))
+        for ordinal in (0, 2, True, 1.0):
+            with self.subTest(ordinal=ordinal), self.assertRaises(AssertionError):
+                legacy_observer_mode("skill_coordination_discovery", ordinal)
+        with tempfile.TemporaryDirectory() as directory:
+            receipt = {"accepted_runs": [], "last_reply": "Actual parent reply"}
+            with patch("child_run_evals.invoke_observer", return_value=(receipt, "observer reply")) as observer:
+                with redirect_stdout(io.StringIO()):
+                    collect(1, "Explain the process", "", "json", directory, "skill_coordination_discovery", 1)
+                self.assertEqual("turn", observer.call_args.args[3])
+            saved = json.loads((Path(directory) / "verified-receipt.json").read_text())
+            self.assertEqual([], saved["verified_deliveries"])
+            self.assertEqual("skill_coordination_discovery", saved["case"])
+
     def shell_functions(self, names):
         source = (Path(__file__).resolve().parents[1] / "evals/run-evals.sh").read_text()
         return "\n".join(re.search(r"^" + re.escape(name) + r"\(\) \{\n.*?^\}", source,
