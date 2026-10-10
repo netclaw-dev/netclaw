@@ -244,6 +244,7 @@ def verify(contract, observer_receipt, events, eval_home, fixture_root):
         checks["artifacts"] = True
         calls, files = occurrences(events, session)
         starts = [call for call in calls if call["name"] == "spawn_agent" and call["failure"] is None
+                  and str(call["arguments"].get("Agent", "")).lower() == "task-worker"
                   and all(path in (call["arguments"].get("Task", "") + "\n" + (call["arguments"].get("Context") or ""))
                           for path in (findings_path, plan_path))]
         require(len(starts) == 1, "missing-proof: one actual plan assignment is required")
