@@ -8,11 +8,11 @@
 
 - [x] 2.1 Add the canonical coordination skill without `metadata.subagent`. Verify normal load remains inline under existing policy.
 - [x] 2.2 Add the short selector and common boundaries. Verify the returned skill payload includes authority, workspace, cancellation, and delivery rules.
-- [ ] 2.3 Add `references/analyze-plan.md`. Verify a fixture handoff produces grounded findings and a complete reviewed Markdown plan.
+- [x] 2.3 Add `references/analyze-plan.md`. Verify a fixture handoff produces grounded findings and a complete reviewed Markdown plan.
 - [x] 2.4 Add `references/parallel-research.md`. Verify distinct questions, report paths, source evidence, and conflict reconciliation appear in its contract.
 - [x] 2.5 Add `references/implement-review.md`. Verify separate workspaces, one writer per workspace, exact revision review, and parent integration checks.
 - [x] 2.6 Add `references/diagnose-fix-verify.md`. Verify baseline counterexample, candidate revision, independent checks, and environment-failure distinction.
-- [ ] 2.7 Add `assets/findings.md` and `assets/plan.md`. Verify required fields and finding references through representative completed artifacts.
+- [x] 2.7 Add `assets/findings.md` and `assets/plan.md`. Verify required fields and finding references through representative completed artifacts.
 - [x] 2.8 Preserve logical resource use and normal spill behavior. Verify no index or skill instruction teaches physical-root derivation.
 - [x] 2.9 Measure actual wrapped load/resource responses. Verify essential content survives the default inline limit and smaller-limit spill receipts.
 - [x] 2.10 Verify the existing daemon resource wildcard packages all seven files. Inspect the restored binary bundle, not a source-only listing.
@@ -24,6 +24,15 @@ Resource proof at `05c28825`:
 - At a 512-character limit, bounded continuations reconstruct each complete response. Foreign-session and Public access checks pass.
 - All seven embedded assets match source bytes. Source review confirms logical access guidance; the selected tests do not assert the full index text.
 - These tests use a no-op content scanner. They do not prove model comprehension or every scanner decision.
+
+Representative artifact evidence at `728f232e`:
+
+- The permitted scripted observation produces complete findings and a complete Markdown plan through two attributed child results.
+- The parent reads all 2,061 findings bytes before the plan assignment and all 2,102 plan bytes before attachment.
+- Independent source review confirms E1/F1, E2/F2, C1/C2, action dependencies, component owners, risks, and the unresolved user decision.
+- Both artifacts contain every required template field. The plan separates implementation, local checks, CI, release, and deployment.
+- The three actual logical resource responses match current source bytes at `8a57fbf5`. All 121 original artifact hashes remain exact.
+- This closes tasks 2.3 and 2.7 only. Scripted content proves no model judgment, independent parent work, or remote user receipt.
 
 ## 3. Runtime route and default worker
 
