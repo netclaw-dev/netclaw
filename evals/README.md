@@ -727,3 +727,46 @@ Repeated cumulative captures and completed call-ID reuse across distinct records
 
 The assertion archives existing actual outputs before it checks their values. It records missing outputs explicitly and rejects linked paths.
 An observer failure before the assertion can still prevent artifact capture. Retain that instrumentation limit with the failed trial.
+
+### Isolated implementation and independent review
+
+`coordination_implement_review` stays outside the default suite. It uses the existing `collect` observer and child relay.
+
+```bash
+NETCLAW_EVAL_CASE=coordination_implement_review \
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 \
+NETCLAW_EVAL_TIMEOUT=300 \
+NETCLAW_CHILD_OBSERVER="$PWD/evals/fixtures/child-runs/bin/Release/net10.0/SessionObserver.dll" \
+  ./evals/run-evals.sh
+```
+
+Use the approved provider configuration and frozen image, CLI, and helper.
+Run five independent fresh invocations for acceptance. Preserve every failed trial.
+The 300-second observation deadline adds no runtime task budget or retry policy.
+
+The fixture reuses the neutral catalog source and creates a real detached Git worktree.
+The original checkout has staged and unstaged operator edits plus an untracked marker.
+Git creates both checkouts under the container's daemon user. The oracle applies no global Git trust override.
+The fixture retains original file bytes, the raw index, branch, HEAD, and Git setup output.
+The unchanged acceptance script fails on the original publication defect before any model call.
+
+One `task-worker` repairs and commits only `source/catalog.py` in the isolated worktree.
+The worker runs the disclosed acceptance command and writes a complete revision-bound report.
+The parent reads that report and the complete source. It checks the actual candidate revision and diff.
+Then a distinct `code-analyst` child reads the same candidate and independently repeats the acceptance command.
+The reviewer writes its findings to a separate report. It cannot edit candidate source.
+The parent reads the complete review and checks the same source, revision, and diff again.
+Its final JSON names the actual candidate, unresolved findings, both reports, and the absent integration.
+
+The oracle requires actual command results, successful report writes, profile discovery, attributed terminals, and complete parent reads.
+It repeats the acceptance check inside the existing eval container under the existing eval deadline.
+It checks operator and checker preservation after that command and before success.
+Only the exact unexecuted `invalid_rationale` start rejection can precede a later accepted start.
+The model owns any correction. The harness retains each attempt and requires its actual DTO and provider pair.
+The oracle rejects all other failed starts and visible source edits after the candidate commit.
+Compaction can hide identical restored actions across captures. The case does not prove absence of every transient edit.
+The assertion preserves actual report bytes before later checks. An earlier observer failure can still prevent that archive.
+
+This case proves one isolated writer and a later read-only review. It does not prove two concurrent writers or integration.
+Actual reads prove access. Deterministic controls do not prove model comprehension, general review quality, CI, release, or deployment.
+Stale, incomplete, and conflicting evidence gates remain separate obligations.
