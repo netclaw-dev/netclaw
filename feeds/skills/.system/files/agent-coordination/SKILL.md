@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.0.6"
+  version: "1.0.7"
 ---
 
 # Agent Coordination
@@ -74,6 +74,13 @@ Commands that create build output need an authorized isolated workspace.
 
 `spawn_agent` returns an accepted run ID before child completion.
 Continue independent parent work. The terminal result arrives later with child attribution.
+When an accepted child blocks the next step, check for useful independent work.
+If none remains, end the current turn with a brief status.
+Keep the status distinct from the final result.
+Preserve any JSON-only constraint without inventing final result fields.
+The canonical terminal result automatically resumes the parent.
+Keep the task open. Do not request permission to wait.
+Do not use artifact reads, status polls, or sleep commands to wait.
 Load `check_agent_run` through `load_tool` only when status or cancellation is necessary.
 Do not create a tight status poll loop. Normal completion uses the terminal result.
 Status and cancellation retain the owner-session and original eligible requester boundary under current policy.

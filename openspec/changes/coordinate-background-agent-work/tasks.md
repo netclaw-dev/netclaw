@@ -236,6 +236,30 @@ Coordination guide 1.0.6 table-transfer clarification:
 - Guide 1.0.5 and 1.0.4 proofs remain exact. All original analyze and code trial files retain their false verdicts.
 - This clarification supplies no model-cure proof. A fresh native producer and fresh targeted observations remain required.
 
+Fresh combined observations at `f6685d5f`:
+
+- The fresh native bundle contains guide 1.0.6. Its compile tree matches the combined source tree.
+- The first code-workflow, analyze-plan, conflict, and blocked-attachment trials remain false. Each cohort stops after its first failure.
+- Independent review checks actual provider requests, typed tool pairs, artifacts, durable results, and the unchanged assertions.
+- The code parent executes extra commands and returns incorrect report field types. Its final checks precede the complete review result.
+- The analyze parent repeats status and absent-file queries. A replacement analyst completes; the plan child lacks a terminal result before cutoff.
+- The conflict parent executes extra commands. The blocked-attachment parent executes a prohibited shell command and returns artifacts with schema faults.
+- Both negative cases pass two independent fresh trials. The first unavailable-profile result uses the sole JSON fence that the existing oracle accepts.
+- That fence violates the literal prompt format. Its canonical pass remains unchanged; no new format allowance enters the oracle.
+- The third unavailable-profile trial fails daemon startup before its prompt. A subsequent disk fault erases its receipt; cleanup remains unverified.
+- These observations close no broader model gate. The remaining trials require a justified change and fresh evidence.
+
+Coordination guide 1.0.7 clarification:
+
+- The guide states the positive wait action: end the current turn when no independent work remains.
+- The canonical child terminal result resumes the parent. An interim status must remain distinct from the final result.
+- A JSON-only constraint does not justify invented final fields. Useful diagnosis through status and logs remains available.
+- The code eval prompt now specifies absolute report path strings and checks after the complete review result returns.
+- These prompt fields match the existing assertions. No oracle, runtime, authority, threshold, deadline, or tool budget changes.
+- The existing 82 Python controls pass. The initial embedded-test build fails because the disk is full; it supplies no test pass.
+- The candidate requires hosted embedded-test proof and a fresh native bundle before new model observations.
+- All original false results remain unchanged. This clarification supplies no model-cure proof and closes no additional task.
+
 ## 7. Review and completion evidence
 
 - [x] 7.1 Run the required focused .NET tests after implementation. Verify discovery and pass counts for changed seed, loader, routing, and skill boundaries.
@@ -250,6 +274,12 @@ Hosted checks at `f48e9fbe`:
 - All 29 hosted checks pass for this exact head. Both native smoke logs report 29 tapes and 10 scenarios passed.
 - These checks precede the later specification repair and guide 1.0.4. They do not establish hosted acceptance for a later stack head.
 - Hosted success supplies no model-workflow acceptance, merge, release, or deployment proof.
+
+Hosted checks at `f6685d5f`:
+
+- All 29 checks pass for this exact combined head. Linux and macOS each pass 29 native tapes and 10 scenarios.
+- The lower two PR heads also pass all 29 checks. These results precede guide 1.0.7.
+- No CI result supplies real-model acceptance, a merge, a live skill publication, a release, or deployment proof.
 
 Combined test and mutation evidence at `915601da`:
 

@@ -126,6 +126,18 @@ Independent contract review at `a3488e95` and combined `f48e9fbe`:
 - The inherited `per-call-tool-recurrence` delta now matches the canonical prompt clauses and three routed prompt scenarios. Its recurrence and authority clauses remain unchanged.
 - Task 7.9 remains open for independent review of the integrated result. Tasks 7.2, 8.6, and 8.7 also remain open.
 
+Live child-adoption regression at `f6685d5f`:
+
+- One fresh scripted observation passes the canonical verifier and the separate read-window predicate. Independent review repeats both checks against actual bytes.
+- The parent receives two Missing results while the child remains held. The child then writes the real artifact and completes.
+- Automatic parent continuation reads the complete artifact twice. The guard refuses the next identical read, which proves continued repeat protection.
+- The retained provider history contains exactly two task inputs and the canonical context nudges. No extra user task supplies the reset.
+- Independent receipt SHA `942d5ff06a197d03eac081da92ae818860432849df42162097ac8300f40635c9` binds all 98 indexed files and the unchanged originals.
+- The earlier V2 observation remains false. Its added predicate misclassified canonical context nudges as extra user tasks.
+- The corrected predicate retains the canonical verifier and rejects extra tasks, changed prompts, and malformed or misplaced nudges.
+- This proves the live regression only. Separate deterministic tests cover recovery and duplicates; no five-trial or days-long claim follows.
+- All remaining integrated health, model acceptance, and final audit gates remain open.
+
 ## 8. Docs, operational guidance, and handoff
 
 - [x] 8.1 Rename the glossary entry to approval prompt with a legacy-anchor alias; verify old links still resolve and exact code identifiers remain unchanged.

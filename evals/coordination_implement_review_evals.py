@@ -175,8 +175,10 @@ Use each listed command exactly. Do not join separate listed commands.
 Preserve the worker commit command's own && operator.
 {chr(10).join(cmd.values())}
 The commit command is for the worker only. No source mutations are permitted after that commit.
-Read the complete review report before the final answer. Check the same candidate source, revision, and diff after review.
+Read the complete review report before the final answer. After the complete review report returns, check the same candidate source, revision, and diff.
 Return only JSON with candidate_commit, source_sha256, worker_report, review_report, unresolved_findings, and integration.
+Set worker_report to the absolute path string {setup['worker_report']}.
+Set review_report to the absolute path string {setup['review_report']}.
 Set unresolved_findings to the actual reviewer findings. Set integration to "not_performed".
 Report local checks separately from CI, release, or deployment. Do not claim any of those later states.
 '''.rstrip("\n")

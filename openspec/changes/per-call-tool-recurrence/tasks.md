@@ -136,3 +136,14 @@
 - Independent review finds no remaining distinct durable prefix without direct or documented equivalent-prefix evidence in the listed cut matrix.
 - Task 4.4 is complete for actor and journal recovery. It does not prove OS-process storage durability or physical external exactly-once effects.
 - Private replay, shadow, productive holdout, model evals, and final activation reconciliation retain their separate gates.
+
+### Child-adoption and current model evidence
+
+- The combined `f6685d5f` runtime passes one live Missing/Missing-child-completion-read regression with independent artifact and provider-history review.
+- The new child-result window permits both productive reads. The next identical read still receives the canonical guard correction.
+- This supplements the retained 177 actor cases and six authority harness cases. It does not replace private replay or productive holdout evidence.
+- Four current coordination model cohorts stop after their first false result. Independent reviews distinguish task-rule violations from a child inactivity timeout.
+- No reviewed trial reproduces the repaired post-adoption false block. This does not establish general model acceptance or zero false blocks.
+- Two negative cases each pass two current observations. A later daemon-startup and disk fault supplies no canonical model verdict.
+- The private records still lack the canonical admission and adoption facts required for faithful replay. Zero productive holdout turns receive certification.
+- Tasks 1.5, 1.6, 7.4, 7.5, 7.6, and 8.5 remain open. No activation gate is lowered.
