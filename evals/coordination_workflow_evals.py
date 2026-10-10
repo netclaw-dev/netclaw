@@ -111,8 +111,10 @@ def workflow_stages(receipt, events, requests, setup, eval_home):
         if key == "findings_path":
             assigned = [call for call in assigned if str(call["arguments"].get("Agent", "")).lower() != "task-worker"]
         else:
-            assigned = [call for call in assigned if setup["findings_path"] in (
-                call["arguments"].get("Task", "") + "\n" + (call["arguments"].get("Context") or ""))]
+            assigned = [call for call in assigned
+                        if str(call["arguments"].get("Agent", "")).lower() == "task-worker"
+                        and setup["findings_path"] in (
+                            call["arguments"].get("Task", "") + "\n" + (call["arguments"].get("Context") or ""))]
         require(len(assigned) == 1, "The workflow lacks one distinct assignment for " + key + ".")
         start = assigned[0]
         agent = start["arguments"].get("Agent")
