@@ -512,10 +512,18 @@ def evidence_requests(directory):
     return [json.loads(path.read_bytes()) for path in sorted(Path(directory).glob("request-*.json"))]
 
 
-def daemon_logs(home):
-    paths = sorted((Path(home) / "logs").glob("daemon*.log"))
-    require(paths, "The eval-owned daemon diagnostic log is absent.")
-    return "\n".join(path.read_text(errors="replace") for path in paths)
+def session_logs(home, session, run_ids):
+    require(run_ids, "The observed parent has no accepted run identifiers.")
+    patterns = [r"child_run_accepted owner=" + re.escape(session) + r" runId=" + re.escape(run_id)
+                + r" journalSequence=\d+" for run_id in run_ids]
+    matches = []
+    # Version-2 parent logs are direct envelope children. Child logs remain excluded.
+    for path in sorted((Path(home) / "data/sessions").glob("*/logs/session.log")):
+        text = path.read_text(errors="replace")
+        if any(re.search(pattern, text) for pattern in patterns):
+            matches.append(text)
+    require(len(matches) == 1, "The observed parent lacks exactly one canonical session diagnostic log.")
+    return matches[0]
 
 
 def legacy_observer_mode(case, prompt_ordinal):
@@ -555,9 +563,10 @@ def collect(port, prompt, session, output_format, evidence, case, prompt_ordinal
         print(output, end="")
         return
     requests = evidence_requests(Path(os.environ["TMPDIR_EVAL"]) / "child-runs/relay")
-    log = daemon_logs(os.environ["EVAL_HOME"])
     require(receipt["accepted_runs"] and receipt["delivery_observations"]["complete"],
             "The legacy response lacks an accepted child and actual terminal consumption.")
+    log = session_logs(os.environ["EVAL_HOME"], receipt["session_id"],
+                       [accepted["run_id"] for accepted in receipt["accepted_runs"]])
     deliveries = []
     for accepted in receipt["accepted_runs"]:
         starts = [call for call in receipt["calls"] if call["name"] == "spawn_agent"
@@ -587,8 +596,11 @@ def cli_acceptance(port, root, nonce):
     (root / "actual-cli.stdout").write_text(result.stdout)
     (root / "actual-cli.stderr").write_text(result.stderr)
     require(result.returncode == 0, "The actual headless CLI failed.")
+    bodies = re.findall(r"^\[tool:result\] spawn_agent → (.+)$", result.stdout, re.MULTILINE)
+    require(len(bodies) == 1, "The actual CLI lacks one start acceptance result.")
+    accepted = acceptance(bodies[0])
     return verify_cli_acceptance(result.stdout, evidence_requests(root / "relay"),
-                                 daemon_logs(os.environ["EVAL_HOME"]), session, nonce)
+                                 session_logs(os.environ["EVAL_HOME"], session, [accepted["run_id"]]), session, nonce)
 
 
 def verify_cli_acceptance(stdout, requests, log, session, nonce):
@@ -649,7 +661,8 @@ def run(port):
         snapshot = control(port, "snapshot")
         (root / "fixture-snapshot.json").write_text(json.dumps(snapshot, indent=2))
         report.update(verify_trial(receipt, evidence_requests(root / "relay"), snapshot,
-                                   daemon_logs(os.environ["EVAL_HOME"]), os.environ["EVAL_HOME"], nonce,
+                                   session_logs(os.environ["EVAL_HOME"], receipt["session_id"],
+                                                [receipt["accepted_run"]["run_id"]]), os.environ["EVAL_HOME"], nonce,
                                    case == "child_run_partial_cancel"))
         report["session_id"] = receipt["session_id"]
         artifact_path = snapshot["binding"]["paths"]["artifact_dir"] + (
