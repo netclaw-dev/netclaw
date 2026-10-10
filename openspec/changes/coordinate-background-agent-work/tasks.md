@@ -66,13 +66,41 @@ Operator procedure evidence:
 - [x] 5.1 Extend headless init seed/loader coverage. Verify an absent worker installs, custom files survive, and the canonical role reaches runtime.
 - [x] 5.2 Preserve existing profile shadow rules. Verify an operator profile beats feed defaults without a silent role override.
 - [x] 5.3 Exercise logical discovery, inline load, and all resource names through the real skill loader. Verify audience denial remains effective.
-- [ ] 5.4 Exercise a scripted accepted-run workflow on the combined stack. Verify independent parent work and later attributed artifact review.
-- [ ] 5.5 Exercise cancellation guidance with scripted receipts. Verify acceptance alone never counts as dispatch closure or terminal completion.
+- [x] 5.4 Exercise a scripted accepted-run workflow on the combined stack. Verify independent parent work and later attributed artifact review.
+- [x] 5.5 Exercise cancellation guidance with scripted receipts. Verify acceptance alone never counts as dispatch closure or terminal completion.
 - [x] 5.6 Supply stale evidence and an incomplete template. Verify the workflow marks missing proof rather than accepting success claims.
-- [ ] 5.7 Supply conflicting analyst reports and failed environment checks. Verify explicit uncertainty instead of majority acceptance or repair claims.
-- [ ] 5.8 Use a dirty source checkout and two writer requests. Verify isolated scopes or serialized writes without cleanup or shared-write assumptions.
+- [x] 5.7 Supply conflicting analyst reports and failed environment checks. Verify explicit uncertainty instead of majority acceptance or repair claims.
+- [x] 5.8 Use a dirty source checkout and two writer requests. Verify isolated scopes or serialized writes without cleanup or shared-write assumptions.
 - [x] 5.9 Use a blocked attachment receipt. Verify the parent reports a delivery limit and never claims the file reached the user.
 - [ ] 5.10 Pair each adversarial fixture with a valid task. Verify controls allow completed plans, current revisions, and permitted artifact delivery.
+
+Scripted workflow evidence at `8a57fbf5`:
+
+- The held V5 observation passes the unchanged canonical verifier and the separate parent-work predicate.
+- The parent reads a separate source and writes its exact source-based report before the bound child response releases.
+- The parent later consumes the attributed terminal result and reads the complete child artifact. All 93 indexed artifact hashes remain exact.
+- The cancellation V4 observation passes the canonical verifier and the separate receipt predicate. All 92 indexed artifact hashes remain exact.
+- The parent loads the complete coordination guide, distinguishes admission from closure, and reads the actual partial result and report.
+- The final status contains the canonical JSON-string terminal. Fourteen independent controls reject accepted-only closure claims and incorrect response attribution.
+- The conflicting and resolved observations pass the unchanged verifier after replay from actual captured bytes.
+- The conflicting reports claim counts of seven and nine. The actual check lacks its dependency; the parent reports unresolved evidence and no repair.
+- The valid control verifies a count of seven. Both cases preserve two attributed child results and complete parent report reads.
+- The retained parent-work audit starts with SHA `7b3dbac3`; the cancellation audit starts with SHA `4a6f5e9b`.
+- The conflict receipts start with SHA `bf4a6641` and `bda2c2ef`. Root reviews verify the actual captured inputs and checker results.
+- Actual resource teardown and source freezes pass. Earlier failed observations and unsafe archive controls remain unchanged.
+- These historical scripted observations close tasks 5.4, 5.5, and 5.7 only. They do not prove the new detector window or autonomous model judgment.
+- Cancellation leaves external effects unknown. The broader model gates and task 5.10 remain open.
+
+Isolated writer evidence at `0da400bb`:
+
+- One fresh scripted observation passes with the current native image and helper. Two task workers produce distinct canonical Completed deliveries.
+- Each worker reads its baseline, edits its assigned worktree, commits one source file, runs the actual check, and writes its complete report.
+- The parent reads both complete sources and reports after terminal consumption. It checks the actual revisions, diffs, and candidate results.
+- The operator retains staged, unstaged, and untracked bytes, its raw index, branch, and HEAD.
+- All 69 regular archive files match the capture inventory. Independent replay passes; altered operator or report bytes fail with a valid restored control.
+- Independent review SHA `f7857faeb82386e020ff4385ff3edbd36ead32b1a0a9fdec7dab4ace2041843a` binds the actual receipt and cleanup.
+- This closes task 5.8's isolated-scope alternative. It proves no overlapping executor schedule or serialized shared-worktree alternative.
+- It proves no autonomous model judgment, integration, CI, release, deployment, backend capacity, or days-long productivity.
 
 Scripted stale-report evidence at `153d9223`:
 
@@ -136,6 +164,15 @@ Negative model observations at `3dd2c1a3`:
 - Those three trials reach the final response check after the file, profile, authority, and provider-history checks pass.
 - These ten planned observations do not complete the broader model gate or authorize retries without a justified change.
 
+Coordination guide 1.0.3 evidence after `0da400bb`:
+
+- The actual coding trial remains false because of extra commands and the incorrect final response schema. All 195 original artifact hashes remain exact.
+- The guide clarifies exact command limits and final field types. It changes neither the eval prompt nor the oracle.
+- Both final embedded loader and dispatcher tests pass. They verify complete inline and spill content plus the existing access boundaries.
+- Independent review SHA `b5da2617e8bf48d78b8d03e6a46d64c336fc16ca360064fda05de807437fd705` binds the three-file patch and actual test results.
+- The guide receives no model-compliance credit before a fresh daemon producer embeds version 1.0.3 and the relevant observation runs.
+- This note closes no additional task. All broader model gates remain open.
+
 ## 7. Review and completion evidence
 
 - [x] 7.1 Run the required focused .NET tests after implementation. Verify discovery and pass counts for changed seed, loader, routing, and skill boundaries.
@@ -174,6 +211,14 @@ Held-child evidence review at `d0377373`:
 - Native inputs match. The historical helper differs from the current helper, which does not execute this offline replay.
 - This evidence preserves the existing held-response gate. It proves neither concurrent backend inference nor days-long productivity.
 - Cancellation, fresh current-helper execution, and the productive false-block gate remain separate requirements.
+
+One current held-child observation at `0da400bb`:
+
+- One fresh real-model observation passes with the current native image and helper. Independent review verifies all 102 indexed artifact hashes.
+- The parent completes its bound probe before child release, consumes the canonical terminal, and reads the full artifact in automatic continuation.
+- Independent review SHA `7742d477d1c71fb0754eee046161c4d8a90a988c2b7dd0f52e38923138da494d` binds the actual receipt and replay.
+- Actual cleanup and the complete source freeze pass. This supplies one observation, not five-pass acceptance.
+- This case does not prove backend inference capacity, days-long productivity, or the two-Missing-read child-adoption counterexample.
 
 Discovery and cancellation scope review at `4a9b7505`:
 
