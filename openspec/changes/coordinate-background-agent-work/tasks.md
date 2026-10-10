@@ -2,7 +2,7 @@
 
 - [ ] 1.1 Include PR 1 and PR 2 before final integration and dependent checks. Verify their frozen contracts remain intact.
 - [ ] 1.2 Reconcile PRD traceability and the canonical plan location. Verify every package link resolves on the combined stack.
-- [ ] 1.3 Record the inherited provider capacity disposition. Verify this PR does not waive the held-child parent-response gate.
+- [x] 1.3 Record backend-owned capacity. Verify this PR preserves the held-child parent-response gate without a provider scheduler.
 
 ## 2. Small inline skill
 
@@ -71,4 +71,4 @@
 - [ ] 7.3 Review security mutation scope. Document why unchanged policy gates require no new target, or prove a narrow unsafe mutant is rejected.
 - [ ] 7.4 Run strict OpenSpec validation and implementation verification. Verify each requirement links to current source and claim-specific evidence.
 - [ ] 7.5 Report implementation, deterministic proof, model evals, native smoke, CI, rollout, and user delivery as separate states.
-- [ ] 7.6 Retain the PR 2 provider gate as an independent obligation. Never infer days-long productivity or provider capacity from these workflow cases.
+- [ ] 7.6 Retain PR 2's held-child parent-response gate. Never infer days-long productivity from these workflow cases.

@@ -3,8 +3,8 @@
 See [proposal.md](proposal.md) for the product need and PRD traceability.
 Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
 The source baseline is `2e6bc4f014dc96b606566709df1bd11f90ecf34a`.
-The approved [plan](../../../../plan-background-subagents/.systematize/plans/background-subagents/plan.html) defines this third PR.
-The plan file lives in the sibling `plan-background-subagents` worktree until the stack includes its canonical documents.
+The approved [plan](../../../.systematize/plans/background-subagents/plan.html) defines this third PR.
+The combined stack contains the canonical plan and its product requirements.
 PR 1 owns recurrence policy. PR 2 owns child lifetime, control, authority, cancellation, and result delivery.
 This PR adds instructions and one default profile. It adds no actor protocol or persistence schema.
 
@@ -193,7 +193,7 @@ The existing profile seed helper remains the absent-only default path; no broad 
 - Main-role work can use more resources. Preserve configured role behavior and avoid provider overrides.
 - A repeat init can replace unrelated identity content. Use the explicit asset procedure for existing deployments.
 - Restart can lose an active child. Inherit PR 2's Lost result and preserve confirmed partial evidence.
-- A child can consume a single provider slot. PR 2's real-model responsiveness gate remains unpassed until capacity is resolved.
+- A backend can delay a request. PR 2 requires a parent reply while the eval holds an accepted child request.
 
 ### Why this is safe
 
@@ -224,8 +224,9 @@ Do not run the legacy manifest generator locally.
 
 ## Open Questions
 
-The provider capacity disposition remains a PR 2 owner decision.
-This PR neither narrows the parent response guarantee nor adds a scheduler.
+The inference backend owns capacity and request admission.
+Netclaw adds no provider scheduler or capacity policy.
+The held-child parent-response gate remains required.
 The exact final prose of each workflow remains subject to artifact and behavioral review within this contract.
 No other unresolved design choice blocks this contract.
 
