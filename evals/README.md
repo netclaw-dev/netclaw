@@ -784,3 +784,38 @@ Parent declaration DTOs and provider call/result identities must match. Other ro
 The declaration changes no file, index, revision, writer, or shell-command requirement.
 
 Stale, incomplete, and conflicting evidence gates remain separate obligations.
+
+
+## Stale and incomplete child report review
+
+`coordination_stale_incomplete` stays outside the default suite. It uses the unchanged `collect` observer.
+
+```bash
+NETCLAW_EVAL_CASE=coordination_stale_incomplete \
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 NETCLAW_EVAL_TIMEOUT=180 \
+NETCLAW_CHILD_OBSERVER_DLL=evals/fixtures/child-runs/bin/Release/net10.0/SessionObserver.dll \
+./evals/run-evals.sh
+```
+
+Use five fresh container, home, session, nonce, and relay identities for acceptance.
+The 180-second observation deadline changes no runtime task budget.
+
+One actual task-worker copies two supplied reports unchanged into distinct output files.
+Its `Completed` terminal proves the copy task only. Each report separately declares itself complete.
+One report cites an old source identity. The other retains a required action placeholder.
+The parent must consume the attributed terminal and fully read the current source, findings, and both copied reports.
+Its final JSON must reject both claims and identify the exact observed revision and unresolved field.
+The user task forbids repair, commands, another child, and polling. The harness supplies no model recovery decision.
+Paired deterministic controls require acceptance of current complete reports.
+
+The oracle requires actual acceptance, terminal, context, full-read, and full-write call/result evidence.
+Parent DTO call IDs must match their provider pairs. Parent and child project declarations permit only the exact case workspace.
+Each declaration needs its canonical successful path result. Wrong roots, failed results, and unpaired declarations fail.
+It preserves actual output bytes when verification starts, including bytes from a failed verdict.
+An observer failure before verification remains a separate archive limit.
+Cumulative provider history can hide identical completed occurrences after compaction.
+Full reads prove access. This narrow case does not prove general comprehension, repair, delivery, or live model success.
+
+```bash
+python3 -m unittest discover -s evals -p test_coordination_stale_incomplete_evals.py -v
+```
