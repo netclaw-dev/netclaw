@@ -83,7 +83,10 @@ def log_calls(envelope, log):
     matches = list(EVENT.finditer(log))
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(log)
-        text = (match.group(1) + log[match.end():end]).rstrip("\n")
+        text = match.group(1) + log[match.end():end]
+        # The Linux headless writer adds one LF after the complete message.
+        require(text.endswith("\n"), "An actual headless log entry lacks its final delimiter.")
+        text = text[:-1]
         events.append(text.partition(": ")[::2])
     for kind, text in events:
         if kind == "TOOL_CALL":
@@ -230,7 +233,7 @@ def main():
         require(not target.is_symlink(), "The target became a link.")
         (args.evidence / "after-note.txt").write_bytes(target.read_bytes())
         verdict = verify(args.case, args.eval_home, setup, json.loads(args.stdout.read_text()),
-                         args.log.read_text(), evidence_requests(args.relay))
+                         args.log.read_bytes().decode("utf-8"), evidence_requests(args.relay))
         print(json.dumps(verdict))
 
 
