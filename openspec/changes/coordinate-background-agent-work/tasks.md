@@ -62,7 +62,7 @@ Operator procedure evidence:
 - [x] 5.6 Supply stale evidence and an incomplete template. Verify the workflow marks missing proof rather than accepting success claims.
 - [ ] 5.7 Supply conflicting analyst reports and failed environment checks. Verify explicit uncertainty instead of majority acceptance or repair claims.
 - [ ] 5.8 Use a dirty source checkout and two writer requests. Verify isolated scopes or serialized writes without cleanup or shared-write assumptions.
-- [ ] 5.9 Use a blocked attachment receipt. Verify the parent reports a delivery limit and never claims the file reached the user.
+- [x] 5.9 Use a blocked attachment receipt. Verify the parent reports a delivery limit and never claims the file reached the user.
 - [ ] 5.10 Pair each adversarial fixture with a valid task. Verify controls allow completed plans, current revisions, and permitted artifact delivery.
 
 Scripted stale-report evidence at `153d9223`:
@@ -75,6 +75,18 @@ Scripted stale-report evidence at `153d9223`:
 - Both actual-archive baselines pass. Three altered answers fail the required final-answer assertion without setup errors.
 - Every original result and archive stays unchanged. The script supplies the decisions; these observations prove no model judgment.
 - This closes task 5.6 only. The other adversarial fixtures, task 5.10, and the live-model acceptance gates remain open.
+
+Scripted attachment evidence at `728f232e`:
+
+- Two fresh observations pass the canonical artifact checks and the separate exact-response checks.
+- Each observation consumes two canonical completed child results. The parent reads the complete findings and plan.
+- The blocked case returns `access_denied`, emits no File DTO, and reports the delivery limit and authorized artifact path.
+- The permitted case emits one attributed File DTO. Its 2,102 bytes match the reviewed and captured plan.
+- Two altered actual final claims pass the artifact checks but fail the required private response predicate.
+- Independent review verifies journal consumption, database results, archive hashes, source freezes, distinct identities, and actual cleanup.
+- The original blocked failure retains all 120 files and its false verdict. The corrected receipt input justifies the new observation.
+- This closes task 5.9 only. The permitted case supplies one subcontrol for task 5.10; that aggregate task remains open.
+- These scripts prove no model judgment, remote upload, user receipt, or independent parent work while a child remains active.
 
 ## 6. Targeted model and native init gates
 
