@@ -901,3 +901,45 @@ This case does not prove repair quality, general research truth, or model accept
 ```bash
 python3 -m unittest discover -s evals -p test_coordination_conflicting_evidence_evals.py -v
 ```
+
+### Two writers and a dirty operator checkout
+
+`coordination_two_writers` stays outside the default suite. It uses the existing `collect` observer and child relay.
+The case starts two actual `task-worker` runs in separate registered Git worktrees.
+One writer repairs catalog publication. The other writer repairs exact record selection.
+Each writer supplies one source-only commit, an actual check result, and a separate full report.
+
+```bash
+NETCLAW_EVAL_CASE=coordination_two_writers \
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 NETCLAW_EVAL_TIMEOUT=300 \
+./evals/run-evals.sh
+```
+
+The 300-second limit bounds eval observation. It adds no runtime task limit.
+Use five independent fresh container, home, session, and relay invocations for the model gate.
+Every failed invocation remains part of the evidence.
+The case-local approval seed permits `git add` and `git commit` within the eval workspace root.
+An explicit `NETCLAW_EVAL_APPROVALS_FILE` override remains authoritative.
+
+The setup retains the operator's staged bytes, unstaged bytes, untracked marker, raw index, branch, and HEAD.
+The parent cannot reset, stash, clean, commit, or integrate the operator checkout.
+The parent reads both actual candidate sources and reports after both terminal deliveries.
+It checks each exact revision, diff, and candidate result before its final JSON response.
+The oracle repeats both checks and compares the final candidate and operator states.
+The oracle archives actual source and report bytes before a verifier failure.
+An observer failure before verifier entry can prevent this later archive.
+
+The deterministic controls reject missing writers, shared worktrees, false receipts, foreign identities, and unauthorized actions.
+They also reject changed operator bytes, checker changes, later candidate commits, and incomplete parent review.
+The shell control executes the actual setup, prepare, case dispatch, and prompt path.
+It compares complete prompt bytes, including both combined Git commands.
+
+```bash
+python3 -m unittest discover -s evals -p test_coordination_two_writers_evals.py -v
+```
+
+Two isolated writers do not prove overlapping executor schedules or a serialized shared-worktree fallback.
+Cumulative provider captures can hide identical child occurrences after compaction.
+Full parent reads prove access, not complete comprehension.
+This case performs no candidate integration, CI, release, or deployment.
+Its deterministic controls establish no live model success.
