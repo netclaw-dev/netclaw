@@ -149,6 +149,9 @@ The operator checkout is {setup['operator']}. It has staged, unstaged, and untra
 Preserve every operator file byte, its raw Git index, its branch, and its HEAD.
 Do not reset, stash, clean, commit, or integrate changes into that checkout.
 The existing isolated worker worktree is {setup['worker']} at base commit {setup['base_commit']}.
+The parent may declare only {setup['operator']} or {setup['worker']} with set_working_directory.
+Each child may declare only {setup['worker']} with set_working_directory.
+The task root {setup['root']} holds artifacts. Do not declare that task root.
 Start exactly one task-worker child for implementation, then one separate code-analyst child for read-only review.
 Use exactly those two child runs and wait for their automatic terminal delivery. Do not poll status.
 The worker may change only {setup['worker']}/source/catalog.py and write {setup['worker_report']}.
@@ -168,6 +171,8 @@ The review JSON must contain nonce, candidate_commit, source_sha256, checks, and
 Each finding must contain path, line, detail, and severity. Use an empty findings list only when no defect is found.
 Both children must use file_write for their complete reports and stop edits before terminal completion.
 Only these shell commands are permitted for this narrow case:
+Use each listed command exactly. Do not join separate listed commands.
+Preserve the worker commit command's own && operator.
 {chr(10).join(cmd.values())}
 The commit command is for the worker only. No source mutations are permitted after that commit.
 Read the complete review report before the final answer. Check the same candidate source, revision, and diff after review.
