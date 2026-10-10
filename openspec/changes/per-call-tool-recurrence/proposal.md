@@ -1,7 +1,7 @@
 ## Why
 
 The hard tool limits stop useful long tasks but miss short loops that interleave other calls.
-The approved plan requires exact recurrence protection and removes both limits in the first runtime change.
+The approved [plan](../../../.systematize/plans/background-subagents/plan.html) requires exact recurrence protection and removes both limits in the first runtime change.
 
 Source requirements: [PRD-001](../../../docs/prd/PRD-001-netclaw-mvp.md), FR-002, FR-003, FR-004, FR-011, and FR-012.
 [PRD-006](../../../docs/prd/PRD-006-mcp-tool-integration.md) supplies the tool-result contract.

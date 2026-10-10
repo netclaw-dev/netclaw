@@ -2277,23 +2277,10 @@ assert_subagent_session_scratch_disposable() {
     child_relative="${child_log#"$EVAL_HOME/data/"}"
     expected_temp_dir="/home/netclaw/.netclaw/${child_relative%/logs/session.log}/tmp"
 
-    local shell_count shell_result_count
-    shell_count=$(grep -ac \
-        'SubAgent \[disposable-diagnostic\] tool start .* name=shell_execute' \
-        "$child_log")
-    shell_result_count=$(grep -ac \
-        'SubAgent \[disposable-diagnostic\] tool \[shell_execute\] result: Exit code: 0' \
-        "$child_log")
-
-    [[ "$shell_count" -eq 1 ]] || return 1
-    [[ "$shell_result_count" -eq 1 ]] || return 1
-
-    local -a call_previews
-    mapfile -t call_previews < <(grep -aEo \
-        'shell_execute#[^(]+\([^)]*\)' \
-        "$child_log")
-    [[ "${#call_previews[@]}" -eq 1 ]] || return 1
-    [[ "${call_previews[0]}" == *"tempfile.gettempdir()"* ]] || return 1
+    local verified_temp_dir
+    verified_temp_dir=$(python3 "$REPO_ROOT/evals/child_run_evals.py" assert-scratch \
+        --evidence "$TMPDIR_EVAL/child-runs") || return 1
+    [[ "$verified_temp_dir" == "$expected_temp_dir" ]] || return 1
     grep -aFq "$expected_temp_dir" "$child_log" || return 1
     stdout_response_contains "$expected_temp_dir"
 
