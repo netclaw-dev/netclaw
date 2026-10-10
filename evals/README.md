@@ -339,6 +339,7 @@ Recovery permits only `file_read` calls.
 `completed_attempts` counts actual primary appends. Denied requests and diagnostics do not count.
 `last_result` names the last executed primary output, without guard feedback or diagnostic output.
 The entire visible reply must contain one final JSON object, without Markdown or text beside tool calls.
+The response check rejects JSON fences and extra prose. It preserves the separate runtime and side-effect scores.
 Earlier trial results retain their original prompt revision. These clarifications do not alter those verdicts.
 
 The nonadjacent cases request `A, B, A, C, A` after the normal shell-tool load.

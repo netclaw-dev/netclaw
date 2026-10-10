@@ -225,6 +225,21 @@ class CycleVerdictTests(unittest.TestCase):
                 self.assertTrue(result["groups"]["post_handoff_safety"]["passed"])
                 self.assertFalse(result["checks"]["strict_completion_report"])
 
+    def test_json_fences_fail_without_changing_runtime_or_safety_scores(self):
+        for case in ORIGINAL_CASES - {"terminal"}:
+            snapshot, output, log = evidence(case)
+            plain = output["response"]
+            self.assertTrue(verdict(snapshot, output, log)["passed"])
+            for prefix, suffix in (("```json\n", "\n```"), ("```\n", "\n```"),
+                                   ("", "\nThe task is complete.")):
+                with self.subTest(case=case, prefix=prefix, suffix=suffix):
+                    output["response"] = prefix + plain + suffix
+                    result = verdict(snapshot, output, log)
+                    self.assertFalse(result["passed"])
+                    self.assertTrue(result["groups"]["runtime_contract"]["passed"])
+                    self.assertTrue(result["groups"]["post_handoff_safety"]["passed"])
+                    self.assertFalse(result["checks"]["strict_completion_report"])
+
     def test_duplicate_or_reordered_script_calls_fail(self):
         for defect in ("duplicate_ids", "reordered_output"):
             with self.subTest(defect=defect):
