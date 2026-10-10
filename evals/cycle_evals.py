@@ -460,8 +460,6 @@ def completion_report(snapshot, output, expected):
     case = snapshot["case"]
     try:
         response = output["response"].strip()
-        if response.startswith("```json\n") and response.endswith("\n```"):
-            response = response[8:-4]
         answer = json.loads(response)
         model["strict_completion_report"] = (answer["status"] == ("incomplete" if case == "terminal" else "complete")
             and type(answer["completed_attempts"]) is int and answer["completed_attempts"] == expected
