@@ -80,6 +80,9 @@ for executable in hold_job queued_marker; do
 done
 if [[ "$fixture_module" == background_process_fixture.py ]]; then
     python3 "$REPO_ROOT/evals/$fixture_module" prepare
+    if [[ "$FILTER_CASE" == child_run_owner_recovery ]]; then
+        export NETCLAW_EVAL_CONFIG_FILE="$TMPDIR_EVAL/child-runs/recovery-config.json"
+    fi
 fi
 RUN_ID="background-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 STARTED_AT=$(date -u +%FT%TZ)

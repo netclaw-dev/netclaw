@@ -375,6 +375,48 @@ def process_handler(fixture):
     return Handler
 
 
+def prepare_recovery_config(root, config_path):
+    original = config_path.read_bytes()
+    config = json.loads(original)
+    config.setdefault("Session", {}).setdefault("Tuning", {})["SnapshotInterval"] = 2147483647
+    generated = json.dumps(config, indent=2).encode() + b"\n"
+    with (root / "recovery-base-config.bin").open("xb") as stream:
+        stream.write(original)
+    with (root / "recovery-config.json").open("xb") as stream:
+        stream.write(generated)
+    require(config_path.read_bytes() == original, "The canonical process config changed during preparation.")
+
+
+def capture_recovery_config(root, home):
+    actual = (home / "data/config/netclaw.json").read_bytes()
+    with (root / "recovery-actual-config.bin").open("xb") as stream:
+        stream.write(actual)
+    expected = (root / "recovery-config.json").read_bytes()
+    config = json.loads(actual)
+    interval = config["Session"]["Tuning"]["SnapshotInterval"]
+    require(actual == expected and type(interval) is int and interval == 2147483647,
+            "The actual recovery config differs from its journal-only snapshot interval.")
+
+
+def require_recovery_journal(database, session, root):
+    owner = "session-" + session
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+        connection.execute("PRAGMA query_only=ON")
+        rows = list(connection.execute("SELECT sequence_number, deleted FROM journal "
+                                       "WHERE persistence_id=? ORDER BY sequence_number", (owner,)))
+        snapshots = list(connection.execute("SELECT sequence_number FROM snapshot WHERE persistence_id=?", (owner,)))
+    facts = {"persistence_id": owner, "journal": [{"sequence_number": sequence, "deleted": deleted}
+                                                for sequence, deleted in rows],
+             "snapshot_sequences": [row[0] for row in snapshots]}
+    (root / "recovery-journal-integrity.json").write_text(json.dumps(facts, indent=2))
+    require(bool(rows) and all(type(sequence) is int and sequence == index
+                              for index, (sequence, _) in enumerate(rows, 1)),
+            "The recovery journal lacks a complete contiguous parent prefix from sequence one.")
+    require(all(type(deleted) is int and deleted == 0 for _, deleted in rows),
+            "The recovery journal contains a deleted parent row.")
+    require(not snapshots, "The journal-only recovery case contains a parent snapshot.")
+
+
 def prepare():
     case = os.environ["NETCLAW_EVAL_CASE"]
     require(case in CASES and os.environ["RUNS"] == "1", "Select one fresh process case with RUNS=1.")
@@ -400,6 +442,8 @@ def prepare():
     executable.chmod(0o755)
     (root / "setup-base.json").write_text(json.dumps({"case": case, "nonce": nonce,
         "marker_sha256": hashlib.sha256(executable.read_bytes()).hexdigest()}, indent=2))
+    if case == "child_run_owner_recovery":
+        prepare_recovery_config(root, Path(os.environ["NETCLAW_EVAL_CONFIG_FILE"]))
 
 
 def read_lines(path):
@@ -475,6 +519,8 @@ def capture_journal(root, session):
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as source:
         with closing(sqlite3.connect(retained)) as destination:
             source.backup(destination)
+    if os.environ["NETCLAW_EVAL_CASE"] == "child_run_owner_recovery":
+        require_recovery_journal(retained, session, root)
     command = observer_command() + ["--project-process-journal", str(retained), session, str(root / "journal.json")]
     result = subprocess.run(command, capture_output=True, timeout=40)
     (root / "journal-projector.stdout").write_bytes(result.stdout)
@@ -501,6 +547,8 @@ def run(port):
               "image_reference": os.environ["NETCLAW_IMAGE"], "zero_forward_route": True}
     error = None
     try:
+        if case == "child_run_owner_recovery":
+            capture_recovery_config(root, Path(os.environ["EVAL_HOME"]))
         try:
             receipt, _ = invoke_observer(port, initial, root / "observer", modes[case], nonce, probe)
         except (AssertionError, KeyError, ValueError, OSError, subprocess.SubprocessError):

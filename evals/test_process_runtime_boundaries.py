@@ -123,7 +123,7 @@ class ProcessRuntimeBoundaryControls(unittest.TestCase):
                     self.assertEqual([str(retained), "owner", str(output / "journal.json")], argv[-3:])
                     (output / "journal.json").write_text("[]")
                     return SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
-                with patch.dict(os.environ, {"EVAL_HOME": str(home)}), \
+                with patch.dict(os.environ, {"EVAL_HOME": str(home), "NETCLAW_EVAL_CASE": "child_run_routed_skill"}), \
                         patch.object(runtime, "observer_command", return_value=["projector"]), \
                         patch.object(runtime.subprocess, "run", side_effect=projector) as process:
                     self.assertEqual([], runtime.capture_journal(output, "owner"))
@@ -495,6 +495,164 @@ class ProcessPrivateCaptureControls(unittest.TestCase):
             self.assertTrue(report["error"].startswith("CalledProcessError:"))
             self.assertEqual(1, len(private))
             self.assertEqual(0, verified)
+
+
+class ProcessJournalRecoveryControls(unittest.TestCase):
+    def test_config_derivation_changes_only_the_existing_snapshot_interval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / "canonical.json"
+            body = {"Session": {"Tuning": {"SnapshotInterval": 20, "MaxTokens": 1000}},
+                    "Providers": {"local": {"Endpoint": "http://127.0.0.1:1/v1"}}, "Authority": "unchanged"}
+            original.write_text(json.dumps(body, separators=(",", ":")))
+            before = original.read_bytes()
+            runtime.prepare_recovery_config(root, original)
+            derived = json.loads((root / "recovery-config.json").read_bytes())
+            body["Session"]["Tuning"]["SnapshotInterval"] = 2147483647
+            self.assertEqual(body, derived)
+            self.assertEqual(before, original.read_bytes())
+            self.assertEqual(before, (root / "recovery-base-config.bin").read_bytes())
+            with self.assertRaises(FileExistsError):
+                runtime.prepare_recovery_config(root, original)
+            self.assertEqual(before, original.read_bytes())
+
+    def test_actual_installed_config_must_match_exact_bytes_and_integer_interval(self):
+        for fault in [None, "wrong-interval", "changed-provider", "format-only", "float"]:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                home = root / "home"
+                installed = home / "data/config/netclaw.json"
+                installed.parent.mkdir(parents=True)
+                config = {"Session": {"Tuning": {"SnapshotInterval": 2147483647}}, "Providers": {"owned": {"Model": "fixed"}}}
+                expected = json.dumps(config).encode()
+                (root / "recovery-config.json").write_bytes(expected)
+                if fault == "wrong-interval":
+                    config["Session"]["Tuning"]["SnapshotInterval"] = 20
+                elif fault == "changed-provider":
+                    config["Providers"]["owned"]["Model"] = "foreign"
+                elif fault == "float":
+                    config["Session"]["Tuning"]["SnapshotInterval"] = 2147483647.0
+                    expected = json.dumps(config).encode()
+                    (root / "recovery-config.json").write_bytes(expected)
+                actual = json.dumps(config, indent=2).encode() if fault == "format-only" else json.dumps(config).encode()
+                installed.write_bytes(actual)
+                if fault is None:
+                    runtime.capture_recovery_config(root, home)
+                else:
+                    with self.assertRaises(AssertionError):
+                        runtime.capture_recovery_config(root, home)
+                self.assertEqual(actual, (root / "recovery-actual-config.bin").read_bytes())
+
+    def database(self, path, rows, snapshot=False):
+        with closing(sqlite3.connect(path)) as connection:
+            connection.execute("CREATE TABLE journal (persistence_id TEXT, sequence_number INTEGER, deleted INTEGER)")
+            connection.execute("CREATE TABLE snapshot (persistence_id TEXT, sequence_number INTEGER)")
+            connection.executemany("INSERT INTO journal VALUES ('session-owned', ?, ?)", rows)
+            connection.execute("INSERT INTO journal VALUES ('session-foreign', 100, 1)")
+            connection.execute("INSERT INTO snapshot VALUES ('session-foreign', 50)")
+            if snapshot:
+                connection.execute("INSERT INTO snapshot VALUES ('session-owned', 2)")
+            connection.commit()
+
+    def test_real_database_rejects_missing_deleted_duplicate_prefix_and_owner_snapshot(self):
+        vectors = [("valid", [(1, 0), (2, 0), (3, 0)], False),
+            ("absent", [], False), ("pruned-prefix", [(2, 0), (3, 0)], False),
+            ("gap", [(1, 0), (3, 0)], False), ("deleted", [(1, 0), (2, 1)], False),
+            ("duplicate", [(1, 0), (1, 0), (2, 0)], False), ("snapshot", [(1, 0), (2, 0)], True)]
+        for name, rows, snapshot in vectors:
+            with self.subTest(fault=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                database = root / "owned.sqlite"
+                self.database(database, rows, snapshot)
+                before = database.read_bytes()
+                if name == "valid":
+                    runtime.require_recovery_journal(database, "owned", root)
+                else:
+                    with self.assertRaises(AssertionError):
+                        runtime.require_recovery_journal(database, "owned", root)
+                self.assertEqual(before, database.read_bytes())
+                facts = json.loads((root / "recovery-journal-integrity.json").read_bytes())
+                self.assertEqual("session-owned", facts["persistence_id"])
+                self.assertEqual(rows, [(row["sequence_number"], row["deleted"]) for row in facts["journal"]])
+
+    def test_backup_gate_precedes_actual_projector_dispatch_and_other_cases_keep_the_old_path(self):
+        for case, rows, expected in [("child_run_owner_recovery", [(1, 0), (2, 0)], 1),
+                ("child_run_owner_recovery", [(2, 0)], 0), ("child_run_approval_once", [(2, 1)], 1)]:
+            with self.subTest(case=case, rows=rows), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                home = root / "home"
+                live = home / "data/netclaw.db"
+                live.parent.mkdir(parents=True)
+                self.database(live, rows)
+                output = root / "evidence"
+                output.mkdir()
+                def projector(argv, **kwargs):
+                    self.assertTrue((output / "journal-backup.sqlite").is_file())
+                    self.assertEqual(case == "child_run_owner_recovery", (output / "recovery-journal-integrity.json").exists())
+                    (output / "journal.json").write_text("[]")
+                    return SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
+                with patch.dict(os.environ, {"EVAL_HOME": str(home), "NETCLAW_EVAL_CASE": case}), \
+                        patch.object(runtime, "observer_command", return_value=["owned-projector"]), \
+                        patch.object(runtime.subprocess, "run", side_effect=projector) as command:
+                    if expected:
+                        self.assertEqual([], runtime.capture_journal(output, "owned"))
+                    else:
+                        with self.assertRaises(AssertionError):
+                            runtime.capture_journal(output, "owned")
+                    self.assertEqual(expected, command.call_count)
+
+    def test_actual_shell_handoff_selects_only_the_recovery_config_before_daemon_start(self):
+        for case in ["child_run_owner_recovery", "child_run_approval_once"]:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                scripts = root / "scripts"
+                scripts.mkdir()
+                candidate = Path(runtime.__file__).parent
+                (scripts / "run-background-evals.sh").write_bytes((candidate / "run-background-evals.sh").read_bytes())
+                modules = root / "repo/evals"
+                modules.mkdir(parents=True)
+                (modules / "background_process_fixture.py").write_bytes(Path(runtime.__file__).read_bytes())
+                marker = modules / "fixtures/child-runs/process_marker.py"
+                marker.parent.mkdir(parents=True)
+                marker.write_bytes(b"#!/usr/bin/env python3\nprint('owned marker')\n")
+                config = modules / "fixtures/background-jobs/netclaw.json"
+                config.parent.mkdir(parents=True)
+                config.write_text('{"Session":{"Tuning":{"SnapshotInterval":20}},"Providers":{"owned":{}}}')
+                for name in ["job.py", "tool-approvals.json"]:
+                    (config.parent / name).write_bytes(b"{}")
+                before = config.read_bytes()
+                output, home = root / "output", root / "home"
+                cli, observer = root / "cli", root / "observer.dll"
+                cli.write_text("#!/usr/bin/env bash\nprintf 'control-version\\n'\n")
+                cli.chmod(0o755)
+                observer.write_bytes(b"command recorder")
+                installed = root / "selected-config.bin"
+                source = ("REPO_ROOT=" + shlex.quote(str(modules.parent)) + "\nTMPDIR_EVAL=" + shlex.quote(str(output))
+                    + "\nEVAL_HOME=" + shlex.quote(str(home)) + "\nNETCLAW_BIN=" + shlex.quote(str(cli))
+                    + "\nRUNS=\"${NETCLAW_EVAL_RUNS:-5}\"\nFILTER_CASE=\"$NETCLAW_EVAL_CASE\"\n"
+                    + "EVAL_CONTAINER_NAME=netclaw-eval-control\nEVAL_PROVIDER_API_KEY=\"\"\nEVAL_DATA_PROTECTION_KEYS=\"\"\n"
+                    + "check_prerequisites() { :; }\nbuild_local_image() { :; }\ncleanup_eval_env() { :; }\n"
+                    + "start_eval_daemon() { cp -- \"$NETCLAW_EVAL_CONFIG_FILE\" " + shlex.quote(str(installed)) + "; return 23; }\n")
+                (scripts / "run-evals.sh").write_text(source)
+                commands = root / "commands"
+                commands.mkdir()
+                shim = commands / "python3"
+                shim.write_text("#!" + sys.executable + "\nimport os,sys\n"
+                    + "if sys.argv[2:]==['serve']:\n print('12345',flush=True)\n sys.stdin.buffer.read()\n sys.exit(0)\n"
+                    + "os.execv(" + repr(sys.executable) + ",[" + repr(sys.executable) + ",*sys.argv[1:]])\n")
+                shim.chmod(0o755)
+                environment = os.environ.copy()
+                environment.pop("RUNS", None)
+                environment.update({"NETCLAW_EVAL_RUNS": "1", "NETCLAW_EVAL_CASE": case,
+                    "NETCLAW_CHILD_OBSERVER": str(observer), "PATH": str(commands) + os.pathsep + environment["PATH"],
+                    "PYTHONPATH": str(Path(runtime.__file__).resolve().parent) + os.pathsep + environment.get("PYTHONPATH", "")})
+                result = subprocess.run(["bash", str(scripts / "run-background-evals.sh"), "--runtime-only"],
+                    env=environment, capture_output=True, text=True, timeout=15)
+                self.assertEqual(23, result.returncode, result.stderr)
+                interval = json.loads(installed.read_bytes())["Session"]["Tuning"]["SnapshotInterval"]
+                self.assertEqual(2147483647 if case == "child_run_owner_recovery" else 20, interval)
+                self.assertEqual(before, config.read_bytes())
+                self.assertEqual(case == "child_run_owner_recovery", (output / "child-runs/recovery-config.json").exists())
 
 
 if __name__ == "__main__":
