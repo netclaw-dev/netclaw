@@ -637,7 +637,7 @@ def legacy_observer_mode(case, prompt_ordinal):
     require(case in {"subagent_headless_ambiguous_task", "subagent_specialization_precedence",
                      "subagent_project_scope_declaration", "subagent_session_scratch_disposable",
                      "approval_natural_subagent_project_review", "coordination_analyze_plan",
-                     "coordination_attachment_blocked", "productive_parent_child", "coordination_implement_review"} and prompt_ordinal == 1,
+                     "coordination_attachment_blocked", "productive_parent_child", "coordination_implement_review", "coordination_stale_incomplete"} and prompt_ordinal == 1,
             "The legacy child case or prompt ordinal is invalid.")
     return "collect"
 
