@@ -161,9 +161,9 @@ jobs:
       matrix:
         include:
           - group: shell-analysis
-            gates: shell-command-analysis tool-authorizer-order mcp-artifact-admission tool-task-adoption
+            gates: shell-command-analysis tool-authorizer-order mcp-artifact-admission
           - group: shell-assignment-and-paths
-            gates: shell-assignment shell-config-read path-access
+            gates: shell-assignment shell-config-read path-access tool-task-adoption
           - group: verb-chain-and-reminder
             gates: exact-verb-chain reminder-execution literal-twin
           - group: approval-and-authorization

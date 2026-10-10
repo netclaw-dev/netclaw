@@ -32,7 +32,16 @@
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request, merge group, and `dev` push.
 The job has four Linux matrix groups that run in parallel with the normal test matrix.
 The baseline run at `2e6bc4f01` took 12m24s, 12m29s, 18m56s, and 20m14s across the four groups.
-The new task-adoption gate uses the lightest group, `shell-analysis`. The job timeout remains 25 minutes.
+The task-adoption gate uses `shell-assignment-and-paths`. The job timeout remains 25 minutes.
+The prior `shell-analysis` job reached its deadline at `fa6aad73` after 342 reported mutants were killed.
+The final child-control target produced no report.
+The same mutation inputs passed the earlier `832ebff8` job in 20m25s.
+
+The destination group took 13m13s to 16m49s across four retained hosted runs.
+It took 14m53s in the `fa6aad73` run. The complete gate moves without target or test changes.
+Hosted verification of the new distribution remains pending.
+See [the cancelled job](https://github.com/netclaw-dev/netclaw/actions/runs/38020934971/job/114121548608)
+and [the prior successful job](https://github.com/netclaw-dev/netclaw/actions/runs/38014833252/job/114102687127).
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
 To add a gate, add its script name (`scripts/run-<name>-mutations.sh`) to the lightest group. Do not add a new job.
 
@@ -83,7 +92,7 @@ The gate correctly rejected those timeouts.
 The separate-filter run killed all six targets in 339.85 seconds.
 Its reports contain no tested timeout or survivor.
 The separate build adds 152.286 seconds over the earlier five-target run.
-CI runs this gate in `shell-analysis` and uploads `artifacts/stryker/tool-task-adoption` with the group reports.
+CI runs this gate in `shell-assignment-and-paths` and uploads `artifacts/stryker/tool-task-adoption` with the group reports.
 The `adoption` and `child-control` directories each retain their own mutation report.
 The local duration does not establish the combined CI duration.
 
