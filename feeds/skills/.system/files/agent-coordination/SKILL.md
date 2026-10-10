@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.0.5"
+  version: "1.0.6"
 ---
 
 # Agent Coordination
@@ -50,6 +50,8 @@ Give each child:
 
 Copy the supplied source identity unchanged into the child assignment, including its type or algorithm prefix.
 When a child must use a template, give its exact fields and columns through `Task` or `Context`.
+Preserve required Markdown table syntax when you transfer a template.
+Column labels and bullet rows do not replace a required table.
 Alternatively, require the child to load that exact canonical skill resource through `skill_read_resource`.
 Name the skill and resource explicitly. Load only the resources that the assigned task needs.
 Preserve supplied source identities exactly in required artifact fields.

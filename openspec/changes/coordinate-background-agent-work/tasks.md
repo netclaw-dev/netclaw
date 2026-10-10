@@ -227,6 +227,15 @@ Coordination guide 1.0.5 transfer clarification:
 - The prior guide 1.0.4 proof and all original analyze and code trial files remain exact.
 - This instruction change supplies no model-cure proof. It changes no eval prompt, oracle, policy, threshold, or deadline.
 
+Coordination guide 1.0.6 table-transfer clarification:
+
+- The parent must preserve required Markdown table syntax in a template transfer. Column labels and bullet rows do not replace a required table.
+- The child can still load the exact canonical template through the logical resource tool. Other workflow resource bytes remain unchanged.
+- Both rebuilt embedded loader and dispatcher tests pass without skips. Slopwatch, copyright headers, and whitespace checks pass.
+- Independent review SHA `0fac3c94884c7063a3f7b2a20c20739f9a59d6d758dc394c5b29a4a5e3538ebf` binds the final delta and executed embedded resource bytes.
+- Guide 1.0.5 and 1.0.4 proofs remain exact. All original analyze and code trial files retain their false verdicts.
+- This clarification supplies no model-cure proof. A fresh native producer and fresh targeted observations remain required.
+
 ## 7. Review and completion evidence
 
 - [x] 7.1 Run the required focused .NET tests after implementation. Verify discovery and pass counts for changed seed, loader, routing, and skill boundaries.
