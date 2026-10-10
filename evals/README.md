@@ -662,6 +662,10 @@ Select `child_run_held_parent`, `child_run_partial_cancel`, or `child_run_cli_ac
 
 The observer records the exact child-status cycle correction as non-success, without status or ownership evidence.
 Other malformed status text remains an error. A correction does not authorize child release or prove completion.
+The observer retains the exact `invalid_rationale` rejection before execution as a failed start attempt.
+The model can correct that attempt through the normal tool path.
+The held and cancel cases still require one accepted child before the initial parent turn ends.
+The collector permits multiple accepted children. Every rejection retains its trusted DTO failure code and exact result.
 To replay the captured status sequence through the helper controls, append its `session-output.jsonl` path:
 
 ```bash

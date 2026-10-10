@@ -18,6 +18,8 @@ from background_fixture import Fixture, handler_for, message_text
 
 CHILD_CONTRACT = "[Subagent Execution Contract]"
 CASES = {"child_run_held_parent", "child_run_partial_cancel", "child_run_cli_acceptance"}
+REQUIRED_RATIONALE_ERROR = ("Error: Required meta argument '_rationale' must be a non-empty string. "
+                          "Supply one sentence that states the tool call intent. The tool was NOT executed.")
 
 
 def require(condition, message):
@@ -40,6 +42,25 @@ def acceptance(text):
                 for key in ("run_id", "scope_id", "state", "control_tool")), "Acceptance lacks owner identifiers.")
     require(value["state"] == "Accepted" and value["control_tool"] == "check_agent_run", "Wrong acceptance contract.")
     return value
+
+
+def is_unexecuted_rationale_rejection(failure_code, result):
+    return failure_code == "invalid_rationale" and result == REQUIRED_RATIONALE_ERROR
+
+
+def accepted_start_calls(calls):
+    accepted = []
+    for call in calls:
+        if call["name"] != "spawn_agent":
+            continue
+        if call.get("success") is False and is_unexecuted_rationale_rejection(
+                call.get("failure_code"), call.get("result")):
+            continue
+        require(call.get("success") is True and call.get("failure_code") is None,
+                "A child start lacks success or the exact unexecuted rationale rejection.")
+        acceptance(call["result"])
+        accepted.append(call)
+    return accepted
 
 
 def context_paths(request):
@@ -374,9 +395,9 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
             and binding["arrived_ns"] < binding["upstream_first_payload_ns"] < receipt["second_turn_ns"] < snapshot["release_ns"]
             and binding["upstream_first_payload_ns"] <= binding["bound_ns"] <= snapshot["release_ns"],
             "The parent probe did not complete under the actual child barrier.")
-    start_calls = [row for row in receipt["calls"] if row["name"] == "spawn_agent"
-                   and row.get("result") and acceptance(row["result"])["run_id"] == accepted["run_id"]]
-    require(len(start_calls) == 1, "The terminal lacks the exact original start occurrence.")
+    start_calls = accepted_start_calls(receipt["calls"])
+    require(len(start_calls) == 1 and acceptance(start_calls[0]["result"]) == accepted
+            and start_calls[0]["turn"] == 1, "The terminal lacks the one original initial-turn acceptance.")
     call_id, terminal = canonical_pairs(requests, accepted, start_calls[0]["id"], start_calls[0]["name"])
     positions = committed_positions(log, receipt["session_id"], accepted["run_id"], call_id)
     consumed = consumption["deliveries"][0]
@@ -399,7 +420,8 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
             and terminal.get("artifact_directory") == binding["paths"]["artifact_dir"], "The terminal paths differ from bound child storage.")
     calls = receipt["calls"]
     starts = [row for row in calls if row["name"] == "spawn_agent"]
-    require(len(starts) == 1 and starts[0]["arguments"].get("Agent", starts[0]["arguments"].get("agent")) == "child-run-worker",
+    require(all(row["turn"] == 1 and row["arguments"].get("Agent", row["arguments"].get("agent")) == "child-run-worker"
+                for row in starts),
             "The fixed flow did not start the assigned child exactly once.")
     verify_child_actions(requests, binding["paths"], nonce, cancel)
     controls = [row for row in calls if row["name"] == "check_agent_run"]
@@ -616,9 +638,9 @@ def collect(port, prompt, session, output_format, evidence, case, prompt_ordinal
     log = session_logs(os.environ["EVAL_HOME"], receipt["session_id"],
                        [accepted["run_id"] for accepted in receipt["accepted_runs"]])
     deliveries = []
+    accepted_starts = accepted_start_calls(receipt["calls"])
     for accepted in receipt["accepted_runs"]:
-        starts = [call for call in receipt["calls"] if call["name"] == "spawn_agent"
-                  and call.get("result") and acceptance(call["result"])["run_id"] == accepted["run_id"]]
+        starts = [call for call in accepted_starts if acceptance(call["result"]) == accepted]
         require(len(starts) == 1, "The legacy terminal lacks the exact original start occurrence.")
         call_id, terminal = canonical_pairs(requests, accepted, starts[0]["id"], starts[0]["name"])
         require(terminal.get("outcome") == "Completed", "A legacy child did not complete normally.")
