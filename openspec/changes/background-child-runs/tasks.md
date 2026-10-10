@@ -159,7 +159,7 @@ Live child-adoption regression at `f6685d5f`:
 - [x] 8.3 Add minimum runtime `AGENTS.md` guidance; verify it describes background acceptance, deferred control, partial result review, and cancel/recreate only.
 - [x] 8.4 Update `subagent-authoring` and `netclaw-operations` versions; verify instructions advertise no deferred messages or restored tool ceilings.
 - [x] 8.5 Run targeted identity/tool/skill evals for those changed instructions; verify selected resource and control receipts satisfy the actual task.
-- [ ] 8.6 Run applicable builds, required tests, Slopwatch, and copyright-header verification; retain exact candidate and meaningful test counts.
+- [x] 8.6 Run applicable builds, required tests, Slopwatch, and copyright-header verification; retain exact candidate and meaningful test counts.
 - [x] 8.7 Validate the OpenSpec change strictly and sync implemented deltas through the appropriate skill; verify the PRD and active plan trace to the final contract.
 - [x] 8.8 Prepare rollback and evidence handoff for the combined PR; verify no merge, rollout, publication, or database replacement is implied by local passes.
 
@@ -173,6 +173,17 @@ Contract reconciliation at `94c63470`:
 - Independent receipt SHA is `a842a428c3e3e92da16c97a5e487f43553befc30c196d0e014b48ddec7aee072`. Root verifies all 32 source document pins.
 - This closes task 8.7 only. Tasks 7.9 and 8.6 remain open, along with broader model, private replay, shadow, and holdout gates.
 - No archive, merge, rollout, live publication, or database operation follows from this document proof.
+
+Independent background quality audit at `4191d1b7`:
+
+- The background runtime and its applicable tests match the hosted `7e44b2bb` source. All 29 hosted checks pass.
+- The actual CI merge tree equals the published head tree. All three platform test jobs and both native smoke jobs pass.
+- The separate focused records retain 177 actor passes and six authority passes without skips. Hosted platform and category skips remain explicit.
+- Independent review verifies 32 source pins, ten retained review receipts, and the four process-case results.
+- Root verifies those source pins against the committed candidate. The independent receipt SHA is `b349330dee7011899ea009d6c412cb20f52086844e3c973e55c0c22b8af605b9`.
+- This closes task 8.6 for the background build, test, and quality scope. Task 7.9 retains the integrated model and inherited recurrence gaps.
+- A later trivial-task observation passes its task oracle but fails final file checks after the retained helper directory disappears.
+- That current evidence fault stops its cohort. It supplies no completed consumer receipt and does not alter earlier hosted results.
 
 Rollback instructions and evidence handoff at `a3488e95`:
 
