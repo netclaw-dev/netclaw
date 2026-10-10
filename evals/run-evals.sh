@@ -967,7 +967,7 @@ check_daemon_alive() {
 
 child_result_consumer() {
     case "${case_name:-$FILTER_CASE}" in
-        subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff) return 0 ;;
+        subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff|coordination_analyze_plan|coordination_attachment_blocked) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1473,6 +1473,43 @@ assert_skill_coordination_discovery() {
     headless_log=$(stdout_json_headless_log_path) || return 1
     python3 "$REPO_ROOT/evals/coordination_evals.py" "$STDOUT_FILE" "$headless_log" \
         "$EVAL_ASSET_ROOT/feeds/skills/.system/files/agent-coordination"
+}
+
+prepare_coordination_config() {
+    if [[ "$FILTER_CASE" != coordination_attachment_blocked ]]; then return; fi
+    local denied_config="$TMPDIR_EVAL/child-runs/coordination-blocked-config.json"
+    python3 "$REPO_ROOT/evals/coordination_workflow_evals.py" blocked-config \
+        --source "${NETCLAW_EVAL_CONFIG_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/netclaw.json}" \
+        --destination "$denied_config"
+    export NETCLAW_EVAL_CONFIG_FILE="$denied_config"
+}
+
+setup_coordination_analyze_plan() {
+    COORDINATION_CASE_EVIDENCE="$TMPDIR_EVAL/child-runs/coordination-case"
+    COORDINATION_PROMPT=$(python3 "$REPO_ROOT/evals/coordination_workflow_evals.py" prepare \
+        --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
+        --eval-home "$EVAL_HOME" --evidence "$COORDINATION_CASE_EVIDENCE")
+}
+
+setup_coordination_attachment_blocked() {
+    setup_coordination_analyze_plan "$1"
+}
+
+assert_coordination_analyze_plan() {
+    local evidence="${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}"
+    python3 "$REPO_ROOT/evals/coordination_workflow_evals.py" contract \
+        --case "$case_name" --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
+        --eval-home "$EVAL_HOME" --setup-directory "$COORDINATION_CASE_EVIDENCE" \
+        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" > "$evidence/coordination-contract.json" || return 1
+    python3 "$REPO_ROOT/evals/coordination_artifact_evals.py" \
+        --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
+        --eval-home "$EVAL_HOME" --contract "$evidence/coordination-contract.json" \
+        --receipt "$evidence/observer-receipt.json" --events "$evidence/session-output.jsonl" \
+        > "$evidence/coordination-verdict.json"
+}
+
+assert_coordination_attachment_blocked() {
+    assert_coordination_analyze_plan
 }
 
 assert_skill_device_pairing_procedure() {
@@ -3127,6 +3164,7 @@ run_case() {
         rendered_prompt="${rendered_prompt//\{\{MANAGED_WORKTREE_BRANCH\}\}/${MANAGED_WORKTREE_BRANCH:-}}"
         rendered_prompt="${rendered_prompt//\{\{CYCLE_PROMPT\}\}/${CYCLE_PROMPT:-}}"
         rendered_prompt="${rendered_prompt//\{\{EVAL_REMINDER_TARGET\}\}/${EVAL_REMINDER_TARGET:-}}"
+        rendered_prompt="${rendered_prompt//\{\{COORDINATION_PROMPT\}\}/${COORDINATION_PROMPT:-}}"
         local prompt_failed=false
         if ! run_prompt "$rendered_prompt" "$output_format"; then
             prompt_failed=true
@@ -3218,6 +3256,12 @@ run_all() {
 
     run_case --json skill_coordination_discovery "loads coordination and the single implementation/review workflow" \
         "We need a substantial code change with an independent review of the finished patch. Before we choose the concrete change, explain your implementation-then-review process, how you will protect my checkout, and how you will verify the exact candidate. Do not start a child, edit files, or run commands yet."
+
+    if [[ "$FILTER_CASE" == coordination_analyze_plan ]]; then
+        run_case --json coordination_analyze_plan "reviews child findings and delivers the complete plan" '{{COORDINATION_PROMPT}}'
+    elif [[ "$FILTER_CASE" == coordination_attachment_blocked ]]; then
+        run_case --json coordination_attachment_blocked "reviews the plan and retains actual attachment denial" '{{COORDINATION_PROMPT}}'
+    fi
 
     run_case skill_device_pairing_procedure "reads the container pairing procedure" \
         "First call skill_load with Name=netclaw-operations and _rationale='Load the operations guide.' After that result, call skill_read_resource with SkillName=netclaw-operations, ResourcePath=references/devices.md, and _rationale='Read the device procedure.' Then tell me how to generate a pairing code inside a daemon container without changing its exposure mode."
@@ -3710,6 +3754,7 @@ main() {
         EVAL_PROVIDER_API_KEY=""
         export EVAL_HOME EVAL_PORT PROMPT_TIMEOUT NETCLAW_CHILD_OBSERVER TMPDIR_EVAL
     fi
+    prepare_coordination_config
     start_eval_daemon
     init_db
     seed_eval_memories
