@@ -665,6 +665,13 @@ Other malformed status text remains an error. A correction does not authorize ch
 The observer retains the exact `invalid_rationale` rejection before execution as a failed start attempt.
 The model can correct that attempt through the normal tool path.
 The held and cancel cases still require one accepted child before the initial parent turn ends.
+The parent must explicitly load `check_agent_run` before its selected control call.
+The oracle checks the successful load result before that call in actual parent provider history.
+A loaded schema can persist across turns. The oracle does not require a second load in the probe turn.
+The selected status must follow the held payload and name that child's exact owner, log, artifact directory, and state.
+The held case permits that recorded status in the first or second turn.
+The second turn still requires a fresh, attributed live-log read and the visible probe reply before release.
+Recorded status does not prove current provider health or schema retention after restart.
 The collector permits multiple accepted children. Every rejection retains its trusted DTO failure code and exact result.
 To replay the captured status sequence through the helper controls, append its `session-output.jsonl` path:
 
@@ -678,7 +685,7 @@ The runner archives actual provider bytes, child paths, commit diagnostics, and 
 The CLI acceptance smoke remains separate from the persistent-result cases.
 
 The cancel case requires an actual `agent-coordination` load in the first parent turn.
-The parent loads the deferred control in the second turn.
+The parent cancels the child in the second turn, after its live-log read.
 The oracle checks cancellation admission and dispatch closure as separate status facts.
 After terminal consumption, the parent must fully read the actual framework report and the confirmed partial artifact.
 The parent must also obtain explicit dispatch closure and the matching cancelled terminal through status.
