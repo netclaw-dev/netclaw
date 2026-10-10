@@ -19,7 +19,7 @@ import unittest
 from unittest.mock import patch
 
 from child_run_evals import (CHILD_CONTRACT, REQUIRED_RATIONALE_ERROR, ChildFixture, acceptance, accepted_start_calls, actual_file, bind_request,
-                             canonical_pairs, child_handler, committed_positions, consumed_deliveries, collect, legacy_observer_mode, session_logs, validate_prompt_receipt, verified_final_response, verify_child_actions, verify_cli_acceptance, verify_trial, write_completed)
+                             canonical_pairs, child_handler, committed_positions, consumed_deliveries, collect, legacy_observer_mode, read_cancellation_report, session_logs, validate_prompt_receipt, verified_final_response, verify_child_actions, verify_cli_acceptance, verify_trial, write_completed)
 
 ACCEPTED = {"run_id": "run-neutral", "scope_id": "scope-neutral", "state": "Accepted", "control_tool": "check_agent_run"}
 ROOT = "/home/netclaw/.netclaw/sessions/neutral/subagents/neutral"
@@ -582,7 +582,83 @@ run_multi_turn_case coding_context_worktree_handoff neutral one two three four
                     actual_file(home, path)
 
 
+class CancellationReportReadControls(unittest.TestCase):
+    def test_owner_read_preserves_one_exact_payload_and_uses_no_shell(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as evidence:
+            path = PATHS["artifact_dir"] + "/cancelled-results.json"
+            target = actual_file(home, path)
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"host bytes must not supply the proof")
+            body = b'{"summary":"actual owner bytes"}\r\n'
+            with patch.dict(os.environ, {"EVAL_CONTAINER_NAME": "owned-neutral-container", "TMPDIR_EVAL": evidence}), \
+                 patch("child_run_evals.subprocess.run", return_value=subprocess.CompletedProcess([], 0, body, b"")) as execute, \
+                 patch.object(Path, "read_bytes", side_effect=PermissionError("The host cannot read the report")):
+                self.assertEqual(body, read_cancellation_report(home, path, PATHS["artifact_dir"]))
+            execute.assert_called_once_with(["docker", "exec", "--user", "netclaw", "owned-neutral-container", "cat", "--", path],
+                                            capture_output=True, check=True, timeout=30)
+            self.assertEqual(body, (Path(evidence) / "child-runs/actual-cancelled-results.json").read_bytes())
+
+    def test_wrong_foreign_link_and_nonregular_paths_fail_before_container_read(self):
+        with tempfile.TemporaryDirectory() as home, patch("child_run_evals.subprocess.run") as execute:
+            path = PATHS["artifact_dir"] + "/cancelled-results.json"
+            target = actual_file(home, path)
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"{}")
+            for bad in [PATHS["artifact_dir"] + "/other.json", "/tmp/cancelled-results.json",
+                        PATHS["artifact_dir"] + "/../cancelled-results.json", path.replace("/artifacts/", "/artifacts//")]:
+                with self.subTest(path=bad), self.assertRaises(AssertionError):
+                    read_cancellation_report(home, bad, PATHS["artifact_dir"])
+            other = target.with_name("other.json")
+            other.write_bytes(b"{}")
+            target.unlink()
+            target.symlink_to(other)
+            with self.assertRaises(AssertionError):
+                read_cancellation_report(home, path, PATHS["artifact_dir"])
+            target.unlink()
+            target.mkdir()
+            with self.assertRaises(AssertionError):
+                read_cancellation_report(home, path, PATHS["artifact_dir"])
+            target.rmdir()
+            other.unlink()
+            target.parent.rmdir()
+            relocated = target.parent.with_name("real-artifacts")
+            relocated.mkdir()
+            (relocated / target.name).write_bytes(b"{}")
+            target.parent.symlink_to(relocated, target_is_directory=True)
+            with self.assertRaises(AssertionError):
+                read_cancellation_report(home, path, PATHS["artifact_dir"])
+            execute.assert_not_called()
+
+    def test_failed_owner_read_and_timeout_are_fatal_without_capture(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as evidence:
+            path = PATHS["artifact_dir"] + "/cancelled-results.json"
+            target = actual_file(home, path)
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"{}")
+            with patch.dict(os.environ, {"EVAL_CONTAINER_NAME": "owned-neutral-container", "TMPDIR_EVAL": evidence}):
+                for failure in [subprocess.CalledProcessError(1, ["docker"], stderr=b"Permission denied"),
+                                subprocess.TimeoutExpired(["docker"], 30)]:
+                    with self.subTest(failure=type(failure).__name__), \
+                         patch("child_run_evals.subprocess.run", side_effect=failure), self.assertRaises(type(failure)):
+                        read_cancellation_report(home, path, PATHS["artifact_dir"])
+            self.assertFalse((Path(evidence) / "child-runs/actual-cancelled-results.json").exists())
+
+
 class TrialOracleControls(unittest.TestCase):
+    def setUp(self):
+        evidence = tempfile.TemporaryDirectory()
+        self.addCleanup(evidence.cleanup)
+        environment = patch.dict(os.environ, {"TMPDIR_EVAL": evidence.name, "EVAL_CONTAINER_NAME": "owned-neutral-container"})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.report_home = None
+        transport = patch("child_run_evals.subprocess.run", side_effect=self.read_report)
+        self.transport = transport.start()
+        self.addCleanup(transport.stop)
+
+    def read_report(self, command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, actual_file(self.report_home, command[-1]).read_bytes(), b"")
+
     def test_repaired_initial_start_preserves_complete_held_and_cancel_flow(self):
         for cancel in [False, True]:
             with self.subTest(cancel=cancel), tempfile.TemporaryDirectory() as home:
@@ -607,6 +683,7 @@ class TrialOracleControls(unittest.TestCase):
                                      logs(), home, "neutral-nonce", cancel)
 
     def sample(self, home, cancel=False):
+        self.report_home = home
         for canonical in [PATHS["log_path"], PATHS["artifact_dir"] + ("/partial-neutral-nonce.txt" if cancel else "/complete-neutral-nonce.txt")]:
             path = actual_file(home, canonical)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -648,7 +725,7 @@ class TrialOracleControls(unittest.TestCase):
                 {"name": "check_agent_run", "arguments": {"RunId": ACCEPTED["run_id"], "Cancel": False},
                  "success": True, "turn": 2, "observed_ns": 36,
                  "result": json.dumps({**STATUS, "state": "Cancelled", "cancellation_requested": True,
-                                        "dispatch_closed": True, "terminal": terminal(True)})}])
+                                        "dispatch_closed": True, "terminal": json.dumps(terminal(True))})}])
         return receipt, snapshot
 
     def test_valid_held_flow_requires_runtime_provider_and_actual_artifact_evidence(self):
@@ -719,6 +796,28 @@ class TrialOracleControls(unittest.TestCase):
             self.assertTrue(verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
                                          logs(), home, "neutral-nonce", True)["passed"])
 
+    def test_cancel_reads_report_once_and_rejects_malformed_owner_bytes(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home, True)
+            path = actual_file(home, PATHS["artifact_dir"] + "/cancelled-results.json")
+            body = path.read_bytes()
+            self.assertTrue(verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
+                                         logs(), home, "neutral-nonce", True)["passed"])
+            self.transport.assert_called_once()
+            capture = Path(os.environ["TMPDIR_EVAL"]) / "child-runs/actual-cancelled-results.json"
+            self.assertEqual(body, capture.read_bytes())
+            for malformed in [b"\xff", b"not JSON", b"[]", b'{"run_id":"foreign","run_id":"run-neutral"}']:
+                self.transport.return_value = subprocess.CompletedProcess([], 0, malformed, b"")
+                self.transport.side_effect = None
+                with self.subTest(body=malformed), self.assertRaises((AssertionError, ValueError)):
+                    verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
+                                 logs(), home, "neutral-nonce", True)
+                self.assertEqual(malformed, capture.read_bytes())
+            self.transport.return_value = subprocess.CompletedProcess([], 0, body + b"\r\n", b"")
+            with self.assertRaisesRegex(AssertionError, "full actual partial-report read"):
+                verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
+                             logs(), home, "neutral-nonce", True)
+
     def test_cancel_requires_guidance_actual_report_read_and_explicit_closure(self):
         with tempfile.TemporaryDirectory() as home:
             receipt, snapshot = self.sample(home, True)
@@ -733,23 +832,49 @@ class TrialOracleControls(unittest.TestCase):
                              "cancellation_requested": True, "dispatch_closed": False, "terminal": None})),
                          lambda r: r["calls"][7].update(result=json.dumps({**STATUS,
                              "scope_id": "foreign", "state": "Cancelled", "cancellation_requested": True,
-                             "dispatch_closed": True, "terminal": terminal(True)})),
+                             "dispatch_closed": True, "terminal": json.dumps(terminal(True))})),
                          lambda r: r["calls"][7].update(result=json.dumps({**STATUS,
                              "state": "Cancelled", "cancellation_requested": True,
-                             "dispatch_closed": 1, "terminal": terminal(True)})),
+                             "dispatch_closed": 1, "terminal": json.dumps(terminal(True))})),
                          lambda r: r["calls"][7].update(result=json.dumps({**STATUS,
                              "state": "Cancelled", "cancellation_requested": True,
-                             "dispatch_closed": True, "terminal": {**terminal(True), "scope_id": "foreign"}})),
+                             "dispatch_closed": True, "terminal": json.dumps({**terminal(True), "scope_id": "foreign"})})),
                          lambda r: r["calls"][2].update(result=json.dumps({**STATUS,
                              "state": "Cancelling", "cancellation_requested": 1,
                              "dispatch_closed": False, "terminal": None})),
                          lambda r: r["calls"][2].update(result=json.dumps({**STATUS,
                              "state": "Cancelled", "cancellation_requested": True,
-                             "dispatch_closed": False, "terminal": terminal(True)}))]
+                             "dispatch_closed": False, "terminal": json.dumps(terminal(True))}))]
             for index, mutate in enumerate(mutations):
                 changed = copy.deepcopy(receipt)
                 mutate(changed)
                 with self.subTest(fault=index), self.assertRaises(AssertionError):
+                    verify_trial(changed, [child_after_write(True), parent(terminal(True))], snapshot,
+                                 logs(), home, "neutral-nonce", True)
+
+    def test_cancel_status_requires_exact_terminal_json_string(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home, True)
+            self.assertTrue(verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
+                                         logs(), home, "neutral-nonce", True)["passed"])
+            valid_status = json.loads(receipt["calls"][7]["result"])
+            self.assertIsInstance(valid_status["terminal"], str)
+            changed = copy.deepcopy(receipt)
+            del valid_status["terminal"]
+            changed["calls"][7]["result"] = json.dumps(valid_status)
+            with self.assertRaisesRegex(AssertionError, "canonical JSON-string representation"):
+                verify_trial(changed, [child_after_write(True), parent(terminal(True))], snapshot,
+                             logs(), home, "neutral-nonce", True)
+            valid_status = json.loads(receipt["calls"][7]["result"])
+            for bad in [None, terminal(True), "not JSON", "[]",
+                        '{"run_id":"foreign",' + json.dumps(terminal(True))[1:],
+                        json.dumps(terminal(True))[:-1] + ',"extra":{"scope":"foreign","scope":"owner"}}',
+                        json.dumps({**terminal(True), "run_id": "foreign"}),
+                        json.dumps({**terminal(True), "scope_id": "foreign"}),
+                        json.dumps({**terminal(True), "reason": "other"})]:
+                changed = copy.deepcopy(receipt)
+                changed["calls"][7]["result"] = json.dumps({**valid_status, "terminal": bad})
+                with self.subTest(terminal=bad), self.assertRaises((AssertionError, ValueError)):
                     verify_trial(changed, [child_after_write(True), parent(terminal(True))], snapshot,
                                  logs(), home, "neutral-nonce", True)
 
