@@ -324,6 +324,7 @@ jobs:
           python3 -m unittest discover -s evals -p test_productive_parent_child_evals.py -v
           python3 -m unittest discover -s evals -p test_coordination_implement_review_evals.py -v
           python3 -m unittest discover -s evals -p test_coordination_stale_incomplete_evals.py -v
+          python3 -m unittest discover -s evals -p test_coordination_conflicting_evidence_evals.py -v
           python3 -m unittest discover -s evals -p test_cycle_evals.py -v
           python3 -m unittest discover -s evals -p test_cli_detector_evals.py -v
           python3 -m unittest discover -s evals -p test_spill_steer_evals.py -v
