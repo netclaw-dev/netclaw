@@ -1,6 +1,8 @@
 # Plan: <objective>
 
 Replace required placeholders. Reference reviewed findings by ID.
+Put only the exact supplied source identity in Source revision.
+Put identity explanations on separate lines.
 
 ## Problem And Accepted Outcome
 
@@ -19,13 +21,13 @@ Replace required placeholders. Reference reviewed findings by ID.
 
 | Step | Action and owner | Finding IDs | Acceptance evidence | Dependencies |
 |---|---|---|---|---|
-| 1 | <action and owner> | <IDs> | <observable pass/fail check> | <dependency> |
+| A1 | <action and owner> | F1 | C1: <check> | <dependency> |
 
 ## Risks And De-risk Steps
 
 | Risk | Why the proposed change is safe | Required check | Remaining limit |
 |---|---|---|---|
-| <specific failure> | <existing boundary or precise mitigation> | <paired valid/invalid check> | <unproven claim> |
+| R1: <risk> | <existing boundary or precise mitigation> | C1: <paired check> | <unproven claim> |
 
 ## Open Decisions
 

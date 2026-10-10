@@ -180,7 +180,8 @@ Return only JSON with candidate_commit, source_sha256, worker_report, review_rep
 Set worker_report to the absolute path string {setup['worker_report']}.
 Set review_report to the absolute path string {setup['review_report']}.
 Set unresolved_findings to the actual reviewer findings. Set integration to "not_performed".
-Report local checks separately from CI, release, or deployment. Do not claim any of those later states.
+Keep local check evidence in the worker and review reports.
+Distinguish local checks from CI, release, and deployment in those reports. Do not claim any of those later states.
 '''.rstrip("\n")
 
 

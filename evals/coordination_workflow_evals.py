@@ -84,9 +84,14 @@ Use the findings and plan template sections and columns. Complete every field wi
 Use this reference schema so the artifacts have stable traceability:
 E1 and F1 concern Catalog.refresh. E2 and F2 concern Catalog.read.
 Each evidence row must cite the exact relevant source lines, their line range, and the source identity.
+Put literal relevant source excerpts in each Evidence table Observation cell.
+Put Catalog.refresh in F1's Component owner cell and Catalog.read in F2's Component owner cell.
 Use A1/C1 for the duplicate-rejection and prior-state check, owned by Catalog.refresh and linked to F1.
 Use A2/C2 for the valid-record order check, owned by Catalog.read and linked to F2.
 Use R1 for the risk to prior state and valid order. Link it to C1 and C2.
+Put A1 and A2 in the Step column. Put their F1 and F2 links in the Finding IDs column.
+Put C1 and C2 with their checks in the corresponding Acceptance evidence cells.
+Put R1 in one Risk cell. Put its C1 and C2 links in the Required check cell.
 Use Q1 for the unresolved identifier case rule, with decision owner User.
 State actual checks and their limits. A plan does not prove implementation, CI, release, or deployment.
 The parent may read authorized case files, inspect status, assign stages, and attach the plan.

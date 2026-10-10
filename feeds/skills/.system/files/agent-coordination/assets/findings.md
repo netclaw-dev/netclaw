@@ -1,6 +1,8 @@
 # Findings: <objective>
 
 Replace required placeholders. Use evidence instead of invented certainty.
+Put only the exact supplied source identity in Source revision.
+Put identity explanations on separate lines.
 
 ## Scope
 
