@@ -580,6 +580,18 @@ class TrialOracleControls(unittest.TestCase):
                       "confirmed_activity": checkpoint["ConfirmedActivity"],
                       "external_effects": "Recorded receipts describe known local results. They do not prove external effects stopped."}
             actual_file(home, PATHS["artifact_dir"] + "/cancelled-results.json").write_text(json.dumps(report))
+            calls[2].update(observed_ns=25, result=json.dumps({**STATUS, "state": "Cancelling",
+                "cancellation_requested": True, "dispatch_closed": False, "terminal": None}))
+            calls.extend([
+                {"name": "skill_load", "arguments": {"Name": "agent-coordination"}, "success": True,
+                 "turn": 1, "observed_ns": 7,
+                 "result": "A cancellation acceptance does not prove dispatch closure or terminal completion."},
+                {"name": "file_read", "arguments": {"Path": PATHS["artifact_dir"] + "/cancelled-results.json"},
+                 "success": True, "turn": 2, "observed_ns": 34, "result": json.dumps(report)},
+                {"name": "check_agent_run", "arguments": {"RunId": ACCEPTED["run_id"], "Cancel": False},
+                 "success": True, "turn": 2, "observed_ns": 36,
+                 "result": json.dumps({**STATUS, "state": "Cancelled", "cancellation_requested": True,
+                                        "dispatch_closed": True, "terminal": terminal(True)})}])
         return receipt, snapshot
 
     def test_valid_held_flow_requires_runtime_provider_and_actual_artifact_evidence(self):
@@ -649,6 +661,40 @@ class TrialOracleControls(unittest.TestCase):
             receipt["last_reply"] += " PARENT-PROBE-neutral-nonce"
             self.assertTrue(verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
                                          logs(), home, "neutral-nonce", True)["passed"])
+
+    def test_cancel_requires_guidance_actual_report_read_and_explicit_closure(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home, True)
+            mutations = [lambda r: r["calls"].pop(5),
+                         lambda r: r["calls"][5].update(success=False),
+                         lambda r: r["calls"].pop(6),
+                         lambda r: r["calls"][6]["arguments"].update(Limit=1),
+                         lambda r: r["calls"][6].update(result="A partial report summary."),
+                         lambda r: r["calls"][6].update(observed_ns=31),
+                         lambda r: r["calls"].pop(7),
+                         lambda r: r["calls"][7].update(result=json.dumps({**STATUS,
+                             "cancellation_requested": True, "dispatch_closed": False, "terminal": None})),
+                         lambda r: r["calls"][7].update(result=json.dumps({**STATUS,
+                             "scope_id": "foreign", "state": "Cancelled", "cancellation_requested": True,
+                             "dispatch_closed": True, "terminal": terminal(True)})),
+                         lambda r: r["calls"][7].update(result=json.dumps({**STATUS,
+                             "state": "Cancelled", "cancellation_requested": True,
+                             "dispatch_closed": 1, "terminal": terminal(True)})),
+                         lambda r: r["calls"][7].update(result=json.dumps({**STATUS,
+                             "state": "Cancelled", "cancellation_requested": True,
+                             "dispatch_closed": True, "terminal": {**terminal(True), "scope_id": "foreign"}})),
+                         lambda r: r["calls"][2].update(result=json.dumps({**STATUS,
+                             "state": "Cancelling", "cancellation_requested": 1,
+                             "dispatch_closed": False, "terminal": None})),
+                         lambda r: r["calls"][2].update(result=json.dumps({**STATUS,
+                             "state": "Cancelled", "cancellation_requested": True,
+                             "dispatch_closed": False, "terminal": terminal(True)}))]
+            for index, mutate in enumerate(mutations):
+                changed = copy.deepcopy(receipt)
+                mutate(changed)
+                with self.subTest(fault=index), self.assertRaises(AssertionError):
+                    verify_trial(changed, [child_after_write(True), parent(terminal(True))], snapshot,
+                                 logs(), home, "neutral-nonce", True)
 
     def test_partial_requires_exact_checkpoint_and_actual_run_local_report(self):
         with tempfile.TemporaryDirectory() as home:
