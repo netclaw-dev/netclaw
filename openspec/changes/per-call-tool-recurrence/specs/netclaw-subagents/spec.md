@@ -96,3 +96,32 @@ It SHALL NOT substitute success for an absent receipt or create a durable child-
 - **WHEN** the subagent executes tool calls
 - **THEN** tool execution context audience is `team`
 - **AND** routed execution does not widen audience to a broader default
+
+### Requirement: Sub-agent approval outcomes settle exactly once
+
+Each sub-agent approval-gated tool call SHALL settle exactly once as approved, denied, timed out, or cancelled. Approved decisions SHALL retry only the blocked call with retry-local approval state. Denied and timed-out decisions SHALL become tool-result messages visible to the sub-agent LLM. Cancellation and actor termination SHALL not produce duplicate `SubAgentResult` messages.
+
+#### Scenario: Approve once is retry-local
+- **GIVEN** a sub-agent approval-gated tool call is approved once
+- **WHEN** the sub-agent retries the blocked call
+- **THEN** the retry-local approval applies only to that tool call
+- **AND** sibling calls, later tool iterations, and later sub-agent runs still require approval when policy requires it
+
+#### Scenario: Denied approval becomes tool result
+- **GIVEN** a sub-agent approval-gated tool call is denied by the user
+- **WHEN** the approval decision is delivered
+- **THEN** the tool is not executed
+- **AND** the sub-agent receives a tool-result message explaining that approval was denied
+- **AND** the sub-agent may continue or finish under the recurrence and operation health rules
+
+#### Scenario: Timed-out approval becomes tool result
+- **GIVEN** a sub-agent approval-gated tool call receives an expired or timed-out approval decision
+- **WHEN** the decision is delivered to the sub-agent
+- **THEN** the tool is not executed
+- **AND** the sub-agent receives a tool-result message explaining that approval timed out
+
+#### Scenario: Terminal races complete once
+- **GIVEN** a sub-agent has an in-flight approval wait
+- **WHEN** cancellation, timeout, and approval completion messages race
+- **THEN** the sub-agent sends at most one `SubAgentResult` to the caller
+- **AND** the first terminal path wins

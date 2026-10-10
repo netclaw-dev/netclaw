@@ -81,7 +81,7 @@ Preparation evidence:
 ## 7. Integrated health, evals, and sensitive fault controls
 
 - [x] 7.1 Extend the existing background relay with explicit parent/child request IDs and barriers; verify setup/sidecar calls cannot consume child script stages.
-- [ ] 7.2 Add targeted Subagents and background cases for acceptance, routed starts, controls, cancellation, prompts, and recovery; verify actual dispatch and artifact evidence.
+- [x] 7.2 Add targeted Subagents and background cases for acceptance, routed starts, controls, cancellation, prompts, and recovery; verify actual dispatch and artifact evidence.
 - [x] 7.3 Preserve queued-grant revocation, shell lifecycle, and PR 1 long-task controls; verify the combined candidate passes those unchanged boundaries.
 - [x] 7.4 Hold several accepted child requests. Verify independent parent dispatch and locally responsive status/cancel without provider-capacity coordination.
 - [x] 7.5 Hold a child on the selected real backend that accepts concurrent requests. Verify a parent reply before child release in five critical-case trials.
@@ -89,6 +89,20 @@ Preparation evidence:
 - [x] 7.7 Demonstrate rejection of duplicate start, early terminal acknowledgement, late dispatch, stale approval prompt, and delivery-reset mutants in isolation.
 - [x] 7.8 Keep any new focused mutation target narrow and inside the documented CI budget; verify expected mutants execute and none survives.
 - [ ] 7.9 Require an independent verifier to inspect integrated results and assertions; verify no skipped cases, weakened gates, or author-only pass claims remain.
+
+Targeted process-case evidence at `7e44b2bb`:
+
+- Independent review maps each task 7.2 surface to actual dispatch and artifact evidence. Its receipt SHA is `504933f4cefdcf36eb09c6a24305ca10cfd65557acb398a43510417aa6324454`.
+- Fresh routed observation 02 proves acceptance, routed activation, owner status, live log access, and complete terminal artifact consumption.
+- Its independent receipt SHA is `1104c06da37f4ef4843fc3ee38adc9a6fe05e1d7debdf587da10e1a112e7584a`.
+- Fresh approval observation 04 proves the actual prompt, original authority, answer, and one protected effect.
+- Fresh cancellation observation 02 proves cancellation at an open prompt, retained partial bytes, and stale-answer rejection.
+- Their independent receipt SHA is `4b20094150460374f9007fb47eee43ab44b29fe6033e6673bf1bb3759acb3734`.
+- Fresh owner-recovery observation 02 proves actual process replacement, canonical `Lost`, and complete partial-artifact consumption.
+- Its independent receipt SHA is `5b2f687df79bbb4d23c0a43bfd4bcccf2d9ee60d59dafebb071f139c86f3b469`.
+- Each fresh process lane rejects four altered actual records. All earlier false observations retain their original verdicts.
+- Root verifies the five current source pins and four retained independent receipts against the review map.
+- This closes task 7.2 only. Recovery remains journal-only; broader model acceptance, task 7.9, and final quality gates remain open.
 
 Bounded relay and response-order evidence:
 
