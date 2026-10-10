@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 
-from child_run_evals import actual_file, legacy_observer_mode
+from child_run_evals import REQUIRED_RATIONALE_ERROR, actual_file, legacy_observer_mode
 from productive_parent_child_evals import CASE, archive_outputs, encode, prepare, prompt, records, verify
 from test_coordination_workflow_evals import shell_functions
 from test_child_run_evals import ACCEPTED, child, parent, terminal
@@ -82,6 +82,31 @@ class ProductiveParentChildControls(unittest.TestCase):
         result = verify(*self.args)
         self.assertEqual((65, 35), (result["parent_feedback_rounds"], result["child_feedback_rounds"]))
         self.assertTrue(result["passed"])
+
+    def test_exact_rejected_attempt_requires_provider_pair_before_productive_repair(self):
+        setup, receipt, events, requests, home = self.args
+        arguments = {"Agent": "task-worker", "Task": "The initial assigned catalog task."}
+        events[:0] = [
+            {"output": {"Type": "tool_call", "SessionId": "session-neutral", "CallId": "rejected-start",
+                        "ToolName": "spawn_agent", "ArgumentsJson": json.dumps(arguments)}},
+            {"output": {"Type": "tool_result", "SessionId": "session-neutral", "CallId": "rejected-start",
+                        "ToolName": "spawn_agent", "ToolFailureCode": "invalid_rationale", "Result": REQUIRED_RATIONALE_ERROR}}]
+        resequence(events)
+        messages = [
+            {"role": "assistant", "tool_calls": [{"id": "rejected-start", "function": {
+                "name": "spawn_agent", "arguments": json.dumps(arguments)}}]},
+            {"role": "tool", "tool_call_id": "rejected-start", "content": REQUIRED_RATIONALE_ERROR}]
+        requests[0]["messages"][1:1] = messages
+        self.assertTrue(verify(*self.args)["passed"])
+        for field, value in [("ToolFailureCode", "unknown_agent"), ("ToolFailureCode", None),
+                             ("Result", REQUIRED_RATIONALE_ERROR + " suffix")]:
+            changed = copy.deepcopy(self.args)
+            changed[2][1]["output"][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(AssertionError):
+                verify(*changed)
+        remove_pair(requests[0], "rejected-start")
+        with self.assertRaisesRegex(AssertionError, "paired provider acceptance"):
+            verify(*self.args)
 
     def test_missing_parent_or_child_round_cannot_use_the_other_actors_count(self):
         for index, identifier in ((0, "parent-64"), (1, "child-34")):
