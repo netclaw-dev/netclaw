@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Providers;
@@ -187,7 +189,22 @@ internal sealed class ReasoningSuppressionChatClient : DelegatingChatClient
         switch (_dialect)
         {
             case ReasoningSuppressionDialect.ChatTemplateKwargs:
-                properties["chat_template_kwargs"] = new Dictionary<string, object?> { ["enable_thinking"] = false };
+                properties.TryGetValue("chat_template_kwargs", out var existing);
+                var kwargs = existing switch
+                {
+                    null => new Dictionary<string, object?>(),
+                    IEnumerable<KeyValuePair<string, object?>> entries => new Dictionary<string, object?>(entries),
+                    _ => JsonSerializer.Deserialize<Dictionary<string, object?>>(JsonSerializer.Serialize(existing,
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web)
+                        {
+                            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+                        }))
+                        ?? throw new InvalidOperationException("chat_template_kwargs must be a JSON object.")
+                };
+                // Some templates combine both aliases with OR. Override both without loss of unrelated kwargs.
+                kwargs["enable_thinking"] = false;
+                kwargs["thinking"] = false;
+                properties["chat_template_kwargs"] = kwargs;
                 break;
 
             case ReasoningSuppressionDialect.OllamaThink:
