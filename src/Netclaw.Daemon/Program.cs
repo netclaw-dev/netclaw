@@ -411,6 +411,10 @@ static (NetclawPaths Paths, ModelSelection Models) ConfigureConfigServices(
     IConfigurationManager configuration,
     NetclawPaths bootstrapPaths)
 {
+    // A volume mount can relax secrets.json permissions after the previous write.
+    // Repair the mode before the configuration provider opens the file.
+    SecretsFileWriter.HardenExistingFile(bootstrapPaths.SecretsPath);
+
     // Initialize Data Protection for secrets encryption/decryption.
     // Must happen before config binding so SensitiveStringTypeConverter
     // can transparently decrypt ENC: values.
