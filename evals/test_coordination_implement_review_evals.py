@@ -346,6 +346,90 @@ class ImplementReviewControls(unittest.TestCase):
                 message["tool_call_id"] = "start-worker"
         self.assertTrue(verify(*args)["passed"])
 
+    def add_declaration(self, args, actor, path, result):
+        index = {"parent": 0, "worker": 1, "review": 2}[actor]
+        identifier = "declare-" + actor
+        arguments = {"Path": path}
+        args[3][index]["messages"][2:2] = [
+            {"role": "assistant", "tool_calls": [{"id": identifier, "function": {
+                "name": "set_working_directory", "arguments": json.dumps(arguments)}}]},
+            {"role": "tool", "tool_call_id": identifier, "content": result}]
+        if actor == "parent":
+            dtos = [
+                {"Type": "tool_call", "CallId": identifier, "ToolName": "set_working_directory", "ArgumentsJson": json.dumps(arguments)},
+                {"Type": "tool_result", "CallId": identifier, "ToolName": "set_working_directory", "Result": result, "ToolFailureCode": None}]
+            args[2][:0] = [{"output": {**d, "SessionId": args[1]["session_id"]}} for d in dtos]
+            for n, event in enumerate(args[2], 1):
+                event.update(sequence=n, observed_ns=n)
+
+    def test_named_parent_and_child_project_declarations_preserve_the_code_contract(self):
+        for parent_root in (self.args[0]["operator"], self.args[0]["worker"]):
+            args = copy.deepcopy(self.args)
+            self.add_declaration(args, "parent", parent_root, parent_root)
+            for actor in ("worker", "review"):
+                self.add_declaration(args, actor, args[0]["worker"], args[0]["worker"])
+            with self.subTest(parent_root=parent_root):
+                self.assertTrue(verify(*args)["passed"])
+
+    def test_wrong_actor_root_failed_or_unpaired_project_declarations_fail(self):
+        for actor in ("parent", "worker", "review"):
+            for mutation in ("root", "failed", "unpaired"):
+                args = copy.deepcopy(self.args)
+                root = args[0]["worker"]
+                path = args[0]["root"] if actor == "parent" else args[0]["operator"]
+                self.add_declaration(args, actor, path if mutation == "root" else root,
+                                     "Error: denied" if mutation == "failed" else (path if mutation == "root" else root))
+                if mutation == "unpaired":
+                    request = args[3][{"parent": 0, "worker": 1, "review": 2}[actor]]
+                    request["messages"][:] = [m for m in request["messages"] if m.get("tool_call_id") != "declare-" + actor]
+                with self.subTest(actor=actor, mutation=mutation):
+                    self.reject(args)
+
+    def test_parent_declaration_dto_and_provider_identity_must_match(self):
+        for mutation in ("id", "path", "result", "failure", "missing"):
+            args = copy.deepcopy(self.args)
+            root = args[0]["operator"]
+            self.add_declaration(args, "parent", root, root)
+            if mutation == "missing":
+                del args[2][:2]
+                for index, event in enumerate(args[2], 1):
+                    event.update(sequence=index, observed_ns=index)
+            elif mutation == "id":
+                for event in args[2][:2]:
+                    event["output"]["CallId"] = "foreign-declaration"
+            elif mutation == "path":
+                args[2][0]["output"]["ArgumentsJson"] = json.dumps({"Path": args[0]["worker"]})
+            elif mutation == "failure":
+                args[2][1]["output"]["ToolFailureCode"] = "authorization_denied"
+            else:
+                args[2][1]["output"]["Result"] = args[0]["worker"]
+            with self.subTest(mutation=mutation):
+                self.reject(args)
+
+    def test_foreign_parent_read_call_and_result_ids_cannot_borrow_real_provider_pairs(self):
+        args = copy.deepcopy(self.args)
+        for event in args[2]:
+            if event["output"].get("ToolName") == "file_read":
+                event["output"]["CallId"] = "foreign-" + event["output"]["CallId"]
+        self.reject(args)
+
+    def test_completed_parent_read_id_reuse_and_cumulative_capture_remain_valid(self):
+        args = copy.deepcopy(self.args)
+        identifiers = [e["output"]["CallId"] for e in args[2] if e["output"].get("Type") == "tool_call"
+                       and e["output"].get("ToolName") == "file_read"]
+        first, second = identifiers[:2]
+        for event in args[2]:
+            if event["output"].get("CallId") == second:
+                event["output"]["CallId"] = first
+        for message in args[3][0]["messages"]:
+            for call in message.get("tool_calls", []):
+                if call["id"] == second:
+                    call["id"] = first
+            if message.get("tool_call_id") == second:
+                message["tool_call_id"] = first
+        args[3].append(copy.deepcopy(args[3][0]))
+        self.assertTrue(verify(*args)["passed"])
+
     def test_actual_case_selection_uses_collect_and_excludes_default(self):
         self.assertEqual("collect", legacy_observer_mode(CASE, 1))
         functions = shell_functions("child_result_consumer", "run_all")
