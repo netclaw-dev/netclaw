@@ -867,6 +867,9 @@ The parent must report explicit uncertainty without a majority conclusion, a det
 A paired deterministic control supplies matching claims and actual raw records. It requires a resolved result from the successful check.
 
 The oracle checks actual accepted runs, terminal pairs, child contexts, full writes, parent reads, and exact DTO/provider call identities.
+It permits exact unexecuted parent metadata feedback only with its canonical failure code and matching provider pair.
+Every attempted action retains its authority checks. Rejected calls cannot replace a required successful read, child start, or check.
+Project declarations retain their separate canonical success requirement. The final reply must contain only the required JSON object.
 It preserves every source, report, dependency, and checker byte. It archives actual reports before the verdict.
 It rejects missing receipts, foreign identities, invented results, forbidden repairs, and unrelated commands.
 The fixture check uses the existing eval observation deadline. It creates no runtime timeout or recovery rule.
