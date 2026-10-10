@@ -1003,6 +1003,7 @@ check_daemon_alive() {
 
 child_result_consumer() {
     case "${case_name:-$FILTER_CASE}" in
+        skill_coordination_discovery) [[ "$FILTER_CASE" == skill_coordination_discovery ]] ;;
         subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff|coordination_analyze_plan|coordination_attachment_blocked|productive_parent_child|coordination_implement_review|coordination_stale_incomplete|coordination_conflicting_evidence) return 0 ;;
         *) return 1 ;;
     esac
@@ -1504,6 +1505,13 @@ assert_skill_progressive_disclosure() {
 }
 
 assert_skill_coordination_discovery() {
+    if [[ "$FILTER_CASE" == skill_coordination_discovery ]]; then
+        local evidence="${CHILD_LAST_EVIDENCE:?The current discovery observer evidence path is absent.}"
+        python3 "$REPO_ROOT/evals/coordination_evals.py" --observed "$evidence" \
+            "$TMPDIR_EVAL/child-runs/relay" "$EVAL_ASSET_ROOT/feeds/skills/.system/files/agent-coordination" \
+            > "$evidence/discovery-verdict.json" 2> "$evidence/discovery-assertion.stderr"
+        return $?
+    fi
     local headless_log
     stdout_json_envelope_valid || return 1
     headless_log=$(stdout_json_headless_log_path) || return 1

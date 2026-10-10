@@ -125,10 +125,14 @@ phrasing — not just one magic prompt.
 ### Coordination Discovery Case
 
 `skill_coordination_discovery` asks for an implementation-then-review process without prescribed tool names.
+The explicit case uses the existing observer `turn` mode and actual provider captures.
+It stops at the first completed parent turn and requires no child.
+Actual DTO failure codes distinguish exact unexecuted metadata feedback from an executed foreign skill.
+The default suite retains its existing CLI evidence and strict legacy oracle.
 The prompt permits an explanation but forbids child starts, file edits, and command execution.
 The case requires a successful logical `agent-coordination` load followed by `references/implement-review.md`.
 It rejects other workflow resources and physical file or shell substitutes.
-The oracle matches runtime JSON call IDs and arguments with ordered headless call/result receipts.
+The selected oracle matches actual DTO identities and typed results with ordered provider call/result occurrences.
 It checks the complete canonical skill body and workflow resource content.
 An explicit discovery-tool allowlist rejects edits and other action tools.
 Final response claims and skill activation alone cannot satisfy the oracle.
@@ -137,9 +141,13 @@ Select this case after you configure an authorized eval provider:
 
 ```bash
 NETCLAW_EVAL_CATEGORY='Skill Discovery' \
-NETCLAW_EVAL_CASE=skill_coordination_discovery \
+NETCLAW_EVAL_CASE=skill_coordination_discovery NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_TIMEOUT=120 \
   ./evals/run-evals.sh
 ```
+
+The 120-second limit applies only to this explicit observation recipe. It changes no runtime or global default.
+Retained upstream final responses took 61.493 and 64.565 seconds after the old CLI start.
+The original 60-second deadline failures and the third strict failure remain unchanged.
 
 The fixture seed affects only the fresh eval-owned home.
 It preserves the existing mission fixture and copies the canonical release worker asset.
