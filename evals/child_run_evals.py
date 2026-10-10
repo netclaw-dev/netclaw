@@ -378,6 +378,85 @@ def verify_child_actions(requests, paths, nonce, cancel):
             "The child artifact call has the wrong path or content.")
 
 
+def parent_call_pairs(request):
+    pending, pairs = {}, []
+    for position, message in enumerate(request.get("messages", [])):
+        for call in message.get("tool_calls", []) if message.get("role") == "assistant" else []:
+            identifier = call.get("id")
+            require(identifier and identifier not in pending, "An unresolved parent call identifier repeats.")
+            function = call["function"]
+            arguments = json.loads(function["arguments"], object_pairs_hook=unique_object)
+            pending[identifier] = (function["name"], arguments, position)
+        if message.get("role") == "tool" and message.get("tool_call_id") in pending:
+            identifier = message["tool_call_id"]
+            name, arguments, start = pending.pop(identifier)
+            pairs.append((identifier, name, arguments, message_text(message.get("content")), start, position))
+    return pairs
+
+
+def pair_matches(pair, row):
+    def arguments(value):
+        return {key: item for key, item in value.items() if key not in {"_timeout_seconds", "_background"}}
+    return (pair[0] == row.get("id") and pair[1] == row["name"]
+            and arguments(pair[2]) == arguments(row["arguments"]) and pair[3] == row.get("result"))
+
+
+def verify_held_probe(receipt, requests, snapshot, home, nonce, cancel):
+    accepted, binding, calls = receipt["accepted_run"], snapshot["binding"], receipt["calls"]
+    first, second, release = receipt["first_turn_ns"], receipt["second_turn_ns"], snapshot["release_ns"]
+    replies = receipt.get("all_replies", [])
+    require(len(replies) >= 2 and f"PARENT-PROBE-{nonce}" in replies[1], "The held probe lacks its actual visible reply marker.")
+    histories = [parent_call_pairs(request) for request in requests if context_paths(request) is None]
+    controls = [row for row in calls if row["name"] == "check_agent_run" and row.get("success") is True
+                and row.get("failure_code") is None
+                and row["arguments"].get("RunId", row["arguments"].get("runId")) == accepted["run_id"]
+                and row["arguments"].get("Cancel", row["arguments"].get("cancel", False)) is cancel
+                and row["turn"] in ([2] if cancel else [1, 2])
+                and binding["upstream_first_payload_ns"] < row.get("observed_ns", 0) < second
+                and (not cancel or first < row["observed_ns"])]
+    loads = [row for row in calls if row["name"] == "load_tool" and row.get("success") is True
+             and row.get("failure_code") is None and row["turn"] in {1, 2}
+             and row["arguments"].get("Name", row["arguments"].get("name")) == "check_agent_run"
+             and row.get("result") == "check_agent_run"]
+    chosen = None
+    for control in controls:
+        for history in histories:
+            for pair in history:
+                if pair_matches(pair, control) and any(pair_matches(loaded, load) and loaded[5] < pair[4]
+                        and 0 < load.get("observed_ns", 0) < control["observed_ns"] and load["turn"] <= control["turn"]
+                        for load in loads for loaded in history):
+                    chosen = control
+                    break
+            if chosen is not None:
+                break
+        if chosen is not None:
+            break
+    require(chosen is not None, "The held probe lacks an exact status after a successful explicit control load.")
+    status = json.loads(chosen["result"], object_pairs_hook=unique_object)
+    require(isinstance(status, dict) and status.get("run_id") == accepted["run_id"]
+            and status.get("scope_id") == accepted["scope_id"]
+            and status.get("log_path") == binding["paths"]["log_path"]
+            and status.get("artifact_directory") == binding["paths"]["artifact_dir"]
+            and status.get("state") in ({"Cancelling", "Cancelled"} if cancel else {"Accepted", "Running"})
+            and type(status.get("cancellation_requested")) is bool and type(status.get("dispatch_closed")) is bool
+            and "terminal" in status, "The held probe status differs from the exact child state and paths.")
+    if not cancel:
+        require(status["cancellation_requested"] is False and status["dispatch_closed"] is False
+                and status["terminal"] is None, "The held probe status does not describe an active child.")
+    read_path = binding["paths"]["log_path"]
+    log_bytes = actual_file(home, read_path).read_text()
+    require(log_bytes, "The actual live child log is empty.")
+    require(any(row["name"] == "file_read" and row.get("success") is True and row.get("failure_code") is None
+                and row["turn"] == 2 and first < row.get("observed_ns", 0) < second < release
+                and (not cancel or row["observed_ns"] < chosen["observed_ns"])
+                and row["arguments"].get("Path", row["arguments"].get("path")) == read_path
+                and any(line in row.get("result", "") for line in log_bytes.splitlines() if len(line) >= 16)
+                and any(pair_matches(pair, row) for history in histories for pair in history)
+                for row in calls), "The held probe lacks a fresh attributed read of the actual live child log.")
+    return {"status_call_id": chosen["id"], "status_turn": chosen["turn"],
+            "limit": "The status describes recorded state during this held request. It does not prove current provider health."}
+
+
 def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
     accepted = acceptance(json.dumps(receipt["accepted_run"]))
     require(receipt["status"] == "observed" and receipt["completed_turns"] >= 2, "The persistent parent flow did not complete.")
@@ -425,18 +504,7 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
                 for row in starts),
             "The fixed flow did not start the assigned child exactly once.")
     verify_child_actions(requests, binding["paths"], nonce, cancel)
-    controls = [row for row in calls if row["name"] == "check_agent_run"]
-    require(any(row["arguments"].get("RunId", row["arguments"].get("runId")) == accepted["run_id"]
-                and row["arguments"].get("Cancel", row["arguments"].get("cancel", False)) is cancel and row.get("success") and row["turn"] == 2 for row in controls),
-            "The parent did not execute the exact deferred child control.")
-    require(any(row["name"] == "load_tool" and row["arguments"].get("Name", row["arguments"].get("name")) == "check_agent_run"
-                and row.get("success") and row["turn"] == 2 for row in calls), "The parent did not load the deferred child control.")
-    read_path = binding["paths"]["log_path"]
-    log_bytes = actual_file(home, read_path).read_text()
-    require(log_bytes, "The actual live child log is empty.")
-    require(any(row["name"] == "file_read" and row["arguments"].get("Path", row["arguments"].get("path")) == read_path
-                and row.get("success") and row["turn"] == 2 and any(line in row.get("result", "") for line in log_bytes.splitlines() if len(line) >= 16)
-                for row in calls), "The parent did not read actual live child log content.")
+    probe = verify_held_probe(receipt, requests, snapshot, home, nonce, cancel)
     artifact = binding["paths"]["artifact_dir"] + (f"/partial-{nonce}.txt" if cancel else f"/complete-{nonce}.txt")
     contents = actual_file(home, artifact).read_text()
     require(contents == ("PARTIAL-" if cancel else "COMPLETE-") + nonce, "The actual child artifact content differs.")
@@ -453,7 +521,7 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
                 and contents in row.get("result", "") for row in calls),
             "The parent did not read the actual artifact during automatic continuation.")
     require(("PARTIAL-" if cancel else "COMPLETE-") + nonce in receipt["last_reply"], "The automatic parent reply lacks actual artifact evidence.")
-    return {"passed": True, "journal_positions": positions, "terminal_call_id": call_id,
+    return {"passed": True, "journal_positions": positions, "terminal_call_id": call_id, "held_probe": probe,
             "artifact_sha256": hashlib.sha256(contents.encode()).hexdigest(),
             "limit": "Local cancellation does not prove that an external provider stopped its accepted operation."}
 

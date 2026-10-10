@@ -667,7 +667,7 @@ class TrialOracleControls(unittest.TestCase):
                             "result": REQUIRED_RATIONALE_ERROR, "success": False,
                             "failure_code": "invalid_rationale", "turn": 1}
                 receipt["calls"].insert(0, rejected)
-                self.assertTrue(verify_trial(receipt, [child_after_write(cancel), parent(terminal(cancel))], snapshot,
+                self.assertTrue(self.verify(receipt, [child_after_write(cancel), parent(terminal(cancel))], snapshot,
                                              logs(), home, "neutral-nonce", cancel)["passed"])
                 self.assertEqual(False, receipt["calls"][0]["success"])
                 for change in [lambda r: r["calls"].pop(1),
@@ -679,8 +679,22 @@ class TrialOracleControls(unittest.TestCase):
                     changed = copy.deepcopy(receipt)
                     change(changed)
                     with self.assertRaises((AssertionError, ValueError)):
-                        verify_trial(changed, [child_after_write(cancel), parent(terminal(cancel))], snapshot,
+                        self.verify(changed, [child_after_write(cancel), parent(terminal(cancel))], snapshot,
                                      logs(), home, "neutral-nonce", cancel)
+
+    def provider_requests(self, requests, rows=None):
+        requests = copy.deepcopy(requests)
+        messages = []
+        for row in sorted(self.provider_rows if rows is None else rows, key=lambda value: value["observed_ns"]):
+            messages.extend([
+                {"role": "assistant", "tool_calls": [{"id": row["id"], "function": {
+                    "name": row["name"], "arguments": json.dumps(row["arguments"])}}]},
+                {"role": "tool", "tool_call_id": row["id"], "content": row["result"]}])
+        requests[1]["messages"] = messages + requests[1]["messages"]
+        return requests
+
+    def verify(self, receipt, requests, *arguments):
+        return verify_trial(receipt, self.provider_requests(requests), *arguments)
 
     def sample(self, home, cancel=False):
         self.report_home = home
@@ -691,14 +705,15 @@ class TrialOracleControls(unittest.TestCase):
                             ("PARTIAL-" if cancel else "COMPLETE-") + "neutral-nonce")
         calls = [{"id": "start-neutral", "name": "spawn_agent", "arguments": {"Agent": "child-run-worker"},
                   "result": json.dumps(ACCEPTED), "success": True, "turn": 1},
-                 {"name": "load_tool", "arguments": {"Name": "check_agent_run"}, "success": True, "turn": 2},
-                 {"name": "check_agent_run", "arguments": {"RunId": ACCEPTED["run_id"], "Cancel": cancel}, "success": True, "turn": 2},
-                 {"name": "file_read", "arguments": {"Path": PATHS["log_path"]}, "success": True, "turn": 2, "result": "actual neutral child log line"},
+                 {"id": "load-neutral", "name": "load_tool", "arguments": {"Name": "check_agent_run"}, "success": True, "turn": 2, "observed_ns": 12, "result": "check_agent_run"},
+                 {"id": "status-neutral", "name": "check_agent_run", "arguments": {"RunId": ACCEPTED["run_id"], "Cancel": cancel}, "success": True, "turn": 2, "observed_ns": 25, "result": json.dumps({**STATUS, "cancellation_requested": False, "dispatch_closed": False, "terminal": None})},
+                 {"id": "log-neutral", "name": "file_read", "arguments": {"Path": PATHS["log_path"]}, "success": True, "turn": 2, "observed_ns": 20, "result": "actual neutral child log line"},
                  {"name": "file_read", "arguments": {"Path": PATHS["artifact_dir"] + ("/partial-neutral-nonce.txt" if cancel else "/complete-neutral-nonce.txt")},
                   "success": True, "turn": 2 if cancel else 3, "observed_ns": 35 if cancel else 80,
                   "result": ("PARTIAL-" if cancel else "COMPLETE-") + "neutral-nonce"}]
         receipt = {"accepted_run": ACCEPTED, "status": "observed", "completed_turns": 3, "user_inputs": 2,
                    "first_turn_ns": 10, "second_turn_ns": 40, "release_ns": 50, "session_id": "session-neutral",
+                   "all_replies": ["Accepted the child.", "PARENT-PROBE-neutral-nonce: actual neutral child log line"],
                    "calls": calls, "last_reply": ("PARTIAL-" if cancel else "COMPLETE-") + "neutral-nonce"}
         snapshot = {"binding": {"accepted": ACCEPTED, "paths": PATHS, "request_id": 1, "arrived_ns": 5, "upstream_first_payload_ns": 6, "bound_ns": 30},
                     "released": True, "release_ns": 49, "requests": [{"held": True, "child": True, "request_id": 1, "admitted_ns": 5, "upstream_first_payload_ns": 6, "response_first_payload_ns": 0, "response_payload_written": False},
@@ -726,12 +741,13 @@ class TrialOracleControls(unittest.TestCase):
                  "success": True, "turn": 2, "observed_ns": 36,
                  "result": json.dumps({**STATUS, "state": "Cancelled", "cancellation_requested": True,
                                         "dispatch_closed": True, "terminal": json.dumps(terminal(True))})}])
+        self.provider_rows = copy.deepcopy(calls[1:4])
         return receipt, snapshot
 
     def test_valid_held_flow_requires_runtime_provider_and_actual_artifact_evidence(self):
         with tempfile.TemporaryDirectory() as home:
             receipt, snapshot = self.sample(home)
-            self.assertTrue(verify_trial(receipt, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)["passed"])
+            self.assertTrue(self.verify(receipt, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)["passed"])
             for mutate in [lambda r: r.update(user_inputs=3), lambda r: r.update(completed_turns=1),
                            lambda r: r.update(first_turn_ns=0), lambda r: r.update(last_reply="imagined artifact"),
                            lambda r: r["calls"].pop(), lambda r: r["calls"][3].update(success=False),
@@ -740,7 +756,7 @@ class TrialOracleControls(unittest.TestCase):
                 value = copy.deepcopy(receipt)
                 mutate(value)
                 with self.subTest(receipt=value), self.assertRaises(AssertionError):
-                    verify_trial(value, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)
+                    self.verify(value, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)
             for mutate in [lambda row: row["binding"].update(upstream_first_payload_ns=0),
                            lambda row: row.update(release_ns=39),
                            lambda row: row["binding"].update(request_id=2),
@@ -748,10 +764,119 @@ class TrialOracleControls(unittest.TestCase):
                 invalid = copy.deepcopy(snapshot)
                 mutate(invalid)
                 with self.subTest(snapshot=invalid), self.assertRaises(AssertionError):
-                    verify_trial(receipt, [child_after_write(), parent()], invalid, logs(), home, "neutral-nonce", False)
+                    self.verify(receipt, [child_after_write(), parent()], invalid, logs(), home, "neutral-nonce", False)
             actual_file(home, PATHS["artifact_dir"] + "/complete-neutral-nonce.txt").write_text("incorrect")
             with self.assertRaises(AssertionError):
-                verify_trial(receipt, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)
+                self.verify(receipt, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)
+
+    def test_initial_turn_status_and_load_support_a_fresh_probe_log_and_reply(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home)
+            receipt["calls"][1].update(turn=1, observed_ns=7)
+            receipt["calls"][2].update(turn=1, observed_ns=8)
+            requests = self.provider_requests([child_after_write(), parent()], receipt["calls"][1:4])
+            verdict = verify_trial(receipt, requests, snapshot, logs(), home, "neutral-nonce", False)
+            self.assertEqual(1, verdict["held_probe"]["status_turn"])
+            receipt["calls"][2].update(turn=2, observed_ns=25)
+            requests = self.provider_requests([child_after_write(), parent()], receipt["calls"][1:4])
+            self.assertEqual(2, verify_trial(receipt, requests, snapshot, logs(), home, "neutral-nonce", False)["held_probe"]["status_turn"])
+
+    def test_probe_rejects_status_outside_the_same_held_interval(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home)
+            for timestamp in [0, 5, 6, 40, 50]:
+                changed = copy.deepcopy(receipt)
+                changed["calls"][2]["observed_ns"] = timestamp
+                with self.subTest(timestamp=timestamp), self.assertRaises(AssertionError):
+                    self.verify(changed, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)
+            changed = copy.deepcopy(snapshot)
+            changed["requests"][0]["held"] = False
+            with self.assertRaises(AssertionError):
+                self.verify(receipt, [child_after_write(), parent()], changed, logs(), home, "neutral-nonce", False)
+
+    def test_probe_rejects_foreign_paths_owner_state_and_noncanonical_booleans(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home)
+            status = json.loads(receipt["calls"][2]["result"])
+            for field, value in [("run_id", "foreign"), ("scope_id", "foreign"), ("log_path", ROOT + "/other.log"),
+                                 ("artifact_directory", ROOT + "/other"), ("state", "Completed"),
+                                 ("state", "Cancelling"), ("cancellation_requested", 0), ("dispatch_closed", 0),
+                                 ("cancellation_requested", True), ("dispatch_closed", True), ("terminal", "{}")]:
+                changed = copy.deepcopy(receipt)
+                changed["calls"][2]["result"] = json.dumps({**status, field: value})
+                requests = self.provider_requests([child_after_write(), parent()], changed["calls"][1:4])
+                with self.subTest(field=field, value=value), self.assertRaises(AssertionError):
+                    verify_trial(changed, requests, snapshot, logs(), home, "neutral-nonce", False)
+
+    def test_probe_requires_a_successful_attributed_load_result_before_status_call(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home)
+            requests = self.provider_requests([child_after_write(), parent()])
+            self.assertTrue(verify_trial(receipt, requests, snapshot, logs(), home, "neutral-nonce", False)["passed"])
+            for mutate in [lambda r: r["calls"][1].update(success=False),
+                           lambda r: r["calls"][1].update(failure_code="invalid_rationale"),
+                           lambda r: r["calls"][1].update(result="other_tool"),
+                           lambda r: r["calls"][1].update(observed_ns=25),
+                           lambda r: r["calls"][1].update(id="foreign"),
+                           lambda r: r["calls"][2].update(id="foreign")]:
+                changed = copy.deepcopy(receipt)
+                mutate(changed)
+                with self.assertRaises(AssertionError):
+                    verify_trial(changed, requests, snapshot, logs(), home, "neutral-nonce", False)
+            changed = copy.deepcopy(requests)
+            messages = changed[1]["messages"]
+            load_result = messages.pop(1)
+            messages.insert(4, load_result)
+            with self.assertRaises(AssertionError):
+                verify_trial(receipt, changed, snapshot, logs(), home, "neutral-nonce", False)
+            for index in [0, 1, 4, 5]:
+                changed = copy.deepcopy(requests)
+                changed[1]["messages"].pop(index)
+                with self.subTest(missing=index), self.assertRaises(AssertionError):
+                    verify_trial(receipt, changed, snapshot, logs(), home, "neutral-nonce", False)
+
+    def test_probe_requires_a_fresh_attributed_log_read_and_marker_before_release(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home)
+            for mutate in [lambda r: r["calls"][3].update(observed_ns=10),
+                           lambda r: r["calls"][3].update(observed_ns=40),
+                           lambda r: r["calls"][3].update(observed_ns=50),
+                           lambda r: r["calls"][3].update(id="foreign"),
+                           lambda r: r["calls"][3].update(result="imagined child log"),
+                           lambda r: r.update(all_replies=["Accepted", "No probe marker"]),
+                           lambda r: r.update(all_replies=["Accepted", "No marker", "PARENT-PROBE-neutral-nonce"])]:
+                changed = copy.deepcopy(receipt)
+                mutate(changed)
+                with self.assertRaises(AssertionError):
+                    self.verify(changed, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)
+            requests = self.provider_requests([child_after_write(), parent()])
+            changed = copy.deepcopy(requests)
+            changed[0]["messages"].extend(changed[1]["messages"][2:4])
+            del changed[1]["messages"][2:4]
+            with self.assertRaises(AssertionError):
+                verify_trial(receipt, changed, snapshot, logs(), home, "neutral-nonce", False)
+
+    def test_probe_provider_arguments_omit_only_execution_hints(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home)
+            for row in receipt["calls"][1:4]:
+                row["arguments"].update(_background=False, _timeout_seconds=30)
+            self.assertTrue(self.verify(receipt, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)["passed"])
+            receipt["calls"][2]["arguments"]["_rationale"] = "Changed intent."
+            with self.assertRaises(AssertionError):
+                self.verify(receipt, [child_after_write(), parent()], snapshot, logs(), home, "neutral-nonce", False)
+
+    def test_cancel_stays_in_probe_turn_after_the_actual_log_read(self):
+        with tempfile.TemporaryDirectory() as home:
+            receipt, snapshot = self.sample(home, True)
+            for mutate in [lambda r: r["calls"][2].update(turn=1, observed_ns=8),
+                           lambda r: r["calls"][2].update(observed_ns=19),
+                           lambda r: r["calls"][3].update(observed_ns=26)]:
+                changed = copy.deepcopy(receipt)
+                mutate(changed)
+                requests = self.provider_requests([child_after_write(True), parent(terminal(True))], changed["calls"][1:4])
+                with self.assertRaises(AssertionError):
+                    verify_trial(changed, requests, snapshot, logs(), home, "neutral-nonce", True)
 
     def test_full_trial_requires_exact_unique_terminal_argument_keys(self):
         with tempfile.TemporaryDirectory() as home:
@@ -759,7 +884,7 @@ class TrialOracleControls(unittest.TestCase):
             def check(arguments):
                 request = parent()
                 request["messages"][0]["tool_calls"][0]["function"]["arguments"] = arguments
-                return verify_trial(receipt, [child_after_write(), request], snapshot, logs(), home, "neutral-nonce", False)
+                return self.verify(receipt, [child_after_write(), request], snapshot, logs(), home, "neutral-nonce", False)
             self.assertTrue(check('  { "source_operation" : "spawn_agent",\n "run_id" : "run-neutral" }  ')["passed"])
             for arguments in [
                 '{"run_id":"run-neutral","source_operation":"spawn_agent","unexpected_authority":"foreign"}',
@@ -786,14 +911,14 @@ class TrialOracleControls(unittest.TestCase):
                 observed = copy.deepcopy(receipt)
                 observed["delivery_observations"]["deliveries"][0]["terminal"] = json.loads(body)
                 with self.subTest(body=body), self.assertRaises(AssertionError):
-                    verify_trial(observed, [child_after_write(), request], snapshot, logs(), home, "neutral-nonce", False)
+                    self.verify(observed, [child_after_write(), request], snapshot, logs(), home, "neutral-nonce", False)
 
     def test_cancel_consumption_can_complete_inside_second_probe_before_release(self):
         with tempfile.TemporaryDirectory() as home:
             receipt, snapshot = self.sample(home, True)
             receipt["completed_turns"] = 2
             receipt["last_reply"] += " PARENT-PROBE-neutral-nonce"
-            self.assertTrue(verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
+            self.assertTrue(self.verify(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
                                          logs(), home, "neutral-nonce", True)["passed"])
 
     def test_cancel_reads_report_once_and_rejects_malformed_owner_bytes(self):
@@ -801,7 +926,7 @@ class TrialOracleControls(unittest.TestCase):
             receipt, snapshot = self.sample(home, True)
             path = actual_file(home, PATHS["artifact_dir"] + "/cancelled-results.json")
             body = path.read_bytes()
-            self.assertTrue(verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
+            self.assertTrue(self.verify(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
                                          logs(), home, "neutral-nonce", True)["passed"])
             self.transport.assert_called_once()
             capture = Path(os.environ["TMPDIR_EVAL"]) / "child-runs/actual-cancelled-results.json"
@@ -810,12 +935,12 @@ class TrialOracleControls(unittest.TestCase):
                 self.transport.return_value = subprocess.CompletedProcess([], 0, malformed, b"")
                 self.transport.side_effect = None
                 with self.subTest(body=malformed), self.assertRaises((AssertionError, ValueError)):
-                    verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
+                    self.verify(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
                                  logs(), home, "neutral-nonce", True)
                 self.assertEqual(malformed, capture.read_bytes())
             self.transport.return_value = subprocess.CompletedProcess([], 0, body + b"\r\n", b"")
             with self.assertRaisesRegex(AssertionError, "full actual partial-report read"):
-                verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
+                self.verify(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
                              logs(), home, "neutral-nonce", True)
 
     def test_cancel_requires_guidance_actual_report_read_and_explicit_closure(self):
@@ -849,13 +974,13 @@ class TrialOracleControls(unittest.TestCase):
                 changed = copy.deepcopy(receipt)
                 mutate(changed)
                 with self.subTest(fault=index), self.assertRaises(AssertionError):
-                    verify_trial(changed, [child_after_write(True), parent(terminal(True))], snapshot,
+                    self.verify(changed, [child_after_write(True), parent(terminal(True))], snapshot,
                                  logs(), home, "neutral-nonce", True)
 
     def test_cancel_status_requires_exact_terminal_json_string(self):
         with tempfile.TemporaryDirectory() as home:
             receipt, snapshot = self.sample(home, True)
-            self.assertTrue(verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
+            self.assertTrue(self.verify(receipt, [child_after_write(True), parent(terminal(True))], snapshot,
                                          logs(), home, "neutral-nonce", True)["passed"])
             valid_status = json.loads(receipt["calls"][7]["result"])
             self.assertIsInstance(valid_status["terminal"], str)
@@ -863,7 +988,7 @@ class TrialOracleControls(unittest.TestCase):
             del valid_status["terminal"]
             changed["calls"][7]["result"] = json.dumps(valid_status)
             with self.assertRaisesRegex(AssertionError, "canonical JSON-string representation"):
-                verify_trial(changed, [child_after_write(True), parent(terminal(True))], snapshot,
+                self.verify(changed, [child_after_write(True), parent(terminal(True))], snapshot,
                              logs(), home, "neutral-nonce", True)
             valid_status = json.loads(receipt["calls"][7]["result"])
             for bad in [None, terminal(True), "not JSON", "[]",
@@ -875,7 +1000,7 @@ class TrialOracleControls(unittest.TestCase):
                 changed = copy.deepcopy(receipt)
                 changed["calls"][7]["result"] = json.dumps({**valid_status, "terminal": bad})
                 with self.subTest(terminal=bad), self.assertRaises((AssertionError, ValueError)):
-                    verify_trial(changed, [child_after_write(True), parent(terminal(True))], snapshot,
+                    self.verify(changed, [child_after_write(True), parent(terminal(True))], snapshot,
                                  logs(), home, "neutral-nonce", True)
 
     def test_partial_requires_exact_checkpoint_and_actual_run_local_report(self):
@@ -885,7 +1010,7 @@ class TrialOracleControls(unittest.TestCase):
             def check(body):
                 value = copy.deepcopy(receipt)
                 value["delivery_observations"]["deliveries"][0]["terminal"] = body
-                return verify_trial(value, [child_after_write(True), parent(body)], snapshot, logs(), home, "neutral-nonce", True)
+                return self.verify(value, [child_after_write(True), parent(body)], snapshot, logs(), home, "neutral-nonce", True)
             self.assertTrue(check(original)["passed"])
             for mutate in [lambda b: b.update(checkpoint=None),
                            lambda b: b["checkpoint"].update(CompletedRound=0),
@@ -911,15 +1036,15 @@ class TrialOracleControls(unittest.TestCase):
     def test_cancel_requires_partial_evidence_and_rejects_later_child_admission(self):
         with tempfile.TemporaryDirectory() as home:
             receipt, snapshot = self.sample(home, True)
-            self.assertTrue(verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot, logs(), home, "neutral-nonce", True)["passed"])
+            self.assertTrue(self.verify(receipt, [child_after_write(True), parent(terminal(True))], snapshot, logs(), home, "neutral-nonce", True)["passed"])
             snapshot["requests"].append({"held": False, "child": True, "request_id": 3})
             with self.assertRaises(AssertionError):
-                verify_trial(receipt, [child_after_write(True), parent(terminal(True))], snapshot, logs(), home, "neutral-nonce", True)
+                self.verify(receipt, [child_after_write(True), parent(terminal(True))], snapshot, logs(), home, "neutral-nonce", True)
             snapshot["requests"].pop()
             for fields in [{"reason": "Timeout"}, {"reason": "CancelledByParent"},
                            {"state": "cancelled"}, {"outcome": "failed"}]:
                 with self.subTest(fields=fields), self.assertRaises(AssertionError):
-                    verify_trial(receipt, [child_after_write(True), parent({**terminal(True), **fields})], snapshot, logs(), home, "neutral-nonce", True)
+                    self.verify(receipt, [child_after_write(True), parent({**terminal(True), **fields})], snapshot, logs(), home, "neutral-nonce", True)
 
 
 if __name__ == "__main__":
