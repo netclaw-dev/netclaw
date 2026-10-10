@@ -194,8 +194,10 @@ def check_artifacts(fixture_root, findings_path, plan_path):
                 and ids(row["Acceptance evidence"], "C") == set(expected["acceptance"]),
                 "artifact: action scope or acceptance references differ")
         for identifier in expected["acceptance"]:
+            # The same row binds the owner above. This cell supplies the check behavior.
             require(all(normalized(term) in normalized(row["Acceptance evidence"])
-                        for term in truth["acceptance"][identifier]["required_identifiers"]),
+                        for term in truth["acceptance"][identifier]["required_identifiers"]
+                        if term != expected["owner"]),
                     "artifact: acceptance lacks the fixed behavior check")
     risks = table(ps["risks and de-risk steps"], ["Risk", "Why the proposed change is safe", "Required check", "Remaining limit"])
     require(set().union(*(ids(row["Risk"], "R") for row in risks)) == set(truth["risks"]), "artifact: required risk is absent")

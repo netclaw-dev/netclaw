@@ -181,6 +181,60 @@ class CoordinationArtifactControls(unittest.TestCase):
         report = self.oracle.verify_artifacts(self.fixture, self.findings, self.plan)
         self.assertIs(report["passed"], True, report)
 
+    def acceptance_without_repeated_owner(self):
+        self.change_artifact(self.plan, lambda text: text.replace(
+            "C1: Catalog.refresh rejects", "C1: rejects").replace(
+            "C2: Catalog.read returns", "C2: returns"))
+
+    def test_acceptance_behavior_uses_the_same_row_owner(self):
+        self.acceptance_without_repeated_owner()
+        self.assert_valid()
+
+    def test_acceptance_does_not_replace_missing_or_swapped_action_owners(self):
+        self.acceptance_without_repeated_owner()
+        self.assert_valid()
+        original = self.plan.read_text()
+        for before, after in [("| A1 | Catalog.refresh", "| A1 | Catalog.read"),
+                              ("| A2 | Catalog.read", "| A2 | Catalog.refresh"),
+                              ("| A1 | Catalog.refresh", "| A1 | The writer"),
+                              ("| A2 | Catalog.read", "| A2 | The reader")]:
+            with self.subTest(owner=before, replacement=after):
+                self.plan.write_text(original.replace(before, after))
+                self.refresh_reads()
+                self.assert_rejected()
+
+    def test_acceptance_requires_each_behavior_in_its_own_cell(self):
+        self.acceptance_without_repeated_owner()
+        self.assert_valid()
+        original = self.plan.read_text()
+        for behavior in ["duplicate", "unchanged", "valid", "order"]:
+            with self.subTest(behavior=behavior):
+                lines = original.splitlines()
+                index = next(i for i, line in enumerate(lines) if line.startswith(
+                    "| A1 |" if behavior in {"duplicate", "unchanged"} else "| A2 |"))
+                cells = lines[index].split("|")
+                self.assertIn(behavior, cells[4])
+                cells[2] += " " + behavior
+                cells[4] = cells[4].replace(behavior, "omitted")
+                lines[index] = "|".join(cells)
+                self.plan.write_text("\n".join(lines) + "\n")
+                self.refresh_reads()
+                self.assert_rejected()
+
+    def test_acceptance_rejects_swapped_check_ids_and_behavior_cells(self):
+        self.acceptance_without_repeated_owner()
+        self.assert_valid()
+        original = self.plan.read_text()
+        lines = original.splitlines()
+        first = next(i for i, line in enumerate(lines) if line.startswith("| A1 |"))
+        second = next(i for i, line in enumerate(lines) if line.startswith("| A2 |"))
+        a, b = lines[first].split("|"), lines[second].split("|")
+        a[4], b[4] = b[4], a[4]
+        lines[first], lines[second] = "|".join(a), "|".join(b)
+        self.plan.write_text("\n".join(lines) + "\n")
+        self.refresh_reads()
+        self.assert_rejected()
+
     def test_shared_runtime_context_preserves_distinct_analyst_and_worker_assignments(self):
         self.assert_valid()
         worker = self.outputs("tool_call", "plan-start")[0]
