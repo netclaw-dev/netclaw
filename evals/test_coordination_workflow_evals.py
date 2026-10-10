@@ -1,8 +1,9 @@
 """Controls for the case adapter and cumulative child consumption."""
 
 import copy
-from contextlib import closing
+from contextlib import closing, redirect_stdout
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -16,7 +17,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from child_run_evals import REQUIRED_RATIONALE_ERROR, actual_file, consumed_deliveries, legacy_observer_mode
+from child_run_evals import REQUIRED_RATIONALE_ERROR, actual_file, collect, consumed_deliveries, context_paths, legacy_observer_mode
 from coordination_workflow_evals import archive_read, archive_runtime_files, blocked_config, contract, prepare, prompt, workflow_stages
 from test_child_run_evals import ACCEPTED, PATHS, child, parent, terminal
 
@@ -34,7 +35,8 @@ def shell_functions(*names):
 def stage_evidence(root):
     home = root / "home"
     setup = prepare(FIXTURE, home, root / "setup")
-    receipt = {"session_id": "session-neutral", "accepted_runs": [], "verified_deliveries": []}
+    receipt = {"session_id": "session-neutral", "accepted_runs": [], "verified_deliveries": [],
+               "delivery_observations": {"complete": True, "deliveries": []}}
     events, requests = [], []
     for index, (key, agent) in enumerate((("findings_path", "headless-analyst"), ("plan_path", "task-worker")), 1):
         content = f"Neutral complete artifact {index}.\n"
@@ -43,8 +45,9 @@ def stage_evidence(root):
         paths = {name: value.replace("/neutral/subagents/neutral", f"/neutral/subagents/run-{index}")
                  for name, value in PATHS.items()}
         receipt["accepted_runs"].append(accepted)
-        receipt["verified_deliveries"].append({"accepted": accepted, "terminal": {
-            "log_path": paths["log_path"], "artifact_directory": paths["artifact_dir"]}})
+        body = {**terminal(), "run_id": accepted["run_id"], "scope_id": accepted["scope_id"],
+                "log_path": paths["log_path"], "artifact_directory": paths["artifact_dir"]}
+        receipt["verified_deliveries"].append({"accepted": accepted, "terminal": body})
         args = {"Agent": agent, "Task": setup[key],
                 "Context": setup["findings_path"] if index == 2 else "Analyze the source."}
         for dto in ({"Type": "tool_call", "CallId": f"start-{index}", "ToolName": "spawn_agent",
@@ -52,7 +55,7 @@ def stage_evidence(root):
                     {"Type": "tool_result", "CallId": f"start-{index}", "ToolName": "spawn_agent",
                      "Result": json.dumps(accepted)}):
             sequence = len(events) + 1
-            events.append({"sequence": sequence, "observed_ns": sequence, "output": {
+            events.append({"sequence": sequence, "observed_ns": sequence * 100, "output": {
                 **dto, "SessionId": "session-neutral"}})
         request = child()
         request["messages"][1]["content"] = "Context:\n" + "\n".join(k + ": " + v for k, v in paths.items())
@@ -62,8 +65,16 @@ def stage_evidence(root):
             {"role": "tool", "tool_call_id": f"write-{index}",
              "content": f"Successfully wrote {len(content.encode())} bytes to {setup[key]}"}])
         requests.append(request)
+        delivery = parent(body, "delivery-" + str(index))
+        delivery["messages"][0]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+            {"run_id": accepted["run_id"], "source_operation": "spawn_agent"})
+        requests.append(delivery)
+        receipt["delivery_observations"]["deliveries"].append({"accepted": accepted, "call_id": "delivery-" + str(index),
+            "terminal": body, "request_admitted_ns": sequence * 100 + 10,
+            "response_first_payload_ns": sequence * 100 + 20, "parent_boundary_ns": 10000})
     requests.append({"messages": [{"role": "user", "content":
         "[system: [available-subagents — use spawn_agent to delegate]\n\n## headless-analyst\nA source analyst.\n]"}]})
+    requests = requests[::2][:2] + requests[1::2] + requests[-1:]
     receipt["calls"] = observer_calls(events)
     return receipt, events, requests, setup, home
 
@@ -101,8 +112,11 @@ def declaration_evidence(root, rejected=False, repeated=False):
                     "ToolFailureCode": "invalid_rationale" if rejected else None}}]
     events[:0] = [copy.deepcopy(event) for _ in range(2 if repeated else 1) for event in pair]
     for index, event in enumerate(events, 1):
-        event.update(sequence=index, observed_ns=index)
+        event.update(sequence=index, observed_ns=index * 100)
     receipt["calls"] = observer_calls(events)
+    for index, row in enumerate(receipt["delivery_observations"]["deliveries"], 1):
+        start = next(call for call in receipt["calls"] if call["id"] == f"start-{index}")
+        row.update(request_admitted_ns=start["observed_ns"] + 110, response_first_payload_ns=start["observed_ns"] + 120)
     history = []
     for event in events:
         output = event["output"]
@@ -114,6 +128,206 @@ def declaration_evidence(root, rejected=False, repeated=False):
     requests.append({"messages": history})
     return receipt, events, requests, setup, home
 
+
+
+def replacement_evidence(root, stage):
+    receipt, events, requests, setup, home = stage_evidence(root)
+    accepted = {**ACCEPTED, "run_id": "run-failed-" + str(stage), "scope_id": "scope-failed-" + str(stage)}
+    body = {**terminal(), "run_id": accepted["run_id"], "scope_id": accepted["scope_id"],
+            "state": "Failed", "outcome": "Failed", "reason": "no_activity_timeout", "log_path": None, "artifact_directory": None}
+    index = (stage - 1) * 2
+    pair = copy.deepcopy(events[index:index + 2])
+    for event in pair:
+        event["output"]["CallId"] = "start-failed-" + str(stage)
+    pair[1]["output"]["Result"] = json.dumps(accepted)
+    events[index:index] = pair
+    for sequence, event in enumerate(events, 1):
+        event.update(sequence=sequence, observed_ns=sequence * 100)
+    receipt["calls"] = observer_calls(events)
+    receipt["accepted_runs"].insert(stage - 1, accepted)
+    receipt["verified_deliveries"].insert(stage - 1, {"accepted": accepted, "terminal": body})
+    consumed = {"accepted": accepted, "call_id": "delivery-failed-" + str(stage), "terminal": body,
+                "request_admitted_ns": 1, "response_first_payload_ns": 2, "parent_boundary_ns": 10000}
+    receipt["delivery_observations"]["deliveries"].insert(stage - 1, consumed)
+    for row in receipt["delivery_observations"]["deliveries"]:
+        start = next(call for call in receipt["calls"] if call["result"] == json.dumps(row["accepted"]))
+        row.update(request_admitted_ns=start["observed_ns"] + 110, response_first_payload_ns=start["observed_ns"] + 120)
+    failure = parent(body, consumed["call_id"])
+    failure["messages"][0]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+        {"run_id": accepted["run_id"], "source_operation": "spawn_agent"})
+    request = child()
+    child_root = "/home/netclaw/.netclaw/sessions/neutral/subagents/" + accepted["run_id"]
+    paths = {"session_dir": child_root, "temp_dir": child_root + "/tmp", "artifact_dir": child_root + "/artifacts",
+             "log_path": child_root + "/logs/session.log"}
+    request["messages"][1]["content"] = "Context:\n" + "\n".join(key + ": " + value for key, value in paths.items())
+    requests[-1:-1] = [request, failure]
+    log = actual_file(home, "/home/netclaw/.netclaw/sessions/neutral/logs/session.log")
+    log.parent.mkdir(parents=True)
+    rows = []
+    for index, run in enumerate(receipt["accepted_runs"]):
+        delivery = next(row for row in receipt["delivery_observations"]["deliveries"] if row["accepted"] == run)
+        for offset, name in enumerate(("accepted", "terminal_recorded", "result_prepared", "delivery_admitted"), 1):
+            rows.append("child_run_" + name + " owner=" + receipt["session_id"] + " runId=" + run["run_id"] +
+                        " journalSequence=" + str(index * 4 + offset) +
+                        (" inputId=input-" + run["run_id"] + " callId=" + delivery["call_id"] if name == "delivery_admitted" else ""))
+    log.write_text("\n".join(rows))
+    return receipt, events, requests, setup, home
+
+
+class CoordinationReplacementControls(unittest.TestCase):
+    def test_failed_analyst_and_failed_worker_retain_one_completed_stage_each(self):
+        for stage in (1, 2):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                receipt, events, requests, setup, home = replacement_evidence(Path(directory), stage)
+                stages = workflow_stages(receipt, events, requests, setup, home)
+                self.assertEqual(["start-1", "start-2"], [row["id"] for row in stages])
+                self.assertEqual("Failed", receipt["verified_deliveries"][stage - 1]["terminal"]["outcome"])
+
+    def test_collector_retains_canonical_failed_attempt_only_for_workflow_cases(self):
+        for case in (*CASES, "subagent_specialization_precedence"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                receipt, _, requests, _, home = replacement_evidence(Path(directory), 1)
+                with patch.dict(os.environ, {"TMPDIR_EVAL": directory, "EVAL_HOME": str(home)}), \
+                     patch("child_run_evals.invoke_observer", return_value=(receipt, "Actual observer reply")), \
+                     patch("child_run_evals.evidence_requests", return_value=requests), redirect_stdout(io.StringIO()):
+                    if case in CASES:
+                        collect(1, "task", "session-neutral", "text", directory, case, 1)
+                        saved = json.loads((Path(directory) / "verified-receipt.json").read_text())
+                        self.assertEqual(["Failed", "Completed", "Completed"], [row["terminal"]["outcome"] for row in saved["verified_deliveries"]])
+                        self.assertEqual(3, len(saved["verified_deliveries"]))
+                    else:
+                        with self.assertRaisesRegex(AssertionError, "did not complete normally"):
+                            collect(1, "task", "session-neutral", "text", directory, case, 1)
+                        self.assertFalse((Path(directory) / "verified-receipt.json").exists())
+
+    def test_failed_terminal_requires_consumption_before_replacement(self):
+        for stage in (1, 2):
+            for fault in ("missing", "incomplete", "late", "wrong-run", "wrong-call", "changed-body", "numeric-time", "forged-start-time", "provider-owner", "missing-pair", "duplicate-pair"):
+                with self.subTest(stage=stage, fault=fault), tempfile.TemporaryDirectory() as directory:
+                    receipt, events, requests, setup, home = replacement_evidence(Path(directory), stage)
+                    observation = receipt["delivery_observations"]["deliveries"][stage - 1]
+                    if fault == "missing":
+                        receipt["delivery_observations"]["deliveries"].remove(observation)
+                    elif fault == "incomplete":
+                        receipt["delivery_observations"]["complete"] = False
+                    elif fault == "late":
+                        replacement = next(row for row in receipt["calls"] if row["id"] == "start-" + str(stage))
+                        observation["response_first_payload_ns"] = replacement["observed_ns"] + 1
+                    elif fault == "wrong-run":
+                        observation["accepted"] = {**observation["accepted"], "run_id": "foreign-run"}
+                    elif fault == "wrong-call":
+                        observation["call_id"] = "foreign-terminal"
+                    elif fault == "changed-body":
+                        observation["terminal"] = {**observation["terminal"], "reason": "forged reason"}
+                    elif fault == "numeric-time":
+                        observation["request_admitted_ns"] = True
+                    elif fault == "forged-start-time":
+                        replacement = next(row for row in receipt["calls"] if row["id"] == "start-" + str(stage))
+                        observation["response_first_payload_ns"] = replacement["observed_ns"] + 1
+                        replacement["observed_ns"] += 50
+                    elif fault == "provider-owner":
+                        body = json.loads(requests[-2]["messages"][1]["content"])
+                        body["scope_id"] = "foreign-scope"
+                        requests[-2]["messages"][1]["content"] = json.dumps(body)
+                    elif fault == "missing-pair":
+                        requests.pop(-2)
+                    else:
+                        requests[-2]["messages"].extend(copy.deepcopy(requests[-2]["messages"]))
+                    with self.assertRaises(AssertionError):
+                        workflow_stages(receipt, events, requests, setup, home)
+
+    def test_failed_attempt_retains_scope_and_actual_owner_requirements(self):
+        for fault in ("tool", "write", "owner", "context", "profile", "dto", "ordinal"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                receipt, events, requests, setup, home = replacement_evidence(Path(directory), 1)
+                request = requests[-3]
+                if fault in {"tool", "write"}:
+                    request["messages"].append({"role": "assistant", "tool_calls": [{"id": "forbidden", "function": {
+                        "name": "shell_execute" if fault == "tool" else "file_write",
+                        "arguments": json.dumps({"Path": setup["plan_path"], "Content": "wrong stage"})}}]})
+                elif fault == "owner":
+                    log = actual_file(home, "/home/netclaw/.netclaw/sessions/neutral/logs/session.log")
+                    log.write_text(log.read_text().replace("owner=session-neutral", "owner=another-owner"))
+                elif fault == "context":
+                    request["messages"][1]["content"] = "Context:\nTask: Missing runtime paths."
+                elif fault == "profile":
+                    args = json.loads(events[0]["output"]["ArgumentsJson"])
+                    args["Agent"] = "invented-profile"
+                    events[0]["output"]["ArgumentsJson"] = json.dumps(args)
+                    receipt["calls"] = observer_calls(events)
+                elif fault == "dto":
+                    receipt["calls"][0]["success"] = False
+                else:
+                    receipt["calls"][0]["occurrence"] = True
+                with self.assertRaises((AssertionError, ValueError)):
+                    workflow_stages(receipt, events, requests, setup, home)
+
+    def test_failed_terminal_storage_matches_actual_context_or_remains_null(self):
+        for stage in (1, 2):
+            for field, context_key in (("log_path", "log_path"), ("artifact_directory", "artifact_dir")):
+                for value in (None, "actual", "foreign", ""):
+                    with self.subTest(stage=stage, field=field, value=value), tempfile.TemporaryDirectory() as directory:
+                        receipt, events, requests, setup, home = replacement_evidence(Path(directory), stage)
+                        paths = context_paths(requests[-3])
+                        body = receipt["verified_deliveries"][stage - 1]["terminal"]
+                        body[field] = paths[context_key] if value == "actual" else (
+                            paths[context_key].replace("/neutral/", "/foreign/") if value == "foreign" else value)
+                        requests[-2]["messages"][1]["content"] = json.dumps(body)
+                        if value in (None, "actual"):
+                            self.assertEqual(["start-1", "start-2"], [row["id"] for row in
+                                workflow_stages(receipt, events, requests, setup, home)])
+                        else:
+                            with self.assertRaisesRegex(AssertionError, "failed child terminal supplies foreign storage"):
+                                workflow_stages(receipt, events, requests, setup, home)
+
+    def test_failed_worker_cannot_supply_successful_write_credit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt, events, requests, setup, home = replacement_evidence(Path(directory), 2)
+            request = requests[1]
+            write = copy.deepcopy(request["messages"][-2:])
+            request["messages"] = request["messages"][:-2]
+            requests[-3]["messages"].extend(write)
+            with self.assertRaisesRegex(AssertionError, "full artifact write"):
+                workflow_stages(receipt, events, requests, setup, home)
+
+    def test_extra_completed_stage_and_forged_completed_outcome_fail(self):
+        for stage in (1, 2):
+            for fault in ("forged", "canonical-extra"):
+                with self.subTest(stage=stage, fault=fault), tempfile.TemporaryDirectory() as directory:
+                    receipt, events, requests, setup, home = replacement_evidence(Path(directory), stage)
+                    verified = receipt["verified_deliveries"][stage - 1]
+                    body = {**verified["terminal"], "state": "Completed", "outcome": "Completed", "reason": None,
+                            "log_path": context_paths(requests[-3])["log_path"],
+                            "artifact_directory": context_paths(requests[-3])["artifact_dir"]}
+                    verified["terminal"] = body
+                    if fault == "canonical-extra":
+                        requests[-2]["messages"][1]["content"] = json.dumps(body)
+                        receipt["delivery_observations"]["deliveries"][stage - 1]["terminal"] = body
+                        requests[-3]["messages"].extend(copy.deepcopy(requests[stage - 1]["messages"][-2:]))
+                    with self.assertRaises(AssertionError):
+                        workflow_stages(receipt, events, requests, setup, home)
+
+    def test_extra_failed_or_duplicate_run_cannot_escape_stage_validation(self):
+        for fault in ("duplicate", "unrelated", "after-completed"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                receipt, events, requests, setup, home = replacement_evidence(Path(directory), 1)
+                if fault == "duplicate":
+                    receipt["accepted_runs"].append(copy.deepcopy(receipt["accepted_runs"][0]))
+                elif fault == "unrelated":
+                    args = json.loads(events[0]["output"]["ArgumentsJson"])
+                    args["Task"] = "An unrelated objective."
+                    events[0]["output"]["ArgumentsJson"] = json.dumps(args)
+                    receipt["calls"] = observer_calls(events)
+                else:
+                    events[:4] = events[2:4] + events[:2]
+                    for index, event in enumerate(events, 1):
+                        event.update(sequence=index, observed_ns=index * 100)
+                    receipt["calls"] = observer_calls(events)
+                    for row in receipt["delivery_observations"]["deliveries"]:
+                        start = next(call for call in receipt["calls"] if call["result"] == json.dumps(row["accepted"]))
+                        row.update(request_admitted_ns=start["observed_ns"] + 110, response_first_payload_ns=start["observed_ns"] + 120)
+                with self.assertRaises(AssertionError):
+                    workflow_stages(receipt, events, requests, setup, home)
 
 
 class CoordinationArchiveControls(unittest.TestCase):
@@ -190,6 +404,97 @@ class CoordinationArchiveControls(unittest.TestCase):
 
     def archive(self, home, evidence):
         return archive_runtime_files(FIXTURE, home, evidence / "coordination-case", evidence)
+
+    def replacement_fixture(self, root):
+        result = self.fixture(root)
+        home, evidence, setup, observer, receipt, events, requests, target, save = result
+        accepted = {**ACCEPTED, "run_id": "failed-archive", "scope_id": "failed-archive-scope"}
+        body = {**terminal(), "run_id": accepted["run_id"], "scope_id": accepted["scope_id"],
+                "state": "Failed", "outcome": "Failed", "reason": "no_activity_timeout",
+                "log_path": None, "artifact_directory": None}
+        args = json.dumps({"Agent": "task-worker", "Task": "A neutral assigned artifact."})
+        failed_events = [{"output": {"Type": kind, "SessionId": receipt["session_id"], "CallId": "failed-archive-start",
+                          "ToolName": "spawn_agent", **values}} for kind, values in (
+                          ("tool_call", {"ArgumentsJson": args}), ("tool_result", {"Result": json.dumps(accepted)}))]
+        events[:0] = failed_events
+        for index, event in enumerate(events, 1):
+            event.update(sequence=index, observed_ns=index * 100)
+        receipt["calls"] = observer_calls(events)
+        receipt["accepted_runs"].insert(0, accepted)
+        receipt["delivery_observations"] = {"complete": True, "deliveries": [{"accepted": accepted,
+            "call_id": "failed-archive-delivery", "terminal": body, "request_admitted_ns": 210,
+            "response_first_payload_ns": 220, "parent_boundary_ns": 10000}]}
+        history = requests[-1]["messages"]
+        delivery = parent(body, "failed-archive-delivery")
+        delivery["messages"][0]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+            {"run_id": accepted["run_id"], "source_operation": "spawn_agent"})
+        history[:0] = [{"role": "assistant", "tool_calls": [{"id": "failed-archive-start", "function": {
+            "name": "spawn_agent", "arguments": args}}]},
+            {"role": "tool", "tool_call_id": "failed-archive-start", "content": json.dumps(accepted)}, *delivery["messages"]]
+        failed_request = copy.deepcopy(requests[0])
+        failed_request["messages"][1]["content"] = failed_request["messages"][1]["content"].replace("/run-1/", "/failed-archive/")
+        requests.insert(0, failed_request)
+        log = actual_file(home, "/home/netclaw/.netclaw/sessions/neutral/logs/session.log")
+        log.write_text(log.read_text() + "\nchild_run_accepted owner=session-neutral runId=failed-archive journalSequence=3")
+        save()
+        return result
+
+    def test_archives_actual_file_output_after_null_path_failed_attempt(self):
+        for supplied in (False, True):
+            with self.subTest(supplied=supplied), tempfile.TemporaryDirectory() as directory:
+                home, evidence, _, _, receipt, _, requests, target, save = self.replacement_fixture(Path(directory))
+                if supplied:
+                    body = receipt["delivery_observations"]["deliveries"][0]["terminal"]
+                    paths = context_paths(requests[0])
+                    body.update(log_path=paths["log_path"], artifact_directory=paths["artifact_dir"])
+                    requests[-1]["messages"][3]["content"] = json.dumps(body)
+                    save()
+                inventory = self.archive(home, evidence)
+                self.assertIs(inventory["capture_complete"], True)
+                delivery = next(row for row in inventory["files"] if row["kind"] == "delivery")
+                self.assertEqual(target, delivery["canonical_path"])
+                self.assertEqual(actual_file(home, target).read_bytes(),
+                    (evidence / "coordination-case/runtime-files" / delivery["archive_path"]).read_bytes())
+                self.assertNotIn("passed", inventory)
+
+    def test_archive_failed_attempt_retains_canonical_consumption_owner_and_storage(self):
+        for fault in ("missing-consumption", "incomplete", "foreign-consumption", "duplicate-consumption", "late-consumption",
+                      "dto-success", "dto-ordinal", "provider-pair", "owner", "context", "log-path", "artifact-path", "no-completed-start"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                home, evidence, _, _, receipt, events, requests, _, save = self.replacement_fixture(Path(directory))
+                observation = receipt["delivery_observations"]["deliveries"][0]
+                if fault == "missing-consumption":
+                    receipt["delivery_observations"]["deliveries"].clear()
+                elif fault == "incomplete":
+                    receipt["delivery_observations"]["complete"] = False
+                elif fault == "foreign-consumption":
+                    observation["accepted"] = {**observation["accepted"], "run_id": "foreign"}
+                elif fault == "duplicate-consumption":
+                    receipt["delivery_observations"]["deliveries"].append(copy.deepcopy(observation))
+                elif fault == "late-consumption":
+                    observation["response_first_payload_ns"] = observation["parent_boundary_ns"] + 1
+                elif fault == "dto-success":
+                    receipt["calls"][0]["success"] = False
+                elif fault == "dto-ordinal":
+                    receipt["calls"][0]["occurrence"] = True
+                elif fault == "no-completed-start":
+                    events[:] = events[:2] + events[-3:]
+                    for index, event in enumerate(events, 1):
+                        event.update(sequence=index, observed_ns=index * 100)
+                    receipt["calls"] = observer_calls(events)
+                elif fault == "provider-pair":
+                    del requests[-1]["messages"][2:4]
+                elif fault == "owner":
+                    log = actual_file(home, "/home/netclaw/.netclaw/sessions/neutral/logs/session.log")
+                    log.write_text(log.read_text().replace("owner=session-neutral runId=failed-archive", "owner=foreign runId=failed-archive"))
+                elif fault == "context":
+                    requests[0]["messages"][1]["content"] = "Context without runtime storage paths."
+                else:
+                    observation["terminal"]["log_path" if fault == "log-path" else "artifact_directory"] = "/foreign/storage"
+                    requests[-1]["messages"][3]["content"] = json.dumps(observation["terminal"])
+                save()
+                with self.assertRaises(AssertionError):
+                    self.archive(home, evidence)
 
     def test_retains_actual_sources_artifacts_and_both_delivery_locations(self):
         for copied in (False, True):
@@ -499,7 +804,7 @@ class CoordinationWorkflowControls(unittest.TestCase):
                 elif fault == "dto-absent":
                     del events[:2]
                     for index, event in enumerate(events, 1):
-                        event.update(sequence=index, observed_ns=index)
+                        event.update(sequence=index, observed_ns=index * 100)
                 elif fault == "provider-absent":
                     requests.pop()
                 else:
@@ -747,11 +1052,13 @@ run_all
                 args = json.loads(event["output"]["ArgumentsJson"])
                 args["Context"] = "Runtime artifact paths:\n" + setup["findings_path"] + "\n" + setup["plan_path"]
                 event["output"]["ArgumentsJson"] = json.dumps(args)
+            receipt["calls"] = observer_calls(events)
             workflow_stages(receipt, events, requests, setup, home)
             original = copy.deepcopy(events)
             args = json.loads(events[2]["output"]["ArgumentsJson"])
             args["Agent"] = "headless-analyst"
             events[2]["output"]["ArgumentsJson"] = json.dumps(args)
+            receipt["calls"] = observer_calls(events)
             with self.assertRaisesRegex(AssertionError, "distinct assignment"):
                 workflow_stages(receipt, events, requests, setup, home)
             events = copy.deepcopy(original)
@@ -762,7 +1069,8 @@ run_all
             for sequence, event in enumerate(events, 1):
                 event["sequence"] = sequence
                 event["observed_ns"] = sequence
-            with self.assertRaisesRegex(AssertionError, "plan_path"):
+            receipt["calls"] = observer_calls(events)
+            with self.assertRaisesRegex(AssertionError, "repeats a run"):
                 workflow_stages(receipt, events, requests, setup, home)
 
     def test_coordination_assertion_retains_each_python_error_despite_outer_stderr_discard(self):
@@ -819,7 +1127,7 @@ assert_coordination_analyze_plan 2>/dev/null
                                  "ArgumentsJson": json.dumps({"Path": setup["source_root"] + "/source/catalog.py"})},
                                 {"Type": "tool_result", "CallId": "forbidden", "ToolName": tool, "Result": "source restored"}):
                         index = len(events) + 1
-                        events.append({"sequence": index, "observed_ns": index,
+                        events.append({"sequence": index, "observed_ns": index * 100,
                                        "output": {**dto, "SessionId": receipt["session_id"]}})
                 self.assertEqual(before, source.read_bytes())
                 with self.subTest(actor=actor, tool=tool), self.assertRaises(AssertionError):
@@ -841,6 +1149,7 @@ assert_coordination_analyze_plan 2>/dev/null
             receipt, events, requests, setup, home = stage_evidence(Path(directory))
             for event in events[2:]:
                 event["output"]["CallId"] = events[0]["output"]["CallId"]
+            receipt["calls"] = observer_calls(events)
             workflow_stages(receipt, events, requests, setup, home)
             events[1], events[2] = events[2], events[1]
             for sequence, event in enumerate(events, 1):
@@ -869,6 +1178,7 @@ assert_coordination_analyze_plan 2>/dev/null
                 arguments = json.loads(event["output"]["ArgumentsJson"])
                 arguments["Agent"] = arguments["Agent"].upper()
                 event["output"]["ArgumentsJson"] = json.dumps(arguments)
+            receipt["calls"] = observer_calls(events)
             workflow_stages(receipt, events, requests, setup, home)
 
     def test_current_attempt_contract_rejects_stale_receipts_and_changed_source(self):
@@ -880,8 +1190,7 @@ assert_coordination_analyze_plan 2>/dev/null
             data = {"Nonce": "nonce-current", "Mode": "collect", "InitialPrompt": prompt(setup), "SessionId": "session-neutral"}
             receipt.update(status="observed", prompt_nonce=data["Nonce"], observer_mode="collect",
                 initial_prompt_sha256=hashlib.sha256(data["InitialPrompt"].encode()).hexdigest(),
-                last_reply="Actual final reply", case=CASES[0], prompt_ordinal=1,
-                delivery_observations={"complete": True})
+                last_reply="Actual final reply", case=CASES[0], prompt_ordinal=1)
             (observer / "observer-input.json").write_text(json.dumps(data))
             (observer / "session-output.jsonl").write_text("\n".join(json.dumps(row) for row in events))
             for index, request in enumerate(requests):
