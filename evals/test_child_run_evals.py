@@ -19,7 +19,7 @@ import unittest
 from unittest.mock import patch
 
 from child_run_evals import (CHILD_CONTRACT, REQUIRED_RATIONALE_ERROR, ChildFixture, acceptance, accepted_start_calls, actual_file, bind_request,
-                             canonical_pairs, child_handler, committed_positions, consumed_deliveries, collect, legacy_observer_mode, read_cancellation_report, session_logs, validate_prompt_receipt, verified_final_response, verify_child_actions, verify_cli_acceptance, verify_trial, write_completed)
+                             canonical_pairs, child_handler, committed_positions, consumed_deliveries, collect, legacy_observer_mode, read_cancellation_report, session_logs, validate_prompt_receipt, verified_final_response, verify_child_actions, verify_cli_acceptance, verify_scratch, verify_trial, write_completed)
 
 ACCEPTED = {"run_id": "run-neutral", "scope_id": "scope-neutral", "state": "Accepted", "control_tool": "check_agent_run"}
 ROOT = "/home/netclaw/.netclaw/sessions/neutral/subagents/neutral"
@@ -1080,6 +1080,174 @@ class TrialOracleControls(unittest.TestCase):
                 with self.subTest(fields=fields), self.assertRaises(AssertionError):
                     self.verify(receipt, [child_after_write(True), parent({**terminal(True), **fields})], snapshot, logs(), home, "neutral-nonce", True)
 
+
+
+class ScratchReceiptControls(unittest.TestCase):
+    def fixture(self):
+        accepted = {**ACCEPTED, "scope_id": "session-neutral/subagent/disposable-diagnostic/run-neutral"}
+        root = "/home/netclaw/.netclaw/sessions/neutral/subagents/run-neutral"
+        paths = {"session_dir": "/home/netclaw/.netclaw/sessions/neutral/workspace",
+                 "temp_dir": root + "/tmp", "artifact_dir": root + "/artifacts", "log_path": root + "/logs/session.log"}
+        body = {**terminal(), "scope_id": accepted["scope_id"], "log_path": paths["log_path"],
+                "artifact_directory": paths["artifact_dir"], "output": paths["temp_dir"]}
+        start = {"id": "start-neutral", "name": "spawn_agent", "success": True, "failure_code": None,
+                 "arguments": {"Agent": "disposable-diagnostic", "Task": "Complete the assigned diagnostic.",
+                               "_rationale": "Run the assigned diagnostic."}, "result": json.dumps(accepted)}
+        def pair(identifier, name, arguments, result):
+            return [{"role": "assistant", "tool_calls": [{"id": identifier, "function": {
+                     "name": name, "arguments": json.dumps(arguments)}}]},
+                    {"role": "tool", "tool_call_id": identifier, "content": result}]
+        first = {"messages": pair(start["id"], start["name"], start["arguments"], start["result"])}
+        worker = {"messages": [{"role": "system", "content": CHILD_CONTRACT}, {"role": "user", "content":
+            "Context:\n[session]\n" + "\n".join(key + ": " + value for key, value in paths.items()) + "\nTask:\nRun the diagnostic."}]}
+        worker["messages"] += pair("shell-neutral", "shell_execute",
+            {"Command": "python3 -c 'import tempfile; print(tempfile.gettempdir())'", "_rationale": "Read the managed temp path."},
+            "Exit code: 0\n" + paths["temp_dir"] + "\n")
+        final = {"messages": first["messages"] + pair("delivery-neutral", "spawn_agent",
+                 {"run_id": accepted["run_id"], "source_operation": "spawn_agent"}, json.dumps(body))}
+        data = {"Nonce": "nonce-neutral", "Mode": "collect", "InitialPrompt": "Run the diagnostic.", "SessionId": ""}
+        positions = {"accepted": 1, "terminal_recorded": 3, "result_prepared": 4, "delivery_admitted": 5}
+        receipt = {"status": "observed", "case": "subagent_session_scratch_disposable", "prompt_nonce": data["Nonce"],
+                   "observer_mode": "collect", "initial_prompt_sha256": hashlib.sha256(data["InitialPrompt"].encode()).hexdigest(),
+                   "session_id": "session-neutral", "last_reply": paths["temp_dir"], "calls": [start],
+                   "accepted_run": accepted, "accepted_runs": [accepted],
+                   "verified_deliveries": [{"accepted": accepted, "terminal": body, "journal_positions": positions}],
+                   "delivery_observations": {"complete": True, "deliveries": [{"accepted": accepted, "terminal": body,
+                       "call_id": "delivery-neutral", "request_id": 3, "request_admitted_ns": 1,
+                       "response_first_payload_ns": 2, "parent_boundary_ns": 3}]}}
+        return receipt, data, [first, worker, final], logs()
+
+    def test_actual_pair_and_repeated_cumulative_capture_pass(self):
+        values = self.fixture()
+        self.assertEqual(values[0]["last_reply"], verify_scratch(*values))
+        values[2].append(copy.deepcopy(values[2][1]))
+        self.assertEqual(values[0]["last_reply"], verify_scratch(*values))
+
+    def test_zero_tool_child_capture_passes_and_malformed_extra_child_call_fails(self):
+        values = self.fixture()
+        initial = copy.deepcopy(values[2][1])
+        initial["messages"] = initial["messages"][:2]
+        values[2].append(initial)
+        self.assertEqual(values[0]["last_reply"], verify_scratch(*values))
+        extra = copy.deepcopy(values[2][1])
+        extra["messages"][1]["content"] = "\n".join(
+            line for line in extra["messages"][1]["content"].splitlines() if not line.startswith("temp_dir:"))
+        extra["messages"][2]["tool_calls"][0]["id"] = "second-real-child-call"
+        extra["messages"][3]["tool_call_id"] = "second-real-child-call"
+        values[2].append(extra)
+        with self.assertRaises(AssertionError):
+            verify_scratch(*values)
+
+    def test_wrong_or_duplicate_command_and_failed_or_wrong_result_fail(self):
+        def command(request, text):
+            call = request["messages"][2]["tool_calls"][0]["function"]
+            args = json.loads(call["arguments"])
+            args["Command"] = text
+            call["arguments"] = json.dumps(args)
+        mutations = [lambda q: command(q, "pwd"),
+                     lambda q: q["messages"][3].update(content="Exit code: 1\nfailed\n"),
+                     lambda q: q["messages"][3].update(content="Exit code: 0\n/tmp\n"),
+                     lambda q: q["messages"].extend(copy.deepcopy(q["messages"][2:])),
+                     lambda q: q["messages"].pop(),
+                     lambda q: q["messages"][2]["tool_calls"][0]["function"].update(name="file_read")]
+        for mutate in mutations:
+            values = self.fixture()
+            mutate(values[2][1])
+            with self.subTest(mutate=mutate), self.assertRaises(AssertionError):
+                verify_scratch(*values)
+        values = self.fixture()
+        other = copy.deepcopy(values[2][1])
+        other["messages"][2]["tool_calls"][0]["id"] = "shell-other"
+        other["messages"][3]["tool_call_id"] = "shell-other"
+        values[2].append(other)
+        with self.assertRaises(AssertionError):
+            verify_scratch(*values)
+
+    def test_wrong_context_owner_temp_path_and_parent_output_fail(self):
+        for before, after in [("/subagents/run-neutral/", "/subagents/foreign/"),
+                              ("temp_dir: ", "temp_dir: /foreign"),
+                              ("session_dir: ", "session_dir: /foreign")]:
+            values = self.fixture()
+            message = values[2][1]["messages"][1]
+            message["content"] = message["content"].replace(before, after)
+            with self.subTest(before=before), self.assertRaises(AssertionError):
+                verify_scratch(*values)
+        for field in ["session_id", "last_reply"]:
+            values = self.fixture()
+            values[0][field] = "foreign"
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                verify_scratch(*values)
+
+    def test_missing_or_foreign_terminal_consumption_and_journal_fail(self):
+        for mutate in [lambda v: v[0]["delivery_observations"].update(complete=False),
+                       lambda v: v[0]["delivery_observations"].update(complete=1),
+                       lambda v: v[0]["delivery_observations"]["deliveries"][0].update(request_id=1),
+                       lambda v: v[0]["delivery_observations"]["deliveries"][0].update(call_id="foreign"),
+                       lambda v: v[0]["verified_deliveries"].clear(),
+                       lambda v: v[2].pop()]:
+            values = self.fixture()
+            mutate(values)
+            with self.subTest(mutate=mutate), self.assertRaises(AssertionError):
+                verify_scratch(*values)
+        values = self.fixture()
+        with self.assertRaises(AssertionError):
+            verify_scratch(*values[:3], values[3].replace("owner=session-neutral", "owner=foreign"))
+
+    def test_context_path_hint_wrong_profile_and_forged_start_fail(self):
+        for key, value in [("Context", "unrequested"), ("context", ""), ("Task", "Use /tmp."),
+                           ("Task", ""), ("Agent", "another-agent")]:
+            values = self.fixture()
+            values[0]["calls"][0]["arguments"][key] = value
+            with self.subTest(key=key), self.assertRaises(AssertionError):
+                verify_scratch(*values)
+        for field, value in [("id", "foreign"), ("success", 1), ("success", False)]:
+            values = self.fixture()
+            values[0]["calls"][0][field] = value
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                verify_scratch(*values)
+
+    def test_shell_assertion_uses_the_exact_provider_receipt(self):
+        values = self.fixture()
+        source = Path(__file__).resolve().parent.parent
+        script = (source / "evals/run-evals.sh").read_text()
+        names = ["assert_subagent_session_scratch_disposable", "child_result_consumer", "assert_child_delivery_receipt",
+                 "stdout_json_tool_called", "stdout_json_tool_call_arguments", "stdout_response_contains"]
+        functions = []
+        for name in names:
+            begin = script.index(name + "() {")
+            functions.append(script[begin:script.index("\n}", begin) + 2])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home, evidence = root / "home", root / "evidence"
+            child_root = home / "data/sessions/neutral/subagents/run-neutral"
+            (child_root / "logs").mkdir(parents=True)
+            (child_root / "logs/session.log").write_text(
+                "SubAgent [disposable-diagnostic] completed (success=True, outcome=Completed\n" + values[0]["last_reply"])
+            (home / "data/sessions/neutral/logs").mkdir()
+            (home / "data/sessions/neutral/logs/session.log").write_text(values[3])
+            observer = evidence / "child-runs/observer-neutral"
+            observer.mkdir(parents=True)
+            relay = evidence / "child-runs/relay"
+            relay.mkdir()
+            (observer / "verified-receipt.json").write_text(json.dumps(values[0]))
+            (observer / "observer-input.json").write_text(json.dumps(values[1]))
+            for number, request in enumerate(values[2], 1):
+                (relay / f"request-{number:04}.json").write_text(json.dumps(request))
+            stdout = root / "stdout.json"
+            start = values[0]["calls"][0]
+            stdout.write_text(json.dumps({"response": values[0]["last_reply"], "toolCalls": [{
+                "toolName": start["name"], "argumentsJson": json.dumps(start["arguments"])}]}))
+            environment = {**os.environ, "REPO_ROOT": str(source), "EVAL_HOME": str(home), "TMPDIR_EVAL": str(evidence),
+                           "STDOUT_FILE": str(stdout), "FILTER_CASE": "subagent_session_scratch_disposable",
+                           "CHILD_LAST_EVIDENCE": str(observer), "PYTHONDONTWRITEBYTECODE": "1"}
+            shell = "\n\n".join(functions) + "\nassert_subagent_session_scratch_disposable\n"
+            result = subprocess.run(["bash", "-c", shell], env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(0, result.returncode, result.stderr)
+            worker = values[2][1]
+            worker["messages"][3]["content"] = "Exit code: 1\nfailed\n"
+            (relay / "request-0002.json").write_text(json.dumps(worker))
+            result = subprocess.run(["bash", "-c", shell], env=environment, capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(0, result.returncode)
 
 if __name__ == "__main__":
     unittest.main()
