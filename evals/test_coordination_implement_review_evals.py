@@ -13,7 +13,7 @@ from child_run_evals import REQUIRED_RATIONALE_ERROR, actual_file, legacy_observ
 from coordination_implement_review_evals import (CASE, FIXTURE, checkout_snapshot, commands, git,
                                                 initialization_script, main, prepare, prompt, run_check, verify)
 from test_child_run_evals import child, parent, terminal, ROOT as CHILD_ROOT
-from test_coordination_workflow_evals import shell_functions
+from test_coordination_workflow_evals import observer_calls, shell_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -90,6 +90,7 @@ def evidence(root, line_ending="\n"):
         parent_request["messages"][-2]["tool_calls"][0]["function"]["arguments"] = json.dumps({"run_id": accepted["run_id"], "source_operation": "spawn_agent"})
         pair(parent_request, "file_read", {"Path": report_path}, report_text[stage], "read-" + stage, True)
         parent_reads(stage)
+    receipt["calls"] = observer_calls(events)
     return setup, receipt, events, [parent_request, *children], home, lambda: run_check(home, setup)
 
 
@@ -320,6 +321,32 @@ class ImplementReviewControls(unittest.TestCase):
                 self.reject(changed)
         args[3][0]["messages"][3]["content"] = "forged provider result"
         self.reject(args)
+
+    def test_terminal_shaped_rejection_needs_its_actual_dto_metadata(self):
+        args = copy.deepcopy(self.args)
+        _, receipt, events, requests, _, _ = args
+        arguments = {"run_id": receipt["accepted_runs"][1]["run_id"], "source_operation": "spawn_agent"}
+        outputs = [{"Type": "tool_call", "CallId": "rejected-terminal", "ToolName": "spawn_agent", "ArgumentsJson": json.dumps(arguments)},
+                   {"Type": "tool_result", "CallId": "rejected-terminal", "ToolName": "spawn_agent", "Result": REQUIRED_RATIONALE_ERROR,
+                    "ToolFailureCode": "invalid_rationale"}]
+        for output in outputs:
+            ordinal = len(events) + 1
+            events.append({"sequence": ordinal, "observed_ns": ordinal, "output": {**output, "SessionId": receipt["session_id"]}})
+        requests[0]["messages"].extend([
+            {"role": "assistant", "tool_calls": [{"id": "rejected-terminal", "function": {
+                "name": "spawn_agent", "arguments": json.dumps(arguments)}}]},
+            {"role": "tool", "tool_call_id": "rejected-terminal", "content": REQUIRED_RATIONALE_ERROR}])
+        receipt["calls"] = observer_calls(events)
+        self.assertTrue(verify(*args)["passed"])
+        self.assertIs(receipt["calls"][-1]["success"], False)
+        for field, value in [("failure_code", None), ("success", 0), ("occurrence", 1)]:
+            changed = copy.deepcopy(args)
+            changed[1]["calls"][-1][field] = value
+            with self.subTest(field=field):
+                self.reject(changed)
+        changed = copy.deepcopy(args)
+        changed[2][-1]["output"]["ToolFailureCode"] = None
+        self.reject(changed)
 
     def test_terminal_must_precede_report_review(self):
         args = copy.deepcopy(self.args)
