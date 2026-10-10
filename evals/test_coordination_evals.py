@@ -20,6 +20,7 @@ RESOURCE = "references/implement-review.md"
 DIRECTORY = ROOT / "feeds/skills/.system/files" / SKILL
 BODY = (DIRECTORY / "SKILL.md").read_text().split("---", 2)[2].strip()
 WORKFLOW = (DIRECTORY / RESOURCE).read_text().rstrip("\n")
+RAW_WORKFLOW = (DIRECTORY / RESOURCE).read_bytes().decode("utf-8")
 HEADER = f"path: /home/netclaw/.netclaw/skills/.system/{SKILL}/{RESOURCE}\n"
 
 
@@ -165,7 +166,7 @@ class ObservedCoordinationReceiptTests(unittest.TestCase):
         observed_pair(self.fixture, "skill_load", {"Name": SKILL, "_rationale": "Read the coordination guidance."},
                       "## Agent Coordination\nVersion: 1.0.0\n\n" + BODY, "load")
         observed_pair(self.fixture, "skill_read_resource", {"SkillName": SKILL, "ResourcePath": RESOURCE,
-                      "_rationale": "Read the selected workflow."}, HEADER + WORKFLOW, "read")
+                      "_rationale": "Read the selected workflow."}, HEADER + RAW_WORKFLOW, "read")
 
     def passes(self):
         receipt, events, requests, data = self.fixture
@@ -177,6 +178,34 @@ class ObservedCoordinationReceiptTests(unittest.TestCase):
 
     def test_actual_dto_provider_occurrences_and_visible_answer_pass(self):
         self.assertTrue(self.passes())
+
+    def test_raw_resource_requires_the_complete_canonical_content(self):
+        self.assertTrue(self.passes())
+        for content in (RAW_WORKFLOW[:-1], "!" + RAW_WORKFLOW[1:], RAW_WORKFLOW + "\n"):
+            with self.subTest(content=content):
+                self.fixture = observed_fixture()
+                observed_pair(self.fixture, "skill_load", {"Name": SKILL},
+                              "## Agent Coordination\n" + BODY, "load")
+                observed_pair(self.fixture, "skill_read_resource", {"SkillName": SKILL, "ResourcePath": RESOURCE},
+                              HEADER + content, "read")
+                observed_complete(self.fixture)
+                self.reject()
+
+    def test_raw_resource_preserves_canonical_CRLF_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            skill = Path(directory)
+            (skill / "SKILL.md").write_bytes((DIRECTORY / "SKILL.md").read_bytes())
+            (skill / RESOURCE).parent.mkdir()
+            content = RAW_WORKFLOW.replace("\n", "\r\n")
+            (skill / RESOURCE).write_bytes(content.encode("utf-8"))
+            self.fixture = observed_fixture()
+            observed_pair(self.fixture, "skill_load", {"Name": SKILL}, "## Agent Coordination\n" + BODY, "load")
+            observed_pair(self.fixture, "skill_read_resource", {"SkillName": SKILL, "ResourcePath": RESOURCE},
+                          HEADER + content, "read")
+            observed_complete(self.fixture)
+            self.assertTrue(verify_observed(*self.fixture[:3], skill, self.fixture[3])["passed"])
+            with self.assertRaisesRegex(AssertionError, "canonical resource"):
+                verify_observed(*self.fixture[:3], DIRECTORY, self.fixture[3])
 
     def test_captured_foreign_metadata_rejection_with_opaque_test_identity_passes(self):
         # The retained trial supplied this public argument and canonical error text.
@@ -250,7 +279,7 @@ class ObservedCoordinationReceiptTests(unittest.TestCase):
                 self.fixture = observed_fixture()
                 self.add_required()
                 observed_pair(self.fixture, "skill_read_resource", {"SkillName": SKILL, "ResourcePath": path},
-                              HEADER + WORKFLOW, "extra")
+                              HEADER + RAW_WORKFLOW, "extra")
                 observed_complete(self.fixture)
                 self.reject()
 
@@ -264,7 +293,7 @@ class ObservedCoordinationReceiptTests(unittest.TestCase):
                         event["output"]["Result"] = "old partial content"
                 self.reject()
         self.fixture = observed_fixture()
-        observed_pair(self.fixture, "skill_read_resource", {"SkillName": SKILL, "ResourcePath": RESOURCE}, HEADER + WORKFLOW, "read")
+        observed_pair(self.fixture, "skill_read_resource", {"SkillName": SKILL, "ResourcePath": RESOURCE}, HEADER + RAW_WORKFLOW, "read")
         observed_pair(self.fixture, "skill_load", {"Name": SKILL}, "## Agent Coordination\n" + BODY, "load")
         observed_complete(self.fixture)
         self.reject()
