@@ -12,7 +12,7 @@ import uuid
 
 from background_fixture import message_text
 from child_run_evals import (acceptance, actual_file, canonical_pairs, context_paths,
-                             evidence_requests, require, validate_prompt_receipt)
+                             evidence_requests, is_unexecuted_rationale_rejection, require, validate_prompt_receipt)
 from coordination_artifact_evals import load_json, occurrences
 
 CASE = "productive_parent_child"
@@ -171,7 +171,8 @@ def verify(setup, receipt, events, requests, eval_home):
             expected_next = setup["chains"][owner][index + 1]["path"] if index + 1 < ROUNDS[owner] else None
             require(load_json(row["content"])["next"] == expected_next, "The fixture chain is not canonical.")
     calls, _ = occurrences(events, receipt["session_id"])
-    starts = [call for call in calls if call["name"] == "spawn_agent"]
+    attempts = [call for call in calls if call["name"] == "spawn_agent"]
+    starts = [call for call in attempts if not is_unexecuted_rationale_rejection(call["failure"], call["result"])]
     require(len(starts) == 1 and starts[0]["failure"] is None
             and str(starts[0]["arguments"].get("Agent", "")).casefold() == "task-worker",
             "The catalog requires one actual task-worker start.")
@@ -202,7 +203,7 @@ def verify(setup, receipt, events, requests, eval_home):
     require(load_json(combined_bytes) == expected_combined, "The combined catalog has wrong values or order.")
     child_pairs, child_write, _, _ = provider_pairs(child_requests, setup, "child", child_bytes, terminal_id)
     parent_pairs, parent_write, artifact_reads, parent_starts = provider_pairs(parent_requests, setup, "parent", child_bytes, terminal_id)
-    require(parent_starts == {provider_signature(start["id"], start["arguments"], start["result"])},
+    require(parent_starts == {provider_signature(call["id"], call["arguments"], call["result"]) for call in attempts},
             "The actual start DTO lacks its paired provider acceptance.")
     require(child_write[1].encode() == child_bytes and parent_write[1].encode() == combined_bytes,
             "The actual catalog bytes differ from the paired full writes.")
