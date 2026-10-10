@@ -17,7 +17,8 @@ from coordination_artifact_evals import load_json, occurrences
 
 CASE = "productive_parent_child"
 ROUNDS = {"parent": 65, "child": 35}
-TOOLS = {"file_read", "file_write", "load_tool", "search_tools", "skill_load", "skill_read_resource"}
+TOOLS = {"file_read", "file_write", "load_tool", "search_tools", "skill_load", "skill_read_resource",
+         "set_working_directory"}
 
 
 def encode(value):
@@ -103,7 +104,7 @@ def provider_pairs(requests, setup, owner, child_bytes, terminal_id):
     allowed_reads = set(expected) | {output}
     if owner == "parent":
         allowed_reads.add(setup["child_output"])
-    pairs, edges, writes, artifact_reads, starts = {}, set(), set(), set(), set()
+    pairs, edges, writes, artifact_reads, starts, declarations = {}, set(), set(), set(), set(), set()
     predecessors = {chain[index]["path"]: chain[index - 1]["path"] for index in range(1, len(chain))}
     for request in requests:
         pending, seen_reads, terminal_seen, write_seen = {}, set(), False, False
@@ -123,6 +124,8 @@ def provider_pairs(requests, setup, owner, child_bytes, terminal_id):
                         edges.add((predecessors[path], path))
                 elif name == "file_write":
                     require(args.get("Path") == output, "A catalog write leaves its assigned output.")
+                elif name == "set_working_directory":
+                    require(args.get("Path") == setup["root"], "A catalog declaration leaves its exact project root.")
             if message.get("role") != "tool":
                 continue
             identifier = message.get("tool_call_id")
@@ -147,6 +150,9 @@ def provider_pairs(requests, setup, owner, child_bytes, terminal_id):
                     artifact_reads.add(signature)
             elif name == "spawn_agent" and "Agent" in args:
                 starts.add(signature)
+            elif name == "set_working_directory":
+                require(result == setup["root"], "A catalog declaration lacks its canonical successful result.")
+                declarations.add(signature)
             elif name == "file_write":
                 require(not write_seen, "The catalog output write repeats within one provider history.")
                 write_seen = True
@@ -159,7 +165,7 @@ def provider_pairs(requests, setup, owner, child_bytes, terminal_id):
     require(edges == {(previous, path) for path, previous in predecessors.items()},
             "A next record call lacks its preceding actual result feedback.")
     require(len(writes) == 1, "The actor lacks one complete output write occurrence.")
-    return pairs, next(iter(writes)), artifact_reads, starts
+    return pairs, next(iter(writes)), artifact_reads, starts, declarations
 
 
 def verify(setup, receipt, events, requests, eval_home):
@@ -201,8 +207,14 @@ def verify(setup, receipt, events, requests, eval_home):
                          "child_records": records(setup, "child")}
     combined_bytes = actual_file(eval_home, setup["combined_output"]).read_bytes()
     require(load_json(combined_bytes) == expected_combined, "The combined catalog has wrong values or order.")
-    child_pairs, child_write, _, _ = provider_pairs(child_requests, setup, "child", child_bytes, terminal_id)
-    parent_pairs, parent_write, artifact_reads, parent_starts = provider_pairs(parent_requests, setup, "parent", child_bytes, terminal_id)
+    child_pairs, child_write, _, _, _ = provider_pairs(child_requests, setup, "child", child_bytes, terminal_id)
+    parent_pairs, parent_write, artifact_reads, parent_starts, declarations = provider_pairs(
+        parent_requests, setup, "parent", child_bytes, terminal_id)
+    declared = [call for call in calls if call["name"] == "set_working_directory"]
+    require(all(call["failure"] is None and call["arguments"].get("Path") == setup["root"]
+                and call["result"] == setup["root"] for call in declared)
+            and declarations == {provider_signature(call["id"], call["arguments"], call["result"]) for call in declared},
+            "The parent project declaration lacks exact successful DTO and provider pairs.")
     require(parent_starts == {provider_signature(call["id"], call["arguments"], call["result"]) for call in attempts},
             "The actual start DTO lacks its paired provider acceptance.")
     require(child_write[1].encode() == child_bytes and parent_write[1].encode() == combined_bytes,

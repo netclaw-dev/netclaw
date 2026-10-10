@@ -83,6 +83,71 @@ class ProductiveParentChildControls(unittest.TestCase):
         self.assertEqual((65, 35), (result["parent_feedback_rounds"], result["child_feedback_rounds"]))
         self.assertTrue(result["passed"])
 
+    def declare_project(self, args, owner=0):
+        setup, receipt, events, requests, home = args
+        raw = json.dumps({"Path": setup["root"], "_rationale": "Declare the catalog project."})
+        pair = [{"role": "assistant", "tool_calls": [{"id": "declare", "function": {
+                    "name": "set_working_directory", "arguments": raw}}]},
+                {"role": "tool", "tool_call_id": "declare", "content": setup["root"]}]
+        requests[owner]["messages"][1:1] = pair
+        if owner == 0:
+            events[:0] = [
+                {"output": {"Type": "tool_call", "SessionId": receipt["session_id"], "CallId": "declare",
+                            "ToolName": "set_working_directory", "ArgumentsJson": raw}},
+                {"output": {"Type": "tool_result", "SessionId": receipt["session_id"], "CallId": "declare",
+                            "ToolName": "set_working_directory", "Result": setup["root"], "ToolFailureCode": None}}]
+            resequence(events)
+        return args
+
+    def test_exact_project_declaration_passes_for_each_actor(self):
+        for owner in (0, 1):
+            with self.subTest(owner=owner):
+                self.assertTrue(verify(*self.declare_project(copy.deepcopy(self.args), owner))["passed"])
+
+    def test_foreign_project_declaration_and_failed_result_fail(self):
+        for owner in (0, 1):
+            for fault in ("path", "result"):
+                args = self.declare_project(copy.deepcopy(self.args), owner)
+                if fault == "path":
+                    args[3][owner]["messages"][1]["tool_calls"][0]["function"]["arguments"] = json.dumps({"Path": "/foreign"})
+                else:
+                    args[3][owner]["messages"][2]["content"] = "Error: The declaration was denied."
+                with self.subTest(owner=owner, fault=fault), self.assertRaisesRegex(AssertionError, "catalog declaration"):
+                    verify(*args)
+
+    def test_parent_declaration_requires_matching_successful_dto_and_provider_pair(self):
+        for fault in ("failure", "dto_result", "provider_missing", "dto_missing", "rationale"):
+            args = self.declare_project(copy.deepcopy(self.args))
+            if fault == "failure":
+                args[2][1]["output"]["ToolFailureCode"] = "access_denied"
+            elif fault == "dto_result":
+                args[2][1]["output"]["Result"] = "/foreign"
+            elif fault == "provider_missing":
+                remove_pair(args[3][0], "declare")
+            elif fault == "dto_missing":
+                del args[2][:2]
+                resequence(args[2])
+            else:
+                args[2][0]["output"]["ArgumentsJson"] = json.dumps({"Path": args[0]["root"], "_rationale": "Changed intent."})
+            with self.subTest(fault=fault), self.assertRaisesRegex(AssertionError, "project declaration lacks"):
+                verify(*args)
+
+    def test_parent_record_before_spawn_acceptance_still_fails(self):
+        args = copy.deepcopy(self.args)
+        args[2][:4] = args[2][2:4] + args[2][:2]
+        resequence(args[2])
+        messages = args[3][0]["messages"]
+        messages[1:5] = messages[3:5] + messages[1:3]
+        with self.assertRaisesRegex(AssertionError, "ordered successful DTO"):
+            verify(*args)
+
+    def test_prose_or_fences_cannot_replace_the_final_json_object(self):
+        for prefix, suffix in (("The files are complete.\n", ""), ("```json\n", "\n```")):
+            args = copy.deepcopy(self.args)
+            args[1]["last_reply"] = prefix + args[1]["last_reply"] + suffix
+            with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+                verify(*args)
+
     def test_exact_rejected_attempt_requires_provider_pair_before_productive_repair(self):
         setup, receipt, events, requests, home = self.args
         arguments = {"Agent": "task-worker", "Task": "The initial assigned catalog task."}
