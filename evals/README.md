@@ -764,6 +764,16 @@ Use the approved provider configuration and frozen image, CLI, and helper.
 Run five independent fresh invocations for acceptance. Preserve every failed trial.
 The 300-second observation deadline adds no runtime task budget or retry policy.
 
+The default approval fixture adds `git add` and `git commit` only for this case and `coordination_two_writers`.
+Both grants use the container workspace directory scope. Other cases retain the exact prior fixture bytes.
+An explicit `NETCLAW_EVAL_APPROVALS_FILE` stays unchanged and receives no added grants.
+The matcher checks the explicit command target first. It uses the process directory when the command has no target.
+The scoped grants do not authorize an outside target or `git push`.
+
+```bash
+python3 -m unittest discover -s evals -p test_eval_approval_seed.py -v
+```
+
 The fixture reuses the neutral catalog source and creates a real detached Git worktree.
 The original checkout has staged and unstaged operator edits plus an untracked marker.
 Git creates both checkouts under the container's daemon user. The oracle applies no global Git trust override.
