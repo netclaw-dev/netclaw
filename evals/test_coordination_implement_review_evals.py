@@ -104,6 +104,90 @@ class ImplementReviewControls(unittest.TestCase):
         with self.assertRaises((AssertionError, ValueError, KeyError)):
             verify(*(args or self.args))
 
+    def spawn_fields(self, spellings):
+        args = copy.deepcopy(self.args)
+        for identifier in ("start-worker", "start-review"):
+            def change(value):
+                task = value.pop("Task")
+                report = args[0]["worker_report" if identifier == "start-worker" else "review_report"]
+                value[spellings[0]] = value.pop("Agent")
+                value[spellings[1]] = report
+                value[spellings[2]] = task.replace(report, "")
+                return value
+            self.change_spawn_fields(args, identifier, change)
+        return args
+
+    def change_spawn_fields(self, args, identifier, change):
+        for event in args[2]:
+            dto = event["output"]
+            if dto["Type"] == "tool_call" and dto.get("CallId") == identifier:
+                dto["ArgumentsJson"] = json.dumps(change(json.loads(dto["ArgumentsJson"])))
+        for request in args[3]:
+            for message in request["messages"]:
+                for call in message.get("tool_calls", []):
+                    if call["id"] == identifier:
+                        function = call["function"]
+                        function["arguments"] = json.dumps(change(json.loads(function["arguments"])))
+        args[1]["calls"] = observer_calls(args[2])
+
+    def test_runtime_spawn_field_spellings_preserve_complete_verification(self):
+        for spellings in (("agent", "task", "context"), ("aGeNt", "tAsK", "cOnTeXt"),
+                          ("a-g_e.n t", "t-a_s.k", "c-o_n.t e x t"), ("Agent", "task", "Context")):
+            with self.subTest(spellings=spellings):
+                self.assertTrue(verify(*self.spawn_fields(spellings))["passed"])
+
+    def test_spawn_field_precedence_matches_the_runtime(self):
+        args = self.spawn_fields(("Agent", "Task", "Context"))
+        self.change_spawn_fields(args, "start-review", lambda v: {**v, "agent": "wrong-profile", "task": "wrong", "context": "wrong"})
+        self.assertTrue(verify(*args)["passed"])
+        args = self.spawn_fields(("aGeNt", "tAsK", "cOnTeXt"))
+        self.change_spawn_fields(args, "start-review", lambda v: {"a_gent": "wrong-profile", "t_ask": "wrong", "con_text": "wrong", **v})
+        self.assertTrue(verify(*args)["passed"])
+        for field, value in (("Agent", "wrong-profile"), ("Task", ""), ("Context", "")):
+            changed = self.spawn_fields(("agent", "task", "context"))
+            self.change_spawn_fields(changed, "start-review", lambda v: {**v, field: value})
+            with self.subTest(field=field):
+                self.reject(changed)
+
+    def test_non_ascii_spawn_aliases_cannot_replace_required_scope(self):
+        valid = self.spawn_fields(("Agent", "Task", "Context"))
+        self.assertTrue(verify(*valid)["passed"])
+        for alias in ("Tas\u212a", "Ta\u017fk"):
+            args = copy.deepcopy(valid)
+            def rename(value):
+                value[alias] = value.pop("Task")
+                return value
+            self.change_spawn_fields(args, "start-review", rename)
+            with self.subTest(alias=alias):
+                with self.assertRaisesRegex(AssertionError, "The child lacks its actual revision, report, or task scope"):
+                    verify(*args)
+            args = copy.deepcopy(valid)
+            self.change_spawn_fields(args, "start-review", lambda v: {alias: "wrong", **v})
+            with self.subTest(canonical_precedence=alias):
+                self.assertTrue(verify(*args)["passed"])
+
+    def test_lowercase_spawn_fields_keep_scope_order_command_and_final_gates(self):
+        valid = self.spawn_fields(("agent", "task", "context"))
+        self.assertTrue(verify(*valid)["passed"])
+        for fault in ("profile", "task", "context", "review-before-report", "checks-before-review-report", "command", "final"):
+            args = copy.deepcopy(valid)
+            if fault in {"profile", "task", "context"}:
+                self.change_spawn_fields(args, "start-review", lambda v: {**v, {"profile": "agent"}.get(fault, fault): "wrong"})
+            elif fault in {"review-before-report", "checks-before-review-report"}:
+                identifier = "read-worker" if fault == "review-before-report" else "read-review"
+                result = next(e for e in args[2] if e["output"]["Type"] == "tool_result" and e["output"].get("CallId") == identifier)
+                args[2].remove(result)
+                args[2].append(result)
+                for ordinal, event in enumerate(args[2], 1):
+                    event.update(sequence=ordinal, observed_ns=ordinal)
+                args[1]["calls"] = observer_calls(args[2])
+            elif fault == "command":
+                self.append_parent_pair(args, "extra-command", "shell_execute", {"Command": "echo extra"}, "Exit code: 0\nextra\n")
+            else:
+                args[1]["last_reply"] = "Result:\n```json\n" + args[1]["last_reply"] + "\n```"
+            with self.subTest(fault=fault):
+                self.reject(args)
+
     def test_actual_baseline_fails_and_committed_candidate_passes(self):
         result = verify(*self.args)
         self.assertTrue(result["passed"])

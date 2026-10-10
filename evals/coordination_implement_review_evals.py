@@ -188,6 +188,19 @@ def signature(name, arguments, result):
     return name, json.dumps(provider_arguments(arguments), sort_keys=True), result
 
 
+def spawn_argument(arguments, name):
+    # Preserve exact-key precedence. Alternate field names support ASCII only.
+    if name in arguments:
+        return arguments[name]
+    for key, value in arguments.items():
+        if key.isascii() and key.casefold() == name.casefold():
+            return value
+    for key, value in arguments.items():
+        if key.isascii() and "".join(char for char in key if char.isalnum()).casefold() == name.casefold():
+            return value
+    return ""
+
+
 def paired_call_occurrences(requests):
     paired = Counter()
     for request in requests:
@@ -361,8 +374,8 @@ def verify(setup, receipt, events, requests, home, check_candidate):
     child_sets = {}
     for index, (stage, profile) in enumerate((("worker", "task-worker"), ("review", "code-analyst"))):
         start = starts[index]
-        require(str(start["arguments"].get("Agent", "")).casefold() == profile, "The child uses the wrong canonical profile.")
-        task = start["arguments"].get("Task", "") + "\n" + (start["arguments"].get("Context") or "")
+        require(str(spawn_argument(start["arguments"], "Agent")).casefold() == profile, "The child uses the wrong canonical profile.")
+        task = spawn_argument(start["arguments"], "Task") + "\n" + (spawn_argument(start["arguments"], "Context") or "")
         required = [setup["nonce"], setup["worker"], setup[stage + "_report"], setup["base_commit"], commands(setup)["check"]]
         if stage == "review":
             required += [actual_check["candidate_commit"], actual_check["source_sha256"]]
