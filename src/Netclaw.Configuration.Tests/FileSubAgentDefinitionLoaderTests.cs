@@ -47,6 +47,29 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
     }
 
     [Fact]
+    public void Eval_reviewer_profile_loads_into_the_parent_discovery_index()
+    {
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "TestData", "code-analyst.md"),
+            Path.Combine(_paths.AgentsDirectory, "code-analyst.md"));
+        var registry = new SubAgentDefinitionRegistry();
+        var layer = new SubAgentDiscoveryContextLayer(new SubAgentConfig(), registry, _loader, _paths);
+
+        var index = layer.GetContextLayer(TrustAudience.Personal);
+
+        var profile = Assert.Single(registry.GetUserFacing());
+        Assert.Equal("code-analyst", profile.Name);
+        Assert.Equal("Analyze code, run commands, and review files", profile.Description);
+        Assert.Equal(ModelRole.Compaction, profile.ModelRole);
+        Assert.Equal(120, profile.TimeoutSeconds);
+        Assert.Equal(SubAgentVisibility.UserFacing, profile.Visibility);
+        Assert.Empty(profile.ToolNames);
+        Assert.Contains("Use shell_execute to run git, build, and test commands as needed.", profile.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains("[available-subagents — use spawn_agent to delegate]", index, StringComparison.Ordinal);
+        Assert.Contains("## code-analyst\nAnalyze code, run commands, and review files\n", index, StringComparison.Ordinal);
+        Assert.Contains("Timeout: 120s", index, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LoadAll_logs_warning_when_agents_directory_is_missing()
     {
         Directory.Delete(_paths.AgentsDirectory, recursive: true);
