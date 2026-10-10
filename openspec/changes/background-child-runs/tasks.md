@@ -80,15 +80,25 @@ Preparation evidence:
 
 ## 7. Integrated health, evals, and sensitive fault controls
 
-- [ ] 7.1 Extend the existing background relay with explicit parent/child request IDs and barriers; verify setup/sidecar calls cannot consume child script stages.
+- [x] 7.1 Extend the existing background relay with explicit parent/child request IDs and barriers; verify setup/sidecar calls cannot consume child script stages.
 - [ ] 7.2 Add targeted Subagents and background cases for acceptance, routed starts, controls, cancellation, prompts, and recovery; verify actual dispatch and artifact evidence.
 - [ ] 7.3 Preserve queued-grant revocation, shell lifecycle, and PR 1 long-task controls; verify the combined candidate passes those unchanged boundaries.
 - [x] 7.4 Hold several accepted child requests. Verify independent parent dispatch and locally responsive status/cancel without provider-capacity coordination.
-- [ ] 7.5 Hold a child on the selected real backend that accepts concurrent requests. Verify a parent reply before child release in five critical-case trials.
+- [x] 7.5 Hold a child on the selected real backend that accepts concurrent requests. Verify a parent reply before child release in five critical-case trials.
 - [x] 7.6 Make provider output ignore cancellation or never finish; verify framework settlement without another model response and report remote-computation limits.
 - [x] 7.7 Demonstrate rejection of duplicate start, early terminal acknowledgement, late dispatch, stale approval prompt, and delivery-reset mutants in isolation.
 - [ ] 7.8 Keep any new focused mutation target narrow and inside the documented CI budget; verify expected mutants execute and none survives.
 - [ ] 7.9 Require an independent verifier to inspect integrated results and assertions; verify no skipped cases, weakened gates, or author-only pass claims remain.
+
+Bounded relay and response-order evidence:
+
+- Five hosted behavioral controls pass at `8aba7cb1`. They verify canonical request attribution, sidecar isolation, setup acknowledgements, real HTTP barriers, and response bytes.
+- Independent review verifies the relay assertions. The existing controls require no relay repair or duplicate test.
+- Five fixed `2c043a93` observations prove parent replies before exact child release on the selected real backend.
+- Actual parent and child SSE requests overlap in recorder evidence. Independent review verifies all five bindings and archived request bytes.
+- Full strict results remain pass, fail, pass, pass, pass. The second trial fails the later artifact-response check.
+- Recorder completion follows downstream writes. These observations prove no independent upstream EOF time or simultaneous GPU work.
+- This closes tasks 7.1 and 7.5 only. Full critical-case acceptance remains open, and every original verdict stays unchanged.
 
 ## 8. Docs, operational guidance, and handoff
 
