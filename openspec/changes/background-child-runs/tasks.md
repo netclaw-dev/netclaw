@@ -123,6 +123,7 @@ Independent contract review at `a3488e95` and combined `f48e9fbe`:
 - The delta now distinguishes the audience operating core and deployment playbook from separately scoped project instructions. It excludes `SOUL.md` and `TOOLING.md`.
 - Public children retain the existing exclusion of project-local instructions. Prompt content grants no additional authority.
 - This specification repair changes no runtime, prefill behavior, prompt bytes, or test assertion. It adds no fresh model evidence for guide version `1.0.3`.
+- The inherited `per-call-tool-recurrence` delta now matches the canonical prompt clauses and three routed prompt scenarios. Its recurrence and authority clauses remain unchanged.
 - Task 7.9 remains open for independent review of the integrated result. Tasks 7.2, 8.6, and 8.7 also remain open.
 
 ## 8. Docs, operational guidance, and handoff
