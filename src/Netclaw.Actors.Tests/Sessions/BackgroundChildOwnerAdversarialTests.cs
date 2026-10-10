@@ -386,6 +386,8 @@ public sealed partial class BackgroundChildOwnerAdversarialTests(ITestOutputHelp
         public TaskCompletionSource<ChildControlReply> ControlReply { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public async Task<string> ExecuteAsync(FunctionCallContent call, ToolExecutionContext context, CancellationToken ct = default)
         {
+            if (call.Name is FileReadTool.ToolName or FileWriteTool.ToolName)
+                return await new DispatchingToolExecutor(registry, policy).ExecuteAsync(call, context, ct);
             if (call.Name is "neutral_probe" or "missing_receipt_probe")
             {
                 ProbeRequesters.Add(context.RunScope.DefaultDeliveryTarget?.DestinationId);

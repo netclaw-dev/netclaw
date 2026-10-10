@@ -20,20 +20,27 @@ namespace Netclaw.Actors.Tests.Sessions;
 public sealed partial class BackgroundChildOwnerAdversarialTests
 {
     [Fact]
-    public async Task Cold_recovery_resumes_an_already_adopted_child_input_without_duplicate_adoption_or_detector_reset()
+    public async Task A_trusted_restart_after_child_input_consumption_preserves_post_adoption_detector_evidence()
     {
         PrepareAdmittedRecoveryRounds();
         var (owner, manager, subscriber) = await CreateOwnerAsync();
         await manager.Ask<CommandAck>(new SendUserMessage
         {
-            SessionId = Session, Content = "Delegate after the two confirmed rounds.",
+            SessionId = Session, Content = "Delegate the assigned task.",
             Source = DeliverySource("original", "operator-a")
         }, Ceiling, TestContext.Current.CancellationToken);
         await _child.FirstCallEntered.Task.WaitAsync(Ceiling, TestContext.Current.CancellationToken);
         await CompletedAsync(subscriber);
         var oldResponse = NewSignal();
         var recoveredResponse = NewSignal();
-        _main.NextResponseGate = oldResponse;
+        _main.PlannedResponses.Enqueue([AdmittedRecoveryProbe("prefix-probe-1")]);
+        _main.PlannedResponses.Enqueue([AdmittedRecoveryProbe("prefix-probe-2")]);
+        await Journal.OnWrite.FailIf(record =>
+        {
+            if (record.Payload is ToolCallRecorded { ToolResult.ToolCallId: { Value: "prefix-probe-2" } })
+                _main.NextResponseGate = oldResponse;
+            return false;
+        });
         try
         {
             _childRelease.TrySetResult();
@@ -45,11 +52,22 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
             var adopted = Assert.Single(prefix.Select(row => row.Event).OfType<ToolTaskAdopted>(),
                 evt => evt.ContinuedChildRunId == accepted.Run.RunId);
             Assert.Equal(new[] { delivery.Input.InputId }, adopted.InputIds);
+            Assert.True(adopted.StartsChildContinuationWindow);
             Assert.True(SessionState.SameCanonicalContext(accepted.Run.OriginalContext, adopted.TurnContext));
             Assert.Empty(prefix.Select(row => row.Event).OfType<InputClosed>());
             Assert.Single(prefix.Select(row => row.Event).OfType<TurnRecorded>());
             AssertAdmittedRecoveryPair(_main.ReceivedMessages[^1], delivery, accepted.Run);
             Assert.Equal(new[] { "prefix-probe-1", "prefix-probe-2" }, _start!.ProbeCallIds);
+            var postAdoption = prefix.Where(row => row.Event is ToolCallRecorded call
+                && call.ToolResult.ToolCallId is { } id && id.Value.StartsWith("prefix-probe-", StringComparison.Ordinal)).ToArray();
+            Assert.Equal(2, postAdoption.Length);
+            var adoptionPosition = Assert.Single(prefix, row => ReferenceEquals(row.Event, adopted)).SequenceNr;
+            Assert.All(postAdoption, row => Assert.True(row.SequenceNr > adoptionPosition));
+            Assert.All(postAdoption, row => Assert.False(Assert.IsType<ToolCallRecorded>(row.Event).LoopObservation!.Synthetic));
+            var confirmed = Assert.IsType<ChildStartReply.Accepted>(await owner.Ask<ChildStartReply>(Retry(accepted), Ceiling,
+                TestContext.Current.CancellationToken));
+            Assert.Equal(2, Assert.Single(confirmed.Run.ParentCheckpoint.Entries,
+                entry => entry.ToolName == "neutral_probe").EqualRounds);
 
             var watcher = CreateTestProbe();
             watcher.Watch(owner);
@@ -63,7 +81,19 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
                 recoveredSubscriber.Ref);
             await recoveredSubscriber.ExpectMsgAsync<SessionJoined>(Ceiling,
                 cancellationToken: TestContext.Current.CancellationToken);
-            Assert.NotEqual(owner, await OwnerAsync());
+            var recovered = await OwnerAsync();
+            Assert.NotEqual(owner, recovered);
+            await AssertTerminalCutOwnerBarrierAsync(recovered, "consumed-child-before-trusted-resume");
+            Assert.Equal(5, _main.CallCount);
+            await manager.Ask<CommandAck>(new SendUserMessage
+            {
+                SessionId = Session, Content = "Resume the work that was interrupted by the daemon restart.",
+                Source = DeliverySource("restart-resume-consumed-child:1", "reminder-system") with
+                {
+                    ReminderId = new ReminderId("restart-resume-consumed-child:1"),
+                    Principal = PrincipalClassification.VerifiedAutomation
+                }
+            }, Ceiling, TestContext.Current.CancellationToken);
             await AwaitAssertAsync(() => Assert.Equal(6, _main.CallCount), Ceiling,
                 cancellationToken: TestContext.Current.CancellationToken);
             var resumed = await ReadJournalPositionsAsync();
@@ -71,6 +101,9 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
             AssertAdmittedRecoveryPair(_main.ReceivedMessages[^1], delivery, accepted.Run);
             Assert.Single(resumed.Select(row => row.Event).OfType<ToolTaskAdopted>(),
                 evt => evt.ContinuedChildRunId == accepted.Run.RunId);
+            var restored = Assert.IsType<ChildStartReply.Accepted>(await recovered.Ask<ChildStartReply>(Retry(accepted), Ceiling,
+                TestContext.Current.CancellationToken));
+            Assert.True(BackgroundChildRun.SameCheckpoint(confirmed.Run.ParentCheckpoint, restored.Run.ParentCheckpoint));
             Assert.Equal(1, _child.CallCount);
             recoveredResponse.TrySetResult();
             await CompletedAsync(recoveredSubscriber);
@@ -92,7 +125,7 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
         var (owner, manager, subscriber) = await CreateOwnerAsync();
         await manager.Ask<CommandAck>(new SendUserMessage
         {
-            SessionId = Session, Content = "Delegate after the two confirmed rounds.",
+            SessionId = Session, Content = "Delegate the assigned task.",
             Source = DeliverySource("original", "operator-a")
         }, Ceiling, TestContext.Current.CancellationToken);
         await _child.FirstCallEntered.Task.WaitAsync(Ceiling, TestContext.Current.CancellationToken);
@@ -107,7 +140,7 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
                 SessionId = Session, Content = "Complete the ordinary head first.",
                 Source = DeliverySource("ordinary-head", "operator-b")
             }, Ceiling, TestContext.Current.CancellationToken);
-            await AwaitAssertAsync(() => Assert.Equal(5, _main.CallCount), Ceiling,
+            await AwaitAssertAsync(() => Assert.Equal(3, _main.CallCount), Ceiling,
                 cancellationToken: TestContext.Current.CancellationToken);
             _childRelease.TrySetResult();
             ChildRunEvent.DeliveryAdmitted? delivery = null;
@@ -141,12 +174,14 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
             var recovered = await OwnerAsync();
             Assert.NotEqual(owner, recovered);
             await AssertTerminalCutOwnerBarrierAsync(recovered, "ordinary-prefix-before-resume");
-            Assert.Equal(5, _main.CallCount);
+            Assert.Equal(3, _main.CallCount);
             var waiting = await ReadJournalPositionsAsync();
             Assert.Equal(prefix.Select(row => row.SequenceNr), waiting.Select(row => row.SequenceNr));
 
             _main.NextResponseGate = recoveredResponse;
             _main.PlannedResponses.Enqueue([AdmittedRecoveryProbe("ordinary-probe")]);
+            _main.PlannedResponses.Enqueue([AdmittedRecoveryProbe("prefix-probe-1")]);
+            _main.PlannedResponses.Enqueue([AdmittedRecoveryProbe("prefix-probe-2")]);
             _main.PlannedResponses.Enqueue([AdmittedRecoveryProbe("prefix-refused-3")]);
             _main.PlannedResponses.Enqueue([AdmittedRecoveryProbe("prefix-stopped-4")]);
             await manager.Ask<CommandAck>(new SendUserMessage
@@ -158,7 +193,7 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
                     Principal = PrincipalClassification.VerifiedAutomation
                 }
             }, Ceiling, TestContext.Current.CancellationToken);
-            await AwaitAssertAsync(() => Assert.Equal(6, _main.CallCount), Ceiling,
+            await AwaitAssertAsync(() => Assert.Equal(4, _main.CallCount), Ceiling,
                 cancellationToken: TestContext.Current.CancellationToken);
             var ordinaryRequest = _main.ReceivedMessages[^1];
             Assert.Contains(ordinaryRequest, message => message.Role == Microsoft.Extensions.AI.ChatRole.User
@@ -173,8 +208,8 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
             await CompletedAsync(recoveredSubscriber);
             var final = await ReadJournalPositionsAsync();
             AssertAdmittedRecoverySettlement(final, delivery, accepted.Run,
-                ["prefix-probe-1", "prefix-probe-2", "ordinary-probe"]);
-            Assert.Equal(new[] { "operator-a", "operator-a", "operator-b" }, _start!.ProbeRequesters);
+                ["ordinary-probe", "prefix-probe-1", "prefix-probe-2"]);
+            Assert.Equal(new[] { "operator-b", "operator-a", "operator-a" }, _start!.ProbeRequesters);
             Assert.Single(final.Select(row => row.Event).OfType<ToolTaskAdopted>(),
                 evt => evt.TurnContext.TurnId == "ordinary-head");
             var childAdoption = Assert.Single(final,
@@ -202,8 +237,6 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
     private void PrepareAdmittedRecoveryRounds()
     {
         _main.ToolCallsOnFirstCall = null;
-        _main.PlannedResponses.Enqueue([AdmittedRecoveryProbe("prefix-probe-1")]);
-        _main.PlannedResponses.Enqueue([AdmittedRecoveryProbe("prefix-probe-2")]);
         _main.PlannedResponses.Enqueue([new FunctionCallContent("start-1", "start_probe",
             new Dictionary<string, object?> { ["_rationale"] = "Inspect the neutral fixture." })]);
         _main.PlannedResponses.Enqueue([new TextContent("The original child run was accepted.")]);

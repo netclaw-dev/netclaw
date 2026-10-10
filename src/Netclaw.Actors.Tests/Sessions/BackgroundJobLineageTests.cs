@@ -28,7 +28,7 @@ public sealed class BackgroundJobLineageTests
         var state = SessionState.Empty.TrackBackgroundJob("bg-job:first", Job("first", checkpoint))
             .TrackBackgroundJob("bg-job:second", Job("second", checkpoint));
         var fresh = UserInput("fresh-task");
-        state = state.Apply(fresh).Apply(new ToolTaskAdopted
+        state = state.Apply(fresh).Apply(new ToolTaskAdopted(false)
         { SessionId = Session, TurnContext = fresh.TurnContext, InputIds = new[] { fresh.InputId } });
         Assert.Equal("fresh-task", state.LoopCheckpoint.TaskId);
         state = state.CloseInputs(new[] { fresh.InputId });
@@ -36,7 +36,7 @@ public sealed class BackgroundJobLineageTests
         var delivery = Delivery("first");
         state = state.Apply(delivery);
         Assert.True(state.TryGetBackgroundContinuation(delivery, out _, out _));
-        state = state.Apply(new ToolTaskAdopted
+        state = state.Apply(new ToolTaskAdopted(false)
         { SessionId = Session, TurnContext = delivery.TurnContext, InputIds = new[] { delivery.InputId }, ContinuedJobKey = "bg-job:first" });
         Assert.Equal(Origin.TurnId.Value, state.LoopCheckpoint.TaskId);
         Assert.Equal("original-correction", state.LoopCheckpoint.LastBlockedAction);
@@ -90,7 +90,7 @@ public sealed class BackgroundJobLineageTests
         var user = UserInput("active-user");
         var delivery = Delivery("orphan");
         var later = UserInput("later-user");
-        var state = SessionState.Empty.Apply(user).Apply(new ToolTaskAdopted
+        var state = SessionState.Empty.Apply(user).Apply(new ToolTaskAdopted(false)
         { SessionId = Session, TurnContext = user.TurnContext, InputIds = new[] { user.InputId } })
             .CloseInputs(new[] { user.InputId });
         state = state with { LoopCheckpoint = state.LoopCheckpoint with { LastBlockedAction = "keep-correction" }, LoopReceiptFailure = true };

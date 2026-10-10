@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about schedules, reminders, cron jobs, timers, background jobs, or child status and cancellation. Also use for diagnostics, troubleshooting, MCP tools, daemon health, identity updates, Netclaw capabilities, and maintenance."
 metadata:
   author: netclaw
-  version: "2.109.0"
+  version: "2.111.0"
 ---
 
 # Netclaw Operations
@@ -1014,7 +1014,11 @@ An accessible Pending or Running job permits its exact noncancel status query. T
 Prefer completion notices or useful independent work over repeated status queries.
 Exact protection can miss changed arguments or noisy results. Operation timeouts and cancellation remain active.
 
-A background result resumes its original exact recurrence evidence after a fresh user task or restart.
+A shell-job result resumes its original exact recurrence evidence after a fresh user task or restart.
+The first durable consumption of a canonical child result starts a new recurrence window under the original task and authority.
+This permits review of the child's new artifact after an earlier absent-artifact correction.
+Acceptance, status, delivery admission, restart, and duplicate consumption do not reset that window.
+A missing execution receipt remains a failure. The child result does not authorize another tool or path.
 A missing or invalid new-format job origin causes an explicit partial failure.
 The runtime records the known job result as data and preserves unrelated tasks.
 Do not treat that report as approval for another tool call.

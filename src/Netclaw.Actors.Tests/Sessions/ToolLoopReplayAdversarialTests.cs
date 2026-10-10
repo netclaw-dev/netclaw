@@ -290,7 +290,7 @@ public sealed class ToolLoopReplayAdversarialTests(ITestOutputHelper output) : T
         }).ToRecord()
     };
 
-    private static ToolTaskAdopted Adoption(InputAdmitted input, IReadOnlyList<InputId> ids) => new()
+    private static ToolTaskAdopted Adoption(InputAdmitted input, IReadOnlyList<InputId> ids) => new(false)
     { SessionId = Session, TurnContext = input.TurnContext, InputIds = ids };
 
     private SessionState Admit(SessionState state, PreparedToolCycleBatch batch, string taskId, IReadOnlyList<string> refused)

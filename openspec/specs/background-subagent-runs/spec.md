@@ -374,7 +374,14 @@ A missing mandatory receipt SHALL retain the receipt-failure fact and invoke PR 
 Direct activation SHALL retain canonical task evidence without a fabricated tool receipt.
 Parent completion and fresh input SHALL retain evidence required by outstanding child continuations.
 Sibling runs SHALL use the latest retained parent checkpoint for their task.
-Canonical continuation adoption SHALL validate the accepted run and commit restored evidence before the next model request.
+Canonical continuation adoption SHALL validate the accepted run and commit its recurrence window before the next model request.
+The first durable consumption of a canonical child result SHALL start a fresh recurrence window with the retained detector `TaskId`.
+It SHALL clear exact entries, adjacent history, cold keys, and the last blocked action.
+It SHALL preserve original authority, receipt failure, and current parent directory/project/branch facts.
+It SHALL refresh every same-task child and job checkpoint copy through the existing ledger update.
+Acceptance, status, terminal preparation, delivery admission, recovery, and duplicate consumption SHALL NOT start that window.
+A duplicate adoption SHALL use durable adopted context and input IDs, even when compaction removes the delivery pair.
+Legacy adoption events without the new window marker SHALL retain their original checkpoint restoration semantics.
 The synthetic delivery pair SHALL NOT clear receipt failure or reopen the completed start call.
 Delivery completion SHALL retain evidence required by another outstanding run.
 Recovery SHALL preserve these facts without child relaunch or a fresh-task reset.
@@ -398,14 +405,14 @@ Recovery SHALL preserve these facts without child relaunch or a fresh-task reset
 - **GIVEN** task A accepted a child and committed its start receipt and feedback round
 - **AND** the parent completed A and admitted fresh user task B
 - **WHEN** the owner adopts the child's later result continuation
-- **THEN** it commits A's latest retained checkpoint and receipt-failure fact before the next model request
+- **THEN** its first durable consumption commits a fresh window with A's retained task ID and receipt-failure fact
 - **AND** it uses the child's original authority without a fresh detector task
 
 #### Scenario: Sibling results use the latest shared task evidence
 
 - **GIVEN** task A accepted two children and later committed additional detector evidence
 - **WHEN** either child result starts a continuation
-- **THEN** that continuation uses A's latest retained parent checkpoint
+- **THEN** its first durable consumption starts a fresh window with A's retained detector task identity
 - **AND** its completion retains evidence required by the other child
 
 #### Scenario: Equal authority cannot merge distinct detector tasks
@@ -413,7 +420,22 @@ Recovery SHALL preserve these facts without child relaunch or a fresh-task reset
 - **GIVEN** one requester owns child runs from distinct detector tasks A and B
 - **WHEN** their terminal results await parent continuation
 - **THEN** the owner keeps separate continuation groups and parent checkpoints
-- **AND** equal authority alone cannot merge or reset their detector evidence
+- **AND** equal authority alone cannot merge their detector evidence or authorize a new window
+
+#### Scenario: A child result permits a new artifact read
+
+- **GIVEN** the parent received recurrence feedback for an absent child artifact
+- **WHEN** it first durably consumes the canonical child result after the child writes that artifact
+- **THEN** its next authorized read uses a fresh recurrence window
+- **AND** the same task ID, original authority, and receipt failure remain authoritative
+
+#### Scenario: Duplicate adoption after compaction preserves the current window
+
+- **GIVEN** durable child adoption and later recurrence evidence
+- **AND** compaction removes the original delivery pair from the transcript
+- **WHEN** the same canonical adoption appears again or the owner recovers
+- **THEN** durable adopted context and input IDs preserve the current checkpoint
+- **AND** the runtime grants no second window
 
 #### Scenario: Recovery cannot erase a retained receipt failure
 

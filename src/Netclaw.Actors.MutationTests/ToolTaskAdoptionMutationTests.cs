@@ -81,6 +81,6 @@ public sealed class ToolTaskAdoptionMutationTests
         }).ToRecord()
     };
 
-    private static ToolTaskAdopted Adoption(InputAdmitted input, IReadOnlyList<InputId> ids) => new()
+    private static ToolTaskAdopted Adoption(InputAdmitted input, IReadOnlyList<InputId> ids) => new(false)
     { SessionId = Session, TurnContext = input.TurnContext, InputIds = ids };
 }

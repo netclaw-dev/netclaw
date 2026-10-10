@@ -136,6 +136,8 @@ public sealed partial record SessionState
             throw new InvalidDataException($"An adopted task has invalid authority: {reason}");
         if (evt.SessionId != context.SessionId)
             throw new InvalidDataException("An adopted task has a different session identity.");
+        if (evt.StartsChildContinuationWindow && evt.ContinuedChildRunId is null)
+            throw new InvalidDataException("Only a canonical child continuation can start a new recurrence window.");
         if (evt.ContinuedChildRunId is not null)
             return AdoptChildContinuation(evt);
         if (PendingInputs.Take(evt.InputIds.Count).Any(static input => input.SourceChildRunId is not null))

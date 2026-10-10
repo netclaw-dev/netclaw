@@ -303,7 +303,14 @@ A missing mandatory receipt retains the receipt-failure fact and invokes PR 1's 
 Direct activation retains canonical task evidence without a fabricated tool receipt.
 Parent completion and fresh input retain evidence that an outstanding child continuation needs.
 Sibling runs use the latest retained parent checkpoint for their task.
-Canonical continuation adoption validates the accepted run and commits restored evidence before the next model request.
+The first durable canonical child consumption starts a fresh recurrence window under the retained detector task identity.
+The owner preserves original authority and sticky receipt failure.
+It clears exact entries, adjacent history, cold keys, and the last blocked action.
+It refreshes same-task child and job checkpoint copies through `RefreshJobEvidence`.
+Acceptance, status, terminal preparation, and delivery admission cannot reset the window.
+Durable adopted context and input IDs reject a second reset after duplicate adoption or compaction.
+Recovery restores the current committed window.
+An additive `ToolTaskAdopted` Boolean records this decision. Missing legacy values remain false and retain old replay semantics.
 The synthetic delivery pair supplies no execution receipt. It cannot clear receipt failure or reopen the completed start call.
 
 Schematic; authorization, admission, and persistence failure paths are abbreviated:
@@ -321,7 +328,7 @@ Parent completes A; fresh user task B starts
   -> retain A's evidence in X; keep B's current checkpoint separate
 Child X terminal receipt
   -> admit one attributed continuation through durable delivery
-  -> validate X; durably restore the latest retained A checkpoint
+  -> validate X; first durable consumption starts a new window under A with sticky receipt failure
   -> if evidence permits, request the model under X's original authority
 Continuation completes
   -> settle only this delivery; retain evidence for outstanding siblings
@@ -329,7 +336,7 @@ Continuation completes
 
 Positive example: two children from A share its latest committed checkpoint before either continuation requests the model.
 Negative example: children from A and B cannot coalesce solely because the same requester owns both tasks.
-Recovery preserves parent detector evidence without child relaunch or a fresh-task reset.
+Recovery preserves the current committed window without child relaunch or another reset.
 Result admission preserves the parent's current directory, project, and branch.
 
 ### 8. Original approval prompts remain run-owned
@@ -378,7 +385,7 @@ Reuse actor persistence fixtures, provider barriers, session subscribers, and th
 Add child-request correlation to the existing relay before it claims background-agent coverage.
 Use actual dispatch counts, persisted state, path contents, and prompt settlement as assertions.
 Keep scripted protocol evidence separate from real-model evidence.
-Keep the inherited PR 1 recurrence gates. This change cannot reset their state through child-result admission.
+Keep the inherited PR 1 recurrence gates. Only first durable canonical child consumption starts the approved new window; admission cannot.
 
 Use paired controls and fault injection at acceptance, closure, terminal receipt, enrichment, continuation admission, and restart.
 Require five successful trials per critical real-model case on the owner-authorized target.

@@ -233,7 +233,8 @@ internal static partial class NetclawProtoMapper
     {
         var proto = new Proto.ToolTaskAdoptedProto
         {
-            SessionId = ToProto(evt.SessionId), TurnContext = ToProto(evt.TurnContext), AdoptedAtMs = evt.AdoptedAtMs
+            SessionId = ToProto(evt.SessionId), TurnContext = ToProto(evt.TurnContext), AdoptedAtMs = evt.AdoptedAtMs,
+            StartsChildContinuationWindow = evt.StartsChildContinuationWindow
         };
         proto.InputIds.AddRange(evt.InputIds.Select(static id => id.Value));
         if (evt.ContinuedJobKey is not null)
@@ -243,7 +244,7 @@ internal static partial class NetclawProtoMapper
         return proto;
     }
 
-    internal static ToolTaskAdopted FromProto(Proto.ToolTaskAdoptedProto proto) => new()
+    internal static ToolTaskAdopted FromProto(Proto.ToolTaskAdoptedProto proto) => new(proto.StartsChildContinuationWindow)
     {
         SessionId = FromProto(proto.SessionId),
         TurnContext = proto.TurnContext is null

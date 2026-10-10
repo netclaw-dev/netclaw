@@ -2673,7 +2673,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void AdoptToolTask(InputAdmitted admitted, IReadOnlyList<InputId> inputIds, Action continuation)
     {
-        var evt = new ToolTaskAdopted
+        var evt = new ToolTaskAdopted(admitted.SourceChildRunId is not null)
         {
             SessionId = _sessionId, TurnContext = admitted.TurnContext, InputIds = inputIds.ToArray(), AdoptedAtMs = NowMs(),
             ContinuedJobKey = admitted.SourceBackgroundJobId?.Value, ContinuedChildRunId = admitted.SourceChildRunId

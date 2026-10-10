@@ -59,7 +59,7 @@ public sealed partial class BackgroundChildAcceptanceTests
         var pending = Assert.Single(state.PendingInputs);
         Assert.Equal(accepted.RunId, pending.SourceChildRunId);
         Assert.Equal(pending.InputId, state.ChildRuns[accepted.RunId].DeliveryInputId);
-        state = state.Apply(RoundTrip(new ToolTaskAdopted
+        state = state.Apply(RoundTrip(new ToolTaskAdopted(false)
         {
             SessionId = Session, TurnContext = accepted.OriginalContext, InputIds = [pending.InputId],
             ContinuedChildRunId = accepted.RunId
@@ -108,7 +108,7 @@ public sealed partial class BackgroundChildAcceptanceTests
             state = state.Apply(new ChildRunEvent.DeliveryAdmitted(input) { SessionId = Session, RunId = run.RunId, RecordedAtMs = index + 1 });
             ids.Add(input.InputId);
         }
-        var adoption = RoundTrip(new ToolTaskAdopted
+        var adoption = RoundTrip(new ToolTaskAdopted(false)
         {
             SessionId = Session, TurnContext = runs[^1].OriginalContext,
             InputIds = ids.ToArray(), ContinuedChildRunId = runs[^1].RunId
