@@ -348,6 +348,57 @@ class ConflictingEvidenceControls(unittest.TestCase):
         args[2][-1]["output"]["ToolFailureCode"] = "authorization_denied"
         self.reject(args)
 
+    def test_exact_parent_metadata_rejections_retain_actual_success_receipts(self):
+        for name, arguments in (("skill_load", {"Name": "agent-coordination"}),
+                                ("load_tool", {"Name": "shell_execute"}),
+                                ("file_read", {"Path": self.args[0]["manifest"]}),
+                                ("shell_execute", {"Command": command(self.args[0])})):
+            args = copy.deepcopy(self.args)
+            pair(args[3][0], args[2], args[1]["session_id"], name, arguments,
+                 REQUIRED_RATIONALE_ERROR, "metadata-attempt", "invalid_rationale")
+            with self.subTest(name=name):
+                self.assertTrue(verify(*args)["passed"])
+
+    def test_metadata_feedback_cannot_replace_the_actual_check_or_source_read(self):
+        for identifier in ("check-actual", "review-0"):
+            args = copy.deepcopy(self.args)
+            for event in args[2]:
+                output = event["output"]
+                if output.get("CallId") == identifier and output["Type"] == "tool_result":
+                    output.update(Result=REQUIRED_RATIONALE_ERROR, ToolFailureCode="invalid_rationale")
+            for message in args[3][0]["messages"]:
+                if message.get("tool_call_id") == identifier:
+                    message["content"] = REQUIRED_RATIONALE_ERROR
+            with self.subTest(identifier=identifier): self.reject(args)
+
+    def test_parent_metadata_rejection_requires_exact_dto_and_provider_attribution(self):
+        for mutation in ("code", "text", "provider", "dto", "foreign"):
+            args = copy.deepcopy(self.args)
+            pair(args[3][0], args[2], args[1]["session_id"], "load_tool", {"Name": "shell_execute"},
+                 REQUIRED_RATIONALE_ERROR, "metadata-attempt", "invalid_rationale")
+            if mutation == "code": args[2][-1]["output"]["ToolFailureCode"] = "authorization_denied"
+            elif mutation == "text": args[2][-1]["output"]["Result"] += " extra"
+            elif mutation == "provider": args[3][0]["messages"].pop()
+            elif mutation == "dto": args[2][-1]["output"]["ToolFailureCode"] = None
+            else: args[2][-1]["output"]["CallId"] = "foreign"
+            with self.subTest(mutation=mutation): self.reject(args)
+
+    def test_metadata_rejection_does_not_authorize_foreign_or_forbidden_attempts(self):
+        for name, arguments in (("shell_execute", {"Command": "git push"}),
+                                ("file_read", {"Path": "/foreign"}),
+                                ("file_search", {"Root": "/foreign", "Query": "claim"}),
+                                ("file_write", {"Path": self.args[0]["manifest"], "Content": "changed"})):
+            args = copy.deepcopy(self.args)
+            pair(args[3][0], args[2], args[1]["session_id"], name, arguments,
+                 REQUIRED_RATIONALE_ERROR, "metadata-attempt", "invalid_rationale")
+            with self.subTest(name=name): self.reject(args)
+
+    def test_prose_or_fenced_json_cannot_replace_the_required_json_reply(self):
+        for prefix, suffix in (("The reports disagree.\n", ""), ("```json\n", "\n```")):
+            args = copy.deepcopy(self.args)
+            args[1]["last_reply"] = prefix + args[1]["last_reply"] + suffix
+            self.reject(args)
+
     def test_checker_cannot_change_preserved_inputs_or_reports_during_verification(self):
         setup, _, _, _, home = self.args
         original_check = run_check
