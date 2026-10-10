@@ -596,7 +596,15 @@ run_all
             expected = prompt(setup).encode()
             actual = (root / "actual-prompt").read_bytes()
             self.assertEqual(expected, actual)
-            self.assertIn(commands(setup)["commit"].encode(), actual)
+            for instruction in [
+                    f"The parent may declare only {setup['operator']} or {setup['worker']} with set_working_directory.",
+                    f"Each child may declare only {setup['worker']} with set_working_directory.",
+                    f"The task root {setup['root']} holds artifacts. Do not declare that task root.",
+                    "Use each listed command exactly. Do not join separate listed commands.",
+                    "Preserve the worker commit command's own && operator."]:
+                self.assertIn(instruction.encode(), actual)
+            for command in commands(setup).values():
+                self.assertIn(b"\n" + command.encode() + b"\n", actual)
             self.assertEqual(b"json", (root / "actual-prompt.format").read_bytes())
 
     def test_single_prompt_replacements_preserve_literal_ampersands_and_newlines(self):
