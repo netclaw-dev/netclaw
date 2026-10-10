@@ -113,6 +113,18 @@ Combined boundary and mutation evidence at `153d9223`:
 - Two unrelated shell-config-read mutations retain their timeout dispositions. They supply no assertion-kill claim for this gate.
 - Independent review approves tasks 7.3 and 7.8. These checks prove no detector activation, days-long productivity, or full model acceptance.
 
+Independent contract review at `a3488e95` and combined `f48e9fbe`:
+
+- The actor runtime bytes match across both revisions. The audit finds no new runtime defect in the inspected background paths.
+- The actual guard TRX records show 177 passes. The separate authority TRX records show six passes. Neither run skips a case.
+- Independent review `80ceb1b3` retains the fault controls and their valid pairs. All eleven listed source and test pins match the combined candidate.
+- The retained PR 2 snapshot reports 29 successful checks. Both native logs report 29 tapes and 10 scenarios passed.
+- Current observation review `7742d477` proves one held-child reply, canonical result consumption, and a complete artifact read. It supplies no five-pass acceptance claim.
+- The delta now distinguishes the audience operating core and deployment playbook from separately scoped project instructions. It excludes `SOUL.md` and `TOOLING.md`.
+- Public children retain the existing exclusion of project-local instructions. Prompt content grants no additional authority.
+- This specification repair changes no runtime, prefill behavior, prompt bytes, or test assertion. It adds no fresh model evidence for guide version `1.0.3`.
+- Task 7.9 remains open for independent review of the integrated result. Tasks 7.2, 8.6, and 8.7 also remain open.
+
 ## 8. Docs, operational guidance, and handoff
 
 - [x] 8.1 Rename the glossary entry to approval prompt with a legacy-anchor alias; verify old links still resolve and exact code identifiers remain unchanged.
@@ -122,7 +134,16 @@ Combined boundary and mutation evidence at `153d9223`:
 - [x] 8.5 Run targeted identity/tool/skill evals for those changed instructions; verify selected resource and control receipts satisfy the actual task.
 - [ ] 8.6 Run applicable builds, required tests, Slopwatch, and copyright-header verification; retain exact candidate and meaningful test counts.
 - [ ] 8.7 Validate the OpenSpec change strictly and sync implemented deltas through the appropriate skill; verify the PRD and active plan trace to the final contract.
-- [ ] 8.8 Prepare rollback and evidence handoff for the combined PR; verify no merge, rollout, publication, or database replacement is implied by local passes.
+- [x] 8.8 Prepare rollback and evidence handoff for the combined PR; verify no merge, rollout, publication, or database replacement is implied by local passes.
+
+Rollback instructions and evidence handoff at `a3488e95`:
+
+- The [runbook](../../../docs/runbooks/subagents.md#background-child-upgrade-and-rollback) requires stopped ingress, coordinated drain, and a recorded pre-upgrade backup.
+- The [canonical plan](../../../.systematize/plans/background-subagents/plan.html#q-rollout) retains separate activation and rollback authority.
+- The retained prior reader accepts its `sid-v1` control and rejects `cra-v1` and `cre-v1`. Direct binary downgrade has no compatibility proof.
+- Rollback therefore requires the recorded pre-upgrade backup. Reader and restoration receipts prove only their stated storage scope.
+- The evidence notes retain exact source revisions, local test counts, hosted checks, original failed observations, and open model gates.
+- This closes task 8.8 for instructions and handoff preparation only. No live rollback, merge, rollout, publication, or database replacement receives authority.
 
 Documentation scope review at `2357991d`:
 
