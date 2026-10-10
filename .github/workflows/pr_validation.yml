@@ -316,6 +316,7 @@ jobs:
           bash -n evals/cycle_evals.sh
           python3 -m unittest discover -s evals -p test_background_evals.py -v
           python3 -m unittest discover -s evals -p test_child_run_evals.py -v
+          python3 -m unittest discover -s evals -p test_terminal_rejection_evals.py -v
           python3 -m unittest discover -s evals -p test_coordination_evals.py -v
           python3 -m unittest discover -s evals -p test_init_agent_profiles.py -v
           python3 -m unittest discover -s evals -p test_eval_approval_seed.py -v

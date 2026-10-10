@@ -12,7 +12,7 @@ import sys
 import uuid
 
 from background_fixture import message_text
-from child_run_evals import (acceptance, actual_file, canonical_pairs, context_paths,
+from child_run_evals import (require_observed_rejections, acceptance, actual_file, canonical_pairs, context_paths,
                              evidence_requests, is_unexecuted_rationale_rejection, require, validate_prompt_receipt)
 from coordination_artifact_evals import load_json, occurrences
 from coordination_negative_evals import provider_arguments
@@ -297,6 +297,7 @@ def verify(setup, receipt, events, requests, home, check_candidate):
             and isinstance(f["detail"], str) and f["detail"].strip() and isinstance(f["severity"], str) and f["severity"].strip() for f in findings),
             "The review findings lack explicit source evidence.")
     calls, _ = occurrences(events, receipt["session_id"])
+    require_observed_rejections(receipt["calls"], calls)
     require(all((c["failure"] is None or (c["name"] == "spawn_agent"
                 and is_unexecuted_rationale_rejection(c["failure"], c["result"])))
                 and c["name"] in READ_TOOLS | {"spawn_agent", "shell_execute", "set_working_directory"} for c in calls),
@@ -345,7 +346,7 @@ def verify(setup, receipt, events, requests, home, check_candidate):
             break
         else:
             raise AssertionError("The canonical child profile lacks actual runtime discovery evidence.")
-        terminal_id, terminal = canonical_pairs(requests, accepted[index], start["id"], "spawn_agent")
+        terminal_id, terminal = canonical_pairs(requests, accepted[index], start["id"], "spawn_agent", receipt["calls"])
         verified = [d for d in receipt["verified_deliveries"] if d["accepted"] == accepted[index]]
         require(len(verified) == 1 and verified[0]["terminal"] == terminal and terminal["outcome"] == "Completed",
                 "The child lacks its exact completed terminal attribution.")
