@@ -96,7 +96,7 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
         // The authority turn stays unchanged, but the current detector state differs from the retained task.
         state = state with { LoopCheckpoint = new ToolLoopCheckpoint { TaskId = "different-current-task" }, LoopReceiptFailure = !receiptFailure };
         state = SessionState.FromSnapshot(RoundTrip(state.ToSnapshot()));
-        var adoption = new ToolTaskAdopted
+        var adoption = new ToolTaskAdopted(false)
         { SessionId = Owner, TurnContext = run.OriginalContext, InputIds = [input.InputId], ContinuedChildRunId = run.RunId };
         RejectUnchanged(state, () => state.Apply(adoption with { ContinuedChildRunId = null }));
         RejectUnchanged(state, () => state.Apply(adoption with { ContinuedJobKey = "foreign-job" }));
@@ -143,7 +143,7 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
                 { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123460 }));
             return SessionState.FromSnapshot(RoundTrip(pair.ToSnapshot()));
         }
-        ToolTaskAdopted AdoptPair(SessionState pair) => new()
+        ToolTaskAdopted AdoptPair(SessionState pair) => new(false)
         { SessionId = Owner, TurnContext = first.OriginalContext, InputIds = pair.PendingInputs.Select(input => input.InputId).ToArray(), ContinuedChildRunId = second.RunId };
         var invalid = AdmitPair(incompatible);
         RejectUnchanged(invalid, () => invalid.Apply(AdoptPair(invalid)));
@@ -201,7 +201,7 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
         Assert.Equal(input.UserMessage.Role, restoredMessage.Role);
         Assert.Equal(input.UserMessage.Name, restoredMessage.Name);
         Assert.Equal(input.UserMessage.ToolCallId, restoredMessage.ToolCallId);
-        var adopted = valid.Apply(RoundTrip(new ToolTaskAdopted
+        var adopted = valid.Apply(RoundTrip(new ToolTaskAdopted(false)
         { SessionId = Owner, TurnContext = run.OriginalContext, InputIds = [input.InputId], ContinuedChildRunId = run.RunId }));
         Assert.True(BackgroundChildRun.SameCheckpoint(run.ParentCheckpoint, adopted.LoopCheckpoint));
         Assert.Equal(input.UserMessage.Content, Assert.Single(adopted.PendingInputs).UserMessage.Content);

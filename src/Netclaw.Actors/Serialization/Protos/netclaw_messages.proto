@@ -121,6 +121,7 @@ message ToolTaskAdoptedProto {
   int64 adopted_at_ms = 4;
   optional string continued_job_key = 5;
   optional string continued_child_run_id = 6;
+  bool starts_child_continuation_window = 7;
 }
 
 message InputClosedProto {

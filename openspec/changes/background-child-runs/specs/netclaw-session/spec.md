@@ -10,7 +10,10 @@ It SHALL NOT claim live provider state that the owner did not observe.
 Terminal child admission SHALL preserve the original task's recurrence state and current parent directory/project/branch facts.
 The durable child run ledger SHALL retain parent detector checkpoints independently from the session's current task checkpoint.
 Fresh input SHALL NOT replace evidence required by an outstanding child continuation.
-Continuation adoption SHALL restore the latest retained original-task checkpoint before the next model request.
+The first durable consumption of a canonical child result SHALL start a fresh recurrence window with the retained original-task ID.
+It SHALL preserve original authority and sticky receipt failure before the next model request.
+Recovery and duplicate adoption SHALL restore the current committed window without another reset.
+Legacy child adoption records SHALL retain their prior checkpoint restoration semantics.
 Confirmed child file activity SHALL merge through the existing working-context rules.
 
 #### Scenario: A later turn can inspect its earlier child
@@ -32,4 +35,4 @@ Confirmed child file activity SHALL merge through the existing working-context r
 - **GIVEN** the original parent task retains unresolved recurrence evidence
 - **WHEN** a child completion admits an internal continuation
 - **THEN** it preserves that task identity and evidence under the first PR's contract
-- **AND** it does not create a fresh authorized task solely from child text
+- **AND** admission creates no fresh window or authorized task solely from child text

@@ -91,8 +91,25 @@ public sealed partial record SessionState
 
     private SessionState AdoptChildContinuation(ToolTaskAdopted evt)
     {
-        if (evt.ContinuedJobKey is not null || evt.InputIds.Count == 0 || evt.InputIds.Distinct().Count() != evt.InputIds.Count
-            || !PendingInputs.Take(evt.InputIds.Count).Select(static input => input.InputId).SequenceEqual(evt.InputIds))
+        if (evt.ContinuedJobKey is not null || evt.InputIds.Count == 0 || evt.InputIds.Distinct().Count() != evt.InputIds.Count)
+            throw new InvalidDataException("A child continuation does not name the next canonical input prefix.");
+        // Consumed inputs and compacted pairs can leave the transcript. Durable adoption remains authoritative.
+        var alreadyAdopted = AdoptedTaskContext is { } && AdoptedTaskInputIds.SequenceEqual(evt.InputIds);
+        if (alreadyAdopted)
+        {
+            if (evt.ContinuedChildRunId is not { } id || !ChildRuns.TryGetValue(id, out var duplicate)
+                || duplicate.DeliveryInputId != evt.InputIds[^1] || duplicate.PreparedTerminal is null
+                || !duplicate.StartBatchSettled || duplicate.StartKey.SessionId != evt.SessionId
+                || !SameCanonicalContext(duplicate.OriginalContext, evt.TurnContext)
+                || !SameCanonicalContext(AdoptedTaskContext!, evt.TurnContext))
+                throw new InvalidDataException("A repeated child adoption differs from its canonical authority.");
+            if (!PendingInputs.Take(evt.InputIds.Count).Select(static input => input.InputId).SequenceEqual(evt.InputIds))
+            {
+                ValidateConsumedChildPairs(evt);
+                return this;
+            }
+        }
+        if (!PendingInputs.Take(evt.InputIds.Count).Select(static input => input.InputId).SequenceEqual(evt.InputIds))
             throw new InvalidDataException("A child continuation does not name the next canonical input prefix.");
         var prefix = PendingInputs.Take(evt.InputIds.Count).ToArray();
         var run = GetChildContinuation(prefix[^1]);
@@ -122,24 +139,66 @@ public sealed partial record SessionState
                 history = history.Add(canonicalCall).Add(input.UserMessage);
                 continue;
             }
-            if (existing is not [var assistant] || assistant.Role != canonicalCall.Role
-                || assistant.Content != canonicalCall.Content || assistant.Name != canonicalCall.Name
-                || assistant.ToolCallId != canonicalCall.ToolCallId || assistant.MediaReferences.Count != 0
-                || !assistant.ToolCalls.SequenceEqual(canonicalCall.ToolCalls))
-                throw new InvalidDataException("A repeated child continuation differs from its canonical call.");
-            var results = ParkedToolBatchHistory.FindToolResultsFor(history, assistant);
-            if (results is not [var result] || result.Role != input.UserMessage.Role
-                || result.ToolCallId != callId || result.Name != input.UserMessage.Name
-                || result.Content != input.UserMessage.Content || result.ToolCalls.Count != 0 || result.MediaReferences.Count != 0)
-                throw new InvalidDataException("A repeated child continuation differs from its canonical result.");
+            ValidateChildPair(history, canonicalCall, input.UserMessage);
         }
-        return this with
+        if (alreadyAdopted)
+            return this;
+        var next = this with
         {
             History = history,
             AdoptedTaskContext = run.OriginalContext, AdoptedTaskInputIds = evt.InputIds,
-            LoopCheckpoint = run.ParentCheckpoint, LoopReceiptFailure = run.ParentReceiptFailure,
+            LoopCheckpoint = evt.StartsChildContinuationWindow
+                ? new ToolLoopCheckpoint { TaskId = run.ParentCheckpoint.TaskId }
+                : run.ParentCheckpoint,
+            LoopReceiptFailure = evt.StartsChildContinuationWindow
+                ? LoopReceiptFailure || run.ParentReceiptFailure
+                : run.ParentReceiptFailure,
             LoopAdmission = null, LoopObservations = []
         };
+        return evt.StartsChildContinuationWindow ? next.RefreshJobEvidence() : next;
+    }
+
+    private void ValidateConsumedChildPairs(ToolTaskAdopted evt)
+    {
+        var runs = ChildRuns.Values.Where(run => run.DeliveryInputId is { } input && evt.InputIds.Contains(input)).ToArray();
+        if (runs.Length != evt.InputIds.Count)
+            throw new InvalidDataException("A repeated child adoption lacks its canonical delivered runs.");
+        foreach (var run in runs)
+        {
+            if (run.PreparedTerminal is null || !run.StartBatchSettled || run.StartKey.SessionId != evt.SessionId
+                || !SameCanonicalContext(run.OriginalContext, evt.TurnContext))
+                throw new InvalidDataException("A repeated child adoption differs from its canonical authority.");
+            var body = ChildRunDelivery.Body(run);
+            var toolName = ChildRunDelivery.ToolName(run);
+            // Retained content can identify a pair. Its absence after compaction does not identify a new adoption.
+            var ids = History.SelectMany(message => message.ToolCalls)
+                .Where(call => call.Name.Value == toolName
+                    && call.ArgumentsJson == ChildRunDelivery.Call(run, call.CallId).ToolCalls[0].ArgumentsJson)
+                .Select(call => call.CallId)
+                .Concat(History.Where(message => message.Role == ChatRole.Tool && message.Name == toolName
+                    && message.Content == body && message.ToolCallId is not null).Select(message => message.ToolCallId!.Value))
+                .Distinct();
+            foreach (var id in ids)
+                ValidateChildPair(History, ChildRunDelivery.Call(run, id), new SerializableChatMessage
+                { Role = ChatRole.Tool, ToolCallId = id, Name = toolName, Content = body });
+        }
+    }
+
+    private static void ValidateChildPair(IReadOnlyList<SerializableChatMessage> history,
+        SerializableChatMessage canonicalCall, SerializableChatMessage canonicalResult)
+    {
+        var callId = canonicalResult.ToolCallId!.Value;
+        var existing = history.Where(message => message.ToolCalls.Any(call => call.CallId == callId)).ToArray();
+        if (existing is not [var assistant] || assistant.Role != canonicalCall.Role
+            || assistant.Content != canonicalCall.Content || assistant.Name != canonicalCall.Name
+            || assistant.ToolCallId != canonicalCall.ToolCallId || assistant.MediaReferences.Count != 0
+            || !assistant.ToolCalls.SequenceEqual(canonicalCall.ToolCalls))
+            throw new InvalidDataException("A repeated child continuation differs from its canonical call.");
+        var results = ParkedToolBatchHistory.FindToolResultsFor(history, assistant);
+        if (results is not [var result] || result.Role != canonicalResult.Role
+            || result.ToolCallId != callId || result.Name != canonicalResult.Name
+            || result.Content != canonicalResult.Content || result.ToolCalls.Count != 0 || result.MediaReferences.Count != 0)
+            throw new InvalidDataException("A repeated child continuation differs from its canonical result.");
     }
 
     private static bool SameTerminalOutcome(ChildRunTerminal original, ChildRunTerminal prepared)

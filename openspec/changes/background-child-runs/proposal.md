@@ -18,7 +18,7 @@ Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
 - Cancel task execution before a five-second framework-only grace period preserves recorded partial evidence.
 - Defer idle passivation while live children or undelivered terminal results require their owner.
 - Report restart loss explicitly. Do not replay interrupted child tools or relaunch lost children.
-- Preserve the first PR's recurrence contract and removed tool ceilings.
+- Preserve removed tool ceilings. Permit a new recurrence window only at first durable canonical child-result consumption.
 - Use **approval prompt** as the glossary's displayed term. Keep existing code identifiers and the legacy anchor unchanged.
 
 In scope: background execution, parent status/cancel, minimum runtime instructions, lifecycle tests, and targeted subagent evals.
@@ -45,7 +45,7 @@ The third PR owns the coordination skill and general worker profile.
 Reuse `ChildRunScope.Authority`, `ToolRunScope`, `TurnContextRecord`, the owner-session seam, and existing session storage.
 Update the spawner, child actor, parent actor, routed skill consumers, approval bridge, session state, snapshots, and framework wire schema.
 Update runtime `AGENTS.md`, `subagent-authoring`, `netclaw-operations`, and the authorization architecture document in the runtime PR.
-The first PR's frozen `per-call-tool-recurrence` contract is a dependency. This package does not redefine its detector.
+The first PR's `per-call-tool-recurrence` contract remains a dependency. This package adds only the approved canonical child-consumption window exception.
 
 ### Security and operational impact
 

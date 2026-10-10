@@ -148,7 +148,7 @@ public sealed partial class BackgroundChildAcceptanceTests(ITestOutputHelper out
             SessionId = Session, InputId = new InputId("input-" + turn), TurnContext = context,
             UserMessage = new SerializableChatMessage { Content = turn }
         };
-        return prior.Apply(input).Apply(new ToolTaskAdopted
+        return prior.Apply(input).Apply(new ToolTaskAdopted(false)
         {
             SessionId = Session, TurnContext = context, InputIds = [input.InputId]
         });

@@ -261,7 +261,7 @@ public sealed partial class BackgroundChildLedgerAdversarialTests(ITestOutputHel
         var first = new InputAdmitted { SessionId = session, InputId = new InputId("origin-one"), TurnContext = context,
             UserMessage = new SerializableChatMessage { Role = StoredRole.User, Content = "Inspect a neutral task." } };
         var second = first with { InputId = new InputId("origin-two") };
-        var state = SessionState.Empty.Apply(first).Apply(second).Apply(new ToolTaskAdopted
+        var state = SessionState.Empty.Apply(first).Apply(second).Apply(new ToolTaskAdopted(false)
         { SessionId = session, TurnContext = context, InputIds = [first.InputId, second.InputId] });
         // The ledger must retain detector identity independently from the original authority turn.
         state = state with { LoopCheckpoint = new ToolLoopCheckpoint

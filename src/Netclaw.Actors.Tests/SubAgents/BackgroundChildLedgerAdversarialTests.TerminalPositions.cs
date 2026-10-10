@@ -29,7 +29,7 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
     {
         var (premise, prototype) = Acceptance(Owner, slash: true);
         var input = premise.PendingInputs[0];
-        var adoption = new ToolTaskAdopted
+        var adoption = new ToolTaskAdopted(false)
         { SessionId = Owner, TurnContext = input.TurnContext, InputIds = [input.InputId] };
         var state = SessionState.Empty.Apply(input).Apply(adoption);
         var run = prototype with

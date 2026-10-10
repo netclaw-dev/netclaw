@@ -39,6 +39,8 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
         _main.PlannedResponses.Enqueue(starts);
         if (!receiptFailure) _main.PlannedResponses.Enqueue([new TextContent("The original task has its two child runs.")]);
         _main.PlannedResponses.Enqueue([new TextContent("The fresh task has no tool effect.")]);
+        _main.PlannedResponses.Enqueue([Probe("window-probe-1")]);
+        _main.PlannedResponses.Enqueue([Probe("window-probe-2")]);
         _main.PlannedResponses.Enqueue([Probe("probe-3")]);
         _main.PlannedResponses.Enqueue([Probe("probe-4")]);
         var (owner, manager, subscriber) = await CreateOwnerAsync();
@@ -133,7 +135,7 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
             }).Where(deliveryIds.Contains);
             Assert.Equal(deliveryIds, consumed);
             Assert.Equal(receiptFailure ? ToolCycleMessages.MissingReceipt : ToolCycleMessages.Final, final.AssistantReply.Content);
-            Assert.Equal(oldModelCount + (receiptFailure ? 1 : 3), _main.CallCount);
+            Assert.Equal(oldModelCount + (receiptFailure ? 1 : 5), _main.CallCount);
             Assert.Equal(new[] { "probe-1", "probe-2" }, _start.ProbeCallIds.Where(id => id.StartsWith("probe-", StringComparison.Ordinal)));
             Assert.Equal(1, _child.CallCount);
             Assert.Equal(1, _secondChild.CallCount);
@@ -153,6 +155,16 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
                     Assert.Single(calls, call => call.CallId == id);
                     Assert.Equal(delivery.Input.UserMessage.Content,
                         Assert.IsType<string>(Assert.Single(results, result => result.CallId == id).Result));
+                }
+                Assert.True(childAdoption.StartsChildContinuationWindow);
+                Assert.Equal(new[] { "window-probe-1", "window-probe-2" },
+                    _start.ProbeCallIds.Where(id => id.StartsWith("window-probe-", StringComparison.Ordinal)));
+                foreach (var id in new[] { "window-probe-1", "window-probe-2" })
+                {
+                    var actual = Assert.Single(after.OfType<ToolCallRecorded>(),
+                        evt => evt.ToolResult.ToolCallId == new ToolCallId(id));
+                    Assert.False(actual.LoopObservation!.Synthetic);
+                    Assert.True(Array.IndexOf(after, childAdoption) < Array.IndexOf(after, actual));
                 }
                 var correction = Assert.Single(after.OfType<ToolCallRecorded>(), evt => evt.ToolResult.ToolCallId == new ToolCallId("probe-3"));
                 Assert.True(correction.LoopObservation!.Synthetic);

@@ -93,7 +93,7 @@ public static partial class SessionProtocol
     }
 
     /// <summary>Commits canonical task authority before the next model request.</summary>
-    public sealed record ToolTaskAdopted : ISessionEvent
+    public sealed record ToolTaskAdopted(bool StartsChildContinuationWindow) : ISessionEvent
     {
         public Netclaw.Tools.SubAgentRunId? ContinuedChildRunId { get; init; }
         public string? ContinuedJobKey { get; init; }
