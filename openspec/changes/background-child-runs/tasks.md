@@ -119,7 +119,7 @@ Combined boundary and mutation evidence at `153d9223`:
 - [x] 8.2 Update `SPEC-002`, `SPEC-016`, and the authorization architecture document; verify they describe implemented ownership and cancellation order.
 - [x] 8.3 Add minimum runtime `AGENTS.md` guidance; verify it describes background acceptance, deferred control, partial result review, and cancel/recreate only.
 - [x] 8.4 Update `subagent-authoring` and `netclaw-operations` versions; verify instructions advertise no deferred messages or restored tool ceilings.
-- [ ] 8.5 Run targeted identity/tool/skill evals for those changed instructions; verify selected resource and control receipts satisfy the actual task.
+- [x] 8.5 Run targeted identity/tool/skill evals for those changed instructions; verify selected resource and control receipts satisfy the actual task.
 - [ ] 8.6 Run applicable builds, required tests, Slopwatch, and copyright-header verification; retain exact candidate and meaningful test counts.
 - [ ] 8.7 Validate the OpenSpec change strictly and sync implemented deltas through the appropriate skill; verify the PRD and active plan trace to the final contract.
 - [ ] 8.8 Prepare rollback and evidence handoff for the combined PR; verify no merge, rollout, publication, or database replacement is implied by local passes.
@@ -132,3 +132,17 @@ Documentation scope review at `2357991d`:
 - Recovery retains committed terminal or cancellation facts. An unresolved accepted run becomes `Lost`.
 - Independent source review approves the two-document clarification. It changes no runtime or detector policy.
 - This closes task 8.2. The remaining integrated health, model, specification-sync, and handoff gates stay open.
+
+Targeted instruction eval evidence at `8a57fbf5`:
+
+- The eight changed instruction files match the prior discovery and cancellation observations.
+- Five discovery observations load the canonical coordination skill and the complete selected resource.
+- Their original results remain pass, pass, fail, pass, pass. A separate corrected-oracle assessment accepts all five archives.
+- Five cancellation observations pass with unchanged instruction bytes. They prove deferred controls, terminal attribution, complete partial-report reads, and final status closure.
+- The operations case reads the complete selected child-run resource. Its activation preview proves no complete operations-guide read.
+- One fresh author-guide observation passes after the narrow assertion repair. It loads the complete version `1.5.0` guide and returns the required contract answer.
+- The original author-guide failure remains false. All 54 files remain unchanged; the separate offline assessment adds no replacement verdict.
+- Independent review verifies actual provider pairs, database verdicts, source equivalence, fresh identities, and cleanup.
+- These observations exercise the private identity. Public identity and CLI templates retain evidence of equal source.
+- This closes task 8.5 only. The explanation proves no executed restart, late approval, framework finalization restriction, or task that lasts days.
+- Integrated health, full critical-case acceptance, specification sync, and final handoff remain open.
