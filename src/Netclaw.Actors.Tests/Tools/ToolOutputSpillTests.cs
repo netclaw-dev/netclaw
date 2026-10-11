@@ -381,6 +381,43 @@ public sealed class ToolOutputSpillTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Spill_rejects_a_link_at_the_parent_of_the_session_workspace()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // The parent (the session folder) is a link to a folder outside the
+        // sessions root. The workspace folder does not exist. The spill must not
+        // create the workspace behind the link.
+        var target = Path.Combine(Path.GetTempPath(), "nc-spill-parent-target-" + Guid.NewGuid().ToString("N"));
+        var link = Path.Combine(Path.GetTempPath(), "nc-spill-parent-link-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(target);
+        Directory.CreateSymbolicLink(link, target);
+        try
+        {
+            var workspace = Path.Combine(link, "workspace");
+            var context = TestToolExecutionContext.CreateBound(
+                "session/parent-link",
+                workspace,
+                new TestToolExecutionContextOptions { Audience = TrustAudience.Personal }).Invocation;
+            var logger = new RecordingLogger();
+
+            var result = await ToolOutputSpill.BoundAndSpillAsync(
+                new string('x', 100), "call_parent_link", budget: 5, context, logger, CancellationToken.None);
+
+            Assert.DoesNotContain("CallId=", result);
+            Assert.Contains("did not keep the full output", result);
+            Assert.Contains("reason=UnsafeSessionFolder", Assert.Single(logger.Entries).Message);
+            Assert.False(Directory.Exists(Path.Combine(target, "workspace")));
+        }
+        finally
+        {
+            Directory.Delete(link);
+            Directory.Delete(target, recursive: true);
+        }
+    }
+
     private sealed class RecordingLogger : ILogger
     {
         public List<(LogLevel Level, string Message)> Entries { get; } = [];
