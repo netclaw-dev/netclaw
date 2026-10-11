@@ -103,8 +103,8 @@ NETCLAW_SMOKE_DAEMON=./publish/daemon/netclawd \
 
 ### CI Smoke Workflow
 
-`smoke.yml` runs the harness on every pull request to `dev`, on `dev`
-pushes, and nightly. It has three legs, all running in parallel:
+`smoke.yml` runs the harness on every pull request to `dev` and nightly.
+It does not run on `dev` pushes. It has three legs, all running in parallel:
 
 - **`Native Smoke (Linux)`** — flow tapes + non-interactive scenarios.
 - **`Screenshot Regression (Linux)`** — TUI screenshot byte-comparison.

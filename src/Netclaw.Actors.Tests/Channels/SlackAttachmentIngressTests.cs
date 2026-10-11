@@ -22,6 +22,7 @@ using FakeChatClient = Netclaw.Tests.Utilities.FakeChatClient;
 using Netclaw.Channels.Slack;
 using Netclaw.Tests.Utilities;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using SlackNet.Blocks;
 using Xunit;
@@ -242,14 +243,14 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit, IAsyncDisposabl
     public async Task Docx_in_dm_is_path_only_with_format_not_inlineable_note()
     {
         _httpHandler.RespondWith(
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            MimeTypeCatalog.ApplicationDocx,
             FakeDocxBytes);
         var gateway = BuildGateway("slack-gw-docx-path-only");
 
         var files = new List<SlackFileReference>
         {
             new("F888", "notes.docx",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                MimeTypeCatalog.ApplicationDocx,
                 FakeDocxBytes.Length,
                 "https://files.slack.com/files-pri/T1234-F888/notes.docx")
         };
@@ -316,7 +317,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit, IAsyncDisposabl
         var files = new List<SlackFileReference>
         {
             new("F999", "secret.docx",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                MimeTypeCatalog.ApplicationDocx,
                 FakeDocxBytes.Length,
                 "https://files.slack.com/files-pri/T1234-F999/secret.docx")
         };

@@ -93,8 +93,11 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         _log = Context.GetLogger();
         _embedderHolder = embedderHolder;
 
+        // Curation decides dedup and merge relationships, so it uses the Main
+        // model, not the Compaction model. The provider resolves Main to the
+        // Main and Fallback pipelines with failover.
         var llmClient = clientProvider != null
-            ? clientProvider.GetClient(ModelRole.Compaction)
+            ? clientProvider.GetClient(ModelRole.Main)
             : null;
         _evaluator = new MemoryCurationEvaluator(
             _store, _log, curationConfig, llmClient, embedderHolder, vectorIndexHolder);

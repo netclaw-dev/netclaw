@@ -68,18 +68,39 @@ internal sealed class OpenAiCodexRequestPolicy : PipelinePolicy
     public override async ValueTask ProcessAsync(
         PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
     {
+        SensitiveString? requestToken = null;
         if (_tokenRefreshService is not null)
         {
-            var token = await _tokenRefreshService.GetValidAccessTokenAsync(
+            requestToken = await _tokenRefreshService.GetValidAccessTokenAsync(
                 _providerName!,
                 _entry!,
                 _oauth!,
                 message.CancellationToken);
-            _credential!.Update(token.Value);
+            _credential!.Update(requestToken.Value);
         }
 
         Modify(message, ResolveAccountId());
         await ProcessNextAsync(message, pipeline, currentIndex);
+
+        // A 401 surfaces as an error response, not an exception: the transport returns
+        // the response normally, and the OpenAI SDK throws ClientResultException only after
+        // the pipeline has fully unwound. So this policy must inspect the response status
+        // after the downstream run, then refresh the OAuth token and retry once. The retry
+        // re-runs ProcessNextAsync with the same message, the same mechanism the SDK's own
+        // ClientRetryPolicy uses for transient retries.
+        if (requestToken is not null && message.Response?.Status == 401)
+        {
+            message.Response.ContentStream?.Dispose();
+            var refreshed = await _tokenRefreshService!.ForceRefreshAccessTokenAsync(
+                _providerName!,
+                _entry!,
+                _oauth!,
+                requestToken.Value,
+                message.CancellationToken);
+            _credential!.Update(refreshed.Value);
+            Modify(message, ResolveAccountId());
+            await ProcessNextAsync(message, pipeline, currentIndex);
+        }
     }
 
     private string ResolveAccountId()

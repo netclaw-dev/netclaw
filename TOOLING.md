@@ -29,7 +29,7 @@
 
 ## Focused Mutation Tests
 
-All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request, merge group, and `dev` push.
+All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
 The job has four Linux matrix groups that run in parallel with the normal test matrix.
 The groups hold about 13 to 14 minutes of gates each. The sum of all gates is about 59 minutes of runner time. The job timeout is 25 minutes.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.

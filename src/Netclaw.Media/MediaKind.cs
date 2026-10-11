@@ -23,3 +23,36 @@ public enum MediaContentKind
     Text,
     Binary
 }
+
+/// <summary>
+/// Byte-signature family for a media type. The catalog owns the family; the
+/// security scanner owns the byte-matcher for each family. This keeps the
+/// MIME → matcher table derived from one list, so the two cannot drift.
+/// <see cref="Any"/> is text-like content with no signature at offset 0;
+/// <see cref="None"/> means the scanner has no matcher for the type.
+/// </summary>
+public enum SignatureFamily
+{
+    None,
+    Any,
+    Png,
+    Jpeg,
+    Gif,
+    Webp,
+    Bmp,
+    Tiff,
+    Pdf,
+    Zip,
+    Ole,
+    Rtf,
+    SevenZip,
+    Gzip,
+    Bzip2,
+    Xz,
+    Mp3,
+    Ftyp,
+    Wav,
+    Ogg,
+    Ebml,
+    Avi
+}

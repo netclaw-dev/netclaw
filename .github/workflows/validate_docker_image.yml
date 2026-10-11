@@ -43,6 +43,12 @@ on:
 permissions:
   contents: read
 
+# One run per ref (or per PR). A newer run cancels the older one so overlapping
+# pushes do not stack image builds on the runner pool.
+concurrency:
+  group: validate-docker-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate-docker-build:
     name: Validate Docker Build

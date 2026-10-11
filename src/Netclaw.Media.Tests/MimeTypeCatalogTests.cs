@@ -55,7 +55,7 @@ public sealed class MimeTypeCatalogTests
     [InlineData(".png", MimeTypeCatalog.ImagePng)]
     [InlineData("jpg", MimeTypeCatalog.ImageJpeg)]
     [InlineData(".pdf", MimeTypeCatalog.ApplicationPdf)]
-    [InlineData(".potx", "application/vnd.openxmlformats-officedocument.presentationml.template")]
+    [InlineData(".potx", MimeTypeCatalog.ApplicationPotx)]
     [InlineData(".mp4", MimeTypeCatalog.VideoMp4)]
     [InlineData(".m4a", MimeTypeCatalog.AudioMp4)]
     public void FromExtension_returns_canonical_mime(string extension, string expected)
@@ -103,5 +103,36 @@ public sealed class MimeTypeCatalogTests
         var normalized = MimeTypeCatalog.NormalizeDeclaredForExtension("text/plain", extension);
 
         Assert.Equal(new MimeType(expected), normalized);
+    }
+
+    // The office-container helpers are derived from the catalog's signature
+    // family and media kind. These cases guard the derivation, including the
+    // generic .zip archive that shares the ZIP family but is not a document.
+    [Theory]
+    [InlineData("report.docx", true)]
+    [InlineData("budget.xlsx", true)]
+    [InlineData("slides.pptx", true)]
+    [InlineData("master.potx", true)]
+    [InlineData("notes.odt", true)]
+    [InlineData("sheet.ods", true)]
+    [InlineData("deck.odp", true)]
+    [InlineData("REPORT.POTX", true)]
+    [InlineData("archive.zip", false)]
+    [InlineData("legacy.doc", false)]
+    [InlineData("photo.png", false)]
+    public void IsZipBackedOfficePath_true_only_for_zip_office_documents(string path, bool expected)
+    {
+        Assert.Equal(expected, MimeTypeCatalog.IsZipBackedOfficePath(path));
+    }
+
+    [Theory]
+    [InlineData("legacy.doc", true)]
+    [InlineData("legacy.xls", true)]
+    [InlineData("legacy.ppt", true)]
+    [InlineData("report.docx", false)]
+    [InlineData("archive.zip", false)]
+    public void IsOleBackedOfficePath_true_only_for_ole_office_documents(string path, bool expected)
+    {
+        Assert.Equal(expected, MimeTypeCatalog.IsOleBackedOfficePath(path));
     }
 }

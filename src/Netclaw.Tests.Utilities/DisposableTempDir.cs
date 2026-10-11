@@ -54,6 +54,9 @@ internal sealed class DisposableTempDir : IDisposable
                 // connections of every database in the process, which other tests
                 // can observe. The first call in a process also loads the SQLite
                 // native library, which a test without SQLite does not need.
+                // This stays global because the helper does not know the database
+                // path it is cleaning up. Any test that asserts pool or handle
+                // identity must tolerate this; do not add more global clears elsewhere.
                 if (i == 0)
                     Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
 

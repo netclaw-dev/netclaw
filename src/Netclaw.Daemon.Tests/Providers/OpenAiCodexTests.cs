@@ -198,6 +198,83 @@ public sealed class OpenAiCodexTests
             Assert.Equal("account-new", accountId);
         }
 
+        [Fact]
+        public async Task ProcessAsync_RefreshesAndRetriesOnceAfterUnauthorizedResponse()
+        {
+            using var dir = new DisposableTempDir();
+            var paths = new NetclawPaths(dir.Path);
+            var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+            var time = new FakeTimeProvider(now);
+            var idToken = JwtTestToken.Make(new Dictionary<string, object>
+            {
+                ["https://api.openai.com/auth"] = new Dictionary<string, object>
+                {
+                    ["chatgpt_account_id"] = "account-new"
+                }
+            });
+
+            // The refresh service and the transport use separate handlers: a refresh
+            // call to the token endpoint must not consume a transport attempt.
+            var refreshHttpClient = new HttpClient(new FakeHttpMessageHandler(_ =>
+                FakeHttpMessageHandler.JsonResponse(new
+                {
+                    access_token = "access-new",
+                    refresh_token = "refresh-new",
+                    id_token = idToken,
+                    expires_in = 3600,
+                })));
+            var refreshService = new ProviderOAuthTokenRefreshService(
+                paths,
+                new DeviceFlowServiceFactory(
+                    new OAuthDeviceFlowService(refreshHttpClient, time),
+                    new OpenAiDeviceFlowService(refreshHttpClient, time)),
+                NullNotificationSink.Instance,
+                time);
+
+            var entry = new ProviderEntry
+            {
+                Type = "openai",
+                AuthMethod = AuthMethod.OAuthDevice,
+                OAuthAccessToken = new SensitiveString("access-old"),
+                OAuthRefreshToken = new SensitiveString("refresh-old"),
+                OAuthTokenExpiry = now.AddHours(1),
+                OAuthAccountId = new SensitiveString("account-old"),
+            };
+            var credential = new ApiKeyCredential("access-old");
+            var policy = new OpenAiCodexRequestPolicy(
+                "openai-codex", entry, OpenAiOAuth, credential, refreshService);
+
+            // The Codex backend returns a 401 as a normal HTTP response (the SDK throws
+            // ClientResultException only after the pipeline unwinds), so the transport must
+            // surface it as a response, not an exception.
+            var transportCalls = 0;
+            var transport = new HttpClientPipelineTransport(new HttpClient(new FakeHttpMessageHandler(_ =>
+            {
+                transportCalls++;
+                return transportCalls == 1
+                    ? new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("{}") }
+                    : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
+            })));
+
+            var options = new ClientPipelineOptions { Transport = transport };
+            options.AddPolicy(policy, PipelinePosition.PerCall);
+            var pipeline = ClientPipeline.Create(options);
+            using var message = pipeline.CreateMessage();
+            message.Request.Method = "POST";
+            message.Request.Uri = new Uri("https://chatgpt.com/backend-api/codex/responses");
+            message.Request.Content = BinaryContent.Create(BinaryData.FromString("{}"));
+
+            await pipeline.SendAsync(message);
+
+            Assert.Equal(2, transportCalls);
+            Assert.Equal("access-new", entry.OAuthAccessToken!.Value);
+            credential.Deconstruct(out var currentCredential);
+            Assert.Equal("access-new", currentCredential);
+            message.Request.Headers.TryGetValue("ChatGPT-Account-Id", out var accountId);
+            Assert.Equal("account-new", accountId);
+            Assert.Equal(200, message.Response!.Status);
+        }
+
         private sealed class TerminalPolicy : PipelinePolicy
         {
             public bool WasCalled { get; private set; }

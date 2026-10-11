@@ -86,9 +86,9 @@ public sealed class MemoryCurationLlmDoctorCheck(NetclawPaths paths, TimeProvide
                 return DoctorCheckResult.Warning(
                     CheckName,
                     $"Curation LLM tier is failing: 0 successful decisions vs {failures} failures in the last {LogWindowDays} days.",
-                    "The curation model (ModelRole.Compaction, falling back to Main) is returning empty/garbled output or timing out. " +
+                    "The curation model (ModelRole.Main) is returning empty/garbled output or timing out. " +
                     "If it is a reasoning model, hidden thinking may exhaust the output-token cap. " +
-                    "Check daemon logs for curation_llm_no_decision/curation_llm_timeout and consider assigning a small non-reasoning model to the Compaction role.");
+                    "Check daemon logs for curation_llm_no_decision/curation_llm_timeout and consider a model that returns a decision within the curation timeout.");
             }
 
             var failureRate = (double)failures / total;
@@ -97,7 +97,7 @@ public sealed class MemoryCurationLlmDoctorCheck(NetclawPaths paths, TimeProvide
                 return DoctorCheckResult.Warning(
                     CheckName,
                     $"Curation LLM failure rate {failureRate:P0} ({failures}/{total}) in the last {LogWindowDays} days.",
-                    "Check daemon logs for curation_llm_timeout/curation_llm_no_decision patterns and the Compaction-role model configuration.");
+                    "Check daemon logs for curation_llm_timeout/curation_llm_no_decision patterns and the Main-role model configuration.");
             }
 
             return DoctorCheckResult.Pass(

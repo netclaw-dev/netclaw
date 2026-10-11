@@ -48,18 +48,18 @@ public static class MagicByteValidator
     private static readonly SignatureMatcher AnyContent = static _ => true;
 
     /// <summary>
-    /// MIME → byte-signature matcher. The matcher is the only piece the security
-    /// layer owns; the set of filename extensions permitted for each MIME comes
-    /// from <see cref="MimeTypeCatalog"/> (via <see cref="MimeTypeCatalog.ExtensionMatches"/>),
-    /// so the extension table is defined once in the catalog and cannot drift
-    /// against the validator.
+    /// MIME → byte-signature matcher, derived from <see cref="MimeTypeCatalog"/>.
+    /// The security layer owns only the byte-matcher for each
+    /// <see cref="SignatureFamily"/>; the MIME set and permitted extensions come
+    /// from the catalog, so the tables cannot drift.
     /// </summary>
     private static readonly FrozenDictionary<string, SignatureMatcher> SignatureMatchers =
         BuildMatchers().ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// MIME types for which the scanner has a native byte-signature matcher.
-    /// Kept aligned with <see cref="MimeTypeCatalog.GetNativeSignatureValidatedMimeTypes"/>.
+    /// Derived from the catalog, so it always equals
+    /// <see cref="MimeTypeCatalog.GetNativeSignatureValidatedMimeTypes"/>.
     /// </summary>
     public static IReadOnlyCollection<string> SupportedMimeTypes => SignatureMatchers.Keys;
 
@@ -218,72 +218,50 @@ public static class MagicByteValidator
     }
 
     // ── Matcher table ─────────────────────────────────────────────────────
-    // MIME → byte-signature matcher only. Permitted extensions live in
-    // MimeTypeCatalog; this table must stay aligned with the catalog's
-    // native-signature-validated set (enforced by a test).
+    // MIME → byte-signature matcher, derived from the catalog. The catalog owns
+    // the MIME → family mapping; this class owns only the family → matcher
+    // mapping. A catalog entry with no family is skipped; a family with no
+    // matcher fails loud in MatcherFor, so drift cannot pass silently.
 
-    private static Dictionary<string, SignatureMatcher> BuildMatchers() => new(StringComparer.OrdinalIgnoreCase)
+    private static Dictionary<string, SignatureMatcher> BuildMatchers()
     {
-        // Images
-        ["image/png"] = IsPng,
-        ["image/jpeg"] = IsJpeg,
-        ["image/gif"] = IsGif,
-        ["image/webp"] = IsWebp,
-        ["image/bmp"] = IsBmp,
-        ["image/tiff"] = IsTiff,
+        var matchers = new Dictionary<string, SignatureMatcher>(StringComparer.OrdinalIgnoreCase);
+        foreach (var definition in MimeTypeCatalog.All)
+        {
+            if (definition.SignatureFamily == SignatureFamily.None)
+                continue;
 
-        // PDF
-        ["application/pdf"] = IsPdf,
+            matchers[definition.MimeType.Value] = MatcherFor(definition.SignatureFamily);
+        }
 
-        // OOXML (ZIP-based) — docx/xlsx/pptx
-        ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = IsZip,
-        ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] = IsZip,
-        ["application/vnd.openxmlformats-officedocument.presentationml.presentation"] = IsZip,
-        ["application/vnd.openxmlformats-officedocument.presentationml.template"] = IsZip,
+        return matchers;
+    }
 
-        // OpenDocument (also ZIP-based)
-        ["application/vnd.oasis.opendocument.text"] = IsZip,
-        ["application/vnd.oasis.opendocument.spreadsheet"] = IsZip,
-        ["application/vnd.oasis.opendocument.presentation"] = IsZip,
-
-        // Legacy OLE Compound Document Office formats
-        ["application/msword"] = IsOle,
-        ["application/vnd.ms-excel"] = IsOle,
-        ["application/vnd.ms-powerpoint"] = IsOle,
-
-        // Plain/structured text — no signature, but executable pre-check
-        // still blocks MZ / ELF / shebang payloads.
-        ["text/plain"] = AnyContent,
-        ["text/markdown"] = AnyContent,
-        ["text/csv"] = AnyContent,
-        ["text/tab-separated-values"] = AnyContent,
-        ["text/html"] = AnyContent,
-        ["application/json"] = AnyContent,
-        ["application/xml"] = AnyContent,
-        ["application/yaml"] = AnyContent,
-
-        // Rich text
-        ["application/rtf"] = IsRtf,
-
-        // Archives
-        ["application/zip"] = IsZip,
-        ["application/x-7z-compressed"] = Is7z,
-        ["application/gzip"] = IsGzip,
-        ["application/x-bzip2"] = IsBzip2,
-        ["application/x-xz"] = IsXz,
-
-        // Audio
-        ["audio/mpeg"] = IsMp3FrameOrId3,
-        ["audio/mp4"] = IsFtyp,
-        ["audio/wav"] = IsWav,
-        ["audio/ogg"] = IsOgg,
-
-        // Video
-        ["video/mp4"] = IsFtyp,
-        ["video/quicktime"] = IsFtyp,
-        ["video/webm"] = IsEbml,
-        ["video/x-matroska"] = IsEbml,
-        ["video/x-msvideo"] = IsAvi
+    private static SignatureMatcher MatcherFor(SignatureFamily family) => family switch
+    {
+        SignatureFamily.Any => AnyContent,
+        SignatureFamily.Png => IsPng,
+        SignatureFamily.Jpeg => IsJpeg,
+        SignatureFamily.Gif => IsGif,
+        SignatureFamily.Webp => IsWebp,
+        SignatureFamily.Bmp => IsBmp,
+        SignatureFamily.Tiff => IsTiff,
+        SignatureFamily.Pdf => IsPdf,
+        SignatureFamily.Zip => IsZip,
+        SignatureFamily.Ole => IsOle,
+        SignatureFamily.Rtf => IsRtf,
+        SignatureFamily.SevenZip => Is7z,
+        SignatureFamily.Gzip => IsGzip,
+        SignatureFamily.Bzip2 => IsBzip2,
+        SignatureFamily.Xz => IsXz,
+        SignatureFamily.Mp3 => IsMp3FrameOrId3,
+        SignatureFamily.Ftyp => IsFtyp,
+        SignatureFamily.Wav => IsWav,
+        SignatureFamily.Ogg => IsOgg,
+        SignatureFamily.Ebml => IsEbml,
+        SignatureFamily.Avi => IsAvi,
+        _ => throw new InvalidOperationException(
+            $"No signature matcher is registered for signature family '{family}'.")
     };
 
     // ── Signature matchers ────────────────────────────────────────────────
