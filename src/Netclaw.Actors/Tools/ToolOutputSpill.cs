@@ -105,7 +105,7 @@ internal static class ToolOutputSpill
             // creates it, and so does this spill: a session whose first large
             // result comes from another tool (skill_load, an MCP tool) has no
             // folder yet. Without this step that result got no continuation.
-            if (!ToolOutputSpillLocation.TryEnsureSessionDirectory(context.SessionDirectory))
+            if (ToolOutputSpillLocation.EnsureSessionWorkspaceDirectory(context.SessionDirectory) is not null)
                 return SpillOutcome.NotRetained(SpillFailureReason.UnsafeSessionFolder);
 
             if (!ToolOutputSpillLocation.TryResolve(
