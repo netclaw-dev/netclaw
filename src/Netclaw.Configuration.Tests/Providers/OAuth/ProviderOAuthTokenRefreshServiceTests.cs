@@ -52,6 +52,36 @@ public sealed class ProviderOAuthTokenRefreshServiceTests
     }
 
     [Fact]
+    public async Task ForceRefreshAccessTokenAsync_RefreshesEvenWhenTokenIsNotNearExpiry()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var service = CreateService(paths, time, new FakeHttpMessageHandler(_ =>
+            FakeHttpMessageHandler.JsonResponse(new
+            {
+                access_token = "access-new",
+                refresh_token = "refresh-new",
+                expires_in = 3600,
+            })));
+        var entry = new ProviderEntry
+        {
+            Type = "openai",
+            AuthMethod = AuthMethod.OAuthDevice,
+            OAuthAccessToken = new SensitiveString("access-old"),
+            OAuthRefreshToken = new SensitiveString("refresh-old"),
+            OAuthTokenExpiry = now.AddHours(1),
+        };
+
+        var token = await service.ForceRefreshAccessTokenAsync(
+            "openai-codex", entry, OpenAiOAuth, "access-old", TestContext.Current.CancellationToken);
+
+        Assert.Equal("access-new", token.Value);
+        Assert.Equal("access-new", entry.OAuthAccessToken!.Value);
+    }
+
+    [Fact]
     public async Task GetValidAccessTokenAsync_ExpiredToken_RefreshesPersistsAndUpdatesEntry()
     {
         using var dir = new DisposableTempDir();
