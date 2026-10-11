@@ -102,7 +102,13 @@ public sealed class MemoryUpdateToolRegistrationTests : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        SqliteConnection.ClearAllPools();
+        // Clear only this test's own database pool. ClearAllPools() would close idle
+        // connections for every database in the process and race other xUnit test
+        // classes that assert pool and handle identity.
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = Path.Combine(_baseDir, "netclaw.db") }.ToString());
+        SqliteConnection.ClearPool(connection);
+
         if (Directory.Exists(_baseDir))
             Directory.Delete(_baseDir, recursive: true);
         return ValueTask.CompletedTask;
