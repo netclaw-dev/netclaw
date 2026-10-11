@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, cross-session memory, memory classes, or memory types. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.14.0"
+  version: "1.14.2"
 ---
 
 # Netclaw Memory
@@ -280,14 +280,22 @@ Useful log events:
   unavailable, sub-budget exceeded, or recall in lexical mode); the floor's own result was
   injected unfiltered
 
-**Formation pipeline** (grep for `memory_observation`):
-- `memory_observation_sidecar_completed`
-- `memory_observation_gate_result`
+**Formation pipeline** (grep for `session_observer` / `memory_curation`):
+- `session_observer_turn_trigger` — the observer starts a distill pass for the session
+- `session_observer_distill_skipped` / `session_observer_distill_deferred` — no pass ran
+  (no new content, an empty transcript, or a pass already in progress)
+- `session_observer_parse_failed` / `session_observer_parse_no_json` — the observer could
+  not read the model's proposals
+- `session_observer_accepted_proposals_persisted` — the accepted proposals were stored
+- `memory_curation_completed` — curation result, with counts of evaluated, skipped,
+  updated, consolidated, and created memories
+- `memory_curation_skipped` / `memory_curation_failed` — curation did not run, or failed
+  with a reason
 
 ### Embeddings
 
 Embeddings are provisioned at daemon start when `Memory.Embeddings.Enabled` is
-`true` (default `false` for now). When unavailable:
+`true` (the default). When unavailable:
 - Log: `memory_embedding_unavailable` (embedder) or `memory_relevance_gate_unavailable`
   (relevance/cross-encoder model)
 - Daemon status shows: `embeddings: degraded`
@@ -310,6 +318,8 @@ To repopulate existing memory vectors after enabling embeddings:
 ```
 netclaw memory backfill-embeddings [--force]
 ```
+
+The command does nothing while `Memory.Embeddings.Enabled` is false.
 
 ## Eval Gate
 

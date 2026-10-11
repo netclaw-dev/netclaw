@@ -48,7 +48,7 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
     private static readonly float[] QueryVector = [1f, 0f];
     private static readonly float[] OrthogonalVector = [0f, 1f];
 
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-recall-hybrid-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-recall-hybrid-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 

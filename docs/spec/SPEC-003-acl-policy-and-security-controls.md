@@ -2,47 +2,19 @@
 
 Source PRDs: `PRD-001`, `PRD-002`
 
-## Purpose
+## Status
 
-Specify ACL schema behavior and enforcement points for inbound interactions,
-tool access, and ambient channel behavior.
+This specification is a pointer. Its earlier policy model (grant categories,
+ambient channel mode, and a tool audit store) no longer describes Netclaw.
 
-## Policy Model
+Use these two sources:
 
-- default deny baseline
-- explicit channel and sender allow rules
-- per-channel `require_mention` behavior
-- optional data and tool grants with explicit allow semantics
+- [Tool authorization architecture](../architecture/tool-authorization.md)
+  explains how Netclaw authorizes every tool call. It has diagrams, decision
+  owners, guidelines, and future scenarios.
+- [`tool-authorization` OpenSpec capability](../../openspec/specs/tool-authorization/spec.md)
+  states the testable rules and maps each rule to its tests.
 
-## Enforcement Points
-
-1. inbound message classification (DM, channel, threaded channel)
-2. sender authorization check
-3. channel policy check
-4. mention/ambient rule check
-5. tool/data grant check at execution time
-
-## Ambient Channel Rules
-
-- ambient mode is opt-in per channel
-- when acting in ambient mode, Netclaw starts a new Slack thread rooted at the
-  trigger message and maps a new session key
-
-## Fail-Closed Rules
-
-- invalid ACL schema -> startup failure
-- policy engine exception -> deny result
-- missing grant for requested tool/data -> deny result
-
-## Shell Approval Completeness
-
-Netclaw keeps static shell candidates reusable when an approval-exempt output command has a bare `$?` argument and no redirect.
-The parser must still account for every executable region. Unknown paths, redirects, and unapproved verbs keep their normal gates.
-
-See the [shell approval contract](../../openspec/specs/tool-approval-gates/spec.md) for the complete authority rules.
-
-## Audit Events
-
-- policy allow/deny decision (with reason)
-- privileged approval decisions
-- exposure mode and binding mode at startup
+Inbound sender and channel rules belong to the channel and input-adapter
+specifications, for example
+[`netclaw-input-adapters`](../../openspec/specs/netclaw-input-adapters/spec.md).

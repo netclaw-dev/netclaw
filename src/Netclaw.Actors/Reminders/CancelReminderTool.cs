@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Reminders;
 /// LLM tool for cancelling (disabling) a reminder by ID.
 /// </summary>
 [NetclawTool("cancel_reminder",
-    "Cancel a reminder by its ID — disables it and stops future executions. The reminder definition is preserved for diagnosis. Use list_reminders to find reminder IDs.",
+    "Cancel a reminder (a scheduled or recurring job) by its ID — disables it and stops future executions. The reminder definition is preserved for diagnosis. Use list_reminders to find reminder IDs.",
     Grant = "scheduling")]
 public sealed partial class CancelReminderTool : NetclawTool<CancelReminderTool.Params>
 {
@@ -42,7 +42,11 @@ public sealed partial class CancelReminderTool : NetclawTool<CancelReminderTool.
 
         var id = new ReminderId(args.ReminderId);
         var response = await _reminderManager.Ask<ReminderCancelledResponse>(
-            new CancelReminderCommand(id), TimeSpan.FromSeconds(10), ct);
+            new CancelReminderCommand(
+                id,
+                new ReminderAudienceAuthorizationContext(context.Audience, context.SessionId ?? context.ChannelType)),
+            TimeSpan.FromSeconds(10),
+            ct);
 
         return response.Found
             ? $"Reminder '{args.ReminderId}' cancelled (disabled). The definition is preserved on disk."

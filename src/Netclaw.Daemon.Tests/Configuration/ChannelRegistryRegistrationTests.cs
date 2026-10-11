@@ -82,7 +82,7 @@ public sealed class ChannelRegistryRegistrationTests
 
         Assert.Contains(ChannelOutputEffectKind.ProcessingIndicator, descriptors["discord"].SupportedOutputEffects);
         Assert.Contains(ChannelOutputEffectKind.ProcessingIndicator, descriptors["slack"].SupportedOutputEffects);
-        Assert.DoesNotContain(ChannelOutputEffectKind.ProcessingIndicator, descriptors["mattermost"].SupportedOutputEffects);
+        Assert.Contains(ChannelOutputEffectKind.ProcessingIndicator, descriptors["mattermost"].SupportedOutputEffects);
     }
 
     [Fact]

@@ -89,8 +89,8 @@ transition_source="$repo_root/src/Netclaw.Actors/Tools/ShellPolicyEvaluation.cs"
 read -r transition_start transition_end transition_line < <(
   resolve_unique_condition_span \
     "$transition_source" \
-    $'Coverage != ShellCoverageKind.Uncovered\n                || GrantEvidence is not null' \
-    "Coverage != ShellCoverageKind.Uncovered"
+    $'Coverage != null\n                || GrantEvidence is not null' \
+    "Coverage != null"
 )
 
 evidence_output="$output_path/evidence-facts"

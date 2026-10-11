@@ -18,6 +18,7 @@ namespace Netclaw.Actors.Memory;
 public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMemoryTool.Params>
 {
     private readonly SQLiteMemoryStore _store;
+    private readonly MemoryEmbedderHolder? _embedderHolder;
     private readonly ILogger _logger;
 
     public record Params(
@@ -34,9 +35,11 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
 
     public SqliteUpdateMemoryTool(
         SQLiteMemoryStore store,
+        MemoryEmbedderHolder? embedderHolder = null,
         ILogger<SqliteUpdateMemoryTool>? logger = null)
     {
         _store = store;
+        _embedderHolder = embedderHolder;
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
@@ -75,9 +78,10 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
                     return "Error: new_content cannot be empty. To remove a memory, set delete to true.";
 
                 var replaced = await _store.ReplaceDocumentTextAsync(storageId.Value, args.NewContent, ct);
-                if (!replaced)
+                if (replaced is null)
                     return $"Edit failed for \"{resolved.Handle}\". Document missing.";
 
+                await EmbedEditedDocumentAsync(replaced, ct);
                 _logger.LogInformation("SQLite update_memory replaced document memory={MemoryId}", resolved.Handle);
                 return $"Memory \"{resolved.Handle}\" updated.";
             }
@@ -86,9 +90,10 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
                 return "Error: document update requires old_text and new_text, or new_content.";
 
             var updated = await _store.UpdateDocumentTextAsync(storageId.Value, args.OldText, args.NewText, ct);
-            if (!updated)
+            if (updated is null)
                 return $"Edit failed for \"{resolved.Handle}\". Document missing or old_text not found.";
 
+            await EmbedEditedDocumentAsync(updated, ct);
             _logger.LogInformation("SQLite update_memory edited document memory={MemoryId}", resolved.Handle);
             return $"Memory \"{resolved.Handle}\" updated.";
         }
@@ -108,4 +113,9 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
         return $"Record \"{resolved.Handle}\" superseded.";
     }
 
+    // The store drops the stale vector in the edit transaction; embedding the new text goes
+    // through the same hook curation writes use, which is a no-op while the embedder is
+    // unavailable (the startup sweep or `netclaw memory backfill-embeddings` picks it up).
+    private Task EmbedEditedDocumentAsync(MemoryDocumentWriteResult edited, CancellationToken ct)
+        => MemoryEmbedOnWriteCoordinator.EmbedWrittenDocumentsAsync(_embedderHolder, _store, [edited], _logger, ct);
 }

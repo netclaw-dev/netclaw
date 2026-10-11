@@ -133,6 +133,17 @@ public static class AtomicFile
     }
 
     /// <summary>
+    /// Gives <paramref name="temp"/> the permission bits of <paramref name="source"/> when that file
+    /// exists (Linux/macOS). Pass it as the harden callback so a rewrite does not widen the mode of a
+    /// file an operator made owner-only, for example a netclaw.json that holds a token.
+    /// </summary>
+    public static void CopyUnixMode(string source, string temp)
+    {
+        if (!OperatingSystem.IsWindows() && File.Exists(source))
+            File.SetUnixFileMode(temp, File.GetUnixFileMode(source));
+    }
+
+    /// <summary>
     /// Restrict a file to owner-only read/write (chmod 600) on Linux/macOS; a no-op on Windows,
     /// which relies on user-profile ACLs. Pass as the harden callback to <see cref="WriteAllText"/>
     /// when writing secrets.json or devices.json so those files are never group/world-readable.

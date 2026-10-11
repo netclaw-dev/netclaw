@@ -11,6 +11,17 @@ internal static class ConfigCommand
 {
     internal const string MissingConfigMessage = "No configuration found. Run `netclaw init` first.";
 
+    /// <summary>
+    /// Runs <c>netclaw config</c> with arguments. Returns false when the caller must open the
+    /// dashboard: no argument was given and the install has a config. Any argument is a help
+    /// request or a subcommand that this call has already run.
+    /// </summary>
+    public static bool Handle(string[] args, NetclawPaths paths, out int exitCode, TextWriter? output = null, TextWriter? error = null)
+    {
+        exitCode = Run(args, paths, output, error);
+        return exitCode != 0 || args.Length > 1;
+    }
+
     public static int Run(string[] args, NetclawPaths paths, TextWriter? output = null, TextWriter? error = null)
     {
         var writer = output ?? Console.Out;
@@ -18,6 +29,9 @@ internal static class ConfigCommand
 
         if (args.Length > 1 && CliArgsParser.IsHelpToken(args[1]))
             return WriteHelp(writer);
+
+        if (args.Length > 1 && args[1] == "retention")
+            return RetentionCommand.Run(args[2..], paths, writer, errorWriter);
 
         if (args.Length > 1)
         {
@@ -38,9 +52,13 @@ internal static class ConfigCommand
     private static int WriteHelp(TextWriter writer)
     {
         writer.WriteLine("Usage: netclaw config");
+        writer.WriteLine("       netclaw config retention [--logs-days <days>]");
         writer.WriteLine();
         writer.WriteLine("Launch the main post-install settings dashboard.");
         writer.WriteLine("Use `netclaw init` for bootstrap setup on a new install.");
+        writer.WriteLine();
+        writer.WriteLine("Subcommands:");
+        writer.WriteLine("  retention   Show or set how long the daemon keeps data (`netclaw config retention --help`).");
         return 0;
     }
 }

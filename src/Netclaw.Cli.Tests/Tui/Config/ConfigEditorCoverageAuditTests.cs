@@ -133,6 +133,18 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                         "src/Netclaw.Configuration.Tests/ExternalSkillsConfigTests.cs",
                         "src/Netclaw.Actors.Tests/Skills/SkillScannerTests.cs"
                     ])),
+            ["retention"] = new(
+                nameof(RetentionConfigViewModelTests),
+                StructuralValidationCoverage.Required(
+                    new ValidationConceptTest("days", nameof(RetentionConfigViewModelTests), nameof(RetentionConfigViewModelTests.Save_rejects_an_invalid_value_before_writing))),
+                DynamicValidationCoverage.NotApplicable("Data Retention validates a number of days locally; it has no remote/runtime probe."),
+                null,
+                new RuntimeConsumerCoverage(
+                    "DataRetentionActor jobs consume Retention:*:Days; the daemon restarts in process on a config change and rebuilds the jobs.",
+                    [
+                        "src/Netclaw.Daemon.Tests/Configuration/DaemonLogRetentionTests.cs",
+                        "src/Netclaw.Daemon.Tests/Services/DataRetentionActorTests.cs"
+                    ])),
             ["search"] = new(
                 nameof(SearchConfigEditorViewModelTests),
                 StructuralValidationCoverage.Required(
@@ -231,6 +243,7 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
             "enabled-features",
             "exposure-mode",
             "inbound-webhooks",
+            "retention",
             "search",
             "security-posture",
             "skill-sources",

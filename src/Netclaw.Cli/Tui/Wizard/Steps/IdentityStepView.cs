@@ -45,7 +45,7 @@ public sealed class IdentityStepView : IWizardStepView
     private ILayoutNode BuildAgentName(IdentityStepViewModel vm, StepViewCallbacks callbacks)
     {
         _agentNameInput = new TextInputNode().WithPlaceholder("Netclaw");
-        _agentNameInput.Text = vm.AgentName;
+        WizardStepHelpers.SeedTextInput(_agentNameInput, vm.AgentName);
         _agentNameInput.OnFocused();
         _lastFocusedInput = _agentNameInput;
         _lastFocusedList = null;
@@ -97,7 +97,7 @@ public sealed class IdentityStepView : IWizardStepView
     {
         _userNameInput = new TextInputNode().WithPlaceholder("Your name");
         if (!string.IsNullOrWhiteSpace(vm.UserName))
-            _userNameInput.Text = vm.UserName;
+            WizardStepHelpers.SeedTextInput(_userNameInput, vm.UserName);
 
         _userNameInput.OnFocused();
         _lastFocusedInput = _userNameInput;
@@ -118,8 +118,8 @@ public sealed class IdentityStepView : IWizardStepView
 
     private ILayoutNode BuildTimezone(IdentityStepViewModel vm, StepViewCallbacks callbacks)
     {
-        _timezoneInput = new TextInputNode().WithPlaceholder(TimeZoneInfo.Local.Id);
-        _timezoneInput.Text = vm.UserTimezone;
+        _timezoneInput = new TextInputNode().WithPlaceholder(IdentityStepViewModel.DefaultTimezone);
+        WizardStepHelpers.SeedTextInput(_timezoneInput, vm.UserTimezone);
 
         _timezoneInput.OnFocused();
         _lastFocusedInput = _timezoneInput;
@@ -128,7 +128,18 @@ public sealed class IdentityStepView : IWizardStepView
         _timezoneInput.Submitted
             .Subscribe(text =>
             {
-                vm.UserTimezone = string.IsNullOrWhiteSpace(text) ? TimeZoneInfo.Local.Id : text;
+                var timezone = string.IsNullOrWhiteSpace(text) ? IdentityStepViewModel.DefaultTimezone : text.Trim();
+                var error = IdentityStepViewModel.ValidateTimezone(timezone);
+                if (error is not null)
+                {
+                    // Submit clears the field; keep the rejected text so a second Enter is rejected again.
+                    WizardStepHelpers.SeedTextInput(_timezoneInput, timezone);
+                    callbacks.ShowValidationError(error);
+                    return;
+                }
+
+                vm.UserTimezone = timezone;
+                callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);

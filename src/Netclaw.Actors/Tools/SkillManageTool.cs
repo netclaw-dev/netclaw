@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Security.Skills;
 using Netclaw.Tools;
 
@@ -49,7 +50,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     private readonly NetclawPaths _paths;
     private readonly ISkillContentScanner _scanner;
     private readonly SkillInventoryRefresher _inventoryRefresher;
-    private readonly ToolPathPolicy _protectedPaths;
+    private readonly FileSystemAuthority _fileSystem;
 
     public record Params(
         [property: Description("Action to perform: create, edit, patch, delete, write_file, remove_file")]
@@ -80,7 +81,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         _paths = paths;
         _scanner = scanner;
         _inventoryRefresher = inventoryRefresher;
-        _protectedPaths = protectedPaths ?? throw new ArgumentNullException(nameof(protectedPaths));
+        _fileSystem = (protectedPaths ?? throw new ArgumentNullException(nameof(protectedPaths))).FileSystem;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
@@ -514,8 +515,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     /// Returns an error when a skill mutation must not touch <paramref name="targetPath"/>.
     /// A text check alone is not sufficient. A link inside the native skills tree can
     /// send a write, patch, or delete to a file outside the skill, and a flat-file
-    /// skill uses the skills root as its directory, so a relative path can reach the
-    /// write-protected <c>.system</c> or <c>.server-feeds</c> tiers.
+    /// skill uses the skills root as its directory, so a relative path can name a
+    /// file of another skill. The flat-skill rule of each action then stops it.
+    /// A protected path below the root stays protected.
     /// </summary>
     /// <remarks>
     /// The link walk starts below the native skills root. The operator owns that
@@ -528,33 +530,35 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     /// </remarks>
     private string? GuardMutationTarget(string skillRoot, string targetPath, bool atomicWrite)
     {
-        try
-        {
-            if (!PathUtility.IsWithinRoot(targetPath, skillRoot))
-                return "Resolved path is outside the skill directory.";
-
-            List<string> paths = [targetPath];
-            if (atomicWrite)
-                paths.Add(targetPath + AtomicTempSuffix);
-            foreach (var path in paths)
-            {
-                if (PathUtility.ContainsSymlinkSegment(_paths.SkillsDirectory, path))
-                    return LinkDeniedError;
-            }
-
-            foreach (var path in paths)
-            {
-                if (_protectedPaths.IsDenied(path))
-                    return "The target path is protected. skill_manage cannot change it.";
-            }
-
-            return null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-                                       or ArgumentException or NotSupportedException)
+        if (!CanonicalPath.TryCreateHost(skillRoot, relativeBase: null, out var root)
+            || !CanonicalPath.TryCreateHost(_paths.SkillsDirectory, relativeBase: null, out var nativeRoot)
+            || !nativeRoot.Contains(root))
         {
             return UnverifiedTargetError;
         }
+
+        PathBoundary[] skill = [new PathBoundary.Folder(root, LinkRule.BelowRoot) { LinkAnchor = nativeRoot }];
+        List<string> paths = [targetPath];
+        if (atomicWrite)
+            paths.Add(targetPath + AtomicTempSuffix);
+        foreach (var path in paths)
+        {
+            var decision = CanonicalPath.TryCreateHost(path, relativeBase: null, out var target)
+                ? _fileSystem.Evaluate(target, PathOperation.Write, skill)
+                : PathDecision.Unverifiable;
+            var error = decision switch
+            {
+                PathDecision.Allowed => null,
+                PathDecision.Outside => "Resolved path is outside the skill directory.",
+                PathDecision.CrossesLink => LinkDeniedError,
+                PathDecision.Protected => "The target path is protected. skill_manage cannot change it.",
+                _ => UnverifiedTargetError
+            };
+            if (error is not null)
+                return error;
+        }
+
+        return null;
     }
 
     /// <summary>

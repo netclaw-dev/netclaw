@@ -136,6 +136,23 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
     }
 
     [Fact]
+    public async Task ExplicitContextWindow_BelowTheStartupMinimum_ReturnsError()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Providers = ProviderConfig("local-ollama", "ollama"),
+            Models = new { Main = new { ModelId = "test-model", Provider = "local-ollama", ContextWindow = 100 } }
+        });
+        var check = CreateCheck(CreateOfflineDaemonApi());
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("ContextWindow (100) is below minimum", result.Message);
+    }
+
+    [Fact]
     public async Task ExplicitContextWindow_DaemonReportsDifferentValue_ReturnsWarning()
     {
         WriteConfig(new
@@ -173,6 +190,31 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
         Assert.Contains("explicitly set", result.Message);
+    }
+
+    [Fact]
+    public async Task InvalidContextWindow_NamedShape_NamesTheDefinitionKey()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Providers = ProviderConfig("local-ollama", "ollama"),
+            Models = new
+            {
+                Definitions = new Dictionary<string, object>
+                {
+                    ["Fast"] = new { Provider = "local-ollama", ModelId = "test-model", ContextWindow = -1 }
+                },
+                Roles = new { Main = "fast" }
+            }
+        });
+        var check = CreateCheck(CreateOfflineDaemonApi());
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Models.Definitions.Fast.ContextWindow must be a positive integer", result.Message);
+        Assert.Contains("Set Models.Definitions.Fast.ContextWindow", result.Remediation);
     }
 
     [Fact]
@@ -307,13 +349,13 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
             JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
     }
 
-    private static DaemonApi CreateOfflineDaemonApi()
+    private DaemonApi CreateOfflineDaemonApi()
         => CreateDaemonApi(_ => throw new HttpRequestException("daemon offline"));
 
-    private static DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
+    private DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
         var configuration = new ConfigurationBuilder().Build();
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-ctx-test-{Guid.NewGuid():N}"));
+        var paths = new NetclawPaths(Path.Combine(_dir.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
         return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths);
     }

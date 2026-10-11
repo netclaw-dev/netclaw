@@ -253,7 +253,7 @@ public sealed class ApprovalsManagerPageTests : IDisposable
         CreateHeadlessApp(out VirtualInputSource input)
         => HeadlessTerminaFixture.Create<ApprovalsManagerPage, ApprovalsManagerViewModel>(
             "/approvals",
-            () => new ApprovalsManagerPage(),
+            _ => new ApprovalsManagerPage(),
             () => new ApprovalsManagerViewModel(_paths, _time),
             out input);
 }

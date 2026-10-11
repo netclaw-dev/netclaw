@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using R3;
+using Netclaw.Cli.Model;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
@@ -1243,6 +1244,73 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         Assert.Equal(ProviderManagerState.RemoveConfirm, vm.CurrentState.Value);
         Assert.NotEmpty(vm.RemoveBlockingRoles);
         Assert.Contains("Main", vm.RemoveBlockingRoles);
+    }
+
+    [Fact]
+    public async Task RemoveProvider_ReferencedByNamedModelRole_IsRejected()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-ollama"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "ollama",
+                    ["Endpoint"] = "http://localhost:11434"
+                }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Definitions"] = new Dictionary<string, object>
+                {
+                    ["qwen"] = new Dictionary<string, object> { ["Provider"] = "my-ollama", ["ModelId"] = "qwen3:30b" }
+                },
+                ["Roles"] = new Dictionary<string, object> { ["Main"] = "qwen" }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        vm.SelectedProviderIndex = vm.DisplayProviders.FindIndex(p => p.ProviderType == "ollama");
+        vm.ActivateSelectedProvider();
+        vm.StartRemove();
+
+        Assert.Equal(ProviderManagerState.RemoveConfirm, vm.CurrentState.Value);
+        Assert.Contains("Main", vm.RemoveBlockingRoles);
+    }
+
+    [Fact]
+    public async Task RemoveProvider_UnresolvableModelsSection_IsRefusedWithShortMessage()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-ollama"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "ollama",
+                    ["Endpoint"] = "http://localhost:11434"
+                }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Main"] = new Dictionary<string, object> { ["Provider"] = "my-ollama", ["ModelId"] = "qwen3:30b" },
+                ["Roles"] = new Dictionary<string, object> { ["Main"] = "x" }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        vm.RemoveSelectedProvider(vm.DisplayProviders.First(p => p.IsConfigured));
+
+        Assert.NotEqual(ProviderManagerState.RemoveConfirm, vm.CurrentState.Value);
+        Assert.Null(vm.RemoveProviderName);
+        Assert.Null(vm.DetailProvider);
+        Assert.Equal(ModelCommand.InvalidConfigurationMessage, vm.ErrorMessage.Value);
     }
 
     [Fact]

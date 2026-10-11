@@ -3,13 +3,13 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
     <!-- Nuget package versions -->
-    <AkkaHostingVersion>1.5.71</AkkaHostingVersion>
+    <AkkaHostingVersion>1.5.73</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.70</AkkaPersistenceSqlHostingVersion>
-    <AkkaRemindersVersion>0.7.0</AkkaRemindersVersion>
+    <AkkaRemindersVersion>1.5.73.1</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.19.1</OpenTelemetryVersion>
     <SlackNetVersion>0.18.0</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
-    <MattermostNetVersion>5.0.10</MattermostNetVersion>
+    <MattermostNetVersion>5.0.12</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.8.3</MicrosoftExtensionsAIVersion>
     <!-- Microsoft.Extensions.TimeProvider.Testing ships on the dotnet/extensions minor
          cadence and has no 10.8.x patch, so it cannot share MicrosoftExtensionsAIVersion
@@ -79,8 +79,8 @@
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
-    <PackageVersion Include="ShellSyntaxTree" Version="0.4.0-beta.5" />
-    <PackageVersion Include="Termina" Version="0.16.2" />
+    <PackageVersion Include="ShellSyntaxTree" Version="0.4.0-beta.24" />
+    <PackageVersion Include="Termina" Version="0.16.3" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.0" />
   </ItemGroup>

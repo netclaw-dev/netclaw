@@ -17,13 +17,22 @@ public sealed class DaemonCrashDoctorCheck(
 
     public Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
     {
+        var result = RunCore();
+        return Task.FromResult(result with
+        {
+            Message = result.Message + DoctorJsonConfigReader.LogRetentionNote(paths, (int)RecentWindow.TotalDays)
+        });
+    }
+
+    private DoctorCheckResult RunCore()
+    {
         var now = _timeProvider.GetUtcNow();
         var recentCrashes = FindRecentDaemonCrashes(paths.LogsDirectory, now).ToList();
         if (recentCrashes.Count == 0)
         {
-            return Task.FromResult(DoctorCheckResult.Pass(
+            return DoctorCheckResult.Pass(
                 CheckName,
-                "No recent daemon crash logs found."));
+                "No recent daemon crash logs found.");
         }
 
         var latest = recentCrashes[0];
@@ -36,10 +45,10 @@ public sealed class DaemonCrashDoctorCheck(
             ? "daemon appears to have restarted since this crash"
             : "daemon has not recorded a newer PID timestamp since this crash";
 
-        return Task.FromResult(DoctorCheckResult.Warning(
+        return DoctorCheckResult.Warning(
             CheckName,
             $"Detected {recentCrashes.Count} daemon crash log(s) in the last {(int)RecentWindow.TotalDays} days (latest: {latest.Name}, {occurredAt}; {restartNote}).",
-            "Inspect ~/.netclaw/logs/crash-*.log for stack traces, run `netclaw daemon status`, and verify notification targets received `daemon.crashing` alerts."));
+            "Inspect ~/.netclaw/logs/crash-*.log for stack traces, run `netclaw daemon status`, and verify notification targets received `daemon.crashing` alerts.");
     }
 
     private static IEnumerable<FileInfo> FindRecentDaemonCrashes(string logsDirectory, DateTimeOffset now)

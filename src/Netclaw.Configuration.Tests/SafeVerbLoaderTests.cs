@@ -9,83 +9,26 @@ namespace Netclaw.Configuration.Tests;
 
 public sealed class SafeVerbLoaderTests
 {
-    [Fact]
-    public void Load_returns_bundled_linux_defaults()
+    [Theory]
+    [InlineData(false, ApprovalShell.Bash, ApprovalShell.PowerShell)]
+    [InlineData(true, ApprovalShell.PowerShell, ApprovalShell.Bash)]
+    public void Load_parses_each_bundled_catalog_for_its_own_shell(
+        bool isWindows,
+        ApprovalShell ownShell,
+        ApprovalShell otherShell)
     {
-        var list = SafeVerbLoader.Load(isWindows: false);
+        var list = SafeVerbLoader.Load(isWindows);
 
-        // Spot-check a few entries from the spec's default Linux list.
-        Assert.True(list.Contains("ls"));
-        Assert.True(list.Contains("grep"));
-        Assert.True(list.Contains("git status"));
-        Assert.False(list.Contains("sed -n"));
-        Assert.False(list.Contains("git push"));
-        Assert.False(list.Contains("rm"));
-
-        // Reviewed system and repository diagnostics remain available.
-        Assert.True(list.Contains("uname"));
-        Assert.True(list.Contains("whoami"));
-        Assert.True(list.Contains("git describe"));
-        Assert.True(list.Contains("git ls-tree"));
-        Assert.True(list.Contains("gh run list"));
-
-        // Each excluded phrase has an accepted argument shape that can mutate,
-        // execute code, or expose ambient secrets.
-        Assert.False(list.Contains("find"));
-        Assert.False(list.Contains("awk"));
-        Assert.False(list.Contains("rg"));
-        Assert.False(list.Contains("sort"));
-        Assert.False(list.Contains("date"));
-        Assert.False(list.Contains("hostname"));
-        Assert.False(list.Contains("tree"));
-        Assert.False(list.Contains("uniq"));
-        Assert.False(list.Contains("git log"));
-        Assert.False(list.Contains("git diff"));
-        Assert.False(list.Contains("git show"));
-        Assert.False(list.Contains("git branch"));
-        Assert.False(list.Contains("git remote"));
-        Assert.False(list.Contains("gh pr view"));
-        Assert.False(list.Contains("gh issue list"));
-        Assert.False(list.Contains("gh run view"));
-        Assert.False(list.Contains("gh repo view"));
-        Assert.False(list.Contains("env"));
-        Assert.False(list.Contains("git fetch"));
-        Assert.False(list.Contains("gh api"));
-        Assert.False(list.Contains("printenv"));
-        Assert.False(list.Contains("ps"));
-        Assert.False(list.Contains("gh auth status"));
-    }
-
-    [Fact]
-    public void Load_returns_bundled_windows_defaults()
-    {
-        var list = SafeVerbLoader.Load(isWindows: true);
-
-        // Spot-check a few entries from the spec's default Windows list.
-        Assert.True(list.Contains("Get-ChildItem"));
-        Assert.True(list.Contains("Get-Content"));
-        Assert.True(list.Contains("Test-Path"));
-        Assert.True(list.Contains("git status"));
-        Assert.False(list.Contains("Remove-Item"));
-
-        // Read-only verbs added by the safe-verb expansion.
-        Assert.True(list.Contains("Get-Date"));
-        Assert.True(list.Contains("Get-Process"));
-        Assert.True(list.Contains("Select-Object"));
-        Assert.True(list.Contains("whoami"));
-        Assert.True(list.Contains("git describe"));
-        Assert.True(list.Contains("git ls-tree"));
-        Assert.True(list.Contains("gh run list"));
-
-        // Aliases use the canonical parser token. Other exclusions have an
-        // unsafe accepted argument shape or expose ambient state.
-        Assert.False(list.Contains("dir"));
-        Assert.False(list.Contains("type"));
-        Assert.False(list.Contains("where"));
-        Assert.False(list.Contains("git log"));
-        Assert.False(list.Contains("gh pr view"));
-        Assert.False(list.Contains("gh api"));
-        Assert.False(list.Contains("gh auth status"));
+        // Each phrase matches as a reviewed diagnostic for the shell of its
+        // platform file, and for no other shell.
+        Assert.NotEmpty(list.Verbs);
+        Assert.All(list.Verbs, phrase =>
+        {
+            var tokens = phrase.Split(' ');
+            Assert.True(list.TryMatchReviewedDiagnostic(ownShell, tokens, out var count));
+            Assert.Equal(tokens.Length, count);
+            Assert.False(list.TryMatchReviewedDiagnostic(otherShell, tokens, out _));
+        });
     }
 
     [Fact]

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Cli.Tui.Wizard;
@@ -33,8 +34,10 @@ public sealed class ProviderSectionEditorTests : SectionEditorTestBase<ProviderS
             field.Path.StartsWith("Models", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public void BuildContribution_BlankCredential_PreservesExistingSecret()
+    [Theory]
+    [InlineData("""{ "Main": { "Provider": "openai", "ModelId": "gpt-4.1" } }""")]
+    [InlineData("""{ "Definitions": { "gpt": { "Provider": "openai", "ModelId": "gpt-4.1" } }, "Roles": { "Main": "gpt" } }""")]
+    public void BuildContribution_BlankCredential_PreservesExistingSecret(string modelsJson)
     {
         File.WriteAllText(Context.Paths.SecretsPath, """
             { "Providers": { "openai": { "ApiKey": "ENC:stored" } } }
@@ -44,17 +47,9 @@ public sealed class ProviderSectionEditorTests : SectionEditorTestBase<ProviderS
             Paths = Context.Paths,
             Registry = ProviderCommand.CreateDefaultRegistry(),
             RequestRedraw = () => { },
-            ExistingConfig = new Dictionary<string, object>
-            {
-                ["Models"] = new Dictionary<string, object>
-                {
-                    ["Main"] = new Dictionary<string, object> { ["Provider"] = "openai", ["ModelId"] = "gpt-4.1" }
-                },
-                ["Providers"] = new Dictionary<string, object>
-                {
-                    ["openai"] = new Dictionary<string, object> { ["Type"] = "openai", ["AuthMethod"] = "ApiKey" }
-                }
-            }
+            ExistingConfig = JsonSerializer.Deserialize<Dictionary<string, object>>($$"""
+                { "Models": {{modelsJson}}, "Providers": { "openai": { "Type": "openai", "AuthMethod": "ApiKey" } } }
+                """)
         };
 
         using var editor = CreateEditor();

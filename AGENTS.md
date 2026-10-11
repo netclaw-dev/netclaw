@@ -50,6 +50,7 @@ Read first:
 - `TOOLING.md`
 - `IMPLEMENTATION_PLAN.md`
 - `docs/prd/README.md`
+- `docs/architecture/*.md`
 - `.opencode/skills/netclaw-*/SKILL.md`
 - `.claude/skills/ralph-*.md`
 - relevant `openspec/specs/*/spec.md`
@@ -125,6 +126,21 @@ task checkboxes in `openspec/changes/*/tasks.md` during RALPH iterations.
 - Name the component that owns each decision. State whether its data is
   call-local, actor-local, or durable.
 - Label pseudocode as schematic when it omits a security gate or runtime step.
+
+## Architecture Document Rule
+
+`docs/architecture/` holds the canonical architecture documents for people.
+`docs/architecture/tool-authorization.md` describes tool authorization: its
+contexts, owners, diagrams, guidelines, and future scenarios.
+
+- A PR that changes an authorization context must update
+  `docs/architecture/tool-authorization.md` in the same diff.
+- An authorization context change includes a new decision owner, a moved
+  check, a new grant scope, a new candidate kind, or a new consent surface.
+- The document describes the current code. Put a planned shape only in its
+  "Future scenarios" section.
+- Keep testable rules in `openspec/specs/tool-authorization/spec.md`. The
+  document links to those rules and does not copy them.
 
 ## Discovery Rules
 
@@ -207,8 +223,9 @@ procedure, cost limits, and expansion criteria.
 
 When adding or changing properties on any `*Config` type in `Netclaw.Configuration`,
 update `src/Netclaw.Configuration/Schemas/netclaw-config.v1.schema.json` in the same PR.
-The schema uses `"additionalProperties": false` throughout — any new property that is
-missing from the schema will be rejected by `ConfigSchemaDoctorCheck` at runtime.
+Most schema objects set `"additionalProperties": false`, so a new property that is missing from the
+schema is rejected by `ConfigSchemaDoctorCheck` at runtime, and `netclaw doctor --fix` deletes it
+without a backup. Provider entries under `Providers` stay open because the binder ignores key case.
 
 **Migration-friendly schema changes:** `netclaw doctor --fix` uses `SchemaFixResolver` to
 auto-fix common schema validation errors. To ensure smooth upgrades for existing configs:
@@ -237,6 +254,35 @@ generator's `feeds/scripts/semver_key.py` are two implementations of one precede
 kept in lockstep by a shared fixture (`feeds/scripts/semver-order.txt`) — change both
 (and the fixture) together if precedence ever changes. Never hand-edit the release
 manifest or installer feed.
+
+## Stacked Pull Requests
+
+Stack PRs only when a change needs several reviewable steps that depend on
+each other. Otherwise, open one PR.
+
+- You need contributor (write) access to `netclaw-dev/netclaw` to stack. A
+  PR's base must be a branch in the base repository, so each stack branch must
+  live upstream. A contributor without write access opens one PR from a fork.
+- Name each branch that another PR uses as its base `feature/<topic>` from
+  the start. `pr_validation` runs only for PRs into `dev`, `main`, `master`,
+  or `feature/*`; a PR into another base gets no test CI.
+- Caution: a branch rename retargets the PRs that use the branch as their
+  base, but it closes the PR whose head is that branch. That PR cannot be
+  reopened. If a head branch must be renamed, open a replacement PR from the
+  renamed branch and link the closed PR to it.
+- Write each PR description so that it stands alone, and name its base PR.
+- Verify each PR on the combined stack, not on its isolated branch.
+- Merge from the bottom up. GitHub treats dependent PRs as a native stack, and
+  `gh pr merge` fails with "must be merged using the asynchronous merge REST
+  API". Use `PUT /repos/{owner}/{repo}/pulls/{n}/merge-async` with
+  `merge_method=squash` and `sha=<head>`. Then poll
+  `GET /repos/{owner}/{repo}/pulls/{n}/merge-async/{uuid}` until the state is
+  `merged`.
+- After a squash merge, GitHub retargets the next PR to `dev` and can rebase
+  it. If the next PR shows a conflict, run
+  `git rebase --onto origin/dev <old base head>` so that only its own commits
+  remain. Then push with `--force-with-lease`.
+- The repository deletes merged head branches automatically.
 
 ## Universal Quality Bar
 
@@ -326,6 +372,21 @@ manifest or installer feed.
   - Use Akka.TestKit's `AwaitAssertAsync` for polling assertions on async state.
   - `Task.Delay` in fake/mock services to simulate latency is acceptable only in
     the fake itself, never in test orchestration logic.
+- **A test MUST delete every file and folder that it creates in the temp
+  directory.** Use `DisposableTempDir` or `TestSessionTempDirectory`. Delete
+  the path in `Dispose`. A `TestKit` class has `IAsyncDisposable`, so xunit
+  does not call its `IDisposable.Dispose`. `TestKit` also stops its actor system
+  after `AfterAllAsync` returns, and it fails the test when `AfterAllAsync`
+  takes more than 5 seconds. A `TestKit` class that owns a temp folder MUST
+  re-implement `IAsyncDisposable.DisposeAsync`. It calls `base.DisposeAsync()`,
+  and then deletes the folder. A class that derives from `LlmSessionTestBase`
+  overrides `DeleteOwnedDirectories` instead. `TestKitTeardownGuardTests` fails
+  when an `AfterAllAsync` override deletes or disposes. Each test process gets
+  a private temp root
+  (`tests/Shared/TestRunTempRoot.cs`). The test run fails with "Test Assembly
+  Cleanup Failure" when a test leaves an entry in that root. The CI log prints
+  the leaks. A test project opts in with
+  `<UseTestRunTempRoot>true</UseTestRunTempRoot>`.
 - **TUI / Termina changes MUST be validated with the native smoke
   harness** before being marked done. xUnit cannot drive Spectre-style
   prompts, and the non-interactive smoke scenarios only cover the
@@ -358,24 +419,20 @@ must be fixed or explicitly baselined with justification.
 
 ## Eval Suite
 
-Run the behavioral eval suite (`./evals/run-evals.sh`) when changing:
+Run the behavioral eval suite (`./evals/run-evals.sh`) only when changing
+the prompt or identity grounding that the agent reads:
 
 - Identity file templates (`SOUL.md`, `AGENTS.md`, `TOOLING.md` in init wizard)
 - System prompt assembly (`SystemPromptAssembler`, `FileSystemPromptProvider`)
 - Skill content (any `SKILL.md` under `feeds/skills/.system/files/`)
 - Skill matching logic (`SkillRegistry` keyword handling)
-- Memory pipeline (`SQLiteMemoryRecallCoordinator`, `MemoryProposalGate`,
-  checkpoint triggers)
-- Compaction logic (`ObservationPromptBuilder`, `ExtractiveSessionReducer`,
-  compaction behavior)
-- Tool definitions (new tools, changed tool schemas, grant categories)
-- Model/provider changes (switching models, changing context window config)
-- `SessionConfig` defaults
+
+Do not run the eval suite for other changes. For those changes, the normal
+test gates in Definition of Done apply.
 
 Update eval cases when:
 
 - Adding a new system skill — add a skill auto-load case
-- Adding a new tool — add a tool discovery/use case
 - Changing identity grounding rules — update identity assertion patterns
 - A production session exhibits a new failure pattern — add a regression case
 
@@ -394,13 +451,18 @@ Runtime skill use is logical: call `skill_load` by canonical name and
 prompt indexes or teach agents to derive `SKILL.md` paths. Direct filesystem
 inspection is reserved for explicit operator diagnostics.
 
+One exception applies. The `skill_read_resource` result starts with the
+resolved absolute path of that one resource, so an agent can run a bundled
+script by its real path. Do not put that path, or any skill root, in skill
+indexes, skill listings, or `skill_load` output.
+
 System skills in `feeds/skills/.system/files/` are the agent's operational
 guidance — they tell the running agent how to use features. When you change a
 feature area, the corresponding skill **must** be updated in the same PR.
 
 | Feature area changed | Skill to update |
 |----------------------|-----------------|
-| Identity files, SOUL/AGENTS/TOOLING paths, progressive disclosure | `netclaw-identity` |
+| Identity files, SOUL/AGENTS/TOOLING paths, progressive disclosure | `netclaw-operations` |
 | Memory provider routing, SQLite memory tools, general memory guidance | `netclaw-memory` |
 | Config format, daemon health, logs, MCP wiring, diagnostics CLI, doctor | `netclaw-operations` |
 | Skill file format, discovery, authoring workflow | `skill-authoring` |
@@ -433,7 +495,7 @@ Done means all of the following are true:
 - operational impact is documented (runbooks or CLI help)
 - OpenSpec artifacts are updated or archived appropriately
 - system skills updated if a mapped feature area was changed (see table above)
-- eval suite passes for changes to identity, skills, memory, or tools (see
+- eval suite passes for changes to identity or skill grounding (see
   Eval Suite section)
 - interactive tape harness passes for changes to Termina TUI surfaces
   (init wizard, model/provider/webhook pickers, chat page) — see

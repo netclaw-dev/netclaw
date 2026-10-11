@@ -2416,7 +2416,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     private static bool TryValidateApiKeyDraft(string value, out string error)
     {
         error = string.Empty;
-        if (value.Contains('\r') || value.Contains('\n'))
+        if (value.Contains('\r', StringComparison.Ordinal) || value.Contains('\n', StringComparison.Ordinal))
         {
             error = "Skill server bearer token must be a single-line value.";
             return false;

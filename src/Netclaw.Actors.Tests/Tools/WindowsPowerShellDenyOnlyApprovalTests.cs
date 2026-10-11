@@ -53,11 +53,10 @@ public sealed class WindowsPowerShellDenyOnlyApprovalTests
             ToolInput.Create("Command", "Write-Output ok; $item++"));
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        var execution = Assert.IsType<ToolAuthorizationResult.ShellExecution>(complete.Result);
-        Assert.True(execution.Decision.Allowed);
-        Assert.False(execution.Decision.NeedsApproval);
-        Assert.Equal(ToolAllowReason.PolicyAuto, execution.Decision.AllowReason);
-        Assert.False(execution.Analysis.IsResolved);
+        Assert.True(complete.Decision.Allowed);
+        Assert.False(complete.Decision.NeedsApproval);
+        Assert.Equal(ToolAllowReason.PolicyAuto, complete.Decision.AllowReason);
+        Assert.False(Assert.IsType<ShellCommandAnalysis>(complete.AuthorizedAnalysis).IsResolved);
     }
 
     [Fact]

@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.10.0"
+  version: "1.12.0"
 ---
 
 # Skill Authoring
@@ -32,6 +32,13 @@ their `SKILL.md` filesystem paths. The registry resolves native, managed-feed,
 and external skills behind the same logical interface. Read bundled detail with
 `skill_read_resource(name, path)`. Direct filesystem access is appropriate only
 when the user explicitly asks to inspect or repair the physical files.
+
+The first line of a `skill_read_resource` result is `path: <absolute path>`.
+The resource contents follow that line. To run a bundled script, first read it
+with `skill_read_resource`, then run it by that absolute path, for example
+`bash /abs/path/scripts/audit.sh`. Do not guess a relative path such as
+`bash scripts/audit.sh`. The working directory is not the skill directory, so a
+relative path fails. Shell approval still applies to the script path.
 
 When a skill declares `metadata.subagent`, pass a concrete task to `skill_load`.
 Routed activation fails loudly when the task or target subagent is invalid.
@@ -196,7 +203,10 @@ safe relative file under the skill directory as a resource; `references/`,
 
 The skill body references these files explicitly: "See
 `references/deployment-checklist.md` for the full checklist." The agent loads
-them on demand via `skill_read_resource`.
+them on demand via `skill_read_resource`. To tell the agent to run a script,
+name its resource path (`scripts/audit.sh`) and tell the agent to run it by the
+absolute path that `skill_read_resource` returns. Do not write a bare
+`bash scripts/audit.sh` step.
 
 ## Creating Skills with skill_manage
 
@@ -244,15 +254,20 @@ Hard rules:
 
 Skills live in two locations:
 
-| Directory | Source | Editable |
-|-----------|--------|----------|
-| `~/.netclaw/skills/.system/` | Embedded Netclaw system bundle | No — read-only |
-| `~/.netclaw/skills/.server-feeds/<feed>/` | Private skill-server feeds | No — read-only |
+| Directory | Source | Lasting edits |
+|-----------|--------|---------------|
+| `~/.netclaw/skills/.system/` | Embedded Netclaw system bundle | No — Netclaw restores it |
+| `~/.netclaw/skills/.server-feeds/<feed>/` | Private skill-server feeds | No — Netclaw restores it |
 | `~/.netclaw/skills/` (root) | Operator-placed or user-created via `skill_manage` | Yes |
 
 System skills (`.system/`) and private server-feed skills (`.server-feeds/`)
-cannot be edited, patched, or deleted via `skill_manage`. Startup restores the
-system tree. Server feed sync maintains private feed trees.
+cannot be edited, patched, or deleted via `skill_manage`. These folders are not
+protected paths. You can run a bundled script with `bash <path>` and list the
+folders. A file tool or a shell command can change a file there, but the change
+does not last. Each daemon start restores the system tree from the binary. Each
+feed sync restores a changed feed skill to its published version. The feed
+`.sync-state.json` file is protected, so you cannot change it. Put a lasting
+change in a skill at the root.
 
 All skills — regardless of origin — are visible in the skill index and
 available to all sessions. The skill index is a compressed file listing

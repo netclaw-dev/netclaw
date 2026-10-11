@@ -171,18 +171,18 @@ public sealed class InitExistingInstallPage : ReactivePage<InitExistingInstallVi
             if (i < progressStep)
             {
                 // Already completed — green checkmark
-                line = new TextNode($"  ✓ {stepLabels[i].Replace("…", "")}").WithForeground(Color.Green);
+                line = new TextNode($"  ✓ {stepLabels[i].Replace("…", "", StringComparison.Ordinal)}").WithForeground(Color.Green);
             }
             else if (i == progressStep)
             {
                 // In progress — spinning dots
                 var color = i == 0 ? Color.Yellow : Color.Cyan;
-                line = SpinnerViews.Labeled(stepLabels[i].Replace("…", ""), color);
+                line = SpinnerViews.Labeled(stepLabels[i].Replace("…", "", StringComparison.Ordinal), color);
             }
             else
             {
                 // Pending — dimmed label
-                line = new TextNode($"  • {stepLabels[i].Replace("…", "")}").WithForeground(Color.Gray);
+                line = new TextNode($"  • {stepLabels[i].Replace("…", "", StringComparison.Ordinal)}").WithForeground(Color.Gray);
             }
 
             lines.WithChild(line);

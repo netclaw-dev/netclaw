@@ -458,4 +458,17 @@ public sealed class DaemonClientMappingTests
         var restored = System.Text.Json.JsonSerializer.Deserialize<ToolInteractionOption>(json);
         Assert.Equal(ApprovalOptionKeys.ApproveOnceKey, restored!.Key);
     }
+
+    [Theory]
+    [InlineData("", 0)]
+    [InlineData(",\"textAdmissionVersion\":1", 1)]
+    [InlineData(",\"textAdmissionVersion\":2", 2)]
+    public void Admission_version_survives_the_JSON_boundary_and_an_old_response_remains_unsupported(string version, int expected)
+    {
+        var response = System.Text.Json.JsonSerializer.Deserialize<SessionEnsureResultDto>(
+            "{\"sessionId\":\"signalr/wire\",\"created\":false" + version + "}",
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        Assert.Equal(expected, Assert.IsType<SessionEnsureResultDto>(response).TextAdmissionVersion);
+    }
+
 }

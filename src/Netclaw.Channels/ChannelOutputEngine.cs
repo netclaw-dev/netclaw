@@ -101,8 +101,10 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
     /// </param>
     /// <param name="readPromptIdValue">Reads the persisted string form of a prompt locator.</param>
     /// <param name="onApprovalPromptFailedAsync">
-    /// Handles a prompt that could not be posted. Every channel routes an
-    /// auto-deny so the blocked tool call unwinds instead of waiting forever.
+    /// Handles a prompt that could not be posted. Every channel routes a
+    /// <c>prompt_unavailable</c> refusal so the blocked tool call unwinds
+    /// instead of waiting forever, and the model does not read it as a user
+    /// decision.
     /// </param>
     /// <param name="persistPromptTracked">
     /// Journals <c>PendingApprovalPromptTracked</c> for a posted prompt. The

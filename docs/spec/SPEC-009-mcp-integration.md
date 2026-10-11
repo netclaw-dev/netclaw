@@ -89,6 +89,9 @@ that the current model cannot inspect the image.
 
 - unreachable MCP server does not crash session actors
 - failed servers are marked degraded and excluded from invocation
+  - currently a connected server whose catalog refreshes keep failing is marked
+    degraded but keeps its last good tools published; excluding them from
+    invocation is a tracked follow-up (#2261)
 - retries are bounded and observable
 
 ## Diagnostics

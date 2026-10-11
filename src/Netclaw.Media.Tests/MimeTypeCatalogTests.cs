@@ -55,6 +55,7 @@ public sealed class MimeTypeCatalogTests
     [InlineData(".png", MimeTypeCatalog.ImagePng)]
     [InlineData("jpg", MimeTypeCatalog.ImageJpeg)]
     [InlineData(".pdf", MimeTypeCatalog.ApplicationPdf)]
+    [InlineData(".potx", "application/vnd.openxmlformats-officedocument.presentationml.template")]
     [InlineData(".mp4", MimeTypeCatalog.VideoMp4)]
     [InlineData(".m4a", MimeTypeCatalog.AudioMp4)]
     public void FromExtension_returns_canonical_mime(string extension, string expected)

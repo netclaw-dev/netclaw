@@ -56,7 +56,7 @@ public sealed class HealthCheckStepView : IWizardStepView
         {
             lines.Add(new TextNode(""));
             lines.Add(new TextNode("  Next steps:").WithForeground(Color.Gray));
-            lines.Add(new TextNode("    netclaw chat    — start talking to your agent").WithForeground(Color.Gray));
+            lines.Add(new TextNode(ChatNextStep(vm.Succeeded.Value)).WithForeground(Color.Gray));
             lines.Add(new TextNode("    netclaw config  — adjust settings any time").WithForeground(Color.Gray));
         }
 
@@ -65,6 +65,14 @@ public sealed class HealthCheckStepView : IWizardStepView
             layout.WithChild(line);
         return layout;
     }
+
+    /// <summary>
+    /// The chat line of the Next-steps block. A finish with warnings never opened the
+    /// onboarding chat, so it points at the flag that does.
+    /// </summary>
+    internal static string ChatNextStep(bool succeeded) => succeeded
+        ? "    netclaw chat    — start talking to your agent"
+        : "    netclaw chat --onboarding — start the identity interview";
 
     public bool HandleKeyPress(KeyPressed key)
     {

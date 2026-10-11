@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Netclaw.Actors.Memory;
@@ -12,8 +13,12 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
 
-public sealed class MemoryCheckpointHealthDoctorCheckTests
+public sealed class MemoryCheckpointHealthDoctorCheckTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     [Fact]
     public async Task Passes_WhenSqliteMemoryQueueIsSmall()
     {
@@ -77,9 +82,9 @@ public sealed class MemoryCheckpointHealthDoctorCheckTests
         Assert.Contains("pending checkpoints", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static NetclawPaths CreateTempPaths()
+    private NetclawPaths CreateTempPaths()
     {
-        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var basePath = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         var paths = new NetclawPaths(basePath);
         paths.EnsureDirectoriesExist();
         return paths;

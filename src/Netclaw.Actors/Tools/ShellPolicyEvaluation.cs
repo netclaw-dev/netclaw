@@ -3,87 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Configuration;
 using Netclaw.Security;
 
 namespace Netclaw.Actors.Tools;
-
-/// <summary>
-/// Represents the final tool authorization result before an execution adapter acts on it.
-/// </summary>
-/// <remarks>
-/// A shell result owns the exact analysis that the process can execute.
-/// A direct result lets the registered tool handle its invocation.
-/// A stopped result cannot carry a shell analysis.
-/// </remarks>
-internal abstract record ToolAuthorizationResult
-{
-    private protected ToolAuthorizationResult(
-        ToolAuthorizationDecision decision,
-        bool isAllowedResult)
-    {
-        ArgumentNullException.ThrowIfNull(decision);
-        if ((decision.Outcome == ToolAuthorizationOutcome.Allowed) != isAllowedResult)
-            throw new ArgumentException("The authorization result contradicts its decision.", nameof(decision));
-
-        Decision = decision;
-    }
-
-    internal ToolAuthorizationDecision Decision { get; }
-
-    internal sealed record ShellExecution : ToolAuthorizationResult
-    {
-        internal ShellExecution(
-            ToolAuthorizationDecision decision,
-            ShellCommandAnalysis analysis)
-            : base(decision, isAllowedResult: true)
-        {
-            ArgumentNullException.ThrowIfNull(analysis);
-            Analysis = analysis;
-        }
-
-        internal ShellCommandAnalysis Analysis { get; }
-    }
-
-    internal sealed record DirectExecution : ToolAuthorizationResult
-    {
-        internal DirectExecution(ToolAuthorizationDecision decision)
-            : base(decision, isAllowedResult: true) { }
-    }
-
-    internal sealed record ShellValidation : ToolAuthorizationResult
-    {
-        internal ShellValidation(ToolAuthorizationDecision decision)
-            : base(decision, isAllowedResult: true) { }
-    }
-
-    internal sealed record Stopped : ToolAuthorizationResult
-    {
-        internal Stopped(ToolAuthorizationDecision decision)
-            : base(decision, isAllowedResult: false) { }
-    }
-
-    internal static ToolAuthorizationResult CreateDirect(ToolAuthorizationDecision decision)
-        => decision.Outcome == ToolAuthorizationOutcome.Allowed
-            ? new DirectExecution(decision)
-            : new Stopped(decision);
-
-    internal static ToolAuthorizationResult CreateShell(
-        ToolAuthorizationDecision decision,
-        ShellCommandAnalysis? authorizedAnalysis)
-        => (decision.Outcome, authorizedAnalysis) switch
-        {
-            (ToolAuthorizationOutcome.Allowed, not null) => new ShellExecution(decision, authorizedAnalysis),
-            (ToolAuthorizationOutcome.Allowed, null) => new ShellValidation(decision),
-            (_, null) => new Stopped(decision),
-            _ => throw new ArgumentException(
-                "A stopped shell result cannot carry analysis.",
-                nameof(authorizedAnalysis)),
-        };
-
-    internal static Stopped Stop(ToolAuthorizationDecision decision)
-        => new(decision);
-}
 
 /// <summary>
 /// Represents the synchronous shell access phase before the coordinator checks approval evidence.
@@ -95,39 +19,44 @@ internal abstract record ShellPolicyPreflightResult
 {
     internal sealed record Complete : ShellPolicyPreflightResult
     {
-        internal Complete(ToolAuthorizationResult result)
+        /// <param name="decision">The screen denial, the automatic allow, or a consent request without analysis.</param>
+        /// <param name="authorizedAnalysis">The analysis that the process may execute. Only an allowed decision carries one.</param>
+        internal Complete(ToolAuthorizationDecision decision, ShellCommandAnalysis? authorizedAnalysis)
         {
-            if (result is not (ToolAuthorizationResult.ShellExecution
-                or ToolAuthorizationResult.ShellValidation
-                or ToolAuthorizationResult.Stopped))
-            {
-                throw new ArgumentException(
-                    "A shell preflight cannot authorize direct execution.",
-                    nameof(result));
-            }
+            ArgumentNullException.ThrowIfNull(decision);
+            if (authorizedAnalysis is not null && decision.Outcome != ToolAuthorizationOutcome.Allowed)
+                throw new ArgumentException("Only an allowed shell decision can carry analysis.", nameof(authorizedAnalysis));
 
-            Result = result;
+            Decision = decision;
+            AuthorizedAnalysis = authorizedAnalysis;
         }
 
-        internal ToolAuthorizationResult Result { get; }
+        internal ToolAuthorizationDecision Decision { get; }
+
+        internal ShellCommandAnalysis? AuthorizedAnalysis { get; }
     }
 
     internal sealed record Continue : ShellPolicyPreflightResult
     {
         internal Continue(
             ShellCommandAnalysis analysis,
-            ToolApprovalContext approvalContext)
+            ToolApprovalContext approvalContext,
+            BashDirectoryScopeProjection? directoryScopes)
         {
             ArgumentNullException.ThrowIfNull(analysis);
             ArgumentNullException.ThrowIfNull(approvalContext);
 
             Analysis = analysis;
             ApprovalContext = approvalContext;
+            DirectoryScopes = directoryScopes;
         }
 
         internal ShellCommandAnalysis Analysis { get; }
 
         internal ToolApprovalContext ApprovalContext { get; }
+
+        /// <summary>The directory proof that supplied the candidates, or null when the main parse supplied them.</summary>
+        internal BashDirectoryScopeProjection? DirectoryScopes { get; }
     }
 }
 
@@ -141,11 +70,13 @@ internal sealed class ShellPolicyEvaluation
         internal ShellPolicyCandidatePathFacts PathFacts { get; } = pathFacts;
         internal ShellGrantCandidateResult? GrantEvidence { get; private set; }
         internal int? GrantEvidenceOrder { get; private set; }
-        internal ShellCoverageKind Coverage { get; private set; }
+
+        /// <summary>Why the candidate needs no prompt, or null while it is uncovered.</summary>
+        internal Coverage? Coverage { get; private set; }
 
         internal void ValidateActorEvidence()
         {
-            if (Coverage != ShellCoverageKind.Uncovered
+            if (Coverage != null
                 || GrantEvidence is not null
                 || GrantEvidenceOrder is not null)
             {
@@ -160,20 +91,18 @@ internal sealed class ShellPolicyEvaluation
                 throw new InvalidOperationException("Invalid shell candidate approval evidence.");
 
             ValidateActorEvidence();
-            (GrantEvidence, GrantEvidenceOrder, Coverage) = (evidence, order, evidence.Coverage);
+            (GrantEvidence, GrantEvidenceOrder, Coverage) = (evidence, order, evidence.Grant);
         }
 
-        internal void Cover(ShellCoverageKind coverage)
+        internal void Cover(Coverage coverage)
         {
-            if (coverage is not (ShellCoverageKind.OneTime
-                or ShellCoverageKind.ReviewedSafeReal
-                or ShellCoverageKind.ReviewedSafeIntent
-                or ShellCoverageKind.ApprovalExemptSideEffect))
-            {
-                throw new InvalidOperationException("Invalid shell candidate coverage.");
-            }
+            ArgumentNullException.ThrowIfNull(coverage);
 
-            if (Coverage != ShellCoverageKind.Uncovered)
+            // A stored grant arrives only as actor evidence.
+            if (coverage is Coverage.Stored)
+                throw new InvalidOperationException("Invalid shell candidate coverage.");
+
+            if (Coverage is not null)
                 throw new InvalidOperationException("Shell candidate coverage was assigned twice.");
 
             Coverage = coverage;
@@ -210,12 +139,11 @@ internal sealed class ShellPolicyEvaluation
     internal IEnumerable<CandidateState> GrantCandidates =>
         _candidates.Where(static state => state.Candidate.CanRequestStoredGrant);
 
-    internal bool AllCovered => _candidates.All(static state =>
-        state.Coverage != ShellCoverageKind.Uncovered);
+    internal bool AllCovered => _candidates.All(static state => state.Coverage is not null);
 
     internal IReadOnlyList<ShellPolicyCandidate> UncoveredCandidates =>
         Array.AsReadOnly(_candidates
-            .Where(static state => state.Coverage == ShellCoverageKind.Uncovered)
+            .Where(static state => state.Coverage is null)
             .Select(static state => state.Candidate)
             .ToArray());
 
@@ -223,8 +151,7 @@ internal sealed class ShellPolicyEvaluation
 
     internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches =>
         _candidates
-            .Where(static state => state.GrantEvidence is
-                { Coverage: not ShellCoverageKind.Uncovered })
+            .Where(static state => state.GrantEvidence is { Grant: not null })
             .OrderBy(static state => state.GrantEvidenceOrder)
             .Select(static state => state.GrantEvidence!.FormatMatch(state.Candidate.Candidate))
             .ToArray();
@@ -236,13 +163,11 @@ internal sealed class ShellPolicyEvaluation
         if (uncovered.Count == 0)
             throw new InvalidOperationException("No uncovered shell candidates remain.");
 
-        return Projection.HasCausalIntent
-            ? Projection.ApprovalContext
-            : ToolAccessPolicy.NarrowShellApprovalContext(
-                Projection.ApprovalContext,
-                uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                sessionOwnedDirectories,
-                Projection.Environment.PathStyle);
+        return ToolAccessPolicy.NarrowShellApprovalContext(
+            Projection.ApprovalContext,
+            uncovered.Select(static candidate => candidate.Candidate).ToArray(),
+            sessionOwnedDirectories,
+            Projection.Environment.PathStyle);
     }
 
     internal bool IsCovered(ShellPolicyCandidateId candidateId)
@@ -251,7 +176,7 @@ internal sealed class ShellPolicyEvaluation
         if ((uint)index >= (uint)_candidates.Count)
             throw new ArgumentOutOfRangeException(nameof(candidateId));
 
-        return _candidates[index].Coverage != ShellCoverageKind.Uncovered;
+        return _candidates[index].Coverage is not null;
     }
 
     internal void ApplyActorEvidence(ShellApprovalMatchResult evidence)
@@ -297,7 +222,7 @@ internal sealed class ShellPolicyEvaluation
 
     internal void Cover(
         ShellPolicyCandidate candidate,
-        ShellCoverageKind coverage)
+        Coverage coverage)
     {
         ArgumentNullException.ThrowIfNull(candidate);
 
@@ -310,10 +235,7 @@ internal sealed class ShellPolicyEvaluation
             throw new InvalidOperationException("Shell candidate facts changed.");
 
         state.Cover(coverage);
-        _trace.AddCoverage(
-            state.Candidate,
-            state.Coverage,
-            state.GrantEvidence?.GrantCreatedAt);
+        _trace.AddCoverage(state.Candidate, coverage);
     }
 
     internal ToolAuthorizationDecision Complete(

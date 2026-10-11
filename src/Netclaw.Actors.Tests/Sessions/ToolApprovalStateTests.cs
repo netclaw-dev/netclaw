@@ -3,12 +3,14 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -30,12 +32,12 @@ public sealed class ToolApprovalStateTests
         Assert.Equal(ApprovalTurnPhase.Waiting, state.TurnPhase);
         Assert.Equal(request, pending.Request);
 
-        Assert.True(state.Resolve(request.CallId, ApprovalDecision.ApprovedOnce, out var resolvedPending));
+        Assert.True(state.Resolve(request.CallId, ConsentAnswer.Once.Instance, out var resolvedPending));
         Assert.Same(pending, resolvedPending);
         Assert.Equal(0, state.PendingCount);
         Assert.Equal(1, state.ResolvedCount);
         Assert.Equal(ApprovalTurnPhase.Running, state.TurnPhase);
-        Assert.False(state.Resolve(request.CallId, ApprovalDecision.Denied, out _));
+        Assert.False(state.Resolve(request.CallId, ConsentAnswer.Denied, out _));
     }
 
     [Fact]
@@ -50,7 +52,7 @@ public sealed class ToolApprovalStateTests
         state.Request(request, persistApprovalState: true, recovered: false);
         Assert.True(state.HasRecoverablePending(request.CallId));
 
-        Assert.True(state.Resolve(request.CallId, ApprovalDecision.ApprovedOnce, out _));
+        Assert.True(state.Resolve(request.CallId, ConsentAnswer.Once.Instance, out _));
         Assert.False(state.HasRecoverablePending(request.CallId));
 
         var legacy = request with { CallId = "legacy-restorable", TurnContext = null };
@@ -73,11 +75,11 @@ public sealed class ToolApprovalStateTests
         state.Request(second, persistApprovalState: true, recovered: true);
 
         Assert.Equal(ApprovalTurnPhase.RecoveredWaiting, state.TurnPhase);
-        Assert.True(state.Resolve(first.CallId, ApprovalDecision.ApprovedOnce, out _));
+        Assert.True(state.Resolve(first.CallId, ConsentAnswer.Once.Instance, out _));
         Assert.Equal(ApprovalTurnPhase.RecoveredWaiting, state.TurnPhase);
         Assert.Equal(1, state.PendingCount);
 
-        Assert.True(state.Resolve(second.CallId, ApprovalDecision.Denied, out _));
+        Assert.True(state.Resolve(second.CallId, ConsentAnswer.Denied, out _));
         Assert.Equal(ApprovalTurnPhase.Running, state.TurnPhase);
         Assert.Equal(0, state.PendingCount);
         Assert.Equal(2, state.ResolvedCount);
@@ -90,7 +92,7 @@ public sealed class ToolApprovalStateTests
         var request = CreateRequest("call-1", requestedAtMs: 10);
 
         state.Request(request, persistApprovalState: true, recovered: false);
-        Assert.True(state.Resolve(request.CallId, ApprovalDecision.Denied, out _));
+        Assert.True(state.Resolve(request.CallId, ConsentAnswer.Denied, out _));
 
         var replacement = request with { RequestedAtMs = 20 };
         state.Request(replacement, persistApprovalState: true, recovered: false);
@@ -125,33 +127,33 @@ public sealed class ToolApprovalStateTests
     [Fact]
     public void A_legacy_prompt_cannot_authorize_a_new_repository_scope()
     {
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.False(ConsentAnswerCodec.IsOffered(
             [], ApprovalOptionKeys.ApproveRepository, "/work/main/.git"));
-        Assert.True(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.True(ConsentAnswerCodec.IsOffered(
             [], ApprovalOptionKeys.ApproveOnce, repositoryCommonDirectory: null));
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.False(ConsentAnswerCodec.IsOffered(
             [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
             ApprovalOptionKeys.ApproveRepository,
             "/work/main/.git"));
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.False(ConsentAnswerCodec.IsOffered(
             [ApprovalOptionKeys.ApproveRepository],
             ApprovalOptionKeys.ApproveRepository,
             repositoryCommonDirectory: null));
-        Assert.True(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.True(ConsentAnswerCodec.IsOffered(
             [ApprovalOptionKeys.ApproveRepository],
             ApprovalOptionKeys.ApproveRepository,
             "/work/main/.git"));
     }
 
     [Theory]
-    [InlineData(ApprovalOptionKeys.ApproveAssignmentSessionV1, ApprovalDecision.ApprovedSession)]
-    [InlineData(ApprovalOptionKeys.ApproveAssignmentAlwaysV1, ApprovalDecision.ApprovedAlways)]
-    [InlineData(ApprovalOptionKeys.ApproveAssignmentRepositoryV1, ApprovalDecision.ApprovedRepository)]
-    [InlineData(ApprovalOptionKeys.ApproveAssignmentEverywhereV1, ApprovalDecision.ApprovedEverywhere)]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentSessionV1, GrantScopeKind.Session)]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentAlwaysV1, GrantScopeKind.Folder)]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentRepositoryV1, GrantScopeKind.Repository)]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentEverywhereV1, GrantScopeKind.Everywhere)]
     public void New_runtime_maps_assignment_option_keys(
         string optionKey,
-        ApprovalDecision expected)
-        => Assert.Equal(expected, LlmSessionActor.MapApprovalDecision(optionKey));
+        GrantScopeKind expected)
+        => Assert.Equal(new ConsentAnswer.Grant(expected), ConsentAnswerCodec.FromOptionKey(optionKey));
 
     [Fact]
     public void Approval_turn_transitions_reject_invalid_source_states()
@@ -168,7 +170,7 @@ public sealed class ToolApprovalStateTests
         state.ClearCalls();
         state.ClearTurn();
         pending = state.Request(request, persistApprovalState: true, recovered: true);
-        Assert.True(state.Resolve(request.CallId, ApprovalDecision.ApprovedOnce, out _));
+        Assert.True(state.Resolve(request.CallId, ConsentAnswer.Once.Instance, out _));
         Assert.True(state.MarkRedriving(pending));
         Assert.Equal(ApprovalTurnPhase.Redriving, state.TurnPhase);
 
@@ -203,8 +205,8 @@ public sealed class ToolApprovalStateTests
         state.Request(approved, persistApprovalState: true, recovered: true);
         state.Request(denied, persistApprovalState: true, recovered: true);
         state.Request(pending, persistApprovalState: true, recovered: true);
-        Assert.True(state.Resolve(approved.CallId, ApprovalDecision.ApprovedOnce, out _));
-        Assert.True(state.Resolve(denied.CallId, ApprovalDecision.Denied, out _));
+        Assert.True(state.Resolve(approved.CallId, ConsentAnswer.Once.Instance, out _));
+        Assert.True(state.Resolve(denied.CallId, ConsentAnswer.Denied, out _));
 
         var plan = state.BuildRedrivePlan([approved.CallId, denied.CallId, pending.CallId]);
 
@@ -213,7 +215,7 @@ public sealed class ToolApprovalStateTests
         Assert.NotNull(plan.ManagedTemporaryDenialDirectories);
         Assert.NotNull(plan.AuthorizationAttemptIds);
         Assert.Equal(approved.Patterns, plan.OneTimeApprovalPreSeed[approved.CallId]);
-        Assert.Equal(ApprovalDecision.Denied, plan.DecisionOverride[denied.CallId]);
+        Assert.Equal(RefusalKind.Denied, plan.DecisionOverride[denied.CallId]);
         Assert.Equal("/session/tmp", plan.ManagedTemporaryDenialDirectories[denied.CallId]);
         var attempts = plan.AuthorizationAttemptIds;
         Assert.Equal(approved.AuthorizationAttemptId, attempts[approved.CallId].Value);
@@ -248,7 +250,7 @@ public sealed class ToolApprovalStateTests
         };
         var state = new ToolApprovalState();
         state.Request(request, persistApprovalState: true, recovered: true);
-        Assert.True(state.Resolve(request.CallId, ApprovalDecision.ApprovedAlways, out _));
+        Assert.True(state.Resolve(request.CallId, new ConsentAnswer.Grant(GrantScopeKind.Folder), out _));
 
         var plan = state.BuildRedrivePlan([request.CallId]);
 

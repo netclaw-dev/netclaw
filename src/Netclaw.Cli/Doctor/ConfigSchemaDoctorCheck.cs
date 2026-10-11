@@ -118,7 +118,7 @@ public sealed class ConfigSchemaDoctorCheck(NetclawPaths paths) : IDoctorCheck
             return Task.FromResult(DoctorCheckResult.Error(
                 "Config Schema",
                 $"Config does not match schema v{version}.{errorDetails}",
-                "Run `netclaw doctor --fix --dry-run` to preview auto-repairs, or check configVersion/schema fields in netclaw.json."));
+                "Correct the fields listed above in netclaw.json, or check configVersion. Move credentials with `netclaw secrets set <key> <value>`."));
         }
 
         if (syntheticVersion)

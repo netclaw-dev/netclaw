@@ -36,14 +36,13 @@ public sealed class ConfigDashboardPage : ReactivePage<ConfigDashboardViewModel>
     {
         return Layouts.Vertical()
             .WithSpacing(1)
-            .WithChild(BuildList())
+            .WithChild(BuildList().Fill())
             .WithChild(BuildHelpLine())
-            .WithChild(Layouts.Empty().Fill())
             .WithChild(BuildStatusBar())
             .WithChild(BuildKeyBindings());
     }
 
-    private ILayoutNode BuildList()
+    private LayoutNode BuildList()
     {
         // Status-summary column: "Label   <live status>". Terminal rows (Doctor /
         // Quit) carry no status and render as the bare label.
@@ -59,7 +58,8 @@ public sealed class ConfigDashboardPage : ReactivePage<ConfigDashboardViewModel>
 
         _entryList = Layouts.SelectionList(rows)
             .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Cyan);
+            .WithHighlightColors(Color.Black, Color.Cyan)
+            .WithFillHeight();
 
         _entryList.OnFocused();
         _entryList.SelectionConfirmed

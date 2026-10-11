@@ -3,10 +3,13 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tests.Utilities;
 using ShellSyntaxTree;
 using Xunit;
@@ -58,10 +61,10 @@ public sealed class ShellPolicyPathFactsTests
         Assert.Contains(
             view.Facts,
             fact => fact.State == ShellPolicyPathResolutionState.Known
-                    && fact.Paths.Any(path => ShellPathRules.Equals(
+                    && fact.Paths.Any(path => string.Equals(
                         path.Value,
                         @"C:\external\file.log",
-                        ShellPathStyle.Windows)));
+                        StringComparison.OrdinalIgnoreCase)));
     }
 
     [Theory]
@@ -70,7 +73,7 @@ public sealed class ShellPolicyPathFactsTests
     [InlineData(@"FileSystem::C:\external\file.log")]
     public void Ambiguous_windows_root_forms_remain_strict(string value)
     {
-        Assert.False(ShellPolicyOccurrencePathFacts.TryResolveCanonicalPath(
+        Assert.False(CanonicalPath.TryCreate(
             value,
             @"C:\work",
             ShellPathStyle.Windows,
@@ -104,7 +107,7 @@ public sealed class ShellPolicyPathFactsTests
     }
 
     [Fact]
-    public void Intent_and_fallback_resolutions_remain_distinct()
+    public void Intent_and_real_resolutions_remain_distinct()
     {
         var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
         var occurrence = Assert.Single(
@@ -116,8 +119,7 @@ public sealed class ShellPolicyPathFactsTests
             "head") with
         {
             Role = ShellPolicyCandidateRole.CausalIntentConsumer,
-            IntentDirectory = "/tmp",
-            IntentFallbackDirectories = ["/work"]
+            IntentDirectory = "/tmp"
         };
 
         var facts = Assert.Single(ShellPolicyPathFacts.Create(
@@ -125,12 +127,12 @@ public sealed class ShellPolicyPathFactsTests
             ShellPathStyle.Posix));
 
         Assert.Equal("/tmp", facts.Intent?.ResolutionBase.Path?.Value);
-        Assert.Equal("/work", Assert.Single(facts.Fallbacks).ResolutionBase.Path?.Value);
+        Assert.Equal("/work", facts.Real.ResolutionBase.Path?.Value);
         Assert.Contains(
             Assert.IsType<ShellPolicyResolvedPathView>(facts.Intent).Facts,
             fact => fact.Paths.Any(path => path.Value == "/tmp/result.log"));
         Assert.Contains(
-            Assert.Single(facts.Fallbacks).Facts,
+            facts.Real.Facts,
             fact => fact.Paths.Any(path => path.Value == "/work/result.log"));
     }
 
@@ -260,7 +262,7 @@ public sealed class ShellPolicyPathFactsTests
             BashCandidate("git push", "/work/repo"));
         var sessionOwned = evaluation.GetUncoveredApprovalContext(["/work/repo"]);
 
-        evaluation.Cover(evaluation.Candidates[0], ShellCoverageKind.ReviewedSafeReal);
+        evaluation.Cover(evaluation.Candidates[0], new Coverage.ReviewedSafe(ReviewedSafeRoot.Real));
         var remaining = evaluation.GetUncoveredApprovalContext(["/work/session"]);
 
         Assert.NotSame(sessionOwned, remaining);
@@ -277,7 +279,6 @@ public sealed class ShellPolicyPathFactsTests
     [InlineData("duplicate")]
     [InlineData("identity")]
     [InlineData("id")]
-    [InlineData("uncovered")]
     [InlineData("session")]
     [InlineData("persistent")]
     public void Invalid_coverage_mutations_are_atomic(string mutation)
@@ -285,28 +286,25 @@ public sealed class ShellPolicyPathFactsTests
         var evaluation = CreateEvaluation(BashCandidate("git status", "/work"));
         var candidate = Assert.Single(evaluation.Candidates);
         if (mutation == "duplicate")
-            evaluation.Cover(candidate, ShellCoverageKind.ReviewedSafeReal);
+            evaluation.Cover(candidate, new Coverage.ReviewedSafe(ReviewedSafeRoot.Real));
 
         Action apply = mutation switch
         {
             "duplicate" => () => evaluation.Cover(
                 candidate,
-                ShellCoverageKind.OneTime),
+                Coverage.OneTime.Instance),
             "identity" => () => evaluation.Cover(
                 candidate with { Candidate = BashCandidate("git push", "/work") },
-                ShellCoverageKind.ReviewedSafeReal),
+                new Coverage.ReviewedSafe(ReviewedSafeRoot.Real)),
             "id" => () => evaluation.Cover(
                 candidate with { Id = new ShellPolicyCandidateId(7) },
-                ShellCoverageKind.ReviewedSafeReal),
-            "uncovered" => () => evaluation.Cover(
-                candidate,
-                ShellCoverageKind.Uncovered),
+                new Coverage.ReviewedSafe(ReviewedSafeRoot.Real)),
             "session" => () => evaluation.Cover(
                 candidate,
-                ShellCoverageKind.Session),
+                new Coverage.Stored(GrantScope.Session.Instance, GrantedAt: null)),
             "persistent" => () => evaluation.Cover(
                 candidate,
-                ShellCoverageKind.PersistentGlobal),
+                new Coverage.Stored(GrantScope.Everywhere.Instance, GrantedAt: null)),
             _ => throw new ArgumentOutOfRangeException(nameof(mutation))
         };
 
@@ -350,7 +348,7 @@ public sealed class ShellPolicyPathFactsTests
             BashCandidate("git status", "/work/repo"),
             BashCandidate("git push", "/work/repo"));
         var candidates = evaluation.Candidates;
-        evaluation.Cover(candidates[1], ShellCoverageKind.ReviewedSafeReal);
+        evaluation.Cover(candidates[1], new Coverage.ReviewedSafe(ReviewedSafeRoot.Real));
         var grantCandidates = candidates.Select(candidate => new ShellGrantCandidate(
                 candidate.Id,
                 candidate.Candidate,
@@ -412,11 +410,9 @@ public sealed class ShellPolicyPathFactsTests
 
         Assert.True(ShellPolicyProjection.TryCreate(
             environment,
-            new ShellApprovalMatcher(environment),
-            execution: null,
             approvalContext,
+            directoryScopes: null,
             context,
-            static _ => false,
             out var projection));
         return new ShellPolicyEvaluation(
             Assert.IsType<ShellPolicyProjection>(projection),

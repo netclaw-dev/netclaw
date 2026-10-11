@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using System.Security.Cryptography;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Actors.Memory;
@@ -20,8 +21,12 @@ namespace Netclaw.Cli.Tests.Memory;
 /// overload of <see cref="MemoryCommand.RunAsync(string[], NetclawPaths, IConfiguration, System.Collections.Generic.IReadOnlyDictionary{string, EmbeddingModelManifestEntry}, TextWriter, TextWriter)"/>
 /// pointed at the tiny fixture ONNX graph — no network access.
 /// </summary>
-public sealed class MemoryCommandTests
+public sealed class MemoryCommandTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     private const string ModelId = "tiny-fixture";
     private static string FixturesDir => Path.Combine(AppContext.BaseDirectory, "Fixtures");
 
@@ -99,7 +104,7 @@ public sealed class MemoryCommandTests
 
         Assert.Equal(0, exitCode);
         Assert.Contains("Usage: netclaw memory <subcommand>", stdout);
-        Assert.DoesNotContain("Embedding", stdout);
+        Assert.DoesNotContain("Embedding 1 document", stdout);
 
         var rows = await store.GetEmbeddingsForModelAsync(ModelId, TestContext.Current.CancellationToken);
         Assert.Empty(rows);
@@ -137,6 +142,32 @@ public sealed class MemoryCommandTests
         Assert.Contains("embedded=0 skipped-hash-unchanged=1 failed=0", stdout);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BackfillEmbeddings_does_nothing_when_embeddings_are_disabled(bool force)
+    {
+        // No model is pre-placed and AutoDownload is on: before the fix this would try to
+        // download the model. Disabled must mean no provisioning, no embedding, and a pointer
+        // to the setting -- with or without --force.
+        var paths = CreateTempPaths(prePlaceValidModel: false);
+        var config = BuildConfig(autoDownload: true, enabled: false);
+
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
+        await store.InitializeAsync(TestContext.Current.CancellationToken);
+        await SeedDocumentAsync(store, "doc-1", "Doc One", "first body");
+
+        string[] args = force ? ["memory", "backfill-embeddings", "--force"] : ["memory", "backfill-embeddings"];
+        var (exitCode, stdout, stderr) = await RunCapturedWithStderrAsync(args, paths, config);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Memory.Embeddings.Enabled", stdout);
+        Assert.DoesNotContain("Provisioning", stdout);
+        Assert.Equal("", stderr);
+        Assert.False(File.Exists(Path.Combine(paths.EmbeddingModelDirectory(ModelId), "model.onnx")));
+        Assert.Empty(await store.GetEmbeddingsForModelAsync(ModelId, TestContext.Current.CancellationToken));
+    }
+
     private static async Task<(int ExitCode, string Stdout)> RunCapturedAsync(string[] args, NetclawPaths paths, IConfiguration config)
     {
         var (exitCode, stdout, _) = await RunCapturedWithStderrAsync(args, paths, config);
@@ -152,9 +183,9 @@ public sealed class MemoryCommandTests
         return (exitCode, stdout.ToString(), stderr.ToString());
     }
 
-    private static NetclawPaths CreateTempPaths(bool prePlaceValidModel)
+    private NetclawPaths CreateTempPaths(bool prePlaceValidModel)
     {
-        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-memory-command-tests", Guid.NewGuid().ToString("N"));
+        var basePath = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         var paths = new NetclawPaths(basePath);
         paths.EnsureDirectoriesExist();
 
@@ -171,11 +202,11 @@ public sealed class MemoryCommandTests
         return paths;
     }
 
-    private static IConfiguration BuildConfig(bool autoDownload)
+    private static IConfiguration BuildConfig(bool autoDownload, bool enabled = true)
     {
         var settings = new Dictionary<string, string?>
         {
-            ["Memory:Embeddings:Enabled"] = "true",
+            ["Memory:Embeddings:Enabled"] = enabled ? "true" : "false",
             ["Memory:Embeddings:ModelId"] = ModelId,
             ["Memory:Embeddings:AutoDownload"] = autoDownload ? "true" : "false",
         };

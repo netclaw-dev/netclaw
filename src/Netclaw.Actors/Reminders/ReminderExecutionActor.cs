@@ -168,7 +168,10 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
                 new SessionPipelineOptions
                 {
                     ChannelType = Channels.ChannelType.Reminder,
-                    Filter = OutputFilter.TextStreaming | OutputFilter.ToolCalls
+                    // The session streams a reply as deltas only when the model
+                    // sends two or more text chunks. A one-chunk reply arrives
+                    // only as the final TextOutput, so subscribe to both.
+                    Filter = OutputFilter.Text | OutputFilter.TextStreaming | OutputFilter.ToolCalls
                 },
                 output => self.Tell(new ExecutionOutput(output)),
                 (_, failure) => self.Tell(new OutputStreamTerminated(failure)));
@@ -424,30 +427,45 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
     }
 
     private static string BuildPrompt(ReminderDefinition definition)
+        => BuildPrompt(definition.Id, definition.Instructions, definition.Delivery, definition.DeliveryInstructions, definition.Schedule.Type);
+
+    /// <summary>
+    /// Builds the exact prompt that a scheduled run sends. <c>run_reminder</c>
+    /// returns this text so that a test in a chat uses the same words.
+    /// </summary>
+    internal static string BuildPrompt(ReminderInfo reminder)
+        => BuildPrompt(reminder.Id, reminder.Instructions, reminder.Delivery, reminder.DeliveryInstructions, reminder.Schedule.Type);
+
+    private static string BuildPrompt(
+        ReminderId id,
+        string instructions,
+        ReminderDelivery delivery,
+        string? deliveryInstructions,
+        ReminderScheduleType scheduleType)
     {
-        var deliverySection = definition.Delivery.Kind switch
+        var deliverySection = delivery.Kind switch
         {
-            DeliveryKind.CurrentSession => string.IsNullOrWhiteSpace(definition.DeliveryInstructions)
+            DeliveryKind.CurrentSession => string.IsNullOrWhiteSpace(deliveryInstructions)
                 ? ""
-                : $"\n\nDelivery guidance:\n{definition.DeliveryInstructions}",
-            DeliveryKind.Channel => BuildChannelDeliveryGuidance(definition) +
-                (string.IsNullOrWhiteSpace(definition.DeliveryInstructions) ? "" : $"\n{definition.DeliveryInstructions}"),
+                : $"\n\nDelivery guidance:\n{deliveryInstructions}",
+            DeliveryKind.Channel => BuildChannelDeliveryGuidance(id, delivery) +
+                (string.IsNullOrWhiteSpace(deliveryInstructions) ? "" : $"\n{deliveryInstructions}"),
             DeliveryKind.None => "",
-            _ => throw new ArgumentOutOfRangeException(nameof(definition.Delivery.Kind), definition.Delivery.Kind, "Unexpected DeliveryKind")
+            _ => throw new ArgumentOutOfRangeException(nameof(delivery), delivery.Kind, "Unexpected DeliveryKind")
         };
 
-        var completionGuidance = definition.Schedule.Type is ReminderScheduleType.Interval or ReminderScheduleType.Cron
-            ? $"\n\nThis is a recurring reminder (ID: {definition.Id}). If you determine that its purpose " +
+        var completionGuidance = scheduleType is ReminderScheduleType.Interval or ReminderScheduleType.Cron
+            ? $"\n\nThis is a recurring reminder (ID: {id}). If you determine that its purpose " +
               "has been permanently fulfilled (e.g., the PR merged, the deploy completed, the issue was " +
               "resolved), call cancel_reminder to stop future executions."
             : "";
 
-        return $"{definition.Instructions}{deliverySection}{completionGuidance}";
+        return $"{instructions}{deliverySection}{completionGuidance}";
     }
 
-    private static string BuildChannelDeliveryGuidance(ReminderDefinition definition)
+    private static string BuildChannelDeliveryGuidance(ReminderId id, ReminderDelivery delivery)
     {
-        var target = ResolveChannelDeliveryTarget(definition);
+        var target = ResolveChannelDeliveryTarget(delivery);
         if (target is not null)
         {
             return "\n\nPost the result using send_channel_message with " +
@@ -456,20 +474,23 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
         }
 
         throw new InvalidOperationException(
-            $"Reminder '{definition.Id}' has channel delivery but could not resolve a delivery target. " +
+            $"Reminder '{id}' has channel delivery but could not resolve a delivery target. " +
             "Transport and address may be missing or invalid.");
     }
 
     internal static ChannelDeliveryTargetInfo? ResolveChannelDeliveryTarget(ReminderDefinition definition)
-    {
-        if (definition.Delivery.Target is not null)
-            return definition.Delivery.Target;
+        => ResolveChannelDeliveryTarget(definition.Delivery);
 
-        if (definition.Delivery.Kind != DeliveryKind.Channel)
+    private static ChannelDeliveryTargetInfo? ResolveChannelDeliveryTarget(ReminderDelivery delivery)
+    {
+        if (delivery.Target is not null)
+            return delivery.Target;
+
+        if (delivery.Kind != DeliveryKind.Channel)
             return null;
 
-        var transport = definition.Delivery.Transport?.Trim().ToLowerInvariant();
-        var address = definition.Delivery.Address?.Trim();
+        var transport = delivery.Transport?.Trim().ToLowerInvariant();
+        var address = delivery.Address?.Trim();
         if (string.IsNullOrWhiteSpace(transport) || string.IsNullOrWhiteSpace(address))
             return null;
 
@@ -510,15 +531,24 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
         {
             case OutputAction.TurnCompleted:
                 {
+                    // A failed turn emits its ErrorOutput first and a closing TurnCompleted(Failed) after it.
+                    // The error already settled the run as failed, so do not log it again as a success.
+                    if (_completed)
+                        break;
+
                     var result = _accumulator.GetAccumulatedText();
                     var notifyFailureMessage = _accumulator.BuildNotifyFailureMessage(
                         _definition.Delivery.Kind == DeliveryKind.Channel,
                         _definition.DeliveryRequired);
+                    // A denial is not a failure: it is deterministic, so a retry cannot help, and the model may
+                    // have finished another way. A delivery failure still is one, and is retried as before.
+                    var deniedMessage = _accumulator.DeniedCallMessage;
                     var success = notifyFailureMessage is null;
+                    var failureMessage = success ? deniedMessage : notifyFailureMessage;
                     _log.Info(
-                        $"ReminderExecution Completed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success={success} output_length={result.Length} notify_attempted={_accumulator.NotifyAttempted} notify_failed={_accumulator.NotifyFailed} dispatched_at={_dispatchedAt} completed_at={_timeProvider.GetUtcNow()}");
+                        $"ReminderExecution Completed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success={success} tool_denied={deniedMessage is not null} output_length={result.Length} notify_attempted={_accumulator.NotifyAttempted} notify_failed={_accumulator.NotifyFailed} dispatched_at={_dispatchedAt} completed_at={_timeProvider.GetUtcNow()}");
 
-                    ReportOutcome(success, notifyFailureMessage);
+                    ReportOutcome(success, failureMessage, toolDenied: success && deniedMessage is not null);
                     break;
                 }
 
@@ -568,7 +598,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
         ReportOutcome(false, reason);
     }
 
-    private void ReportOutcome(bool success, string? errorMessage = null)
+    private void ReportOutcome(bool success, string? errorMessage = null, bool toolDenied = false)
     {
         if (_completed || _settlementStarted)
             return;
@@ -583,12 +613,18 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
         var durationMs = (long)(_timeProvider.GetUtcNow() - _dispatchedAt).TotalMilliseconds;
         var history = new HistoryRecord(
             FiredAt: _dispatchedAt,
-            Success: success,
+            Success: success && !toolDenied,
             DurationMs: durationMs,
             SessionId: _sessionIdValue ?? $"reminder/{_definition.Id}/unknown",
-            ErrorMessage: errorMessage);
+            ErrorMessage: errorMessage,
+            ToolDenied: toolDenied);
 
-        if (!success)
+        if (toolDenied)
+        {
+            _log.Warning(
+                $"ReminderExecution ReportDenied: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} status=denied error_message={errorMessage}");
+        }
+        else if (!success)
         {
             _log.Warning(
                 $"ReminderExecution ReportFailed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success=false error_message={errorMessage}");

@@ -108,13 +108,13 @@ public sealed class DaemonClientSessionTests
                 if (!string.IsNullOrWhiteSpace(sessionId) && _sessions.Contains(sessionId))
                 {
                     _connectionSessions[connectionId] = sessionId;
-                    return new SessionEnsureResultDto(sessionId, false);
+                    return new SessionEnsureResultDto(sessionId, false) { TextAdmissionVersion = 1 };
                 }
 
                 var created = $"signalr/{Guid.NewGuid():N}";
                 _sessions.Add(created);
                 _connectionSessions[connectionId] = created;
-                return new SessionEnsureResultDto(created, true);
+                return new SessionEnsureResultDto(created, true) { TextAdmissionVersion = 1 };
             }
         }
 

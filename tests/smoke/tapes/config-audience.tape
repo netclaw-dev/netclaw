@@ -22,9 +22,12 @@ Enter
 Type "netclaw config"
 Enter
 Wait+Screen@10s /Settings Areas/
+# Anchor on a Security & Access menu row description. The root dashboard and the
+# Security & Access sub-screens also show the text "Security & Access", so that
+# text does not prove that the menu is on screen and bound to input.
 Down 8
 Enter
-Wait+Screen@10s /Security & Access/
+Wait+Screen@10s /Deployment trust stance\./
 
 # Open Audience Profiles, edit Team, then reset the full profile.
 Down 2
@@ -44,7 +47,7 @@ Wait+Screen@10s /Team overrides reset to the Team posture baseline/
 Escape
 Wait+Screen@10s /System default posture: Team/
 Escape
-Wait+Screen@10s /Security & Access/
+Wait+Screen@10s /Deployment trust stance\./
 Ctrl+Q
 
 # Alt-screen restore guard (CSI ?1049l): give vhs a beat to catch the restored main buffer.

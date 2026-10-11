@@ -36,10 +36,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// </summary>
 public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
 {
-    private readonly string _dbDir = Path.Combine(
-        Path.GetTempPath(),
-        "netclaw-observer-storage-tests",
-        Guid.NewGuid().ToString("N"));
+    private readonly string _dbDir = Path.Combine(Path.GetTempPath(), $"netclaw-observer-storage-tests-{Guid.NewGuid():N}");
 
     public SessionMemoryObserverStorageIntegrationTests(ITestOutputHelper output) : base(output: output)
     {

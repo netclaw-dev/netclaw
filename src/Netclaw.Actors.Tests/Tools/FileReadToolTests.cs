@@ -279,7 +279,7 @@ public class FileReadToolTests : IDisposable
         var result = await tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("Access denied", result);
-        Assert.DoesNotContain("value", result);
+        Assert.DoesNotContain("\"secret\"", result);
     }
 
     [Fact]

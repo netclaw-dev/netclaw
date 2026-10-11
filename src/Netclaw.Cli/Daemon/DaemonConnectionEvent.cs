@@ -34,7 +34,9 @@ public enum DaemonConnectionState
     /// Terminal failure: the reconnect loop exhausted its retry budget. No
     /// further automatic recovery occurs without an explicit reconnect.
     /// </summary>
-    Disconnected
+    Disconnected,
+
+    Closing
 }
 
 public sealed record DaemonConnectionEvent(
@@ -43,4 +45,7 @@ public sealed record DaemonConnectionEvent(
     string Message,
     int? Attempt = null,
     int? MaxAttempts = null,
-    int? SecondsUntilRetry = null);
+    int? SecondsUntilRetry = null)
+{
+    public string? SessionId { get; init; }
+}

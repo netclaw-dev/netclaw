@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Netclaw.Cli;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
@@ -12,8 +13,12 @@ using Xunit;
 namespace Netclaw.Cli.Tests.Doctor;
 
 [Collection(Netclaw.Cli.Tests.LegacyModelEnvironmentCollection.Name)]
-public sealed class ConfigSchemaDoctorCheckTests
+public sealed class ConfigSchemaDoctorCheckTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     [Fact]
     public async Task ReturnsWarning_WhenConfigFileMissing()
     {
@@ -151,6 +156,35 @@ public sealed class ConfigSchemaDoctorCheckTests
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
+    }
+
+    [Theory]
+    [InlineData("""{ "configVersion": 1, "Retention": { "Logs": { "Days": 14 } } }""")]
+    [InlineData("""{ "configVersion": 1, "Retention": { "Logs": { "Days": 0 } } }""")]
+    // The Retention node stays open so a retention setting added later does not fail an older doctor.
+    [InlineData("""{ "configVersion": 1, "Retention": { "Logs": { "Days": 14 }, "Sessions": { "Days": 90 } } }""")]
+    public async Task ReturnsPass_WhenRetentionConfigIsValid(string json)
+    {
+        var paths = new NetclawPaths(CreateTempBasePath());
+        paths.EnsureDirectoriesExist();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, json, TestContext.Current.CancellationToken);
+
+        var result = await new ConfigSchemaDoctorCheck(paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public async Task ReturnsNonPass_WhenLogRetentionDaysIsNegative()
+    {
+        var paths = new NetclawPaths(CreateTempBasePath());
+        paths.EnsureDirectoriesExist();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """{ "configVersion": 1, "Retention": { "Logs": { "Days": -1 } } }""", TestContext.Current.CancellationToken);
+
+        var result = await new ConfigSchemaDoctorCheck(paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(DoctorSeverity.Pass, result.Severity);
     }
 
     [Fact]
@@ -882,9 +916,9 @@ public sealed class ConfigSchemaDoctorCheckTests
         Assert.Contains("MaxToolCallsPerTurn", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string CreateTempBasePath()
+    private string CreateTempBasePath()
     {
-        var path = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
     }

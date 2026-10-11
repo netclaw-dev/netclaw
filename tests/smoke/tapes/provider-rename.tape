@@ -55,7 +55,7 @@ Enter
 
 # ─── Success status ──────────────────────────────────────────────────
 # StatusMessage on the list view: "Renamed 'seed-provider' to
-# 'renamed-provider'. Restart daemon for changes to take effect."
+# 'renamed-provider'. A running daemon applies the change automatically."
 # Wait for the success status. The name also appears in the input before
 # the Enter event completes, so it cannot prove that the save completed.
 Wait+Screen@10s /Renamed 'seed-provider' to 'renamed-provider'\./

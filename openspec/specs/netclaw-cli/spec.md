@@ -35,19 +35,35 @@ the operator to `netclaw init` and exit non-zero without launching Termina.
 - **AND** the command exits non-zero
 - **AND** no partial TUI starts
 
-### Requirement: Personal shell approval defaults are explicit
+### Requirement: Personal posture requires shell approval by default
 
-When bootstrap selects `Personal` posture, the written config SHALL make the
-recommended shell approval default explicit by writing
-`Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides.shell_execute = "approval"`
-rather than relying on runtime-only implicit defaults.
+`netclaw init` SHALL write the posture (`Security.DeploymentPosture`,
+`Security.ShellExecutionMode`, `Security.StrictDefaults`) and `Tools.ShellMode`. It
+SHALL NOT write `Tools.AudienceProfiles`. The daemon SHALL bind the `Tools` section
+on top of the defaults for the resolved posture. For the `Personal` posture, these
+defaults set `Personal.ApprovalPolicy.ToolOverrides.shell_execute = Approval`. An
+explicit value in `netclaw.json` SHALL replace the posture default.
 
-#### Scenario: Personal bootstrap writes explicit shell approval default
+#### Scenario: Personal bootstrap writes the posture only
 
 - **GIVEN** the operator completes `netclaw init` with `Personal` posture
 - **WHEN** the wizard writes the config
-- **THEN** `netclaw.json` includes
-  `Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides.shell_execute = "approval"`
+- **THEN** `netclaw.json` has `Security.DeploymentPosture = "Personal"`
+- **AND** `netclaw.json` has no `Tools.AudienceProfiles` key
+
+#### Scenario: The daemon applies the Personal posture shell rule
+
+- **GIVEN** the resolved posture is `Personal`
+- **AND** `netclaw.json` has no `ApprovalPolicy` for the Personal audience
+- **WHEN** the daemon binds the `Tools` section
+- **THEN** `shell_execute` requires approval for the Personal audience
+
+#### Scenario: An explicit shell override replaces the posture default
+
+- **GIVEN** the resolved posture is `Personal`
+- **AND** `netclaw.json` sets `Personal.ApprovalPolicy.ToolOverrides.shell_execute = "Auto"`
+- **WHEN** the daemon binds the `Tools` section
+- **THEN** the Personal `shell_execute` mode is `Auto`
 
 ### Requirement: Doctor checks for approval configuration
 
@@ -146,7 +162,10 @@ executable-private grammar.
 
 For another tool, `trust-verb` SHALL write the compatible global non-shell
 exact entry. It SHALL keep support for an arbitrary `--tool` value. It SHALL
-not add shell members.
+not add shell members. The phrase SHALL equal the phrase that the approval
+matcher takes from a call to that tool, which is the canonical tool name. Any
+other phrase SHALL exit with code 1, store nothing, and print the command that
+works.
 
 The CLI SHALL add only global entries. A folder entry SHALL come from an
 interactive approval. An equal entry SHALL exit with code 0 and a no-change
@@ -387,3 +406,158 @@ Model CLI and TUI operations SHALL assign roles by changing references and SHALL
 - **WHEN** a model mutation is requested
 - **THEN** the CLI SHALL migrate and validate the canonical shape before persistence
 - **AND** failure SHALL leave the original file unchanged
+
+### Requirement: Chat TUI ends generation after a terminal error
+
+The Chat TUI SHALL clear its generation state after it receives terminal error output.
+The TUI SHALL remove pending tool interaction state and enable input when the daemon remains connected.
+The TUI SHALL show an explicit retry-ready status and request a redraw.
+
+#### Scenario: Provider error ends generation
+
+- **GIVEN** the Chat TUI shows `Generating...`
+- **WHEN** it receives terminal error output from the daemon
+- **THEN** it does not show `Generating...`
+- **AND** it shows `Last request failed. Ready to retry.`
+- **AND** input is enabled
+
+### Requirement: A fresh interactive chat creates its session on first input
+
+The CLI SHALL connect a fresh interactive chat without a daemon session until it receives its first input.
+The CLI SHALL preserve explicit Create, Resume, Keep, and headless session contracts.
+Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
+
+#### Scenario: Open and quit leaves no empty session
+
+- **GIVEN** the user opens a fresh interactive chat
+- **WHEN** the user quits without text or an initial message
+- **THEN** the daemon creates no session for that chat
+
+#### Scenario: The first input establishes one session
+
+- **GIVEN** the user opens a fresh chat after another chat
+- **WHEN** the user submits text
+- **THEN** the client creates one new session and sends the text there
+- **AND** it does not send the text to the earlier session
+
+#### Scenario: Resume retains the selected identity
+
+- **GIVEN** the user selects a session to resume
+- **WHEN** the connection attaches successfully
+- **THEN** later input targets that session
+- **AND** the client does not create an unrelated session
+
+### Requirement: Accepted local inputs retain order and visible outcomes
+
+The CLI SHALL retain accepted local inputs in order through connection and attachment retries.
+The CLI SHALL display each permanent rejection or uncertain delivery outcome.
+The CLI SHALL NOT automatically resend an input after uncertain RPC dispatch.
+
+#### Scenario: Duplicate connection events do not duplicate input
+
+- **GIVEN** two local inputs wait for attachment
+- **WHEN** duplicate connection events occur before attachment completes
+- **THEN** the client attempts the two inputs once each in their original order
+
+#### Scenario: An interrupted RPC remains uncertain
+
+- **GIVEN** the client dispatches an input RPC
+- **WHEN** the connection fails before its response
+- **THEN** the client reports unconfirmed delivery
+- **AND** it does not automatically replay that input
+
+#### Scenario: Queued caller cancellation prevents dispatch
+
+- **GIVEN** a cancellable command waits before transport dispatch
+- **WHEN** its caller cancels it
+- **THEN** the client removes that command
+- **AND** it makes no RPC for that command
+
+#### Scenario: Admission response cannot reverse completed model state
+
+- **GIVEN** a turn-complete event reaches the client before its text RPC response
+- **WHEN** the text RPC response confirms admission
+- **THEN** the UI retains the completed turn state
+- **AND** it does not restore the Generating status
+
+### Requirement: Normal quit resolves admission within a two-second limit
+
+The CLI SHALL allow at most two seconds for prior input admission after normal quit starts.
+The limit SHALL apply once to all prior local inputs.
+The CLI SHALL reject later inputs and SHALL NOT wait for model completion.
+The CLI SHALL report queued unsent text separately from an unresolved active RPC.
+The final unresolved receipt SHALL remain visible after the TUI closes.
+
+#### Scenario: Admission completes before the deadline
+
+- **GIVEN** the user submits text and requests normal quit
+- **WHEN** the daemon confirms admission within two seconds
+- **THEN** the CLI can close without a model response
+- **AND** it does not discard the close result before UI disposal
+
+#### Scenario: The deadline separates uncertain and unsent text
+
+- **GIVEN** one input RPC remains unresolved and another local input waits behind it
+- **WHEN** the two-second deadline expires
+- **THEN** the CLI reports unconfirmed delivery for the active input
+- **AND** it reports the queued input as unsent
+- **AND** it starts no later input RPC
+
+#### Scenario: Repeated quit shares one close operation
+
+- **GIVEN** normal quit has started
+- **WHEN** the user requests quit again and submits later text
+- **THEN** the client retains one close operation
+- **AND** it rejects the later text
+
+### Requirement: Offline bootstrap and client observers retain isolation
+
+Offline bootstrap SHALL create no client ActorSystem.
+An explicit transition to daemon chat SHALL use one local client ActorSystem for that host.
+A blocked observer SHALL NOT prevent client commands from completion.
+
+Identity redo SHALL capture the daemon generation before it writes config.
+If the daemon already runs, an absent generation SHALL block that write with a visible error.
+After the user chooses guided chat, the CLI SHALL confirm a healthy daemon before navigation.
+If the daemon already ran before the write, that confirmation SHALL require a newer generation.
+If the daemon was down, the CLI SHALL use the existing start and health check.
+The existing wizard readiness component SHALL own that wait.
+A skip or quit SHALL cancel preparation without dispatch of the hidden input.
+
+#### Scenario: Bootstrap exits without chat
+
+- **WHEN** the user completes offline bootstrap without chat
+- **THEN** the CLI creates no client ActorSystem
+
+#### Scenario: Bootstrap transitions to chat
+
+- **WHEN** the user explicitly enters daemon chat after bootstrap
+- **THEN** the host creates one local client ActorSystem
+- **AND** host shutdown terminates that system
+
+#### Scenario: An observer blocks while a command proceeds
+
+- **GIVEN** one client event observer blocks
+- **WHEN** another client command is ready to execute
+- **THEN** that command can complete without release of the observer
+
+#### Scenario: Identity redo waits for the daemon config reload
+
+- **GIVEN** identity redo captures generation 1 before its config write
+- **WHEN** the user chooses guided chat while generation 1 remains healthy
+- **THEN** the CLI does not enter chat
+- **AND** a healthy generation 2 permits the hidden input through normal chat admission
+
+#### Scenario: An absent generation blocks identity persistence
+
+- **GIVEN** the daemon already runs but its probe fails or omits its generation
+- **WHEN** identity redo attempts its config write
+- **THEN** the CLI reports the probe failure
+- **AND** config and identity files remain unchanged
+
+#### Scenario: Quit cancels the guided chat handoff
+
+- **GIVEN** the CLI waits for the saved identity generation
+- **WHEN** the user quits
+- **THEN** the CLI cancels preparation
+- **AND** it sends no hidden input

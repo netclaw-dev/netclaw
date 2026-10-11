@@ -12,6 +12,7 @@ using Akka.Hosting;
 using Akka.Persistence;
 using Netclaw.Actors.Hosting;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Memory;
@@ -25,6 +26,7 @@ using Netclaw.Actors.Text;
 using Netclaw.Configuration;
 using Netclaw.Actors.Tools;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
 using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -438,11 +440,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ReceiveTimeout>(_ =>
         {
-            if (_subscribers.Count > 0)
+            if (HasLiveBackgroundJobs)
             {
                 _log.Info(
-                    "Session idle but {SubscriberCount} subscriber(s) active; deferring passivation",
-                    _subscribers.Count);
+                    "Session idle but active background jobs remain; deferring passivation");
                 return;
             }
 
@@ -1496,10 +1497,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Disable idle timeout — we're shutting down
         Context.SetReceiveTimeout(null);
 
-        // Reap-on-passivation: a background job is session-scoped — when the
-        // conversation goes idle its processes must not linger. Kills are
-        // requested up front (parallel with distillation) and the final
-        // snapshot is gated on the ack so it captures the reaped marks.
+        // Explicit shutdown or restart reaps session-scoped jobs.
+        // Reaped-only records still use the manager's idempotent reap ack.
         _jobReapPending = false;
         _passivationDeferredForReap = false;
         if (!_state.ActiveBackgroundJobs.IsEmpty)
@@ -1713,6 +1712,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
 
         _passivationCompleted = true;
+        EmitOutput(new SessionDeactivated { SessionId = _sessionId, TimestampMs = NowMs() });
         _lifecycleObserver?.OnSessionDeactivated(_sessionId);
         _restartDrainReplyTo?.Tell(new DaemonRestartPrepared(
             _sessionId,
@@ -1720,6 +1720,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _restartDrainReplyTo = null;
         Context.Stop(Self);
     }
+
+    private bool HasLiveBackgroundJobs
+        => _state.ActiveBackgroundJobs.Values.Any(job => job.ReapedAtMs is null);
 
     private void AbortPassivationTimers()
     {
@@ -2061,7 +2064,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
-        IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
+        IReadOnlyDictionary<string, RefusalKind>? decisionOverride = null,
         IReadOnlyDictionary<string, string>? managedTemporaryDenialDirectories = null,
         IReadOnlyDictionary<string, AuthorizationAttemptId>? authorizationAttemptIds = null,
         PreparedToolCycleBatch? preparedCycleBatch = null,
@@ -2148,7 +2151,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             OneTimeApprovalPreSeed = oneTimeApprovalPreSeed
                 ?? new Dictionary<string, IReadOnlyList<string>>(),
             DecisionOverrides = decisionOverride
-                ?? new Dictionary<string, ApprovalDecision>(),
+                ?? new Dictionary<string, RefusalKind>(),
             ManagedTemporaryDenialDirectories = managedTemporaryDenialDirectories
                 ?? new Dictionary<string, string>(),
             AuthorizationAttemptIds = authorizationAttemptIds
@@ -2756,8 +2759,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!isReJoin)
             {
                 _subscribers.AddOrUpdate(cmd.Subscriber, cmd.Filter);
-                Context.WatchWith(cmd.Subscriber,
-                    new LeaveSession(cmd.Subscriber) { SessionId = _sessionId });
+                // Persistence can replay raw Terminated and discard WatchWith's custom payload.
+                Context.Watch(cmd.Subscriber);
 
                 _log.Info("{Subscriber} joined (filter={Filter})", cmd.Subscriber, cmd.Filter);
             }
@@ -2807,6 +2810,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (_subscribers.Remove(cmd.Subscriber))
             {
                 _log.Info("{Subscriber} left", cmd.Subscriber);
+            }
+
+            Context.Unwatch(cmd.Subscriber);
+        });
+
+        Command<Terminated>(msg =>
+        {
+            if (_subscribers.Remove(msg.ActorRef))
+            {
+                _log.Info("{Subscriber} left", msg.ActorRef);
             }
         });
     }
@@ -2965,7 +2978,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return Convert.ToHexString(bytes.AsSpan(0, 8)).ToLowerInvariant();
     }
 
-    private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)
+    private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false, string? slashCommandSkillContent = null)
     {
         var compatibility = ModelInputCompatibility.Evaluate(_model.InputModalities, _state.History);
         if (!compatibility.IsCompatible)
@@ -3051,6 +3064,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     workingContextGeneration,
                     forceNoTools,
                     _turnRestartNotice,
+                    slashCommandSkillContent,
                     _state.WorkingContext,
                     CurrentTurnAudience(),
                     _activeLlmCts.Token)
@@ -3139,7 +3153,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             State: _state,
             ContextLayers: _contextLayers,
             StartupContextInjected: _startupContextInjected,
-            SlashCommandSkillContent: _slashCommandSkillContent,
+            // The body is in the volatile block persisted before this call; Assemble does not emit it.
+            SlashCommandSkillContent: null,
             SessionPromptOverlay: _sessionPromptOverlay,
             TurnRestartNotice: _turnRestartNotice,
             SessionId: _sessionId,
@@ -3190,6 +3205,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         long generation,
         bool forceNoTools,
         string? turnRestartNotice,
+        string? slashCommandSkillContent,
         WorkingContext workingContext,
         TrustAudience audience,
         CancellationToken cancellationToken)
@@ -3200,7 +3216,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 workingContext,
                 audience,
                 cancellationToken).ConfigureAwait(false);
-            return new WorkingContextSnapshotReady(generation, forceNoTools, turnRestartNotice, snapshot);
+            return new WorkingContextSnapshotReady(generation, forceNoTools, turnRestartNotice, slashCommandSkillContent, snapshot);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -3212,6 +3228,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 generation,
                 forceNoTools,
                 turnRestartNotice,
+                slashCommandSkillContent,
                 workingContext,
                 ex);
         }
@@ -3237,6 +3254,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             message.Generation,
             message.ForceNoTools,
             message.TurnRestartNotice,
+            message.SlashCommandSkillContent,
             new WorkingContextSnapshot
             {
                 WorkingContext = message.WorkingContext,
@@ -3265,7 +3283,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             State: _state,
             ContextLayers: _contextLayers,
             StartupContextInjected: _startupContextInjected,
-            SlashCommandSkillContent: _slashCommandSkillContent,
+            SlashCommandSkillContent: message.SlashCommandSkillContent,
             SessionPromptOverlay: _sessionPromptOverlay,
             TurnRestartNotice: message.TurnRestartNotice,
             SessionId: _sessionId,
@@ -3503,9 +3521,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TryReplyAck();
         _recallManager.ResetForNewTurn();
 
-        _slashCommandSkillContent = skillBody;
-        FireInitialTurnLlmCall(effectiveUserContent);
-        _slashCommandSkillContent = null;
+        FireInitialTurnLlmCall(effectiveUserContent, skillBody);
 
         TransitionTo(SessionPhase.Processing);
         return true;
@@ -3722,8 +3738,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return updated;
     }
 
-    // Transient: skill body injected by slash-command dispatch for the current turn
-    private string? _slashCommandSkillContent;
     private string? _sessionPromptOverlay;
 
     private bool HasFileReadGranted()
@@ -3958,11 +3972,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ApplyToolApprovalResolved(ToolApprovalResolved evt)
     {
-        var decision = Enum.TryParse<ApprovalDecision>(evt.Decision, ignoreCase: true, out var parsed)
-            ? parsed
-            : ApprovalDecision.Denied;
-
-        _toolApprovals.Resolve(evt.CallId, decision, out _);
+        _toolApprovals.Resolve(evt.CallId, ConsentAnswerCodec.FromJournalText(evt.Decision), out _);
     }
 
     private void ApplyToolBatchAbandoned(ToolBatchAbandoned evt)
@@ -4107,24 +4117,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }, OutputFilter.Usage);
     }
 
-    /// <summary>
-    /// Maps a <see cref="ToolInteractionResponse"/> option key to an
-    /// <see cref="ApprovalDecision"/>. Shared by the live-<c>Processing</c>
-    /// handler and the idle re-drive handler so the two paths never diverge.
-    /// Any unrecognized key falls closed to <see cref="ApprovalDecision.Denied"/>.
-    /// </summary>
-    internal static ApprovalDecision MapApprovalDecision(string selectedKey) =>
-        ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
-        {
-            ApprovalOptionKeys.ApproveOnce => ApprovalDecision.ApprovedOnce,
-            ApprovalOptionKeys.ApproveSession => ApprovalDecision.ApprovedSession,
-            ApprovalOptionKeys.ApproveAlways => ApprovalDecision.ApprovedAlways,
-            ApprovalOptionKeys.ApproveRepository => ApprovalDecision.ApprovedRepository,
-            ApprovalOptionKeys.ApproveEverywhere => ApprovalDecision.ApprovedEverywhere,
-            ApprovalOptionKeys.Deny => ApprovalDecision.Denied,
-            _ => ApprovalDecision.Denied
-        };
-
     private bool HasApprovalHistory
         => _toolApprovals.ResolvedCount > 0
         || ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null;
@@ -4172,7 +4164,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// non-null return means authorization succeeded; the caller is
     /// responsible for journaling <see cref="ToolApprovalResolved"/>.
     /// </summary>
-    private async Task<(ApprovalDecision? Decision, string? NackReason)> AuthorizeApprovalResponseAsync(
+    private async Task<(ConsentAnswer? Answer, string? NackReason)> AuthorizeApprovalResponseAsync(
         PendingToolInteraction pending,
         ToolInteractionResponse msg,
         bool persistApprovalGrant)
@@ -4199,12 +4191,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return (null, ApprovalNackReasons.WrongRequester);
         }
 
-        // Legacy journal entries lack offered option keys. They cannot prove
-        // that the new repository scope appeared in the original prompt.
-        if (!IsOfferedApprovalOption(
-                pending.Request.OptionKeys,
+        if (!ConsentAnswerCodec.TryParseOption(
                 msg.SelectedKey.Value,
-                pending.Request.RepositoryCommonDirectory))
+                pending.Request.OptionKeys,
+                pending.Request.RepositoryCommonDirectory,
+                out var answer))
         {
             _log.Warning(
                 "Ignoring unavailable approval option {SelectedKey} for call {CallId}; offered options were [{OptionKeys}]",
@@ -4215,49 +4206,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return (null, ApprovalNackReasons.OptionUnavailable);
         }
 
-        var decision = MapApprovalDecision(msg.SelectedKey.Value);
         _log.Info(
             "Tool approval decision authorizationAttemptId={AuthorizationAttemptId} " +
             "sessionId={SessionId} callId={CallId} decision={Decision}",
             pending.AuthorizationAttemptId.Value,
             _sessionId.Value,
             msg.CallId.Value,
-            decision);
+            ConsentAnswerCodec.ToJournalText(answer));
 
         if (persistApprovalGrant)
-            await PersistApprovalGrantIfNeededAsync(pending, decision, CancellationToken.None);
+            await PersistApprovalGrantIfNeededAsync(pending, answer, CancellationToken.None);
 
-        return (decision, null);
+        return (answer, null);
     }
-
-    internal static bool IsOfferedApprovalOption(
-        IReadOnlyList<string> optionKeys,
-        string selectedKey,
-        string? repositoryCommonDirectory)
-        => ApprovalOptionKeys.IsAssignmentVariant(selectedKey)
-            ? optionKeys.Contains(selectedKey, StringComparer.Ordinal)
-              && (!ApprovalOptionKeys.IsRepository(selectedKey)
-                  || repositoryCommonDirectory is not null)
-            : ApprovalOptionKeys.IsRepository(selectedKey)
-            ? repositoryCommonDirectory is not null
-              && optionKeys.Contains(selectedKey, StringComparer.Ordinal)
-            : optionKeys.Count == 0 || optionKeys.Contains(selectedKey, StringComparer.Ordinal);
 
     private async Task PersistApprovalGrantIfNeededAsync(
         PendingToolInteraction pending,
-        ApprovalDecision decision,
+        ConsentAnswer answer,
         CancellationToken ct)
     {
-        // Persistent scopes write a durable grant so future invocations — and
-        // the re-driven call itself — pass the gate without another prompt.
-        if (decision is ApprovalDecision.ApprovedSession
-                or ApprovalDecision.ApprovedAlways
-                or ApprovalDecision.ApprovedRepository
-                or ApprovalDecision.ApprovedEverywhere
-            && _approvalService is not null)
-        {
-            await PersistApprovalCandidatesAsync(pending, decision, ct);
-        }
+        // A grant answer writes a session or durable grant so future
+        // invocations — and the re-driven call itself — pass the gate without
+        // another prompt.
+        if (answer is ConsentAnswer.Grant grant && _approvalService is not null)
+            await PersistApprovalCandidatesAsync(pending, grant.Scope, ct);
     }
 
     private void EmitWrongRequesterApprovalNotice()
@@ -4415,7 +4387,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 pending,
                 msg,
                 persistApprovalGrant: false);
-            if (authorization.Decision is not { } decision)
+            if (authorization.Answer is not { } answer)
             {
                 TryReplyNack(authorization.NackReason ?? ApprovalNackReasons.WrongRequester);
                 return;
@@ -4438,27 +4410,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!pending.PersistApprovalState)
                 _toolApprovals.RemovePending(msg.CallId.Value);
 
-            await PersistApprovalGrantIfNeededAsync(pending, decision, CancellationToken.None);
+            await PersistApprovalGrantIfNeededAsync(pending, answer, CancellationToken.None);
 
             if (!pending.PersistApprovalState)
             {
                 // Live-only prompts should release the blocked child task, not
                 // journal ToolApprovalResolved. After restart the child actor is
                 // gone, so a durable redrive would be misleading.
-                approvalWait.Complete(decision);
+                approvalWait.Complete(answer);
                 TryReplyAck();
                 return;
             }
 
-            PersistApprovalResolved(pending, msg, decision, () =>
+            PersistApprovalResolved(pending, msg, answer, () =>
             {
-                approvalWait.Complete(decision);
+                approvalWait.Complete(answer);
                 TryReplyAck();
             });
         }
         catch (Exception ex)
         {
-            claimedWait?.Complete(ApprovalDecision.Denied);
+            claimedWait?.Complete(ConsentAnswer.Denied);
             FailCurrentTurn("I couldn't persist that approval decision. Please try again.", ex, ErrorCategory.ToolFailure);
             TryReplyNack(ApprovalNackReasons.PersistFailed);
         }
@@ -4467,7 +4439,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void PersistApprovalResolved(
         PendingToolInteraction pending,
         ToolInteractionResponse msg,
-        ApprovalDecision decision,
+        ConsentAnswer answer,
         Action afterPersist)
     {
         Persist(new ToolApprovalResolved
@@ -4475,7 +4447,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId = _sessionId,
             CallId = msg.CallId.Value,
             AuthorizationAttemptId = pending.AuthorizationAttemptId.Value,
-            Decision = decision.ToString(),
+            Decision = ConsentAnswerCodec.ToJournalText(answer),
             ResolvedAtMs = NowMs()
         }, evt =>
         {
@@ -4520,19 +4492,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        ApprovalDecision decision;
+        ConsentAnswer answer;
         try
         {
             var authorization = await AuthorizeApprovalResponseAsync(
                 pending,
                 msg,
                 persistApprovalGrant: true);
-            if (authorization.Decision is not { } authorizedDecision)
+            if (authorization.Answer is not { } authorizedAnswer)
             {
                 TryReplyNack(authorization.NackReason ?? ApprovalNackReasons.WrongRequester);
                 return;
             }
-            decision = authorizedDecision;
+            answer = authorizedAnswer;
         }
         catch (Exception ex)
         {
@@ -4548,7 +4520,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        PersistApprovalResolved(pending, msg, decision, () =>
+        PersistApprovalResolved(pending, msg, answer, () =>
         {
             var outcome = TryRedriveToolBatchAfterApproval(callId);
             if (outcome == ApprovalRedriveOutcome.Failed)
@@ -4843,110 +4815,33 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private async Task PersistApprovalCandidatesAsync(
         PendingToolInteraction pending,
-        ApprovalDecision decision,
+        GrantScopeKind scope,
         CancellationToken ct)
     {
         if (_approvalService is null)
             return;
 
-        var persistent = decision is ApprovalDecision.ApprovedAlways
-            or ApprovalDecision.ApprovedRepository
-            or ApprovalDecision.ApprovedEverywhere;
-        var globalWildcard = decision == ApprovalDecision.ApprovedEverywhere;
         var request = pending.Request;
         var audience = pending.TurnContext?.Audience ?? request.Audience;
 
-        // Prefer per-clause Candidates so we can use each clause's extracted
-        // path argument as the directory half. Fall back to the verb-only
-        // CandidateVerbs list for older callers (or non-shell tools whose
-        // matcher doesn't populate Candidates).
-        if (request.Candidates.Count == 0)
-        {
-            if (decision == ApprovalDecision.ApprovedRepository)
-                throw new InvalidOperationException("A repository grant requires exact shell candidates.");
-
-            var fallbackCwd = globalWildcard ? null : request.Cwd;
-            await _approvalService.RecordApprovalAsync(
-                (ToolApprovalSessionId)_sessionId.Value,
-                audience,
-                new ToolName(request.ToolName),
-                request.CandidateVerbs,
-                persistent,
-                fallbackCwd,
-                ct);
-            return;
-        }
-
-        // Group candidates by their effective directory so we make one
-        // RecordApprovalAsync call per (audience, tool, directory) bucket
-        // rather than one per verb. Side-effect-only clauses are dropped
-        // before grouping — they're authorized for the current call by
-        // the decision but persistence is suppressed.
-        //
-        // Bucket key is string.Empty for the null-directory (global wildcard)
-        // bucket; mapped back to null when calling the persistence layer
-        // below. The session-owned dead-on-arrival guard is applied inside
-        // BuildApprovalBuckets for persistent scope only — session-scope
-        // entries are matched verb-only at lookup time so threading cwd
-        // through here just feeds the filter that drops standalone verbs
-        // with no path arg (curl, gh, git status).
-        var sessionDirectory = GetSessionDirectory();
-        var grantScope = ApprovalGrantScope.FromDecision(
-            decision,
-            request.Cwd,
-            sessionDirectory,
-            request.RepositoryCommonDirectory);
-
-        if (_approvalService is IStructuredToolApprovalService structuredApprovalService)
-        {
-            var grants = ApprovalBucketBuilder.BuildGrants(
-                request.Candidates,
-                grantScope);
-            if (grants.Count > 0)
-            {
-                await structuredApprovalService.RecordApprovalCandidatesAsync(
-                    (ToolApprovalSessionId)_sessionId.Value,
-                    audience,
-                    new ToolName(request.ToolName),
-                    grants,
-                    persistent,
-                    ct);
-            }
-
-            return;
-        }
-
-        if (decision == ApprovalDecision.ApprovedRepository)
-            throw new InvalidOperationException("Repository grants require structured approval storage.");
-
-        if (request.Candidates.Any(static candidate => candidate.AssignmentDigest is not null))
-        {
-            throw new InvalidOperationException(
-                "Assignment-qualified grants require structured approval storage.");
-        }
-
-        var grouping = ApprovalBucketBuilder.Build(
+        // Each production prompt carries its candidates. Approval-exempt side
+        // effects are dropped, and a folder grant for the session directory is
+        // dead on arrival, so a batch can hold no grant at all.
+        var grants = GrantBuilder.Build(
             request.Candidates,
-            grantScope);
+            scope,
+            request.Cwd,
+            GetSessionDirectory(),
+            request.RepositoryCommonDirectory);
+        if (grants.Count == 0)
+            return;
 
-        foreach (var (key, verbs) in grouping)
-        {
-            if (verbs.Count == 0)
-                continue;
-
-            // Re-derive null vs concrete directory: the dictionary key was
-            // string.Empty for null to satisfy the comparer; map back here.
-            var directory = string.IsNullOrEmpty(key) ? null : key;
-
-            await _approvalService.RecordApprovalAsync(
-                (ToolApprovalSessionId)_sessionId.Value,
-                audience,
-                new ToolName(request.ToolName),
-                verbs,
-                persistent,
-                directory,
-                ct);
-        }
+        await _approvalService.RecordApprovalCandidatesAsync(
+            (ToolApprovalSessionId)_sessionId.Value,
+            audience,
+            new ToolName(request.ToolName),
+            grants,
+            ct);
     }
 
     /// <summary>
@@ -5564,14 +5459,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _buffer.Clear();
     }
 
-    private void FireInitialTurnLlmCall(string? recallQuery)
+    private void FireInitialTurnLlmCall(string? recallQuery, string? slashCommandSkillContent = null)
     {
         _turnRestartNotice = _pendingRestartNotice;
         _pendingRestartNotice = null;
 
         try
         {
-            FireLlmCall(recallQuery);
+            FireLlmCall(recallQuery, slashCommandSkillContent: slashCommandSkillContent);
         }
         finally
         {

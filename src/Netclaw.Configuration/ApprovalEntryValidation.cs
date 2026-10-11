@@ -69,7 +69,7 @@ internal static class ApprovalEntryValidation
                 {
                     throw new JsonException("The assignment digest is invalid.");
                 }
-                if (!string.Equals(entry.Verb, string.Join(" ", entry.VerbTokens), StringComparison.Ordinal))
+                if (!string.Equals(entry.Verb, ShellCommandWordText.FormatPhrase(entry.Shell.Value, entry.VerbTokens), StringComparison.Ordinal))
                 {
                     throw new JsonException("The token phrase and display verb differ.");
                 }
@@ -92,7 +92,9 @@ internal static class ApprovalEntryValidation
 
         foreach (var token in tokens)
         {
-            ValidatePersistedString(token, "verb token", allowWhitespace: false);
+            // A word can contain a space: the program "/opt/My App/bin/tool".
+            // The phrase text quotes such a word (ShellCommandWordText).
+            ValidatePersistedString(token, "verb token", allowWhitespace: true);
             if (token.Length == 0)
             {
                 throw new JsonException("A verb token must not be empty.");

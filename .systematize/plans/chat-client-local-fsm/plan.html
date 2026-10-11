@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light"><link rel="icon" href="data:,">
+<title>Netclaw TUI workflow: explicit owners and typed state</title>
+<style>
+:root{--ink:#24333a;--line:#d4dfdc;--accent:#145d55;--soft:#edf5f1;--paper:#f6f7f3}
+*{box-sizing:border-box}body{margin:0;color:var(--ink);background:var(--paper);font:16px/1.6 system-ui,sans-serif}
+main,header,footer,nav{max-width:1080px;margin:auto;padding:22px 28px}header{padding-top:42px}
+h1{font-size:clamp(2rem,4vw,3rem);line-height:1.12}h2{font-size:1.5rem}h3{font-size:1.1rem}
+h1,h2,h3{overflow-wrap:anywhere}h2,h3{break-after:avoid}a{color:var(--accent);overflow-wrap:anywhere}
+section{margin:0 0 28px;padding:24px;background:white;border:1px solid var(--line);border-radius:10px;scroll-margin-top:15px}
+p{margin:0 0 12px;overflow-wrap:anywhere}li{overflow-wrap:anywhere}li+li{margin-top:6px}.status,.note{background:var(--soft);padding:12px 16px;border-left:4px solid var(--accent)}
+nav{display:flex;flex-wrap:wrap;gap:12px 24px}table{width:100%;border-collapse:collapse;font-size:.93rem}
+td,th{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+th{background:var(--soft)}code,pre{font-family:ui-monospace,monospace;font-size:.88em}code{overflow-wrap:anywhere}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--soft);padding:16px;line-height:1.5}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.flow{display:grid;gap:8px}.flow div{padding:12px;border:1px solid var(--line)}
+.muted{color:#52636c}details{margin-top:16px;border:1px solid var(--line);padding:14px}summary{cursor:pointer;font-weight:650}
+:focus-visible{outline:3px solid #b57525;outline-offset:3px}.skip{position:absolute;left:10px;top:-60px}.skip:focus{top:10px}
+@media(max-width:700px){main,header,footer,nav{padding:18px}.grid{grid-template-columns:1fr}section{padding:18px}
+table,tbody,tr,td{display:block;width:100%}thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+td:before{content:attr(data-label);display:block;font-weight:650;color:var(--accent)}tr+tr{margin-top:14px;border-top:2px solid var(--line)}}
+@media print{body{background:white;font-size:10pt}main,header,footer{max-width:none;padding:0}nav,.skip{display:none}
+section{border:none;border-bottom:1px solid var(--line);padding:10px 0;break-inside:auto}h1{font-size:24pt}tr,pre{break-inside:avoid}
+.grid{display:block}.grid>div{break-inside:avoid;margin-bottom:12px}
+details::details-content{content-visibility:visible}details{break-inside:auto}}
+</style>
+</head>
+<body>
+<a class="skip" href="#workflow-example">Skip to the plan</a>
+<header>
+<p class="muted">Netclaw · Source PRDs: PRD-001, PRD-004, PRD-009 · 2026-10-09</p>
+<h1>Define the workflow before the component code</h1>
+<p class="status">The code revision is implemented. This plan defines the workflow and proof gates. PR #2426 carries the current verification status.</p>
+<p>One owner controls each decision. Record types describe valid state and protocol data. Infrastructure resources retain explicit lifetime owners.</p>
+<p>Recommendation: revise the chat flow in the existing PR. Assess the log and readiness changes as separate follow-ups.</p>
+<p>The user approved this scope. The active goal includes the cohesive revision, required proof, and an update to PR #2426.</p>
+<p>The older implementation plan and its proof remain available below as historical material.</p>
+</header>
+<nav aria-label="Plan sections"><a href="#workflow-example">Concrete change</a><a href="#tui-workflow">Runtime workflow</a><a href="#tui-owners">Owners</a><a href="#typed-state">Records and protocol</a><a href="#workflow-delivery">Delivery</a><a href="#workflow-proof">Verification</a><a href="#prior-plan">Earlier plan and evidence</a></nav>
+<main>
+<section id="workflow-example">
+<h2>The concrete change</h2>
+<p>Revision baseline: <code>891dd1d651b3ca522928905723632ec7557ef6c4</code>, on <code>plan/chat-client-local-fsm</code>. The source manifest identifies the code revision.</p>
+<p><a href="https://github.com/netclaw-dev/netclaw/pull/2426">PR #2426</a> is open against <code>dev</code>. Its current head and required checks identify the delivery status.</p>
+<div class="grid">
+<div><h3>Before: unrelated data can share one request</h3><pre><code>Request(RequestKind Kind, ChannelType ChannelType,
+        string? SessionId, string? Text,
+        string? SelectedKey, CancellationToken Token)
+
+Completed(long Id, Operation Operation,
+          object? Value, Exception? Error)
+
+// Both ChatPage and ChatViewModel handle TurnCompleted.
+ViewModel.StatusMessage.Value = "Ready";</code></pre></div>
+<div><h3>After: each message states its contract</h3><pre><code>internal static class ChatClientProtocol
+{
+    internal sealed record SendText(string Text, CancellationToken Token)
+        : Command(Token);
+    internal sealed record Resume(SessionId SessionId,
+        ChannelType Channel, CancellationToken Token)
+        : SessionRequest(Channel, Token);
+    internal sealed record Respond(ToolCallId CallId,
+        ApprovalOptionKey Selection, CancellationToken Token)
+        : Command(Token);
+    internal sealed record Bound(long Id, SessionBinding Binding)
+        : Completed(Id);
+}
+
+// ViewModel applies the event on the Termina loop.
+Apply(TurnCompleted) → update the page state
+// Page changes terminal nodes only.
+Render(state) → update text, controls, and transcript</code></pre></div>
+</div>
+<p>The excerpt is schematic. It omits base records, reply targets, validation, error variants, and transport conversion.</p>
+<p>The command envelope retains typed replies and cancellation. It must enter the mailbox before the caller can request quit.</p>
+<p>Existing public string APIs and SignalR wire payloads stay compatible. The facade validates input and converts identities at the boundary.</p>
+<p>Malformed combinations were representable in the earlier internal request. This assessment does not claim that callers emitted them.</p>
+<p>A protocol groups messages for one component. A state descriptor holds the data that a valid lifecycle phase requires.</p>
+<p>Use the <a href="../../../docs/spec/GLOSSARY.md">engineering glossary</a> for shared terms. Admission means that the daemon journal stores the input.</p>
+</section>
+
+<section id="tui-workflow">
+<h2>The runtime workflow</h2>
+<div class="flow" aria-label="Proposed command path">
+<div><strong>1. Page:</strong> translate a key or selected option into a view-model action.</div>
+<div><strong>2. View-model:</strong> validate page input, set page state, and call the client.</div>
+<div><strong>3. DaemonClient:</strong> create a typed command and submit it before the first await.</div>
+<div><strong>4. ChatClientActor:</strong> select the session, order commands, and start at most one transport operation.</div>
+<div><strong>5. Transport adapter:</strong> map the local protocol to SignalR and return a typed result.</div>
+<div><strong>6. Daemon:</strong> check authority, admit text to the journal, and then acknowledge admission.</div>
+</div>
+<p>Response path: transport callback → typed client event → event pump → view-model <code>InvokeAsync</code> → page state and terminal display.</p>
+<p>Within one UI loop action, apply page state first, publish transcript output second, and request redraw last.</p>
+<p>Control results return through actor messages. Raw transcript output need not pass through the lifecycle actor.</p>
+<p>The event pump prevents subscriber code from occupying the actor. The Termina loop serializes page-state and terminal-node changes.</p>
+<table aria-label="Representative user journeys"><thead><tr><th>Journey</th><th>Required sequence and result</th></tr></thead><tbody>
+<tr><td data-label="Journey">Enter, then quit</td><td data-label="Required sequence and result">Submit text first. Close rejects later commands. Admission or one total two-second deadline produces the final receipt. Model work does not delay exit.</td></tr>
+<tr><td data-label="Journey">Approval response</td><td data-label="Required sequence and result">The view-model selects an existing option for the current call. The actor sends its typed identity and key once. The daemon owns the authority decision.</td></tr>
+<tr><td data-label="Journey">Connection loss</td><td data-label="Required sequence and result">The adapter posts a loss notice. The actor invalidates attachment and owns retries. It never replays an uncertain text RPC.</td></tr>
+<tr><td data-label="Journey">Caller cancellation</td><td data-label="Required sequence and result">Queued work produces no RPC. Active work retains its resources until the old task ends. Only then can the next operation start.</td></tr>
+<tr><td data-label="Journey">Identity save, then chat</td><td data-label="Required sequence and result">Capture daemon state before the write. Save identity. An already active daemon must report a newer ready generation. A stopped daemon follows the existing start and health path. Quit cancels this handoff.</td></tr>
+</tbody></table>
+<p>A late admission reply must not restore the model activity display after <code>TurnCompleted</code>.</p>
+</section>
+
+<section id="tui-owners">
+<h2>Component owners and lifetimes</h2>
+<table aria-label="Proposed component ownership"><thead><tr><th>Component</th><th>Owns</th><th>Boundary</th></tr></thead><tbody>
+<tr><td data-label="Component">Page</td><td data-label="Owns">Keys, focus, scroll, terminal nodes, transcript segments, and page subscriptions.</td><td data-label="Boundary">Page lifetime; Termina loop. It requests actions and reads page state.</td></tr>
+<tr><td data-label="Component">View-model</td><td data-label="Owns">User actions, approval prompt state, activity display, status, and usage display.</td><td data-label="Boundary">Page lifetime; state changes occur on the Termina loop. It does not decide reconnect policy.</td></tr>
+<tr><td data-label="Component">DaemonClient</td><td data-label="Owns">Public caller API, lazy local runtime, transport subscription, and event pump.</td><td data-label="Boundary">Host-owned lifetime. It stops the actor system and disposes the transport.</td></tr>
+<tr><td data-label="Component">ChatClientActor</td><td data-label="Owns">Session selection, command queue, operation resources, retries, cancellation, and close deadline.</td><td data-label="Boundary">Actor-local state. It does not own terminal nodes or model execution.</td></tr>
+<tr><td data-label="Component">Transport adapter</td><td data-label="Owns">Hub connection and conversion between SignalR and the local protocol.</td><td data-label="Boundary">Client lifetime. It exposes one typed notification contract and no retry policy.</td></tr>
+<tr><td data-label="Component">Daemon</td><td data-label="Owns">Authorization, durable admission, persistence, and model work.</td><td data-label="Boundary">Daemon session and journal lifetimes. UI state cannot grant authority.</td></tr>
+</tbody></table>
+<p>The actor queue holds commands that await execution. The channel carries client events to subscribers outside the actor.</p>
+<p>Keep both mechanisms because their responsibilities differ. Type the channel as <code>Channel&lt;ClientEvent&gt;</code>.</p>
+<p>R3 remains the UI observation mechanism. SignalR event handlers stay inside its adapter. Do not add another event bus.</p>
+<details><summary>Observed boundary violations and source evidence</summary>
+<ul>
+<li><a href="https://github.com/Aaronontheweb/netclaw/blob/891dd1d651b3ca522928905723632ec7557ef6c4/src/Netclaw.Cli/Tui/ChatPage.cs#L464-L505">ChatPage</a> writes usage and status properties. <a href="https://github.com/Aaronontheweb/netclaw/blob/891dd1d651b3ca522928905723632ec7557ef6c4/src/Netclaw.Cli/Tui/ChatViewModel.cs#L403-L433">ChatViewModel</a> also handles turn status.</li>
+<li><a href="https://github.com/Aaronontheweb/netclaw/blob/891dd1d651b3ca522928905723632ec7557ef6c4/src/Netclaw.Cli/Tui/ChatViewModel.cs#L326-L400">ChatViewModel</a> owns file I/O and the usage-log contract. <a href="https://github.com/Aaronontheweb/netclaw/blob/891dd1d651b3ca522928905723632ec7557ef6c4/src/Netclaw.Cli/HeadlessChannel.cs#L270-L277">HeadlessChannel</a> emits the same usage fields.</li>
+<li><a href="https://github.com/Aaronontheweb/netclaw/blob/891dd1d651b3ca522928905723632ec7557ef6c4/src/Netclaw.Cli/Tui/IdentityRedoViewModel.cs#L29-L39">IdentityRedoViewModel</a> requires a wizard view-model for daemon operations.</li>
+<li><a href="https://github.com/Aaronontheweb/netclaw/blob/891dd1d651b3ca522928905723632ec7557ef6c4/src/Netclaw.Cli/Daemon/DaemonClient.cs#L24-L48">DaemonClient</a> receives transport events and callbacks, then uses an object channel.</li>
+</ul>
+<p>The source review covers chat and the identity handoff. It samples config seams; it does not establish whole-TUI correctness.</p>
+<p>The syntax inventory covers 1,749 C# files and 3,955 declarations at the pinned revision, with zero parse errors.</p>
+<p>Five files contain conditional directives. Lexical name counts do not prove dependencies. Existing tests were inspected, not rerun for this proposal.</p>
+</details>
+</section>
+
+<section id="typed-state">
+<h2>Records describe valid state</h2>
+<p>Keep independent dimensions separate. Do not create every possible combination as a different state type.</p>
+<table aria-label="Record dimensions"><thead><tr><th>Dimension</th><th>Record cases, schematic</th><th>Invariant</th></tr></thead><tbody>
+<tr><td data-label="Dimension">Session</td><td data-label="Record cases, schematic">NoSession; Detached(SessionId); Attached(SessionId); RecoveryPending(SessionId).</td><td data-label="Invariant">An attached descriptor requires an identity. Its construction follows the supported admission-version check.</td></tr>
+<tr><td data-label="Dimension">Operation</td><td data-label="Record cases, schematic">Idle; Pending(request, attempt); Running(pending, rpc); Retrying(pending); AwaitingCancelledRpc(rpc).</td><td data-label="Invariant">Only an active or cancelled RPC retains operation resources. Retry state has no live RPC.</td></tr>
+<tr><td data-label="Dimension">Close</td><td data-label="Record cases, schematic">OpenClose; Closing(reply); Closed(receipt).</td><td data-label="Invariant">A close reply and a final receipt cannot independently describe the same close phase.</td></tr>
+</tbody></table>
+<p>These private variants describe the candidate. Explicit transitions constrain the interactions between dimensions. C# does not enforce every interaction statically.</p>
+<p><code>Become</code> captures the state required by its handlers. Do not retain a separate phase discriminator that can disagree with the behavior.</p>
+<p>Use <code>IWithTimers</code> for retry, RPC, and close deadlines. An idle mailbox timeout cannot express these elapsed deadlines.</p>
+<p>Keep dependencies, channels, observables, subscriptions, and resource owners as fields where their lifetimes require it.</p>
+<p>Record descriptors can reference an operation resource owner. A record copy must not duplicate cancellation or disposal authority.</p>
+<p>Reuse <code>SessionId</code>, <code>ToolCallId</code>, <code>ApprovalOptionKey</code>, and <code>ChannelType</code>. Convert to primitives only at the existing wire boundary.</p>
+<p>Existing value objects do not validate every possible value. Check external input before construction; do not claim that a wrapper alone proves validity.</p>
+<p>Construct Attached only after a successful bind and the supported admission-version check. Unknown versions must still dispatch zero text RPCs.</p>
+<p>Use controlled construction and get-only properties for cross-property invariants. Avoid mutable collection aliases in state snapshots.</p>
+<p>Private record variants restrict construction. C# records alone do not guarantee exhaustive case checks or single resource disposal.</p>
+<p>Keep operation identities and runtime connection checks. A valid attachment descriptor cannot guarantee that the network remains connected.</p>
+<details><summary>Retain, replace, and avoid</summary>
+<ul>
+<li>Retain the local actor, explicit command queue, event pump, R3 UI boundary, existing timers, and public facade contracts.</li>
+<li>Replace RequestKind plus nullable payloads, object replies, object completion payloads, and the object event channel.</li>
+<li>Replace lifecycle field combinations with record descriptors. Remove direct page writes to view-model state.</li>
+<li>Add one cohesive protocol container and only the state variants that enforce useful invariants.</li>
+<li>Avoid a generic FSM framework, an actor per page, a new service layer, wrapper types for every string, and one-type-per-file churn.</li>
+</ul>
+<p>Bootcamp recommends protocol design before actor implementation and groups immutable record messages by their owner and role.</p>
+<p>Sources: <a href="https://petabridge.com/bootcamp/lessons/unit-0/effective-actor-messaging/">Effective Actor Messaging</a>, <a href="https://petabridge.com/bootcamp/lessons/unit-1/behavior-switching/">Behavior Switching</a>, and <a href="https://petabridge.com/bootcamp/lessons/unit-1/akkadotnet-sagas/">IWithTimers and sagas</a>.</p>
+</details>
+</section>
+
+<section id="workflow-delivery">
+<h2>Delivery</h2>
+<p>Objective: make the chat workflow understandable through its owners, typed protocol, and explicit state transitions.</p>
+<p>Work order: agree on owners → define protocol and transitions → implement one complete flow → prove guarantees → update the existing PR.</p>
+<h3>Next: one cohesive revision to PR #2426</h3>
+<ol>
+<li>Define the command, reply, completion, and event records beside the existing chat unit. Update the facade, fake transport, and real consumers together.</li>
+<li>Replace the actor lifecycle flags with record descriptors and behavior captures. Preserve request order and resource lifetime rules.</li>
+<li>Normalize adapter notifications and type the client event channel. Keep subscriber dispatch outside the actor.</li>
+<li>Make ChatViewModel the sole owner of chat page-state changes. Keep terminal transcript nodes in ChatPage.</li>
+<li>Adapt existing theory fixtures mechanically. Add only missing behavioral cases. Update the current chat architecture document after verification.</li>
+</ol>
+<p>Start condition: the user resumes the goal and accepts this scope. Recheck the branch and PR head before edits.</p>
+<p>Review map: one Enter-to-admission-to-quit trace, one cancellation trace, and the event-to-Termina path.</p>
+<p>Intermediate state: the current implementation remains authoritative until the complete revision passes. No dual FSM, shadow RPC, or migration flag is required.</p>
+<p>The revision preserves wire and storage formats, public facade signatures, the daemon admission contract, and headless behavior.</p>
+<p>Merge evidence: the procedures below pass on the combined candidate, a separate verifier accepts the evidence, and required hosted checks pass.</p>
+<p>Publication updates the existing PR within the user’s prior authority. Merge and deployment remain outside this scope.</p>
+<p>Reversal: revert the private refactor if a preserved guarantee fails. No new data migration needs reversal.</p>
+<p>Retirement: remove the replaced request discriminator, erased payloads, lifecycle flags, and duplicate page-state writes in the same revision.</p>
+<h3>Later: bounded TUI follow-ups, provisional</h3>
+<p>Usage log: identify its consumers, filename contract, and session lifetime before a shared implementation. Preserve existing output and visible failure behavior.</p>
+<p>Readiness: reuse daemon operations beneath the wizard so identity redo does not require another screen's view-model. Preserve the generation gate.</p>
+<p>These follow-ups can stand alone. They do not require a PR stack or block the typed chat revision.</p>
+<p>Until those follow-ups occur, the current log and readiness owners remain explicit exceptions. The next revision does not claim complete TUI separation.</p>
+<p>Unrelated provider, config, wizard, and authorization redesigns remain outside this scope.</p>
+<h3>Smaller alternative and uncertainty</h3>
+<p>A smaller revision could type only commands and events. It would reduce payload mistakes but retain the actor's inconsistent field combinations.</p>
+<p>I recommend the cohesive revision because state ownership is the user's central concern. More records are justified only when they remove a real invariant burden.</p>
+<p>No line-count or test-code reduction is promised. Measure removed production code, replacement code, test changes, and docs separately.</p>
+<p>Reject the proposal if it adds a second phase model, shares mutable state between owners, or makes the representative flow harder to trace.</p>
+</section>
+
+<section id="workflow-proof">
+<h2>Verification procedures and current evidence</h2>
+<p>Before the base update, the formatted code revision passes 2,136 CLI tests and 100 gateway tests. No selected case fails or skips.</p>
+<p>That 37-file source manifest has SHA256 <code>2d648eb3ad0267d5c57727c06bc9fb41aa88d31f68220620cd586d91e359d0df</code>.</p>
+<table aria-label="Record revision evidence before the base update"><thead><tr><th>Claim</th><th>Observed evidence</th><th>Limit</th></tr></thead><tbody>
+<tr><td data-label="Claim">Typed state and protocol</td><td data-label="Observed evidence">The build has zero warnings and errors. Existing public APIs and wire values retain their contracts.</td><td data-label="Limit">Private records constrain payloads and state data. C# does not enforce every transition statically.</td></tr>
+<tr><td data-label="Claim">Actual RPC lifetime</td><td data-label="Observed evidence">Three deliberately faulty overlap cases fail at peak concurrency two. Both lost-recovery cases fail at two binds instead of three.</td><td data-label="Limit">The temporary peak-control copy removes two earlier invocation guards so the unchanged peak assertions execute. Both source files restore before the final build.</td></tr>
+<tr><td data-label="Claim">Page ownership and order</td><td data-label="Observed evidence">Bound-loop theories check actual delta payload order, state before transcript publication, approval clearance, and one final transcript.</td><td data-label="Limit">Usage-log resources and daemon-readiness extraction remain separate follow-ups.</td></tr>
+<tr><td data-label="Claim">Quality</td><td data-label="Observed evidence">Slopwatch finds zero issues. Headers, strict OpenSpec validation, and the diff check pass.</td><td data-label="Limit">The private refactor changes no product contract. OpenSpec archive follows merge.</td></tr>
+<tr><td data-label="Claim">Complexity</td><td data-label="Observed evidence">Continue has complexity 28; CompleteOperation has complexity 50. Actor line coverage is 95.5%; branch coverage is 87.2%.</td><td data-label="Limit">CompleteOperation, End, and the existing transcript switch remain risk hotspots. This revision does not claim their removal.</td></tr>
+<tr><td data-label="Claim">Native and hosted checks</td><td data-label="Observed evidence">Fresh CLI and daemon binaries enter the full light profile. The existing PR reports completion and hosted CI separately.</td><td data-label="Limit">See <a href="https://github.com/netclaw-dev/netclaw/pull/2426">PR #2426</a> for the current result. A started command is not a pass.</td></tr>
+</tbody></table>
+<p>ReportGenerator supplies the line, branch, and complexity figures. Coverlet emits no CRAP score.</p>
+<p>The retained estimate uses the <a href="https://www.artima.com/weblogs/viewpost.jsp?thread=215899">original formula</a> with sequence coverage instead of basis-path coverage.</p>
+<p>Estimated scores are 50.01 for CompleteOperation, 30.85 for End, and 99.21 for ChatPage.HandleOutput. These values remain explicit review limits.</p>
+<p>The independent verifier accepts the cancellation order, fault controls, and source identity. Final acceptance also requires native and hosted results.</p>
+<p>The PR branch also imports the current dev changes for tail-only tool output. It retains both operations-skill sections at version 2.108.0.</p>
+<p>PR #2426 reports the combined candidate’s source identity and final proof. The earlier receipts retain their original source identity.</p>
+<table aria-label="Before and after acceptance"><thead><tr><th>Claim</th><th>Before</th><th>After and proof</th></tr></thead><tbody>
+<tr><td data-label="Claim">Typed contracts</td><td data-label="Before">Nullable generic requests and object results require branches and casts.</td><td data-label="After and proof">Specific record payloads and typed replies remove those casts. Inspect construction and all real consumers; build both test projects.</td></tr>
+<tr><td data-label="Claim">One page-state owner</td><td data-label="Before">Page and view-model both write status; the page writes usage display.</td><td data-label="After and proof">Only the view-model changes page state. Theory rows cover turn completion, usage, errors, approval, and close. Retain native node tests.</td></tr>
+<tr><td data-label="Claim">Serialized operations</td><td data-label="Before">Existing actor theories assert order, cancellation, and stale-result handling.</td><td data-label="After and proof">Keep the same assertions with typed fixtures. Hold an RPC, cancel it, and prove no replacement starts before its actual task ends.</td></tr>
+<tr><td data-label="Claim">Bounded close and admission</td><td data-label="Before">Existing virtual-timer, typed-key, and real hub tests cover separate boundaries.</td><td data-label="After and proof">Keep one two-second deadline, the delivery classifications, and the persist-before-Ack requirement. Run the native chat tape against fresh binaries.</td></tr>
+</tbody></table>
+<details><summary>Executable recipes, evidence, and cleanup</summary>
+<p><strong>Actor recipe:</strong> reuse ChatSessionSetupTests, FakeDaemonHubTransport, and TestScheduler. Hold the fake RPC with a task gate.</p>
+<p>Submit two inputs, cancel or time out the first, and hold its task. Release that task and require the second to proceed once.</p>
+<p>Add concurrency counters to the fake for every operation. Decrement only when each actual task ends, including cancellation and failure.</p>
+<p>After both operations finish, require peak concurrency to equal one. An early assertion on invocation count cannot prove this guarantee.</p>
+<p>In an isolated test copy, start the replacement before release. Require the same check to reject peak concurrency of two.</p>
+<p>Repeat for late success and late failure. Retain hidden-input order, finite retry budgets, authentication failure, version rejection, and original-session receipt assertions.</p>
+<p>For close, hold the active RPC and queue another input. Advance virtual time to two seconds and require unconfirmed and unsent outcomes respectively.</p>
+<p>Release every gate in finally. Await actor teardown. Require no extra sends or automatic replay.</p>
+<p><strong>Page-state recipe:</strong> extend ChatAdmissionTests and the existing ChatPageTests fixture. Use theory data for meaningful event sequences.</p>
+<p>Emit TurnCompleted before the held admission reply. Require Ready to remain after the reply. Test usage and approval through the view-model event entry point.</p>
+<p>Require the transcript subscriber to observe the updated page state for the same event. This checks state-before-publication order.</p>
+<p>Keep typed Enter followed by repeated Ctrl+Q. Require exactly one text RPC, a shared final receipt, and rejection of later text.</p>
+<p>Add a bound Termina-loop case that queues event application. Observe the state transition after the loop executes it, without sleeps.</p>
+<p>Send an ordered burst through the real view-model subscription: deltas, final text, usage, then TurnCompleted. Require one transcript sequence and final Ready state.</p>
+<p>Repeat with an approval request followed by TurnCompleted. Require the prompt to clear, with no duplicate output or response RPC.</p>
+<p>Unbound view-model tests run InvokeAsync inline. They cannot prove the real loop boundary; the typed-key host and native tapes supply that proof.</p>
+<p><strong>Subscriber recipe:</strong> retain DaemonClientReconnectTests.A_blocking_connection_event_subscriber_does_not_stall_commands.</p>
+<p>Hold the observer, then complete a command and close. Release the observer before disposal. This proves isolation, not bounded disposal under permanent blockage.</p>
+<p><strong>Boundary recipe:</strong> retain real SignalRAdmissionTests. Require journal admission before successful response, explicit rejection, and model continuation after disconnect.</p>
+<p><strong>Commands:</strong> execute sequentially in the isolated worktree. Set DOTNET_PROCESSOR_COUNT=2 and MSBUILDDISABLENODEREUSE=1.</p>
+<pre><code>dotnet test src/Netclaw.Cli.Tests/Netclaw.Cli.Tests.csproj --filter 'FullyQualifiedName~ChatSessionSetupTests|FullyQualifiedName~DaemonClientReconnectTests|FullyQualifiedName~ChatAdmissionTests|FullyQualifiedName~ChatPageTests|FullyQualifiedName~IdentityRedoReadinessTests' --logger 'trx;LogFileName=tui-workflow-focused.trx'
+dotnet test src/Netclaw.Daemon.Tests/Netclaw.Daemon.Tests.csproj --filter 'FullyQualifiedName~SignalRAdmissionTests' --logger 'trx;LogFileName=tui-workflow-admission.trx'
+dotnet test src/Netclaw.Cli.Tests/Netclaw.Cli.Tests.csproj --logger 'trx;LogFileName=tui-workflow-cli.trx'
+dotnet slopwatch analyze
+pwsh ./scripts/Add-FileHeaders.ps1 -Verify
+git diff --check</code></pre>
+<p>Require nonzero discovery, zero failed or skipped selected cases, and no leaked temp files. Retain the candidate revision, exact commands, and TRX counts.</p>
+<p>Run focused coverage and the repo CRAP procedure for changed complex code. Coverage does not prove concurrency or authority.</p>
+<p><strong>Native recipe:</strong> use scripts/build/publish-binaries.sh as the smoke harness does. Supply fresh candidate CLI and daemon paths through NETCLAW_SMOKE_CLI and NETCLAW_SMOKE_DAEMON.</p>
+<p>Use private smoke homes, port 56199, and a distinct binary path. Never use the installed daemon path because harness cleanup matches that path.</p>
+<pre><code>./scripts/smoke/run-smoke.sh light</code></pre>
+<p>During the edit loop, the existing filters permit light init-wizard init-redo-chat chat-admission-quit. The full light profile remains the final native gate.</p>
+<p>Require all selected tapes and scenarios to pass. Retain binary hashes, logs, and durable journal assertions. Remove only run-owned processes and temp homes.</p>
+<p>The local disk was near capacity during assessment. Check space before builds and native publish. Remove only positively identified run-owned artifacts.</p>
+<p>No model-steering contract changes are proposed. A live-model eval is not a gate for this scope. Reassess if prompts, tools, skills, or provider behavior change.</p>
+</details>
+<h3>Handoff and evidence limits</h3>
+<p>Use akka-best-practices and akka-testing-patterns for actor work; use architectural-principles for state and protocol design.</p>
+<p>Read the repo termina-tui-patterns guidance before UI async changes. Use systematize:verify for proof and a separate evidence reviewer.</p>
+<p>Report an unavailable skill and its effect. Do not silently install new tools or substitute weaker evidence.</p>
+<p>Update docs/architecture/chat-client.md with verified owners. Use OpenSpec skills only if a behavior or specification change becomes necessary.</p>
+<p>Retain the existing PRD-001, PRD-004, and PRD-009 traceability. This private refactor does not propose a new product capability.</p>
+<p>At closure, retain the final plan in a merged revision before archive removal. Keep verified architecture facts in the canonical architecture document.</p>
+<p>Plan review must challenge state-resource aliases, close responsiveness, output order, headless compatibility, and any undocumented API change.</p>
+<p>A separate plan reviewer identified gaps in the stopped-daemon path, concurrency proof, and output-order proof. This revision adds the missing procedures.</p>
+<p>Readiness and log ownership remain follow-up limits. Current results apply only to the named candidate and checks.</p><p>No merge or deployment is authorized.</p>
+</section>
+
+<details id="prior-plan"><summary>Earlier implementation plan and evidence — historical scope</summary>
+<section id="example">
+<h2>The concrete change</h2>
+<p>A user presses Enter and then Ctrl+Q. The client must resolve daemon admission before it closes the transport.</p>
+<p>Admission means that the daemon journal stores the text input. It does not mean that the model finished a turn.</p>
+<div class="grid">
+<div><h3>Pinned baseline client, abbreviated</h3><pre><code>SubmitAsync(text):
+  if not ready or disconnected:
+    pending.Enqueue(text)
+    start ConnectUntilReadyAsync()
+  else:
+    await SendAsync(text)
+
+Connected callback:
+  start EnsureSessionAndFlushAsync()
+
+ConnectUntilReadyAsync():
+  connect; acquire setup gate; bind; flush
+
+RequestAppShutdown():
+  Shutdown()</code></pre></div>
+<div><h3>Replacement client, schematic</h3><pre><code>Receive(Submit(text)):
+  pending.Enqueue(text)
+  advance the current behavior
+
+Unattached + pending input:
+  Become(Operating)
+  bindTask.PipeTo(Self)
+
+Attached + pending input:
+  Become(Operating)
+  sendTask.PipeTo(Self)
+
+Receive(Close):
+  reject later submissions
+  continue admission until done or deadline
+  reply ChatCloseReceipt; Become(Closed)
+
+Host disposal:
+  terminate the local ActorSystem</code></pre></div>
+</div>
+<p>The proposed example omits transport guards, identity mapping, cancellation, and event publication. Those steps remain required.</p>
+<p>One actor will replace both the client command loop and the view model lifecycle paths.</p>
+<p>The daemon fix will make the successful text RPC response depend on the existing journal acknowledgment.</p>
+<div class="flow" aria-label="Proposed text admission sequence">
+<div>CLI actor → existing SignalR SendMessage method</div>
+<div>Registry → validate attachment, authenticated identity, and ingress → gateway actor</div>
+<div>Gateway → existing ChannelInput.AckTarget → real channel pipeline → LlmSessionActor</div>
+<div>Session → persist InputAdmitted → existing CommandAck → successful hub response</div>
+<div>CLI actor → mark admission confirmed → permit normal close</div>
+</div>
+<p>The shared acknowledgment type retains its other meanings. This contract applies to the text-only SignalR SendMessage route.</p>
+</section>
+
+<section id="baseline">
+<h2>Baseline and evidence limits</h2>
+<p>Implementation base: <code>netclaw-dev/netclaw dev@2e6bc4f014dc96b606566709df1bd11f90ecf34a</code>.</p>
+<p>The primary checkout remains unchanged. Plan branch: <code>plan/chat-client-local-fsm</code>.</p>
+<p><a href="https://github.com/netclaw-dev/netclaw/pull/2413">PR #2413</a> remains a draft at <code>51b71e1b90e9c769f88562cb5bd32dc769833e84</code>.</p>
+<p>The plan does not adopt that branch. It carries useful failure cases into the new tests.</p>
+<p>The current base and the earlier base <code>cf5ad41e</code> have the same affected client and daemon lifecycle code.</p>
+<ul>
+<li>The hub returns after a <code>Tell</code>, before durable admission.</li>
+<li>The session already persists <code>InputAdmitted</code> before its normal text acknowledgment.</li>
+<li><code>LeaveSession</code> removes a subscriber; it does not cancel a model call.</li>
+<li>Disconnect closes the adapter pipeline, including its input stream.</li>
+<li>The previous agent reported first-turn loss after <code>Ready→Processing</code>. This turn did not reproduce that symptom.</li>
+</ul>
+<p>The acceptance gap explains a risk before admission. It does not prove the cause of the reported loss after admission.</p>
+<p>The next slice must test both boundaries. A remaining failure after admission requires a bounded daemon correction before client cutover.</p>
+<p>References: <a href="https://memory.testlab.petabridge.net/view/010af658-be94-40a5-93f7-fcdfd1811a6c">prior work record</a>, <a href="https://memory.testlab.petabridge.net/view/71d1a662-fdca-409c-b77b-caa58c3a227c">earlier FSM proposal</a>, and <a href="../../../docs/spec/GLOSSARY.md">engineering glossary</a>.</p>
+<details><summary>Pinned source anchors</summary>
+<ul>
+<li><a href="https://github.com/netclaw-dev/netclaw/blob/2e6bc4f014dc96b606566709df1bd11f90ecf34a/src/Netclaw.Cli/Tui/ChatViewModel.cs">ChatViewModel</a>: submit, setup, retry, interaction, and disposal paths.</li>
+<li><a href="https://github.com/netclaw-dev/netclaw/blob/2e6bc4f014dc96b606566709df1bd11f90ecf34a/src/Netclaw.Cli/Daemon/DaemonClient.cs">DaemonClient</a>: command owner, attachment, retries, event pump, and public API.</li>
+<li><a href="https://github.com/netclaw-dev/netclaw/blob/2e6bc4f014dc96b606566709df1bd11f90ecf34a/src/Netclaw.Daemon/Gateway/SessionRegistry.cs#L195-L244">SessionRegistry text ingress</a>: attachment checks, identity map, and dispatch.</li>
+<li><a href="https://github.com/netclaw-dev/netclaw/blob/2e6bc4f014dc96b606566709df1bd11f90ecf34a/src/Netclaw.Daemon/Gateway/SignalRSessionActor.cs#L118-L146">SignalR input adapter</a>: null queue, timeout, and closed queue paths currently drop input.</li>
+<li><a href="https://github.com/netclaw-dev/netclaw/blob/2e6bc4f014dc96b606566709df1bd11f90ecf34a/src/Netclaw.Actors/Channels/ChannelPipeline.cs#L233-L272">ChannelPipeline</a>: canonical source mapping and AckTarget propagation.</li>
+<li><a href="https://github.com/netclaw-dev/netclaw/blob/2e6bc4f014dc96b606566709df1bd11f90ecf34a/src/Netclaw.Actors/Sessions/LlmSessionActor.cs#L2403-L2464">Input admission</a>: persist before continuation; buffered states also use this path.</li>
+<li><a href="https://github.com/netclaw-dev/netclaw/blob/2e6bc4f014dc96b606566709df1bd11f90ecf34a/src/Netclaw.Actors/Sessions/LlmSessionActor.cs#L2807-L2813">LeaveSession</a>: subscriber removal.</li>
+</ul>
+</details>
+</section>
+
+<section id="design">
+<h2>Owners, state, and lifetime</h2>
+<table><thead><tr><th>Component</th><th>Current responsibility</th><th>Proposed responsibility and lifetime</th></tr></thead><tbody>
+<tr><td data-label="Component">DaemonClient</td><td data-label="Baseline responsibility">Command mailbox, transport, identity, attachment, retries, and event dispatch.</td><td data-label="Replacement responsibility">Retain the public API and DTO map. Forward commands to the actor. Retain isolated event dispatch.</td></tr>
+<tr><td data-label="Component">Client actor</td><td data-label="Baseline responsibility">Absent.</td><td data-label="Replacement responsibility">Own transport operations, session intent, attachment, input queue, retries, and close. Data is actor-local.</td></tr>
+<tr><td data-label="Component">ChatViewModel</td><td data-label="Baseline responsibility">UI plus separate connection, queue, bind, and retry paths.</td><td data-label="Replacement responsibility">Forward input and interaction commands. Apply immutable UI results on the Termina loop.</td></tr>
+<tr><td data-label="Component">Client ActorSystem</td><td data-label="Baseline responsibility">Absent.</td><td data-label="Replacement responsibility">One local system per daemon-client host. Create it lazily. Terminate it through host shutdown.</td></tr>
+<tr><td data-label="Component">Daemon session</td><td data-label="Baseline responsibility">Model work, authority, input journal, and session state.</td><td data-label="Replacement responsibility">Retain those responsibilities. Return text admission results through the existing acknowledgment seam.</td></tr>
+</tbody></table>
+<p>The client remains a thin presentation client. It does not acquire model, tool, or persistence responsibilities.</p>
+<p>Offline bootstrap must not create the actor system. The init-to-chat transition may resolve the lazy client runtime.</p>
+<p>PRD-004 now distinguishes offline bootstrap from its explicit daemon-chat transition.</p>
+<h3>Behaviors and controls</h3>
+<table><thead><tr><th>Behavior</th><th>Required action</th></tr></thead><tbody>
+<tr><td data-label="Behavior"><code>Idle</code></td><td data-label="Required action">Accept queued requests. A fresh connected chat remains unbound until input arrives.</td></tr>
+<tr><td data-label="Behavior"><code>Operating</code></td><td data-label="Required action">Run one connect, bind, text, or interaction operation. Pipe its result to the actor.</td></tr>
+<tr><td data-label="Behavior"><code>Retrying</code></td><td data-label="Required action">Use one keyed retry timer. Retain ordered requests and the selected session.</td></tr>
+<tr><td data-label="Behavior"><code>Closed</code></td><td data-label="Required action">Reject later requests and ignore late results. Host disposal stops the runtime.</td></tr>
+</tbody></table>
+<p>Close is a control protocol across these four behaviors. One timer bounds all prior admission work.</p>
+<p>Use <code>ReceiveActor</code> and <code>Become(...)</code>. Use <code>PipeTo(Self)</code> for network completion messages.</p>
+<p>Each behavior must register its close, transport-drop, cancellation, and stale-result handlers. A behavior change replaces the previous handlers.</p>
+<p>The actor must remain able to process a close or drop while a network task waits.</p>
+<p>Operation identities reject stale completions. They do not cancel transport side effects.</p>
+<p>Do not start a replacement operation on the same transport until the earlier task completes or transport teardown confirms its end.</p>
+<p>Cancellation alone is not that confirmation. A fake that ignores cancellation must exercise this rule.</p>
+<p>Retain the existing retry budgets for explicit connect and background recovery. Consolidate their schedules under the actor.</p>
+<p>Use IWithTimers for retry, RPC timeout, and close. Use the injected TimeProvider only when a UTC timestamp is required.</p>
+<p>Use stable timer keys for retry, operation timeout, and close. Akka cancels replaced timers and filters their stale messages.</p>
+<p>Interactive attachment failures use the established 1, 2, 5, and 10 second escalation. Successful readiness resets that counter.</p>
+<p>Authentication failure remains a terminal error for the affected request. Do not silently retry it as a transient network failure.</p>
+<h3>Session intent and interaction commands</h3>
+<p>Reuse the navigation resume identity and hidden initial message. Transfer their ownership once when the page opens.</p>
+<p>The actor must distinguish a fresh interactive chat, explicit Create, Resume, and Keep.</p>
+<p>A fresh interactive chat must clear a prior session selection. Route reuse must not send the first input to the old session.</p>
+<p>Explicit Create, Resume, Keep, and headless behavior retain their existing public contracts.</p>
+<p>Interaction responses use the same actor command path. Their existing call IDs, option keys, and authority checks remain intact.</p>
+<p>The hidden initial input retains its current order after already queued user inputs. The actor attempts it at most once.</p>
+<h3>UI and close</h3>
+<p>Retain an event pump that cannot block actor commands when a subscriber blocks. It has no connection or retry authority.</p>
+<p>The event pump forwards immutable status and output. The view model uses its existing <code>InvokeAsync</code> boundary for UI changes.</p>
+<p>Model output and usage retain their current observers across reconnect. Admission results do not overwrite model-turn state.</p>
+<p>If TurnCompleted arrives before the hub response, the later response must not restore the Generating status.</p>
+<p>Normal quit sends Close before Termina shutdown or host cancellation. A repeated quit does not start a second close.</p>
+<p>Close returns a terminal result to the caller. The caller renders its receipt before UI disposal.</p>
+<p>Confirmed inputs need no model-completion wait. At the deadline, queued unstarted inputs are unsent; an unresolved input RPC has unconfirmed delivery.</p>
+<p>The two-second deadline covers all queued admission work. It is not two seconds for each input.</p>
+<p>A final receipt must survive alternate-screen teardown. Write unresolved message status to the terminal after the TUI closes.
+</p><p>ChatViewModel stores the immutable result in ChatNavigationState. Program reads it after RunAsync disposes the host.
+</p><p>This seam preserves the init factory's lazy endpoint, exposure, and device-token read. Each uncertain input retains its original session.</p>
+<p>After the deadline, do not start another bind or send. Cancel owned tasks and complete transport teardown.</p>
+<p>Forced process termination cannot guarantee admission. This plan does not add a durable client outbox.</p>
+<h3>Failure results</h3>
+<p>Connection or attachment failure before an input RPC leaves the input safe to retry.</p>
+<p>A confirmed daemon rejection ends that input attempt and produces a transcript notice.</p>
+<p>An interrupted RPC produces delivery unconfirmed. The client must not automatically resend that input.</p>
+<p>Caller cancellation before dispatch removes the queued request with zero RPCs. Cancellation after dispatch can leave delivery unconfirmed.</p>
+<p>This intentionally removes the current ready-path automatic resend after an uncertain send failure.</p>
+<p>Unexpected actor failure must end the client visibly. Supervision must not silently restart the actor and discard its local queue.</p>
+<p>A zero-turn session can contain durable input or an approval wait. Do not delete it because its turn count is zero.</p>
+</section>
+
+<section id="bootcamp">
+<h2>Bootcamp sources and design checks</h2>
+<p>The Petabridge lessons support the selected local FSM. These notes distinguish lesson guidance from this plan's application decisions.</p>
+<h3>Behavior and asynchronous work</h3>
+<p><a href="https://petabridge.com/bootcamp/lessons/unit-1/behavior-switching/">Behavior Switching and Receive Timeouts</a> explains that Become replaces the current message handlers.</p>
+<p>It also describes ReceiveTimeout as a period without relevant activity. Activity resets that period.</p>
+<p>For this client, every behavior must retain the control handlers it needs. The close deadline must stay fixed despite later events.</p>
+<p><a href="https://petabridge.com/bootcamp/lessons/unit-1/async-await-actors/">Actors and Async / Await</a> distinguishes ReceiveAsync from PipeTo.</p>
+<p>ReceiveAsync suspends other user messages until its task completes. PipeTo sends the task result back as a message.</p>
+<p>For this client, connect, bind, and send use PipeTo so close and transport-drop commands remain available.</p>
+<p>Capture task inputs before dispatch. Task continuations must not mutate actor state or read the actor's current Sender or Context.</p>
+<h3>Deferred input, timer lifetime, and message data</h3>
+<p><a href="https://petabridge.com/bootcamp/lessons/unit-1/akkadotnet-sagas/">Sagas, Message Stashing, and IWithTimers</a> explains how a stash preserves messages and their senders until a behavior can accept them.</p>
+<p>The lesson also describes actor timers that cancel on actor stop or restart.</p>
+<p>This client retains one explicit input queue because close must inspect each input's delivery outcome. A second stash must not duplicate that queue.</p>
+<p>Close, transport-drop, and cancellation commands must execute promptly. They must not wait in a catch-all stash.</p>
+<p>Use IWithTimers and TestScheduler for elapsed deadlines. Retain TimeProvider for UTC timestamps; it does not drive actor timers.</p>
+<p><a href="https://petabridge.com/bootcamp/lessons/unit-0/effective-actor-messaging/">Effective Actor Messaging</a> separates commands, events, queries, and acknowledgments. It requires immutable message data.</p>
+<p>For this client, separate local acceptance, durable daemon admission, and model completion. Each result must name the boundary it confirms.</p>
+<p>A record with a mutable list does not provide deep immutability. Copy or use immutable collections when a payload crosses the actor boundary.</p>
+<h3>Proof through actor messages and real host composition</h3>
+<p><a href="https://petabridge.com/bootcamp/lessons/unit-1/unit-testing-akkadotnet/">Testing Actors with Akka.TestKit</a> demonstrates isolated systems and assertions on actor replies.</p>
+<p><a href="https://petabridge.com/bootcamp/lessons/unit-1/akka-hosting-testkit/">Integration Testing with Akka.Hosting.TestKit</a> adds a real host, dependency injection, and the actor registry.</p>
+<p>For this client, assert observable outcomes through probes and controlled transport results. Retain the separate real journal and native terminal proof.</p>
+<p>The lessons are references. They do not establish that the proposed client or admission correction works.</p>
+</section>
+
+<section id="tests">
+<h2>How the actor simplifies the tests</h2>
+<p>Yes: the actor should remove most fixture work that forces races between two lifecycle owners.</p>
+<p>It does not make the event sequences or integration requirements disappear.</p>
+<div class="grid"><div><h3>Current fixture shape</h3><pre><code>Hold setup with a TaskCompletionSource.
+Start flush from several paths.
+Race SubmitAsync against setup.
+Repeat many times to find a narrow window.
+Inspect queued text, sends, and transient status.</code></pre></div>
+<div><h3>Proposed fixture shape</h3><pre><code>Activate a new chat.
+Hold the transport bind task.
+Submit "a", then "b".
+Deliver a duplicate connection event.
+Complete bind.
+Confirm the RPC attempts are ["a", "b"].
+Complete admission and assert Ready.</code></pre></div></div>
+<p>Use TestProbes and the existing fake transport to control completion order. Use TestScheduler.Advance to advance retry and close deadlines.</p>
+<p>Use xUnit theories for shared sequence cases. Keep few meaningful sequence tests. Do not generate tests for every internal state name or trivial field assignment.</p>
+<table><thead><tr><th>Evidence</th><th>Action</th></tr></thead><tbody>
+<tr><td data-label="Evidence">Duplicate setup, input order, drop during bind, retry escalation, late completion, and close.</td><td data-label="Action">Replace race orchestration with actor commands and controlled task results.</td></tr>
+<tr><td data-label="Evidence">DaemonClient DTO mapping and token-provider behavior.</td><td data-label="Action">Retain existing tests. An actor does not simplify these contracts.</td></tr>
+<tr><td data-label="Evidence">Real SignalR create, resume, reconnect, and interaction response.</td><td data-label="Action">Retain existing integration tests with mechanical fixture changes.</td></tr>
+<tr><td data-label="Evidence">Real journal admission and disconnect before model completion.</td><td data-label="Action">Add the missing production-boundary fixture in the first slice.</td></tr>
+<tr><td data-label="Evidence">Typed Enter and Ctrl+Q; init-to-chat; normal quit receipt.</td><td data-label="Action">Retain native tapes and add a narrow tape with durable assertions.</td></tr>
+</tbody></table>
+<p>Measured baseline: DaemonClient has 674 lines; ChatViewModel has 677 lines; ChatSessionSetupTests has 211 lines and four tests.</p>
+<p>PR #2413 expands setup tests with additional failure cases. Those cases remain useful even when their fixture changes.</p>
+<p>No net code reduction or speed improvement is measured. The replacement actor, facade, and missing integration proof add code.</p>
+<p>At review, report gross removal, replacement cost, and net change separately for product code, tests, generated files, and documentation.</p>
+<p>The structural acceptance test is concrete: a retry or close correction must change one lifecycle owner and one controlled sequence fixture.</p>
+<p>If the new design retains both old loops or introduces several control actors, it fails that objective.</p>
+</section>
+
+<section id="delivery">
+<h2>Delivery</h2>
+<p>One objective: preserve daemon-admitted text across normal quit and give one local actor control of client lifecycle.</p>
+<p>Local submissions can remain unsent at the deadline. Their terminal receipt must state that outcome.</p>
+<p>Use two coherent product PRs. Keep the second slice provisional until the first slice establishes the daemon contract.</p>
+<h3>PR 1 — Confirm SignalR text admission before the hub returns success</h3>
+<p>The reviewer will see the real input path return its existing session acknowledgment instead of returning after a Tell.</p>
+<ul>
+<li id="t1">T1: Add a daemon integration fixture with the real registry, gateway, channel pipeline, session actor, and journal.</li>
+<li id="t2">T2: Hold initialization and journal writes at explicit barriers. Establish the early-response regression before the correction.</li>
+<li id="t3">T3: Propagate AckTarget through text enqueue. Await its response and translate Nack into a hub failure.</li>
+<li id="t4">T4: Return Nack for a null queue, queue timeout, closed queue, initialization failure, and journal failure.</li>
+<li id="t4a">T4a: Add TextAdmissionVersion to the existing session response DTO. Emit supported version 1 on every successful attachment.</li>
+<li id="t5">T5: Prove admitted input continues after disconnect before the model starts and during a held model response.</li>
+<li id="t6">T6: Update the session delta, shared glossary, daemon architecture contract, operator guidance, and operations skill for admission semantics.</li>
+</ul>
+<p>Start condition: implementation authorization and a clean checkout at the pinned base or a reviewed successor.</p>
+<p>Review map: registry authority checks → adapter acknowledgment → canonical source map → session journal → hub response.</p>
+<p>The fixture must preserve the real authenticated identity path. It must not replace the session with a probe that already acknowledges.</p>
+<p>Intermediate state: the existing eager TUI remains. Old clients and the new daemon use the same hub signatures.</p>
+<p>An old daemon still returns early. A new CLI cannot prove durable admission against that daemon.</p>
+<p>Merge gates: recipes V1, V2, V3, preserved gateway checks, independent evidence review, and applicable required CI.</p>
+<p>First-turn failure after confirmed admission blocks client cutover. Investigate its exact owner and add the smallest justified daemon correction.</p>
+<p>If that correction changes the plan boundary, revise this plan before additional product work.</p>
+<p>Rollback restores the old early-response limitation. It does not delete durable inputs or undo completed model/tool effects.</p>
+<p>Retirement: remove the log-and-drop text enqueue outcomes when the acknowledgment path replaces them.</p>
+<h3>PR 2 — Replace both client lifecycle mechanisms with a local actor</h3>
+<p>The reviewer will see DaemonClient delegate to one actor and ChatViewModel forward input instead of coordinating connection loops.</p>
+<ul>
+<li id="t7">T7: Add the lazy local runtime and behavior actor. Reuse IDaemonHubTransport, public API, DTO map, and event isolation.</li>
+<li id="t8">T8: Transfer session intent, ordered input, hidden trigger, interaction requests, retries, and close into that actor.</li>
+<li id="t9">T9: Route UI results through InvokeAsync. Return and display the close receipt before host shutdown.</li>
+<li id="t10">T10: Cut over every daemon client consumer. Remove the old command owner and view model lifecycle paths in the same PR.</li>
+<li id="t11">T11: Replace race fixtures while preserving their behavioral assertions. Add typed-key and native quit coverage.</li>
+<li id="t12">T12: Update PRD-004, the CLI delta, SPEC-011, operator help, and the operations skill. Complete the release compatibility gate.</li>
+</ul>
+<p>Start condition: PR 1 contract and passing admission/disconnect proof. Design and fixture work may start on that stable contract.</p>
+<p>Merge condition: PR 1 merged; all affected checks run on the combined candidate.</p>
+<p>Review map: one actor owns control; the event pump owns delivery isolation; Termina owns UI mutation; the host owns teardown.</p>
+<p>Intermediate state: cutover and deletion stay together. No dormant production actor or permanent feature flag is required.</p>
+<p>Merge gates: V4–V8, complete CLI tests, relevant daemon/actor tests, native light coverage, the user-selected Spark2 E2E, and required CI.</p>
+<p>PR 1 adds a TextAdmissionVersion property to SessionEnsureResultDto. It preserves the existing positional constructor and hub signatures.</p>
+<p>PR 2 accepts version 1 before its first send and after every reattachment. A missing field means unsupported version 0.</p>
+<p>Reject unknown versions explicitly. Clear the attachment's support state when transport drops.</p>
+<p>The existing response carries session attachment data but lacks admission semantics. This new property supplies that missing contract.</p>
+<p>Old clients ignore the added property. No separate handshake RPC or health request is required.</p>
+<p>An unsupported daemon must fail clearly. It must not silently advertise the new quit guarantee.</p>
+<p>Rollback can restore the old client against the new daemon. It cannot reverse already accepted inputs or external tool effects.</p>
+<p>Retirement: delete the command mailbox, owner task, setup semaphore, ready flag, connect-loop flag, and competing lifecycle methods.</p>
+<p>Retain event dispatch and presentation-only code. Do not count their removal as required simplification.</p>
+<p>PR #2413 remains untouched. A later authorized replacement PR can link its useful cases and close it when authorized.</p>
+<h3>Operational and publication boundaries</h3>
+<p>No remote action is authorized. Later implementation needs explicit commit, push, PR, merge, and deployment authority as applicable.</p>
+<p>When PR publication is authorized, open an early draft with a meaningful first slice and disclose pending checks.</p>
+<p>Do not publish an empty PR or call a local pass hosted CI.</p>
+</section>
+
+<section id="verification">
+<h2>Verification procedures and status</h2>
+<p>The recipes below define acceptance. The evidence section separates executed results from pending gates.</p>
+<p>Existing SessionRegistryTests exercise registry coordination through a stub gateway. They do not prove journal admission.</p>
+<p>Existing ChannelPipelineAckTargetTests mirror a sink expression. They do not exercise the real pipeline or journal.</p>
+<p>Existing sessions-and-chat smoke checks catalog presence and permits prompt errors. It does not prove Enter followed by quit.</p>
+<h3 id="v1">V1 — Hub response waits for the real journal</h3>
+<p>Owner: PR 1 implementer. Enabling work: T1 and a test-only journal barrier that can hold or reject InputAdmitted writes.</p>
+<ol>
+<li>Create a disposable daemon fixture with real SignalR, authenticated loopback identity, the production actor wiring, and a temporary journal.</li>
+<li>Ensure a new session. Hold its initialization or InputAdmitted write; call the real hub SendMessage with a unique text marker.</li>
+<li>Observe no hub completion through a bounded probe interval while the journal barrier remains held. Then release the barrier.</li>
+<li>Require one journal admission and one successful hub response. Hold the model response separately; the hub must return before release.</li>
+<li>Repeat while the session buffers text in Processing and Compacting. Query recovery state to prove the admitted input remains durable.</li>
+</ol>
+<p>Before: the early-return baseline must fail the held-admission assertion. After: the candidate must pass it.</p>
+<p>An immediate task-state check at barrier arrival is insufficient. SignalR can deliver an early response after that check.</p>
+<p>Use ExpectNoMsgAsync or an equivalent bounded acknowledgment probe. The early-Ack control must fail that same observation.</p>
+<p>Negative controls: early Ack and wait-until-model-completion mutations must each fail a behavioral assertion.</p>
+<p>Retain barrier events, RPC outcome, admitted IDs, model request counts, revision, and TRX. No raw credentials enter the receipt.</p>
+<p>Cleanup: release all barriers in finally; stop the host and actor system; delete every fixture-owned path.</p>
+<p>This recipe proves text admission, not exactly-once replay after response loss.</p>
+<h3 id="v2">V2 — Failure is explicit and authority remains intact</h3>
+<ol>
+<li>Use V1's real fixture. Submit from an unattached connection and from a connection attached to another session.</li>
+<li>Require a hub failure, no InputAdmitted record, and no model call. Submit valid attached text as the positive control.</li>
+<li>Close ingress and repeat. Then inject initialization failure, a missing writer, queue timeout, and journal rejection or failure.</li>
+<li>Require failure without successful admission acknowledgment. Inspect side effects and retain the exact failure class.</li>
+</ol>
+<p>Use a controllable input boundary for queue faults; keep the registry and source mapping real.</p>
+<p>Review writer ownership and completion for the defensive closed-writer catch. Do not add a production seam solely to force an unreachable state.</p>
+<p>The independent audit found no supported live-adapter path to writer closure in Akka.Streams 1.5.73.</p>
+<p>DrainAsync completes and clears the private writer before its first await. The actor suspends input handlers during drain and reinitialization.</p>
+<p>PostStop completes the writer after actor termination starts. The installed ChannelSource owns only the reader and cannot complete the writer.</p>
+<p>This source invariant preserves the no-false-admission guarantee. The closed-writer catch is source-reviewed, not runtime-exercised.</p>
+<p>Forced termination remains outside this live-adapter invariant. Reassess this proof if writer ownership or the Akka version changes.</p>
+<p>Review focused mutation scope only if the implementation moves an authority check. Keep its cost within TOOLING.md limits.</p>
+<h3 id="v3">V3 — Confirmed input survives client disconnect</h3>
+<ol>
+<li>Use V1's fixture and a model provider with an explicit request barrier.</li>
+<li>Confirm journal admission. Disconnect before the model request; then release its prerequisite barrier.</li>
+<li>Require one model request and a durable terminal turn or explicit terminal failure after client disconnect.</li>
+<li>Repeat with the model response held after request arrival. Disconnect, release the response, and inspect the journal.</li>
+<li>Compare eager and first-input session creation with the same barriers and markers.</li>
+</ol>
+<p>Read the journal or recovered session state. A catalog zero-turn row alone does not prove input loss.</p>
+<p>A failure after admission remains a product defect. Do not substitute a longer quit delay for its correction.</p>
+<h3 id="v4">V4 — Actor message sequences replace race fixtures</h3>
+<p>Owner: PR 2 implementer. Reuse FakeDaemonHubTransport and Akka.Hosting.TestKit; add its test package through the existing package procedure if required.</p>
+<ol>
+<li>Hold bind; submit a then b; deliver duplicate Connected; release bind. Require one bind and attempts a then b.</li>
+<li>Submit during an input RPC; drop transport; complete the old task late. Require no parallel transport operation or reordered input.</li>
+<li>Use a task that ignores cancellation. Require no replacement RPC on the same transport before task end or confirmed transport teardown.</li>
+<li>Fail attachment repeatedly. Advance TestScheduler through 1, 2, 5, and 10 seconds. Require one attempt per due event.</li>
+<li>Deliver a late completion and a stale retry event. Require no new send, bind, or readiness change.</li>
+<li>Fail one input permanently. Require one actual RPC attempt, a visible transcript notice, and progress for later inputs.</li>
+<li>Cancel a queued caller before dispatch. Require zero RPCs. Cancel an active input RPC; require an uncertain result without replay.</li>
+<li>Deliver TurnCompleted before the admission response. Require that the later response does not restore Generating.</li>
+</ol>
+<p>Use probe messages and operation barriers, not Thread.Sleep, orchestration Task.Delay, CPU load, or repeated timing races.</p>
+<p>Retain the existing bounded setup and failure assertions as acceptance intent. Their implementation-specific gate calls can change.</p>
+<p>Controls must reject a duplicate bind, omitted retry, early readiness, automatic uncertain resend, and input overtaking.</p>
+<h3 id="v5">V5 — Compatibility and lifecycle</h3>
+<ol>
+<li>Reuse DaemonClientSessionTests, reconnect tests, mapping tests, factory tests, and real SignalR integration tests.</li>
+<li>Assert Create clears identity, Resume selects identity, and Keep retains identity. A fresh interactive chat clears prior selection lazily.</li>
+<li>Exercise headless success and failure, JSON output, remote token setup, interaction responses, onboarding, and reminder-to-chat.</li>
+<li>Block an event subscriber and issue a client command. Require command completion without releasing that subscriber.</li>
+<li>Use offline bootstrap without chat and require zero client actor systems. Transition to chat and require one local system.</li>
+<li>Close the host and require system termination. Test TextAdmissionVersion 1, absent 0, unknown versions, and an old daemon after reattachment.</li>
+</ol>
+<p>Do not weaken test expectations for token behavior, failed-turn exit codes, session selection, or interaction option keys.</p>
+<h3 id="v6">V6 — Two-second close and final receipt</h3>
+<ol>
+<li>Hold an input RPC; submit Close twice; attempt a later input. Require one close and rejection of the later input.</li>
+<li>Confirm admission before the deadline. Require close completion without model completion and without a disposed UI callback.</li>
+<li>Hold the first RPC and queue a second input. Advance TestScheduler by two seconds.</li>
+<li>Require delivery unconfirmed for the first input and unsent for the second. Require no later bind or send.</li>
+<li>Drive typed Enter and Ctrl+Q through the real page. Require the close receipt before UI disposal and terminal notice after teardown.</li>
+</ol>
+<p>Stop the actor only after the close result reaches its caller. A fire-and-forget event is insufficient for the terminal receipt.</p>
+<p>The actor deadline is deterministic. Native process exit has a separate bounded teardown ceiling, which the fixture must measure.</p>
+<h3 id="v7">V7 — Native first-input and resume proof</h3>
+<p>Enabling work: add a narrow native tape and sibling assertion script to the existing harness in PR 2.</p>
+<ol>
+<li>Use the harness-owned NETCLAW_HOME, native binaries, and SmokeLlmServer request record. Wait for screen or protocol anchors.</li>
+<li>Open and quit a new chat. Require no session creation. Repeat through the session picker's new-chat action.</li>
+<li>Enter unique text and quit immediately after Enter. Require either confirmed durable admission or an explicit unresolved terminal receipt.</li>
+<li>After confirmed admission, require the daemon to finish the turn after CLI exit. Inspect request records and durable state.</li>
+<li>Resume an existing session, complete a turn, and quit. Require no extra empty session or duplicate input.</li>
+<li>Run init-redo-chat and light. Preserve their existing semantic assertions.</li>
+</ol>
+<p>The baseline comparison must use the same binary set, fixture config, daemon, and input markers. Timing-only samples remain supplemental evidence.</p>
+<p>The server lacks a model-response barrier today. Add one only if native proof needs it; the integration fixture already supplies exact barrier proof.</p>
+<p>New tapes use Wait+Screen and paired assertions. Existing unrelated tape sleeps are not permission to add new sleeps.</p>
+<h3 id="v8">V8 — Structural payoff and quality gates</h3>
+<p>Trace the same retry or close correction through both revisions. Count lifecycle owners, state fields, fixture barriers, and affected files.</p>
+<p>Require one actor owner and removal of both old control paths. Do not claim savings from deleted coverage.</p>
+<p>Run the following checks after product changes. These commands are existing procedures; new fixture filters remain enabling work.</p>
+<pre><code>dotnet test src/Netclaw.Cli.Tests/Netclaw.Cli.Tests.csproj -m:4 --blame-hang-timeout 5m
+dotnet test src/Netclaw.Daemon.Tests/Netclaw.Daemon.Tests.csproj -m:4 --filter FullyQualifiedName~Gateway --blame-hang-timeout 5m
+dotnet test src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj -m:4 --filter 'FullyQualifiedName~LlmSessionIntegrationTests|FullyQualifiedName~SerializationRoundTripTests' --blame-hang-timeout 5m
+dotnet slopwatch analyze
+pwsh ./scripts/Add-FileHeaders.ps1 -Verify
+./scripts/smoke/run-smoke.sh init-redo-chat
+./scripts/smoke/run-smoke.sh light
+./evals/run-evals.sh</code></pre>
+<p>Run builds and test projects sequentially in a shared worktree. Use discovered pass counts; zero discovered tests fail the gate.</p>
+<p>The operations skill has its metadata.version bump. The user selected focused Spark2 E2E for this client-control change instead of the full eval suite.</p>
+<p>The full behavioral eval suite is waived for this scope; it did not pass. Do not generate the legacy manifest locally.</p>
+</section>
+
+<section id="evidence">
+<h2>Evidence status and independent review</h2>
+<p>This section retains the original local proof for commit <code>edb476bc4892b4396aa908993b088d5756929cad</code>.</p>
+<p>The <a href="#revision-result">revision report</a> records the three simplifications, the CI fixes, and their separate proof.</p>
+<p><a href="https://github.com/netclaw-dev/netclaw/pull/2426">PR #2426</a> targets dev from Aaronontheweb:plan/chat-client-local-fsm. Hosted CI is active. Merge and deployment remain separate.</p>
+<p>The original source manifest covers 34 changed production, test, smoke, and skill files. Its receipts retain their original source identity.</p>
+<table><thead><tr><th>Claim</th><th>Status</th><th>Limit</th></tr></thead><tbody>
+<tr><td data-label="Claim">Pinned client baseline</td><td data-label="Status" id="baseline-status">34 passed; zero failed or skipped.</td><td data-label="Limit">The baseline lacks durable admission and native quit proof.</td></tr>
+<tr><td data-label="Claim">Admission sensitivity</td><td data-label="Status">Both baseline admission cases fail the held-journal observation with an early hub response.</td><td data-label="Limit">This is a product regression receipt, not a fixture compile failure.</td></tr>
+<tr><td data-label="Claim">Client and UI</td><td data-label="Status">2,128 cases pass with zero failures or skips. The receipt includes the identity generation handoff and preserved page assertions.</td><td data-label="Limit">The native suite remains a separate gate.</td></tr>
+<tr><td data-label="Claim">Daemon admission</td><td data-label="Status">98 gateway tests pass; zero failed or skipped. The cases cover ready, buffered, compaction, and disconnect states.</td><td data-label="Limit">The closed-writer catch has an independent source proof. No supported live-adapter path reaches it. It has no runtime exercise.</td></tr>
+<tr><td data-label="Claim">Native and actor boundaries</td><td data-label="Status">94 actor boundary tests pass with zero failures or skips. All 28 native tapes and all 10 scenarios have pass receipts.</td><td data-label="Limit">The final light run exited 1 after the disk filled during pairing. The pairing-only retry passed with identical binaries after cleanup.</td></tr>
+<tr><td data-label="Claim">Static quality</td><td data-label="Status">Slopwatch reports zero issues. The final copyright check passes.</td><td data-label="Limit">The complexity report retains two explicit transition-method hotspots.</td></tr>
+<tr><td data-label="Claim">Real model E2E</td><td data-label="Status">Spark2 passes initial input and resume with one session. The journal stores two input admissions and two completed turns.</td><td data-label="Limit">The user selected focused E2E instead of the full behavioral eval suite for this client-control change.</td></tr>
+<tr><td data-label="Claim">Independent verification</td><td data-label="Status" id="review-status">The independent agent accepts the combined local proof. It reproduced all 34 source hashes and checked test, native, quality, and Spark2 receipts.</td><td data-label="Limit">The agent assessed executed evidence and source. It did not rerun the suites. The light exit remains 1; acceptance includes the unchanged-binary pairing retry.</td></tr>
+<tr><td data-label="Claim">OpenSpec</td><td data-label="Status">The main contracts are synced. Strict change validation passes.</td><td data-label="Limit">The change remains active until the final plan has a merged retention revision.</td></tr>
+<tr><td data-label="Claim">Plan presentation</td><td data-label="Status">The final desktop, mobile, source-link, and PDF checks pass. The tailnet copy matches the final document.</td><td data-label="Limit">The tailnet page is a local review surface. It is not merged retention.</td></tr>
+</tbody></table>
+<p>Candidate SHA256: <code>b4907e1bf410a4f13638ba62853a7c0f8c2b156057f62f7e94d6e5a5ff4dbba8</code>. The independent agent reproduced every file hash and this aggregate.</p>
+<p>Receipts live under <code>artifacts/chat-client-local-fsm/baseline/</code> and <code>artifacts/chat-client-local-fsm/validation/</code>.</p>
+<p>The closed-sink experiment remains in <code>queue-closed-experiment.trx</code>. It does not prove that a real channel writer closes.</p>
+<p>The independent source audit and dependency extracts reside in <code>closed-writer-audit.md</code> and its four sibling evidence files.</p>
+<p>The first native run passed 26 tapes and ten scenarios. It failed identity redo and the quit tape before their corrections.</p>
+<p>The final run passed every tape, including both corrected flows. It passed nine scenarios before a pairing daemon-start failure.</p>
+<p>The shared disk reached 100% during pairing. Cleanup removed 34 completed test-owned extraction directories and freed space.</p>
+<p>The pairing-only retry passed eight assertions with identical CLI and daemon hashes. No product or test source changed for this retry.</p>
+<p>The native disk receipt and both final logs retain the failed command and the successful focused retry.</p>
+<p>The independent final audit resides in <code>independent-final-audit.md</code>. It accepts the bounded local proof and retains its limits.</p>
+<p>The eager integration case waits for SessionJoined before text dispatch. No native comparison against the baseline client has a receipt.</p>
+<p>The timeout theory fills the real adapter queue. The missing-writer case fails reinitialization through the existing pipeline seam.</p>
+<p>The init-wizard failure also reproduces at the pinned base with a controlled systemctl command. Its fixture now selects an absent test-owned unit.</p>
+<p>The actor uses 29 cases in 12 methods through shared theories, task barriers, and virtual deadlines. Total test code increases because new production-boundary proof was absent.</p>
+<p>The three client control files shrink from 1,351 to 1,061 lines. This count includes the new actor and excludes tests and documents.</p>
+<p>All changed production C# files shrink from 5,466 to 5,283 lines, a reduction of 183 lines.</p>
+<p>Changed test C# files grow from 4,219 to 4,892 lines, an increase of 673 lines. The receipt retains each file count.</p>
+<p>The final coverage run passes 199 relevant cases. ChatClientActor has 97.5% sequence coverage and 87.5% branch coverage.</p>
+<p>DaemonClient has 100% sequence coverage. ChatViewModel has 77.02% sequence coverage and 69.23% branch coverage in this selected scope.</p>
+<p>IdentityRedoViewModel has 94.5% sequence coverage and 82.14% branch coverage in this selected scope.</p>
+<p>ReportGenerator flags CompleteOperation at complexity 48 and Continue at 32. Their reported sequence coverage is 100% and 95%.</p>
+<p>The candidate retains those methods as an explicit complexity exception. Each method holds an ordered transition path under one lifecycle owner.</p>
+<p>Coverlet emits no CRAP score. The retained estimate uses the <a href="https://www.artima.com/weblogs/viewpost.jsp?thread=215899">original CRAP formula</a> and sequence coverage, not basis-path proof.</p>
+<p>Focused mutation scope remains unchanged. This change does not move an authority decision or policy check.</p>
+<p>The user authorized publication after local verification. PR #2426 retains the implementation. The revision report records later source and CI status.</p>
+<p>Merge and deployment have no receipt. The Spark2 test and tailnet plan service retain their separate local receipts.</p>
+<h3>OpenSpec verification report</h3>
+<table><thead><tr><th>Dimension</th><th>Assessment</th></tr></thead><tbody>
+<tr><td data-label="Dimension">Completeness</td><td data-label="Assessment" id="task-summary">14 of 15 tasks have their required proof. Final retention and archive remain open.</td></tr>
+<tr><td data-label="Dimension">Correctness</td><td data-label="Assessment">All seven added requirements have implementation evidence. Native proof passes with one documented disk-space retry. The full eval suite has a user-approved scope waiver.</td></tr>
+<tr><td data-label="Dimension">Coherence</td><td data-label="Assessment">One local actor owns control. Four behaviors share the close protocol. The daemon retains authority, model work, and durable state.</td></tr>
+</tbody></table>
+<table><thead><tr><th>Requirement</th><th>Owner and proof</th></tr></thead><tbody>
+<tr><td data-label="Requirement">First-input session creation</td><td data-label="Owner and proof">ChatClientActor.Begin and Continue. Session selection theories cover fresh, Create, Keep, and Resume contracts.</td></tr>
+<tr><td data-label="Requirement">Input order and outcomes</td><td data-label="Owner and proof">ChatClientActor.Next, Abort, and End. Shared theories cover order, cancellation, late completion, and uncertain delivery.</td></tr>
+<tr><td data-label="Requirement">Two-second close</td><td data-label="Owner and proof">ChatClientActor.FinishClose and ChatViewModel.CloseAndShutdownAsync. Virtual timers and typed keys prove one deadline and the retained receipt.</td></tr>
+<tr><td data-label="Requirement">Offline and observer isolation</td><td data-label="Owner and proof">DaemonClient lazy runtime and event pump. Dormant-client and blocked-observer tests pass. Identity redo reuses HealthCheckStepViewModel to confirm daemon health before chat. A prior running daemon must report a newer generation.</td></tr>
+<tr><td data-label="Requirement">Durable text admission</td><td data-label="Owner and proof">SessionRegistry.SendMessageAsync and the session journal. Real SignalR theories hold journal writes during ready, buffered, and compaction states.</td></tr>
+<tr><td data-label="Requirement">Work after disconnect</td><td data-label="Owner and proof">The daemon session owns the turn. The real fixture disconnects before or during a model call and observes TurnRecorded.</td></tr>
+<tr><td data-label="Requirement">Explicit admission support</td><td data-label="Owner and proof">SessionEnsureResultDto and ChatClientActor.CompleteOperation. Version 0, 1, 2, and old-daemon reattachment cases retain the contract.</td></tr>
+</tbody></table>
+<p id="archive-assessment">The local implementation is verified. Keep the change active until the plan has a merged retention revision and the archive steps are authorized.</p>
+<p>The event-pump test proves command isolation. It does not prove bounded disposal while a subscriber never returns.</p>
+<h3>Identity redo boundary correction</h3>
+<p>The first native run exposed an existing producer race: identity redo saved config and entered chat before the daemon reload.</p>
+<p>The page now captures the daemon generation before its write. The existing wizard readiness component confirms daemon health. A prior running daemon must report a newer generation.</p>
+<p>A missing generation from a running daemon blocks the write. A skip or quit cancels preparation without the hidden input.</p>
+<p>The change adds no second readiness loop, timer, or coordinator. Shared theory cases cover stale generations, quit, and probe failures.</p>
+<h3>What would disprove this recommendation</h3>
+<ul>
+<li>The replacement retains competing lifecycle loops or spreads retry control across several actors.</li>
+<li>Actor tests still require repeated timing races to prove order or close.</li>
+<li>New hub acknowledgment waits for model completion or bypasses canonical identity and source mapping.</li>
+<li>Confirmed input still stops after disconnect and no bounded daemon correction resolves it.</li>
+<li>The runtime starts during offline bootstrap or changes remote token and headless behavior.</li>
+</ul>
+<p>A meaningful smaller alternative is a daemon admission fix plus transcript notices, with eager client session creation retained.</p>
+<p>That alternative costs less client change. It retains the lifecycle overlap and empty sessions from open-and-quit.</p>
+<p>Automatic zero-turn deletion is unsafe because durable pending inputs and approval waits can exist before a completed turn.</p>
+</section>
+
+<section id="adversarial-review">
+<h2>Adversarial review: smaller mechanisms</h2>
+<p>The actor remains the correct owner for client order, retry, cancellation, and close. The review found three optional changes, with no demonstrated merge blocker.</p>
+<p>The source under review is <code>edb476bc4892b4396aa908993b088d5756929cad</code>. The review inspected callers, tests, contracts, and the retained evidence.</p>
+<p>The review reused the source inventory and coverage report. A new whole-repository analyzer run was unnecessary for these bounded ownership questions.</p>
+<p>The review proposed the following changes. The user then authorized all three. The revision report records their implementation and checks.</p>
+
+<h3>1. Share the queue-write failure policy inside SignalRSessionActor</h3>
+<p><a href="https://github.com/Aaronontheweb/netclaw/blob/edb476bc4892b4396aa908993b088d5756929cad/src/Netclaw.Daemon/Gateway/SignalRSessionActor.cs#L139-L163">Text input</a> and <a href="https://github.com/Aaronontheweb/netclaw/blob/edb476bc4892b4396aa908993b088d5756929cad/src/Netclaw.Daemon/Gateway/SignalRSessionActor.cs#L207-L264">trusted delivery</a> duplicate the ten-second queue write, timeout Nack, and closed-writer restart.</p>
+<p>A change to that failure policy currently requires two edits in one actor. One private method can own the shared write and failure actions.</p>
+<p>Keep the existing null checks before reminder observer registration. Keep source construction, observer ownership, and the successful reminder diagnostic at each caller.</p>
+<p>Preserve admission acknowledgment through AckTarget. A successful queue write must not become a successful admission acknowledgment.</p>
+<p>Counterevidence: the two paths have different diagnostic text. Confirm whether those messages need exact compatibility before consolidation.</p>
+<p>Verification: extend the existing queue-failure theory with text and trusted-delivery cases. Require Nack, no model call, and unchanged positive admission behavior.</p>
+<p>This is the first recommended change. It removes one policy copy without a new service, interface, or owner.</p>
+
+<h3>2. Keep one owner for the shared close request</h3>
+<p><a href="https://github.com/Aaronontheweb/netclaw/blob/edb476bc4892b4396aa908993b088d5756929cad/src/Netclaw.Cli/Daemon/DaemonClient.cs#L64-L75">DaemonClient</a> shares one Lazy close task. Production therefore sends one Close message.</p>
+<p><a href="https://github.com/Aaronontheweb/netclaw/blob/edb476bc4892b4396aa908993b088d5756929cad/src/Netclaw.Cli/Daemon/ChatClientActor.cs#L101-L110">ChatClientActor</a> also retains a list of close waiters and completes each waiter separately.</p>
+<p>Keep the facade cache for dormant close without an ActorSystem. Narrow the internal actor protocol to one close reply.</p>
+<p>Counterevidence: the actor test deliberately sends two Close messages. Its current internal contract supports several waiters.</p>
+<p>Move that repeated-close proof to the public facade before the actor contract changes. Do not merely delete the assertion.</p>
+<p>Verification: require the same task and receipt for repeated facade close, one total deadline, rejection of later input, and no runtime for dormant close.</p>
+<p>This is optional. It removes a general waiter collection that the production caller does not use.</p>
+
+<h3>3. Return the preparation result to identity redo</h3>
+<p><a href="https://github.com/Aaronontheweb/netclaw/blob/edb476bc4892b4396aa908993b088d5756929cad/src/Netclaw.Cli/Tui/IdentityRedoViewModel.cs#L160-L164">IdentityRedoViewModel</a> receives a boolean, then reads the wizard's last result row to obtain the failure reason.</p>
+<p>Return the existing HealthCheckItem from PrepareDaemonAsync. The identity page can consume its status and label without indexing another view model's result collection.</p>
+<p>Keep the shared readiness operation and its generation gate. This proposal needs no new result type or service.</p>
+<p>Counterevidence: both callers currently share the wizard component. This change reduces the collection dependency; it does not remove that component dependency.</p>
+<p>Verification: retain the identity probe, generation, cancellation, preparation-failure, and native init-redo-chat checks.</p>
+<p>This is a contract clarification with a small code effect. It is preferable to a new readiness service solely for fewer lines.</p>
+
+<h3>Changes the review rejects or defers</h3>
+<ul>
+<li>Keep the explicit request queue. Akka Stash does not expose the queued text needed for the final unsent receipt.</li>
+<li>Keep the event pump. Direct subscriber calls can block the actor and its close deadline.</li>
+<li>Keep operation IDs and the wait for a cancelled transport task. Cancellation alone does not end transport side effects.</li>
+<li>Keep the distinct retry budgets and admission-version check. They preserve explicit API behavior and the durable-admission contract.</li>
+<li>Do not add a generic test framework. Shared theories already cover 29 actor cases in 12 methods.</li>
+<li>Defer a separate readiness service. It adds a construct without a demonstrated line reduction in this scope.</li>
+</ul>
+<p>A minor additional option removes Completed.Operation. The accepted operation ID already identifies the actor's current operation.</p>
+<p>That option removes a duplicate message field. It does not justify a broader rewrite or a claim of a large reduction.</p>
+<p>The expected payoff is bounded. These proposals remove duplicate mechanisms; their actual code savings require implementation and the same boundary proof.</p>
+</section>
+
+<section id="revision-result">
+<h2>Applied simplifications and CI corrections</h2>
+<p>The source revision is <code>e25d482a89adbac341ebf79265f6e25d8424b912</code>. PR #2426 contains all three authorized simplifications.</p>
+<ul>
+<li>SignalRSessionActor uses one private queue-write method for text and trusted delivery. Each caller retains its null guard and source duties.</li>
+<li>ChatClientActor retains one close reply. The facade retains its shared close task, including dormant close without an ActorSystem.</li>
+<li>PrepareDaemonAsync returns the existing HealthCheckItem. Identity redo consumes its status and label directly.</li>
+</ul>
+<p>The shared queue method uses the text-path diagnostic messages for timeout and closure. No exact-string consumer requires the earlier trusted-path variants.</p>
+<p>The successful reminder diagnostic remains unchanged. Queue acceptance still does not acknowledge durable admission.</p>
+<p>The revision adds no service, interface, configuration option, or decision owner. The minor Completed.Operation proposal remains deferred.</p>
+<p>Production C# contains 185 fewer lines than the pinned base, versus 183 before this revision. Test C# adds 765 lines, versus 673 before.</p>
+<h3>CI failures and corrections</h3>
+<p>Windows failed when ChatAdmissionTests deleted a temporary log that its route-created view model still held open.</p>
+<p>The test now owns and disposes that view model. Its admission and repeated-quit assertions remain intact.</p>
+<p>Linux exposed a product race: the identity page showed its retry screen before OperationCompletion released Enter.</p>
+<p>The final UI actions now release Enter before they publish the final screen. The transient wait screen still blocks repeated input.</p>
+<p>A controlled UI dispatch theory holds the acknowledgment. Both cases fail the prior gate and pass after the correction.</p>
+<h3>Current verification</h3>
+<ul>
+<li>The complete CLI suite passes 2,132 cases. The gateway scope passes 100 cases. Both receipts have zero failures and skips.</li>
+<li>The gateway theory covers text and trusted delivery for missing queues and actual queue-write timeouts.</li>
+<li>The facade theory proves one task and receipt for active and dormant close. The actor theory retains the single total deadline.</li>
+<li>The focused coverage run passes 185 cases. Its six-class report gives ChatClientActor 96.5% line coverage and DaemonClient 100%.</li>
+<li>Continue and CompleteOperation retain their complexity exceptions. The refactors do not remove those hotspots.</li>
+<li>Slopwatch, copyright headers, strict OpenSpec validation, and the diff whitespace check pass.</li>
+<li id="revision-native-status">Fresh binaries pass all three affected native tapes. The quit check confirms two durable inputs and completed turns across initial chat and resume.</li>
+<li id="revision-ci-status">Hosted CI tests the pushed source revision. Windows confirmation remains separate from the local Linux receipts.</li>
+</ul>
+<p>Revised manifest SHA256: <code>3d9d071c30c7e3a56783ebf5202c03a00d0d5779d7adfd6dff2c2dffeee85513</code>. The independent verifier reproduced all 34 file hashes.</p>
+<p>The revised receipts use the simplification prefix under the existing validation directory. The original receipts remain unchanged.</p>
+<p>The affected native checks pass init-wizard, init-redo-chat, and chat-admission-quit. The earlier full native and Spark2 receipts remain historical.</p>
+<p>The independent verifier accepts the current local scope. Hosted platform checks remain separate. The native test homes are removed.</p>
+<p>The revised source does not change model steering. The approved focused E2E scope remains unchanged.</p>
+<p>The closed-writer branch retains source proof only. Merge, deployment, final retention, and OpenSpec archive remain separate actions.</p>
+</section>
+
+<section id="handoff">
+<h2>Implementation handoff and retention</h2>
+<p>The direction and close policy are settled. No further product choice blocks the first slice.</p>
+<p>The local implementation and required local proof are complete. The full eval suite has a user-approved replacement with focused Spark2 E2E.</p>
+<p>The worktree uses plan/chat-client-local-fsm. Its published implementation commit and source manifest identify the verified candidate.</p>
+<p>Product implementation is authorized. Complete tasks only after their required proof passes.</p>
+<p>Use <a href="../../../openspec/changes/chat-client-local-fsm/tasks.md">the OpenSpec task index</a> to enter the plan. It links tasks without duplicating recipes.</p>
+<p>Use openspec-apply-change for implementation and the repository's sync, verify, and archive skills at completion.</p>
+<p>Use akka-best-practices, akka-hosting-actor-patterns, akka-testing-patterns, and csharp-concurrency-patterns for the actor and async boundaries.</p>
+<p>Use the repository Termina skill for UI publication. Use package-management if the test project needs Akka.Hosting.TestKit.</p>
+<p>Use systematize:verify with a separate verification agent before declaring the combined implementation verified.</p>
+<p>Report unavailable essential skills or procedures. Do not silently install them or substitute weaker proof.</p>
+<p>Before implementation, compare the checkout to the pinned base and review relevant changes. Do not cherry-pick PR #2413 wholesale.</p>
+<p>Before a pause, report revision, changed behavior, pass counts, failed or missing gates, and the next eligible task.</p>
+<p>Publish a draft only when authorized. Leave PR #2413, remote branches, and the live daemon unchanged until their actions are authorized.</p>
+<p>At closure, update the canonical architecture contract with verified owners. Retain the final plan in a merged revision before its active files are removed.</p>
+<p>Record the retained revision and path in a history index only when work is complete. Archive the OpenSpec change through its skill.</p>
+</section>
+</details>
+</main>
+<footer>Implementation candidate. Local evidence, pending gates, hosted CI, merge, and deployment remain separate evidence classes.</footer>
+</body>
+</html>

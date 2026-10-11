@@ -44,7 +44,7 @@ existing-install re-entry paths.
 
 - automatically run config and health validation when the step is reached
 - show summary with remediation guidance on failure
-- output next-step commands (`netclaw chat`, `netclaw config`)
+- output next-step commands (`netclaw chat`, or `netclaw chat --onboarding` after a finish with warnings, and `netclaw config`)
 
 ## Existing-Install Flow
 

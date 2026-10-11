@@ -33,7 +33,7 @@ public sealed class McpHttpClientFactoryTests
     private static async Task<CapturedHeaders> SendAsync(string method)
     {
         var capture = new CapturingHandler();
-        using var client = McpHttpClientFactory.Create(capture);
+        using var client = McpHttpClientFactory.Create(capture, disposeHandler: true);
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://example.invalid/mcp");
         request.Headers.Add(McpHttpClientFactory.MethodHeaderName, method);
         request.Headers.Add(McpHttpClientFactory.ProtocolVersionHeaderName, "2026-07-28");

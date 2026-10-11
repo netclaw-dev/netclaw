@@ -23,9 +23,18 @@ public enum ApprovalShell
 /// </summary>
 public enum ApprovalMatchKind
 {
-    /// <summary>Match whole initial tokens.</summary>
+    /// <summary>
+    /// Match the stored tokens against the candidate's ShellSyntaxTree command
+    /// words (<see cref="ToolApprovalEntryComparer.CoversCommandWords"/>). A
+    /// grant of two or more tokens covers the words that start with its tokens.
+    /// A grant of one token (the program) covers that word alone.
+    /// </summary>
     TokenPrefix = 0,
 
-    /// <summary>Match the complete legacy phrase only.</summary>
+    /// <summary>
+    /// Match a version-2 phrase. The space-separated words of the phrase get
+    /// the same rule as <see cref="TokenPrefix"/> tokens. The kind keeps the
+    /// stored form of an upgraded grant; it does not give a different reach.
+    /// </summary>
     LegacyExact = 1,
 }

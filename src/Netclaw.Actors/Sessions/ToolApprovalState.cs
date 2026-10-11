@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
@@ -64,7 +65,7 @@ internal enum ApprovalTurnPhase
 
 internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, IReadOnlyList<string>>? OneTimeApprovalPreSeed,
-    IReadOnlyDictionary<string, ApprovalDecision>? DecisionOverride,
+    IReadOnlyDictionary<string, RefusalKind>? DecisionOverride,
     IReadOnlyDictionary<string, string>? ManagedTemporaryDenialDirectories,
     IReadOnlyDictionary<string, AuthorizationAttemptId>? AuthorizationAttemptIds);
 
@@ -75,7 +76,7 @@ internal sealed record PendingToolApproval(PendingToolInteraction Pending)
 
 internal sealed record ResolvedToolApproval(
     PendingToolInteraction Pending,
-    ApprovalDecision Decision) : ToolApprovalCallState(Pending);
+    ConsentAnswer Answer) : ToolApprovalCallState(Pending);
 
 /// <summary>
 /// Owns all actor-local approval state for one session.
@@ -155,13 +156,13 @@ internal sealed class ToolApprovalState
 
     public bool Resolve(
         string callId,
-        ApprovalDecision decision,
+        ConsentAnswer answer,
         out PendingToolInteraction pending)
     {
         if (!TryGetPending(callId, out pending))
             return false;
 
-        _calls[callId] = new ResolvedToolApproval(pending, decision);
+        _calls[callId] = new ResolvedToolApproval(pending, answer);
         if (PendingCount == 0 && pending.TurnContext is { } context)
         {
             TurnContext = context;
@@ -243,7 +244,7 @@ internal sealed class ToolApprovalState
     private sealed class ApprovalRedrivePlanBuilder
     {
         private readonly Dictionary<string, IReadOnlyList<string>> _preSeed = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, ApprovalDecision> _decisionOverride = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, RefusalKind> _decisionOverride = new(StringComparer.Ordinal);
         private readonly Dictionary<string, string> _managedTemporaryDenialDirectories = new(StringComparer.Ordinal);
         private readonly Dictionary<string, AuthorizationAttemptId> _authorizationAttemptIds = new(StringComparer.Ordinal);
 
@@ -252,19 +253,19 @@ internal sealed class ToolApprovalState
             var request = resolved.Pending.Request;
             _authorizationAttemptIds[callId] = resolved.Pending.AuthorizationAttemptId;
 
-            if (resolved.Decision.IsApprovalGrant())
+            if (resolved.Answer is not ConsentAnswer.Refused refusal)
             {
+                // The re-drive seeds these keys as a one-time consent for the
+                // tool name of the re-driven call.
                 _preSeed[callId] = OneTimeApprovalKeys.Create(
                     request.Patterns,
                     request.Candidates,
                     request.Cwd);
+                return;
             }
 
-            if (resolved.Decision is not (ApprovalDecision.Denied or ApprovalDecision.TimedOut))
-                return;
-
-            _decisionOverride[callId] = resolved.Decision;
-            if (resolved.Decision == ApprovalDecision.Denied
+            _decisionOverride[callId] = refusal.Kind;
+            if (refusal.Kind == RefusalKind.Denied
                 && request.ManagedTemporaryDirectory is { Length: > 0 } managedTemporaryDirectory)
             {
                 _managedTemporaryDenialDirectories[callId] = managedTemporaryDirectory;

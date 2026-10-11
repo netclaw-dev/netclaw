@@ -66,6 +66,7 @@ static async Task RunAsync(string[] args)
     // ── Mode selection from CLI args ──
     var parseResult = CliArgsParser.Parse(args);
     string? headlessPrompt = null;
+    string? chatInitialMessage = null;
     string mode;
 
     switch (parseResult.Kind)
@@ -92,6 +93,16 @@ static async Task RunAsync(string[] args)
         default: // CliParseKind.Known
             mode = parseResult.Mode!;
             break;
+    }
+
+    // ── Reminder test: a normal chat whose first message is /run-reminder <id> ──
+    // The run-reminder skill and the run_reminder tool do the work, so the
+    // chat and the CLI use one code path.
+    if (mode is "reminder" && ReminderCommand.GetRunReminderId(args) is { } runReminderId)
+    {
+        chatInitialMessage = $"/run-reminder {runReminderId}";
+        mode = "chat";
+        args = ["chat"];
     }
 
     // Kick off the update check only for modes that do not boot Termina or
@@ -161,6 +172,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddSingleton(initPaths);
             builder.Services.AddSingleton(TimeProvider.System);
             builder.Services.AddSingleton<DaemonManager>();
+            builder.Services.AddTransient<HealthCheckStepViewModel>();
             builder.Services.AddSingleton<IBrowserAutomationBootstrapper, BrowserAutomationBootstrapper>();
             builder.Services
                 .AddSectionEditor<ProviderStepViewModel>()
@@ -200,10 +212,8 @@ static async Task RunAsync(string[] args)
 
             // On an existing install, `netclaw init` opens an explicit action menu instead
             // of silently re-walking setup (simplify-netclaw-init). First run starts the
-            // bootstrap wizard directly.
-            var initStartRoute = File.Exists(initPaths.NetclawConfigPath)
-                ? InitExistingInstallViewModel.MenuRoute
-                : "/init";
+            // bootstrap wizard directly, as it does for the installer's channel seed.
+            var initStartRoute = InitExistingInstallViewModel.ResolveStartRoute(initPaths);
 
             builder.Services.AddTermina(initStartRoute, termina =>
             {
@@ -211,7 +221,7 @@ static async Task RunAsync(string[] args)
                 termina.RegisterRoute<InitWizardPage, InitWizardViewModel>("/init");
                 termina.RegisterRoute<InitExistingInstallPage, InitExistingInstallViewModel>(InitExistingInstallViewModel.MenuRoute);
                 termina.RegisterRoute<IdentityRedoPage, IdentityRedoViewModel>(InitExistingInstallViewModel.IdentityRoute);
-                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
+                termina.RegisterRoute<ChatPage, ChatViewModel>(ChatViewModel.Route);
             });
 
             using var initApp = builder.Build();
@@ -243,7 +253,19 @@ static async Task RunAsync(string[] args)
                 {
                     var shouldApply = doctorOptions.Yes || PromptForDoctorFixApply();
                     if (shouldApply)
-                        await fixService.ApplyAsync(fixPlan);
+                    {
+                        try
+                        {
+                            foreach (var backup in await fixService.ApplyAsync(fixPlan))
+                                Console.WriteLine($"Backed up the original to {backup}");
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                        {
+                            Console.Error.WriteLine($"Error: could not apply the fixes: {ex.Message}");
+                            Environment.ExitCode = 1;
+                            return;
+                        }
+                    }
                 }
             }
 
@@ -504,21 +526,47 @@ static async Task RunAsync(string[] args)
         switch (subcommand)
         {
             case "start":
-                var startResult = manager.Start();
+                var startResult = await UpdateCommand.StartDaemonAsync(
+                    new UpdateCommand.DaemonProcessLifecycle(manager),
+                    new SystemdUserService());
                 WriteDaemonResult(startResult);
                 return;
 
             case "stop":
-                var stopResult = await manager.StopAsync("cli-stop", CancellationToken.None);
+                var stopResult = (await UpdateCommand.StopDaemonAsync(
+                    new UpdateCommand.DaemonProcessLifecycle(manager),
+                    new SystemdUserService(),
+                    "cli-stop")).ToDaemonResult();
                 WriteDaemonResult(stopResult);
+                if (stopResult.Success && new ContainerSupervisor().IsExternallySupervised)
+                    Console.WriteLine("The container supervisor will restart the daemon.");
                 return;
 
             case "status":
+            {
                 var status = manager.GetStatus();
                 Console.WriteLine(status.Message);
-                if (status.IsRunning)
-                    Console.WriteLine("Tip: run `netclaw status` for detailed runtime connector and telemetry health.");
+                if (!status.IsRunning)
+                {
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                // The container HEALTHCHECK runs this command, so readiness is probed at the
+                // endpoint the CLI resolves (netclaw.json, NETCLAW_* env, default) instead of a
+                // port baked into the image.
+                var (ready, readyEndpoint) = await DaemonApi.ProbeLocalReadinessAsync(paths);
+
+                if (!ready)
+                {
+                    Console.WriteLine($"Daemon process is running but {readyEndpoint}/api/health/ready did not answer.");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                Console.WriteLine("Tip: run `netclaw status` for detailed runtime connector and telemetry health.");
                 return;
+            }
 
             case "install":
                 var installResult = await manager.InstallAsync();
@@ -577,8 +625,8 @@ static async Task RunAsync(string[] args)
                     Console.WriteLine($"Pairing code:  {pairingResult.FormattedCode}");
                     Console.WriteLine($"Expires at:    {pairingResult.ExpiresAt.ToLocalTime():HH:mm:ss} (local time)");
                     Console.WriteLine();
-                    Console.WriteLine("On the remote device, run:");
-                    Console.WriteLine($"  netclaw pair {pairApi.Endpoint}");
+                    PairCommand.WriteClientInstructions(
+                        Console.Out, pairApi.Endpoint, DaemonClientFactory.ResolveExposureMode(paths));
                 }
                 catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {
@@ -593,7 +641,7 @@ static async Task RunAsync(string[] args)
             case "devices":
             {
                 var devicesSubcmd = args.Length > 2 ? args[2] : "list";
-                if (IsHelpToken(devicesSubcmd))
+                if (DaemonCommandDispatch.ShouldShowDevicesHelp(args))
                 {
                     WriteDaemonDevicesHelp();
                     return;
@@ -803,7 +851,7 @@ static async Task RunAsync(string[] args)
             return;
         }
 
-        Environment.ExitCode = await ApprovalsCommand.RunAsync(args, paths);
+        Environment.ExitCode = await ApprovalsCommand.RunAsync(CliContext.ForProcess(paths, TimeProvider.System), args);
         return;
     }
 
@@ -952,8 +1000,7 @@ static async Task RunAsync(string[] args)
         var configPaths = new NetclawPaths();
         configPaths.EnsureDirectoriesExist();
 
-        var configExitCode = ConfigCommand.Run(args, configPaths);
-        if (configExitCode != 0 || (args.Length > 1 && IsHelpToken(args[1])))
+        if (ConfigCommand.Handle(args, configPaths, out var configExitCode))
         {
             Environment.ExitCode = configExitCode;
             return;
@@ -968,7 +1015,7 @@ static async Task RunAsync(string[] args)
     {
         var pairPaths = new NetclawPaths();
         pairPaths.EnsureDirectoriesExist();
-        Environment.ExitCode = await PairCommand.RunAsync(args, pairPaths);
+        Environment.ExitCode = await PairCommand.RunAsync(CliContext.ForProcess(pairPaths, TimeProvider.System), args);
         return;
     }
 
@@ -978,16 +1025,13 @@ static async Task RunAsync(string[] args)
         var builder = CreateQuietHostBuilder(args);
 
         using var host = builder.Build();
-        var paths = host.Services.GetRequiredService<NetclawPaths>();
+        var cli = host.Services.GetRequiredService<CliContext>();
         var daemonConfig = host.Services.GetRequiredService<DaemonConfig>();
         Environment.ExitCode = await UpdateCommand.RunAsync(
+            cli,
             args,
-            paths,
             daemonConfig.DisableSelfUpdate,
-            daemonConfig.UpdateChannel,
-            Console.In,
-            Console.Out,
-            Console.Error);
+            daemonConfig.UpdateChannel);
         return;
     }
 
@@ -1027,6 +1071,7 @@ static async Task RunAsync(string[] args)
     // ── Parse chat flags: --resume, -p/--prompt, --json ──
     string? resumeSessionId = null;
     bool chatJsonOutput = false;
+    bool chatOnboarding = false;
     if (mode is "chat")
     {
         bool chatHeadless = false;
@@ -1066,6 +1111,19 @@ static async Task RunAsync(string[] args)
                 continue;
             }
 
+            if (ChatOnboarding.ValidateToken(args[i]) is { } tokenError)
+            {
+                Console.Error.WriteLine(tokenError);
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            if (args[i] is ChatOnboarding.Flag)
+            {
+                chatOnboarding = true;
+                continue;
+            }
+
             if (IsHelpToken(args[i]))
             {
                 WriteChatHelp();
@@ -1077,6 +1135,14 @@ static async Task RunAsync(string[] args)
             {
                 chatPrompt = args[i];
             }
+        }
+
+        if (chatOnboarding && ChatOnboarding.ValidateCombination(chatHeadless, resumeSessionId) is { } onboardingError)
+        {
+            Console.Error.WriteLine(onboardingError);
+            WriteChatHelp();
+            Environment.ExitCode = 1;
+            return;
         }
 
         if (chatHeadless)
@@ -1114,7 +1180,13 @@ static async Task RunAsync(string[] args)
     ConfigureCliChatServices(webBuilder.Services, webBuilder.Configuration);
 
     // Shared navigation state for passing resume session ID to ChatViewModel
-    var navState = new ChatNavigationState { ResumeSessionId = resumeSessionId };
+    var navState = new ChatNavigationState
+    {
+        ResumeSessionId = resumeSessionId,
+        InitialMessage = chatInitialMessage
+    };
+    if (chatOnboarding)
+        navState.StartOnboarding(ChatOnboarding.BuildTrigger(sharedPaths));
     webBuilder.Services.AddSingleton(navState);
 
     // Suppress framework console logging — console is reserved for the chat UI
@@ -1125,10 +1197,10 @@ static async Task RunAsync(string[] args)
     switch (mode)
     {
         case "chat":
-            webBuilder.Services.AddTermina("/chat", termina =>
+            webBuilder.Services.AddTermina(ChatViewModel.Route, termina =>
             {
                 ConfigureNativeSelection(termina);
-                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
+                termina.RegisterRoute<ChatPage, ChatViewModel>(ChatViewModel.Route);
             });
             break;
 
@@ -1137,7 +1209,7 @@ static async Task RunAsync(string[] args)
             {
                 ConfigureNativeSelection(termina);
                 termina.RegisterRoute<SessionsPage, SessionsViewModel>("/sessions");
-                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
+                termina.RegisterRoute<ChatPage, ChatViewModel>(ChatViewModel.Route);
             });
             break;
 
@@ -1231,6 +1303,7 @@ static async Task RunConfigEditorAsync(string[] args)
         t.RegisterRoute<BrowserAutomationConfigPage, BrowserAutomationConfigViewModel>("/browser-automation");
         t.RegisterRoute<TelemetryAlertingConfigPage, TelemetryAlertingConfigViewModel>("/telemetry-alerting");
         t.RegisterRoute<WorkspacesConfigPage, WorkspacesConfigViewModel>("/workspaces");
+        t.RegisterRoute<RetentionConfigPage, RetentionConfigViewModel>("/retention");
         t.RegisterRoute<SecurityAccessPage, SecurityAccessViewModel>("/security");
         t.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>("/exposure-mode");
         t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools");
@@ -1276,11 +1349,16 @@ static async Task RunTerminaHostAsync(IHost host)
             return;
         }
 
+        var navigation = host.Services.GetService<ChatNavigationState>();
         await host.RunAsync();
+        if (navigation?.CloseReceipt is { Inputs.Length: > 0 } receipt)
+            Console.Error.WriteLine($"netclaw: {receipt.Notice}");
     }
     catch (DaemonUnavailableException ex)
     {
         Console.Error.WriteLine($"netclaw: {ex.Message}");
+        if (ChatOnboarding.DaemonUnavailableHint(host.Services.GetService<ChatNavigationState>()) is { } hint)
+            Console.Error.WriteLine(hint);
         Environment.ExitCode = 1;
     }
 }
@@ -1303,6 +1381,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("Commands:");
     Console.WriteLine("  chat                     Interactive TUI chat");
     Console.WriteLine("  chat --resume <id>       Resume an existing session by ID");
+    Console.WriteLine("  chat --onboarding        Start the guided identity interview");
     Console.WriteLine("  chat -p <text>           Headless single-prompt mode (supports --resume, --json)");
     Console.WriteLine("  sessions                 Browse and resume recent sessions (TUI)");
     Console.WriteLine("  sessions --once          List sessions and exit (no TUI, plain text or JSON)");
@@ -1336,7 +1415,7 @@ static void WriteDaemonHelp()
     Console.WriteLine("Subcommands:");
     Console.WriteLine("  start                        Start daemon as a background process");
     Console.WriteLine("  stop                         Stop daemon gracefully");
-    Console.WriteLine("  status                       Show daemon process status");
+    Console.WriteLine("  status                       Show daemon process status (exit 1 if not running or not ready)");
     Console.WriteLine("  install                      Install systemd user service (Linux)");
     Console.WriteLine("  uninstall                    Remove systemd user service (Linux)");
     Console.WriteLine("  pair                         Generate a pairing code for remote device access");
@@ -1407,6 +1486,8 @@ static void WriteChatHelp()
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  --resume, -r <id>   Resume (or create) a session by ID");
+    Console.WriteLine("  --onboarding        Start the guided identity interview (interactive only;");
+    Console.WriteLine("                      not with -p or --resume)");
     Console.WriteLine("  -p, --prompt        Send a single headless prompt (non-interactive)");
     Console.WriteLine("  --json              Output structured JSON (headless mode only)");
     Console.WriteLine("                      Includes sessionId, response, toolCalls, and usage");
@@ -1414,11 +1495,14 @@ static void WriteChatHelp()
     Console.WriteLine("Examples:");
     Console.WriteLine("  netclaw chat                                       Interactive TUI");
     Console.WriteLine("  netclaw chat --resume abc123                       Resume session in TUI");
+    Console.WriteLine("  netclaw chat --onboarding                          Run the identity interview");
     Console.WriteLine("  netclaw chat -p \"hello\"                            Headless single prompt");
     Console.WriteLine("  netclaw chat -p --resume my-session \"hello\"        Named session, headless");
     Console.WriteLine("  netclaw chat -p --resume my-session --json \"hello\" JSON output, named session");
     Console.WriteLine();
     Console.WriteLine("Use `netclaw sessions` to browse available sessions.");
+    Console.WriteLine("Normal Ctrl+Q allows two seconds for daemon admission. It does not wait for the model.");
+    Console.WriteLine("Check the session before you resend text with unconfirmed delivery.");
 }
 
 static void WriteStatusHelp()
@@ -1524,6 +1608,8 @@ static void WriteDoctorFixPlan(DoctorFixPlan plan, bool dryRun)
     {
         Console.WriteLine($"- {fix.FilePath}");
         Console.WriteLine($"  {fix.Description}");
+        foreach (var backup in DoctorFixService.PlannedBackups(fix))
+            Console.WriteLine($"  Original is backed up to {backup} before the change.");
         WriteSimpleDiff(fix.OriginalText, fix.UpdatedText);
     }
 }
@@ -1691,6 +1777,12 @@ static void WriteSessionsHelp()
 static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoint, StatusUpdateResult? cliUpdate = null)
 {
     Console.WriteLine($"overall: {status.Overall}");
+    if (!string.IsNullOrWhiteSpace(status.ConfigNotApplied))
+    {
+        Console.WriteLine($"config on disk not applied: {status.ConfigNotApplied}");
+        Console.WriteLine("  The daemon is still running the previous configuration. No change from netclaw.json is applied until this is fixed.");
+    }
+
     Console.WriteLine($"version: {status.Build.Version} (commit {status.Build.CommitHash}, built {status.Build.BuildTimestamp})");
     Console.WriteLine($"daemon: PID {status.Process.Pid}, uptime {FormatUptime(status.Process.UptimeSeconds)}, endpoint {endpoint}");
     Console.WriteLine($"persistence: {status.Persistence.Provider}");
@@ -2040,6 +2132,10 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
 
     // TimeProvider (virtualized for testing)
     services.AddSingleton(TimeProvider.System);
+    // Resolve after all registrations so the context uses the final paths and clock.
+    services.AddSingleton(sp => CliContext.ForProcess(
+        sp.GetRequiredService<NetclawPaths>(),
+        sp.GetRequiredService<TimeProvider>()));
 
     // Shared daemon HTTP API client — single endpoint resolution for all commands
     services.AddHttpClient();

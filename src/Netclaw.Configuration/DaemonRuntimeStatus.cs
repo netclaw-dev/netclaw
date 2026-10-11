@@ -15,6 +15,12 @@ public static class DaemonRuntimeStatus
     {
         public string Overall { get; init; } = "unknown";
 
+        /// <summary>
+        /// Why the daemon rejected the configuration on disk, or null. When set, the daemon keeps
+        /// running the previous configuration and applies no change from netclaw.json.
+        /// </summary>
+        public string? ConfigNotApplied { get; init; }
+
         public required Build Build { get; init; }
 
         public required Process Process { get; init; }

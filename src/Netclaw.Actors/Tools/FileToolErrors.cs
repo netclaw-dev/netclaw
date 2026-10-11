@@ -8,12 +8,13 @@ namespace Netclaw.Actors.Tools;
 internal static class FileToolErrors
 {
     public static string ControlPlaneWriteDenied(string path)
-        => $"Error: Access denied: '{path}' is part of Netclaw's control plane "
-           + "(secrets, keys, database, or lifecycle files) and cannot be modified by agent tools, "
-           + "even with approval. If the user wants this change, ask them to run a dedicated command "
-           + "(e.g. `netclaw doctor --fix`, `netclaw secrets set`) or edit the file directly.";
+        => $"Error: Access denied: '{path}' is protected (Netclaw control plane, or a credential location such as ~/.ssh, ~/.aws or ~/.kube) "
+           + "and cannot be modified by agent tools, even with approval. Do not retry through another tool or path. "
+           + "Tell the user what change is needed; they can make it themselves "
+           + "(Netclaw settings: `netclaw secrets set` or `netclaw doctor --fix`; SSH or AWS files: their own shell).";
 
     public static string CredentialReadDenied(string path)
-        => $"Error: Access denied: '{path}' is a protected Netclaw file "
-           + "(credentials, keys, secrets, or control-plane state) and cannot be read by agent tools.";
+        => $"Error: Access denied: '{path}' is protected (Netclaw secrets, keys or control-plane state, or a credential location such as ~/.ssh, ~/.aws or ~/.kube) "
+           + "and cannot be read by agent tools, even with approval. Do not look for another way to read it. "
+           + "ssh, git and aws still use these credentials when you run them; if you need a value from the file, ask the user.";
 }

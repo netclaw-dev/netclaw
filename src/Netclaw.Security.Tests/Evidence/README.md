@@ -52,7 +52,7 @@ These files are byte-identical copies of evidence from these OpenSpec change
 folders:
 
 - `openspec/changes/archive/2026-08-15-structure-shell-approval-policy/evidence/`
-- `openspec/changes/reduce-fresh-session-approval-spam/evidence/`
+- `openspec/changes/archive/2026-09-29-reduce-fresh-session-approval-spam/evidence/`
 - `openspec/changes/make-agent-tools-pit-of-success/evidence/`
 
 The OpenSpec copies are historical records. The tests do not read them. Change

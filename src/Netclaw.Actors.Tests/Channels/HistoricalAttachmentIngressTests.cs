@@ -8,6 +8,7 @@ using Netclaw.Channels;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -16,10 +17,21 @@ namespace Netclaw.Actors.Tests.Channels;
 /// Tests for the shared historical-attachment security gate that Slack, Discord,
 /// and Mattermost run on both the fresh-download and the inbox cache-hit paths.
 /// </summary>
-public sealed class HistoricalAttachmentIngressTests
+public sealed class HistoricalAttachmentIngressTests : IAsyncLifetime
 {
     private static readonly byte[] PngBytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     private static readonly byte[] WindowsExecutableBytes = [0x4D, 0x5A, 0x90, 0x00];
+
+    private readonly List<TestSessionTempDirectory> _tempDirs = [];
+
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var dir in _tempDirs)
+            await dir.DisposeAsync();
+        _tempDirs.Clear();
+    }
 
     private static ChannelAttachmentPolicy ImagePolicy => new()
     {
@@ -30,9 +42,11 @@ public sealed class HistoricalAttachmentIngressTests
 
     private static IContentScanner Scanner => new MagicByteContentScanner(new ContentPolicy());
 
-    private static string WriteTempFile(byte[] bytes, string extension)
+    private string WriteTempFile(byte[] bytes, string extension)
     {
-        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + extension);
+        var tempDir = TestSessionTempDirectory.Create();
+        _tempDirs.Add(tempDir);
+        var path = Path.Join(tempDir.Path, Guid.NewGuid().ToString("N") + extension);
         File.WriteAllBytes(path, bytes);
         return path;
     }
@@ -44,27 +58,21 @@ public sealed class HistoricalAttachmentIngressTests
         // be promoted to its scanner-verified image/png MIME — this is the
         // exact value the cache-hit path now serves instead of the raw declared one.
         var path = WriteTempFile(PngBytes, ".png");
-        try
-        {
-            var outcome = await HistoricalAttachmentIngress.ScanAndVerifyAsync(
-                Scanner,
-                path,
-                "pic.png",
-                new DeclaredMimeType("application/octet-stream"),
-                TrustAudience.Public,
-                ImagePolicy,
-                TimeSpan.FromSeconds(5),
-                NullLogger.Instance,
-                TestContext.Current.CancellationToken);
 
-            var verified = Assert.IsType<HistoricalAttachmentIngress.ScanOutcome.Verified>(outcome);
-            Assert.Equal("image/png", verified.MimeType.Value);
-            Assert.Equal(AttachmentCategory.Image, verified.Category);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        var outcome = await HistoricalAttachmentIngress.ScanAndVerifyAsync(
+            Scanner,
+            path,
+            "pic.png",
+            new DeclaredMimeType("application/octet-stream"),
+            TrustAudience.Public,
+            ImagePolicy,
+            TimeSpan.FromSeconds(5),
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken);
+
+        var verified = Assert.IsType<HistoricalAttachmentIngress.ScanOutcome.Verified>(outcome);
+        Assert.Equal("image/png", verified.MimeType.Value);
+        Assert.Equal(AttachmentCategory.Image, verified.Category);
     }
 
     [Fact]

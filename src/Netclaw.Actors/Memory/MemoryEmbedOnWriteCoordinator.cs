@@ -11,7 +11,9 @@ namespace Netclaw.Actors.Memory;
 /// <summary>
 /// One <c>memory_documents</c> row written by a curation batch-apply
 /// (<see cref="SQLiteMemoryStore.ApplyInlineCurationBatchAsync"/> or
-/// <see cref="SQLiteMemoryStore.ApplyCurationBatchAsync"/>), carrying exactly what
+/// <see cref="SQLiteMemoryStore.ApplyCurationBatchAsync"/>) or by an <c>update_memory</c> edit
+/// (<see cref="SQLiteMemoryStore.UpdateDocumentTextAsync"/> or
+/// <see cref="SQLiteMemoryStore.ReplaceDocumentTextAsync"/>), carrying exactly what
 /// <see cref="MemoryEmbedOnWriteCoordinator"/> needs to embed it: the final (post-anchor-
 /// resolution) document id and the text that was persisted. Immutable <c>memory_records</c>
 /// (Evidence) are never included — they bypass curation evaluation entirely (see

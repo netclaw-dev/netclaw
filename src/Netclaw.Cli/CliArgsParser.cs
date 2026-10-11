@@ -51,12 +51,15 @@ public static class CliArgsParser
     /// have actually stopped the daemon). Callers that DO have their own more specific
     /// <c>--help</c> handling for a subcommand (e.g. <c>webhooks set</c>) should exclude that
     /// subcommand from this check so the more specific help text is not shadowed.
+    /// Pass <paramref name="includeBareHelp"/> <c>false</c> where a later operand can legitimately
+    /// be the word "help" (a server, key, skill or provider name): only <c>-h</c> and
+    /// <c>--help</c> then count.
     /// </summary>
-    public static bool HasTrailingHelpToken(string[] args, int startIndex)
+    public static bool HasTrailingHelpToken(string[] args, int startIndex, bool includeBareHelp = true)
     {
         for (var i = startIndex; i < args.Length; i++)
         {
-            if (IsHelpToken(args[i]))
+            if (IsHelpToken(args[i]) && (includeBareHelp || args[i] != "help"))
                 return true;
         }
 

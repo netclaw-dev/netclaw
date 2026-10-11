@@ -63,7 +63,12 @@ that breaks them.
 
 5. **Anchor regexes at every step.** After every `Type` / `Enter` /
    `Down` / etc. that changes the visible state, immediately
-   `Wait+Screen /…/` for an anchor in the next view.
+   `Wait+Screen /…/` for an anchor in the next view. The anchor must be
+   text that only the next view shows. Do not anchor on a menu label, a
+   page title, or a key hint that the current view also shows. Such an
+   anchor matches at once, and the next keys reach the old view. For
+   example, the root dashboard shows the row `Security & Access`, so
+   tapes anchor that page on its row text `Deployment trust stance.`.
 
 6. **Pair each non-trivial tape with an assertion.** Place a sibling
     script at `tests/smoke/assertions/<tape-name>.sh`. The wrapper

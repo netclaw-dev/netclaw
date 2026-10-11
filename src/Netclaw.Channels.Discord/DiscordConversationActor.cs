@@ -14,8 +14,8 @@ namespace Netclaw.Channels.Discord;
 
 /// <summary>
 /// Per-channel actor that serves as the security boundary for Discord messages.
-/// The inbound pipeline (ACL, routing policy, ingress gating, passivation,
-/// session binding management) lives in <see cref="ChannelConversationActor{TMessage}"/>;
+/// The inbound pipeline (ACL, routing policy, ingress gating, and session
+/// binding management) lives in <see cref="ChannelConversationActor{TMessage}"/>;
 /// this subclass supplies the Discord projections plus the interaction,
 /// proactive-thread, and trusted-turn receives.
 /// Uses blind-write routing: session IDs are derived deterministically from

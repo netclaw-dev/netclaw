@@ -34,12 +34,18 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)
     {
+        // Same endpoint normalisation as chat: the configured endpoint may or may not
+        // end in /v1, so the models path comes from OpenAiCompatibleEndpoint rather
+        // than being appended to the raw string.
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl(
+            string.IsNullOrWhiteSpace(entry.Endpoint) ? DefaultEndpoint : entry.Endpoint);
+
         return ProbeHelpers.ExecuteProbeAsync(
             _httpClient,
             TypeKey,
             DefaultEndpoint,
-            ModelListingPath,
-            entry.Endpoint,
+            endpoint.ModelsPath,
+            endpoint.BaseUri.GetLeftPart(UriPartial.Authority),
             request =>
             {
                 OpenAiCompatibleHttp.ApplyBearerAuth(

@@ -6,6 +6,7 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Media;
+using Netclaw.Tools.Authorization.Consent;
 
 namespace Netclaw.Actors.Tests.Tools;
 
@@ -139,14 +140,14 @@ public sealed class ToolExecutionValueObjectTests
         var second = new ToolExecutionContext(runScope, ToolExecutionTimeout.Default);
 
         first.Outputs.AddFileAttachment("/tmp/one.txt", "one.txt", new MimeType("text/plain"));
-        first.Approval.ApplyDecision("allow-once", "shell_execute:git status");
+        first.Approval.SeedOneTimeConsent(new OneTimeConsent("shell_execute", ["git status"]));
 
         Assert.Same(runScope, first.RunScope);
         Assert.Same(runScope, second.RunScope);
         Assert.NotSame(first.Outputs, second.Outputs);
         Assert.NotSame(first.Approval, second.Approval);
         Assert.Empty(second.Outputs.FileAttachments);
-        Assert.Null(second.Approval.AppliedDecision);
+        Assert.Null(second.Approval.OneTimeConsent);
     }
 
     [Fact]

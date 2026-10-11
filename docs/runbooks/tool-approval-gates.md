@@ -1,54 +1,52 @@
 # Tool Approval Gates
 
-Netclaw includes a tool approval system that requires interactive user sign-off
-before executing potentially destructive tool calls. This guide covers how
-approval gates work, how to configure them, and what to expect from each
-channel.
+This runbook tells an operator how to configure, answer, inspect, and repair
+tool approval in Netclaw. It covers configuration, the CLI, channels, and
+diagnostics.
 
-## Overview
+For how authorization works inside Netclaw, read
+[the tool authorization architecture](../architecture/tool-authorization.md).
+For the testable rules, read the
+[`tool-authorization` capability](../../openspec/specs/tool-authorization/spec.md).
 
-The current source checks shell requests in this order:
+## What happens to a tool call
 
-1. **Tool access and shell capability** — the audience must expose the tool.
-   The shell must be enabled and the caller must use the Personal audience.
-2. **Shell operation controls** — `check_background_job` can control only a
-   job that has the same session, audience, and trust boundary.
-3. **Operation and resource hard deny** — blocked shell operations and
-   protected shell paths never receive approval authority.
-4. **Mode and channel controls** — `Deny` stops the call. Non-interactive
-   calls must pass the trust-zone policy before `Auto` can allow the call.
-5. **Correction or approval** — an `Approval` call can request prior-grant
-   evidence, reviewed-safe coverage, or an interactive approval.
+Netclaw checks each tool call before it runs. The result is one of four
+outcomes:
 
-The approval gate does not execute a call or grant authority by itself. A shell
-call can return a result, a denial, or a recoverable correction to the model.
+| Outcome | What you see |
+| --- | --- |
+| Allowed | The tool runs. |
+| Requires approval | The channel shows a prompt. The call waits for your answer. |
+| Requires correction | The agent gets advice and sends a different call. You see no prompt. |
+| Denied | The tool does not run. No answer can change this. |
 
-`ShellPolicyCoordinator` asks `ToolAccessPolicy` to analyze the request and
-apply synchronous access checks. The coordinator collects compatible native,
-temporary, and project advice from existing invocation facts and policy.
-Native advice precedes stored grants. Temporary-only and project-only advice
-retain existing stored-grant and exact one-time approval precedence.
-Corrections precede an `Auto` allow. Hard denials precede all advice.
-Reviewed diagnostics without file output retain their requested temporary directory. Normal authorization still applies.
-A redirect that writes a file or an additional unclassified command can still require relocation advice.
-Parent and child deliver the common result and retain their state and transport duties.
-Project advice requires a visible declaration tool that accepts the exact directory.
-That advice can apply without an approval bridge; temporary advice retains its interactive capability requirement.
+These checks run first and cannot be overridden by an approval:
 
-## Approval Modes
+- The audience profile must allow the tool.
+- Shell calls need the Personal audience and a shell mode that allows the host
+  shell.
+- A hard-deny rule or a protected path denies the call. A glob word that can
+  match a protected path or the credential store (`~/.netclaw/keys`,
+  `~/.netclaw/config/secrets.json`), such as `cat ~/.netclaw/k*/*.xml`, is
+  denied as the literal path is (owner decision D5). The check compares the
+  glob segments with the protected paths. It does not list directories or
+  follow links.
 
-Each tool can be in one of three modes per audience:
+## Approval modes
+
+Each audience sets a mode per tool:
 
 | Mode | Behavior |
-|------|----------|
-| `Auto` | No approval prompt. Shell corrections and hard denials still apply before execution. |
-| `Approval` | User must approve before execution. Unapproved commands pause and prompt. |
-| `Deny` | Always blocked. No approval prompt offered. |
+| --- | --- |
+| `Auto` | No prompt. Hard deny, path checks, and agent corrections still apply. |
+| `Approval` | Netclaw asks you unless a grant or a safe rule covers the call. |
+| `Deny` | The call is always blocked. No prompt. |
 
 ## Configuration
 
-Approval is configured per audience via `ApprovalPolicy` on each audience
-profile in `netclaw.json`:
+Set the mode in the `ApprovalPolicy` of each audience profile in
+`netclaw.json`:
 
 ```json
 {
@@ -67,33 +65,47 @@ profile in `netclaw.json`:
 }
 ```
 
-This means: all tools run normally, but `shell_execute` requires approval for
-the Personal audience. You can add other tools to `ToolOverrides` as needed
-(e.g., `"mcp:filesystem:write_file": "Approval"`).
+This means: all tools run without a prompt, but `shell_execute` needs approval
+for the Personal audience. Add other tools to `ToolOverrides` as needed, for
+example `"mcp:filesystem:write_file": "Approval"`. `McpServerDefaults` sets a
+mode for every tool of one MCP server.
 
-### New installations
+Defaults you get without an `ApprovalPolicy`:
 
-`netclaw init` sets `shell_execute: Approval` for Personal audience by default.
-The operator can change this in the generated config.
+- Personal `shell_execute` uses `Approval`, even when `DefaultMode` is `Auto`.
+  Only an exact `shell_execute` override of `Auto` removes the prompt.
+- Personal `file_write` and `file_edit` on a Netclaw control-plane path use
+  `Approval`.
+- Other tools use `Auto`.
+- Team and Public cannot use `shell_execute`.
 
-### Existing installations
+`netclaw init` writes an explicit `shell_execute: Approval` override for
+Personal. Rerun `netclaw init` or add the override to make the default visible.
 
-Personal `shell_execute` calls without an exact override use the fail-closed
-`Approval` mode. This rule also applies when the Personal `ApprovalPolicy` is
-absent or its `DefaultMode` is `Auto`.
+### Shell mode
 
-Rerun `netclaw init` or add the `Approval` override to make this behavior
-explicit. Set an exact `shell_execute` override to `Auto` only when shell
-commands must run without approval.
+`Tools.ShellMode` selects `Off`, `SandboxOnly`, or `HostAllowed`. When it is
+absent, Netclaw uses `Security.ShellExecutionMode`, then the posture default
+(`HostAllowed` for Personal). `SandboxOnly` always denies today, because
+Netclaw has no sandbox backend.
 
-### Headless mode
+### Headless and unattended runs
 
-Headless mode (`netclaw chat -p "prompt"`) cannot ask for approval — there is no
-interactive user. Netclaw still applies hard deny, path access decisions, and
-stored grants. If any candidate remains uncovered and would need a
-prompt, the call is denied. The reviewed-safe catalog alone does not grant a
-headless call; approval-exempt side effects can still pass. For unrestricted
-shell in headless scripts, explicitly set `shell_execute` to `Auto`:
+Headless chat (`netclaw chat -p "prompt"`), reminders, and webhooks cannot show
+a prompt. They use the same audience policy as a chat of the same audience
+(decision D2): the same file reach, hard deny, protected paths, reviewed-safe
+catalog, stored grants, and approval modes. The one difference: a call that
+would prompt in a chat is denied, because nobody can answer. The deny reason is
+`approval_required_unattended`, and the tool result says:
+
+```text
+Tool access denied: <tool> needs approval, and nobody can answer a prompt in an unattended run. ...
+```
+
+To allow that call, save an "Always" grant for it in a chat with the same
+audience (for a reminder, use `/run-reminder <id>`). A "Once" or "This chat"
+answer does not carry over. To let a headless script run shell commands
+without any prompt, set `shell_execute` to `Auto`:
 
 ```json
 {
@@ -111,556 +123,224 @@ shell in headless scripts, explicitly set `shell_execute` to `Auto`:
 }
 ```
 
-## How Approval Works
-
-When the agent calls a tool in `Approval` mode:
-
-1. The system extracts a **command pattern** (for example,
-   `git push origin main` from that exact call).
-2. It checks the **approval cache** — has this pattern been approved before?
-3. If all grant-bearing candidates resolve to one registered repository,
-   the channel can post this prompt:
-   ```
-   🔒 Tool approval required
-   > shell_execute: git push origin main
-   Pattern: git push origin main
-
-   Reply with:
-     A) Once
-     B) This chat
-     C) Always here
-     D) This repository
-     E) Always anywhere
-     F) Deny
-   ```
-   A missing or mixed repository scope omits `This repository`.
-4. The tool execution pauses until the user responds. Other tool calls in the
-   same batch continue running independently.
-5. Based on the response:
-   - **Once** — the exact blocked call retries once; no grant is saved
-   - **This chat** — the covered phrase remains valid anywhere in this session
-   - **Always here** — a folder-scoped grant is saved to disk
-   - **This repository** — Netclaw saves a grant for registered worktrees
-   - **Always anywhere** — a global phrase grant is saved to disk
-   - **Deny** — the call returns "Command denied by user" to the LLM
-
-The policy can remove reusable choices when a command has no clean phrase. It
-also removes `Always here` for a shallow root, a session-owned directory, and
-non-shell tools that have no directory scope. See [When the prompt offers fewer
-buttons](#when-the-prompt-offers-fewer-buttons).
-
-### When the prompt offers fewer buttons
-
-`Once` and `Deny` are the fail-closed choices. Netclaw omits `This chat` and
-the persistent choices when the shell parser cannot produce a clean reusable
-phrase for every uncovered command occurrence. It also omits `Always here`
-when no safe directory scope can be stored. This rule prevents a one-time
-decision from becoming broader reusable authority.
-
-### Repository grants
-
-`This repository` creates a distinct grant for one Git common directory.
-Netclaw resolves each grant-bearing candidate's effective directory.
-Each directory must belong to a registered worktree under one Git common directory.
-The request working directory supplies scope only when a candidate has no directory.
-Netclaw checks each candidate again before it stores or uses the grant.
-Pure output side effects do not establish or suppress repository identity.
-An old `Always here` grant remains a folder grant.
-Netclaw supports an ordinary `.git` directory and registered linked worktrees.
-It does not offer this choice for a main checkout that uses `--separate-git-dir`.
-
-For example, approve `./scripts/bump-version.sh` with `This repository` in a
-registered worktree. The same command can then use that grant in a registered
-sibling worktree. A second command, such as `python3`, still needs its own
-authority. An unrelated repository cannot use the grant.
-
-Netclaw rejects mixed repositories, copied `.git` pointers, moved worktrees,
-and paths through external symbolic links. Hard denies, path checks, and audience rules still apply.
-Use `netclaw approvals list` to copy the exact repository label.
-Use `netclaw approvals revoke '<label>'` to remove that grant.
-
-A command with an exact-tree requirement always offers only `Once` or `Deny`.
-It cannot use reviewed-safe, session, stored, or persistent coverage. This rule
-applies in interactive `Auto` and `Approval` modes. Headless `Auto` denies the
-call, and `Deny` mode denies it.
-
-The exact one-time retry parses the call again. It repeats the command
-hard-deny and protected-path checks before execution.
-
-### Command patterns
-
-For `shell_execute`, patterns come from the parser for the daemon's selected
-native shell environment. Linux and macOS use Bash. Windows uses a probed
-native PowerShell host: compatible PowerShell 7.6 is preferred, with Windows
-PowerShell 5.1 as the fallback. The exact executable, grammar, and dialect are
-shown in Personal session working context.
-
-| Command | Pattern |
-|---------|---------|
-| `git push origin main` | `git push origin main` |
-| `docker compose up -d` | `docker compose up` |
-| `ls -la /tmp` | `ls` |
-| `dotnet build --configuration Release` | `dotnet build` |
-
-Extraction is greedy: bare-word operands (subcommands, remote names, branch
-names) stay in the verb chain; the chain stops at the first flag, path, or
-URL. Approving `git push origin main` covers later `git push origin main`
-calls, not `git push origin dev` — each distinct verb chain is its own
-pattern.
-
-For **compound commands** (`&&`, `||`, `;`, `|`), each segment is checked
-independently. If any segment is unapproved, all unapproved patterns are
-batched into one prompt.
-
-ShellSyntaxTree `0.4.0-beta.4` supplies bounded assignment facts.
-Netclaw can reuse a grant when each assignment fact is exact and complete.
-The grant stores a SHA-256 digest of the canonical assignment facts.
-It does not store an assignment name, source value, or effective value.
-A changed assignment produces a different digest and needs separate authority.
-An old unqualified grant cannot authorize an assignment-qualified command.
-The reviewed-safe catalog does not authorize assignment-qualified commands.
-An assignment inside an opaque fallback shell wrapper remains one-time.
-Netclaw still expands that wrapper for hard-deny review.
-
-PowerShell finite loops can project more than one path scope.
-Netclaw checks every scope when ShellSyntaxTree supplies complete public path facts.
-An incomplete cmdlet operand path keeps the complete call one-time-only.
-
-Netclaw can resolve a complete static Bash list with an exact `cd` target.
-ShellSyntaxTree `0.4.0-beta.3` supplies each bounded directory and source slice.
-Netclaw checks each fact against its command policy and grant rules.
-Netclaw keeps the causal intent policy when it recognizes the list.
-It checks both the success and failure directories after each directory change.
-It checks each pipeline stage under the same entry directory.
-Every reachable verb and path needs its own grant or safe policy result.
-Unknown directory effects, dynamic syntax, linked directories, deep glob paths,
-and excess scopes retain exact approval.
-The agent receives directory advice only when this scope proof fails and the advice is safe.
-A shell working directory with a `..` segment is invalid.
-The OS can resolve that segment after a symbolic link and reach another directory.
-Use an absolute working directory without parent traversal.
-
-The selected host grammar is also the language boundary. Under Bash,
-`pwsh -Command 'Get-Content ./a.txt'` is an ordinary external `pwsh` command;
-the payload is not separately parsed as PowerShell. Under native PowerShell,
-`bash -c 'cat ./a.txt'` is likewise an ordinary external `bash` command.
-Same-language static child hosts can expose nested command occurrences when
-ShellSyntaxTree proves them.
-
-PowerShell 7 and Windows PowerShell 5.1 are analyzed as distinct dialects.
-In particular, `&&` and `||` are unresolved under 5.1 and cannot create a
-persistent approval candidate or receive the reviewed diagnostic shortcut.
-Incomplete commands, dynamic command identities, and non-filesystem provider
-drives also remain one-time-only. Netclaw does not claim knowledge of ambient
-profiles, modules, inherited variables, executable lookup, or external script
-contents.
-
-For most **non-shell tools** (MCP tools, `file_read`, etc.), approval is at the
-tool-name level.
-
-For `file_write` and `file_edit`, approval is path-aware for Netclaw
-control-plane targets. Writes under the control-plane root use mode keys like
-`file_write:control-plane` / `file_edit:control-plane` and persist approvals as
-path-scoped patterns (for example,
-`file_write:control-plane:netclaw.json`).
-
-### Reviewed diagnostic phrases skip the prompt
-
-In an interactive session, reviewed diagnostic phrases can auto-run below an
-applicable trusted root. Personal and Team use `session_dir` or `project_dir`.
-In a headless session, this catalog does not grant authority. The call still
-needs an exact one-time, session, or persistent grant. The bundled safe-policy
-catalogs (`safe-verbs.linux.json`, `safe-verbs.windows.json`) cover
-file readers (for example `ls`, `grep`, and `cat` on Bash; `Get-ChildItem`,
-`Get-Content`, and `Select-String` on PowerShell), system/info phrases
-(`whoami`, `uname`, `uptime`), reviewed Windows queries (`Get-Process` and
-`Select-Object`), and narrowly reviewed `git`/`gh` queries
-(`git status`, `git rev-parse`, `gh run list`). Mutating verbs (`git push`, `git fetch`, `rm`),
-command-prefixing verbs (`env`, `xargs`, `sudo`), network-writing verbs
-(`gh api`, `curl`), environment dumps (`printenv`), and the Bash `ps` process
-table are never auto-allowed. The path access decision limits where file verbs
-can act. Each entry stores canonical shell tokens and a proof category.
-`ReviewedDiagnostic` classifies the shell-authored invocation. It does not
-claim that Netclaw sandboxes the executable.
-
-The reviewed phrase cannot accept an authored helper command, output file,
-destructive state request, or remote mutation. Netclaw also rejects an
-argument before the phrase completes. A possible local path must stay beneath
-an applicable trusted root.
-
-Ambient executable configuration is outside this claim. Tool-private cache or
-metadata refresh is also outside this claim. The same limit applies to paths
-that a tool discovers after execution starts.
-
-The catalog ships with the daemon and changes only through code review. The
-agent cannot extend its own auto-pass surface. Every clause needs coverage.
-One uncovered clause makes the call prompt.
-
-### How parser facts become one policy result
-
-ShellSyntaxTree describes shell syntax. It does not grant authority. Netclaw
-projects those facts into one immutable call-local view and then decides which
-authority, if any, covers each command occurrence.
-
-| Step | Input | Output | Owner |
-|------|-------|--------|-------|
-| Preflight and syntax analysis | Original tool call, shell environment, initial cwd, audience, and run scope | Canonical analysis and access, hard-denial, mode, and channel checks | `ToolAccessPolicy` |
-| Correction collection | Canonical analysis, exposed tools, and invocation facts | Compatible advice; applicable corrections precede an Auto allow | `ShellPolicyCoordinator` |
-| Policy projection | Syntax facts plus the unchanged approval context | Stable call-local candidate IDs and immutable scope facts | Netclaw |
-| Grant match | Candidates plus one session/persistent store snapshot | One typed match or one bounded near miss per candidate | Approval actor |
-| Coverage | Grant matches, reviewed-safe policy, and an exact one-time retry | One coverage result per candidate | Netclaw |
-| Completion | Coverage results and applicable advice | `Allowed`, `RequiresApproval`, `RequiresAgentCorrection`, or `Denied` | `ShellPolicyCoordinator` |
-
-The coordinator does not rewrite the original command. A prompt and an eventual
-execution still refer to the exact tool call the model authored. Candidate IDs
-exist only for that call; they are not durable grant IDs.
-
-The coordinator returns one closed result shape:
-
-| Outcome | Consumer data | Next action |
-|---------|---------------|-------------|
-| `Allowed` | One allow reason and any stored matches that helped cover the call | Execute the original tool call |
-| `RequiresApproval` | A narrowed approval context plus any partial stored matches | Prompt only for the uncovered candidates |
-| `RequiresAgentCorrection` | The complete compatible collection and any prior approval matches | Deliver the advice without execution, a prompt, or a new grant |
-| `Denied` | One stable deny reason | Return the denial without execution or prompt |
-
-The important value-domain rules are:
-
-- Effective `Exact` and `FiniteSet` path values pass through `ToolPathPolicy`.
-- An `Exact` or `FiniteSet` `AuthoredFileSystemValue` also passes through
-  `ToolPathPolicy`. This is the strong parser fact used for a finite loop path.
-- `AuthoredPathShape` is lexical evidence only. A slash-shaped value may be a
-  repository slug, URL segment, image name, or other data, so shape alone never
-  creates filesystem authority.
-- A `DynamicSkip` exemption needs an audited non-path fact. The argument must
-  set `IsPath` to false and `AuthoredFileSystemValue` to `Unknown`.
-- The exemption accepts `Exact`, `FiniteSet`, and an `OrderedList` with 2
-  through 32 non-null elements. An ordered list can contain duplicates.
-- The exemption accepts an `IntegerRange` only when the typed bounds match and
-  the range contains no more than 4,096 elements.
-- Conflicting facts, arbitrary values, `Concatenation`, and future enum values
-  do not satisfy the `DynamicSkip` exemption.
-- Bounded non-path values cannot select an executable, justify a redirect, or
-  grant file access.
-- `Unknown`, incomplete control flow, a dynamic executable, an unresolved path,
-  or an unresolved redirect stays strict.
-
-The important file-tree rules are:
-
-- Netclaw consumes one consistent ShellSyntaxTree tree-access fact.
-- Direct access and no-link recursion can use normal policy after all root
-  checks pass.
-- Windows PowerShell 5.1 recursion remains exact-only because it can follow
-  links.
-- Unknown, malformed, conflicting, and future tree facts remain exact-only.
-- A root separator, an incomplete root, a device UNC root, and a
-  drive-relative `C:` glob remain exact-only.
-- The tree root enters path policy as `FileSystemTreeRoot`.
-
-The result can compose. A three-part command can use a stored grant for one
-candidate and reviewed-safe policy for the other two. Netclaw prompts only for
-the candidates that remain uncovered.
-
-#### Example: a bounded PowerShell line selection
-
-Input:
-
-```powershell
-Get-Content "C:\WORK\PROJECT\SourceFile.cs" |
-  Select-Object -Index (113..145)
-```
-
-ShellSyntaxTree reports one exact path and a bounded 33-element integer range.
-Netclaw can apply reviewed-safe policy when the file is under a trusted root.
-The hard-deny and protected-path checks still run first.
-
-#### Example: bounded status data in a compound command
-
-Input:
+To collect stored grants for a reminder, test it once in a chat with the
+same audience as the reminder:
 
 ```bash
-gh run view 123456 --repo example/project --log-failed --verbose 2>&1 \
-  | head -200; echo "---EXIT $?---"
+netclaw reminder run <id>      # opens a chat that sends /run-reminder <id>
 ```
 
-Assume the operator already stored a global Bash token-prefix grant for
-`gh run view`. With a trusted `/work` scope, the facts and result are:
+In a channel or a DM, type `/run-reminder <id>`. The agent runs the reminder's
+exact prompt in the chat. Answer each prompt with "Always here",
+"This repository", or "Always anywhere". The scheduled run reads those
+grants. "Once" and "This chat" answers do not carry over to a scheduled run.
 
-| Candidate | Parser fact | Coverage |
-|-----------|-------------|----------|
-| `gh run view` | Complete Bash occurrence with canonical tokens | Persistent global `gh run view` grant |
-| `head` | Complete occurrence under the real trusted root | Reviewed-safe policy |
-| `echo` | Argument is `Concatenation(Exact, IntegerRange(0..255), Exact)` and is not a path | Approval-exempt side effect |
+Limitation ([#2330](https://github.com/netclaw-dev/netclaw/issues/2330)):
+`run_reminder` runs only in a chat at the reminder's audience. A CLI chat is
+Personal, so `netclaw reminder run` tests only Personal reminders. A bot with a
+disposition below Personal may have no chat where some of its reminders can be
+tested.
 
-Output: `Allowed`. The status expansion is bounded data; it does not make the
-command complex and it does not add filesystem authority. Without the stored
-grant, `gh run view` remains uncovered. It accepts `--web`, so the complete
-phrase cannot satisfy `ReviewedDiagnostic` without executable-private
-flag logic.
+## Answer a prompt
 
-If the call is outside every trusted root, the global `gh run view` grant still
-matches, while `head` remains uncovered. When an eligible Personal or Team call
-names a directory that the session can declare, Netclaw can first return a
-`set_working_directory` correction to the agent. Otherwise the uncovered
-candidates require approval. The bare `echo` side effect does not become a
-reusable prompt choice.
+A prompt shows the tool, the command or arguments with secrets removed, and
+the options that are safe for this call:
 
-#### Example: one-call directory advice
+| Option | Key | Effect |
+| --- | --- | --- |
+| Once | `approve_once` | The exact blocked call runs once. Netclaw saves nothing. |
+| This chat | `approve_session` | The phrase is allowed for the rest of this session. |
+| Always here | `approve_always` | Netclaw saves a grant for this folder. |
+| This repository | `approve_repository` | Netclaw saves a grant for one Git repository and its registered worktrees. |
+| Always anywhere | `approve_everywhere` | Netclaw saves a global grant. For an MCP tool, the label is "Always allow this tool". |
+| Deny | `deny` | This call does not run. Netclaw does not ban the phrase. |
 
-An eligible Bash call can start with `cd /work/sub && command` while its
-session already declares `/work`. Netclaw can return
-`use_shell_working_directory` before an approval prompt. The correction names
-`/work/sub` for the next call's typed `WorkingDirectory`. The agent must remove
-the leading `cd` when it creates that next call. The original command does not
-run. The new command passes all normal policy checks. Netclaw gives no such
-advice for an unknown target, an external path, or a symbolic link below the
-project root.
-If the task needs the original shell directory behavior, the agent can keep
-the command and set typed `WorkingDirectory` to the current project root.
-That explicit scope stops repeat advice but grants no authority. Normal
-approval policy then applies to the original command.
+After an approved call, Netclaw adds one line to the tool result that the
+model reads. The line names the choice: `[approval: once]`,
+`[approval: this chat only]`, `[approval: always in this folder]`,
+`[approval: always in this repo]`, or `[approval: always anywhere]`. A call
+that a saved grant or a policy allows gets no line. A denied call gets no line.
 
-#### Example: Bash causal directory intent
+The prompt offers fewer options when a broader grant is not safe:
 
-Input:
+- Only `Once` and `Deny` appear when the shell parser cannot prove a reusable
+  phrase for every uncovered command in the call, or when the call is a
+  managed temporary directory retry. In an interactive Bash call, each
+  unresolved command (for example `cat "$f"` in a loop, or a command after
+  `cd "$dir"`) is one exact candidate with its own text. The other commands
+  keep their grants, so the prompt names only the unresolved part.
+  A multi-line operand, such as `python3 -c` code, does not cause this. Its
+  scope is the deepest directory of its text before the first line break,
+  usually the working directory.
+- Only `Once` and `Deny` appear when a shell path has a `..` segment that
+  leaves a symbolic link. The OS follows the link before it applies `..`. If
+  `lnk` points to `/data/deep`, then `cat lnk/../notes.txt` reads
+  `/data/notes.txt` and not `./notes.txt`. No grant or reviewed-safe phrase
+  covers such a call, and a headless call is denied. A `..` that leaves an
+  ordinary directory keeps its normal approval behavior.
+- `Always here` is absent for non-shell tools, for a shallow directory, and
+  for a session-owned directory.
+- `This repository` appears only for a shell call whose commands all resolve
+  to one registered Git repository. Netclaw does not offer it for a main
+  checkout that uses `--separate-git-dir`.
 
-```bash
-cd /tmp && gh api repos/example/project/actions/jobs/123456/logs \
-  > slopwatch.log 2>&1; wc -c slopwatch.log; head -100 slopwatch.log
-```
+Only the person who started the request can answer it, unless the request came
+from verified automation. Netclaw rejects an option that the prompt did not
+offer.
 
-Assume global grants cover `cd` and `gh api`. The reviewed catalog contains
-`wc` and `head`.
+A prompt waits until you answer. No timer denies it. If the daemon restarts or
+the session goes idle, your later answer still resumes the call. A new message
+in the thread abandons the calls that wait. A subagent prompt does not survive a
+restart; Netclaw rejects the old prompt as expired.
 
-| Candidate | Real scope | Approval scope | Coverage |
-|-----------|------------|----------------|----------|
-| `cd` | `/tmp` target | Real scope | Persistent global grant |
-| `gh api` | `/tmp` | Real scope | Persistent global grant |
-| `wc` | Unknown after the sequence boundary | `/tmp` intent | Reviewed-safe policy |
-| `head` | Unknown after the sequence boundary | `/tmp` intent | Reviewed-safe policy |
+## What runs without a prompt
 
-Netclaw allows the call when all four rows have coverage. It does not change
-the command, its arguments, its execution directory, or model history.
+A call in `Approval` mode runs without a prompt when every part of it is
+covered:
 
-ShellSyntaxTree starts intent only after an exact working-directory change on
-success. The next action must be success-gated with `&&`. Both prerequisites
-need one-time, session, or stored authority.
+- A grant that you saved (this chat, a folder, a repository, or everywhere)
+  covers the phrase. A shell grant of two or more words names a verb. It
+  covers its command words and any later command words, which are the
+  arguments of the verb. A shell grant of one word names only the program,
+  and it covers that word alone:
 
-Netclaw does not inspect names such as `cd`, `command cd`, or `builtin cd`.
-It consumes ShellSyntaxTree's closed working-directory effect. An unchanged
-effect preserves intent. An unknown effect invalidates it.
+  | Grant | Covers | Does not cover |
+  | --- | --- | --- |
+  | `git push` | `git push upstream`, `git push origin main` | `git pull` |
+  | `git push upstream` | `git push upstream feature-x` | `git push origin main` |
+  | `git push origin feature-x` | `git push origin feature-x --force-with-lease` | `git push origin main` |
+  | `dotnet package search` | `dotnet package search Dapper.AOT` | `dotnet package add` |
+  | `gh` | `gh --help` | `gh auth logout` |
 
-The intent stops after an unknown directory change, an alternate branch, a
-scope join, a group, a subshell, dynamic flow, or unsupported syntax.
-Netclaw also validates every possible fallback directory. A prior symlink
-target cannot become a later fallback. On POSIX, the policy resolves the
-runtime temp root and the conventional `/tmp` alias independently. Safe alias
-descendants map to their canonical host path.
+  A plain word after the program word can name a link in the command's
+  directory, for example `git add keylink`. Netclaw checks the link target
+  against the protected paths. A protected target denies the call, also under
+  a grant. A link to an ordinary file keeps the decision of the grant.
+- The command is an output command: `echo`, `printf`, `:`, `true`, or `false`.
+  This rule also applies after `cd dir && action;`, where the directory is not
+  known: a data command with no redirect and proved data operands has no path
+  scope. A redirect or an unquoted unknown word (`echo $n`) keeps the exact
+  prompt there. A dynamic operand, such as
+  `echo "head: $(git rev-parse HEAD)"`, is data. A value from `$(...)` or
+  `read` in a word that the shell cannot glob, such as `n=$(cmd); echo "$n"`
+  or `echo pre"$n"`, is also data (ShellSyntaxTree 0.4.0-beta.19 reports
+  `MayPathnameExpand`). An unquoted word with such a value (`echo $n`) can
+  expand to file names, so it needs consent. For a program that can open
+  files, such as `cat /work/$f`, such a word gets one exact prompt that no
+  grant covers. A brace word or a loop over literal words in that place gets
+  a rewrite correction instead, and the call does not run. Netclaw sends a
+  correction only when the agent can make the rewrite: a word with a
+  run-time value (`$FOO`, `$(cmd)`, `$?`, a glob loop value) in a command-word
+  position gets a one-time prompt with `Once` and `Deny`. No grant covers it,
+  and an unattended run denies it. When the command
+  words are known and such a word after them is the only cause, as in
+  `git rev-list HEAD...origin/$(git branch --show-current)`, the agent gets a
+  quote correction: no prompt and no run. The quoted retry
+  (`"HEAD...origin/$(git branch --show-current)"`) has one unknown operand, so
+  a grant for anywhere covers it (decision D1). `exit` and `return`
+  need no approval. The command inside
+  `$(...)` still needs its own coverage, and a redirect target keeps its own
+  check.
+- In Bash, the command is a test builtin, `test` or `[`, and the parser proves
+  each operand value with no `[` in it. Examples: `[ 3 -gt 2 ]`,
+  `x=3; [ "$x" -gt 2 ]`, and `for d in a b; do [ "$d" = a ]; done`. A path
+  operand is not a scope, but a protected path is still denied. An operand with
+  `[` or a value from `$(...)` or `read` gets a one-time prompt, because a
+  `-v` subscript can run a command. A file name from a glob loop
+  (`for f in src/*; do [ -f "$f" ]; done`) and an environment value
+  (`[ -n "$FOO" ]`) also get a one-time prompt with `Once` and `Deny`. No
+  grant covers it. The agent cannot write a run-time value literally, so
+  Netclaw sends no rewrite correction for it. An unattended run denies the
+  call.
+- In an interactive session, the reviewed diagnostic catalog covers the
+  phrase, and the audience profile lets a file tool read every path
+  (`ReadFiles`). With the default Personal profile, that is every path except a
+  protected path. The catalog ships with the daemon (`safe-verbs.linux.json`,
+  `safe-verbs.windows.json`). It includes readers such as `ls`, `cat`, `grep`,
+  `rg`, `jq`, `sort`, `pgrep`, `ps`, `Get-Content`, and `Select-String`, the
+  Bash `cd`, and queries such as `git status`, `git log`, `git diff`,
+  `gh pr view`, `gh pr checks`, `gh issue list`, and `gh run view`. It never
+  includes `git push`, `rm`, `sed`, `find`, `awk`, `env`, `xargs`, `sudo`,
+  `curl`, `gh api`, `gh pr create`, `gh pr merge`, or `printenv`. The agent
+  cannot extend it.
+- The catalog lists a common read command even when a rare flag of that
+  command can write or run a program, for example `sort -o`, `rg --pre`, or
+  `git branch -D`. Each path argument must still be a path that the audience
+  may read.
+- A command whose only unknown part is an operand value (for example
+  `kubectl get pods -l "app=$(whoami)"`) runs when a safe phrase or an
+  `Always anywhere` grant covers its command words (owner decision D1). This
+  applies to attended and unattended runs alike. A folder, repository, or chat
+  grant does not cover it. An unknown program word and an unknown redirect
+  target keep the prompt (an unattended run denies it).
+- On a Linux host (Bash 5.2), a glob word reaches each path below its
+  covering directory, to the depth of its segments. The covering directory is
+  its scope, for a grant and for the catalog. For example,
+  `ls -d ~/repositories/*/akka*` has the scope `~/repositories`. A link that
+  leaves the covering directory keeps `Once` and `Deny`. A glob whose first
+  segment is a wildcard, such as `*/notes.md`, can expand to an option word,
+  so decision D1 applies to it.
+- A word that reads a bound value, such as `x=/etc/app.conf; cat "$x"`, gets
+  the decision of the literal value. A name with a run-time value (`PID=$!`,
+  `x=$(cmd)`, `read x`) is unknown. A command that reads it as a word gets
+  `Once` and `Deny`.
+- A variable word has no path scope, also when the parser proves its value.
+  In `for d in ../x; do dotnet build "$d"; done` and in
+  `d=../x; dotnet build "$d"`, the value `../x` is outside the folder, but the
+  candidate keeps only the working directory scope. So the word is an unknown
+  operand (decision D1): a safe phrase or an `Always anywhere` grant covers the
+  command, and a folder, repository, or chat grant does not. The literal twin
+  `dotnet build ../x` keeps the scope of its path. A word that the parser
+  resolves as a path (`"$HOME/x"`) or types as a file value (`cat "$x"`) keeps
+  its scope. A data command (`echo "$f"`) and a protected path keep their own
+  rules.
+- An option value can name a path (0.27.2). In `dotnet build --output=../x`,
+  the value `../x` is outside the folder, so a folder or repository grant for
+  `dotnet build` does not cover the command. The same is true for
+  `--output=$HOME/x` (Bash and PowerShell), `--output\=../x`,
+  `--output'='../x`, `"--output=../x"`, and `-p:OutDir=../x`. A value inside
+  the folder (`--output=bin/x`, `--include=src/*.cs`), a value that is not a
+  path (`--configuration=Release`), and a URL keep the grant. A chat grant and
+  an `Always anywhere` grant cover the command. Free text that starts with
+  `../` or `/` also prompts, for example `--message="../x y"`.
+  These forms get no path scope, because no general parser fact splits them:
+  `-o../x`, `--data=@../x`, `--path=a:../b`, `--files=a,../b`,
+  `--output=file:///etc/x`, `make PREFIX=../x`, `dd of=../x`, and
+  `/p:OutDir=../x`, and a PowerShell value that is relative to a drive
+  (`--output=D:x`). The protected-path check still reads them. A glob value
+  with an expansion before the glob character (`--output=$HOME/*.x`) gets
+  `Once` and `Deny`, as its separate word does.
+- Each command inside `if`, `case`, `while`, `until`, or a background list
+  (`server &`) gets its own decision.
+- A Bash redirect to `/dev/null` (for example `2>/dev/null`) writes no file,
+  so it does not stop the catalog coverage. A redirect to any other file does.
+- An absolute word whose top-level directory does not exist on the host, such
+  as the API route in `gh api /repos/o/r/actions/jobs/1/logs`, names no file.
+  It has no path scope, so the candidate uses the working directory. A URL
+  also has no path scope.
+- On Linux and macOS, a backslash in a Bash word is a file-name character, not
+  a path separator. `grep -n "a\|b" file` therefore stays inside the project.
 
-Session grants can cover prerequisites. Folder grants use each prerequisite's
-real scope. Intent scope cannot convert a folder near miss into coverage.
+For a compound command (`&&`, `||`, `;`, `|`), each command needs its own
+coverage. The prompt asks only for the commands that remain uncovered.
 
-Only a reviewed diagnostic without a file-output redirect can use the intent.
-Protected paths and folder grants always use real execution facts. Headless
-runs and native PowerShell do not receive this reviewed-safe authority.
+A Bash `cd` with an exact target changes the directory of the commands after
+it. Netclaw checks each command in each directory where it can run. For
+`cd /tmp && gh api ... > log; wc -c log`, `wc` can run in `/tmp`, or in the
+original directory when `cd` fails, so it needs coverage in both. The prompt
+offers reusable grants, and an `Always here` grant uses that directory, not
+the session directory. A reviewed diagnostic after `cd dir && action;` is
+covered inside `dir`, attended or not. A dynamic target (`cd "$X"`),
+`cd -`, `pushd`, a `cd` in a subshell, function, or pipeline, and a linked
+target directory still offer only `Once` and `Deny`.
 
-#### Example: a finite Bash loop over known files
+## Manage saved grants
 
-Input:
+Netclaw stores saved grants in `~/.netclaw/config/tool-approvals.json`
+(version 3). Each audience has its own section, and each tool has its own
+list. A grant for `shell_execute` never allows another tool.
 
-```bash
-for f in src/A.cs src/B.cs; do cat /work/$f; done
-```
-
-ShellSyntaxTree reports one complete `cat` occurrence. Its effective value is
-unknown because Bash can apply runtime word transforms, but its stronger
-authored filesystem value is:
-
-```text
-FiniteSet("/work/src/A.cs", "/work/src/B.cs")
-```
-
-Netclaw checks both values through `ToolPathPolicy`. If both paths are allowed
-and a stored grant or reviewed-safe policy covers `cat`, the output is
-`Allowed`. A protected path is denied before grant coverage. A non-protected
-external path stays exact, but it is not reviewed-safe merely because it is
-finite; it needs a folder or global grant that matches, or it requires approval. A
-runtime iterator, active glob, or command substitution does not receive this
-finite fact.
-
-#### Example: a PowerShell expression-only callback
-
-Input:
-
-```powershell
-Get-ChildItem | ForEach-Object { $_.FullName }
-```
-
-ShellSyntaxTree reports a complete command-argument region for the script block.
-The region contains no authored child command. Netclaw can therefore reuse an
-explicit `ForEach-Object` grant for the host argument. `Get-ChildItem` still
-needs its own reviewed-safe or explicit coverage.
-
-Netclaw does not make `ForEach-Object` reviewed-safe. A method call, an
-assignment, an executable substitution, or an unknown receiver remains
-one-time-only. A child command in the script block needs separate authority.
-
-#### Example: stored mutation grants compose with reviewed-safe readers
-
-Input:
-
-```bash
-cd /work && git fetch upstream feature/update 2>&1 | tail -2 \
-  && echo "===REMOTE TIP===" && git rev-parse FETCH_HEAD \
-  && git log --oneline -3 FETCH_HEAD \
-  && echo "===HAS FIX?===" \
-  && git show FETCH_HEAD:src/App/App.csproj | grep -n "ProtocolPackage" \
-  ; echo "exit: $?"
-```
-
-With explicit global grants for `cd`, `git fetch`, `git rev-parse`, `git log`,
-and `git show`, the actor covers those exact candidates. It returns `NoGrant`
-for `tail` and `grep`; reviewed-safe policy then covers both under `/work`.
-Each `echo` occurrence is an approval-exempt side effect, including the final
-bounded `Concatenation` that contains `$?`. The final output is `Allowed` with
-reason `AllCandidatesCovered`. No single grant covers the compound command.
-
-#### Example: a folder grant near miss
-
-Suppose the store has a Bash token-prefix grant for `git status` under
-`/work/project-a`, but the call runs under `/work/project-b`. The actor returns
-an `OutsideDirectory` near miss. The candidate remains uncovered, so the final
-output is `RequiresApproval`. A same-verb grant is diagnostic evidence, not
-authority for a peer directory.
-
-### Checked process startup
-
-The dispatcher keeps the exact authorized command and directory in `ShellProcessLaunch`.
-It copies the approval state for that invocation and retains the child environment.
-The launch requires an absolute directory; its callers select that directory before construction.
-For Bash, the child environment excludes startup hooks and imported functions.
-These inputs can change a verb or a directory effect before the authored command starts.
-
-The launch follows this sequence:
-
-1. Check cancellation and current command and path policy.
-2. Prepare the managed temporary directory and the child environment.
-3. Capture known path targets and check current authority.
-4. Repeat the hard checks and reject changed path targets.
-5. Start one process without another await or actor message.
-
-A queued command with a valid grant can start once.
-A queued command whose grant was revoked fails without a process.
-These checks narrow filesystem races; they do not provide an OS sandbox.
-The path snapshot includes every directory and path from a proved Bash scope.
-The launch stops if a symbolic link changes in any such path during authorization.
-
-The foreground caller owns cancellation and process disposal.
-The background start task owns the process until the job actor adopts it.
-Actor stop cancels startup and reclaims a process that was not adopted.
-The job actor retains timeout, cancellation, output capture, and completion duties.
-It drains stdout and stderr to a bounded log while the process runs.
-`check_background_job` returns the current output tail and log path.
-Capture waits for complete lines, so output without a newline can remain buffered until EOF.
-
-### Maintainer boundaries
-
-Use [the engineering glossary](../spec/GLOSSARY.md) for shared terms.
-The coordinator owns shell correction selection.
-`TemporaryPathCorrectionPolicy` supplies directory eligibility and target facts.
-`ToolCorrectionDelivery` creates the common response, receipt, and proposed retry-state change.
-Parent and child callers deliver that result and apply their own lifecycle state.
-Their correction exception requires the complete collection; it has no single-correction adapter.
-
-The non-shell approval path still needs a single temporary-directory fact before stored grants are checked.
-`ToolAuthorizationDecision.AgentCorrection` serves that path and validates that exactly one fact exists.
-The single-fact decision factories and shared grant-evidence adapter therefore remain in use.
-The direct `ShellTool` API also retains its hard-policy contract for host callers.
-These consumers prevent blanket removal of every adapter or direct-call entry point.
-
-#### The same policy change before and after consolidation
-
-The comparison uses baseline `99cee4d2` and integrated source `03de93d5`.
-The fixed exercise redirects platform-temporary advice to the host's run-local managed directory.
-The session-storage implementation arrived separately in #2090; this comparison does not credit consolidation for that storage change.
-
-| Component | Baseline responsibility | Current responsibility for the same change |
-|-----------|-------------------------|--------------------------------------------|
-| Temporary-path policy | Select the session-directory target | Read the managed target from `ToolInvocationContext.SessionStorage` |
-| `ToolAccessPolicy` | Attach shell directory advice to an approval request | Supply deterministic shell facts; retain non-shell approval policy |
-| Shell coordinator | Complete shell approval after separate advice paths | Collect advice and select the terminal shell result |
-| Parent and child callers | Select advice within approval-exception branches | Deliver the common result and apply exact retry state |
-| Remediation presenter | Render the selected next action | Render the selected next action; it grants no authority |
-
-Changing the host's target now needs no new parent or child selection branch.
-The temporary-path policy owns target eligibility; the coordinator composes its result with other advice.
-A new correction kind still needs an explicit delivery shape and meaningful caller tests.
-This result demonstrates fewer independent decision sites, not unrestricted extension through configuration.
-
-The source inventory gives these concrete changes:
-
-- Parent and child components that select correction policy: two to zero.
-- Process-creation sites across foreground, stream, and background shell modes: three to one.
-- `ShellPolicyAuthorization` and `ToolAccessDecision` wrappers disappear; `ToolAuthorizationDecision` carries the common terminal result.
-- No old/new evaluator selector or comparison-only production implementation remains in these paths.
-- The five coordinator support files grow from 1,701 to 1,908 physical lines; this is not a code-size reduction.
-
-The count includes comments and blank lines at those exact revisions.
-It covers `ShellPolicyCoordinator`, `ShellPolicyEvaluation`, `ShellPolicyProjection`, `ShellPolicyDecisionTrace`, and `ShellApprovalEvidence`.
-It excludes callers, startup, tests, and docs and does not attribute every intervening edit to this project.
-Keep merged PR history for detailed changes and test evidence.
-Rollout, old-binary recovery checks, and real-model usability evidence remain separate from this source inventory.
-
-### Persistent approvals
-
-Persistent decisions are stored in
-`~/.netclaw/config/tool-approvals.json`:
-
-```json
-{
-  "version": 3,
-  "audiences": {
-    "personal": {
-      "shell_execute": [
-        {
-          "shell": "Bash",
-          "match": "TokenPrefix",
-          "verbTokens": ["git", "push"],
-          "assignmentDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "directory": "/work/project",
-          "createdAt": "2026-08-11T12:00:00+00:00"
-        },
-        {
-          "shell": "Bash",
-          "match": "LegacyExact",
-          "verb": "dotnet build",
-          "directory": null,
-          "createdAt": null
-        }
-      ],
-      "notion/create-page": [
-        {
-          "verb": "create-page",
-          "directory": null,
-          "createdAt": "2026-08-11T12:00:00+00:00"
-        }
-      ]
-    }
-  }
-}
-```
-
-This file is **not** monitored by the config watcher — writing to it does not
-restart the daemon. Each audience has its own section. A token-prefix shell
-entry matches the same canonical tokens with optional later tokens. A legacy
-entry matches only its exact phrase. Version-2 shell entries convert to
-`LegacyExact`, so an upgrade does not add authority.
-
-The optional `assignmentDigest` member qualifies one token-prefix shell grant.
-The codec rejects this member on legacy or non-shell entries.
-It also rejects malformed digest text and makes the complete store unavailable.
-
-Use the CLI instead of direct file edits:
+Use the CLI. Do not edit the file by hand.
 
 ```bash
 netclaw approvals list
@@ -670,51 +350,88 @@ netclaw approvals revoke 'Bash token-prefix "git push" anywhere'
 netclaw approvals revoke --tool shell_execute --all --audience personal
 ```
 
-`trust-verb` accepts one complete static ShellSyntaxTree phrase. It rejects a
-flag, redirect, assignment, dynamic command identity, or compound command. For
-a non-shell tool, use `--tool`; the CLI stores the text as an exact non-shell
-entry. Do not use `--shell` with a non-shell tool.
+- `trust-verb` accepts one complete static phrase. It rejects a flag, a
+  redirect, an assignment, a dynamic command name, and a compound command.
+- For a non-shell tool, use `--tool`, and give the tool name as the phrase:
+  `netclaw approvals trust-verb demo/calculate --tool demo/calculate`. Any
+  other phrase never matches a call, so the command refuses it. Do not use
+  `--shell` with a non-shell tool.
+- Use `netclaw approvals list` to copy the exact label of a repository grant
+  before you revoke it.
 
-On the first version-2 load, Netclaw creates a byte-identical
-`tool-approvals.json.v2.bak` before it replaces the active file. To recover,
-stop the daemon, copy the backup over the active file, and start the current
-daemon. The current daemon can convert that backup again. Do not run an old
-version-2 daemon against a version-3 file.
+The daemon does not watch this file. A change to it does not restart the
+daemon.
 
-An older version-3 binary can reject an entry with `assignmentDigest`.
-Remove qualified entries before a rollback, or restore the approval-store backup.
+The store keeps itself clean when it saves a grant:
 
-Pending assignment prompts use versioned keys for all reusable options.
-An older binary treats those keys as unknown and denies them.
-The `Once` and `Deny` keys keep their existing values.
-A current binary rejects those keys for a legacy prompt that did not offer them.
-A resolved approval can redrive only its exact assignment-qualified call once.
-The approval store controls later calls.
+- It refuses a shell folder grant whose words name an existing file or
+  folder of that folder after the verb slot. In that folder the grant
+  `dotnet build Phobos.slnx` is refused; `dotnet build` covers the call.
+  `netclaw approvals trust-verb` saves an "anywhere" grant with the exact
+  phrase that the operator typed.
+- It does not save a grant that a stored grant already covers. A grant
+  covers another one when the tool, the shell, and the assignment digest are
+  equal, its words cover the other words by the rule above, and it applies
+  "anywhere" or has the same scope. So a stored `git push` grant covers a new
+  `git push upstream` grant, and a stored `gh` grant does not cover a new
+  `gh auth logout` grant. A folder
+  never covers another folder, and a repository never covers a folder: a link
+  or a nested repository can put a directory outside the wider scope.
+- It never removes a stored grant when it saves one, so a later revoke keeps
+  its meaning.
 
-Malformed, partial, or future-version files stay untouched. Netclaw marks the
-persistent store unavailable. An uncovered call is denied instead of shown as
-a normal approval prompt.
+### Upgrade, rollback, and repair
 
-## Hard Deny List
+- On the first load of a version 2 file, Netclaw writes a byte-identical
+  `tool-approvals.json.v2.bak` and converts the file. Old shell entries become
+  phrase (`LegacyExact`) grants. A legacy grant covers a call by the rule of
+  a new grant for the same words: a phrase of two or more words covers its
+  words and any later words, and a one-word phrase covers the program alone.
+  The text in the prompt does not count.
+- A word after the verb slot that names an existing file or folder in the
+  command's directory is not a command word. A grant such as
+  `dotnet build Phobos.slnx` from an earlier version stays in the store, but
+  the call now matches `dotnet build`. Revoke the old grant when you no
+  longer want it.
+- To recover the old file: stop the daemon, copy the backup over the active
+  file, and start the current daemon. Do not run a version 2 daemon against a
+  version 3 file.
+- An older version 3 binary can reject an entry with `assignmentDigest`.
+  Remove those entries, or restore the backup, before a rollback.
+- Netclaw does not change a malformed, partial, or future-version file. It
+  marks the store unavailable. A call that needs a grant is then denied with
+  `approval_store_unavailable`. Fix or restore the file to recover.
 
-Some commands are categorically blocked and cannot be approved, regardless of
-mode:
+## Hard deny
+
+Some commands and paths are always blocked, in every mode:
 
 | Category | Examples |
-|----------|---------|
-| Self-destructive | `netclaw daemon stop`, `kill`, `killall`, `pkill`, `systemctl stop netclaw` |
+| --- | --- |
+| Self-destructive | `netclaw daemon stop`, `systemctl stop netclaw`, and a `kill`, `killall`, `pkill`, or `Stop-Process` whose operand names `netclaw` (for example `pkill netclawd`). Any other kill prompts, and a grant can cover it (owner decision D2). |
 | System-destructive | `rm -rf /`, `rm -rf ~/`, fork bombs, `mkfs` |
+| Privilege escalation | `sudo`, `su`, `doas`, and a PowerShell `-Verb RunAs` start |
+| Protected paths | `secrets.json`, webhook route files (they hold the verification secret), key material, the Netclaw database, and daemon lifecycle files. A write to any config file. |
 
-The hard deny check runs even in `Auto` mode (no approval configured).
+Owner decision D6: file tools can read each file under the config directory,
+for example `netclaw.json`, `tool-approvals.json`, and
+`hard-deny-overrides.json`. They cannot write them. Only `secrets.json`, the
+`webhooks` route files, and the `keys` directory stay read-denied. In the shell, a program that only reads its operands (`cat`,
+`head`, `tail`, `wc`, `grep`, `jq`, `diff`; policy data in
+`ShellVerbPolicyData.ReadOnlyOperandVerbs`) can read a config file by its
+exact path (decision D6). Every other shell command that names a config file
+meets write protection, because shell text cannot show a read from a write.
+A glob, a brace word (`{netclaw,secrets}.json`), an ANSI-C quoted word
+(`$'\x73ecrets.json'`), an unknown path value, or a
+directory operand that holds a read-denied path keeps write protection too. A
+`jq` filter with a brace (`jq '{a: .x}' file`) is not a read-only program, so
+use `cat file | jq '{a: .x}'`. Shell text that names the config directory in
+any other place, for example in a `jq` or `python3 -c` program, stays denied.
+This includes spellings with `//`, `/./`, `name/../`, or split quotes. A redirect that writes, such as `> copy.json`, gets the write
+check for its target only.
 
-In addition to command hard deny, Netclaw enforces path hard deny for protected
-resources (for example `secrets.json`, key material, webhook secrets, and
-control-plane lifecycle files). Those accesses are blocked for file tools and
-for shell commands that reference those paths.
-
-### Custom hard deny patterns
-
-Add patterns via `HardDenyPatterns` in `netclaw.json`:
+Add your own command patterns with `HardDenyPatterns`. They add to the
+built-in list; they do not replace it:
 
 ```json
 {
@@ -724,102 +441,110 @@ Add patterns via `HardDenyPatterns` in `netclaw.json`:
 }
 ```
 
-Custom patterns are added to the defaults — they don't replace them.
+## Channel support
 
-## Channel Support
-
-| Channel | Supports approval? | Rendering |
-|---------|-------------------|-----------|
-| Slack | Yes | Block Kit buttons with text-compatible option labels |
-| Discord | Yes | Native buttons with text-compatible option labels |
-| Mattermost | Yes | Interactive buttons with text-compatible option labels |
+| Channel | Shows a prompt? | Prompt form |
+| --- | --- | --- |
+| Slack | Yes | Block Kit buttons |
+| Discord | Yes | Native buttons |
+| Mattermost | Yes | Interactive buttons, or a text reply when no callback URL is set |
 | TUI (`netclaw chat`) | Yes | Inline prompt |
 | SignalR (web client) | Yes | Inline prompt |
-| Headless (`netclaw chat -p`) | No — deny uncovered calls | N/A |
-| Reminders | No — deny uncovered calls | N/A |
-| Webhooks | No — deny uncovered calls | N/A |
+| Headless (`netclaw chat -p`) | No | The call is denied with the headless result text |
+| Reminders | No | Same as headless |
+| Webhooks | No | Same as headless |
 
-If a channel doesn't support approval, an uncovered call that would require a
-prompt is denied with reason `channel_does_not_support_approval`. A stored
-grant or an approval-exempt side effect can still cover the call. The
-reviewed-safe catalog alone does not grant unattended authority.
+In a channel without prompts, a saved grant or an output command can still
+cover a call. If a channel cannot post a prompt (for example, the platform
+rejects the message), the channel answers `Deny` for that call.
 
 ## Diagnostics
 
-`netclaw doctor` checks approval configuration for common issues:
+### Doctor
 
-- **Approval mode enabled but shell off**: warns when `shell_execute` is in
-  `Approval` mode but `ShellMode` is `Off` (config has no effect)
-- **Stale persistent approvals**: warns when `tool-approvals.json` has patterns
-  for an audience where shell is disabled
+`netclaw doctor` checks the approval configuration:
 
-## Audit
+- `shell_execute` is in `Approval` mode but `ShellMode` is `Off`. The approval
+  setting has no effect.
+- Saved shell grants exist, but shell is disabled.
+- Personal sets `shell_execute` to `Auto` while the host shell is enabled.
+- "Tool approval grants" lists each grant that another grant covers, and
+  `netclaw doctor --fix` removes it. Of two equal grants, the token-prefix
+  grant stays and the legacy phrase goes. The fix writes only when the store
+  did not change after the check.
+- It also lists a folder grant whose words name an entry of its folder, and
+  keeps it: a subfolder can still use the grant.
+- An "anywhere" or repository grant does not record where its command ran.
+  The doctor never removes one for a file-like word: the word can be a
+  command word in another folder.
+- A grant whose folder no longer exists is reported and kept. The doctor does
+  not guess what it covered.
 
-Tool audit entries include `ApprovalDecision` and `ApprovalPattern` fields when
-a tool goes through the approval flow. Later calls that are satisfied by a
-session or persistent approval are audited as `PreviouslyApproved`; the pattern
-includes the matched source and scope so operators can tell which grant applied.
-Near-miss diagnostics are also emitted to the daemon log when a persistent
-shell grant almost matches but differs by token phrase, shell, absent folder
-scope, directory containment, or symlink safety.
+### Daemon log lines
 
+Netclaw has no separate audit store. The daemon log records each decision:
+
+```text
+Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} ... authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}
+Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars) authorizationAttemptId=... sessionId=... callId=...
 ```
-Tool executed: shell_execute (approved, pattern=git push)
-Tool executed: shell_execute (PreviouslyApproved, pattern=git push [persistent: git push in /home/user/repo])
-Tool denied: shell_execute (denied_by_user, pattern=docker rm)
-Tool denied: shell_execute (timed_out, pattern=kubectl apply)
-```
 
-Each shell decision also emits ordered `Shell policy trace:` rows to the daemon
-log. A row contains only enum facts, a call-local candidate ID, a bounded and
-redacted executable basename, coverage kind, scope relation, and grant time. It
-does not contain the full command, arguments, raw paths, tokens, redirects,
-secrets, or model content. The trace never enters the prompt or session journal.
+- A `Denied` line is a warning and includes `reason=`, for example
+  `hard_deny_self_destructive`, `tool_not_allowed_for_audience_profile`,
+  `shell_path_protected` (a shell path is a protected path), or
+  `shell_path_outside_trusted_roots` (a bounded `Roots` profile does not hold
+  the shell path).
+- An `Allowed` line is at debug level.
+- One `authorizationAttemptId` joins the decision, the prompt, your answer,
+  and the retry of one call.
 
-Example for the compound status command above:
+The session journal records each prompt (`ToolApprovalRequested`) and each
+answer (`ToolApprovalResolved`).
+
+### Shell policy trace
+
+Each shell decision also writes ordered `Shell policy trace:` rows. A row holds
+only enum facts, a call-local candidate ID, a short redacted executable name,
+the coverage, the scope relation, and the grant time. It never holds the full
+command, arguments, paths, or secrets.
 
 ```text
 Shell policy trace: stage=StoredGrantMatch outcome=Covered reason=PersistentGlobalGrant candidate_id=0 executable=gh coverage=PersistentGlobal scope_relation=Global grant_timestamp=2026-08-13T00:00:00.0000000+00:00
 Shell policy trace: stage=StoredGrantMatch outcome=Uncovered reason=NoGrant candidate_id=1 executable=head coverage=Uncovered scope_relation=None grant_timestamp=(null)
-Shell policy trace: stage=ReviewedSafePolicy outcome=Covered reason=ApprovalExemptSideEffect candidate_id=2 executable=echo coverage=ReviewedSafePolicy scope_relation=None grant_timestamp=(null)
-Shell policy trace: stage=ReviewedSafePolicy outcome=Covered reason=ReviewedSafePhrase candidate_id=1 executable=head coverage=ReviewedSafePolicy scope_relation=UnderRealRoot grant_timestamp=(null)
-Shell policy trace: stage=Completion outcome=Allow reason=AllCandidatesCovered candidate_id=(null) executable=(null) coverage=(null) scope_relation=None grant_timestamp=(null)
+Shell policy trace: stage=Completion outcome=RequiresApproval reason=UncoveredCandidates candidate_id=(null) executable=(null) coverage=(null) scope_relation=None grant_timestamp=(null)
 ```
 
-Read a trace from the final row backward:
+Read a trace from the last row back:
 
 1. `Completion/RequiresApproval/UncoveredCandidates` means at least one
-   candidate lacked coverage.
-2. Find that candidate ID in `StoredGrantMatch`. `NoGrant` means no same-call
-   grant matched. `TokenMismatch`, `ShellMismatch`, `OutsideDirectory`, or
-   `Symlink` explains a bounded near miss.
-3. Check whether that ID has a `ReviewedSafePolicy` or `OneTimeApproval` row.
-   If it does, that stage supplied coverage after the grant check.
-4. `Completion/Deny/InternalPolicyFailure` is not an ordinary approval case.
-   Treat it as a policy defect or malformed internal result; do not add a grant
-   to work around it.
-5. `Trace/TraceTruncated/TraceLimitReached` means the diagnostic row cap was
-   reached. It never changes the authorization result.
+   command had no coverage.
+2. Find that candidate ID in the `StoredGrantMatch` rows. `NoGrant` means no
+   saved grant matched. `TokenMismatch`, `ShellMismatch`, `OutsideDirectory`,
+   or `Symlink` explains a near miss.
+3. A `ReviewedSafePolicy` or `OneTimeApproval` row for that ID means a later
+   stage covered it.
+4. `Completion/Deny/InternalPolicyFailure` is a defect, not an approval case.
+   Do not add a grant to work around it. Report it.
+5. `Trace/TraceTruncated/TraceLimitReached` means the row cap was reached. It
+   does not change the result.
 
-Use the trace to classify a repeated prompt before a policy change:
+Use the trace before you ask for a policy change:
 
-- A valid same-phrase folder near miss usually indicates scope or cwd drift.
-- `NoGrant` plus a reviewed-safe candidate outside a trusted root usually points
-  to project/scratch alignment.
-- A complete candidate with no general safe proof is an expected approval.
-- A command that should have a strong parser fact but remains unresolved is a
-  ShellSyntaxTree evidence gap, not a reason to add executable-specific Netclaw
-  parser logic.
+- A same-phrase `OutsideDirectory` near miss usually means that the working
+  directory moved.
+- A command that stays unresolved although its effect is clear is a parser
+  gap. Report it for ShellSyntaxTree. Netclaw does not add parsers for one
+  executable.
 
 ## FAQ
 
-**Q: Can I disable approval gates entirely?**
-A: Yes. Set an exact `shell_execute` override to `Auto`. Removal alone does not
-disable the Personal shell default. If the exact override is absent, the shell
-stays fail-closed in `Approval` mode.
+**Q: Can I turn off approval for shell commands?**
+A: Yes. Set an exact `shell_execute` override to `Auto`. A removed override
+does not turn off the Personal default.
 
-**Q: Can I require approval for MCP tools?**
-A: Yes. Add the tool name to `ToolOverrides`:
+**Q: Can I require approval for an MCP tool?**
+A: Yes. Add the tool to `ToolOverrides`:
+
 ```json
 "ToolOverrides": {
   "shell_execute": "Approval",
@@ -827,15 +552,15 @@ A: Yes. Add the tool name to `ToolOverrides`:
 }
 ```
 
-**Q: What happens if I don't respond to an approval prompt?**
-A: While the daemon and session remain alive, approval waits remain pending until
-you approve, deny, or the blocked run is cancelled. Parent-session approvals have
-durable recovery state and can be redriven after cold recovery. Subagent approval
-waits are live-only; if the daemon or parent session restarts before you respond,
-the stale prompt is rejected as expired and the interrupted `spawn_agent` call is
-closed before the next turn continues.
+**Q: What happens if I do not answer a prompt?**
+A: The call waits. No timer denies it. Your answer still works after a daemon
+restart, except for a subagent prompt.
 
-**Q: Can I pre-approve common commands?**
-A: Yes. Use `netclaw approvals trust-verb`, or use the agent normally and
-select an always option. Use `netclaw approvals list` to copy the exact label
-for a later revoke.
+**Q: Can I approve common commands in advance?**
+A: Yes. Use `netclaw approvals trust-verb`, or choose a saved-grant option in a
+prompt.
+
+**Q: Why did Netclaw deny a command that I approved before?**
+A: A grant covers one phrase for one audience and one tool, inside its scope.
+A different phrase, a different folder or repository, or a protected path needs
+new approval or stays denied. Read the shell policy trace.

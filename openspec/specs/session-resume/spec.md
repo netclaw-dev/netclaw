@@ -6,6 +6,7 @@ Define session browsing, selection, and resumption behavior across TUI and CLI
 entry points. Covers the daemon-side join path, client API surface, and TUI
 session browser.
 ## Requirements
+
 ### Requirement: Session listing via REST API
 
 The system SHALL expose session catalog data through the existing
@@ -143,41 +144,6 @@ call.
 - **THEN** the session injects a transient restart continuity notice into the turn context
 - **AND** the notice explains that recovery resumed from the last durable checkpoint
 
-### Requirement: Outstanding tool approvals restored on session recovery
-
-When a session recovers, it SHALL restore outstanding tool approvals from
-journaled tool-batch and approval events. Snapshots SHALL remain a cache of
-state already implied by earlier journal events; they SHALL NOT be the source of
-truth for in-flight approval state.
-
-#### Scenario: Pending approval restored from journal on recovery
-
-- **GIVEN** a `ToolApprovalRequested` event was written while a tool-approval prompt was outstanding
-- **WHEN** the session cold-recovers through the journal/snapshot path
-- **THEN** recovery SHALL restore the pending tool interaction from the journal
-- **AND** the session SHALL log the count of recovered pending interactions
-
-#### Scenario: Restored pending approval superseded by resolution events
-
-- **GIVEN** a journal carrying a pending tool interaction
-- **WHEN** a `ToolApprovalResolved`, `ToolBatchAbandoned`, `TurnRecorded`, or `SessionCompacted` event replays afterward
-- **THEN** recovery SHALL clear the superseded pending interaction
-- **AND** the recovered session SHALL NOT treat the superseded approval as outstanding
-
-#### Scenario: Approval click resumes a cold-resumed session
-
-- **GIVEN** a tool approval prompt was outstanding when the session passivated
-- **WHEN** the session cold-resumes and the user clicks the approval afterward
-- **THEN** the session SHALL re-drive the parked tool batch and continue the turn
-- **AND** the user SHALL NOT have to send a separate message to wake the agent
-
-#### Scenario: Pre-change snapshot recovers with no pending approval projection
-
-- **GIVEN** a snapshot written before approval recovery existed
-- **WHEN** the session recovers from that snapshot
-- **THEN** recovery SHALL succeed with an empty pending-interaction set
-- **AND** SHALL NOT fail or error on the missing field
-
 ### Requirement: Graceful stop of durable approval waits
 
 During a graceful daemon stop, a session SHALL finish drain when every unfinished tool call waits on a durable approval. The session SHALL wait for the tool task to stop before it acknowledges drain. The journal SHALL retain approval requests and completed tool results for cold recovery.
@@ -233,82 +199,187 @@ Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
 - **AND** its original button or text response resumes the recovered turn
 - **AND** a duplicate response does not execute the tool again
 
-### Requirement: Recovered pending approvals restore turn context
+### Requirement: Approval responses resume after idle passivation
 
-When a session recovers pending tool approvals from the journal, it SHALL also restore the original turn context for each pending approval. The restored context SHALL include the requester, audience, boundary, channel type, approval capability, principal classification, provenance, and adopted-context safety state needed to resume the original request faithfully.
+When a session with a journaled approval passivates after its active work ends,
+an approval response SHALL rehydrate the session and resume the original tool
+batch. This recovery SHALL preserve the existing requester and restored-approval
+checks. The session-state-machine capability defines whether idle passivation can
+start.
 
-#### Scenario: Pending approval restores original context
+#### Scenario: Approval response resumes the passivated turn
 
-- **GIVEN** a `ToolApprovalRequested` event was written with turn context while a prompt was outstanding
-- **WHEN** the session cold-recovers through the journal path
-- **THEN** the pending approval is restored with that turn context
-- **AND** approval redrive uses the restored context rather than deriving a new context from the session id
-
-#### Scenario: Legacy approval event uses compatibility restoration
-
-- **GIVEN** a pre-change `ToolApprovalRequested` event has no turn-context record but still has legacy persisted trust fields
-- **WHEN** the session recovers the event
-- **THEN** the session MAY construct turn context from those legacy fields
-- **AND** this compatibility path is isolated from the normal new-event path
-
-#### Scenario: Incomplete legacy approval fails loud
-
-- **GIVEN** a recovered pending approval lacks enough persisted context to restore the original requester and trust context
-- **WHEN** an approval response arrives for that pending call
-- **THEN** the session does not redrive the tool under a synthesized permissive context
-- **AND** the user receives an explicit expired or unrecoverable approval notice
-
-### Requirement: Restarted approvals resume as the original request
-
-An approval response received after idle passivation, cold recovery, or daemon restart SHALL resume the same original session turn. The resumed tool batch and any continuation LLM/tool calls SHALL use the restored turn context until the resumed turn completes or is abandoned.
-
-#### Scenario: Approval after cold recovery resumes original request
-
-- **GIVEN** a session has recovered a pending approval from the journal
-- **WHEN** the original requester approves the prompt
-- **THEN** the session re-drives the parked tool batch
-- **AND** the tool execution context uses the original turn audience, boundary, channel type, and approval capability
-
-#### Scenario: Continuation after redrive keeps restored context
-
-- **GIVEN** a recovered approval redrive has completed its parked tool call
-- **WHEN** the follow-up LLM response asks for another tool call in the same turn
-- **THEN** the continuation tool call uses the same restored turn context
-- **AND** it does not fall back to a context derived from missing transport metadata
-
-### Requirement: Idle passivation proceeds with pending approvals
-
-A session SHALL NOT defer idle passivation because tool approval prompts are
-outstanding. Pending approval state is journaled (`ToolApprovalRequested` /
-`ToolApprovalResolved`) and the approval response path already rehydrates a
-passivated session and resumes the original turn, so keeping the session in
-memory while a human decides adds no correctness — only resident memory.
-Active live subscribers (CLI/TUI connections) SHALL continue to defer
-passivation, because subscriber connections are ephemeral and cannot survive
-actor stop. The existing resolved-approval abandonment behavior (a parked tool
-batch whose approval was granted but whose tool result never completed) SHALL
-be preserved.
-
-#### Scenario: Session passivates with an approval prompt outstanding
-
-- **GIVEN** a session is idle past its idle timeout
-- **AND** a tool approval prompt is outstanding
-- **AND** no live subscribers are attached
-- **WHEN** the receive timeout fires
-- **THEN** the session passivates normally
-- **AND** the pending approval remains recoverable from the journal
-
-#### Scenario: Approval click after passivation resumes the turn
-
-- **GIVEN** a session passivated with an approval prompt outstanding
-- **WHEN** the user responds to the approval prompt
+- **GIVEN** a session has a journaled approval and no active work when idle
+  passivation starts
+- **WHEN** the user responds to the approval prompt after passivation
 - **THEN** the session rehydrates from the journal
-- **AND** re-drives the parked tool batch per the existing restored-approval
+- **AND** it re-drives the parked tool batch under the restored-approval
   requirements
 
-#### Scenario: Live subscribers still defer passivation
+#### Scenario: Recovery closes an approved call without a tool result
 
-- **GIVEN** a session is idle past its idle timeout
-- **AND** a live CLI or TUI subscriber is attached
-- **WHEN** the receive timeout fires
-- **THEN** passivation is deferred while the subscriber remains attached
+- **GIVEN** recovery finds a granted approval without a journaled tool result
+- **WHEN** the session returns to `Ready`
+- **THEN** the session persists a `ToolBatchAbandoned` event with a synthetic
+  tool result
+- **AND** clears the approval state
+- **AND** does not execute the approved tool again
+
+### Requirement: Accepted input survives a graceful stop
+
+The session SHALL store each accepted input before acknowledgment. The record SHALL retain its identity, order, content, media, source identity, and original authority.
+
+Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
+
+#### Scenario: Input acknowledgment follows its journal record
+
+- **GIVEN** a session receives user input
+- **WHEN** the journal stores its admission record
+- **THEN** the session acknowledges the input
+- **AND** cold recovery restores the pending input and its authority
+
+#### Scenario: Journal failure rejects input
+
+- **GIVEN** the journal cannot store an admission record
+- **WHEN** the session receives input
+- **THEN** the session rejects that input
+- **AND** it starts no model call for that input
+
+#### Scenario: A lost acknowledgment does not duplicate input
+
+- **GIVEN** the journal stores input with a stable source ID
+- **WHEN** the source retries that input
+- **THEN** the session acknowledges the stored input
+- **AND** it does not add a second pending record
+
+### Requirement: Graceful drain creates only a safe restart reminder
+
+The session SHALL create a restart reminder only after an eligible model task stops. It SHALL use the existing reminder definition and `current_session` delivery contract.
+
+#### Scenario: An interrupted model call creates a reminder
+
+- **GIVEN** a model call has pending admitted input
+- **AND** no tool batch or partial reply exists
+- **WHEN** graceful drain cancels the call and confirms its task stopped
+- **THEN** the restart manifest stores one reminder for that session
+- **AND** the reminder expires ten minutes after interruption
+
+#### Scenario: A completed turn stays quiet
+
+- **GIVEN** a model call completes during drain
+- **AND** no admitted input remains pending
+- **WHEN** the daemon starts again
+- **THEN** it registers no restart reminder for that session
+
+#### Scenario: A possible effect blocks the reminder
+
+- **GIVEN** a tool batch started or partial text reached a subscriber
+- **WHEN** graceful drain stops the session
+- **THEN** the manifest contains no restart reminder for that turn
+- **AND** the daemon reports the blocked session
+
+### Requirement: A fresh restart reminder resumes stored work
+
+The reminder manager SHALL deliver a fresh restart reminder through its existing `current_session` path. The session SHALL restore pending input under its recorded authority.
+
+#### Scenario: A fresh reminder resumes the pending input
+
+- **GIVEN** the restart manifest contains a reminder that has not expired
+- **WHEN** the daemon starts
+- **THEN** startup registers the reminder through `SaveReminderCommand`
+- **AND** the session resumes the stored input without a user prompt
+
+#### Scenario: The original authority remains in force
+
+- **GIVEN** a restart reminder wakes a session with pending input
+- **WHEN** the session starts the model call
+- **THEN** it restores the recorded requester, audience, and trust boundary
+- **AND** reminder automation authority does not replace that context
+
+#### Scenario: An expired reminder stays quiet
+
+- **GIVEN** the reminder expiration is in the past
+- **WHEN** startup reads the restart manifest
+- **THEN** it does not register or deliver that reminder
+- **AND** it logs one warning
+
+#### Scenario: Stored authority has no channel type
+
+- **GIVEN** an interrupted session has no stored channel type
+- **WHEN** graceful drain classifies the session
+- **THEN** the actor creates no restart reminder
+- **AND** the actor does not contain a channel-specific route list
+
+### Requirement: SignalR text success confirms durable admission
+
+The daemon SHALL return success for a text SendMessage request only after its journal stores the input admission record.
+The daemon SHALL preserve the input's source identity and original authority.
+The success response SHALL NOT wait for model completion.
+Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
+
+#### Scenario: Journal admission precedes the hub response
+
+- **GIVEN** an authenticated connection is attached to its target session
+- **AND** the journal holds the text admission write
+- **WHEN** the connection sends text
+- **THEN** the hub response remains incomplete until the journal stores that record
+- **AND** success does not require a model response
+
+#### Scenario: Buffered text retains the same contract
+
+- **GIVEN** the session already processes or compacts an earlier turn
+- **WHEN** an attached connection sends later text
+- **THEN** success confirms that the journal stores the later input and its authority
+- **AND** success does not require the earlier turn to finish
+
+#### Scenario: An admission fault fails explicitly
+
+- **GIVEN** session initialization, input enqueue, or the journal write fails
+- **WHEN** a connection sends text
+- **THEN** the daemon returns a failure or timeout
+- **AND** the daemon does not report successful admission
+
+#### Scenario: Attachment or ingress denial preserves authority
+
+- **GIVEN** the connection lacks target attachment or ingress is closed
+- **WHEN** the connection sends text
+- **THEN** the daemon rejects the request before admission
+- **AND** it starts no model call for that text
+
+### Requirement: Client disconnect preserves admitted text work
+
+The daemon SHALL retain admitted text after its SignalR client disconnects.
+The disconnect SHALL NOT cancel the session's model task or discard the pending input.
+
+#### Scenario: Disconnect precedes the model request
+
+- **GIVEN** the daemon confirms text admission
+- **AND** the model request has not started
+- **WHEN** the client disconnects
+- **THEN** the daemon retains that input
+- **AND** the session can complete its turn or store an explicit terminal failure
+
+#### Scenario: Disconnect occurs during the model response
+
+- **GIVEN** the daemon confirms text admission and starts a model request
+- **WHEN** the client disconnects before the model response
+- **THEN** the session continues that turn independently of its subscriber
+- **AND** the durable result does not require the client's connection
+
+### Requirement: Text admission support is explicit
+
+The daemon SHALL expose explicit support for durable text admission through its compatibility contract.
+A client that depends on that support SHALL reject an unsupported daemon before it promises confirmed admission.
+
+#### Scenario: A compatible daemon permits reliable admission
+
+- **GIVEN** the daemon explicitly supports durable text admission
+- **WHEN** the client attaches before text dispatch
+- **THEN** the client can use the admission response contract
+
+#### Scenario: An old daemon cannot imply support
+
+- **GIVEN** the daemon lacks explicit durable text admission support
+- **WHEN** the new client attaches before text dispatch
+- **THEN** the client reports the unsupported daemon
+- **AND** it does not silently treat the old early response as durable admission

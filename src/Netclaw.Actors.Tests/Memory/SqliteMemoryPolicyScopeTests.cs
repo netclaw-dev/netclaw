@@ -13,7 +13,7 @@ namespace Netclaw.Actors.Tests.Memory;
 
 public sealed class SqliteMemoryPolicyScopeTests : IAsyncDisposable
 {
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-sqlite-memory-policy-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-sqlite-memory-policy-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 

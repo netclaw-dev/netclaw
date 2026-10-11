@@ -55,6 +55,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         SQLiteMemoryStore? sqliteMemoryStore = null,
         IChatClientProvider? chatClientProvider = null,
         ProviderRuntimeValidation? providerValidation = null,
+        RejectedConfigState? rejectedConfig = null,
         MemoryEmbedderHolder? memoryEmbedderHolder = null,
         MemoryConfig? memoryConfig = null)
     {
@@ -69,6 +70,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             paths ?? CreatePaths(),
             chatClientProvider ?? new TestChatClientProvider(),
             providerValidation ?? new ProviderRuntimeValidation(ProviderRuntimeStatus.Valid, null, []),
+            rejectedConfig ?? new RejectedConfigState(),
             mcpClientManager,
             sqliteMemoryStore,
             memoryEmbedderHolder,
@@ -135,6 +137,27 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
 
         // Best effort cleanup: file handles can remain briefly open on Windows CI.
         // Leaving temp dirs behind is preferable to failing the test run.
+    }
+
+    [Fact]
+    public async Task RejectedConfig_IsReportedAndMakesOverallDegraded()
+    {
+        var rejected = new RejectedConfigState();
+        var service = CreateService(rejectedConfig: rejected);
+
+        var before = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+        Assert.Null(before.ConfigNotApplied);
+        Assert.Equal("healthy", before.Overall);
+
+        rejected.Reject("Models:Roles is set but Models:Definitions is missing or empty.");
+        var during = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("Models:Roles is set but Models:Definitions is missing or empty.", during.ConfigNotApplied);
+        Assert.Equal("degraded", during.Overall);
+
+        rejected.Clear();
+        var after = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+        Assert.Null(after.ConfigNotApplied);
+        Assert.Equal("healthy", after.Overall);
     }
 
     [Fact]
@@ -279,7 +302,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             }
         };
 
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
+        var paths = CreatePaths();
         paths.EnsureDirectoriesExist();
         var credentials = new McpOAuthCredentialStore(
             paths,
@@ -301,7 +324,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             new DaemonConfig(),
             NullNotificationSink.Instance,
             TimeProvider.System,
-            new McpClientRuntime(),
+            new McpClientRuntime(NullLogger<McpClientRuntime>.Instance, TimeProvider.System),
             dependencies.ArtifactMaterializer,
             NullLogger<McpClientManager>.Instance,
             new SessionConfig());

@@ -162,10 +162,10 @@ public sealed class DaemonClientReconnectTests
                     throw new InvalidOperationException("session not ready");
                 }
 
-                return new SessionEnsureResultDto(requested, false);
+                return new SessionEnsureResultDto(requested, false) { TextAdmissionVersion = 1 };
             }
 
-            return new SessionEnsureResultDto("fake/session", true);
+            return new SessionEnsureResultDto("fake/session", true) { TextAdmissionVersion = 1 };
         };
 
         var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -199,7 +199,7 @@ public sealed class DaemonClientReconnectTests
         // The daemon restarted and forgot the session: EnsureSession now returns
         // a brand-new id (Created=true) instead of echoing the requested one.
         const string newId = "fake/session-after-restart";
-        transport.EnsureSessionResponder = _ => new SessionEnsureResultDto(newId, true);
+        transport.EnsureSessionResponder = _ => new SessionEnsureResultDto(newId, true) { TextAdmissionVersion = 1 };
 
         var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var sub = client.ConnectionEvents.Subscribe(evt =>
@@ -235,15 +235,17 @@ public sealed class DaemonClientReconnectTests
         // This subscriber blocks the event pump indefinitely.
         using var sub = client.ConnectionEvents.Subscribe(_ => release.Wait());
 
-        // Commands must still complete, because events are delivered off the
-        // owner thread. If they were on the owner thread, these would hang.
-        await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken)
-            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        await client.SendAsync("hi", TestContext.Current.CancellationToken)
-            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-
-        // Unblock the pump so DisposeAsync can drain it and finish.
-        release.Set();
+        try
+        {
+            await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await client.SendAsync("hi", TestContext.Current.CancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            var receipt = await client.CloseAsync()
+                .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.Empty(receipt.Inputs);
+        }
+        finally { release.Set(); }
     }
 
     // Simulates a hub RPC whose response never arrives: it completes only when

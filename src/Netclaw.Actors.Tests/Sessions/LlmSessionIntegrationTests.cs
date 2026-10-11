@@ -120,7 +120,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             "You are a test assistant."));
         services.AddSingleton<MemoryProposalGate>();
         services.AddSingleton<IMemoryCheckpointSink, NullMemoryCheckpointSink>();
-        services.AddSingleton<SQLiteMemoryStore>(sp => new SQLiteMemoryStore(Path.Combine(Path.GetTempPath(), $"netclaw-sidecar-tests-{Guid.NewGuid():N}.db"), TimeProvider.System));
+        services.AddSingleton<SQLiteMemoryStore>(sp => new SQLiteMemoryStore(Path.Combine(TestPaths.BasePath, "sidecar-memory.db"), TimeProvider.System));
         services.AddSingleton<IMemoryRecallCoordinator>(sp => new SQLiteMemoryRecallCoordinator(
             sp.GetRequiredService<SQLiteMemoryStore>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
@@ -1633,7 +1633,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Session_does_not_passivate_with_active_subscribers()
+    public async Task Session_passivates_with_an_active_subscriber_when_idle()
     {
         var sessionId = new SessionId("test-channel/no-passivate-sub");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -1652,29 +1652,23 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
 
-        // Send ReceiveTimeout directly — with active subscriber, should be deferred
+        // A live subscriber does not block idle passivation.
         child.Tell(ReceiveTimeout.Instance);
-
-        // Actor should still be alive
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
-
-        // Session should still process messages
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Still alive?"
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await ExpectTerminatedAsync(
+            child,
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
 
     [Fact]
-    public async Task Session_idle_timeout_deactivates_only_when_actor_passivates()
+    public async Task Processing_turn_ignores_idle_timeout_then_passivates_after_return_to_ready()
     {
         var sessionId = new SessionId("test-channel/deactivate-on-passivate");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("deactivate-passivate-sub");
+        var responseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = responseGate;
 
         await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
@@ -1683,21 +1677,42 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Keep processing while idle timeout arrives"
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(3),
+            TestContext.Current.CancellationToken);
+
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var childPath = $"/user/session-manager/{escapedId}";
         var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
 
         child.Tell(ReceiveTimeout.Instance);
+        var processingJoin = await child.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, processingJoin.SessionId);
         await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
         Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
 
-        child.Tell(new LeaveSession(subscriber)
-        {
-            SessionId = sessionId
-        });
+        responseGate.TrySetResult();
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         child.Tell(ReceiveTimeout.Instance);
+        await subscriber.FishForMessageAsync(
+            m => m is SessionDeactivated,
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
         await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
@@ -2094,6 +2109,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             Generation: 1,
             ForceNoTools: false,
             TurnRestartNotice: null,
+            SlashCommandSkillContent: null,
             Snapshot: new WorkingContextSnapshot
             {
                 WorkingContext = WorkingContext.Empty.WithProjectDirectory("/stale/project"),

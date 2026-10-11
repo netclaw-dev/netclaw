@@ -58,25 +58,36 @@ public static class CronScheduleHelper
     /// When valid, <paramref name="timeZone"/> receives the resolved zone (UTC when no prefix is present).
     /// </summary>
     public static bool TryParse(string expression, out TimeZoneInfo timeZone)
+        => TryParse(expression, out timeZone, out _);
+
+    /// <summary>
+    /// Validates the expression like <see cref="TryParse(string, out TimeZoneInfo)"/>. When the failure is in the
+    /// <c>CRON_TZ</c> prefix, <paramref name="prefixError"/> says what is wrong with it; it is null when the
+    /// time zone is fine and the cron fields themselves are the problem.
+    /// </summary>
+    public static bool TryParse(string expression, out TimeZoneInfo timeZone, out string? prefixError)
     {
         timeZone = TimeZoneInfo.Utc;
+        prefixError = null;
 
         if (string.IsNullOrWhiteSpace(expression))
             return false;
 
+        string fields;
         TimeZoneInfo parsedZone;
         try
         {
-            (_, parsedZone) = SplitTimeZone(expression);
+            (fields, parsedZone) = SplitTimeZone(expression);
         }
-        catch (CronFormatException)
+        catch (CronFormatException ex)
         {
+            prefixError = ex.Message;
             return false;
         }
 
         try
         {
-            CronExpression.Parse(StripTimeZone(expression), CronFormat.Standard);
+            CronExpression.Parse(fields, CronFormat.Standard);
         }
         catch (CronFormatException)
         {
@@ -112,24 +123,11 @@ public static class CronScheduleHelper
             throw new CronFormatException(
                 "CRON_TZ prefix requires a time zone identifier. Use an IANA time zone id without spaces (e.g. 'Europe/Brussels').");
 
-        try
-        {
-            var zone = TimeZoneInfo.FindSystemTimeZoneById(zoneId);
-            return (rest[spaceIndex..].Trim(), zone);
-        }
-        catch (TimeZoneNotFoundException)
-        {
-            throw new CronFormatException(
-                $"Unknown time zone '{zoneId}' in CRON_TZ prefix. Use an IANA time zone id without spaces (e.g. 'Europe/Brussels').");
-        }
-        catch (InvalidTimeZoneException)
-        {
-            throw new CronFormatException(
-                $"Invalid time zone '{zoneId}' in CRON_TZ prefix. Use an IANA time zone id without spaces (e.g. 'Europe/Brussels').");
-        }
-    }
+        if (!SchedulerTimeZones.TryResolve(zoneId, out var zone, out var error))
+            throw new CronFormatException($"Invalid CRON_TZ prefix. {error}");
 
-    private static string StripTimeZone(string cronExpression) => SplitTimeZone(cronExpression).Fields;
+        return (rest[spaceIndex..].Trim(), zone);
+    }
 
     /// <summary>
     /// Translates a 5-field cron expression to a human-readable English description.

@@ -204,12 +204,12 @@ internal static class DaemonPathEnvironmentFile
     /// </summary>
     private static string ExtractFirstToken(string directive)
     {
-        var equalsIndex = directive.IndexOf('=');
+        var equalsIndex = directive.IndexOf('=', StringComparison.Ordinal);
         if (equalsIndex < 0 || equalsIndex == directive.Length - 1)
             return string.Empty;
 
         var value = directive[(equalsIndex + 1)..].TrimStart();
-        var spaceIndex = value.IndexOf(' ');
+        var spaceIndex = value.IndexOf(' ', StringComparison.Ordinal);
         return spaceIndex < 0 ? value : value[..spaceIndex];
     }
 }

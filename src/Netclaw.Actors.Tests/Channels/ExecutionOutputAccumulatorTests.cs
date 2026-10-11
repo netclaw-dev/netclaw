@@ -141,6 +141,54 @@ public sealed class ExecutionOutputAccumulatorTests
         Assert.False(acc.NotifyAttempted);
     }
 
+    // ── Denied call tests ───────────────────────────────────────────────────
+
+    private ToolResultOutput ToolResult(string tool, string result, string? failureCode = null) => new()
+    {
+        SessionId = TestSessionId,
+        CallId = new Netclaw.Tools.ToolCallId($"call-{tool}"),
+        ToolName = new Netclaw.Tools.ToolName(tool),
+        Result = result,
+        FailureCode = failureCode
+    };
+
+    [Fact]
+    public void Denied_call_is_recorded_with_the_tool_and_what_it_was_told()
+    {
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
+
+        acc.ProcessOutput(ToolResult(
+            "shell_execute",
+            "Tool access denied: shell_execute needs approval, and nobody can answer a prompt in an unattended run.",
+            ToolResultOutput.AccessDeniedFailureCode));
+
+        Assert.StartsWith("Tool call denied (shell_execute): Tool access denied:", acc.DeniedCallMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void First_denied_call_wins_and_the_detail_is_bounded()
+    {
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
+
+        acc.ProcessOutput(ToolResult("shell_execute", new string('x', 5000), ToolResultOutput.AccessDeniedFailureCode));
+        acc.ProcessOutput(ToolResult("file_write", "Tool access denied: later", ToolResultOutput.AccessDeniedFailureCode));
+
+        Assert.StartsWith("Tool call denied (shell_execute)", acc.DeniedCallMessage, StringComparison.Ordinal);
+        Assert.True(acc.DeniedCallMessage!.Length < 400);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("invalid_meta_value")]
+    public void Calls_that_were_not_denied_do_not_mark_the_run(string? failureCode)
+    {
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
+
+        acc.ProcessOutput(ToolResult("shell_execute", "Error executing tool: boom", failureCode));
+
+        Assert.Null(acc.DeniedCallMessage);
+    }
+
     // ── BuildNotifyFailureMessage tests ──────────────────────────────────────
 
     [Fact]

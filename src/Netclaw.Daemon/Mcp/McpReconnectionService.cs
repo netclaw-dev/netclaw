@@ -154,7 +154,7 @@ internal sealed class McpReconnectionService : BackgroundService
         catch (Exception ex)
         {
             // A refresh failure is not a connection failure — the manager keeps the
-            // last good catalog and the next tick retries. Log and move on.
+            // last good catalog and backs off its own retries. Log and move on.
             _logger.LogDebug(ex,
                 "MCP server '{Name}' catalog refresh threw an exception",
                 serverName.Value);

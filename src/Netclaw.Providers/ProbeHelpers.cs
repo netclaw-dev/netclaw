@@ -106,6 +106,7 @@ internal static class ProbeHelpers
             ? defaultEndpoint
             : entryEndpoint.TrimEnd('/');
         var url = $"{baseUrl}{modelListingPath}";
+        var displayUrl = RedactUrl(url);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(effectiveTimeout);
@@ -120,7 +121,7 @@ internal static class ProbeHelpers
             if (!response.IsSuccessStatusCode)
             {
                 var apiErrorDetail = await ExtractApiErrorDetailAsync(response, timeoutCts.Token);
-                return FailForStatus(response.StatusCode, providerName, apiErrorDetail);
+                return FailForStatus(response.StatusCode, providerName, displayUrl, apiErrorDetail);
             }
 
             var json = await response.Content.ReadAsStringAsync(timeoutCts.Token);
@@ -130,7 +131,7 @@ internal static class ProbeHelpers
         {
             // Timeout, not caller cancellation: the endpoint may just be slow.
             return new ProviderProbeResult(false,
-                $"No response from {baseUrl} after {(int)effectiveTimeout.TotalSeconds}s. "
+                $"No response from {RedactUrl(baseUrl)} after {(int)effectiveTimeout.TotalSeconds}s. "
                 + "The server may be slow, loading a model, or unreachable — "
                 + "confirm it is up, then try again.", []) { Transient = true };
         }
@@ -149,13 +150,22 @@ internal static class ProbeHelpers
     }
 
     /// <summary>
+    /// Scheme, host, port and path only: drops userinfo and the query string so a URL
+    /// can be echoed in an error message without leaking credentials embedded in it.
+    /// </summary>
+    internal static string RedactUrl(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            ? uri.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped)
+            : "the configured endpoint";
+
+    /// <summary>
     /// Maps HTTP status codes to user-friendly error messages.
     /// Covers auth errors (401/403), rate limiting (429), and server errors (5xx).
     /// When <paramref name="apiErrorDetail"/> is provided, it is appended to auth
     /// error messages so users can see the actual reason from the provider.
     /// </summary>
     public static ProviderProbeResult FailForStatus(
-        HttpStatusCode statusCode, string providerName, string? apiErrorDetail = null)
+        HttpStatusCode statusCode, string providerName, string displayUrl, string? apiErrorDetail = null)
     {
         var message = statusCode switch
         {
@@ -166,7 +176,7 @@ internal static class ProbeHelpers
                 ? $"Access denied by {providerName}: {apiErrorDetail}"
                 : $"Access denied. Your {providerName} credentials may lack model-listing permissions.",
             HttpStatusCode.NotFound =>
-                $"The {providerName} models API was not found. The service may be down.",
+                $"The {providerName} models API was not found at {displayUrl}. Check the endpoint URL, or the service may be down.",
             HttpStatusCode.TooManyRequests =>
                 $"Rate limited by {providerName}. Wait a moment and try again.",
             HttpStatusCode.InternalServerError or HttpStatusCode.BadGateway

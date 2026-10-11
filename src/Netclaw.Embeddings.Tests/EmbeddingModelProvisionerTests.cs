@@ -26,7 +26,7 @@ public sealed class EmbeddingModelProvisionerTests : IAsyncLifetime
     {
         _server = new LocalArtifactServer();
         _httpClient = new HttpClient();
-        _destinationDirectory = Path.Combine(Path.GetTempPath(), "netclaw-embedding-provisioner-tests", Guid.NewGuid().ToString("N"));
+        _destinationDirectory = Path.Combine(Path.GetTempPath(), $"netclaw-embedding-provisioner-tests-{Guid.NewGuid():N}");
         return ValueTask.CompletedTask;
     }
 

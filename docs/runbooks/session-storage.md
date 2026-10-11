@@ -59,12 +59,13 @@ Path containment does not replace operation permission.
 
 ## Configuration Reads
 
-An authorized `file_read` can inspect the exact `config/netclaw.json` path.
-That file contains ordinary persisted configuration, not the effective value
-of environment overrides.
+An authorized `file_read` can inspect each file under `config/`, for example
+`config/netclaw.json` and the grant store `config/tool-approvals.json`
+(owner decision D6). `netclaw.json` contains ordinary persisted
+configuration, not the effective value of environment overrides.
 
-Secret configuration belongs in protected stores. `secrets.json`, key and OAuth
-material, webhook secrets, database state, and process-control files remain
+Secret configuration belongs in protected stores. `secrets.json`, webhook route
+files, key and OAuth material, database state, and process-control files remain
 read-denied. Reading `netclaw.json` does not grant write, attach, or shell
 authority.
 

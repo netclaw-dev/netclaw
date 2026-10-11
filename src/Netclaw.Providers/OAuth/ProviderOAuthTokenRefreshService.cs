@@ -85,7 +85,7 @@ public sealed class ProviderOAuthTokenRefreshService(
                 EmitAuthExpired(providerName, "no_refresh_token");
                 throw new ProviderOAuthRefreshRequiredException(
                     $"OAuth token for provider '{providerName}' expired with no refresh token. "
-                    + $"Re-authenticate with 'netclaw provider fix {providerName}'.");
+                    + $"Re-authenticate '{providerName}' with `netclaw provider`.");
             }
 
             var service = deviceFlowFactory.GetFor(oauth);
@@ -100,7 +100,7 @@ public sealed class ProviderOAuthTokenRefreshService(
                 EmitAuthExpired(providerName, "invalid_grant");
                 throw new ProviderOAuthRefreshRequiredException(
                     $"OAuth refresh token for provider '{providerName}' was rejected. "
-                    + $"Re-authenticate with 'netclaw provider fix {providerName}'.");
+                    + $"Re-authenticate '{providerName}' with `netclaw provider`.");
             }
 
             ApplyRefreshResult(entry, result);
@@ -136,7 +136,7 @@ public sealed class ProviderOAuthTokenRefreshService(
             _timeProvider,
             "provider.auth.expired",
             AlertType.ProviderAuthExpired,
-            $"OAuth credentials for provider '{providerName}' require re-authentication. Run: netclaw provider fix {providerName}",
+            $"OAuth credentials for provider '{providerName}' require re-authentication. Run `netclaw provider`, or `netclaw provider add {providerName} <type> --auth oauth-device` to re-authenticate in place.",
             AlertSeverity.Warning,
             source: providerName,
             context: new Dictionary<string, string>

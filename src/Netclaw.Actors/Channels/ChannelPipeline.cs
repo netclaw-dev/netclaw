@@ -262,11 +262,9 @@ public sealed class SessionPipeline : ISessionPipeline
                 if (promptOverlayMsg is not null)
                     sessionManager.Tell(promptOverlayMsg, ActorRefs.NoSender);
 
-                // Trusted deliveries (e.g. Mode B reminders) carry an ephemeral
-                // AckTarget on their MessageSource so that the session's
-                // TryReplyAck routes CommandAck/CommandNack back to the
-                // dispatcher's Ask temp actor. Regular inbound ingress
-                // leaves AckTarget null → existing NoSender fire-and-forget.
+                // SignalR text and trusted deliveries carry an ephemeral AckTarget.
+                // The session confirms admission through that target after the journal write.
+                // Other ingress retains the NoSender contract.
                 var ackTarget = cmd.Source?.AckTarget ?? ActorRefs.NoSender;
                 sessionManager.Tell(cmd, ackTarget);
             }).ObservingFault());

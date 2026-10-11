@@ -6,9 +6,11 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <UseTestRunTempRoot>true</UseTestRunTempRoot>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Akka.Hosting.TestKit" />
     <PackageReference Include="Microsoft.AspNetCore.TestHost" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
@@ -33,6 +35,8 @@
          MemoryCommandTests (backfill-embeddings). -->
     <None Include="../Netclaw.Embeddings.Tests/Fixtures/*.onnx" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../Netclaw.Embeddings.Tests/Fixtures/*.txt" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- netclaw init output before init stopped writing audience profiles (InitOutputEquivalenceTests). -->
+    <None Include="Tui/Wizard/InitOutput/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

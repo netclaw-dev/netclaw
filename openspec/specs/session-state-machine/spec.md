@@ -70,59 +70,68 @@ Any transition not in this set SHALL throw `InvalidOperationException`.
 - **WHEN** `TransitionTo(Processing)` is attempted
 - **THEN** an `InvalidOperationException` is thrown
 
-### Requirement: Passivating behavior
+### Requirement: Idle passivation follows active work
 
-The session actor SHALL enter `Passivating` phase when idle timeout fires and no
-subscribers are active. In `Passivating`, the actor SHALL request final memory
-distillation from the observer actor (if present), wait up to 5 seconds for
-completion, save a snapshot, notify the lifecycle observer, and stop itself.
-Idle-driven passivation SHALL include a short post-snapshot grace window where a
-racing inbound message can abort the stop and return the actor to `Ready`
-instead of forcing a full stop and recovery cycle.
+The session actor SHALL enter `Passivating` when its idle timeout fires in
+phase `Ready` and its active-work check returns false. The default idle timeout
+SHALL be one hour. Subscriber count and journaled approval state SHALL NOT
+change idle eligibility. The `background-job-execution` capability defines the
+active-job check. In `Passivating`, the actor SHALL request final memory
+distillation from the observer actor, if present, wait up to five seconds, save
+a snapshot, notify the lifecycle observer, and stop itself. Idle passivation
+SHALL retain the post-snapshot grace window. The actor SHALL emit
+`SessionDeactivated` only when it commits to stop.
 
-#### Scenario: Idle timeout triggers passivation with no subscribers
+#### Scenario: Session passivates with no active work and a live subscriber
 
-- **GIVEN** the session actor is in phase `Ready` with `_subscribers.Count == 0`
-- **WHEN** `ReceiveTimeout` fires
-- **THEN** the actor transitions to phase `Passivating`
-- **AND** sends `RequestFinalDistillation` to the observer actor (if present)
+- **GIVEN** the session is in phase `Ready`
+- **AND** a live channel subscriber is attached
+- **AND** a journaled approval is outstanding
+- **AND** no active work remains
+- **WHEN** the one-hour idle timeout fires
+- **THEN** the session enters `Passivating`
+- **AND** it requests final memory distillation from the observer, if present
 
-#### Scenario: Idle timeout deferred when subscribers active
+#### Scenario: Processing phase disables the idle timeout
 
-- **GIVEN** the session actor is in phase `Ready` with `_subscribers.Count > 0`
-- **WHEN** `ReceiveTimeout` fires
-- **THEN** the actor remains in phase `Ready`
-- **AND** does NOT transition to `Passivating`
+- **GIVEN** the session is processing a foreground turn
+- **WHEN** the idle period would elapse while the foreground turn remains active
+- **THEN** the session remains in `Processing`
+- **AND** it does not emit `SessionDeactivated`
 
 #### Scenario: Passivation completes after distillation
 
-- **GIVEN** the session actor is in phase `Passivating`
-- **WHEN** `SessionDistillationCompleted` is received from the observer
+- **GIVEN** the session is in phase `Passivating`
+- **WHEN** `SessionDistillationCompleted` arrives from the observer
 - **THEN** the actor saves a snapshot
-- **AND** notifies `ISessionLifecycleObserver.OnSessionDeactivated()`
-- **AND** stops itself via `Context.Stop(Self)`
+- **AND** notifies the lifecycle observer of deactivation
+- **AND** emits `SessionDeactivated` once
+- **AND** stops itself
 
 #### Scenario: Passivation completes on timeout
 
-- **GIVEN** the session actor is in phase `Passivating`
-- **WHEN** 5 seconds elapse without `SessionDistillationCompleted`
+- **GIVEN** the session is in phase `Passivating`
+- **WHEN** five seconds elapse without `SessionDistillationCompleted`
 - **THEN** the actor saves a snapshot and stops itself
-- **AND** does NOT wait indefinitely for the observer
+- **AND** it does not wait indefinitely for the observer
+- **AND** it emits `SessionDeactivated` once
 
-#### Scenario: Passivation without observer actor
+#### Scenario: Passivation without an observer actor
 
-- **GIVEN** the session actor has no observer actor (no memory store configured)
-- **WHEN** idle timeout triggers passivation
-- **THEN** the actor saves a snapshot and stops itself immediately
-- **AND** does NOT attempt to send `RequestFinalDistillation`
+- **GIVEN** the session has no observer actor
+- **AND** no active work remains
+- **WHEN** the idle timeout fires
+- **THEN** the actor saves a snapshot and stops itself
+- **AND** it does not request final distillation
+- **AND** it emits `SessionDeactivated` once
 
-#### Scenario: Messages buffered during passivation
+#### Scenario: User input aborts passivation before commit
 
-- **GIVEN** the session actor is in phase `Passivating`
-- **WHEN** a `SendUserMessage` arrives
-- **THEN** idle passivation is aborted
-- **AND** the actor transitions `Passivating → Ready`
-- **AND** the message is handled immediately
+- **GIVEN** the session is in the post-snapshot grace window
+- **WHEN** the session receives `SendUserMessage` during the idle grace window
+- **THEN** the actor returns to `Ready`
+- **AND** it does not emit `SessionDeactivated`
+- **AND** it handles the message
 
 ### Requirement: Phase transition logging and observability
 

@@ -78,13 +78,18 @@ public sealed class SkillManageGuardMutationTests : IDisposable
         Assert.Equal("original", File.ReadAllText(outsideFile));
     }
 
+    // No production protected path is below the skills root (owner decision,
+    // 2026-10-05: the skill tiers are not control plane). A policy that protects
+    // one folder of the skill proves that the guard still keeps the protection.
     [Fact]
-    public async Task Flat_skill_write_into_system_tier_is_denied()
+    public async Task Write_into_a_protected_path_is_denied()
     {
-        var result = await WriteFileAsync("flat", ".system/planted/SKILL.md");
+        var locked = Path.Combine(_paths.SkillsDirectory, "guarded", "locked");
+
+        var result = await WriteFileAsync("guarded", "locked/notes.md", new ToolPathPolicy([locked]));
 
         Assert.StartsWith(ProtectedDenied, result);
-        Assert.False(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "planted", "SKILL.md")));
+        Assert.False(File.Exists(Path.Combine(locked, "notes.md")));
     }
 
     public void Dispose()
@@ -94,6 +99,9 @@ public sealed class SkillManageGuardMutationTests : IDisposable
     }
 
     private Task<string> WriteFileAsync(string skill, string filePath)
+        => WriteFileAsync(skill, filePath, DaemonToolPathPolicyFactory.Create(_paths, ShellExecutionEnvironmentDefaults.Bash, new SkillFeedsConfig()));
+
+    private Task<string> WriteFileAsync(string skill, string filePath, ToolPathPolicy protectedPaths)
     {
         var refresher = new SkillInventoryRefresher(
             _paths,
@@ -106,7 +114,7 @@ public sealed class SkillManageGuardMutationTests : IDisposable
             _paths,
             new NoOpSkillContentScanner(),
             refresher,
-            DaemonToolPathPolicyFactory.Create(_paths, ShellExecutionEnvironmentDefaults.Bash));
+            protectedPaths);
         var arguments = new Dictionary<string, object?>
         {
             ["Action"] = "write_file",

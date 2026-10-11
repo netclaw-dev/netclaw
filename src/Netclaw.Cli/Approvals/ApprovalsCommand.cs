@@ -31,16 +31,24 @@ internal static class ApprovalsCommand
     public const string DefaultTrustVerbTool = "shell_execute";
 
     public static Task<int> RunAsync(
-        string[] args,
-        NetclawPaths paths,
-        TextWriter? output = null,
-        TimeProvider? timeProvider = null,
-        TextWriter? diagnostics = null)
+        CliContext cli,
+        string[] args)
     {
-        var writer = output ?? Console.Out;
-        var diagnosticWriter = diagnostics ?? Console.Error;
-        var clock = timeProvider ?? TimeProvider.System;
+        var paths = cli.Paths;
+        var writer = cli.Output;
+        var diagnosticWriter = cli.Error;
+        var clock = cli.Time;
         var subcommand = args.Length > 1 ? args[1] : "help";
+
+        // A help flag after list or revoke is otherwise rejected as an unknown flag. The
+        // trust-verb phrase is free text, so only its first operand can ask for help, and a
+        // tool or phrase may be called "help", so only the flags count.
+        var helpRequested = CliArgsParser.HasTrailingHelpToken(
+            subcommand is "trust-verb" ? args[..Math.Min(args.Length, 3)] : args,
+            startIndex: 2,
+            includeBareHelp: false);
+        if (helpRequested)
+            return Task.FromResult(WriteHelp(paths, writer, clock));
 
         return subcommand switch
         {
@@ -275,6 +283,17 @@ internal static class ApprovalsCommand
                 writer.WriteLine("Error: The verb must be nonempty and canonical.");
                 return 1;
             }
+
+            // A call to a non-shell tool has no command line to prefix-match: the
+            // daemon looks a grant up by the tool's canonical name, so a grant
+            // with another phrase would save and never apply.
+            var phrase = ApprovalPatternMatching.NonShellGrantPhrase(new ToolName(canonicalTool));
+            if (!ApprovalPatternMatching.MatchesAny(phrase, [entry]))
+            {
+                writer.WriteLine($"Error: '{opts.Verb}' never matches a call to {canonicalTool}. Grants for this tool match only the phrase '{phrase}'.");
+                writer.WriteLine($"If the tool is named '{canonicalTool}', run: netclaw approvals trust-verb {phrase} --tool {canonicalTool} --audience {opts.Audience.ToWireValue()}");
+                return 1;
+            }
         }
 
         var store = CreateStore(paths, clock);
@@ -343,8 +362,11 @@ internal static class ApprovalsCommand
         {
             writer.WriteLine("Usage: netclaw approvals trust-verb <phrase> [--audience personal|team|public] [--tool <name>]");
             writer.WriteLine();
-            writer.WriteLine("Adds a global-wildcard approval. Shell phrases use typed canonical token prefixes;");
-            writer.WriteLine("other tools use exact phrases. Use it for unattended or scheduled tasks.");
+            writer.WriteLine("Adds a global-wildcard approval. A shell phrase of two or more words covers its");
+            writer.WriteLine("command words and any later words: 'git push' covers 'git push origin main'.");
+            writer.WriteLine("A one-word phrase covers the program alone: 'gh' does not cover 'gh pr view'.");
+            writer.WriteLine("Other tools take the tool's name as the phrase: --tool demo/calculate takes");
+            writer.WriteLine("'demo/calculate'. Use it for unattended or scheduled tasks.");
             return null;
         }
 
@@ -421,7 +443,10 @@ internal static class ApprovalsCommand
         writer.WriteLine("                    Flags: --audience <personal|team|public>");
         writer.WriteLine("  trust-verb <phrase>");
         writer.WriteLine("                    Add one static canonical phrase as a global wildcard.");
-        writer.WriteLine("                    Shell phrases become typed token prefixes; other tools stay exact.");
+        writer.WriteLine("                    A shell phrase of two or more words covers its command words");
+        writer.WriteLine("                    and any later words. A one-word phrase covers the program alone:");
+        writer.WriteLine("                    'gh' does not cover 'gh pr view'. Other tools take the tool's name");
+        writer.WriteLine("                    as the phrase (--tool demo/calculate takes 'demo/calculate').");
         writer.WriteLine("                    Flags: --audience <personal|team|public> (default personal)");
         writer.WriteLine("                           --tool <name>                       (default shell_execute)");
         writer.WriteLine("                           --shell <bash|powershell>           (shell_execute only)");
@@ -583,7 +608,7 @@ internal static class ApprovalsCommand
         return view;
     }
 
-    private static ToolApprovalStore CreateStore(NetclawPaths paths, TimeProvider clock) =>
+    internal static ToolApprovalStore CreateStore(NetclawPaths paths, TimeProvider clock) =>
         new(
             paths.ToolApprovalsPath,
             clock,

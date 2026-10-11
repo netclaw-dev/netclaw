@@ -210,8 +210,6 @@ internal sealed record PolicyFixtureCandidate
 
     public string? Role { get; init; }
 
-    public List<int>? PrerequisiteIds { get; init; }
-
     public required string ExpectedCoverage { get; init; }
 }
 

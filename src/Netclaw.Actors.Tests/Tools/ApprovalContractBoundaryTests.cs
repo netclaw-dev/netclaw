@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Diagnostics;
 using System.Text.Json;
+using Netclaw.Actors.Authorization;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -186,57 +187,208 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
 
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
-    public async Task Synced_skill_script_can_run_but_its_directory_stays_write_protected()
+    public async Task Skill_folders_get_the_decision_of_an_ordinary_path()
     {
-        await using var harness = await CreateHarnessAsync("synced-skill-script");
-        var tools = Path.Combine(harness.Paths.SystemSkillsDirectory, "netclaw-operations", "tools");
-        Directory.CreateDirectory(tools);
-        var script = Path.Combine(tools, "check");
+        // Owner decision (2026-10-05): the system skill folder and the server feed
+        // folder are agent guidance, not control plane. Netclaw cannot tell if a
+        // program reads or writes a path argument, so the old write protection
+        // denied "bash <skill script>" and "ls <skill folder>".
+        await using var harness = await CreateHarnessAsync(
+            "skill-folder-paths",
+            approvals: Approvals.PersistentAnywhere("bash"));
+        var scripts = Path.Combine(harness.Paths.ServerFeedDirectory("team"), "disk-cleanup", "scripts");
+        Directory.CreateDirectory(scripts);
+        var script = Path.Combine(scripts, "audit.sh");
         await File.WriteAllTextAsync(script, "#!/bin/sh\necho ok\n", Ct);
+        var systemSkill = Path.Combine(harness.Paths.SystemSkillsDirectory, "netclaw-operations", "SKILL.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(systemSkill)!);
+        await File.WriteAllTextAsync(systemSkill, "skill", Ct);
+        var userSkill = Path.Combine(harness.Paths.SkillsDirectory, "user-skill", "SKILL.md");
 
-        var run = await harness.EvaluateShellAsync($"'{script}'", Ct);
-        var write = await harness.EvaluateShellAsync($"touch '{Path.Combine(tools, "added")}'", Ct);
+        var run = await harness.EvaluateShellAsync($"bash '{script}'", Ct);
+        var list = await harness.EvaluateShellAsync($"ls '{harness.Paths.SystemSkillsDirectory}/'", Ct);
+        var touch = await harness.EvaluateShellAsync($"touch '{Path.Combine(scripts, "added")}'", Ct);
+        var edit = await harness.EvaluateToolAsync(
+            "file_edit",
+            ToolInput.Create("Path", systemSkill, "OldString", "skill", "NewString", "guide"),
+            Ct);
+        var write = await harness.EvaluateToolAsync(
+            "file_write",
+            ToolInput.Create("Path", systemSkill, "Content", "x"),
+            Ct);
+        var userWrite = await harness.EvaluateToolAsync(
+            "file_write",
+            ToolInput.Create("Path", userSkill, "Content", "x"),
+            Ct);
 
-        Assert.Equal(ApprovalOutcome.RequiresApproval, run.Outcome);
-        Assert.Equal(ApprovalOutcome.Denied, write.Outcome);
+        Assert.Equal(ApprovalOutcome.Allowed, run.Outcome);
+        Assert.Equal(ApprovalAllowReason.StoredApproval, run.AllowReason);
+        Assert.Equal(ApprovalOutcome.Allowed, list.Outcome);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, touch.Outcome);
+        // The file tools use the same protected-path list. A skill folder gets
+        // the decision of the user skill root.
+        Assert.Equal(userWrite.Outcome, write.Outcome);
+        Assert.Equal(userWrite.Outcome, edit.Outcome);
+        Assert.NotEqual(ApprovalOutcome.Denied, write.Outcome);
+    }
+
+    // The feed sync state holds the file hashes that the sync restore compares.
+    // It is an integrity record, so it stays write-protected inside the writable
+    // skill folders. The agent may read it.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Feed_sync_state_stays_write_protected()
+    {
+        await using var harness = await CreateHarnessAsync(
+            "feed-sync-state",
+            approvals: Approvals.PersistentAnywhere("echo", "touch", "cp", "rm"));
+        var feed = ShellApprovalHarness.HarnessSkillFeeds.Feeds[0].Name;
+        string[] states = [harness.Paths.ServerFeedSyncStatePath(feed), harness.Paths.ServerFeedAgentSyncStatePath(feed)];
+
+        foreach (var state in states)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(state)!);
+            await File.WriteAllTextAsync(state, "{}", Ct);
+            var redirect = await harness.EvaluateShellAsync($"echo x > '{state}'", Ct);
+            var remove = await harness.EvaluateShellAsync($"rm '{state}'", Ct);
+            var write = await harness.EvaluateToolAsync("file_write", ToolInput.Create("Path", state, "Content", "{}"), Ct);
+            var read = await harness.EvaluateToolAsync("file_read", ToolInput.Create("Path", state), Ct);
+
+            Assert.Equal(ApprovalOutcome.Denied, redirect.Outcome);
+            Assert.Equal("shell_path_protected", redirect.DenyReason);
+            Assert.Equal(ApprovalOutcome.Denied, remove.Outcome);
+            Assert.Equal(ApprovalOutcome.Denied, write.Outcome);
+            Assert.NotEqual(ApprovalOutcome.Denied, read.Outcome);
+        }
+    }
+
+    // Negative control for the skill folder decision: each write form to a
+    // control-plane file stays denied, with a grant for anywhere for each program.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Control_plane_writes_stay_denied_in_every_form()
+    {
+        await using var harness = await CreateHarnessAsync(
+            "control-plane-writes",
+            approvals: Approvals.PersistentAnywhere("echo", "touch", "cp", "tee", "rm", "mv", "bash", "sed"));
+        var source = Path.Combine(harness.ProjectDirectory, "source.txt");
+        await File.WriteAllTextAsync(source, "x", Ct);
+        string[] targets =
+        [
+            Path.Combine(harness.Paths.ConfigDirectory, "netclaw.json"),
+            Path.Combine(harness.Paths.ConfigDirectory, "tool-approvals.json"),
+            harness.Paths.SecretsPath,
+            Path.Combine(harness.Paths.WebhooksDirectory, "route.json"),
+            Path.Combine(harness.Paths.KeysDirectory, "key-1.xml"),
+        ];
+        foreach (var target in targets)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            await File.WriteAllTextAsync(target, "{}", Ct);
+        }
+
+        foreach (var target in targets)
+        {
+            string[] commands =
+            [
+                $"echo x > '{target}'",
+                $"echo x >> '{target}'",
+                $"touch '{target}'",
+                $"cp '{source}' '{target}'",
+                $"mv '{source}' '{target}'",
+                $"echo x | tee '{target}'",
+                $"rm '{target}'",
+                $"sed -i s/a/b/ '{target}'",
+                $"bash -c \"echo x > '{target}'\"",
+            ];
+            foreach (var command in commands)
+            {
+                var shell = await harness.EvaluateShellAsync(command, Ct);
+                Assert.True(ApprovalOutcome.Denied == shell.Outcome, $"{command}: {shell.Outcome} {shell.DenyReason}");
+            }
+
+            var write = await harness.EvaluateToolAsync("file_write", ToolInput.Create("Path", target, "Content", "x"), Ct);
+            var edit = await harness.EvaluateToolAsync(
+                "file_edit",
+                ToolInput.Create("Path", target, "OldString", "{}", "NewString", "[]"),
+                Ct);
+            Assert.Equal(ApprovalOutcome.Denied, write.Outcome);
+            Assert.Equal(ApprovalOutcome.Denied, edit.Outcome);
+        }
+
+        // A link hides the config directory from the text screen. The path check
+        // still finds the write-protected target and names the cause.
+        Directory.CreateSymbolicLink(Path.Combine(harness.ProjectDirectory, "cfg"), harness.Paths.ConfigDirectory);
+        var linked = await harness.EvaluateShellAsync("touch cfg/netclaw.json", Ct);
+        Assert.Equal(ApprovalOutcome.Denied, linked.Outcome);
+        Assert.Equal("shell_path_protected", linked.DenyReason);
     }
 
     // ── 3. Unattended and Public path authority for file tools ──
     // Old coverage: UnattendedPathAccessTests, PublicAudienceFileAccessPolicyTests.
 
-    private const string UnattendedRootsMessage = "Error: unattended session may only access files inside trusted roots.";
-
+    // D2: an unattended Personal call gets the decision of a Personal chat. A
+    // call that would prompt in the chat is denied, because nobody can answer.
     [Fact]
-    public async Task Unattended_personal_file_tools_stay_inside_trusted_roots()
+    public async Task Unattended_personal_file_tools_get_the_attended_decision()
     {
-        await using var harness = await CreateHarnessAsync(
-            "unattended-file-roots",
+        await using var attended = await CreateHarnessAsync(
+            "attended-file-reach",
+            new ShellApprovalInvocation("true", Interactive: true));
+        await using var unattended = await CreateHarnessAsync(
+            "unattended-file-reach",
             new ShellApprovalInvocation("true", Interactive: false));
-        var outside = Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt");
-        await File.WriteAllTextAsync(outside, "outside data", Ct);
 
-        var identity = await harness.EvaluateToolAsync(
+        foreach (var harness in new[] { attended, unattended })
+        {
+            var outside = Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt");
+            await File.WriteAllTextAsync(outside, "outside data", Ct);
+        }
+
+        foreach (var call in FileCalls())
+        {
+            var expected = await call(attended);
+            var actual = await call(unattended);
+            if (expected.Outcome == ApprovalOutcome.RequiresApproval)
+            {
+                Assert.Equal(ApprovalOutcome.Denied, actual.Outcome);
+                Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, actual.DenyReason);
+                continue;
+            }
+
+            Assert.Equal(expected.Outcome, actual.Outcome);
+            Assert.Equal(expected.DenyReason, actual.DenyReason);
+        }
+
+        var secrets = await unattended.EvaluateToolAsync(
+            "file_read",
+            ToolInput.Create("Path", Path.Combine(unattended.Paths.ConfigDirectory, "secrets.json")),
+            Ct);
+        Assert.Equal(ApprovalOutcome.Denied, secrets.Outcome);
+    }
+
+    private static IEnumerable<Func<ShellApprovalHarness, Task<ApprovalObservation>>> FileCalls()
+    {
+        yield return harness => harness.EvaluateToolAsync(
             "file_write",
             ToolInput.Create("Path", Path.Combine(harness.Paths.IdentityDirectory, "SOUL.md"), "Content", "x"),
             Ct);
-        var skills = await harness.EvaluateToolAsync(
+        yield return harness => harness.EvaluateToolAsync(
             "file_write",
             ToolInput.Create("Path", Path.Combine(harness.Paths.SkillsDirectory, "added", "SKILL.md"), "Content", "x"),
             Ct);
-        var read = await harness.EvaluateToolAsync("file_read", ToolInput.Create("Path", outside), Ct);
-        var session = await harness.EvaluateToolAsync(
+        yield return harness => harness.EvaluateToolAsync(
+            "file_read",
+            ToolInput.Create("Path", Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt")),
+            Ct);
+        yield return harness => harness.EvaluateToolAsync(
             "file_write",
             ToolInput.Create("Path", Path.Combine(harness.SessionDirectory, "notes.txt"), "Content", "x"),
             Ct);
-
-        foreach (var denied in new[] { identity, skills, read })
-        {
-            Assert.Equal(ApprovalOutcome.Denied, denied.Outcome);
-            Assert.Equal("path_access_denied", denied.DenyReason);
-            Assert.Equal(UnattendedRootsMessage, denied.DenyMessage);
-        }
-
-        Assert.Equal(ApprovalOutcome.Allowed, session.Outcome);
+        yield return harness => harness.EvaluateToolAsync(
+            "file_read",
+            ToolInput.Create("Path", Path.Combine(harness.Paths.ConfigDirectory, "secrets.json")),
+            Ct);
     }
 
     [Fact]
@@ -388,61 +540,6 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
         Assert.False(Directory.Exists(Path.Combine(home, folder)));
     }
 
-    [Fact]
-    public async Task Unattended_session_can_write_a_configured_custom_workspaces_directory()
-    {
-        var custom = ApprovalTestGit.CreateRoot("netclaw-custom-workspaces-");
-        try
-        {
-            await using var harness = await CreateHarnessAsync(
-                "custom-workspaces",
-                new ShellApprovalInvocation("true", Interactive: false),
-                policy: new ShellApprovalHarnessPolicy { WorkspacesDirectory = custom.FullName });
-            var defaultLocation = Path.Combine(harness.Paths.BasePath, "workspaces", "state.json");
-
-            var customWrite = await harness.EvaluateToolAsync(
-                "file_write",
-                ToolInput.Create("Path", Path.Combine(custom.FullName, "state.json"), "Content", "x"),
-                Ct);
-            var defaultWrite = await harness.EvaluateToolAsync(
-                "file_write",
-                ToolInput.Create("Path", defaultLocation, "Content", "x"),
-                Ct);
-
-            Assert.Equal(ApprovalOutcome.Allowed, customWrite.Outcome);
-            Assert.Equal(ApprovalOutcome.Denied, defaultWrite.Outcome);
-            Assert.Equal(UnattendedRootsMessage, defaultWrite.DenyMessage);
-        }
-        finally
-        {
-            custom.Delete(recursive: true);
-        }
-    }
-
-    // Without a bound session or a project, an unattended Personal call keeps
-    // only the shared session roots and the global roots. A path outside them
-    // is denied. The "no trusted roots" branch cannot be reached here: the
-    // production paths always supply the shared session and workspaces roots.
-    [Fact]
-    public async Task Unattended_call_without_a_session_or_project_stays_inside_shared_roots()
-    {
-        await using var harness = await CreateHarnessAsync(
-            "no-trusted-roots",
-            new ShellApprovalInvocation("true", Interactive: false),
-            policy: new ShellApprovalHarnessPolicy { Sessionless = true });
-        var outside = Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt");
-
-        var write = await harness.EvaluateToolAsync("file_write", ToolInput.Create("Path", outside, "Content", "x"), Ct);
-        var read = await harness.EvaluateToolAsync("file_read", ToolInput.Create("Path", outside), Ct);
-
-        Assert.Equal(ApprovalOutcome.Denied, write.Outcome);
-        Assert.Equal("path_access_denied", write.DenyReason);
-        Assert.Equal(UnattendedRootsMessage, write.DenyMessage);
-        Assert.Equal(ApprovalOutcome.Denied, read.Outcome);
-        Assert.Equal("path_access_denied", read.DenyReason);
-        Assert.Equal(UnattendedRootsMessage, read.DenyMessage);
-    }
-
     // ── 5 (continued). Nested secrets and the display size bound ──
 
     // The MCP adapter rejects a tool name over 128 characters, so only an
@@ -547,19 +644,56 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
 
             // A write in %TEMP% gets managed-directory advice. The production
             // Windows safe-verb list marks Get-Content as a reviewed diagnostic,
-            // and a diagnostic gets no relocation advice; it asks for approval.
+            // and a diagnostic gets no relocation advice. The interactive
+            // Personal profile may read %TEMP%, so the reviewed phrase runs.
             var write = await harness.EvaluateShellAsync("Remove-Item result.log", Ct, temporary);
             var diagnostic = await harness.EvaluateShellAsync("Get-Content result.log", Ct, temporary);
 
             Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, write.Outcome);
             Assert.Equal(ApprovalCorrection.ManagedTemporaryDirectory, write.AgentCorrection);
-            Assert.Equal(ApprovalOutcome.RequiresApproval, diagnostic.Outcome);
+            Assert.Equal(ApprovalOutcome.Allowed, diagnostic.Outcome);
+            Assert.Equal(ApprovalAllowReason.ReviewedSafePolicy, diagnostic.AllowReason);
             Assert.NotEqual(ApprovalCorrection.ManagedTemporaryDirectory, diagnostic.AgentCorrection);
         }
         finally
         {
             root.Delete(recursive: true);
         }
+    }
+
+    // On a Windows host, the catalog row powershell7-backslash-parent-separator-prompts
+    // reads a real path outside the project. The interactive Personal profile
+    // may read it, so the reviewed phrase runs. A POSIX host simulates the
+    // Windows paths, cannot judge them, and keeps the prompt.
+    [SlopwatchSuppress("SW001", "The case needs real Windows paths.")]
+    [Fact(SkipUnless = nameof(IsWindows), Skip = "The case needs real Windows paths.")]
+    public async Task Windows_host_reviewed_phrase_reads_a_path_outside_the_project()
+    {
+        await using var harness = await CreateHarnessAsync(
+            "windows-outside-read",
+            new ShellApprovalInvocation(@"Get-Content ..\..\outside\secret.txt", Host: ShellApprovalHost.PowerShell7));
+
+        var decision = await harness.EvaluateAsync(Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, decision.Outcome);
+        Assert.Equal(ApprovalAllowReason.ReviewedSafePolicy, decision.AllowReason);
+    }
+
+    // On a Windows host, the catalog row powershell7-prose-quoted-program-word-prompts
+    // reads "/" as the root of the drive. The shell text then names a protected
+    // path, so the call gets the normal protected-path denial.
+    [SlopwatchSuppress("SW001", "The case needs real Windows paths.")]
+    [Fact(SkipUnless = nameof(IsWindows), Skip = "The case needs real Windows paths.")]
+    public async Task Windows_host_prose_gets_a_protected_path_denial()
+    {
+        await using var harness = await CreateHarnessAsync(
+            "windows-prose",
+            new ShellApprovalInvocation("I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?", Host: ShellApprovalHost.PowerShell7));
+
+        var decision = await harness.EvaluateAsync(Ct);
+
+        Assert.Equal(ApprovalOutcome.Denied, decision.Outcome);
+        Assert.Equal("shell_references_protected_path", decision.DenyReason);
     }
 
     private static string CanonicalPath(string path)
@@ -583,9 +717,9 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [InlineData("netclaw daemon stop &", "hard_deny_self_destructive")]
     [InlineData("'netclaw' daemon stop &", "hard_deny_self_destructive")]
-    [InlineData("bash -c \"kill -9 1\" &", "hard_deny_self_destructive")]
+    [InlineData("bash -c \"pkill netclawd\" &", "hard_deny_self_destructive")]
     [InlineData("sudo rm -rf / &", "hard_deny_privilege_escalation")]
-    [InlineData("cat ../netclaw/config/notes.txt &", "shell_references_protected_path")]
+    [InlineData("cat ../netclaw/config/secrets.json &", "shell_references_protected_path")]
     public async Task Unresolved_command_still_meets_hard_deny_and_protected_paths(string command, string reason)
     {
         await using var harness = await CreateHarnessAsync("legacy-tokenizer");
@@ -604,8 +738,8 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
     [InlineData("git tag v0.4.2", "git tag")]
     [InlineData("git tag 0.4.2", "git tag")]
     [InlineData("freshdesk ticket get 123", "freshdesk ticket get")]
-    [InlineData("git log v0.4.1..dev", "git log")]
-    [InlineData("timeout 30 curl http://example.com", "timeout")]
+    [InlineData("git cherry-pick v0.4.1..dev", "git cherry-pick")]
+    [InlineData("timeout 30 curl http://example.com", "timeout curl")]
     [InlineData("git commit -m \"fix the bug\"", "git commit")]
     public async Task Prompt_candidate_drops_trailing_version_and_number_operands(string command, string candidate)
     {
@@ -948,13 +1082,10 @@ public sealed class ApprovalLaunchEnvironmentTests(ShellApprovalMatrixFixture fi
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The launch runs /bin/bash.")]
     public async Task Shell_launch_removes_bash_startup_and_loader_overrides()
     {
-        await using var harness = await ShellApprovalHarness.CreateAsync(
-            "launch-environment",
-            new ShellApprovalInvocation("printenv"),
-            Approvals.PersistentAnywhere("printenv"),
-            fixture.ActorSystem,
-            Ct);
-        var startupFile = Path.Combine(harness.ProjectDirectory, "startup.sh");
+        // The shell environment takes its daemon environment snapshot when the
+        // harness creates it, so the probe names are set first.
+        using var startupDirectory = new DisposableTempDir();
+        var startupFile = Path.Combine(startupDirectory.Path, "startup.sh");
         await File.WriteAllTextAsync(startupFile, "export NETCLAW_BASH_ENV_PROBE=probe-bash-env\n", Ct);
         var probes = new Dictionary<string, string>
         {
@@ -969,6 +1100,13 @@ public sealed class ApprovalLaunchEnvironmentTests(ShellApprovalMatrixFixture fi
         {
             foreach (var (name, value) in probes)
                 Environment.SetEnvironmentVariable(name, value);
+            await using var harness = await ShellApprovalHarness.CreateAsync(
+                "launch-environment",
+                new ShellApprovalInvocation("printenv"),
+                // The command words keep each plain variable name (#2306), so the grant names them.
+                Approvals.PersistentAnywhere("printenv NETCLAW_LAUNCH_PROBE NETCLAW_BASH_ENV_PROBE LD_NETCLAW_PROBE DYLD_NETCLAW_PROBE"),
+                fixture.ActorSystem,
+                Ct);
             run = await harness.RunShellAsync(
                 "printenv NETCLAW_LAUNCH_PROBE NETCLAW_BASH_ENV_PROBE LD_NETCLAW_PROBE DYLD_NETCLAW_PROBE",
                 Ct);

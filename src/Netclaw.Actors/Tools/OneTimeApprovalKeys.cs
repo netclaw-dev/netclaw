@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools.Authorization.Consent;
 
 namespace Netclaw.Actors.Tools;
 
@@ -31,14 +32,15 @@ internal static class OneTimeApprovalKeys
         return keys;
     }
 
+    /// <summary>Creates the "Once" answer for the prompt of <paramref name="toolName"/>.</summary>
+    public static OneTimeConsent CreateConsent(string toolName, ToolApprovalContext context)
+        => new(toolName, Create(context));
+
     public static bool Matches(
-        string? approvedToolName,
-        IReadOnlySet<string> approvedKeys,
+        OneTimeConsent? consent,
         string toolName,
         ToolApprovalContext approvalContext)
-        => !string.IsNullOrEmpty(approvedToolName)
-           && string.Equals(approvedToolName, toolName, StringComparison.Ordinal)
-           && approvedKeys.SetEquals(Create(approvalContext));
+        => consent is not null && consent.Covers(toolName, Create(approvalContext));
 
     private static string CreateCandidateKey(ApprovalCandidate candidate, string? cwd)
     {

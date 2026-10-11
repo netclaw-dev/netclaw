@@ -38,10 +38,10 @@ public sealed class SessionConfigDefaultsTests
     }
 
     [Fact]
-    public void Idle_timeout_defaults_to_30_minutes()
+    public void Idle_timeout_defaults_to_one_hour()
     {
         var config = new SessionConfig();
-        Assert.Equal(TimeSpan.FromMinutes(30), config.IdleTimeout);
+        Assert.Equal(TimeSpan.FromHours(1), config.IdleTimeout);
     }
 
     [Fact]

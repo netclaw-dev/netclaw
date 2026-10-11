@@ -58,6 +58,15 @@ internal sealed class MattermostNetReplyClient : IMattermostReplyClient
         return details.Id;
     }
 
+    public Task SendTypingAsync(
+        MattermostChannelId channelId,
+        string? rootPostId,
+        CancellationToken cancellationToken = default)
+        => _client.SendTypingAsync(
+            channelId.Value,
+            string.IsNullOrEmpty(rootPostId) ? null : rootPostId,
+            cancellationToken);
+
     private static PostProps? BuildProps(IReadOnlyList<MattermostAttachment>? attachments)
     {
         if (attachments is null or { Count: 0 })

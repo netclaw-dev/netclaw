@@ -268,7 +268,7 @@ internal static class WebhooksCommand
             var truncated = route.NotifyInstructions.Length > 60
                 ? route.NotifyInstructions[..60] + "..."
                 : route.NotifyInstructions;
-            output.WriteLine($"  Instructions:     {truncated.Replace("\n", " ")}");
+            output.WriteLine($"  Instructions:     {truncated.Replace("\n", " ", StringComparison.Ordinal)}");
         }
         output.WriteLine();
         output.WriteLine("Prompt:");
@@ -278,7 +278,7 @@ internal static class WebhooksCommand
         }
         else if (route.Prompt.Length > 200)
         {
-            output.WriteLine($"  {route.Prompt[..200].Replace("\n", " ")}...");
+            output.WriteLine($"  {route.Prompt[..200].Replace("\n", " ", StringComparison.Ordinal)}...");
             output.WriteLine("  (truncated; run with --json for full prompt)");
         }
         else

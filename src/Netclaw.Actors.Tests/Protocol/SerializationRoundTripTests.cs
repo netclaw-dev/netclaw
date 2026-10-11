@@ -7,6 +7,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Serialization;
 using Google.Protobuf;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
@@ -15,6 +16,7 @@ using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
+using Netclaw.Security.Authorization.Consent;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -1053,7 +1055,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Null(legacyProjection.AssignmentDigest);
         Assert.All(
             wire.OptionKeys.Where(static key => key.StartsWith("approve_assignment_", StringComparison.Ordinal)),
-            key => Assert.Equal(ApprovalDecision.Denied, MapLegacyApprovalDecision(key)));
+            key => Assert.Equal(ConsentAnswer.Denied, MapLegacyApprovalDecision(key)));
     }
 
     [Fact]
@@ -1104,7 +1106,7 @@ public sealed class SerializationRoundTripTests : TestKit
             SessionId = new SessionId("C123/1700000000.000001"),
             CallId = "call-resolved-1",
             AuthorizationAttemptId = "auth-fedcba9876543210fedcba9876543210",
-            Decision = ApprovalDecision.ApprovedOnce.ToString(),
+            Decision = "ApprovedOnce",
             ResolvedAtMs = 1700000001000
         };
 
@@ -1291,14 +1293,14 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(0L, result.TimestampMs);
     }
 
-    private static ApprovalDecision MapLegacyApprovalDecision(string selectedKey) => selectedKey switch
+    private static ConsentAnswer MapLegacyApprovalDecision(string selectedKey) => selectedKey switch
     {
-        ApprovalOptionKeys.ApproveOnce => ApprovalDecision.ApprovedOnce,
-        ApprovalOptionKeys.ApproveSession => ApprovalDecision.ApprovedSession,
-        ApprovalOptionKeys.ApproveAlways => ApprovalDecision.ApprovedAlways,
-        ApprovalOptionKeys.ApproveRepository => ApprovalDecision.ApprovedRepository,
-        ApprovalOptionKeys.ApproveEverywhere => ApprovalDecision.ApprovedEverywhere,
-        ApprovalOptionKeys.Deny => ApprovalDecision.Denied,
-        _ => ApprovalDecision.Denied,
+        ApprovalOptionKeys.ApproveOnce => ConsentAnswer.Once.Instance,
+        ApprovalOptionKeys.ApproveSession => new ConsentAnswer.Grant(GrantScopeKind.Session),
+        ApprovalOptionKeys.ApproveAlways => new ConsentAnswer.Grant(GrantScopeKind.Folder),
+        ApprovalOptionKeys.ApproveRepository => new ConsentAnswer.Grant(GrantScopeKind.Repository),
+        ApprovalOptionKeys.ApproveEverywhere => new ConsentAnswer.Grant(GrantScopeKind.Everywhere),
+        ApprovalOptionKeys.Deny => ConsentAnswer.Denied,
+        _ => ConsentAnswer.Denied,
     };
 }

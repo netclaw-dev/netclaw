@@ -31,4 +31,12 @@ internal static class DaemonCommandDispatch
     public static bool ShouldShowHelpInsteadOfExecuting(string subcommand, string[] args)
         => LifecycleVerbsRequiringTrailingHelpGuard.Contains(subcommand)
            && CliArgsParser.HasTrailingHelpToken(args, startIndex: 2);
+
+    /// <summary>
+    /// Returns <c>true</c> for <c>daemon devices help</c> and for a help flag after the devices
+    /// subcommand. A device may be called "help", so past the subcommand only the flags count.
+    /// </summary>
+    public static bool ShouldShowDevicesHelp(string[] args)
+        => CliArgsParser.IsHelpToken(args.Length > 2 ? args[2] : "list")
+           || CliArgsParser.HasTrailingHelpToken(args, startIndex: 3, includeBareHelp: false);
 }

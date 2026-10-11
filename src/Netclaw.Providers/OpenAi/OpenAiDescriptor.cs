@@ -23,9 +23,13 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
 {
     internal const string CodexBackendEndpoint = "https://chatgpt.com/backend-api/codex";
 
-    // The Codex backend gates model catalog entries by Codex CLI client version.
+    // The Codex backend gates model catalog entries by Codex CLI client version:
+    // a stale value silently hides newer models from discovery (#1831, #2259).
     // This must track the official @openai/codex release, not Netclaw's version.
-    internal const string CodexModelCatalogClientVersion = "0.147.0";
+    // To refresh: use `npm view @openai/codex dist-tags.latest` (or the rust-v* release
+    // marked "Latest" in `gh release list -R openai/codex`). Plain MAJOR.MINOR.PATCH only:
+    // the real CLI strips pre-release suffixes before sending client_version.
+    internal const string CodexModelCatalogClientVersion = "0.159.0";
 
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
@@ -92,12 +96,12 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
 
         if (entry.OAuthTokenExpiry is { } expiry && expiry < _timeProvider.GetUtcNow())
             return new ProviderProbeResult(false,
-                $"OAuth token expired {expiry:g}. Re-authenticate with 'netclaw provider fix <name>'.", []);
+                $"OAuth token expired {expiry:g}. Re-authenticate with 'netclaw provider'.", []);
 
         var accountId = JwtAccountIdExtractor.ResolveAccountId(entry);
         if (accountId is null)
             return new ProviderProbeResult(false,
-                "OpenAI OAuth login did not return a ChatGPT account ID. Re-authenticate with 'netclaw provider fix <name>'.", []);
+                "OpenAI OAuth login did not return a ChatGPT account ID. Re-authenticate with 'netclaw provider'.", []);
 
         return await ProbeCodexModelsAsync(token, accountId, ct);
     }

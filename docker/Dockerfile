@@ -142,8 +142,10 @@ VOLUME /home/netclaw/.netclaw
 
 EXPOSE 5199
 
+# The CLI resolves the daemon endpoint (netclaw.json, NETCLAW_* env, default) and exits
+# non-zero unless the daemon answers /api/health/ready, so a changed Daemon.Port stays healthy.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -sf http://127.0.0.1:5199/api/health/ready || exit 1
+  CMD netclaw daemon status >/dev/null || exit 1
 
 # Keep the image entrypoint root so it can repair host bind-mount ownership.
 # docker/entrypoint.sh drops privileges before starting the daemon supervisor.

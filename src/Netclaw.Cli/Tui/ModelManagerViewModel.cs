@@ -101,7 +101,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         if (!Model.ModelCommand.TryLoadModelSelection(_paths, out var models, out _))
         {
             Models = null;
-            StatusMessage.Value = "Model configuration is invalid. Run `netclaw doctor` for details.";
+            StatusMessage.Value = Model.ModelCommand.InvalidConfigurationMessage;
         }
         else
         {
@@ -210,7 +210,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
 
         Refresh();
-        StatusMessage.Value = $"Set {SelectedRole} to {SelectedProvider}/{SelectedModelId}. Restart daemon for changes to take effect.";
+        StatusMessage.Value = $"Set {SelectedRole} to {SelectedProvider}/{SelectedModelId}. {ConfigFileHelper.DaemonAppliesChange}";
         ClearAssignmentState();
         CurrentState.Value = ModelManagerState.RoleOverview;
         NotifyStateChanged();
@@ -241,7 +241,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         {
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
             Refresh();
-            StatusMessage.Value = $"Cleared {role} role. Restart daemon for changes to take effect.";
+            StatusMessage.Value = $"Cleared {role} role. {ConfigFileHelper.DaemonAppliesChange}";
             NotifyStateChanged();
         }
     }

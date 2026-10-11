@@ -85,8 +85,8 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             }
             catch (Exception ex)
             {
-                _log.Error(ex, "Failed to initialize SignalR session pipeline; stopping actor");
-                Context.Stop(Self);
+                _log.Error(ex, "Failed to initialize SignalR session pipeline");
+                RejectInitialization(ex.Message);
             }
         });
 
@@ -101,13 +101,31 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             }
             catch (Exception ex)
             {
-                _log.Error(ex, "Failed to initialize SignalR session pipeline for Mode B reminder; stopping actor");
+                _log.Error(ex, "Failed to initialize SignalR session pipeline for Mode B reminder");
                 Sender.Tell(CommandNack.For(_sessionId, $"SignalR pipeline init failed: {ex.Message}"));
-                Context.Stop(Self);
+                RejectInitialization(ex.Message);
             }
         });
 
         ReceiveAny(_ => Stash.Stash());
+    }
+
+    private void RejectInitialization(string reason)
+    {
+        // Retain the failure until attachment retries. A stopped child loses the next admission request.
+        Become(() =>
+        {
+            Receive<EnqueueSignalRInput>(msg => msg.Input.AckTarget?.Tell(CommandNack.For(_sessionId, $"SignalR pipeline init failed: {reason}")));
+            Receive<DeliverTrustedSessionTurn>(msg => { Become(Initializing); Self.Forward(msg); });
+            Receive<AttachSignalRConnection>(msg =>
+            {
+                Become(Initializing);
+                Self.Tell(new StartSignalRSession(_sessionId, _channelType, msg.ConnectionId));
+            });
+            Receive<StartSignalRSession>(msg => { Become(Initializing); Self.Forward(msg); });
+            Receive<ShutdownSignalRSession>(_ => Context.Stop(Self));
+        });
+        Stash.UnstashAll();
     }
 
     private void Active()
@@ -123,24 +141,11 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             var writer = _handle.InputQueue;
             if (writer is null)
             {
-                _log.Warning("Input queue not initialized; dropping message for session {SessionId}", _sessionId.Value);
+                msg.Input.AckTarget?.Tell(CommandNack.For(_sessionId, "SignalR input queue is not initialized."));
                 return;
             }
 
-            try
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                await writer.WriteAsync(msg.Input, cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                _log.Warning("Timed out writing to input queue for session {SessionId}", _sessionId.Value);
-            }
-            catch (ChannelClosedException)
-            {
-                _log.Warning("Input queue closed for session {SessionId}; reinitializing", _sessionId.Value);
-                Self.Tell(new ReinitializePipeline("input queue closed"));
-            }
+            await WriteInputAsync(writer, msg.Input);
         });
 
         ReceiveAsync<OutputReceived>(HandleOutputReceivedAsync);
@@ -224,26 +229,33 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
                 && !string.IsNullOrWhiteSpace(reminderKey.Value))
                 _reminderDeliveryObservers[reminderKey] = deliveryObserver;
 
-            try
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                await writer.WriteAsync(input, cts.Token);
+            if (await WriteInputAsync(writer, input))
                 _log.Debug(
                     "reminder_mode_b_dispatch session={Session} reminder={Reminder}",
                     _sessionId.Value, msg.Source.ReminderId);
-            }
-            catch (OperationCanceledException)
-            {
-                _log.Warning("Timed out enqueueing Mode B reminder for session {SessionId}", _sessionId.Value);
-                ackTarget.Tell(CommandNack.For(_sessionId, "SignalR pipeline enqueue timeout"));
-            }
-            catch (ChannelClosedException)
-            {
-                _log.Warning("SignalR input queue closed; rejecting Mode B reminder for {SessionId}", _sessionId.Value);
-                ackTarget.Tell(CommandNack.For(_sessionId, "SignalR input queue closed"));
-                Self.Tell(new ReinitializePipeline("input queue closed during Mode B delivery"));
-            }
         });
+    }
+
+    private async Task<bool> WriteInputAsync(ChannelWriter<ChannelInput> writer, ChannelInput input)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await writer.WriteAsync(input, cts.Token);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            _log.Warning("Timed out writing to input queue for session {SessionId}", _sessionId.Value);
+            input.AckTarget?.Tell(CommandNack.For(_sessionId, "SignalR input queue write timed out."));
+        }
+        catch (ChannelClosedException)
+        {
+            _log.Warning("Input queue closed for session {SessionId}; reinitializing", _sessionId.Value);
+            input.AckTarget?.Tell(CommandNack.For(_sessionId, "SignalR input queue is closed."));
+            Self.Tell(new ReinitializePipeline("input queue closed"));
+        }
+        return false;
     }
 
     private async Task EnsureInitializedAsync()

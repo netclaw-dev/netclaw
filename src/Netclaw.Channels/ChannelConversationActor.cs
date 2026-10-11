@@ -56,9 +56,8 @@ public sealed record ChannelRoutingVerdict(
 /// self-loop filtering, ingress gating (restart drain), routing policy,
 /// text normalization/truncation, empty-content filtering, and session
 /// binding get-or-create — in a fixed order so every channel applies the
-/// same security gates the same way. Also owns idle passivation (2 hours),
-/// stop-on-failure supervision of session bindings, and <c>Terminated</c>
-/// bookkeeping.
+/// same security gates the same way. It stops after its last session binding
+/// exits and owns stop-on-failure supervision and <c>Terminated</c> handling.
 ///
 /// Subclasses register their channel-specific receives (interactions,
 /// proactive threads, trusted session turns) in their own constructors and
@@ -67,15 +66,13 @@ public sealed record ChannelRoutingVerdict(
 /// Slack's conversation actor intentionally does NOT use this base: its
 /// pipeline order differs observably (routing policy before the ingress
 /// gate, thread creation before the empty-text filter) and it has no
-/// truncation, watch, or supervision override — see SPEC-015 §1.3 risk note.
+/// truncation or supervision override — see SPEC-015 §1.3 risk note.
 /// </summary>
 /// <typeparam name="TMessage">The channel's normalized inbound gateway message.</typeparam>
 public abstract class ChannelConversationActor<TMessage> : ReceiveActor
     where TMessage : class
 {
     private const int MaxInboundTextLength = 4000;
-    private static readonly TimeSpan PassivationTimeout = TimeSpan.FromHours(2);
-
     private readonly string _channelDisplayName;
 
     protected ChannelConversationActor(
@@ -91,16 +88,16 @@ public abstract class ChannelConversationActor<TMessage> : ReceiveActor
             .WithContext("Adapter", channelType.ToWireValue())
             .WithContext(_channelDisplayName + "ChannelId", channelIdValue);
 
-        Context.SetReceiveTimeout(PassivationTimeout);
-
-        Receive<ReceiveTimeout>(_ =>
+        Receive<TMessage>(HandleGatewayMessage);
+        Receive<Terminated>(msg =>
         {
-            Log.Info("Conversation idle for 2 hours, passivating");
+            Log.Debug("Session binding stopped: {0}", msg.ActorRef.Path.Name);
+            if (Context.GetChildren().Any())
+                return;
+
+            Log.Info("Last session binding stopped; stopping conversation actor");
             Context.Stop(Self);
         });
-
-        Receive<TMessage>(HandleGatewayMessage);
-        Receive<Terminated>(msg => Log.Debug("Session binding stopped: {0}", msg.ActorRef.Path.Name));
     }
 
     /// <summary>Conversation log adapter tagged with the channel's <c>Adapter</c> and channel-id contexts.</summary>

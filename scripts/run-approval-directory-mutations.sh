@@ -16,40 +16,79 @@ import sys
 
 repo_root = Path(sys.argv[1])
 targets = [
+    # Folder grants: one containment rule and one link walker serve Bash and
+    # PowerShell. The two shell-specific containment copies are gone.
     (
-        "src/Netclaw.Security/ApprovalPatternMatching.cs",
-        "!IsWithinWindowsRoot(normalizedCandidate, normalizedRoot)",
+        "src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs",
+        "!folder.Root.Contains(path)",
         1,
     ),
     (
-        "src/Netclaw.Security/ApprovalPatternMatching.cs",
-        "if (!PathUtility.IsNormalizedWithinRoot(normalizedCandidate, entry.Directory))\n"
-        "                return ShellApprovalScopeResult.OutsideDirectory;",
+        "src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs",
+        "LinkRule.BelowRoot => CrossesLink(folder.LinkAnchor.Value, path.Value, includeAnchor: false)",
         1,
     ),
     (
-        "src/Netclaw.Security/ApprovalPatternMatching.cs",
-        "return PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory)\n"
-        "                ? ShellApprovalScopeResult.Symlink\n"
-        "                : ShellApprovalScopeResult.Match;",
+        "src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs",
+        "crossesLink ? PathDecision.CrossesLink : PathDecision.Allowed",
         2,
     ),
     (
         "src/Netclaw.Security/ApprovalPatternMatching.cs",
-        "return GitRepositoryApprovalScope.TryResolveCandidate(candidateDirectory, cwd, out var scope)\n"
-        "                   && ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, entry.Repository)\n"
+        "return RepositoryIdentity.TryResolve(candidateDirectory, cwd, out var repository)\n"
+        "                   && ToolApprovalEntryComparer.Equals(repository!.CommonDirectory, entry.Repository)\n"
         "                ? ShellApprovalScopeResult.Match\n"
         "                : ShellApprovalScopeResult.OutsideDirectory;",
         3,
     ),
     (
-        "src/Netclaw.Security/GitRepositoryApprovalScope.cs",
-        "!PathUtility.AreEquivalentPaths(resolved[0].CommonDirectory, scope.CommonDirectory)",
+        "src/Netclaw.Security/Authorization/Filesystem/RepositoryIdentity.cs",
+        "!PathUtility.AreEquivalentPaths(resolved[0].CommonDirectory, identity.CommonDirectory)",
         1,
     ),
     (
-        "src/Netclaw.Security/GitRepositoryApprovalScope.cs",
+        "src/Netclaw.Security/Authorization/Filesystem/RepositoryIdentity.cs",
         "!PathUtility.AreEquivalentPaths(reverse, dotGit)",
+        1,
+    ),
+    # A ".." that leaves a link makes the shell scope unresolved.
+    (
+        "src/Netclaw.Security/IToolApprovalMatcher.cs",
+        "if (HasParentSegmentAfterLink(occurrence, clauseWorkingDirectory, pathStyle))\n"
+        "            return null;",
+        1,
+    ),
+    (
+        "src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs",
+        "CrossesLink(parents.Peek(), parent, includeAnchor: false)",
+        2,
+    ),
+    # A link word has the scope of its link folder and of its final target
+    # (#2375). A target after a ".." that leaves a link is not known, so the
+    # word stays unresolved. A word that names no link keeps its lexical scope.
+    (
+        "src/Netclaw.Security/IToolApprovalMatcher.cs",
+        "if (!TryAddLinkScopes(resolved, pathStyle, directories, out var isLink))",
+        1,
+    ),
+    (
+        "src/Netclaw.Security/IToolApprovalMatcher.cs",
+        "if (!isLink)",
+        1,
+    ),
+    (
+        "src/Netclaw.Security/IToolApprovalMatcher.cs",
+        "if (!TryAddLinkScopes(link, pathStyle, directories, out _))",
+        1,
+    ),
+    (
+        "src/Netclaw.Security/IToolApprovalMatcher.cs",
+        "directories.Add(Path.GetDirectoryName(link) ?? link);",
+        2,
+    ),
+    (
+        "src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs",
+        "if (HasParentSegmentAfterLink(next, baseDirectory: null))",
         1,
     ),
 ]
@@ -62,7 +101,7 @@ for relative_path, marker, expected_count in targets:
         raise SystemExit("An approval boundary is missing or duplicated.")
     line = text.count("\n", 0, start) + 1
     print(
-        source.name,
+        source.relative_to(repo_root / "src/Netclaw.Security").as_posix(),
         source,
         start,
         start + len(marker),
@@ -101,50 +140,61 @@ while IFS=$'\t' read -r _source_name source_file _span_start _span_end line coun
 done <<< "$spans"
 
 # Each target above must die even if Stryker reports unrelated compiler errors.
-jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 9' \
+jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 18' \
   "$report" > /dev/null || {
-  echo "Expected exactly nine approval directory mutants." >&2
+  echo "Expected exactly 18 approval directory mutants." >&2
   exit 1
 }
 
-# The approval actor is the final authority boundary before persistence.
-actor_source="$repo_root/src/Netclaw.Actors/Tools/ToolApprovalActor.cs"
+# The approval actor is the final authority boundary before persistence. The
+# grant builder decides the folder of each stored grant: the directory where
+# the occurrence runs, never the session directory after a cd.
+actor_root="$repo_root/src/Netclaw.Actors"
 actor_output="$output_path/actor"
 actor_spans="$(
-  python3 - "$actor_source" <<'PY'
+  python3 - "$actor_root" <<'PY'
 from pathlib import Path
 import sys
 
-source = Path(sys.argv[1])
-text = source.read_text(encoding="utf-8")
+root = Path(sys.argv[1])
 targets = [
     (
+        "Tools/ToolApprovalActor.cs",
         "!candidateResolved",
         1,
     ),
     (
-        "!ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, grant.Repository)",
+        "Tools/ToolApprovalActor.cs",
+        "!ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, repository.CommonDirectory)",
         1,
     ),
     (
+        "Tools/ToolApprovalActor.cs",
         "!PathUtility.AreEquivalentPaths(\n"
-        "                                scope.WorktreeRoot, grant.RepositoryWorktree)",
+        "                scope.WorktreeRoot, grant.RepositoryWorktree)",
         1,
+    ),
+    (
+        "Authorization/Consent/GrantBuilder.cs",
+        "candidate.Directory ?? workingDirectory",
+        3,
     ),
 ]
 
-for marker, expected_count in targets:
+for relative_path, marker, expected_count in targets:
+    source = root / relative_path
+    text = source.read_text(encoding="utf-8")
     start = text.find(marker)
     if start < 0 or text.find(marker, start + 1) >= 0:
         raise SystemExit("An approval persistence boundary is missing or duplicated.")
     line = text.count("\n", 0, start) + 1
-    print(start, start + len(marker), line, expected_count, sep="\t")
+    print(relative_path, source, start, start + len(marker), line, expected_count, sep="\t")
 PY
 )"
 
 actor_mutate_args=()
-while IFS=$'\t' read -r span_start span_end _line _count; do
-  actor_mutate_args+=(--mutate "Tools/ToolApprovalActor.cs{$span_start..$span_end}")
+while IFS=$'\t' read -r source_name _source_file span_start span_end _line _count; do
+  actor_mutate_args+=(--mutate "$source_name{$span_start..$span_end}")
 done <<< "$actor_spans"
 
 (
@@ -158,9 +208,12 @@ done <<< "$actor_spans"
 )
 
 actor_report="$actor_output/reports/mutation-report.json"
-while IFS=$'\t' read -r _span_start _span_end line count; do
-  jq -e --arg source "$actor_source" --argjson line "$line" --argjson count "$count" '
-    [.files[$source].mutants[] | select(.status != "Ignored")
+while IFS=$'\t' read -r _source_name source_file _span_start _span_end line count; do
+  # A whole-condition negation that Stryker cannot compile shares the first
+  # target line. It is not a tested mutant; the count still requires each
+  # selected negation to compile and die.
+  jq -e --arg source "$source_file" --argjson line "$line" --argjson count "$count" '
+    [.files[$source].mutants[] | select(.status != "Ignored" and .status != "CompileError")
       | select(.location.start.line == $line)] as $mutants
     | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
   ' "$actor_report" > /dev/null || {
@@ -169,8 +222,8 @@ while IFS=$'\t' read -r _span_start _span_end line count; do
   }
 done <<< "$actor_spans"
 
-jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 3' \
+jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 6' \
   "$actor_report" > /dev/null || {
-  echo "Expected exactly three approval persistence mutants." >&2
+  echo "Expected exactly six approval persistence mutants." >&2
   exit 1
 }

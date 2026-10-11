@@ -22,7 +22,7 @@ log "Testing one-shot reminder create (id=$ONE_SHOT_ID)..."
 nc reminder create "$ONE_SHOT_ID" once 10s "Say OK in one word"
 
 log "Verifying reminder appears in list..."
-reminder_list="$(nc reminder list 2>/dev/null || true)"
+reminder_list="$(nc reminder list --json 2>/dev/null || true)"
 echo "$reminder_list"
 if [[ "$reminder_list" == *"$ONE_SHOT_ID"* ]]; then
   pass "reminder list: includes $ONE_SHOT_ID"
@@ -51,13 +51,28 @@ else
   fail "reminder execution: timed out waiting for $ONE_SHOT_ID"
 fi
 
-log "Verifying the completed one-shot reminder is absent from the list..."
-completed_list="$(nc reminder list 2>/dev/null || true)"
+log "Verifying the completed one-shot reminder is kept as Completed and its history stays readable..."
+# Settlement runs just after the model call returns, so poll briefly for the Completed outcome.
+completed_list=""
+settle_deadline=$((SECONDS + 15))
+while (( SECONDS < settle_deadline )); do
+  completed_list="$(nc reminder list --json 2>/dev/null || true)"
+  [[ "$completed_list" == *'"terminalOutcome": "Completed"'* ]] && break
+  sleep 1
+done
 echo "$completed_list"
-if [[ "$completed_list" == *"$ONE_SHOT_ID"* ]]; then
-  fail "one-shot reminder: $ONE_SHOT_ID remained after execution"
+if [[ "$completed_list" == *"$ONE_SHOT_ID"* && "$completed_list" == *'"terminalOutcome": "Completed"'* ]]; then
+  pass "one-shot reminder: $ONE_SHOT_ID is listed as Completed after execution"
 else
-  pass "one-shot reminder: $ONE_SHOT_ID was removed after execution"
+  fail "one-shot reminder: $ONE_SHOT_ID is not listed as Completed after execution"
+fi
+completed_history_exit=0
+completed_history="$(nc reminder history "$ONE_SHOT_ID" 2>/dev/null)" || completed_history_exit=$?
+echo "$completed_history"
+if [[ "$completed_history_exit" -eq 0 && "$completed_history" == *"ok"* ]]; then
+  pass "reminder history: $ONE_SHOT_ID history is readable after execution"
+else
+  fail "reminder history: expected exit 0 with a recorded run for completed $ONE_SHOT_ID (exit $completed_history_exit)"
 fi
 
 log "Testing reminder delete (id=$DELETE_ID)..."
@@ -65,7 +80,7 @@ nc reminder create "$DELETE_ID" interval 1m "Say OK in one word"
 nc reminder delete "$DELETE_ID"
 
 log "Verifying the deleted reminder is absent from the list..."
-after_delete_list="$(nc reminder list 2>/dev/null || true)"
+after_delete_list="$(nc reminder list --json 2>/dev/null || true)"
 echo "$after_delete_list"
 if [[ "$after_delete_list" == *"$DELETE_ID"* ]]; then
   fail "reminder delete: $DELETE_ID remained in the list"

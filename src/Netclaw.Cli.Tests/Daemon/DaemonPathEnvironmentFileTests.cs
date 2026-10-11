@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using Xunit;
@@ -18,8 +19,12 @@ namespace Netclaw.Cli.Tests.Daemon;
 /// exercising them in-process would mutate the developer's own service. The
 /// pure builders below are exactly the content those methods write and read.
 /// </summary>
-public sealed class DaemonPathEnvironmentFileTests
+public sealed class DaemonPathEnvironmentFileTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     [Fact]
     public void ComposePathValue_InstallDirFirst_ThenCapture_ThenDedupedFloor()
         => Assert.Equal(
@@ -124,7 +129,7 @@ public sealed class DaemonPathEnvironmentFileTests
     {
         // Covers the uninstall env-file-removal contract without driving the
         // systemctl-coupled UninstallAsync.
-        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var basePath = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         var paths = new NetclawPaths(basePath);
         paths.EnsureDirectoriesExist();
         File.WriteAllText(paths.DaemonEnvironmentFilePath, "PATH=/opt/netclaw:/usr/bin\n");

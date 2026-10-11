@@ -34,13 +34,13 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
         {
             // OAuth path → Codex backend
             var token = entry.OAuthAccessToken.RequireValid(
-                "OpenAI OAuth access token (run 'netclaw provider fix <name>')");
+                "OpenAI OAuth access token (re-authenticate with 'netclaw provider')");
 
             var accountId = JwtAccountIdExtractor.ResolveAccountId(entry);
             if (_tokenRefreshService is null && accountId is null)
             {
                 throw new InvalidOperationException(
-                    "OpenAI OAuth credential is missing ChatGPT account ID. Re-authenticate with 'netclaw provider fix <name>'.");
+                    "OpenAI OAuth credential is missing ChatGPT account ID. Re-authenticate with 'netclaw provider'.");
             }
             var oauth = Descriptor.Auth.GetOAuthConfig()
                         ?? throw new InvalidOperationException("OpenAI OAuth configuration is unavailable.");

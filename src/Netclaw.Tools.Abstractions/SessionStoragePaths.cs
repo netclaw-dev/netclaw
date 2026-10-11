@@ -68,10 +68,11 @@ public readonly record struct SessionStorageEnvelopeRoot
 }
 
 /// <summary>
-/// The immutable durable binding for a versioned session storage envelope.
+/// The durable binding for a versioned session storage envelope. The stored root is absolute;
+/// the resolver re-roots it under the current sessions directory when a home has moved.
 /// </summary>
 /// <param name="LayoutVersion">The layout that interprets the envelope.</param>
-/// <param name="EnvelopeRoot">The immutable absolute envelope root.</param>
+/// <param name="EnvelopeRoot">The absolute envelope root as stored.</param>
 public sealed record SessionStorageBinding(
     SessionStorageLayoutVersion LayoutVersion,
     SessionStorageEnvelopeRoot EnvelopeRoot);

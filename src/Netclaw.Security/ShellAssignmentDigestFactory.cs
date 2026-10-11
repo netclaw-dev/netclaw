@@ -81,6 +81,49 @@ internal static class ShellAssignmentDigestFactory
         return true;
     }
 
+    /// <summary>
+    /// Returns the assignments that can reach the environment of a program:
+    /// each assignment except a Bash shell-state assignment that the parser
+    /// proves stays in the shell (owner decision F3).
+    /// </summary>
+    /// <remarks>
+    /// Use it only for a program that is not a Bash data command. A data command
+    /// is a builtin that reads no environment, and its digest guards operands
+    /// that are not proved data, so it keeps every assignment.
+    /// </remarks>
+    public static IReadOnlyList<ShellVariableAssignment> ReachingProgram(
+        ApprovalShell shell,
+        IReadOnlyList<ShellVariableAssignment> assignments)
+    {
+        ArgumentNullException.ThrowIfNull(assignments);
+        return assignments.Where(assignment => !StaysInShell(shell, assignment)).ToArray();
+    }
+
+    /// <summary>
+    /// Returns true when the parser proves that a Bash shell-state assignment
+    /// reaches no child process (owner decision F3).
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: ShellSyntaxTree 0.4.0-beta.24 sets
+    /// <see cref="ShellVariableAssignment.MayAffectProcessEnvironment"/> to false
+    /// only under a fresh no-startup Bash state, with the complete launch
+    /// environment names, when no path to the command exports the name and the
+    /// name is not in the launch environment. Bash then passes the variable to
+    /// no program, so the variable cannot change what the program does. A read
+    /// of the variable as a word is an argument with its own value facts. Every
+    /// other assignment keeps its place in the digest: a command prefix
+    /// (<c>X=1 cmd</c>), a PowerShell assignment, and a Bash assignment that can
+    /// reach the environment (<c>GIT_DIR=/x; git status</c> when the launch
+    /// environment holds <c>GIT_DIR</c>).
+    /// </remarks>
+    private static bool StaysInShell(ApprovalShell shell, ShellVariableAssignment? assignment)
+        => shell == ApprovalShell.Bash
+           && assignment is
+           {
+               Scope: ShellVariableAssignmentScope.ShellState,
+               MayAffectProcessEnvironment: false
+           };
+
     private static void AppendString(IncrementalHash hash, string value)
     {
         var bytes = StrictUtf8.GetBytes(value);

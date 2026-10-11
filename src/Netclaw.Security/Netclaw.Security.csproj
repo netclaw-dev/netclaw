@@ -10,6 +10,7 @@
     <InternalsVisibleTo Include="Netclaw.Actors" />
     <InternalsVisibleTo Include="Netclaw.Actors.Tests" />
     <InternalsVisibleTo Include="Netclaw.Actors.MutationTests" />
+    <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
     <InternalsVisibleTo Include="Netclaw.Security.Tests" />
   </ItemGroup>
 

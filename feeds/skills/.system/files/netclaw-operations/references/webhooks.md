@@ -70,7 +70,8 @@ delivery endpoint:
 - `PUT /api/webhooks/{route}` -> create or update; requires Operator authority
 - `DELETE /api/webhooks/{route}` -> remove the route
 
-The `netclaw webhooks` CLI manages routes through this resource. `set` and
+The `netclaw webhooks` CLI is for the operator; use the three tools above. It
+manages routes through this resource. `set` and
 `delete` require a running daemon: when the daemon does not answer, when an older
 daemon lacks the resource, or when the daemon rejects the call, the command fails
 and changes no file. The CLI never writes a route file. `list`, `show`, and

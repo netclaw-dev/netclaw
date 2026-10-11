@@ -86,7 +86,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             new StaticContextLayerProvider(AgentsLayerMarker, ContextLayerTiming.OnceAtStart)
         ]);
 
-        var skillRoot = Path.Combine(Path.GetTempPath(), $"netclaw-skill-routing-{Guid.NewGuid():N}");
+        var skillRoot = Path.Join(TestPaths.BasePath, "skill-routing");
         Directory.CreateDirectory(skillRoot);
 
         var routedSkillDir = Path.Combine(skillRoot, "ops-route");
@@ -175,7 +175,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             new ShellCommandPolicy(),
             new ToolPathPolicy([]));
         var subAgentRegistry = new SubAgentDefinitionRegistry();
-        var subAgentPaths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-subagents-{Guid.NewGuid():N}"));
+        var subAgentPaths = TestPaths;
         subAgentPaths.EnsureDirectoriesExist();
         subAgentRegistry.Register(new SubAgentProfile
         {

@@ -35,6 +35,10 @@
 # Usage:
 #   scripts/docker/test-daemon-lifecycle.sh <image-ref>
 #   scripts/docker/test-daemon-lifecycle.sh netclawd-pr:pr-1279
+#
+# On a shared machine, set NETCLAW_LIFECYCLE_CONTAINER (default netclaw-lifecycle-1279) to a
+# name you own, since the script removes any container of that name, and
+# NETCLAW_LIFECYCLE_HEALTH_INTERVAL (default 3s) to poll the Docker health check less often.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,7 +46,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/smoke-lib.sh"
 
 IMAGE="${1:?usage: test-daemon-lifecycle.sh <image-ref>}"
-CONTAINER="netclaw-lifecycle-1279"
+CONTAINER="${NETCLAW_LIFECYCLE_CONTAINER:-netclaw-lifecycle-1279}"
+HEALTH_INTERVAL="${NETCLAW_LIFECYCLE_HEALTH_INTERVAL:-3s}"
 DEFAULT_PORT=5199   # DaemonConfig default; the daemon binds this on first boot
 NEW_PORT=5200       # Phase A re-binds here via a config-file write
 PIDFILE=/home/netclaw/.netclaw/netclaw.pid
@@ -109,7 +114,8 @@ cleanup
 # Minimal provider/model config from the shared lib (deliberately no Daemon.Port — see
 # netclaw_smoke_env_args; Phase A needs the file's port to win over env).
 # shellcheck disable=SC2046  # intentional word-splitting of the -e args
-docker run -d --name "$CONTAINER" $(netclaw_smoke_env_args) "$IMAGE" >/dev/null
+# --health-interval only shortens the poll; the HEALTHCHECK command itself comes from the image.
+docker run -d --name "$CONTAINER" --health-interval "$HEALTH_INTERVAL" $(netclaw_smoke_env_args) "$IMAGE" >/dev/null
 
 wait_healthy "$DEFAULT_PORT" 60 || fail "supervised daemon never became healthy on :$DEFAULT_PORT"
 
@@ -143,6 +149,15 @@ done
 wait_healthy "$NEW_PORT" 60   || fail "daemon not healthy on the new port :$NEW_PORT after reload (re-bind did not take effect)"
 ! port_serving "$DEFAULT_PORT" || fail "old port :$DEFAULT_PORT still serving — the bind change did not apply"
 
+# The image HEALTHCHECK must follow the port change (it used to probe a hard-coded :5199).
+health=""
+for _ in $(seq 1 60); do
+    health="$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER")"
+    [[ "$health" == "healthy" ]] && break
+    sleep 1
+done
+[[ "$health" == "healthy" ]] || fail "container health is '$health' on :$NEW_PORT (HEALTHCHECK did not follow Daemon.Port)"
+
 # ...and it was an in-process restart, not a respawn / duplicate.
 count_a="$(daemon_count)"; pid_a="$(daemon_pid)"; sup_a="$(daemon_supervision)"
 echo "    after reload: count=$count_a pid=$pid_a supervision=$sup_a (port :$NEW_PORT)"
@@ -171,6 +186,22 @@ echo "    after daemon start: count=$count_b supervision=$sup_b"
 if docker logs "$CONTAINER" 2>&1 | grep -q "Another netclawd instance is already running (lock file held)"; then
     fail "lock-file contention detected in container logs (split-brain)"
 fi
+
+# `netclaw daemon stop` is the CLI way to bounce a containerised daemon: it stops the process,
+# exits 0 and says so, and the supervisor starts a fresh one.
+echo "==> Phase B2: 'netclaw daemon stop' under supervisor bounces the daemon"
+pid_before_stop="$(daemon_pid)"
+rc=0
+out="$(docker exec "$CONTAINER" netclaw daemon stop 2>&1)" || rc=$?
+echo "    daemon stop => $out (exit $rc)"
+[[ "$rc" == "0" ]] || fail "'netclaw daemon stop' exited $rc under the supervisor: $out"
+echo "$out" | grep -q "The container supervisor will restart the daemon." \
+    || fail "'netclaw daemon stop' did not say the supervisor restarts the daemon: $out"
+wait_healthy "$NEW_PORT" 90 || fail "daemon did not come back on :$NEW_PORT after 'netclaw daemon stop'"
+pid_after_stop="$(daemon_pid)"
+[[ -n "$pid_after_stop" && "$pid_after_stop" != "$pid_before_stop" ]] \
+    || fail "daemon PID did not change across 'netclaw daemon stop' ($pid_before_stop -> $pid_after_stop)"
+[[ "$(daemon_count)" == "1" ]] || fail "expected exactly 1 daemon after the supervisor restart"
 
 # ── Phase C: a bad Daemon config fails loudly, then recovers when fixed ──────
 echo "==> Phase C: bad Daemon config fails loudly (and recovers)"

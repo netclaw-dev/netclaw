@@ -108,21 +108,21 @@ public static class ToolRegistrationExtensions
     }
 
     /// <summary>
-    /// Registers reminder tools (set, cancel, list, get_history) that communicate with the
+    /// Registers reminder tools (set, cancel, list, get_history, run) that communicate with the
     /// <see cref="ReminderManagerActor"/> via Ask.
     /// </summary>
     public static ToolRegistry WithReminderTools(
         this ToolRegistry registry,
         IActorRef reminderManager,
         TimeProvider timeProvider,
-        ReminderHistoryStore historyStore,
         SchedulingConfig schedulingConfig,
         IEnumerable<IReminderTargetResolver>? targetResolvers = null)
     {
         registry.Register(new SetReminderTool(reminderManager, timeProvider, schedulingConfig, targetResolvers));
         registry.Register(new CancelReminderTool(reminderManager, schedulingConfig));
         registry.Register(new ListRemindersTool(reminderManager, schedulingConfig));
-        registry.Register(new GetReminderHistoryTool(historyStore, schedulingConfig));
+        registry.Register(new GetReminderHistoryTool(schedulingConfig, reminderManager));
+        registry.Register(new RunReminderTool(reminderManager, schedulingConfig));
         return registry;
     }
 

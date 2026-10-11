@@ -110,7 +110,7 @@ public sealed class ExposureModeStepView : IWizardStepView
     private ILayoutNode BuildReverseProxyHost(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
         _hostInput = new TextInputNode().WithPlaceholder(ExposureModeStepViewModel.DefaultReverseProxyHost);
-        _hostInput.Text = vm.Host;
+        WizardStepHelpers.SeedTextInput(_hostInput, vm.Host);
         _hostInput.OnFocused();
         _lastFocusedInput = _hostInput;
         _lastFocusedList = null;
@@ -155,7 +155,7 @@ public sealed class ExposureModeStepView : IWizardStepView
     private ILayoutNode BuildReverseProxyTrustedProxies(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
         _trustedProxiesInput = new TextInputNode().WithPlaceholder("10.0.0.0/24, 192.168.1.5");
-        _trustedProxiesInput.Text = string.Join(", ", vm.TrustedProxies);
+        WizardStepHelpers.SeedTextInput(_trustedProxiesInput, string.Join(", ", vm.TrustedProxies));
         _trustedProxiesInput.OnFocused();
         _lastFocusedInput = _trustedProxiesInput;
         _lastFocusedList = null;

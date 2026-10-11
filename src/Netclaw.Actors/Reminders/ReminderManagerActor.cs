@@ -19,7 +19,7 @@ namespace Netclaw.Actors.Reminders;
 /// Schedules durable timer entries and resolves execution behavior from
 /// file-backed reminder definitions.
 /// </summary>
-public sealed partial class ReminderManagerActor : ReceiveActor
+public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
 {
     public const string ShardRegionName = "netclaw-reminders";
     public const string EntityId = "manager";
@@ -31,6 +31,18 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     /// first — the two counters are kept out of conflict by inspection.
     /// </summary>
     internal const int FailurePauseThreshold = 5;
+
+    /// <summary>
+    /// How long a completed one-shot keeps its definition and execution history before it
+    /// is pruned. Not configurable. Also handed to Akka.Reminders as its
+    /// <c>PruneOlderThan</c> (the library's own default), so both stores agree.
+    /// </summary>
+    internal static readonly TimeSpan TerminalRetention = TimeSpan.FromDays(12);
+
+    /// <summary>How often completed one-shots past <see cref="TerminalRetention"/> are pruned.</summary>
+    internal static readonly TimeSpan TerminalPruneInterval = TimeSpan.FromHours(12);
+
+    internal static readonly object TerminalPruneTimerKey = new();
 
     /// <summary>Recent run records returned by the per-reminder status query.</summary>
     internal const int RecentHistoryCount = 5;
@@ -49,8 +61,14 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private IReminderClient? _client;
 
+    /// <summary>Timer scheduler injected by Akka for <see cref="IWithTimers"/>.</summary>
+    public ITimerScheduler Timers { get; set; } = null!;
+
     private readonly ActiveExecutionTracker _activeExecutions = new();
     private readonly Dictionary<ReminderId, int> _skipCounts = [];
+    // The denial text last alerted per reminder; cleared by its next ok run, so a reminder that is denied on
+    // every run alerts once. Not persisted: a restart may alert once more.
+    private readonly Dictionary<ReminderId, string> _deniedAlerts = [];
 
     // Uniqueness source for execution child actor names. A wall-clock
     // millisecond suffix collided when two fires for one reminder landed in
@@ -85,12 +103,14 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         ReceiveAsync<EnableReminderCommand>(HandleEnableAsync);
         ReceiveAsync<ListRemindersCommand>(HandleListAsync);
         ReceiveAsync<GetReminderCommand>(HandleGetAsync);
+        ReceiveAsync<GetReminderHistoryQuery>(HandleGetHistoryAsync);
 
         ReceiveAsync<ReminderEnvelope<ReminderPayload>>(HandleReminderFiredAsync);
         ReceiveAsync<ReminderExecutionCompleted>(HandleExecutionOutcomeAsync);
         ReceiveAsync<ReminderExecutionTerminated>(HandleExecutionTerminatedAsync);
 
         ReceiveAsync<ReconcileReminders>(_ => HandleReconcileAsync());
+        ReceiveAsync<PruneTerminalReminders>(_ => PruneTerminalRemindersAsync());
         Receive<GetReminderHealthQuery>(_ => HandleGetHealth());
         ReceiveAsync<GetReminderStatusQuery>(HandleGetStatusAsync);
     }
@@ -115,6 +135,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         EmitRejectedLegacyDefinitionAlerts();
 
         Self.Tell(ReconcileReminders.Instance);
+        Timers.StartPeriodicTimer(TerminalPruneTimerKey, PruneTerminalReminders.Instance, TerminalPruneInterval);
     }
 
     protected override SupervisorStrategy SupervisorStrategy() =>
@@ -212,10 +233,30 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             : ReminderIdGenerator.Generate(title);
 
         var exists = _definitionStore.Exists(id);
+        var existing = exists ? _definitionStore.Get(id) : null;
+
+        // The id collides with a reminder the caller cannot see. Reject the save
+        // outright — the same "not found" shape a genuinely missing id gets — for
+        // every write mode. Letting CreateOnly report Conflict would disclose that
+        // the id exists; letting Replace/Upsert proceed would silently overwrite a
+        // reminder outside the caller's audience.
+        if (existing is not null && !CanAccessAudience(cmd.Authorization, existing.Audience))
+        {
+            LogAudienceDenied("save", id, existing.Audience, cmd.Authorization);
+            replyTo.Tell(new ReminderSavedResponse(
+                id,
+                title,
+                Success: false,
+                NextFire: null,
+                Error: ReminderSaveError.NotFound,
+                ErrorMessage: $"Reminder '{id.Value}' was not found."));
+            return;
+        }
 
         switch (cmd.WriteMode)
         {
-            case ReminderWriteMode.CreateOnly when exists:
+            // A retained completed one-shot is history, not a live reminder: its id is free again.
+            case ReminderWriteMode.CreateOnly when exists && existing is not { Enabled: false, TerminalOutcome: ReminderTerminalOutcome.Completed }:
                 replyTo.Tell(new ReminderSavedResponse(
                     id,
                     title,
@@ -269,7 +310,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         if (exists)
         {
-            var existing = _definitionStore.Get(id);
             normalized.CreatedAtMs = existing?.CreatedAtMs ?? (normalized.CreatedAtMs > 0 ? normalized.CreatedAtMs : now.ToUnixTimeMilliseconds());
         }
         else
@@ -282,6 +322,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         if (exists)
         {
             await CancelScheduleOnlyAsync(id);
+            if (existing is { Enabled: false, TerminalOutcome: ReminderTerminalOutcome.Completed })
+                _historyStore.DeleteHistory(id);
         }
 
         DateTimeOffset? nextFire = null;
@@ -377,6 +419,17 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private async Task HandleCancelAsync(CancelReminderCommand cmd)
     {
         var replyTo = Sender;
+        var target = _definitionStore.Get(cmd.Id);
+        if (target is null || !CanAccessAudience(cmd.Authorization, target.Audience))
+        {
+            if (target is not null)
+                LogAudienceDenied("cancel", cmd.Id, target.Audience, cmd.Authorization);
+
+            _log.Info("Cancel reminder '{0}': not found", cmd.Id.Value);
+            replyTo.Tell(new ReminderCancelledResponse(cmd.Id, Found: false));
+            return;
+        }
+
         var response = await DisableReminderInternalAsync(cmd.Id);
 
         _log.Info("Cancel reminder '{0}': {1}", cmd.Id.Value, response.Found ? "disabled" : "not found");
@@ -439,6 +492,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     {
         await CancelScheduleOnlyAsync(id);
         _skipCounts.Remove(id);
+        _deniedAlerts.Remove(id);
 
         try
         {
@@ -496,8 +550,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             var definitions = _definitionStore.List();
             var schedules = await ListScheduledRemindersAsync();
 
+            // Out-of-scope reminders are omitted, never flagged — a caller must not
+            // be able to tell an invisible reminder apart from one that does not
+            // exist. No logging here: List is not a per-id lookup, so there is no
+            // single denial to record.
             var infos = definitions
                 .Where(d => cmd.IncludeDisabled || d.Enabled)
+                .Where(d => CanAccessAudience(cmd.Authorization, d.Audience))
                 .OrderBy(d => d.Title, StringComparer.OrdinalIgnoreCase)
                 .Select(d => ToReminderInfo(d, schedules.GetValueOrDefault(d.Id.Value)))
                 .ToList();
@@ -517,8 +576,11 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         try
         {
             var definition = _definitionStore.Get(cmd.Id);
-            if (definition is null)
+            if (definition is null || !CanAccessAudience(cmd.Authorization, definition.Audience))
             {
+                if (definition is not null)
+                    LogAudienceDenied("get", cmd.Id, definition.Audience, cmd.Authorization);
+
                 replyTo.Tell(new GetReminderResponse(null));
                 return;
             }
@@ -607,7 +669,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
-        if (!HasSafeExecutionLease(envelope, _timeProvider.GetUtcNow()))
+        if (!HasSafeExecutionLease(definition, envelope, _timeProvider.GetUtcNow()))
         {
             var isOneShot = definition.Schedule.Type == ReminderScheduleType.OneShot;
             if (isOneShot)
@@ -645,10 +707,27 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         && active.Deadline == candidate.Deadline;
 
     private static bool HasSafeExecutionLease(
+        ReminderDefinition definition,
         ReminderEnvelope<ReminderPayload> envelope,
-        DateTimeOffset now) =>
-        envelope.Deadline.IsInfinite
-        || envelope.Deadline.UtcDateTime - now >= ReminderExecutionActor.ExecutionAttemptTimeout + SettlementMargin;
+        DateTimeOffset now)
+    {
+        if (envelope.Deadline.IsInfinite)
+            return true;
+
+        var remaining = envelope.Deadline.UtcDateTime - now;
+        var requiredLease = ReminderExecutionActor.ExecutionAttemptTimeout + SettlementMargin;
+        if (remaining >= requiredLease)
+            return true;
+
+        // An interval shorter than the required lease can never satisfy it. The
+        // deadline of each of its occurrences is the next due time, and
+        // Akka.Reminders does not redeliver an occurrence after that time. The
+        // occurrence starts while it is current. An occurrence that arrives at
+        // or after its next due time is stale.
+        return definition.Schedule is { Type: ReminderScheduleType.Interval, Interval: { } interval }
+            && interval < requiredLease
+            && remaining > TimeSpan.Zero;
+    }
 
     private async Task SettleBlockedOccurrenceAsync(
         ReminderDefinition definition,
@@ -796,8 +875,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         await AppendHistorySafelyAsync(outcome.Id, outcome.History);
 
         var definition = _definitionStore.Get(outcome.Id);
+        if (outcome.Success && outcome.History.ToolDenied)
+        {
+            await SettleDeniedExecutionAsync(outcome, execution, definition);
+            return;
+        }
+
         if (outcome.Success)
         {
+            _deniedAlerts.Remove(outcome.Id);
             await SettleSuccessfulExecutionAsync(outcome, execution, definition);
             return;
         }
@@ -814,6 +900,73 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         catch (Exception ex)
         {
             _log.Warning(ex, "Failed to write execution history for reminder '{0}'", id.Value);
+        }
+    }
+
+    /// <summary>
+    /// A run in which authorization denied a tool call. The denial is deterministic, so the occurrence is
+    /// acknowledged: no retry, no failure count, no auto-disable, and a recurring reminder keeps its
+    /// schedule. The owner gets one alert per distinct denial until the reminder next records an ok run.
+    /// A spent one-shot is disabled but kept, because its history is the only record of the denial.
+    /// </summary>
+    private async Task SettleDeniedExecutionAsync(
+        ReminderExecutionCompleted outcome,
+        ActiveReminderExecution execution,
+        ReminderDefinition? definition)
+    {
+        var reason = outcome.ErrorMessage ?? "A tool call was denied.";
+        _log.Warning("Reminder '{0}' ran with a denied tool call: {1}", outcome.Id.Value, reason);
+
+        if (!_deniedAlerts.TryGetValue(outcome.Id, out var alerted) || alerted != reason)
+        {
+            _deniedAlerts[outcome.Id] = reason;
+            var title = definition?.Title ?? outcome.Id.Value;
+            _notificationSink.Emit(OperationalAlert.Create(
+                _timeProvider,
+                "reminder.tool_denied",
+                AlertType.ReminderExecutionFailed,
+                $"Reminder '{title}' was denied a tool: {reason}",
+                AlertSeverity.Warning,
+                source: outcome.Id.Value,
+                context: new Dictionary<string, string>
+                {
+                    ["reminderId"] = outcome.Id.Value,
+                    ["title"] = title,
+                    ["error"] = reason
+                }));
+        }
+
+        try
+        {
+            var ack = await _client!.AckAsync(execution.Envelope);
+            if (ack.ResponseCode is ReminderAckResponseCode.Error)
+            {
+                if (definition is not null)
+                    EmitSettlementFailure(definition, ack.Message ?? $"Reminder acknowledgement returned {ack.ResponseCode}.");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            if (definition is not null)
+                EmitSettlementFailure(definition, ex.Message, ex);
+            return;
+        }
+
+        if (definition is { Schedule.Type: ReminderScheduleType.OneShot })
+        {
+            try
+            {
+                _definitionStore.Save(definition with
+                {
+                    Enabled = false,
+                    UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+                });
+            }
+            catch (Exception ex)
+            {
+                EmitSettlementFailure(definition, ex.Message, ex);
+            }
         }
     }
 
@@ -864,7 +1017,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
 
         if (definition is { Schedule.Type: ReminderScheduleType.OneShot })
-            await DeleteReminderInternalAsync(outcome.Id);
+            await RetainCompletedOneShotAsync(definition);
 
         _log.Info("Reminder '{0}' execution completed successfully", outcome.Id.Value);
     }
@@ -911,8 +1064,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 EmitSettlementFailure(definition, ex.Message, ex);
         }
 
+        // An expired occurrence ends a one-shot. It does not end a reminder
+        // series: Akka.Reminders answers Expired when no retry fits before the
+        // next due time, and the next occurrence is already scheduled. The
+        // consecutive failure count is the only stop condition for a series.
+        var isSeries = definition is { Schedule.Type: not ReminderScheduleType.OneShot };
         var occurrenceTerminal = nack?.ResponseCode is ReminderNackResponseCode.Failed
-            or ReminderNackResponseCode.Expired;
+            || (nack?.ResponseCode is ReminderNackResponseCode.Expired && !isSeries);
         if (nack?.ResponseCode is ReminderNackResponseCode.Error)
         {
             if (definition is not null)
@@ -1103,6 +1261,55 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }));
     }
 
+    /// <summary>
+    /// A delivered one-shot keeps its definition (disabled, <c>Completed</c>) and its
+    /// execution history until <see cref="TerminalRetention"/> has passed.
+    /// </summary>
+    private async Task RetainCompletedOneShotAsync(ReminderDefinition definition)
+    {
+        await CancelScheduleOnlyAsync(definition.Id);
+        _skipCounts.Remove(definition.Id);
+        _definitionStore.Save(definition with
+        {
+            Enabled = false,
+            ConsecutiveFailures = 0,
+            TerminalOutcome = ReminderTerminalOutcome.Completed,
+            UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+        });
+    }
+
+    /// <summary>
+    /// Removes every completed one-shot (disabled, outcome <c>Completed</c>) whose last update is
+    /// more than <see cref="TerminalRetention"/> ago, with its history. Recurring reminders and
+    /// failed one-shots are never pruned; only an explicit delete removes them. Returns the removed ids.
+    /// </summary>
+    private async Task<IReadOnlyList<ReminderId>> PruneTerminalRemindersAsync()
+    {
+        var cutoffMs = _timeProvider.GetUtcNow().Subtract(TerminalRetention).ToUnixTimeMilliseconds();
+        var pruned = new List<ReminderId>();
+        foreach (var definition in _definitionStore.List().Where(d =>
+                     !d.Enabled
+                     && d.Schedule.Type == ReminderScheduleType.OneShot
+                     && d.TerminalOutcome == ReminderTerminalOutcome.Completed
+                     && d.UpdatedAtMs < cutoffMs))
+        {
+            try
+            {
+                await DeleteReminderInternalAsync(definition.Id);
+                pruned.Add(definition.Id);
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "Failed to prune completed one-shot '{0}'", definition.Id.Value);
+            }
+        }
+
+        if (pruned.Count > 0)
+            _log.Info("Pruned {0} completed one-shot(s) older than {1}", pruned.Count, TerminalRetention);
+
+        return pruned;
+    }
+
     private async Task HandleReconcileAsync()
     {
         var sender = Sender; // capture before any await
@@ -1113,13 +1320,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             var definitionsById = definitions.ToDictionary(d => d.Id.Value, StringComparer.Ordinal);
 
             var deletedCompletedOneShots = 0;
-            foreach (var definition in definitions.Where(d =>
-                         !d.Enabled &&
-                         d.Schedule.Type == ReminderScheduleType.OneShot &&
-                         d.TerminalOutcome == ReminderTerminalOutcome.Completed))
+            foreach (var id in await PruneTerminalRemindersAsync())
             {
-                await DeleteReminderInternalAsync(definition.Id);
-                definitionsById.Remove(definition.Id.Value);
+                definitionsById.Remove(id.Value);
                 deletedCompletedOneShots++;
             }
 
@@ -1192,8 +1395,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
                 if (outcome == ReminderTerminalOutcome.Completed)
                 {
-                    await DeleteReminderInternalAsync(definition.Id);
-                    deletedCompletedOneShots++;
+                    await RetainCompletedOneShotAsync(definition);
                     continue;
                 }
 
@@ -1414,7 +1616,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         Sender.Tell(new ReminderHealthResponse(
             scheduledCount,
             _activeExecutions.Count,
-            _definitionStore.List().Count(d => d.ConsecutiveFailures > 0)));
+            _definitionStore.List().Count(d => d.Enabled && d.ConsecutiveFailures > 0)));
     }
 
     private async Task HandleGetStatusAsync(GetReminderStatusQuery query)
@@ -1423,8 +1625,11 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         try
         {
             var definition = _definitionStore.Get(query.Id);
-            if (definition is null)
+            if (definition is null || !CanAccessAudience(query.Authorization, definition.Audience))
             {
+                if (definition is not null)
+                    LogAudienceDenied("status", query.Id, definition.Audience, query.Authorization);
+
                 replyTo.Tell(new ReminderStatusResponse(
                     query.Id, Found: false, Enabled: false, Executing: false,
                     NextFire: null, ConsecutiveFailures: 0, SkippedDuplicates: 0,
@@ -1475,6 +1680,86 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             _log.Error(ex, "Error getting status for reminder '{0}'", query.Id.Value);
             replyTo.Tell(new Status.Failure(ex));
         }
+    }
+
+    private async Task HandleGetHistoryAsync(GetReminderHistoryQuery query)
+    {
+        var replyTo = Sender;
+        try
+        {
+            var definition = _definitionStore.Get(query.Id);
+            if (definition is null || !CanAccessAudience(query.Authorization, definition.Audience))
+            {
+                if (definition is not null)
+                    LogAudienceDenied("history", query.Id, definition.Audience, query.Authorization);
+
+                replyTo.Tell(new ReminderHistoryResponse(query.Id, Found: false, Records: []));
+                return;
+            }
+
+            var records = await _historyStore.ReadAsync(query.Id, query.MaxRecords);
+            replyTo.Tell(new ReminderHistoryResponse(query.Id, Found: true, Records: records));
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Error getting history for reminder '{0}'", query.Id.Value);
+            replyTo.Tell(new ReminderHistoryResponse(query.Id, Found: false, Records: []));
+        }
+    }
+
+    /// <summary>
+    /// The one place that decides whether a caller may see or act on a reminder.
+    /// A caller may access a reminder only when the reminder's audience is at or
+    /// below the caller's audience: Personal &gt; Team &gt; Public — a Personal
+    /// caller can reach Personal, Team, and Public reminders; a Team caller can
+    /// reach Team and Public; a Public caller can reach only Public.
+    /// <para>
+    /// A missing <paramref name="authorization"/>, or one with no
+    /// <see cref="ReminderAudienceAuthorizationContext.SourceAudience"/>, resolves
+    /// no caller audience at all and therefore denies access — it never grants it.
+    /// This intentionally does not use <c>authorization?.SourceAudience</c>: that
+    /// shorthand is how a missing value would silently widen access elsewhere, and
+    /// here it must do the opposite.
+    /// </para>
+    /// <para>
+    /// <see cref="ReminderDefinition.Audience"/> is a required, non-nullable field,
+    /// and <see cref="ReminderDefinitionStore"/> rejects and never loads a document
+    /// that predates it (see <c>LegacyTrustFieldGuard</c>), so a definition reaching
+    /// this method always carries a real audience. There is no "unknown audience"
+    /// branch to fall back on here; if that guarantee is ever relaxed, an unknown
+    /// audience must resolve to <see cref="TrustAudience.Personal"/> — the most
+    /// restrictive value — never to <see cref="TrustAudience.Team"/> or
+    /// <see cref="TrustAudience.Public"/>.
+    /// </para>
+    /// </summary>
+    internal static bool CanAccessAudience(
+        ReminderAudienceAuthorizationContext? authorization,
+        TrustAudience reminderAudience)
+    {
+        if (authorization is null || authorization.SourceAudience is not { } callerAudience)
+            return false;
+
+        return reminderAudience <= callerAudience;
+    }
+
+    /// <summary>
+    /// Logs an audience-scoped denial at Info so an operator can see access-control
+    /// activity without a debug build, while keeping the record free of reminder
+    /// content — only the id, its audience, and the caller's audience.
+    /// </summary>
+    private void LogAudienceDenied(
+        string operation,
+        ReminderId id,
+        TrustAudience reminderAudience,
+        ReminderAudienceAuthorizationContext? authorization)
+    {
+        _log.Info(
+            "Reminder '{0}' (audience={1}) is out of scope for a {2} caller (audience={3}, source={4}); treating as not found.",
+            id.Value,
+            reminderAudience.ToWireValue(),
+            operation,
+            authorization?.SourceAudience?.ToWireValue() ?? "none",
+            authorization?.SourceDescription ?? "unknown");
     }
 
     private async Task<ReminderOccurrenceStatus?> GetOccurrenceStatusAsync(ReminderDefinition definition)
@@ -1528,6 +1813,11 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     internal sealed record ReconcileReminders : INoSerializationVerificationNeeded
     {
         public static readonly ReconcileReminders Instance = new();
+    }
+
+    internal sealed record PruneTerminalReminders : INoSerializationVerificationNeeded
+    {
+        public static readonly PruneTerminalReminders Instance = new();
     }
 
     /// <summary>

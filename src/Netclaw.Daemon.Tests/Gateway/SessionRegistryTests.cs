@@ -3,10 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using Akka.Actor;
 using Akka.Hosting;
+using Akka.Hosting.TestKit;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
@@ -24,8 +25,11 @@ namespace Netclaw.Daemon.Tests.Gateway;
 /// <see cref="SignalRSessionActor"/> — these tests focus on the registry's
 /// session-tracking, connection-binding, and message-routing responsibilities.
 /// </summary>
-public sealed class SessionRegistryTests
+public sealed class SessionRegistryTests(ITestOutputHelper output) : TestKit(output: output)
 {
+    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
+        => builder.AddHocon("akka.loglevel = ERROR", HoconAddMode.Prepend);
+
     private SessionRegistry BuildRegistry(
         SessionIngressGate? ingressGate = null,
         IRequiredActor<SignalRGatewayActorKey>? actorProvider = null)
@@ -173,43 +177,32 @@ public sealed class SessionRegistryTests
         Assert.Equal(SessionIngressGate.RestartInProgressMessage, ex.Message);
     }
 
-    [Fact]
-    public async Task SendMessage_populates_channel_input_from_claims_principal()
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task SendMessage_preserves_identity_and_waits_for_the_admission_result(bool authenticated, bool reject)
     {
-        var capturing = new CapturingRequiredActor();
-        var registry = BuildRegistry(actorProvider: capturing);
+        var inputs = CreateTestProbe();
+        var replies = CreateTestProbe();
+        var gateway = Sys.ActorOf(Props.Create(() => new AdmissionGateway(inputs, replies)));
+        var registry = BuildRegistry(actorProvider: new RequiredGateway(gateway));
         var sessionId = await registry.CreateSessionAsync("conn-1", "tui");
-
-        var claimsIdentity = new ClaimsIdentity(
+        var principal = authenticated ? new ClaimsPrincipal(new ClaimsIdentity(
         [
             new Claim(NetclawClaimTypes.PrincipalClassification, nameof(PrincipalClassification.Operator)),
             new Claim(NetclawClaimTypes.TransportAuthenticity, nameof(TransportAuthenticity.LocalProcess)),
             new Claim(NetclawClaimTypes.DeviceId, "local")
-        ], "test");
-        var principal = new ClaimsPrincipal(claimsIdentity);
-
-        await registry.SendMessageAsync("conn-1", sessionId, "hello", principal);
-
-        var enqueue = capturing.Messages.OfType<EnqueueSignalRInput>().Single();
-        Assert.Equal("local", enqueue.Input.SenderId.Value);
-        Assert.Equal(PrincipalClassification.Operator, enqueue.Input.Principal);
-        Assert.Equal(TransportAuthenticity.LocalProcess, enqueue.Input.Provenance!.TransportAuthenticity);
-    }
-
-    [Fact]
-    public async Task SendMessage_uses_untrusted_defaults_when_no_principal_provided()
-    {
-        var capturing = new CapturingRequiredActor();
-        var registry = BuildRegistry(actorProvider: capturing);
-        var sessionId = await registry.CreateSessionAsync("conn-1", "tui");
-
-        // No principal — mapper should fall back to UntrustedExternal / Unknown
-        await registry.SendMessageAsync("conn-1", sessionId, "hello", principal: null);
-
-        var enqueue = capturing.Messages.OfType<EnqueueSignalRInput>().Single();
-        Assert.Equal("unknown", enqueue.Input.SenderId.Value);
-        Assert.Equal(PrincipalClassification.UntrustedExternal, enqueue.Input.Principal);
-        Assert.Equal(TransportAuthenticity.Unknown, enqueue.Input.Provenance!.TransportAuthenticity);
+        ], "test")) : null;
+        var send = registry.SendMessageAsync("conn-1", sessionId, "hello", principal);
+        var enqueue = await inputs.ExpectMsgAsync<EnqueueSignalRInput>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(authenticated ? "local" : "unknown", enqueue.Input.SenderId.Value);
+        Assert.Equal(authenticated ? PrincipalClassification.Operator : PrincipalClassification.UntrustedExternal, enqueue.Input.Principal);
+        Assert.Equal(authenticated ? TransportAuthenticity.LocalProcess : TransportAuthenticity.Unknown, enqueue.Input.Provenance!.TransportAuthenticity);
+        Assert.False(send.IsCompleted);
+        enqueue.Input.AckTarget!.Tell(reject ? CommandNack.For(enqueue.SessionId, "rejected") : CommandAck.For(enqueue.SessionId));
+        if (reject) Assert.Equal("Text rejected: rejected", (await Assert.ThrowsAsync<HubException>(() => send)).Message);
+        else await send;
     }
 
     /// <summary>
@@ -225,50 +218,18 @@ public sealed class SessionRegistryTests
             => Task.FromResult<IActorRef>(ActorRefs.Nobody);
     }
 
-    /// <summary>
-    /// Capturing implementation of <see cref="IRequiredActor{T}"/> that records
-    /// all messages delivered via <see cref="IActorRef.Tell"/>. Used to verify
-    /// that <see cref="SessionRegistry"/> sends the expected actor messages.
-    /// </summary>
-    private sealed class CapturingRequiredActor : IRequiredActor<SignalRGatewayActorKey>
+    private sealed record RequiredGateway(IActorRef ActorRef) : IRequiredActor<SignalRGatewayActorKey>
     {
-        private readonly CapturingActorRef _ref = new();
-
-        public IActorRef ActorRef => _ref;
-        public IReadOnlyList<object> Messages => _ref.Messages;
-
-        public Task<IActorRef> GetAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IActorRef>(_ref);
+        public Task<IActorRef> GetAsync(CancellationToken cancellationToken = default) => Task.FromResult(ActorRef);
     }
 
-    /// <summary>
-    /// Minimal <see cref="IActorRef"/> implementation that records all
-    /// <see cref="Tell"/> invocations without requiring a live actor system.
-    /// </summary>
-    private sealed class CapturingActorRef : IActorRef
+    private sealed class AdmissionGateway : ReceiveActor
     {
-        private readonly List<object> _messages = [];
-        public IReadOnlyList<object> Messages => _messages;
-
-        public ActorPath Path => ActorRefs.Nobody.Path;
-
-        void ICanTell.Tell(object message, IActorRef sender) => _messages.Add(message);
-
-        bool IEquatable<IActorRef>.Equals(IActorRef? other) => ReferenceEquals(this, other);
-
-        int IComparable<IActorRef>.CompareTo(IActorRef? other)
-            => other is null ? 1 : string.Compare(Path.ToString(), other.Path.ToString(), StringComparison.Ordinal);
-
-        int IComparable.CompareTo(object? obj) => obj is IActorRef other
-            ? ((IComparable<IActorRef>)this).CompareTo(other)
-            : 1;
-
-        Akka.Util.ISurrogate Akka.Util.ISurrogated.ToSurrogate(ActorSystem system)
-            => ActorRefs.Nobody.ToSurrogate(system);
-
-        public override bool Equals(object? obj) => ReferenceEquals(this, obj);
-
-        public override int GetHashCode() => RuntimeHelpers.GetHashCode(this);
+        public AdmissionGateway(IActorRef inputs, IActorRef replies)
+        {
+            Receive<EnqueueSignalRInput>(input => inputs.Tell(input));
+            ReceiveAny(_ => replies.Tell(Akka.Done.Instance));
+        }
     }
 
     private sealed class NoopSessionPipeline : ISessionPipeline

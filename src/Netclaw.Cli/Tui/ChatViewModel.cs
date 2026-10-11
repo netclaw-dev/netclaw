@@ -21,6 +21,9 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public partial class ChatViewModel : ReactiveViewModel
 {
+    /// <summary>Termina route every host registers the chat page under.</summary>
+    public const string Route = "/chat";
+
     /// <summary>
     /// Cap on the approval body shown in the expanded (Ctrl+O) view.
     /// Without it, a multi-KB command handed verbatim to a TextNode can
@@ -32,12 +35,13 @@ public partial class ChatViewModel : ReactiveViewModel
     private readonly TimeProvider _timeProvider;
     private readonly ModelCapabilities _modelCapabilities;
     private readonly NetclawPaths _paths;
-    private string? _resumeSessionId;
-    private string? _initialMessage;
+    private readonly ChatNavigationState _navigationState;
+    private readonly string? _resumeSessionId;
+    private readonly string? _initialMessage;
 
     private readonly Subject<SessionOutput> _outputSubject = new();
-    private readonly Queue<string> _pendingMessages = new();
     private readonly Queue<ToolInteractionRequest> _pendingInteractions = new();
+    private readonly Lock _lifetimeGate = new();
 
     /// <summary>
     /// True while an interaction response is in flight to the daemon. Guards
@@ -55,8 +59,8 @@ public partial class ChatViewModel : ReactiveViewModel
     // cache analysis and eval tooling that anchors on the per-session log
     // silently gets no data from TUI turns (issue #1173).
     private StreamWriter? _usageLog;
-    private bool _sessionReady;
-    private int _connectAttempts;
+    private Task? _shutdownTask;
+    private Task? _activationTask;
     private readonly ObservableCollection<string> _approvalOptions = [];
 
     public ReactiveProperty<bool> IsGenerating { get; } = new(false);
@@ -104,6 +108,7 @@ public partial class ChatViewModel : ReactiveViewModel
         _timeProvider = timeProvider;
         _modelCapabilities = modelCapabilities;
         _paths = paths;
+        _navigationState = navigationState;
         _resumeSessionId = navigationState.TakeResumeSessionId();
         _initialMessage = navigationState.TakeInitialMessage();
     }
@@ -116,130 +121,83 @@ public partial class ChatViewModel : ReactiveViewModel
 
     protected virtual Task InitializeSessionAsync()
     {
-        _daemonOutputSubscription = _daemonClient.SessionOutput.Subscribe(ProcessOutput);
-
-        _daemonConnectionSubscription = _daemonClient.ConnectionEvents
-            .Subscribe(evt =>
+        _daemonOutputSubscription?.Dispose();
+        _daemonConnectionSubscription?.Dispose();
+        _daemonOutputSubscription = _daemonClient.SessionOutput.Subscribe(output =>
+            _ = ApplyAsync(() => ProcessOutput(output)));
+        _daemonConnectionSubscription = _daemonClient.ConnectionEvents.Subscribe(connection =>
+            _ = ApplyAsync(() =>
             {
-                if (evt.State is DaemonConnectionState.Disconnected
-                    or DaemonConnectionState.Reconnecting
-                    or DaemonConnectionState.TransportClosed)
+                if (connection.SessionId is { } sessionId)
                 {
-                    _sessionReady = false;
-                    IsGenerating.Value = false;
+                    SessionIdDisplay.Value = sessionId;
+                    if (Subscriptions.IsDisposed) return;
+                    OpenUsageLogIfNeeded(sessionId);
                 }
-
-                if (evt.State is DaemonConnectionState.Connected)
-                {
-                    _ = EnsureSessionAndFlushAsync();
-                }
-
-                if (IsGenerating.Value && evt.State is DaemonConnectionState.Connected)
-                    StatusMessage.Value = "Generating...";
-                else
-                    StatusMessage.Value = evt.Message;
-
+                StatusMessage.Value = connection.State == DaemonConnectionState.Connected
+                    ? IsGenerating.Value ? "Generating..." : "Ready"
+                    : connection.Message;
                 RequestRedraw();
-            });
+            }));
+        if (_activationTask is null)
+        {
+            IsGenerating.Value = _initialMessage is not null;
+            _activationTask = ObserveRequestAsync(() => _daemonClient.OpenChatAsync(_resumeSessionId, _initialMessage));
+        }
+        return _activationTask;
+    }
 
-        _ = ConnectUntilReadyAsync();
+    /// <summary>Posts user text before the caller can request normal quit.</summary>
+    public Task SubmitAsync(string text)
+    {
+        if (_shutdownTask is not null || string.IsNullOrWhiteSpace(text)) return Task.CompletedTask;
+        if (HasPendingInteraction)
+        {
+            var interaction = CurrentInteraction!;
+            if (ToolInteractionResponseParser.TryParseApprovalResponse(text, interaction.Options, out var key) && key is not null)
+                return SubmitInteractionSelectionAsync(key);
+            StatusMessage.Value = $"Approval required: reply with {FormatReplyLetters(interaction.Options)}.";
+            RequestRedraw();
+            return Task.CompletedTask;
+        }
+        IsGenerating.Value = true;
+        StatusMessage.Value = "Generating...";
+        _ = ObserveRequestAsync(() => _daemonClient.SendAsync(text));
         return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Submit user text to the session pipeline.
-    /// </summary>
-    public async Task SubmitAsync(string text)
+    private async Task ObserveRequestAsync(Func<Task> request)
     {
-        if (string.IsNullOrWhiteSpace(text))
-            return;
-
-        if (_pendingInteractions.Count > 0)
+        try { await request(); }
+        catch (Exception error)
         {
-            await SubmitInteractionResponseAsync(text);
-            return;
-        }
-
-        if (!_sessionReady || !_daemonClient.IsConnected)
-        {
-            _pendingMessages.Enqueue(text);
-            IsGenerating.Value = false;
-            IsInputEnabled.Value = true;
-            StatusMessage.Value = $"Queued {_pendingMessages.Count} message(s). Reconnecting...";
-            RequestRedraw();
-            _ = ConnectUntilReadyAsync();
-            return;
-        }
-
-        IsGenerating.Value = true;
-        StatusMessage.Value = "Generating...";
-
-        try
-        {
-            await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
-
-            await _daemonClient.SendAsync(text);
-        }
-        catch (Exception ex)
-        {
-            IsGenerating.Value = false;
-            _sessionReady = false;
-            IsInputEnabled.Value = true;
-            _pendingMessages.Enqueue(text);
-            StatusMessage.Value = $"Send failed ({ex.Message}). Reconnecting...";
-            RequestRedraw();
-            _ = ConnectUntilReadyAsync();
+            await ApplyAsync(() =>
+            {
+                IsGenerating.Value = false;
+                StatusMessage.Value = error.Message;
+                RequestRedraw();
+            });
         }
     }
 
     public virtual void RequestAppShutdown()
     {
-        Shutdown();
+        if (_shutdownTask is not null) return;
+        IsInputEnabled.Value = false;
+        StatusMessage.Value = "Confirming daemon admission...";
+        _shutdownTask = CloseAndShutdownAsync();
     }
 
-    private async Task SubmitInteractionResponseAsync(string text)
+    private async Task CloseAndShutdownAsync()
     {
-        if (!_sessionReady || !_daemonClient.IsConnected)
-        {
-            StatusMessage.Value = "Approval required. Reconnecting...";
-            RequestRedraw();
-            _ = ConnectUntilReadyAsync();
-            return;
-        }
-
-        var interaction = CurrentInteraction;
-        if (interaction is null)
-            return;
-
-        if (!ToolInteractionResponseParser.TryParseApprovalResponse(text, interaction.Options, out var selectedKey) || selectedKey is null)
-        {
-            StatusMessage.Value = $"Approval required: reply with {FormatReplyLetters(interaction.Options)}.";
-            RequestRedraw();
-            return;
-        }
-
-        var pending = _pendingInteractions.Peek();
-
         try
         {
-            await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
-            await _daemonClient.RespondToInteractionAsync(pending.CallId.Value, selectedKey);
-
-            _pendingInteractions.Dequeue();
-            RefreshApprovalOptions();
-            IsGenerating.Value = _pendingInteractions.Count == 0;
-            StatusMessage.Value = _pendingInteractions.Count == 0
-                ? "Generating..."
-                : "Approval required";
-            RequestRedraw();
+            var receipt = await _daemonClient.CloseAsync();
+            await ApplyAsync(() => { _navigationState.CloseReceipt = receipt; StatusMessage.Value = receipt.Notice; Shutdown(); });
         }
-        catch (Exception ex)
+        catch (Exception error)
         {
-            _sessionReady = false;
-            IsGenerating.Value = false;
-            StatusMessage.Value = $"Approval response failed ({ex.Message}). Reconnecting...";
-            RequestRedraw();
-            _ = ConnectUntilReadyAsync();
+            await ApplyAsync(() => { StatusMessage.Value = error.Message; Shutdown(); });
         }
     }
 
@@ -355,15 +313,9 @@ public partial class ChatViewModel : ReactiveViewModel
     /// <see cref="InitializeSessionAsync"/>. Used by <c>ChatPageTests</c> to
     /// exercise the Input-panel rendering without spinning up a daemon.
     /// </summary>
-    internal void SeedPendingInteractionForTesting(ToolInteractionRequest interaction)
-    {
-        _outputSubject.OnNext(interaction);
-        _pendingInteractions.Enqueue(interaction);
-        RefreshApprovalOptions();
-        IsGenerating.Value = false;
-        StatusMessage.Value = "Approval required";
-        RequestRedraw();
-    }
+    internal void SeedPendingInteractionForTesting(ToolInteractionRequest interaction) => ProcessOutput(interaction);
+
+    internal void NotifyViewportChanged() => UiVersion.Value++;
 
     internal void ProcessOutputForTesting(SessionOutput output) => ProcessOutput(output);
 
@@ -428,60 +380,46 @@ public partial class ChatViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
-        _daemonOutputSubscription?.Dispose();
-        _daemonConnectionSubscription?.Dispose();
-        _outputSubject.Dispose();
-        _usageLog?.Dispose();
-        _usageLog = null;
-
-        IsGenerating.Dispose();
-        IsInputEnabled.Dispose();
-        StatusMessage.Dispose();
-        SessionIdDisplay.Dispose();
-        UsageDisplay.Dispose();
-        UiVersion.Dispose();
-        IsApprovalDetailVisible.Dispose();
-        base.Dispose();
-    }
-
-    private async Task ConnectUntilReadyAsync()
-    {
-        var delays = new[]
+        lock (_lifetimeGate)
         {
-            TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(2),
-            TimeSpan.FromSeconds(5),
-            TimeSpan.FromSeconds(10)
-        };
+            if (Subscriptions.IsDisposed) return;
+            base.Dispose();
+            _daemonOutputSubscription?.Dispose();
+            _daemonConnectionSubscription?.Dispose();
+            _outputSubject.Dispose();
+            _usageLog?.Dispose();
+            _usageLog = null;
 
-        while (!_sessionReady)
-        {
-            try
-            {
-                await _daemonClient.ConnectAsync();
-                await EnsureSessionAndFlushAsync();
-                return;
-            }
-            catch
-            {
-                _connectAttempts++;
-                var idx = Math.Min(_connectAttempts - 1, delays.Length - 1);
-                StatusMessage.Value = $"Connecting... retry {_connectAttempts} in {delays[idx].TotalSeconds:0}s";
-                RequestRedraw();
-                await Task.Delay(delays[idx]);
-            }
+            IsGenerating.Dispose();
+            IsInputEnabled.Dispose();
+            StatusMessage.Dispose();
+            SessionIdDisplay.Dispose();
+            UsageDisplay.Dispose();
+            UiVersion.Dispose();
+            IsApprovalDetailVisible.Dispose();
         }
     }
 
+    private Task ApplyAsync(Action action) => InvokeAsync(() =>
+    {
+        // Unbound callbacks run inline. Disposal must wait for their resource access.
+        lock (_lifetimeGate)
+        {
+            if (!Subscriptions.IsDisposed) action();
+        }
+    });
+
     private void ProcessOutput(SessionOutput output)
     {
-        _outputSubject.OnNext(output);
-
-        if (output is UsageOutput usage)
-            AppendUsageLog(usage);
-
         switch (output)
         {
+            case UsageOutput usage:
+                AppendUsageLog(usage);
+                var contextWindow = usage.ContextWindowTokens > 0 ? usage.ContextWindowTokens : ContextWindowTokens;
+                var percentage = usage.InputTokens.HasValue && contextWindow > 0
+                    ? $" ({(double)usage.InputTokens.Value / contextWindow:P0} ctx)" : "";
+                UsageDisplay.Value = $"in={usage.InputTokens ?? 0} out={usage.OutputTokens ?? 0}{percentage}";
+                break;
             case ToolInteractionRequest interaction:
                 _pendingInteractions.Enqueue(interaction);
                 RefreshApprovalOptions();
@@ -492,104 +430,61 @@ public partial class ChatViewModel : ReactiveViewModel
                 _pendingInteractions.Clear();
                 RefreshApprovalOptions();
                 IsGenerating.Value = false;
+                StatusMessage.Value = "Ready";
                 break;
             case ErrorOutput:
                 _pendingInteractions.Clear();
                 RefreshApprovalOptions();
                 IsGenerating.Value = false;
-                IsInputEnabled.Value = true;
+                IsInputEnabled.Value = _shutdownTask is null;
                 StatusMessage.Value = "Last request failed. Ready to retry.";
                 break;
         }
 
+        _outputSubject.OnNext(output);
         RequestRedraw();
     }
 
-    private async Task EnsureSessionAndFlushAsync()
+    internal Task CancelFromInputAsync()
     {
-        // On the first call, use ResumeSessionAsync if a resume ID was provided.
-        // After that, DaemonClient has the session ID cached, so use EnsureSessionAsync
-        // to avoid redundant resume calls on reconnect.
-        var resumeId = _resumeSessionId;
-        _resumeSessionId = null;
-        var sessionId = resumeId is not null
-            ? await _daemonClient.ResumeSessionAsync(resumeId, DaemonClient.TuiChannelType)
-            : await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
-        SessionIdDisplay.Value = sessionId;
-        OpenUsageLogIfNeeded(sessionId);
-        _sessionReady = true;
-        IsInputEnabled.Value = true;
-        _connectAttempts = 0;
-
-        while (_pendingMessages.Count > 0)
+        if (HasPendingInteraction) return DenyPendingInteractionAsync();
+        if (IsGenerating.Value)
         {
-            var pending = _pendingMessages.Dequeue();
-            await _daemonClient.SendAsync(pending);
-        }
-
-        // Auto-send hidden trigger message (e.g., onboarding interview prompt).
-        // Not rendered as a user bubble — the LLM's greeting is the first visible thing.
-        if (_initialMessage is not null)
-        {
-            var trigger = _initialMessage;
-            _initialMessage = null;
-            IsGenerating.Value = true;
-            StatusMessage.Value = "Generating...";
+            StatusMessage.Value = "Cancel generation is not supported yet.";
             RequestRedraw();
-            await _daemonClient.SendAsync(trigger);
-            return;
         }
-
-        if (!IsGenerating.Value)
-            StatusMessage.Value = "Ready";
-
-        RequestRedraw();
+        return Task.CompletedTask;
     }
 
     protected virtual async Task SubmitInteractionSelectionAsync(string selectedKey)
     {
-        if (CurrentInteraction is null)
-            return;
-
-        if (_isSubmittingInteraction)
-            return;
-
-        if (!_sessionReady || !_daemonClient.IsConnected)
-        {
-            StatusMessage.Value = "Approval required. Reconnecting...";
-            RequestRedraw();
-            _ = ConnectUntilReadyAsync();
-            return;
-        }
-
-        var pending = _pendingInteractions.Peek();
-
+        if (_shutdownTask is not null || CurrentInteraction is not { } pending || _isSubmittingInteraction) return;
+        _isSubmittingInteraction = true;
+        IsGenerating.Value = true;
         try
         {
-            _isSubmittingInteraction = true;
-            await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
             await _daemonClient.RespondToInteractionAsync(pending.CallId.Value, selectedKey);
-
-            _pendingInteractions.Dequeue();
-            RefreshApprovalOptions();
-            IsGenerating.Value = _pendingInteractions.Count == 0;
-            StatusMessage.Value = _pendingInteractions.Count == 0
-                ? "Generating..."
-                : "Approval required";
-            RequestRedraw();
+            await ApplyAsync(() =>
+            {
+                // Turn completion can clear the prompt before the RPC response arrives.
+                if (CurrentInteraction != pending) return;
+                _pendingInteractions.Dequeue();
+                RefreshApprovalOptions();
+                if (HasPendingInteraction) IsGenerating.Value = false;
+                StatusMessage.Value = HasPendingInteraction ? "Approval required" : IsGenerating.Value ? "Generating..." : "Ready";
+                RequestRedraw();
+            });
         }
-        catch (Exception ex)
+        catch (Exception error)
         {
-            _sessionReady = false;
-            IsGenerating.Value = false;
-            StatusMessage.Value = $"Approval response failed ({ex.Message}). Reconnecting...";
-            RequestRedraw();
-            _ = ConnectUntilReadyAsync();
+            await ApplyAsync(() =>
+            {
+                IsGenerating.Value = false;
+                StatusMessage.Value = $"Approval response failed: {error.Message}";
+                RequestRedraw();
+            });
         }
-        finally
-        {
-            _isSubmittingInteraction = false;
-        }
+        finally { await ApplyAsync(() => _isSubmittingInteraction = false); }
     }
 
     private void RefreshApprovalOptions()

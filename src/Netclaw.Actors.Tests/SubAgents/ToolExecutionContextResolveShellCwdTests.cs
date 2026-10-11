@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -45,9 +46,10 @@ public class ToolExecutionContextResolveShellCwdTests
     }
 
     [Fact]
-    public void SessionDirectory_wins_over_inherited_cwd()
+    public async Task SessionDirectory_wins_over_inherited_cwd()
     {
-        var sessionDirectory = Path.Combine(Path.GetTempPath(), "netclaw-test-session");
+        await using var sessionDir = TestSessionTempDirectory.Create("netclaw-test-");
+        var sessionDirectory = sessionDir.Path;
         var context = TestToolExecutionContext.CreateBound("sess", sessionDirectory, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,

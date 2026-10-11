@@ -19,10 +19,7 @@ namespace Netclaw.Actors.Tests.Memory;
 /// </summary>
 public sealed class MemoryCheckpointAudienceTests : IAsyncDisposable
 {
-    private readonly string _baseDir = Path.Combine(
-        Path.GetTempPath(),
-        "netclaw-memory-checkpoint-audience-tests",
-        Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-memory-checkpoint-audience-tests-{Guid.NewGuid():N}");
 
     private readonly SQLiteMemoryStore _store;
     private readonly RecordingLogger _logger = new();

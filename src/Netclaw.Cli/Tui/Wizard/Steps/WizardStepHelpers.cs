@@ -50,11 +50,7 @@ internal static class WizardStepHelpers
         => NetclawTuiChrome.BuildTextInputPanel(input, title);
 
     internal static void SeedTextInput(TextInputNode input, string? text)
-    {
-        input.Text = text ?? string.Empty;
-        if (!string.IsNullOrEmpty(input.Text))
-            input.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
-    }
+        => NetclawTuiChrome.SeedTextInput(input, text);
 
     /// <summary>
     /// Syncs a text input back to its view-model on every text change. Termina auto-routes

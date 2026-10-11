@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 
 namespace Netclaw.Actors.Tests.Channels;
 
@@ -30,10 +31,14 @@ internal static class TestMattermostGatewayDeps
             OutputModalities = ModelModality.Text
         };
 
-    public static NetclawPaths NewTestPaths()
-    {
-        var path = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-mattermost-test-{Guid.NewGuid():N}"));
-        path.EnsureDirectoriesExist();
-        return path;
-    }
+    /// <summary>
+    /// Creates a unique temp directory (with a full <see cref="NetclawPaths"/>
+    /// tree) for a Mattermost test. The returned value owns the directory and
+    /// deletes it on disposal — callers must <c>await using</c> it so the
+    /// <c>/tmp/netclaw-mattermost-test-*</c> tree is not leaked (issue #2266).
+    /// </summary>
+    public static TestSessionTempDirectory NewTestPaths()
+        => TestSessionTempDirectory.Create(
+            prefix: "netclaw-mattermost-test-",
+            createDirectoryTree: true);
 }

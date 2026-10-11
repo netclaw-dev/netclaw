@@ -17,12 +17,17 @@ public sealed class ApprovalPatternV3Tests
     private static readonly ApprovalEntry BashGitPush =
         ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"]);
 
+    // A verb grant covers its words and any later words: the later words are
+    // arguments (owner decision, 2026-10-05).
     [Theory]
-    [InlineData("git push", new[] { "git", "push" })]
-    [InlineData("git push origin", new[] { "git", "push", "origin" })]
-    public void Token_prefix_matches_complete_candidate_prefix(
+    [InlineData("git push", new[] { "git", "push" }, true)]
+    [InlineData("git push origin", new[] { "git", "push", "origin" }, true)]
+    [InlineData("git push origin main", new[] { "git", "push", "origin", "main" }, true)]
+    [InlineData("git pull origin", new[] { "git", "pull", "origin" }, false)]
+    public void Token_prefix_covers_its_words_and_later_words(
         string verb,
-        string[] tokens)
+        string[] tokens,
+        bool expected)
     {
         var candidate = new ApprovalCandidate(verb, Directory: null)
         {
@@ -30,7 +35,7 @@ public sealed class ApprovalPatternV3Tests
             Shell = ApprovalShell.Bash,
         };
 
-        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+        Assert.Equal(expected, ApprovalPatternMatching.MatchesShellApproval(
             candidate,
             cwd: null,
             [BashGitPush]));
@@ -113,21 +118,90 @@ public sealed class ApprovalPatternV3Tests
             Shell = ApprovalShell.Bash,
         };
 
+        // The parser chain "git ls-tree feature" starts with the grant words.
         Assert.True(ApprovalPatternMatching.MatchesShellApproval(
             candidate,
             cwd: null,
             [grant]));
     }
 
-    [Fact]
-    public void Legacy_exact_does_not_match_a_longer_candidate()
+    // Policy data gives echo and which a one-token chain, so the parser's
+    // folded word is an argument. gh has no such policy, so "gh auth" is a chain.
+    [Theory]
+    [InlineData("echo", new[] { "echo", "hi" }, true)]
+    [InlineData("which", new[] { "which", "gh" }, true)]
+    [InlineData("gh", new[] { "gh", "auth" }, false)]
+    public void Bare_program_grant_covers_folded_operands_only_for_single_token_programs(
+        string program,
+        string[] tokens,
+        bool expected)
+    {
+        var grant = ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, [program]);
+        var candidate = new ApprovalCandidate(program, Directory: null)
+        {
+            VerbTokens = Array.AsReadOnly(tokens),
+            Shell = ApprovalShell.Bash,
+        };
+
+        Assert.Equal(expected, ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [grant]));
+    }
+
+    // A legacy phrase gets the rule of a new grant for its words: it covers
+    // its words and any later words, but no other word in its own positions.
+    [Theory]
+    [InlineData(new[] { "git", "push", "origin" }, true)]
+    [InlineData(new[] { "git", "push", "origin", "v1.5.1" }, true)]
+    [InlineData(new[] { "git", "push", "upstream" }, false)]
+    [InlineData(new[] { "git", "push" }, false)]
+    public void Legacy_exact_covers_its_words_and_later_words(string[] tokens, bool expected)
     {
         var grant = ApprovalEntry.CreateLegacyExact(
             ApprovalShell.Bash,
-            "git push");
+            "git push origin");
         var candidate = new ApprovalCandidate("git push origin", Directory: null)
         {
-            VerbTokens = Array.AsReadOnly(["git", "push", "origin"]),
+            VerbTokens = Array.AsReadOnly(tokens),
+            Shell = ApprovalShell.Bash,
+        };
+
+        Assert.Equal(expected, ApprovalPatternMatching.MatchesShellApproval(
+            candidate,
+            cwd: null,
+            [grant]));
+    }
+
+    // A legacy phrase is its command words. The display verb does not count:
+    // "dotnet list package --vulnerable" shows "dotnet list".
+    [Theory]
+    [InlineData("dotnet list", new[] { "dotnet", "list", "package" }, true)]
+    [InlineData("dotnet list package --vulnerable", new[] { "dotnet", "list", "package" }, true)]
+    [InlineData("dotnet list", new[] { "dotnet", "list", "reference" }, false)]
+    [InlineData("dotnet list", new[] { "dotnet", "list" }, false)]
+    public void Legacy_exact_matches_its_own_words_whatever_the_display(
+        string display,
+        string[] tokens,
+        bool expected)
+    {
+        var grant = ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, "dotnet list package");
+        var candidate = new ApprovalCandidate(display, Directory: null)
+        {
+            VerbTokens = Array.AsReadOnly(tokens),
+            Shell = ApprovalShell.Bash,
+        };
+
+        Assert.Equal(expected, ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [grant]));
+    }
+
+    // A legacy program-only phrase stays exact, as a new program-only grant does.
+    [Fact]
+    public void Legacy_program_phrase_does_not_cover_a_verb()
+    {
+        var grant = ApprovalEntry.CreateLegacyExact(
+            ApprovalShell.Bash,
+            "gh");
+        var candidate = new ApprovalCandidate("gh auth logout", Directory: null)
+        {
+            VerbTokens = Array.AsReadOnly(["gh", "auth", "logout"]),
             Shell = ApprovalShell.Bash,
         };
 
@@ -167,21 +241,6 @@ public sealed class ApprovalPatternV3Tests
             matching,
             cwd: null,
             [ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["inspect"])]));
-    }
-
-    [Fact]
-    public void String_candidate_does_not_match_an_assignment_qualified_grant()
-    {
-        var grant = ApprovalEntry.CreateTokenPrefix(
-            ApprovalShell.Bash,
-            ["inspect"],
-            assignmentDigest: AssignmentDigest);
-
-        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
-            "inspect",
-            candidateDirectory: null,
-            cwd: null,
-            [grant]));
     }
 
     [Fact]

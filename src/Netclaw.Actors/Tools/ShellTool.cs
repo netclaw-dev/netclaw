@@ -41,10 +41,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     // The required execution context carries the session default or the
     // agent's validated _timeout_seconds hint as a semantic value.
 
-    // Shell output is mostly verbose noise the model skims, so bound it
-    // aggressively: small inline head+tail, full output spilled to a session file
-    // to grep. Content tools (file_read, web_fetch, MCP) keep the larger session
-    // content budget because the model fetched them to read in full.
+    // The small inline tail retains recent shell output and the exit status.
+    // The dispatcher retains the full capture for tool_output_read.
+    // Content tools use the larger session budget.
     public override int InlineOutputBudgetChars => 2000;
 
     private readonly ToolConfig _config;
@@ -147,7 +146,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             // drain would hang for the grandchild's full life span instead of
             // returning once the command itself is done.
             //
-            // BoundedOutputReader reads into a head+tail window bounded by
+            // BoundedOutputReader retains the tail within
             // MaxOutputChars but continues draining after the cap is reached so
             // the pipe never fills up and deadlocks a still-running child.
             using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
@@ -228,7 +227,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             if (stdoutGraceCut || stderrGraceCut)
                 captured += GraceCutMarker;
 
-            return $"Exit code: {process.ExitCode}{Environment.NewLine}{captured}";
+            return FormatCompletedOutput(captured, process.ExitCode);
         }
     }
 
@@ -236,7 +235,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     /// Streams stdout/stderr as <see cref="ToolActivityUpdate"/> items while the
     /// process runs. Shell output is live display data only; the parent pipeline
     /// still treats shell as opaque and enforces a wall-clock budget. The terminal
-    /// <see cref="ToolCompletedUpdate"/> carries the same bounded head+tail result
+    /// <see cref="ToolCompletedUpdate"/> carries the same bounded tail result
     /// as the non-streaming path.
     /// </summary>
     public override IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
@@ -414,8 +413,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 if (graceCut)
                     captured += GraceCutMarker;
 
-                output.TryWrite(new ToolCompletedUpdate(
-                    $"Exit code: {process.ExitCode}{Environment.NewLine}{captured}"));
+                output.TryWrite(new ToolCompletedUpdate(FormatCompletedOutput(captured, process.ExitCode)));
             }
         }
         catch (Exception ex) when (ex is ToolApprovalRequiredException or ToolCorrectionRequiredException or ToolAccessDeniedException)
@@ -561,6 +559,17 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         {
             Debug.WriteLine($"shell_execute: pipe drain aborted — {ex.Message}");
         }
+    }
+
+    private string FormatCompletedOutput(string captured, int exitCode)
+    {
+        var status = $"Exit code: {exitCode}";
+        var result = $"{status}{Environment.NewLine}{captured}";
+
+        // The dispatcher discards the prefix of a large result. Repeat the status in its retained tail.
+        return result.Length > InlineOutputBudgetChars
+            ? $"{result}{Environment.NewLine}{status}"
+            : result;
     }
 
     // Retained for compatibility with tests/benchmark that call it directly; the

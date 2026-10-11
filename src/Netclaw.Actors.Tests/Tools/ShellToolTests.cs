@@ -12,18 +12,18 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
 
-public class ShellToolTests
+public class ShellToolTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     private static readonly ShellExecutionEnvironment ShellEnvironment = TestShellEnvironment.Current;
     private readonly ShellTool _tool = CreateTool();
 
-    private static ToolExecutionContext CreateExecutionContext()
+    private ToolExecutionContext CreateExecutionContext()
     {
-        var sessionDirectory = Path.Combine(
-            Path.GetTempPath(),
-            "netclaw-shell-tests",
-            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        Directory.CreateDirectory(sessionDirectory);
+        var sessionDirectory = _temp.Path;
         return TestToolExecutionContext.CreateBound(
             "test/shell",
             sessionDirectory,
@@ -238,7 +238,7 @@ public class ShellToolTests
     {
         var tool = CreateTool();
         var args = ToolInput.Create("Command", TestShellEnvironment.LongRunningCommand);
-        var context = TestToolExecutionContext.CreateBound("test/thread", Path.GetTempPath(), new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("test/thread", _temp.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(1))
@@ -261,7 +261,7 @@ public class ShellToolTests
         // wait for the still-running child.
         var tool = CreateTool();
         var args = ToolInput.Create("Command", "sleep 20 & exit 0");
-        var context = TestToolExecutionContext.CreateBound("test/thread", Path.GetTempPath(), new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("test/thread", _temp.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(90))
@@ -297,7 +297,7 @@ public class ShellToolTests
             ? "ping.exe 127.0.0.1 -n 120 | Out-Null"
             : "sleep 120 & wait";
         var args = ToolInput.Create("Command", command);
-        var context = TestToolExecutionContext.CreateBound("test/thread", Path.GetTempPath(), new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("test/thread", _temp.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(100))
@@ -628,7 +628,7 @@ public class ShellToolTests
         var commandPolicy = new ShellCommandPolicy();
         var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), commandPolicy);
 
-        var args = ToolInput.Create("Command", "kill -9 12345");
+        var args = ToolInput.Create("Command", "pkill -f netclawd");
         var result = await tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("hard deny policy", result);

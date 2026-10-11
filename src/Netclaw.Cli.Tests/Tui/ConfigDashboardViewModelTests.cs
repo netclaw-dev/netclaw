@@ -31,6 +31,7 @@ public sealed class ConfigDashboardViewModelTests
             "Telemetry & Alerting",
             "Security & Access",
             "Workspaces Directory",
+            "Data Retention",
             "Run Full Doctor",
             "Quit",
         ], labels);
@@ -90,6 +91,7 @@ public sealed class ConfigDashboardViewModelTests
     [InlineData("Browser Automation", "/browser-automation")]
     [InlineData("Telemetry & Alerting", "/telemetry-alerting")]
     [InlineData("Workspaces Directory", "/workspaces")]
+    [InlineData("Data Retention", "/retention")]
     public void Task1_config_areas_route_to_dedicated_pages(string label, string expectedRoute)
     {
         using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState());
@@ -166,12 +168,14 @@ public sealed class ConfigDashboardViewModelTests
         Assert.Equal("– none configured", Summary(vm, "Channels"));
         Assert.Equal("– disabled", Summary(vm, "Inbound Webhooks"));
         Assert.Equal("0 dirs · 0 feeds", Summary(vm, "Skill Sources"));
-        Assert.Equal("– not set", Summary(vm, "Search"));
+        // No Search section means the DuckDuckGo default is in effect.
+        Assert.Equal("✓ DuckDuckGo", Summary(vm, "Search"));
         Assert.Equal("– disabled", Summary(vm, "Browser Automation"));
         Assert.Equal("OTLP off · 0 webhooks", Summary(vm, "Telemetry & Alerting"));
         // Features default to enabled when absent, so a bare config reports 6/6.
-        Assert.Equal("Personal · 6/6 enabled", Summary(vm, "Security & Access"));
+        Assert.Equal("Public · 6/6 enabled", Summary(vm, "Security & Access"));
         Assert.Equal(paths.WorkspacesDirectory, Summary(vm, "Workspaces Directory"));
+        Assert.Equal("logs 14d", Summary(vm, "Data Retention"));
     }
 
     [Fact]
@@ -211,6 +215,63 @@ public sealed class ConfigDashboardViewModelTests
         Assert.Equal("OTLP on · 1 webhook", Summary(vm, "Telemetry & Alerting"));
         // Memory.Enabled=false drops the count to 5/6.
         Assert.Equal("Team · 5/6 enabled", Summary(vm, "Security & Access"));
+    }
+
+    [Fact]
+    public void Models_row_shows_the_main_model_of_the_named_definitions_and_roles_shape()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Providers": { "anthropic": { "Type": "anthropic" } },
+              "Models": {
+                "Definitions": { "opus": { "Provider": "anthropic", "ModelId": "claude-opus-4" } },
+                "Roles": { "Main": "opus" }
+              }
+            }
+            """);
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState(), paths);
+
+        Assert.Equal("claude-opus-4", Summary(vm, "Models"));
+    }
+
+    [Fact]
+    public void Models_row_reports_a_config_error_for_an_unresolvable_models_section()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Models": {
+                "Main": { "Provider": "anthropic", "ModelId": "claude-opus-4" },
+                "Roles": { "Main": "opus" }
+              }
+            }
+            """);
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState(), paths);
+
+        Assert.Equal("– config error", Summary(vm, "Models"));
+    }
+
+    [Theory]
+    [InlineData("""{ "Enabled": false }""")]
+    [InlineData("""{ "Enabled": false, "Backend": "brave" }""")]
+    public void Search_row_reports_disabled_when_search_is_turned_off(string searchJson)
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.NetclawConfigPath, $$"""{ "configVersion": 1, "Search": {{searchJson}} }""");
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState(), paths);
+
+        Assert.Equal("– disabled", Summary(vm, "Search"));
     }
 
     [Fact]

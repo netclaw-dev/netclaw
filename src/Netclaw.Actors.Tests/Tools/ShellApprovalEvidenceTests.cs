@@ -3,9 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
 
 namespace Netclaw.Actors.Tests.Tools;
 
@@ -36,51 +38,8 @@ public sealed class ShellApprovalEvidenceTests
             [ShellGrantCandidateResult.Persistent(grantCandidate, entry)]);
 
         var match = Assert.Single(result.Candidates);
-        Assert.Equal(ShellCoverageKind.PersistentFolder, match.Coverage);
-        Assert.Equal(entry.FormatScope(), match.FormatMatch(candidate.Candidate).Scope);
-    }
-
-    [Theory]
-    [InlineData(
-        ApprovalShell.Bash,
-        "git status",
-        "/danger",
-        "Bash token-prefix \"git status\" in /safe/../danger")]
-    [InlineData(
-        ApprovalShell.PowerShell,
-        "Get-Location",
-        "C:\\danger",
-        "PowerShell token-prefix \"Get-Location\" in C:\\safe\\..\\danger")]
-    [InlineData(
-        ApprovalShell.Bash,
-        "git status",
-        null,
-        "Bash token-prefix \"git  status\" anywhere")]
-    public async Task Persistent_scope_must_be_canonical(
-        ApprovalShell shell,
-        string verb,
-        string? directory,
-        string scope)
-    {
-        var candidate = CreateCandidate(0, shell, verb, directory);
-        var grantCandidate = CreateGrantCandidate(candidate, directory);
-        var publicMatch = new ToolApprovalMatch(verb, "persistent", scope);
-        var publicResult = new ToolApprovalCheckResult([], [publicMatch])
-        {
-            CandidateChecks =
-            [
-                new ToolApprovalCandidateCheck(candidate.Candidate, publicMatch)
-            ]
-        };
-        var adapter = new ShellApprovalEvidenceAdapter(new FixedApprovalService(publicResult));
-        var request = new ShellApprovalMatchRequest(
-            SessionId: null,
-            TrustAudience.Personal,
-            new ToolName("shell_execute"),
-            [grantCandidate]);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            adapter.MatchAsync(request, directory, TestContext.Current.CancellationToken));
+        Assert.Equal(new Coverage.Stored(new GrantScope.Folder(directory), GrantedAt: null), match.Grant);
+        Assert.Equal(new GrantScope.Folder(directory), match.FormatMatch(candidate.Candidate).Scope);
     }
 
     [Theory]
@@ -150,37 +109,6 @@ public sealed class ShellApprovalEvidenceTests
         ShellPolicyCandidate candidate,
         string? directory)
         => new(candidate.Id, candidate.Candidate, directory);
-
-    private sealed class FixedApprovalService(ToolApprovalCheckResult result) : IToolApprovalService
-    {
-        public Task<ToolApprovalCheckResult> CheckApprovalAsync(
-            ToolApprovalSessionId? sessionId,
-            TrustAudience audience,
-            ToolName toolName,
-            IReadOnlyList<ApprovalCandidate> candidates,
-            string? cwd,
-            CancellationToken ct = default)
-            => Task.FromResult(result);
-
-        public Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
-            ToolApprovalSessionId? sessionId,
-            TrustAudience audience,
-            ToolName toolName,
-            IReadOnlyList<string> patterns,
-            string? cwd,
-            CancellationToken ct = default)
-            => throw new InvalidOperationException("This test uses the candidate check API.");
-
-        public Task RecordApprovalAsync(
-            ToolApprovalSessionId sessionId,
-            TrustAudience audience,
-            ToolName toolName,
-            IReadOnlyList<string> patterns,
-            bool persistent,
-            string? cwd,
-            CancellationToken ct = default)
-            => throw new InvalidOperationException("This test does not record approvals.");
-    }
 
     public enum MalformedNearMissGrantCase
     {

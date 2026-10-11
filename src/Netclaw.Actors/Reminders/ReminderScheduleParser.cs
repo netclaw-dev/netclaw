@@ -75,8 +75,12 @@ public static partial class ReminderScheduleParser
 
             case ReminderScheduleType.Cron:
             {
-                if (!CronScheduleHelper.TryParse(scheduleValue))
+                if (!CronScheduleHelper.TryParse(scheduleValue, out _, out var prefixError))
                 {
+                    // A bad CRON_TZ zone is not a bad cron expression: say which one it is.
+                    if (prefixError is not null)
+                        return (null, prefixError);
+
                     return (null,
                         $"Invalid cron expression '{scheduleValue}'. Use standard 5-field format (minute hour day month weekday), " +
                         "optionally preceded by 'CRON_TZ=<IANA-time-zone-id>' (no spaces in the zone id, e.g. 'Europe/Brussels') " +

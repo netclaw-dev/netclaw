@@ -5,26 +5,26 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using System.Linq;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Skills;
 
-public class SkillScannerTests : IDisposable
+public class SkillScannerTests : IAsyncLifetime
 {
+    private readonly TestSessionTempDirectory _tempDir =
+        TestSessionTempDirectory.Create("netclaw-skills-test-");
     private readonly string _skillsDir;
 
     public SkillScannerTests()
     {
-        _skillsDir = Path.Combine(Path.GetTempPath(), $"netclaw-skills-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_skillsDir);
+        _skillsDir = _tempDir.Path;
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_skillsDir))
-            Directory.Delete(_skillsDir, recursive: true);
-    }
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+    public ValueTask DisposeAsync() => _tempDir.DisposeAsync();
 
     [Fact]
     public void Empty_directory_returns_empty_list()

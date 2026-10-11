@@ -63,20 +63,23 @@ public sealed class ShellProcessLaunchTests
         Assert.Equal(directory.FullName, launch.WorkingDirectory);
     }
 
+    // The child gets the daemon environment snapshot of the shell environment.
+    // The parser declares the names of that same snapshot (decision F3), so a
+    // later change to the daemon environment reaches no child.
     [Fact]
-    public async Task Child_environment_remains_the_submission_snapshot()
+    public async Task Child_environment_remains_the_shell_environment_snapshot()
     {
         using var directory = new DisposableTempDir();
-        var environment = TestShellEnvironment.Current;
         var key = "NETCLAW_LAUNCH_TEST_" + Guid.NewGuid().ToString("N");
         try
         {
             Environment.SetEnvironmentVariable(key, "submitted");
+            var environment = TestShellEnvironment.CreateEnvironment();
+            Environment.SetEnvironmentVariable(key, "changed");
             var command = environment.Grammar == ShellGrammar.Bash ? $"echo ${key}" : $"echo $env:{key}";
             var context = TestToolExecutionContext.CreateBound("launch/environment", directory.Path, TrustAudience.Personal);
             var launch = new ShellProcessLaunch(command, directory.Path, context.Invocation,
                 new ShellCommandPolicy(environment), new ToolPathPolicy(environment, []), static _ => Task.CompletedTask);
-            Environment.SetEnvironmentVariable(key, "changed");
 
             using var process = await launch.StartAsync(TestContext.Current.CancellationToken);
             process.StandardInput.Close();

@@ -42,35 +42,35 @@ public class BoundedOutputReaderTests
     }
 
     [Fact]
-    public async Task DrainToWindow_long_output_truncated_with_head_and_tail()
+    public async Task DrainToWindow_long_output_truncated_to_tail_only()
     {
-        // 100-char head marker + separator + 100-char tail marker, with filler in the middle
+        // 200-char tail marker with head and middle filler before it. Only the
+        // last `budget` chars survive, prefixed by the separator.
         var head = new string('H', 100);
         var middle = new string('M', 5000);
-        var tail = new string('T', 100);
+        var tail = new string('T', 200);
         var input = head + middle + tail;
 
         var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 200, CancellationToken.None);
 
         Assert.True(truncated);
         Assert.False(cancelled); // budget cut, not a cancelled/grace cut
-        Assert.StartsWith(new string('H', 100), text);  // head preserved
-        Assert.EndsWith(new string('T', 100), text);    // tail preserved
-        Assert.Contains("...", text);                    // separator present
+        Assert.EndsWith(new string('T', 200), text);    // tail preserved
+        Assert.StartsWith(BoundedOutputReader.Separator, text); // separator preface present
+        Assert.DoesNotContain("H", text);                // head discarded
         Assert.DoesNotContain("M", text);                // middle discarded
     }
 
     [Fact]
-    public async Task DrainToWindow_head_and_tail_split_evenly()
+    public async Task DrainToWindow_keeps_last_budget_chars_with_tail_only()
     {
-        // budget=10 → headCap=5, tailCap=5
-        var input = "AAAAAXXXXXXBBBBB"; // 16 chars: 5 head, 6 overflow discard, 5 tail
+        // budget=10 → the last 10 chars of "AAAAAXXXXXXBBBBB" = "XXXXXBBBBB".
+        var input = "AAAAAXXXXXXBBBBB"; // 16 chars: 6 head + 4 middle discarded, 10 tail kept
         var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 10, CancellationToken.None);
 
         Assert.True(truncated);
         Assert.False(cancelled);
-        Assert.StartsWith("AAAAA", text);
-        Assert.EndsWith("BBBBB", text);
+        Assert.Equal($"{Environment.NewLine}...{Environment.NewLine}XXXXXBBBBB", text);
     }
 
     [Fact]
@@ -87,16 +87,16 @@ public class BoundedOutputReaderTests
     public async Task DrainToWindow_tail_ring_wraps_across_small_chunks()
     {
         // Drives the ring's wraparound + start-advance path that the StringReader
-        // tests skip: each read delivers a chunk smaller than tailCap, so the tail
-        // window is rebuilt incrementally and must wrap rather than reset wholesale.
-        // budget=10 → headCap=5 ("ABCDE"), tailCap=5; last 5 of "FGHIJKLMNO" = "KLMNO".
+        // tests skip: each read delivers a chunk smaller than the budget, so the
+        // tail window is rebuilt incrementally and must wrap rather than reset
+        // wholesale. budget=10 → last 10 of "ABCDEFGHIJKLMNO" = "ABCDEFGHIJKL"[^10..] = "FGHIJKLMNO".
         var reader = new ChunkedReader("ABCDEFGHIJKLMNO", chunkSize: 3);
 
         var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(reader, 10, CancellationToken.None);
 
         Assert.True(truncated);
         Assert.False(cancelled);
-        Assert.Equal($"ABCDE{Environment.NewLine}...{Environment.NewLine}KLMNO", text);
+        Assert.Equal($"{Environment.NewLine}...{Environment.NewLine}FGHIJKLMNO", text);
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class BoundedOutputReaderTests
         Assert.Equal("", text);
     }
 
-    // ── Window (pure string head+tail) ──
+    // ── Window (pure string tail-only) ──
 
     [Fact]
     public void Window_under_budget_returned_unchanged()
@@ -124,14 +124,15 @@ public class BoundedOutputReaderTests
     }
 
     [Fact]
-    public void Window_over_budget_keeps_head_and_tail()
+    public void Window_over_budget_keeps_tail_only()
     {
-        var input = new string('H', 50) + new string('M', 500) + new string('T', 50);
+        var input = new string('H', 50) + new string('M', 500) + new string('T', 100);
         var result = BoundedOutputReader.Window(input, 100);
 
-        Assert.StartsWith(new string('H', 50), result);
-        Assert.EndsWith(new string('T', 50), result);
-        Assert.DoesNotContain("M", result);
+        Assert.EndsWith(new string('T', 100), result);  // last budget chars kept
+        Assert.StartsWith(BoundedOutputReader.Separator, result); // separator preface
+        Assert.DoesNotContain("H", result);              // head discarded
+        Assert.DoesNotContain("M", result);              // middle discarded
     }
 
     // ── BoundedOutputAccumulator ──
@@ -147,18 +148,18 @@ public class BoundedOutputReaderTests
     }
 
     [Fact]
-    public void Accumulator_long_input_truncates_with_head_and_tail()
+    public void Accumulator_long_input_truncates_to_tail_only()
     {
         var acc = new BoundedOutputAccumulator(200);
         acc.Append(new string('H', 100).AsSpan());
         acc.Append(new string('M', 5000).AsSpan());
-        acc.Append(new string('T', 100).AsSpan());
+        acc.Append(new string('T', 200).AsSpan());
         var (text, truncated) = acc.Finish();
 
         Assert.True(truncated);
-        Assert.StartsWith(new string('H', 100), text);
-        Assert.EndsWith(new string('T', 100), text);
-        Assert.Contains("...", text);
+        Assert.EndsWith(new string('T', 200), text);
+        Assert.StartsWith(BoundedOutputReader.Separator, text);
+        Assert.DoesNotContain("H", text);
         Assert.DoesNotContain("M", text);
     }
 
@@ -174,13 +175,13 @@ public class BoundedOutputReaderTests
         var (text, truncated) = acc.Finish();
 
         Assert.True(truncated);
-        Assert.Equal($"ABCDE{Environment.NewLine}...{Environment.NewLine}KLMNO", text);
+        Assert.Equal($"{Environment.NewLine}...{Environment.NewLine}FGHIJKLMNO", text);
     }
 
     [Fact]
     public async Task Accumulator_matches_drain_output()
     {
-        var input = new string('H', 100) + new string('M', 5000) + new string('T', 100);
+        var input = new string('H', 100) + new string('M', 5000) + new string('T', 200);
         const int budget = 200;
 
         var (drainText, drainTruncated, _) = await BoundedOutputReader.DrainToWindowAsync(

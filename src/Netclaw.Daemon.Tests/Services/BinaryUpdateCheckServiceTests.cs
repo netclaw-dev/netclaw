@@ -210,6 +210,61 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         Assert.False(result.IsUpdateAvailable);
     }
 
+    /// <summary>
+    /// With no route to the release server both requests fail. The manifest failure returns
+    /// early, so the signature request's exception was never observed; the runtime then raised
+    /// UnobservedTaskException on the next GC and the daemon wrote a crash log (shown by
+    /// doctor as "Daemon Crash Logs").
+    /// </summary>
+    [Fact]
+    public async Task FetchVerifiedManifestAsync_DoesNotLeaveTheSignatureFailureUnobserved()
+    {
+        const string marker = "release-server-unreachable";
+        var unobserved = new List<string>();
+        void Record(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            lock (unobserved)
+                unobserved.AddRange(e.Exception.Flatten().InnerExceptions.Select(inner => inner.Message));
+        }
+
+        TaskScheduler.UnobservedTaskException += Record;
+        try
+        {
+            var result = await FetchWithUnreachableServerAsync(marker);
+            Assert.Equal(ManifestFetchStatus.NetworkFailure, result.Status);
+
+            for (var i = 0; i < 3; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Record;
+        }
+
+        lock (unobserved)
+            Assert.DoesNotContain(unobserved, message => message.Contains(marker, StringComparison.Ordinal));
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static async Task<ManifestFetchResult> FetchWithUnreachableServerAsync(string marker)
+    {
+        using var httpClient = new HttpClient(new UnreachableHandler(marker));
+        return await UpdateCheckService.FetchVerifiedManifestAsync(httpClient, CancellationToken.None);
+    }
+
+    private sealed class UnreachableHandler(string marker) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            throw new HttpRequestException(marker);
+        }
+    }
+
     [Fact]
     public async Task FetchVerifiedManifestAsync_ReturnsSignatureFailureOnMissingSignature()
     {

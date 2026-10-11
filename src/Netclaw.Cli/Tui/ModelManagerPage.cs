@@ -20,6 +20,7 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 {
+    private readonly IAnsiTerminal _terminal;
     private SelectionListNode<string>? _roleList;
     private SelectionListNode<string>? _providerList;
     private SelectionListNode<string>? _modelList;
@@ -30,6 +31,11 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
     private TextInputNode? _lastFocusedInput;
     private KeyedDynamicLayoutNode<ModelManagerContent>? _contentNode;
     private readonly CompositeDisposable _stepSubs = [];
+
+    public ModelManagerPage(IAnsiTerminal terminal)
+    {
+        _terminal = terminal;
+    }
 
     protected override void OnBound()
     {
@@ -145,14 +151,27 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
     private ILayoutNode BuildRoleOverview()
     {
         var items = new[] { "Main", "Fallback", "Compaction" };
+        var models = items.ToDictionary(
+            static role => role,
+            role => role switch
+            {
+                "Main" => ViewModel.Models?.Main,
+                "Fallback" => ViewModel.Models?.Fallback,
+                "Compaction" => ViewModel.Models?.Compaction,
+                _ => null
+            });
 
-        _roleList = Layouts.SelectionList(items, role => FormatRoleItem(role, role switch
-        {
-            "Main" => ViewModel.Models?.Main,
-            "Fallback" => ViewModel.Models?.Fallback,
-            "Compaction" => ViewModel.Models?.Compaction,
-            _ => null
-        }))
+        // Size the Provider (capped) and Model ID columns to their longest values so
+        // Status stays aligned, leaving room for the Role (12) and Status (12) columns
+        // and the list prefix and panel border.
+        var available = _terminal.Width - 12 - 12 - 12;
+        var providerLabels = models.Values.Select(ProviderLabel).ToList();
+        var providerWidth = NetclawTuiChrome.FitColumnWidth(providerLabels, "Provider",
+            Math.Min(NetclawTuiChrome.MaxProviderColumnWidth, available - 20));
+        var modelWidth = NetclawTuiChrome.FitColumnWidth(
+            models.Values.Select(static m => m?.ModelId ?? "\u2014"), "Model ID", available - providerWidth);
+
+        _roleList = Layouts.SelectionList(items, role => FormatRoleItem(role, models[role], providerWidth, modelWidth))
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -171,7 +190,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Model Role Assignments").WithForeground(Color.White).Bold())
-            .WithChild(new TextNode($"  {"Role",-12} {"Provider",-28} {"Model ID",-28} Status")
+            .WithChild(new TextNode($"   {"Role",-12} {NetclawTuiChrome.FitColumn("Provider", providerWidth)} {NetclawTuiChrome.FitColumn("Model ID", modelWidth)} Status")
                 .WithForeground(Color.Gray))
             .WithChild(_roleList)
             .WithChild(new TextNode("").Height(1))
@@ -179,18 +198,22 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                 .WithForeground(Color.Gray));
     }
 
-    private string FormatRoleItem(string role, ModelReference? model)
+    private string ProviderLabel(ModelReference? model)
     {
         if (model is null)
-            return $"{role,-12} {"(not set)",-28} {"\u2014",-28} \u2014";
+            return "(not set)";
 
-        var providerLabel = model.Provider;
         var match = ViewModel.Providers.FirstOrDefault(p =>
             string.Equals(p.Name, model.Provider, StringComparison.OrdinalIgnoreCase));
-        if (match.Name is not null)
-            providerLabel = $"{match.Name} ({match.DisplayName})";
+        return match.Name is not null ? $"{match.Name} ({match.DisplayName})" : model.Provider;
+    }
 
-        return $"{role,-12} {providerLabel,-28} {model.ModelId,-28} {(model.Provenance?.ToString() ?? "unknown")}";
+    private string FormatRoleItem(string role, ModelReference? model, int providerWidth, int modelWidth)
+    {
+        if (model is null)
+            return $"{role,-12} {NetclawTuiChrome.FitColumn(ProviderLabel(null), providerWidth)} {NetclawTuiChrome.FitColumn("\u2014", modelWidth)} \u2014";
+
+        return $"{role,-12} {NetclawTuiChrome.FitColumn(ProviderLabel(model), providerWidth)} {NetclawTuiChrome.FitColumn(model.ModelId, modelWidth)} {(model.Provenance?.ToString() ?? "unknown")}";
     }
 
     private ILayoutNode BuildProviderSelection()

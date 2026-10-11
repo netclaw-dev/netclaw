@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Channels;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -11,10 +12,10 @@ namespace Netclaw.Actors.Tests.Channels;
 public sealed class HistoricalAttachmentInboxTests
 {
     [Fact]
-    public void PromoteOrReuse_returns_existing_target_when_concurrent_writer_wins()
+    public async Task PromoteOrReuse_returns_existing_target_when_concurrent_writer_wins()
     {
-        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        await using var tempDir = TestSessionTempDirectory.Create();
+        var root = tempDir.Path;
 
         const string rawFilename = "report.pdf";
         const string sourceKey = "slack:F123";

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
@@ -13,8 +14,12 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Services;
 
-public sealed class ExposureModeValidationServiceTests
+public sealed class ExposureModeValidationServiceTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     // ── Local mode ───────────────────────────────────────────────────────────
 
     [Fact]
@@ -433,10 +438,9 @@ public sealed class ExposureModeValidationServiceTests
             bootstrapDeviceSeeder);
     }
 
-    private static (BootstrapDeviceSeeder Seeder, Func<CancellationToken, Task<int>> DeviceCounter) BuildBootstrapSeeder()
+    private (BootstrapDeviceSeeder Seeder, Func<CancellationToken, Task<int>> DeviceCounter) BuildBootstrapSeeder()
     {
-        var basePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        var paths = new NetclawPaths(basePath);
+        var paths = new NetclawPaths(_temp.Path);
         paths.EnsureDirectoriesExist();
         var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero));
         var registry = new DeviceRegistry(paths, timeProvider, NullLogger<DeviceRegistry>.Instance);

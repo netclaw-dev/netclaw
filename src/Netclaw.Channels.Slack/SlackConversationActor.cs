@@ -27,13 +27,6 @@ public sealed class SlackConversationActor : ReceiveActor
             .WithContext("Adapter", "slack")
             .WithContext("SlackChannelId", _conversationId);
 
-        Context.SetReceiveTimeout(TimeSpan.FromHours(2));
-        Receive<ReceiveTimeout>(_ =>
-        {
-            _log.Info("Conversation idle for 2 hours, passivating");
-            Context.Stop(Self);
-        });
-
         Receive<SlackInboundMessage>(message =>
         {
             var aclDecision = SlackAclPolicy.EvaluateInbound(
@@ -103,6 +96,8 @@ public sealed class SlackConversationActor : ReceiveActor
             var thread = existingThread.IsNobody()
                 ? Context.ActorOf(CreateThreadProps(message.ChannelId, threadTs), threadActorName)
                 : existingThread;
+            if (existingThread.IsNobody())
+                Context.Watch(thread);
 
             var normalized = NormalizeInboundText(message.Text);
             if (string.IsNullOrWhiteSpace(normalized) && message.Files is not { Count: > 0 })
@@ -176,6 +171,8 @@ public sealed class SlackConversationActor : ReceiveActor
             var thread = existingThread.IsNobody()
                 ? Context.ActorOf(CreateThreadProps(message.ChannelId, message.ThreadTs), threadActorName)
                 : existingThread;
+            if (existingThread.IsNobody())
+                Context.Watch(thread);
 
             _log.Debug("Routing proactive thread setup to thread actor {0}", message.ThreadTs);
             thread.Forward(message);
@@ -193,6 +190,7 @@ public sealed class SlackConversationActor : ReceiveActor
                 .GetOrElse(() => Context.ActorOf(
                     CreateThreadProps(message.ChannelId, message.ThreadTs),
                     threadActorName));
+            Context.Watch(thread);
 
             thread.Forward(message);
         });
@@ -215,11 +213,23 @@ public sealed class SlackConversationActor : ReceiveActor
             var thread = existingThread.IsNobody()
                 ? Context.ActorOf(CreateThreadProps(_conversationId, threadTs), threadActorName)
                 : existingThread;
+            if (existingThread.IsNobody())
+                Context.Watch(thread);
 
             _log.Debug(
                 "Routing DeliverTrustedSessionTurn to thread binding session={Session} thread={Thread}",
                 message.SessionId.Value, threadTs.Value);
             thread.Forward(message);
+        });
+
+        Receive<Terminated>(msg =>
+        {
+            _log.Debug("Slack thread binding stopped: {0}", msg.ActorRef.Path.Name);
+            if (Context.GetChildren().Any())
+                return;
+
+            _log.Info("Last session binding stopped; stopping conversation actor");
+            Context.Stop(Self);
         });
     }
 

@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Security.Authorization.Filesystem;
+using Netclaw.Tools;
 
 namespace Netclaw.Security;
 
@@ -21,81 +23,31 @@ public static class ApprovalPatternMatching
     // ToolApprovalEntryComparer for the rationale (POSIX is case-sensitive
     // for $PATH lookups; Windows is not).
 
-    /// <summary>
-    /// Returns true when <paramref name="approvedEntries"/> contains an entry
-    /// whose verb equals <paramref name="candidateVerb"/> AND whose directory
-    /// is either <c>null</c> (the global wildcard) or an ancestor of the
-    /// candidate's effective directory with no symlink segments along the
-    /// path between the two.
-    ///
-    /// The candidate's effective directory is
-    /// <paramref name="candidateDirectory"/> when non-null (the path argument
-    /// extracted from the command), otherwise <paramref name="cwd"/>. Relative
-    /// effective directories (<c>./build</c>, <c>../shared</c>) are resolved
-    /// against <paramref name="cwd"/> before the under-check.
-    ///
-    /// The symlink-segment guard prevents a planted symlink under an approved
-    /// directory from being used to redirect the candidate to a path outside
-    /// that directory: <see cref="PathUtility.ContainsSymlinkSegment"/> walks
-    /// each component from the approved root toward the effective directory
-    /// and refuses the match if any segment is a reparse point.
-    /// </summary>
-    public static bool MatchesShellApproval(
-        string candidateVerb,
-        string? candidateDirectory,
-        string? cwd,
-        IEnumerable<ApprovalEntry> approvedEntries)
-        => MatchesApprovalScope(
-            candidateDirectory,
-            cwd,
-            approvedEntries.Where(entry =>
-                entry.Repository is null
-                && entry.AssignmentDigest is null
-                && ToolApprovalEntryComparer.Equals(entry.Verb, candidateVerb)));
-
     private static bool MatchesApprovalScope(
         string? candidateDirectory,
         string? cwd,
         IEnumerable<ApprovalEntry> approvedEntries,
-        ApprovalShell? shell = null)
+        ApprovalShell? shell)
     {
-        var effectiveDirectory = ResolveEffectiveDirectory(candidateDirectory, cwd, shell);
-
-        // Lazily computed once per call so the candidate's Path.GetFullPath
-        // canonicalization isn't repeated for every folder-scoped entry
-        // whose verb happens to match. Wrapped in try/catch below because
-        // GetFullPath can throw on malformed input.
-        string? normalizedCandidate = null;
-
         foreach (var entry in approvedEntries)
         {
-            if (EvaluateApprovalScope(
-                    effectiveDirectory,
-                    candidateDirectory,
-                    entry,
-                    shell,
-                    cwd,
-                    ref normalizedCandidate) == ShellApprovalScopeResult.Match)
-            {
+            if (EvaluateApprovalScope(candidateDirectory, cwd, entry, shell) == ShellApprovalScopeResult.Match)
                 return true;
-            }
         }
 
         return false;
     }
 
     private static ShellApprovalScopeResult EvaluateApprovalScope(
-        string? effectiveDirectory,
         string? candidateDirectory,
-        ApprovalEntry entry,
-        ApprovalShell? shell,
         string? cwd,
-        ref string? normalizedCandidate)
+        ApprovalEntry entry,
+        ApprovalShell? shell)
     {
         if (entry.Repository is not null)
         {
-            return GitRepositoryApprovalScope.TryResolveCandidate(candidateDirectory, cwd, out var scope)
-                   && ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, entry.Repository)
+            return RepositoryIdentity.TryResolve(candidateDirectory, cwd, out var repository)
+                   && ToolApprovalEntryComparer.Equals(repository!.CommonDirectory, entry.Repository)
                 ? ShellApprovalScopeResult.Match
                 : ShellApprovalScopeResult.OutsideDirectory;
         }
@@ -103,44 +55,69 @@ public static class ApprovalPatternMatching
         if (entry.Directory is null)
             return ShellApprovalScopeResult.Match;
 
-        if (string.IsNullOrEmpty(effectiveDirectory))
+        // A PowerShell scope uses Windows path rules on every host. Other shells
+        // use the host path API, with home expansion for a relative candidate.
+        var candidateCreated = shell == ApprovalShell.PowerShell
+            ? TryCreateWindowsScopePath(candidateDirectory, cwd, out var candidate)
+            : TryCreateHostScopePath(candidateDirectory, cwd, out candidate);
+        if (candidateCreated is null)
             return ShellApprovalScopeResult.MissingDirectory;
 
-        try
-        {
-            if (shell == ApprovalShell.PowerShell)
-            {
-                normalizedCandidate ??= NormalizeWindowsPath(effectiveDirectory, baseDirectory: null);
-                var normalizedRoot = NormalizeWindowsPath(entry.Directory, baseDirectory: null);
-                if (normalizedCandidate is null || normalizedRoot is null ||
-                    !IsWithinWindowsRoot(normalizedCandidate, normalizedRoot))
-                {
-                    return ShellApprovalScopeResult.OutsideDirectory;
-                }
-
-                return OperatingSystem.IsWindows() &&
-                       PathUtility.ContainsSymlinkSegment(normalizedRoot, normalizedCandidate)
-                    ? ShellApprovalScopeResult.Symlink
-                    : ShellApprovalScopeResult.Match;
-            }
-
-            normalizedCandidate ??= PathUtility.Normalize(effectiveDirectory);
-
-            if (!PathUtility.IsNormalizedWithinRoot(normalizedCandidate, entry.Directory))
-                return ShellApprovalScopeResult.OutsideDirectory;
-
-            return PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory)
-                ? ShellApprovalScopeResult.Symlink
-                : ShellApprovalScopeResult.Match;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException)
-        {
+        var rootCreated = shell == ApprovalShell.PowerShell
+            ? CanonicalPath.TryCreate(entry.Directory, relativeBase: null, ShellPathStyle.Windows, out var root)
+            : CanonicalPath.TryCreateHost(entry.Directory, relativeBase: null, out root);
+        if (candidateCreated == false || !rootCreated)
             return ShellApprovalScopeResult.OutsideDirectory;
-        }
+
+        // A folder grant refuses links only below its root (R3). The operator
+        // approved the root and its ancestors, which can include an OS alias.
+        return FileSystemAuthority.EvaluateMembership(
+                candidate,
+                [new PathBoundary.Folder(root, LinkRule.BelowRoot)]) switch
+            {
+                PathDecision.Allowed => ShellApprovalScopeResult.Match,
+                PathDecision.CrossesLink => ShellApprovalScopeResult.Symlink,
+                _ => ShellApprovalScopeResult.OutsideDirectory,
+            };
+    }
+
+    /// <summary>
+    /// Creates the host path of a candidate. The candidate falls back to cwd. A
+    /// relative candidate expands home tokens and resolves against cwd. Returns
+    /// null when no directory exists to evaluate.
+    /// </summary>
+    private static bool? TryCreateHostScopePath(string? candidateDirectory, string? cwd, out CanonicalPath path)
+    {
+        path = default;
+        var directory = string.IsNullOrEmpty(candidateDirectory) ? cwd : candidateDirectory;
+        if (string.IsNullOrEmpty(directory))
+            return null;
+
+        return string.IsNullOrEmpty(candidateDirectory) || Path.IsPathRooted(candidateDirectory)
+            ? CanonicalPath.TryCreateHost(directory, relativeBase: null, out path)
+            : CanonicalPath.TryCreateHost(PathUtility.ExpandHome(candidateDirectory), cwd, out path);
+    }
+
+    /// <summary>
+    /// Creates the Windows path of a PowerShell candidate. The candidate falls back
+    /// to cwd, and a relative candidate resolves against cwd. Returns null when no
+    /// valid directory exists to evaluate.
+    /// </summary>
+    private static bool? TryCreateWindowsScopePath(string? candidateDirectory, string? cwd, out CanonicalPath path)
+    {
+        var created = string.IsNullOrEmpty(candidateDirectory)
+            ? CanonicalPath.TryCreate(cwd, relativeBase: null, ShellPathStyle.Windows, out path)
+            : CanonicalPath.TryCreate(candidateDirectory, cwd, ShellPathStyle.Windows, out path);
+        return created ? true : null;
     }
 
     /// <summary>
     /// Matches one structured shell candidate against version-3 phrase forms.
+    /// A folder grant matches when its directory contains the candidate's
+    /// effective directory (the path operand, else <paramref name="cwd"/>) and
+    /// no link lies below the grant root. A grant with no directory matches any
+    /// directory. A repository grant matches the registered worktrees of its
+    /// repository.
     /// </summary>
     public static bool MatchesShellApproval(
         ApprovalCandidate candidate,
@@ -162,11 +139,6 @@ public static class ApprovalPatternMatching
         int maximumNearMisses)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maximumNearMisses);
-        var effectiveDirectory = ResolveEffectiveDirectory(
-            candidate.Directory,
-            cwd,
-            candidate.Shell);
-        string? normalizedCandidate = null;
         List<ShellApprovalNearMiss>? nearMisses = null;
 
         foreach (var entry in approvedEntries)
@@ -174,12 +146,10 @@ public static class ApprovalPatternMatching
             if (PhraseMatches(candidate, entry))
             {
                 var scopeResult = EvaluateApprovalScope(
-                    effectiveDirectory,
                     candidate.Directory,
-                    entry,
-                    candidate.Shell,
                     cwd,
-                    ref normalizedCandidate);
+                    entry,
+                    candidate.Shell);
                 if (scopeResult == ShellApprovalScopeResult.Match)
                     return new ShellApprovalEvaluation(entry, []);
 
@@ -264,170 +234,139 @@ public static class ApprovalPatternMatching
             return ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb);
         }
 
-        if (entry.Shell is { } entryShell && candidate.Shell != entryShell)
+        if (entry.Shell is not { } entryShell
+            || candidate.Shell != entryShell
+            || candidate.VerbTokens is not { Count: > 0 } candidateTokens
+            || candidateTokens.Any(static token => token.Length == 0))
         {
             return false;
         }
 
-        if (entry.Match == ApprovalMatchKind.LegacyExact)
+        if (entryShell == ApprovalShell.Bash
+            && GetGrantProgram(entry) is { } grantProgram
+            && CoversProgramByRelativePath(entry, grantProgram, candidateTokens[0]))
         {
-            return ToolApprovalEntryComparer.Equals(
-                entry.Verb,
-                candidate.Verb,
-                entry.Shell!.Value);
+            // The grant spells this file relative to its scope. Compare the rest
+            // of the phrase with the grant's spelling in place of the file path.
+            candidateTokens = [grantProgram, .. candidateTokens.Skip(1)];
         }
 
-        if (entry.Match != ApprovalMatchKind.TokenPrefix ||
-            candidate.Shell is null ||
-            candidate.VerbTokens is null ||
-            entry.VerbTokens is null ||
-            candidate.VerbTokens.Any(static token =>
-                token.Length == 0 || token.Any(char.IsWhiteSpace)) ||
-            entry.VerbTokens.Count > candidate.VerbTokens.Count)
+        return entry.Match switch
+        {
+            // The legacy phrase is the space-joined command words. Its words get
+            // the same rule as a new grant for those words: "git push origin"
+            // covers "git push origin main", and "gh" does not cover "gh pr view".
+            // The display verb does not count. "dotnet list package --vulnerable"
+            // shows "dotnet list", but its words are "dotnet list package", so the
+            // legacy phrase "dotnet list package" covers it (approval taxonomy fix 5).
+            ApprovalMatchKind.LegacyExact =>
+                MatchesChain(entry.Verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), candidateTokens, entryShell),
+            ApprovalMatchKind.TokenPrefix when entry.VerbTokens is { } grantTokens =>
+                MatchesChain(grantTokens, candidateTokens, entryShell),
+            _ => false,
+        };
+    }
+
+    private static string? GetGrantProgram(ApprovalEntry entry) => entry.Match switch
+    {
+        ApprovalMatchKind.TokenPrefix => entry.VerbTokens is { Count: > 0 } tokens ? tokens[0] : null,
+        ApprovalMatchKind.LegacyExact => entry.Verb.Split(' ', 2)[0],
+        _ => null,
+    };
+
+    /// <summary>
+    /// Returns true when a grant with a relative program path covers the file
+    /// <paramref name="candidateProgram"/>. The candidate builder gives the
+    /// absolute path of each program path (R1), and a new grant stores it, so
+    /// only these two grant forms are relative.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: a repository grant stores the path below the worktree root
+    /// (<c>./scripts/build.sh</c>). It covers that file in each registered
+    /// worktree of its repository, and no file outside them. An older grant with
+    /// a relative program and no scope directory covers only the files that its
+    /// spelling could reach (see <see cref="ShellProgramPath.MatchesLegacyRelative"/>).
+    /// </remarks>
+    private static bool CoversProgramByRelativePath(
+        ApprovalEntry entry,
+        string grantProgram,
+        string candidateProgram)
+    {
+        if (!ShellProgramPath.IsLegacyRelative(grantProgram)
+            || entry.Directory is not null
+            || string.Equals(grantProgram, candidateProgram, StringComparison.Ordinal))
         {
             return false;
         }
 
-        for (var index = 0; index < entry.VerbTokens.Count; index++)
+        if (entry.Repository is { } repository
+            && string.Equals(ShellProgramPath.NormalizeRelative(grantProgram), grantProgram, StringComparison.Ordinal))
         {
-            if (!ToolApprovalEntryComparer.Equals(
-                    entry.VerbTokens[index],
-                    candidate.VerbTokens[index],
-                    entry.Shell!.Value))
-            {
-                return false;
-            }
+            return TryGetWorktreeProgram(candidateProgram, repository, out var worktreeProgram)
+                   && string.Equals(worktreeProgram, grantProgram, StringComparison.Ordinal);
         }
 
+        return ShellProgramPath.MatchesLegacyRelative(grantProgram, candidateProgram);
+    }
+
+    /// <summary>
+    /// Returns the path of a program below the root of its own worktree, in the
+    /// form <c>./a/b</c>, when that worktree belongs to <paramref name="repository"/>.
+    /// The repository grant builder and the matcher use this one rule.
+    /// </summary>
+    internal static bool TryGetWorktreeProgram(
+        string programPath,
+        string repository,
+        out string worktreeProgram)
+    {
+        worktreeProgram = string.Empty;
+        if (!programPath.StartsWith('/'))
+            return false;
+
+        // The lexical path can name a file that does not exist yet. Its nearest
+        // existing directory gives the worktree.
+        var programDirectory = Path.GetDirectoryName(programPath);
+        while (programDirectory is { Length: > 0 } && !Directory.Exists(programDirectory))
+            programDirectory = Path.GetDirectoryName(programDirectory);
+
+        if (programDirectory is not { Length: > 0 }
+            || !RepositoryIdentity.TryResolve(programDirectory, cwd: null, out var identity)
+            || !ToolApprovalEntryComparer.Equals(identity!.CommonDirectory, repository)
+            || ShellProgramPath.ToWorktreeRelative(programPath, identity.WorktreeRoot) is not { } relative)
+        {
+            return false;
+        }
+
+        worktreeProgram = relative;
         return true;
     }
 
     /// <summary>
-    /// Backwards-compatible overload for callers that pass cwd
-    /// only. Equivalent to passing <c>null</c> for the candidate directory.
+    /// True when a grant's words cover the candidate's command words
+    /// (<see cref="ToolApprovalEntryComparer.CoversCommandWords"/>): a verb
+    /// grant covers its words and any later words, and a program-only grant
+    /// covers its word alone. The store hygiene uses the same rule.
     /// </summary>
-    public static bool MatchesShellApproval(
-        string candidateVerb,
-        string? cwd,
-        IEnumerable<ApprovalEntry> approvedEntries)
-        => MatchesShellApproval(candidateVerb, candidateDirectory: null, cwd, approvedEntries);
+    private static bool MatchesChain(
+        IReadOnlyList<string> grantTokens,
+        IReadOnlyList<string> candidateTokens,
+        ApprovalShell shell)
+        => ToolApprovalEntryComparer.CoversCommandWords(grantTokens, candidateTokens, shell)
+           || IsSingleTokenProgramGrant(grantTokens, candidateTokens, shell);
 
     /// <summary>
-    /// Resolves a candidate's path argument to an absolute path. When the
-    /// argument is null, falls back to cwd. When the argument is relative
-    /// (<c>./build</c>, <c>../shared</c>, or bare <c>~</c> without expansion),
-    /// it is resolved against cwd. Tilde-rooted paths are passed through
-    /// unchanged — the storage layer treats <c>~</c> consistently with the
-    /// daemon's home expansion via <see cref="PathUtility.ExpandAndNormalize"/>
-    /// at match time.
+    /// True when a bare-program grant names a program that policy data gives a
+    /// one-token verb chain (<c>echo</c>, <c>which</c>, <c>jq</c>). The command
+    /// words keep a plain operand (<c>echo hi</c>), but policy treats that word
+    /// as an argument, as <see cref="ShellVerbPolicyData.ApplyVerbShortCircuit"/> does.
     /// </summary>
-    private static string? ResolveEffectiveDirectory(
-        string? candidateDirectory,
-        string? cwd,
-        ApprovalShell? shell = null)
-    {
-        if (string.IsNullOrEmpty(candidateDirectory))
-        {
-            return shell == ApprovalShell.PowerShell
-                ? NormalizeWindowsPath(cwd, baseDirectory: null)
-                : cwd;
-        }
-
-        if (shell == ApprovalShell.PowerShell)
-            return NormalizeWindowsPath(candidateDirectory, cwd);
-
-        if (Path.IsPathRooted(candidateDirectory))
-            return candidateDirectory;
-
-        // Tilde-rooted paths look "rooted" to the user but aren't to .NET.
-        // Expand against the user's home alongside any cwd-relative segments
-        // so we end up with a canonicalized absolute path.
-        var expanded = PathUtility.ExpandAndNormalize(candidateDirectory, cwd);
-        return expanded ?? candidateDirectory;
-    }
-
-    private static string? NormalizeWindowsPath(string? path, string? baseDirectory)
-    {
-        if (string.IsNullOrEmpty(path))
-            return null;
-
-        var normalized = path.Replace('/', '\\');
-        if (!IsWindowsAbsolutePath(normalized))
-        {
-            var normalizedBase = NormalizeWindowsPath(baseDirectory, baseDirectory: null);
-            if (normalizedBase is null)
-                return null;
-
-            normalized = normalizedBase.TrimEnd('\\') + "\\" + normalized;
-        }
-
-        var rootLength = GetWindowsRootLength(normalized);
-        if (rootLength == 0)
-            return null;
-
-        var root = normalized[..rootLength];
-        var segments = new List<string>();
-        foreach (var segment in normalized[rootLength..].Split(
-                     '\\',
-                     StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (segment == ".")
-                continue;
-
-            if (segment == "..")
-            {
-                if (segments.Count == 0)
-                    return null;
-
-                segments.RemoveAt(segments.Count - 1);
-                continue;
-            }
-
-            segments.Add(segment);
-        }
-
-        if (segments.Count == 0)
-            return root;
-
-        return root.EndsWith('\\')
-            ? root + string.Join('\\', segments)
-            : root + "\\" + string.Join('\\', segments);
-    }
-
-    private static bool IsWithinWindowsRoot(string candidate, string root)
-    {
-        if (string.Equals(candidate, root, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        var prefix = root.EndsWith('\\') ? root : root + "\\";
-        return candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsWindowsAbsolutePath(string path)
-        => GetWindowsRootLength(path) > 0;
-
-    private static int GetWindowsRootLength(string path)
-    {
-        if (path.Length >= 3 &&
-            char.IsAsciiLetter(path[0]) &&
-            path[1] == ':' &&
-            path[2] == '\\')
-        {
-            return 3;
-        }
-
-        if (!path.StartsWith("\\\\", StringComparison.Ordinal))
-            return 0;
-
-        var serverEnd = path.IndexOf('\\', 2);
-        if (serverEnd <= 2)
-            return 0;
-
-        var shareEnd = path.IndexOf('\\', serverEnd + 1);
-        return shareEnd < 0
-            ? path.Length
-            : shareEnd + 1;
-    }
+    private static bool IsSingleTokenProgramGrant(
+        IReadOnlyList<string> grantTokens,
+        IReadOnlyList<string> candidateTokens,
+        ApprovalShell shell)
+        => grantTokens.Count == 1
+           && ShellVerbPolicyData.HasSingleTokenVerbChain(grantTokens[0])
+           && ToolApprovalEntryComparer.Equals(grantTokens[0], candidateTokens[0], shell);
 
     /// <summary>
     /// Returns true when <paramref name="approvedEntries"/> contains an entry
@@ -448,6 +387,16 @@ public static class ApprovalPatternMatching
     }
 
     /// <summary>
+    /// Returns the phrase a stored non-shell grant needs to cover a call to
+    /// <paramref name="toolName"/>. The matchers of non-shell tools take the
+    /// candidate verb of a call from the tool name, so a grant with any other
+    /// phrase never matches. Apply <see cref="MatchesAny"/> to the result to
+    /// ask whether a grant can ever match.
+    /// </summary>
+    public static string NonShellGrantPhrase(ToolName toolName)
+        => DefaultApprovalMatcher.Instance.ExtractCandidates(toolName, arguments: null).Single().Verb;
+
+    /// <summary>
     /// Returns true when this candidate is a pure side-effect clause that
     /// should not be persisted on Always-here/Always-anywhere clicks. The
     /// rule is verb-in-skip-list AND no effective directory. The shell
@@ -455,165 +404,50 @@ public static class ApprovalPatternMatching
     /// redirect target. Thus, <c>echo X &gt; /tmp/log</c> is not exempt.
     /// </summary>
     /// <remarks>
-    /// The side-effect verb set
-    /// (<see cref="ShellTokenizer.SingleTokenSideEffectVerbs"/>) is shared
+    /// The data command check
+    /// (<see cref="ShellVerbPolicyData.IsDataCommand"/>) is shared
     /// with the verb-chain short-circuit so both paths agree on which
-    /// verbs collapse to depth 1 and which ones skip persistence.
+    /// verbs collapse to depth 1 and which ones skip persistence. The Bash
+    /// test builtins (<c>test</c>, <c>[</c>) count only for a Bash candidate.
     /// Conservative on purpose. <c>eval</c>, <c>command</c>, <c>exec</c>,
     /// and other reflective builtins are NOT in the set because they
     /// execute their arguments. Adding entries there is a
     /// security-relevant change reviewed alongside the safe-verb list.
     /// </remarks>
     public static bool IsPureSideEffect(ApprovalCandidate candidate)
-    {
-        if (candidate.Directory is not null || candidate.AssignmentDigest is not null)
-            return false;
-
-        return ShellTokenizer.SingleTokenSideEffectVerbs.Contains(candidate.Verb);
-    }
+        => candidate.Directory is null
+           && candidate.AssignmentDigest is null
+           && ShellVerbPolicyData.IsDataCommand(PolicyProgram(candidate), candidate.Shell);
 
     /// <summary>
-    /// Explains why a shell candidate that <see cref="MatchesShellApproval"/>
-    /// rejected is nonetheless a near-miss against the persisted entries —
-    /// i.e. an entry exists that the operator would reasonably expect to
-    /// match. This is read-only diagnostics: it never changes a match
-    /// decision and is meant to be logged when the approval gate prompts
-    /// despite a same-verb grant being present.
-    ///
-    /// A near-miss is one of:
-    /// <list type="bullet">
-    /// <item>verb matches exactly but the candidate's effective directory is
-    /// not under the grant's directory;</item>
-    /// <item>verb matches exactly and the effective directory IS under the
-    /// grant's directory, but a symlink segment along the path breaks the
-    /// match;</item>
-    /// <item>verb matches exactly but the folder-scoped grant cannot be
-    /// evaluated because the candidate has no effective directory;</item>
-    /// <item>verb matches only case-insensitively — on a case-sensitive
-    /// filesystem <c>git</c> and <c>Git</c> are distinct grants.</item>
-    /// </list>
-    /// A grant whose verb matches and whose directory is <c>null</c> would
-    /// have been approved, so it never appears here.
+    /// Returns the program word that the data-command rule reads. The verb of a
+    /// candidate is the phrase of its command words (<c>echo hi</c>), so the
+    /// first command word is the program.
     /// </summary>
-    public static IReadOnlyList<ApprovalNearMiss> ExplainShellNearMisses(
-        string candidateVerb,
-        string? candidateDirectory,
-        string? cwd,
-        IEnumerable<ApprovalEntry> approvedEntries)
-    {
-        var effectiveDirectory = ResolveEffectiveDirectory(candidateDirectory, cwd);
-        string? normalizedCandidate = null;
-        List<ApprovalNearMiss>? misses = null;
+    /// <remarks>
+    /// SECURITY: an exact candidate keeps its source text and is never exempt.
+    /// Without the <see cref="ApprovalCandidate.Unresolved"/> test, the exact
+    /// candidate <c>echo $x</c> (command words <c>echo</c>) is approval-exempt.
+    /// A candidate with unknown command words keeps its policy verb.
+    /// </remarks>
+    internal static string PolicyProgram(ApprovalCandidate candidate)
+        => candidate is { Unresolved: ShellUnresolvedPart.None, VerbTokens: [var program, ..] }
+            ? program
+            : candidate.Verb;
 
-        foreach (var entry in approvedEntries)
-        {
-            if (!ToolApprovalEntryComparer.Equals(entry.Verb, candidateVerb))
-            {
-                // Verb-case near-miss: equal ignoring case but not under the
-                // platform comparer. Only possible on case-sensitive POSIX —
-                // on Windows the platform comparer already folds case.
-                if (string.Equals(entry.Verb, candidateVerb, StringComparison.OrdinalIgnoreCase))
-                {
-                    (misses ??= []).Add(new ApprovalNearMiss(
-                        entry, ApprovalNearMissReason.VerbCaseMismatch, candidateVerb,
-                        effectiveDirectory ?? string.Empty));
-                }
-
-                continue;
-            }
-
-            // A null-directory grant for this verb would have matched, so it
-            // is not a near-miss; if we are explaining, no such grant exists.
-            if (entry.Directory is null)
-                continue;
-
-            if (string.IsNullOrEmpty(effectiveDirectory))
-            {
-                (misses ??= []).Add(new ApprovalNearMiss(
-                    entry, ApprovalNearMissReason.NoCandidateDirectory, candidateVerb, string.Empty));
-                continue;
-            }
-
-            try
-            {
-                normalizedCandidate ??= PathUtility.Normalize(effectiveDirectory);
-
-                if (!PathUtility.IsNormalizedWithinRoot(normalizedCandidate, entry.Directory))
-                {
-                    (misses ??= []).Add(new ApprovalNearMiss(
-                        entry, ApprovalNearMissReason.DirectoryNotUnderGrant, candidateVerb, effectiveDirectory));
-                    continue;
-                }
-
-                if (PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory))
-                {
-                    (misses ??= []).Add(new ApprovalNearMiss(
-                        entry, ApprovalNearMissReason.SymlinkSegmentOnPath, candidateVerb, effectiveDirectory));
-                }
-
-                // Under the root with no symlink segment: this grant matched,
-                // so the candidate would have been approved — not a near-miss.
-            }
-            catch (Exception ex) when (ex is ArgumentException or IOException)
-            {
-                // A malformed path cannot be classified precisely; report it
-                // as a directory near-miss rather than dropping it silently.
-                (misses ??= []).Add(new ApprovalNearMiss(
-                    entry, ApprovalNearMissReason.DirectoryNotUnderGrant, candidateVerb, effectiveDirectory));
-            }
-        }
-
-        return misses ?? (IReadOnlyList<ApprovalNearMiss>)[];
-    }
-}
-
-/// <summary>
-/// Why a persisted <see cref="ApprovalEntry"/> failed to auto-approve a
-/// candidate the operator might have expected it to. See
-/// <see cref="ApprovalPatternMatching.ExplainShellNearMisses"/>.
-/// </summary>
-public enum ApprovalNearMissReason
-{
-    /// <summary>Verb matched; the candidate's directory is not under the grant's.</summary>
-    DirectoryNotUnderGrant,
-
-    /// <summary>Verb matched and the directory is under the grant's, but a
-    /// symlink segment along the path breaks the containment check.</summary>
-    SymlinkSegmentOnPath,
-
-    /// <summary>Verb matched a folder-scoped grant, but the candidate has no
-    /// effective directory to evaluate containment against.</summary>
-    NoCandidateDirectory,
-
-    /// <summary>Verbs are equal ignoring case but differ under the
-    /// platform's case-sensitive comparer (POSIX).</summary>
-    VerbCaseMismatch,
-}
-
-/// <summary>
-/// One persisted grant that nearly — but did not — authorize a candidate,
-/// paired with the reason. Carries enough context to render a human-readable
-/// diagnostic via <see cref="Describe"/>.
-/// </summary>
-public sealed record ApprovalNearMiss(
-    ApprovalEntry Grant,
-    ApprovalNearMissReason Reason,
-    string CandidateVerb,
-    string EffectiveDirectory)
-{
-    /// <summary>Renders the near-miss as an operator-facing explanation.</summary>
-    public string Describe() => Reason switch
-    {
-        ApprovalNearMissReason.DirectoryNotUnderGrant =>
-            $"cwd '{EffectiveDirectory}' is not under the grant directory '{Grant.Directory}'",
-        ApprovalNearMissReason.SymlinkSegmentOnPath =>
-            $"a symlink segment lies between grant directory '{Grant.Directory}' and cwd '{EffectiveDirectory}'",
-        ApprovalNearMissReason.NoCandidateDirectory =>
-            $"the invocation had no working directory to match against folder-scoped grant '{Grant.Directory}'",
-        ApprovalNearMissReason.VerbCaseMismatch =>
-            $"grant verb '{Grant.Verb}' differs from invoked verb '{CandidateVerb}' only by case (case-sensitive on this OS)",
-        _ => "unrecognized near-miss reason",
-    };
+    /// <summary>
+    /// Returns the comparer that removes equal verbs from a prompt list. It
+    /// uses the case rule of a grant match: Bash words compare with case, and
+    /// PowerShell words compare without case. A tool with no shell keeps the
+    /// comparison without case.
+    /// </summary>
+    /// <remarks>
+    /// The prompt must show each grant that the answer saves.
+    /// <c>pipedrive dealFields list; pipedrive dealfields list</c> saves two
+    /// Bash grants, so the prompt shows two verbs.
+    /// </remarks>
+    public static StringComparer VerbTextComparer(ApprovalShell? shell)
+        => shell == ApprovalShell.Bash ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
 }
 
 internal enum ShellApprovalScopeResult

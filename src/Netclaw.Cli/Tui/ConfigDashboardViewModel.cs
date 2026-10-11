@@ -6,6 +6,8 @@
 using System.Text.Json;
 using Netclaw.Actors.Channels;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Model;
+using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
 using R3;
 using Termina.Reactive;
@@ -77,6 +79,7 @@ public sealed class ConfigDashboardViewModel : ReactiveViewModel
         new("Telemetry & Alerting", "Telemetry and outbound webhook alerting.", "/telemetry-alerting"),
         new("Security & Access", "Posture, enabled features, audience profiles, and exposure mode.", "/security"),
         new("Workspaces Directory", "Project discovery root for workspace-aware prompts.", "/workspaces"),
+        new("Data Retention", "How long the daemon keeps logs and other data.", "/retention"),
         new("Run Full Doctor", "Exit the dashboard and run `netclaw doctor`.", IsTerminal: true),
         new("Quit", "Exit without changing settings.", IsTerminal: true),
     ];
@@ -196,6 +199,7 @@ internal sealed class ConfigDashboardStatusReader
             "Telemetry & Alerting" => TelemetrySummary(config),
             "Security & Access" => SecuritySummary(config),
             "Workspaces Directory" => WorkspacesSummary(config),
+            "Data Retention" => RetentionSummary(),
             _ => string.Empty
         };
     }
@@ -208,13 +212,11 @@ internal sealed class ConfigDashboardStatusReader
 
     private static string ModelsSummary(Dictionary<string, object> config)
     {
-        if (ConfigFileHelper.TryGetPathValue(config, "Models.Main.ModelId", out var modelId)
-            && modelId is string id && !string.IsNullOrWhiteSpace(id))
-        {
-            return id;
-        }
+        // Same resolver as `netclaw model list`: understands both the Definitions/Roles and legacy inline shapes.
+        if (!ModelCommand.TryLoadModelSelection(config, out var models, out _))
+            return "– config error";
 
-        return "– not set";
+        return string.IsNullOrWhiteSpace(models?.Main.ModelId) ? "– not set" : models.Main.ModelId;
     }
 
     private string ChannelsSummary(Dictionary<string, object> config)
@@ -262,11 +264,15 @@ internal sealed class ConfigDashboardStatusReader
 
     private static string SearchSummary(Dictionary<string, object> config)
     {
-        if (!ConfigFileHelper.TryGetPathValue(config, "Search.Backend", out var raw)
-            || raw is not string backend || string.IsNullOrWhiteSpace(backend))
-        {
-            return "– not set";
-        }
+        // SearchConfig.Enabled defaults to true, so only an explicit false turns the subsystem off.
+        if (ConfigFileHelper.TryGetPathValue(config, "Search.Enabled", out var enabled) && enabled is false)
+            return OnOff(false);
+
+        // An absent Search.Backend means the SearchConfig default is in effect.
+        var backend = ConfigFileHelper.TryGetPathValue(config, "Search.Backend", out var raw)
+                      && raw is string configured && !string.IsNullOrWhiteSpace(configured)
+            ? configured
+            : new SearchConfig().Backend.ToWireValue();
 
         return backend.ToLowerInvariant() switch
         {
@@ -294,11 +300,7 @@ internal sealed class ConfigDashboardStatusReader
 
     private static string SecuritySummary(Dictionary<string, object> config)
     {
-        var posture = ConfigFileHelper.TryGetPathValue(config, "Security.DeploymentPosture", out var value)
-            && value is string text
-            && Enum.TryParse<DeploymentPosture>(text, ignoreCase: true, out var parsed)
-                ? parsed
-                : DeploymentPosture.Personal;
+        DeploymentPostureReader.TryRead(config, out var posture, out _);
 
         var enabled = 0;
         foreach (var path in FeatureConfigPaths)
@@ -319,6 +321,20 @@ internal sealed class ConfigDashboardStatusReader
             && value is string dir && !string.IsNullOrWhiteSpace(dir)
                 ? dir
                 : _paths.WorkspacesDirectory;
+
+    private string RetentionSummary()
+    {
+        try
+        {
+            return string.Join(" · ", RetentionSettings.All.Select(setting =>
+                $"{setting.Id} {RetentionConfigStore.Short(RetentionConfigStore.Read(_paths, setting).Days)}"));
+        }
+        catch (InvalidDataException)
+        {
+            // The dashboard render must not throw on a malformed netclaw.json.
+            return "– config error";
+        }
+    }
 
     private static bool BoolAt(Dictionary<string, object> config, string path)
         => ConfigFileHelper.TryGetPathValue(config, path, out var value) && value is bool flag && flag;

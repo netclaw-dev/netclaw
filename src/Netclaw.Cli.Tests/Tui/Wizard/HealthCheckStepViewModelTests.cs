@@ -93,7 +93,7 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         Assert.DoesNotContain("Daemon did not become ready", failure.Label, StringComparison.Ordinal);
         Assert.Contains(crashLogPath, failure.Label, StringComparison.Ordinal);
         Assert.Equal(
-            "Setup complete with warnings. Run `netclaw daemon start`, then `netclaw chat`. Adjust settings with `netclaw config`.",
+            "Setup complete with warnings. Run `netclaw daemon start`, then `netclaw chat --onboarding`. Adjust settings with `netclaw config`.",
             context.StatusMessage.Value);
         Assert.False(step.Succeeded.Value);
     }
@@ -291,7 +291,10 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
             // No readiness probe → the poll loop is skipped and we fall straight through to
             // the timeout diagnostic, exercising the message path without a real wait.
             daemonApi: null,
-            navigationState: new ChatNavigationState());
+            navigationState: new ChatNavigationState())
+        {
+            SystemdService = new SystemdUserService(unitFilePath: Path.Combine(_dir.Path, "absent.service"), homePath: _dir.Path)
+        };
         var launched = false;
         step.Navigate = _ => launched = true;
         using var exposureStep = new ExposureModeStepViewModel { SelectedMode = ExposureMode.Local };
@@ -315,6 +318,56 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         Assert.False(step.Succeeded.Value);
         // A failed health check must NOT auto-launch chat — it stays on the summary.
         Assert.False(launched);
+    }
+
+    [Fact]
+    public async Task RunWithOrchestrator_StartsTheDaemonThroughTheUnit_WhenAUnitIsInstalled()
+    {
+        // After a unit-routed reset the unit is inactive but enabled; a detached start would run
+        // a daemon the unit knows nothing about.
+        var unitPath = Path.Combine(_dir.Path, "netclaw.service");
+        await File.WriteAllTextAsync(unitPath, "[Service]\nExecStart=/opt/netclaw/netclawd\n", TestContext.Current.CancellationToken);
+        var runner = new RecordingRunner();
+        var daemonManager = new DaemonManager(_paths, TimeProvider.System);
+
+        using var step = new HealthCheckStepViewModel(
+            daemonManager,
+            daemonApi: null,
+            navigationState: new ChatNavigationState())
+        {
+            SystemdService = new SystemdUserService(
+                unitPath, runner, enabledOnThisPlatform: true, homePath: SystemdUserService.DefaultHomePath)
+        };
+        step.Navigate = _ => { };
+        using var exposureStep = new ExposureModeStepViewModel { SelectedMode = ExposureMode.Local };
+        using var context = new WizardContext
+        {
+            Paths = _paths,
+            Registry = new ProviderDescriptorRegistry([]),
+            RequestRedraw = () => { }
+        };
+        step.OnEnter(context, NavigationDirection.Forward);
+        exposureStep.OnEnter(context, NavigationDirection.Forward);
+        using var orchestrator = new WizardOrchestrator([exposureStep, step], context);
+
+        await step.RunWithOrchestrator(orchestrator);
+
+        Assert.Contains("--user start netclaw.service", runner.Commands);
+        Assert.DoesNotContain(step.Results, r => r.Label.Contains("Cannot find netclawd", StringComparison.Ordinal));
+    }
+
+    private sealed class RecordingRunner : ISystemCommandRunner
+    {
+        public List<string> Commands { get; } = [];
+
+        public Task<SystemCommandResult> RunAsync(string command, string arguments)
+        {
+            Commands.Add(arguments);
+            // Inactive but enabled, like a unit whose daemon a reset just stopped.
+            return Task.FromResult(arguments.Contains("is-active", StringComparison.Ordinal)
+                ? new SystemCommandResult(3, string.Empty, StandardOutput: "inactive\n")
+                : new SystemCommandResult(0, string.Empty));
+        }
     }
 
     [Fact]

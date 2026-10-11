@@ -24,6 +24,7 @@ using Netclaw.Actors.Tests.Sessions;
 using FakeChatClient = Netclaw.Tests.Utilities.FakeChatClient;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Netclaw.Security;
 using Xunit;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
@@ -35,7 +36,7 @@ namespace Netclaw.Actors.Tests.Channels;
 /// is @-mentioned in an existing Slack thread, prior messages (text + images)
 /// are fetched and injected as context before the first LLM turn.
 /// </summary>
-public sealed class SlackThreadBackfillIntegrationTests : TestKit
+public sealed class SlackThreadBackfillIntegrationTests : TestKit, IAsyncDisposable
 {
     private static readonly byte[] FakePngBytes = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==");
@@ -43,13 +44,27 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
     private readonly FakeChatClient _chatClient = new();
     private readonly RecordingReplyClient _replyClient = new();
     private readonly FakeSlackFileHandler _httpHandler = new();
-    private readonly NetclawPaths _paths = new(Path.Combine(
-        Path.GetTempPath(),
-        $"netclaw-backfill-tests-{Guid.NewGuid():N}"));
+    private readonly TestSessionTempDirectory _tempDir =
+        TestSessionTempDirectory.Create(prefix: "netclaw-backfill-tests-", createDirectoryTree: true);
+    private NetclawPaths _paths => _tempDir.Paths;
 
     public SlackThreadBackfillIntegrationTests(ITestOutputHelper output) : base(output: output)
     {
-        _paths.EnsureDirectoriesExist();
+    }
+
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directory
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        try
+        {
+            await base.DisposeAsync();
+        }
+        finally
+        {
+            await _tempDir.DisposeAsync();
+        }
     }
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)

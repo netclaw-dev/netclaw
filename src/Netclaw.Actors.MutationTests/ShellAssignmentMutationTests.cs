@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
 using System.Reflection;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
@@ -57,9 +58,12 @@ public sealed class ShellAssignmentMutationTests
     [Fact]
     public void Reviewed_safe_policy_rejects_an_assignment_constraint()
     {
+        // The daemon environment holds "mode", so the assignment reaches the
+        // program and qualifies the candidate (decision F3).
         var environment = ShellExecutionEnvironment.CreateBash(
             ShellPlatform.Linux,
-            new Version(5, 2));
+            new Version(5, 2),
+            [new("PATH", "/usr/bin"), new("mode", "inherited")]);
         var matcher = new ShellApprovalMatcher(environment);
         var qualified = Assert.Single(matcher.ExtractCandidates(
             new ToolName("shell_execute"),
@@ -134,6 +138,91 @@ public sealed class ShellAssignmentMutationTests
         Assert.True(topLevel.IsResolved);
         Assert.False(policy.Evaluate(
             "bash -lc \"mode='fast'; netclaw daemon stop\"",
+            "/work").Allowed);
+
+        // An assignment prefix on the wrapper itself reaches the child
+        // environment, so the child candidate must not stay resolved.
+        var wrapperPrefix = analyzer.Analyze(
+            "GIT_SSH_COMMAND=evil bash -lc \"git push\"",
+            "/work");
+        Assert.False(wrapperPrefix.IsResolved);
+        Assert.Contains(
+            wrapperPrefix.Commands,
+            static command => command.Clause.Verb.Tokens.SequenceEqual(["git", "push"]));
+        Assert.False(policy.Evaluate(
+            "GIT_SSH_COMMAND=evil bash -lc \"netclaw daemon stop\"",
+            "/work").Allowed);
+    }
+
+    [Fact]
+    public void Wrapper_child_source_is_the_decoded_argument_value()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2));
+        var analyzer = new ShellCommandAnalyzer(environment);
+        var escaped = analyzer.Analyze(
+            "bash -lc \"echo \\\"a b\\\"; rm -rf ~/work\"",
+            "/work");
+        var optionFirst = analyzer.Analyze(
+            "bash --norc -lc \"echo \\\"a b\\\"; rm -rf ~/work\"",
+            "/work");
+        var dynamic = analyzer.Analyze(
+            "bash -lc \"$CHILD\"",
+            "/work");
+        var missing = analyzer.Analyze(
+            "bash -lc",
+            "/work");
+        var policy = new ShellCommandPolicy(environment);
+
+        Assert.True(escaped.IsResolved);
+        Assert.Equal(
+            ["echo", "rm"],
+            escaped.Commands.Select(static command => command.Clause.Verb.Tokens[0]));
+        Assert.True(optionFirst.IsResolved);
+        Assert.Equal(
+            ["echo", "rm"],
+            optionFirst.Commands.Select(static command => command.Clause.Verb.Tokens[0]));
+        Assert.False(dynamic.IsResolved);
+        // The option is the last word, so the wrapper has no child source.
+        Assert.Equal(
+            ["bash"],
+            missing.Commands.Select(static command => command.Clause.Verb.Tokens[0]));
+        Assert.False(policy.Evaluate(
+            "bash -lc \"echo \\\"a b\\\"; netclaw daemon stop\"",
+            "/work").Allowed);
+        // The assignment keeps this analysis unresolved. The decoded child
+        // clauses must still meet the hard-deny list.
+        Assert.False(policy.Evaluate(
+            "bash -lc \"echo \\\"a b\\\"; X=1 netclaw daemon stop\"",
+            "/work").Allowed);
+
+        // With an unknown initial state, the approval parser rejects the
+        // assignment word. Only the hard-deny screen sees the denied command.
+        var unknownState = new ShellCommandPolicy(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+        Assert.False(unknownState.Evaluate(
+            "bash -lc \"echo \\\"a b\\\"; X=1 netclaw daemon stop\"",
+            "/work").Allowed);
+        Assert.False(unknownState.Evaluate(
+            "X=1 netclaw daemon stop",
+            "/work").Allowed);
+        Assert.True(unknownState.Evaluate(
+            "X=1 inspect item",
+            "/work").Allowed);
+        // A cd that can fail leaves the bash -lc child without a directory, so
+        // the parse stops there. Each list element is screened again, and the
+        // child meets the hard-deny list.
+        Assert.False(unknownState.Evaluate(
+            "cd /work/sub && git fetch; bash -lc \"echo \\\"a b\\\"; netclaw daemon stop\"",
+            "/work").Allowed);
+        Assert.True(unknownState.Evaluate(
+            "cd /work/sub && git fetch; bash -lc \"echo \\\"a b\\\"; git status\"",
+            "/work").Allowed);
+        // The parser rejects arithmetic expansion, so only the per-element
+        // screen sees the denied command after the background operator.
+        Assert.False(unknownState.Evaluate(
+            "echo $((1 + 1)) & netclaw daemon stop",
             "/work").Allowed);
     }
 
@@ -231,7 +320,7 @@ public sealed class ShellAssignmentMutationTests
                 ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
                 ApprovalOptionKeys.ApproveAssignmentEverywhereV1,
             },
-            optionKey => Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+            optionKey => Assert.False(ConsentAnswerCodec.IsOffered(
                 [],
                 optionKey,
                 "/work/repository/.git")));
@@ -243,49 +332,49 @@ public sealed class ShellAssignmentMutationTests
                      (ApprovalOptionKeys.ApproveAssignmentEverywhereV1, ApprovalOptionKeys.ApproveEverywhere),
                  })
         {
-            Assert.True(LlmSessionActor.IsOfferedApprovalOption(
+            Assert.True(ConsentAnswerCodec.IsOffered(
                 [assignmentKey],
                 assignmentKey,
                 repositoryCommonDirectory: null));
-            Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+            Assert.False(ConsentAnswerCodec.IsOffered(
                 [legacyKey],
                 assignmentKey,
                 repositoryCommonDirectory: null));
-            Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+            Assert.False(ConsentAnswerCodec.IsOffered(
                 [assignmentKey],
                 legacyKey,
                 repositoryCommonDirectory: null));
         }
 
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.False(ConsentAnswerCodec.IsOffered(
             [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
             ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
             repositoryCommonDirectory: null));
-        Assert.True(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.True(ConsentAnswerCodec.IsOffered(
             [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
             ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
             "/work/repository/.git"));
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.False(ConsentAnswerCodec.IsOffered(
             [ApprovalOptionKeys.ApproveRepository],
             ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
             "/work/repository/.git"));
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.False(ConsentAnswerCodec.IsOffered(
             [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
             ApprovalOptionKeys.ApproveRepository,
             "/work/repository/.git"));
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.False(ConsentAnswerCodec.IsOffered(
             [ApprovalOptionKeys.ApproveRepository],
             ApprovalOptionKeys.ApproveRepository,
             repositoryCommonDirectory: null));
-        Assert.True(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.True(ConsentAnswerCodec.IsOffered(
             [ApprovalOptionKeys.ApproveRepository],
             ApprovalOptionKeys.ApproveRepository,
             "/work/repository/.git"));
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.False(ConsentAnswerCodec.IsOffered(
             [],
             ApprovalOptionKeys.ApproveRepository,
             "/work/repository/.git"));
-        Assert.True(LlmSessionActor.IsOfferedApprovalOption(
+        Assert.True(ConsentAnswerCodec.IsOffered(
             [],
             ApprovalOptionKeys.ApproveAlways,
             repositoryCommonDirectory: null));
@@ -365,6 +454,7 @@ public sealed class ShellAssignmentMutationTests
             arguments,
             version,
             null,
+            ImmutableDictionary<string, string>.Empty,
         ]));
     }
 }

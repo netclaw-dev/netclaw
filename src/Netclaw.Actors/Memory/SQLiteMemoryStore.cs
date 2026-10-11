@@ -1128,9 +1128,9 @@ public sealed class SQLiteMemoryStore
         }, ct);
     }
 
-    public async Task<bool> UpdateDocumentTextAsync(string documentId, string oldText, string newText, CancellationToken ct = default)
+    public async Task<MemoryDocumentWriteResult?> UpdateDocumentTextAsync(string documentId, string oldText, string newText, CancellationToken ct = default)
     {
-        var (didUpdate, embeddingsDeleted) = await WithConnectionAsync(async (conn, ct) =>
+        var (edited, embeddingsDeleted) = await WithConnectionAsync(async (conn, ct) =>
         {
         await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
 
@@ -1147,7 +1147,7 @@ public sealed class SQLiteMemoryStore
         await using (var reader = await read.ExecuteReaderAsync(ct))
         {
             if (!await reader.ReadAsync(ct))
-                return (false, 0);
+                return (null, 0);
             current = reader.GetString(0);
             title = reader.GetString(1);
             aliasesJson = reader.IsDBNull(2) ? null : reader.GetString(2);
@@ -1156,7 +1156,7 @@ public sealed class SQLiteMemoryStore
         }
 
         if (!current.Contains(oldText, StringComparison.Ordinal))
-            return (false, 0);
+            return (null, 0);
 
         var updated = current.Replace(oldText, newText, StringComparison.Ordinal);
 
@@ -1181,18 +1181,18 @@ public sealed class SQLiteMemoryStore
             : 0;
 
         await tx.CommitAsync(ct);
-        return (affected > 0, embeddingsDeleted);
+        return (affected > 0 ? new MemoryDocumentWriteResult(documentId, title, updated) : null, embeddingsDeleted);
         }, ct);
 
         if (embeddingsDeleted > 0)
             Interlocked.Increment(ref _embeddingDataVersion);
 
-        return didUpdate;
+        return edited;
     }
 
-    public async Task<bool> ReplaceDocumentTextAsync(string documentId, string newText, CancellationToken ct = default)
+    public async Task<MemoryDocumentWriteResult?> ReplaceDocumentTextAsync(string documentId, string newText, CancellationToken ct = default)
     {
-        var (didUpdate, embeddingsDeleted) = await WithConnectionAsync(async (conn, ct) =>
+        var (edited, embeddingsDeleted) = await WithConnectionAsync(async (conn, ct) =>
         {
         await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
 
@@ -1208,7 +1208,7 @@ public sealed class SQLiteMemoryStore
         await using (var reader = await read.ExecuteReaderAsync(ct))
         {
             if (!await reader.ReadAsync(ct))
-                return (false, 0);
+                return (null, 0);
             title = reader.GetString(0);
             aliasesJson = reader.IsDBNull(1) ? null : reader.GetString(1);
             facetsJson = reader.IsDBNull(2) ? null : reader.GetString(2);
@@ -1236,13 +1236,13 @@ public sealed class SQLiteMemoryStore
             : 0;
 
         await tx.CommitAsync(ct);
-        return (affected > 0, embeddingsDeleted);
+        return (affected > 0 ? new MemoryDocumentWriteResult(documentId, title, newText) : null, embeddingsDeleted);
         }, ct);
 
         if (embeddingsDeleted > 0)
             Interlocked.Increment(ref _embeddingDataVersion);
 
-        return didUpdate;
+        return edited;
     }
 
     public async Task<bool> TombstoneDocumentAsync(string documentId, CancellationToken ct = default)

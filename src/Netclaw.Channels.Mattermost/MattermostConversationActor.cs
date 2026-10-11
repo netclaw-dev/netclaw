@@ -14,8 +14,8 @@ namespace Netclaw.Channels.Mattermost;
 
 /// <summary>
 /// Per-channel actor that serves as the security boundary for Mattermost messages.
-/// The inbound pipeline (ACL, routing policy, ingress gating, passivation,
-/// session binding management) lives in <see cref="ChannelConversationActor{TMessage}"/>;
+/// The inbound pipeline (ACL, routing policy, ingress gating, and session
+/// binding management) lives in <see cref="ChannelConversationActor{TMessage}"/>;
 /// this subclass supplies the Mattermost projections plus the interaction,
 /// proactive-thread, and trusted-turn receives.
 /// Uses blind-write routing: session IDs are derived deterministically from

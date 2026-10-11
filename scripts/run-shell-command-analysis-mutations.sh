@@ -149,6 +149,15 @@ read -r traversal_start traversal_end < <(
 )
 security_mutations+=("ShellFileSystemTreeAccessPolicy.cs{$traversal_start..$traversal_end}")
 
+read -r kill_start kill_end < <(
+  find_span \
+    "$policy_file" \
+    "internal sealed record DaemonProcessKillDenyPattern(" \
+    "return KillVerbs.Contains(verb)" \
+    "token.AuthoredValue.Contains(DaemonName, StringComparison.OrdinalIgnoreCase));"
+)
+security_mutations+=("ShellCommandPolicy.cs{$kill_start..$kill_end}")
+
 read -r nonfile_start nonfile_end < <(
   find_span \
     "$analysis_file" \
@@ -176,6 +185,89 @@ read -r status_start status_end < <(
 )
 security_mutations+=("ShellCommandAnalysis.cs{$status_start..$status_end}")
 
+read -r data_start data_end < <(
+  find_span \
+    "$analysis_file" \
+    "private bool HasOnlyDataOperands(" \
+    "=> Environment.Grammar == ShellGrammar.Bash" \
+    "|| HasProvedDataOperands(command, isTestBuiltin: true));"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$data_start..$data_end}")
+
+read -r data_use_start data_use_end < <(
+  find_span \
+    "$analysis_file" \
+    "private ShellUnresolvedPart ClassifyUnresolvedPart(" \
+    "if (HasOnlyDataOperands(command))" \
+    ": ShellUnresolvedPart.None;"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$data_use_start..$data_use_end}")
+
+read -r test_verb_start test_verb_end < <(
+  find_span \
+    "$analysis_file" \
+    "private bool HasTestBuiltinVerb(" \
+    "=> Environment.Grammar == ShellGrammar.Bash" \
+    "&& ShellVerbPolicyData.BashTestBuiltins.Contains(verb);"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$test_verb_start..$test_verb_end}")
+
+read -r name_safe_start name_safe_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool HasBoundedNameSafeValue(" \
+    "=> argument.Value switch" \
+    "&& !value.Contains('[', StringComparison.Ordinal);"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$name_safe_start..$name_safe_end}")
+
+read -r proved_start proved_end < <(
+  find_span \
+    "$analysis_file" \
+    "internal static bool HasProvedDataOperands(" \
+    "=> command.Arguments.All(argument => isTestBuiltin" \
+    "|| HasGlobFreeAuthoredValue(argument));"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$proved_start..$proved_end}")
+
+read -r expansion_start expansion_end < <(
+  find_span \
+    "$analysis_file" \
+    "private bool HasUnboundedPathnameExpansion(" \
+    "=> Environment.Grammar == ShellGrammar.Bash" \
+    "=> value is not null && value.IndexOfAny(['*', '?', '[']) < 0;"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$expansion_start..$expansion_end}")
+
+# A variable word with no path scope is an unknown operand (D1).
+read -r unscoped_start unscoped_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool IsUnscopedVariableWord(AnalyzedArgument argument)" \
+    "=> argument.Argument.Kind == ArgKind.EnvVar" \
+    "&& argument.Value is not ShellValueDomain.IntegerRange;"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$unscoped_start..$unscoped_end}")
+
+read -r unscoped_use_start unscoped_use_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool HasUnresolvedOperand(" \
+    "(HasUnsupportedArgumentDomain(argument) || IsUnscopedVariableWord(argument))" \
+    "(HasUnsupportedArgumentDomain(argument) || IsUnscopedVariableWord(argument))"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$unscoped_use_start..$unscoped_use_end}")
+
+verb_data_file="$repo_root/src/Netclaw.Security/ShellVerbPolicyData.cs"
+read -r data_verb_start data_verb_end < <(
+  find_span \
+    "$verb_data_file" \
+    "internal static bool IsDataCommand(" \
+    "=> SingleTokenSideEffectVerbs.Contains(verb)" \
+    "|| BashControlTransferBuiltins.Contains(verb));"
+)
+security_mutations+=("ShellVerbPolicyData.cs{$data_verb_start..$data_verb_end}")
+
 matcher_file="$repo_root/src/Netclaw.Security/IToolApprovalMatcher.cs"
 read -r candidate_start candidate_end < <(
   find_span \
@@ -186,19 +278,298 @@ read -r candidate_start candidate_end < <(
 )
 security_mutations+=("IToolApprovalMatcher.cs{$candidate_start..$candidate_end}")
 
+read -r control_start control_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static string? ResolveControlCharacterScope(" \
+    "var firstControl = resolved.AsSpan().IndexOfAny(ControlCharacters);" \
+    ": GetRedirectDirectory(resolved![..firstControl], pathStyle);"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$control_start..$control_end}")
+
+read -r absent_guard_start absent_guard_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static bool HasAbsentTopLevelDirectory(" \
+    "if (!CanonicalPath.IsHostPathStyle(pathStyle)" \
+    "|| !Directory.Exists(workingDirectory))"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$absent_guard_start..$absent_guard_end}")
+
+read -r absent_start absent_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static bool HasAbsentTopLevelDirectory(" \
+    "return !Path.Exists(topLevel);" \
+    "return !Path.Exists(topLevel);"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$absent_start..$absent_end}")
+
+read -r split_start split_end < <(
+  find_span \
+    "$matcher_file" \
+    "private IReadOnlyList<ApprovalCandidate> ExtractCommandCandidates(" \
+    "var part = occurrence.WorkingDirectory is ShellValueDomain.Exact" \
+    ": ShellUnresolvedPart.Command;"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$split_start..$split_end}")
+
+read -r exact_start exact_end < <(
+  find_span \
+    "$matcher_file" \
+    "private ApprovalCandidate? CreateExactCandidate(" \
+    "var unresolved = part == ShellUnresolvedPart.None" \
+    "Unresolved = unresolved,"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$exact_start..$exact_end}")
+
+read -r digest_start digest_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static bool TryCreateAssignmentDigest(" \
+    "if (IsScopeFreeDataCommand(occurrence, shell, verb))" \
+    "return true;"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$digest_start..$digest_end}")
+
+# F2: a data command with no redirect and proved data operands has no path
+# scope, so an unknown directory keeps its normal candidate. A mutant that drops
+# a condition gives another command (cat, a redirect, an unproved operand) the
+# call directory as a wrong scope, so it must die.
+read -r scope_free_start scope_free_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static bool IsScopeFreeDataCommand(" \
+    "=> shell == ApprovalShell.Bash" \
+    "isTestBuiltin: ShellVerbPolicyData.BashTestBuiltins.Contains(verb));"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$scope_free_start..$scope_free_end}")
+
 read -r messy_start messy_end < <(
   find_span \
     "$matcher_file" \
-    "private bool IsMessy(ShellCommandAnalysis analysis)" \
+    "private bool IsMessy(ShellCommandAnalysis analysis, LinkRule hostLinks)" \
     "if (!analysis.IsResolved" \
     "return true;"
 )
 security_mutations+=("IToolApprovalMatcher.cs{$messy_start..$messy_end}")
 
+# #2364: an option value can name a path for the program. A value that can
+# leave the working directory gets the scope of a path word with the same
+# text, so a folder or repository grant cannot cover it. A mutant that drops
+# the scope, skips a value, or calls an outside value inside must die.
+read -r option_use_start option_use_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static IReadOnlyList<string?>? ResolveCommandDirectories(" \
+    "for (var index = 1; index < occurrence.Arguments.Count; index++)" \
+    "directories)))"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$option_use_start..$option_use_end}")
+
+read -r option_value_start option_value_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static IReadOnlyList<Arg>? ResolveOptionValuePathWords(" \
+    "var isGlob = value.Argument.Kind == ArgKind.Glob;" \
+    "return words;"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$option_value_start..$option_value_end}")
+
+read -r option_location_start option_location_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static bool TryCreateLocation(" \
+    "return CanonicalPath.IsHostPathStyle(pathStyle)" \
+    "&& CanonicalPath.TryCreate(text, cwd.Value, pathStyle, out location);"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$option_location_start..$option_location_end}")
+
+read -r option_stays_start option_stays_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static bool StaysInWorkingDirectory(" \
+    "=> FileSystemAuthority.EvaluateMembership(" \
+    "[new PathBoundary.Folder(cwd, LinkRule.BelowRoot)]) is PathDecision.Allowed;"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$option_stays_start..$option_stays_end}")
+
+# ShellSyntaxTree 0.4.0-beta.17 facts. Decision D5 (option A): a glob word gets
+# the decision of each literal path that its segments can match.
+path_policy_file="$repo_root/src/Netclaw.Security/ToolPathPolicy.cs"
+glob_file="$repo_root/src/Netclaw.Security/ShellGlobScope.cs"
+read -r glob_deny_start glob_deny_end < <(
+  find_span \
+    "$path_policy_file" \
+    "private bool GlobMayReachDeniedPath(" \
+    "var glob = ShellGlobScope.AsGlobPattern(pattern);" \
+    "|| IsShellDenied(shell, match));"
+)
+security_mutations+=("ToolPathPolicy.cs{$glob_deny_start..$glob_deny_end}")
+
+read -r credential_start credential_end < <(
+  find_span \
+    "$path_policy_file" \
+    "private IEnumerable<string> DefaultCredentialStorePaths()" \
+    "var home = Environment.HomeDirectory;" \
+    '"config", "secrets.json"))'
+)
+security_mutations+=("ToolPathPolicy.cs{$credential_start..$credential_end}")
+
+# ShellSyntaxTree 0.4.0-beta.19 decodes ANSI-C words. A proved value gets the
+# protected list and the default credential store text hints.
+read -r proved_value_start proved_value_end < <(
+  find_span \
+    "$path_policy_file" \
+    "private static bool IsProvedValueDenied(" \
+    "=> IsShellDenied(shell, value)" \
+    "StringComparison.OrdinalIgnoreCase));"
+)
+security_mutations+=("ToolPathPolicy.cs{$proved_value_start..$proved_value_end}")
+
+read -r glob_fact_start glob_fact_end < <(
+  find_span \
+    "$glob_file" \
+    "internal static ShellValueDomain.PathPattern? AsGlobPattern(" \
+    "=> domain is ShellValueDomain.PathPattern" \
+    ": null;"
+)
+security_mutations+=("ShellGlobScope.cs{$glob_fact_start..$glob_fact_end}")
+
+read -r segment_start segment_end < <(
+  find_span \
+    "$glob_file" \
+    "internal static bool SegmentMayMatch(" \
+    "if (!segment.IsPattern)" \
+    "ignoreCase: true);"
+)
+security_mutations+=("ShellGlobScope.cs{$segment_start..$segment_end}")
+
+read -r toward_start toward_end < <(
+  find_span \
+    "$glob_file" \
+    "internal static string? MatchPathToward(" \
+    "var glob = pattern.Glob!;" \
+    "return prefix + string.Join(separator, relative[..reach]);"
+)
+security_mutations+=("ShellGlobScope.cs{$toward_start..$toward_end}")
+
+read -r bracket_start bracket_end < <(
+  find_span \
+    "$glob_file" \
+    "private static string ToSimpleExpression(" \
+    "=> text.Contains('[', StringComparison.Ordinal)" \
+    '? "*" : text;'
+)
+security_mutations+=("ShellGlobScope.cs{$bracket_start..$bracket_end}")
+
+read -r walk_start walk_end < <(
+  find_span \
+    "$glob_file" \
+    "internal static bool IsLinkContained(" \
+    "if (!Directory.Exists(coveringDirectory.Value))" \
+    "return current.All(HasOnlyContainedLinkEntries);"
+)
+security_mutations+=("ShellGlobScope.cs{$walk_start..$walk_end}")
+
+read -r glob_part_start glob_part_end < <(
+  find_span \
+    "$analysis_file" \
+    "var globMayAddOption = false;" \
+    "var globMayAddOption = false;" \
+    "globMayAddOption |= pattern.Glob!.MayStartWithDash;"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$glob_part_start..$glob_part_end}")
+
+# A bound value gets the hard-deny decision of its literal twin.
+read -r effective_use_start effective_use_end < <(
+  find_span \
+    "$policy_file" \
+    "private ShellCommandDecision EvaluateStructuralAnalysis(" \
+    "if (Environment.Grammar == ShellGrammar.Bash)" \
+    "if (!decision.Allowed)"
+)
+security_mutations+=("ShellCommandPolicy.cs{$effective_use_start..$effective_use_end}")
+
+read -r effective_start effective_end < <(
+  find_span \
+    "$policy_file" \
+    "private ShellCommandDecision EvaluateEffectiveValues(" \
+    "var choices = new List<IReadOnlyList<string>>();" \
+    "return ShellCommandDecision.Allow();"
+)
+security_mutations+=("ShellCommandPolicy.cs{$effective_start..$effective_end}")
+
+read -r proved_start proved_end < <(
+  find_span \
+    "$policy_file" \
+    "private static IReadOnlyList<string>? ProvedValues(" \
+    "foreach (var argument in occurrence.Arguments)" \
+    "_ => null"
+)
+security_mutations+=("ShellCommandPolicy.cs{$proved_start..$proved_end}")
+
+read -r combine_start combine_end < <(
+  find_span \
+    "$policy_file" \
+    "private static IEnumerable<IReadOnlyList<string>> Combine(" \
+    "IEnumerable<IReadOnlyList<string>> combinations = [[]];" \
+    "return combinations;"
+)
+security_mutations+=("ShellCommandPolicy.cs{$combine_start..$combine_end}")
+
+# Fixed text on stdin is data only for a receiver that is not a shell, and
+# only when the heredoc does not expand or the here string has a proved value.
+read -r stdin_arm_start stdin_arm_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool HasUnresolvedRedirect(" \
+    "HereDocumentRedirectAnalysis heredoc =>" \
+    "!HasFixedTextStdin(occurrence, hereString),"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$stdin_arm_start..$stdin_arm_end}")
+
+read -r stdin_start stdin_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool HasFixedTextStdin(" \
+    "=> IsStandardInputSource(redirect.Source)" \
+    "&& MayNameScriptShell(argument.Value));"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$stdin_start..$stdin_end}")
+
+read -r shell_value_start shell_value_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool MayNameScriptShell(" \
+    "=> value switch" \
+    ".Any(ShellVerbPolicyData.IsScriptShellProgram);"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$shell_value_start..$shell_value_end}")
+
+read -r literal_start literal_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool HasLiteralHereDocument(" \
+    "&& hereDocument.ExpansionMode == HereDocumentExpansionMode.Literal" \
+    "&& hereDocument.ExpansionMode == HereDocumentExpansionMode.Literal"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$literal_start..$literal_end}")
+
+verb_policy_file="$repo_root/src/Netclaw.Security/ShellVerbPolicyData.cs"
+read -r shell_name_start shell_name_end < <(
+  find_span \
+    "$verb_policy_file" \
+    "internal static bool IsScriptShellProgram(" \
+    "var program = LegacyShellTextScan.TrimShellPunctuation(word);" \
+    "return ScriptShellNames.Contains(name);"
+)
+security_mutations+=("ShellVerbPolicyData.cs{$shell_name_start..$shell_name_end}")
+
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  72 \
+  303 \
   "${security_mutations[@]}"
 
 actor_mutations=()
@@ -233,8 +604,63 @@ read -r reviewed_start reviewed_end < <(
 )
 actor_mutations+=("Tools/ReviewedSafeShellPolicy.cs{$reviewed_start..$reviewed_end}")
 
+coordinator_file="$repo_root/src/Netclaw.Actors/Tools/ShellPolicyCoordinator.cs"
+read -r d1_grant_start d1_grant_end < <(
+  find_span \
+    "$coordinator_file" \
+    "private static ShellApprovalMatchResult KeepUnknownOperandGlobalGrants(" \
+    "return candidate.Unresolved == ShellUnresolvedPart.None" \
+    "&& evidence.Grant is { Scope: GrantScope.Everywhere }"
+)
+actor_mutations+=("Tools/ShellPolicyCoordinator.cs{$d1_grant_start..$d1_grant_end}")
+
+read -r split_use_start split_use_end < <(
+  find_span \
+    "$tool_policy_file" \
+    "internal static ShellApprovalAnalysis WithCommandCandidates(" \
+    "=> approval is { IsMessy: true, Candidates.Count: 0, CommandCandidates.Count: > 0 }" \
+    "=> approval is { IsMessy: true, Candidates.Count: 0, CommandCandidates.Count: > 0 }"
+)
+actor_mutations+=("Tools/ToolAccessPolicy.cs{$split_use_start..$split_use_end}")
+
+read -r reusable_start reusable_end < <(
+  find_span \
+    "$tool_policy_file" \
+    "private static bool HasReusableShellPhrase(" \
+    "&& candidate.Unresolved == ShellUnresolvedPart.None" \
+    "&& candidate.Unresolved == ShellUnresolvedPart.None"
+)
+actor_mutations+=("Tools/ToolAccessPolicy.cs{$reusable_start..$reusable_end}")
+
+read -r d1_safe_start d1_safe_end < <(
+  find_span \
+    "$reviewed_file" \
+    "private bool IsReviewedDiagnostic(" \
+    "if (candidate.Unresolved == ShellUnresolvedPart.Command" \
+    "|| candidate.Unresolved == ShellUnresolvedPart.Operand && !allowUnknownOperands"
+)
+actor_mutations+=("Tools/ReviewedSafeShellPolicy.cs{$d1_safe_start..$d1_safe_end}")
+
+read -r d1_fact_start d1_fact_end < <(
+  find_span \
+    "$reviewed_file" \
+    "private bool AllAuthoredPathsStayWithinRoots(" \
+    "if (allowUnknownOperands" \
+    "&& fact.State == ShellPolicyPathResolutionState.UnknownDynamic)"
+)
+actor_mutations+=("Tools/ReviewedSafeShellPolicy.cs{$d1_fact_start..$d1_fact_end}")
+
+read -r d1_call_start d1_call_end < <(
+  find_span \
+    "$reviewed_file" \
+    "internal bool ShortCircuits(" \
+    "allowUnknownOperands: candidate.Unresolved == ShellUnresolvedPart.Operand)" \
+    "allowUnknownOperands: candidate.Unresolved == ShellUnresolvedPart.Operand)"
+)
+actor_mutations+=("Tools/ReviewedSafeShellPolicy.cs{$d1_call_start..$d1_call_end}")
+
 run_group \
   "stryker-config.json" \
   "$output_path/actors" \
-  9 \
+  27 \
   "${actor_mutations[@]}"

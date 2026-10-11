@@ -5,7 +5,9 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Json.Schema;
+using Netclaw.Security;
 
 namespace Netclaw.Cli.Doctor;
 
@@ -15,6 +17,8 @@ namespace Netclaw.Cli.Doctor;
 /// </summary>
 public static class SchemaFixResolver
 {
+    internal const string RemovedPropertyPrefix = "Removed disallowed property";
+
     /// <summary>
     /// Validates config against schema and applies safe fixes for known error patterns.
     /// Returns true if any fixes were applied; <paramref name="appliedFixes"/> lists descriptions.
@@ -148,6 +152,9 @@ public static class SchemaFixResolver
     /// <summary>
     /// Removes properties that are disallowed by <c>additionalProperties: false</c>.
     /// Common cause: a property was removed from the schema in a newer version.
+    /// Keys under <c>Models</c> and keys that hold a credential are never removed. The
+    /// schema has no notion of a key that moved, so those are the values that a removal
+    /// could lose without a replacement. The Config Schema check reports them instead.
     /// </summary>
     /// <remarks>
     /// When <c>additionalProperties: false</c> rejects a property, json-everything emits
@@ -182,19 +189,59 @@ public static class SchemaFixResolver
             if (propertySchema is not null)
                 continue; // schema recognizes this property — don't remove
 
+            if (string.Equals(segments[0], "Models", StringComparison.OrdinalIgnoreCase))
+                continue;
+
             // Remove the property from its parent
             var parentSegments = segments[..^1];
             var propertyName = segments[^1];
             if (ResolveConfigNode(config, parentSegments) is JsonObject parent
-                && parent.ContainsKey(propertyName))
+                && parent.ContainsKey(propertyName)
+                && !HoldsCredential(propertyName, parent[propertyName]))
             {
                 parent.Remove(propertyName);
-                appliedFixes.Add($"Removed disallowed property {instancePath}");
+                appliedFixes.Add($"{RemovedPropertyPrefix} {instancePath}");
                 changed = true;
             }
         }
 
         return changed;
+    }
+
+    // IsSecretKey is the output redactor's rule and stays the one source for what a secret key
+    // name is. These are extra names that are unambiguous as config keys, and URL values that
+    // carry a credential. A bare "Key" is left alone: too many ordinary settings are called that.
+    private static readonly HashSet<string> CredentialNames =
+        new(["passphrase", "pwd", "cookie", "bearer", "pat"], StringComparer.OrdinalIgnoreCase);
+
+    private static readonly Regex UrlWithPassword = new(@"://[^/\s:@]+:[^/\s@]+@", RegexOptions.Compiled);
+    private static readonly Regex UrlWithUserInfo = new(@"://[^/\s@]+@", RegexOptions.Compiled);
+    private static readonly Regex ChatWebhookUrl = new(
+        @"hooks\.slack\.com/(services|workflows)/|discord(app)?\.com/api/webhooks/",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Looks through objects and arrays: a credential nested anywhere under the key keeps the key.
+    private static bool HoldsCredential(string name, JsonNode? value)
+        => SecretOutputRedactor.IsSecretKey(name)
+           || CredentialNames.Contains(name.Replace("_", "", StringComparison.Ordinal).Replace("-", "", StringComparison.Ordinal))
+           || IsCredentialUrl(name, value)
+           || value switch
+           {
+               JsonObject obj => obj.Any(property => HoldsCredential(property.Key, property.Value)),
+               JsonArray array => array.Any(item => HoldsCredential(name, item)),
+               _ => false,
+           };
+
+    private static bool IsCredentialUrl(string name, JsonNode? value)
+    {
+        if (value is not JsonValue json || !json.TryGetValue<string>(out var text))
+            return false;
+
+        if (name.EndsWith("Dsn", StringComparison.OrdinalIgnoreCase))
+            return UrlWithUserInfo.IsMatch(text);
+
+        return (name.EndsWith("Url", StringComparison.OrdinalIgnoreCase) || name.EndsWith("Uri", StringComparison.OrdinalIgnoreCase))
+               && (UrlWithPassword.IsMatch(text) || ChatWebhookUrl.IsMatch(text));
     }
 
     /// <summary>

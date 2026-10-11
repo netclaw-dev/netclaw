@@ -6,6 +6,7 @@
 using Netclaw.Actors.Channels;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
+using Netclaw.Channels.Mattermost;
 using Netclaw.Channels.Slack;
 
 namespace Netclaw.Actors.Tests.Channels.TestHelpers;
@@ -83,5 +84,40 @@ internal static class TestChannelRegistries
             [new StaticChannelDescriptorProvider(descriptor)],
             [],
             outputRenderers: [renderer]);
+    }
+
+    public static IChannelRegistry MattermostWithProcessingRenderer(IMattermostReplyClient replyClient)
+    {
+        var key = ChannelDescriptorKey.FromChannelType(ChannelType.Mattermost);
+        var descriptor = new ChannelDescriptor(
+            key,
+            ChannelType.Mattermost,
+            ChannelKind.RemoteChat,
+            "Mattermost",
+            IsEnabled: true,
+            ChannelCapabilities.ReceiveMessages
+                | ChannelCapabilities.SendMessages
+                | ChannelCapabilities.ThreadedConversations
+                | ChannelCapabilities.InteractiveApproval,
+            ToolIntents: new HashSet<ChannelToolIntentKind>
+            {
+                ChannelToolIntentKind.SendMessage
+            },
+            AddressKinds: new HashSet<ChannelAddressKind>
+            {
+                ChannelAddressKind.Destination,
+                ChannelAddressKind.Thread
+            },
+            SupportedOutputEffects: new HashSet<ChannelOutputEffectKind>
+            {
+                ChannelOutputEffectKind.TextMessage,
+                ChannelOutputEffectKind.InteractiveApproval,
+                ChannelOutputEffectKind.ProcessingIndicator
+            });
+
+        return new ChannelRegistry(
+            [new StaticChannelDescriptorProvider(descriptor)],
+            [],
+            outputRenderers: [new MattermostProcessingOutputRenderer(replyClient)]);
     }
 }

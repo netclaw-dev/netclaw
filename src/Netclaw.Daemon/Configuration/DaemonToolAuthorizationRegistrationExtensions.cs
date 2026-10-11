@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -98,6 +99,24 @@ internal static class DaemonToolAuthorizationRegistrationExtensions
                 toolAccessPolicy,
                 sp.GetService<IToolApprovalService>(),
                 sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the embedder holder and the <c>update_memory</c> tool that re-embeds edits through it.
+    /// </summary>
+    /// <remarks>
+    /// Factory registration keeps the container responsible for disposing the holder. The tool
+    /// shares the same instance so its edits re-embed like curation writes do.
+    /// </remarks>
+    public static IServiceCollection AddMemoryUpdateTool(
+        this IServiceCollection services,
+        ToolRegistry toolRegistry,
+        SQLiteMemoryStore memoryStore,
+        MemoryEmbedderHolder embedderHolder)
+    {
+        services.AddSingleton(_ => embedderHolder);
+        toolRegistry.Register(new SqliteUpdateMemoryTool(memoryStore, embedderHolder));
         return services;
     }
 }

@@ -18,7 +18,7 @@ public sealed class McpProtocolVersionFallbackTests
     public async Task Initialize_fallback_does_not_reuse_discovery_protocol_header()
     {
         var server = new ControlledFallbackHandler();
-        using var httpClient = McpHttpClientFactory.Create(server);
+        using var httpClient = McpHttpClientFactory.Create(server, disposeHandler: true);
         await using var transport = new HttpClientTransport(
             new HttpClientTransportOptions
             {

@@ -6,8 +6,9 @@
 #      the final identity sub-step, so SOUL.md / TOOLING.md existing proves the
 #      timezone loop did not recur (the tape would otherwise hang on the
 #      "Identity updated" anchor and vhs would exit non-zero).
-#   2. It rewrites ONLY identity files — it must never call WriteConfig, so the
-#      seeded netclaw.json (the empty object) must survive untouched.
+#   2. It rewrites ONLY the identity files and the Identity section of netclaw.json —
+#      it must never call WriteConfig, so nothing else may appear in the seeded
+#      netclaw.json (the empty object). configVersion is stamped on every config save.
 
 set -euo pipefail
 
@@ -31,16 +32,22 @@ else
 fi
 
 echo "init-redo-identity: checking config was not clobbered..."
-config_json="$(read_config_json | tr -d '[:space:]')"
-if [[ "$config_json" != "{}" ]]; then
-  echo "FAIL: netclaw.json changed — redo must not call WriteConfig. Got: ${config_json}" >&2
+rest="$(jq -cS 'del(.Identity) | del(.configVersion)' "$CONFIG_PATH" 2>/dev/null || true)"
+if [[ "$rest" != "{}" ]]; then
+  echo "FAIL: netclaw.json changed outside Identity — redo must not call WriteConfig. Got: ${rest}" >&2
   assert_fail=1
 else
-  echo "  ok  netclaw.json untouched"
+  echo "  ok  netclaw.json unchanged outside Identity"
+fi
+if ! jq -e '.Identity.AgentName | type == "string"' "$CONFIG_PATH" >/dev/null 2>&1; then
+  echo "FAIL: netclaw.json has no Identity.AgentName — redo did not persist the identity." >&2
+  assert_fail=1
+else
+  echo "  ok  Identity persisted to netclaw.json"
 fi
 
 if (( assert_fail )); then
   exit 1
 fi
 
-echo "init-redo-identity: assertions passed (identity written, config preserved)."
+echo "init-redo-identity: assertions passed (identity written, rest of config preserved)."

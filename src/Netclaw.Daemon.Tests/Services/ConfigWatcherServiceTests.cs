@@ -3,10 +3,13 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
+using Netclaw.Providers;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -18,6 +21,8 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     private readonly NetclawPaths _paths;
     private readonly FakeRestartCoordinator _restartCoordinator;
     private readonly FakeTimeProvider _time = new();
+    private readonly RejectedConfigState _rejectedConfig = new();
+    private readonly CapturingLogger _logger = new();
     private readonly ConfigWatcherService _sut;
 
     public ConfigWatcherServiceTests()
@@ -27,12 +32,37 @@ public sealed class ConfigWatcherServiceTests : IDisposable
 
         _restartCoordinator = new FakeRestartCoordinator();
 
+        var services = new ServiceCollection();
+        services.AddSingleton(_paths);
+        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        services.AddLlmProviders();
+        var plugins = services.BuildServiceProvider().GetServices<ILlmProviderPlugin>();
+
         _sut = new ConfigWatcherService(
             _paths,
             _time,
             _restartCoordinator,
-            NullLogger<ConfigWatcherService>.Instance);
+            _rejectedConfig,
+            plugins,
+            _logger);
     }
+
+    private sealed class CapturingLogger : ILogger<ConfigWatcherService>
+    {
+        public int Warnings { get; private set; }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                Warnings++;
+        }
+    }
+
+    private const string GoodModels = "\"Models\": { \"Definitions\": { \"d\": { \"Provider\": \"p\", \"ModelId\": \"m\" } }, \"Roles\": { \"Main\": \"d\" } }";
 
     [Fact]
     public async Task ValidConfigChange_TriggersRestart()
@@ -42,6 +72,50 @@ public sealed class ConfigWatcherServiceTests : IDisposable
         await _sut.ApplyReloadAsync(CancellationToken.None);
 
         Assert.Equal(1, _restartCoordinator.RequestCount);
+    }
+
+    [Theory]
+    [InlineData("""{ "Models": { "Main": { "Provider": "p", "ModelId": "m" }, "Roles": { "Main": "d" } } }""")]
+    [InlineData("""{ "Models": { "Definitions": { "d": { "Provider": "p", "ModelId": "m" } } } }""")]
+    [InlineData("""{ "Models": { "Definitions": { "d": { "Provider": "p", "ModelId": "m" } }, "Roles": { "Main": "nope" } } }""")]
+    // Valid for the resolver, rejected by the rest of the startup check.
+    [InlineData("""{ "Models": { "Definitions": { "d": { "Provider": "p", "ModelId": "m", "ContextWindow": 100 } }, "Roles": { "Main": "d" } } }""")]
+    [InlineData("""{ "Providers": { "p": { "Type": "ollama" } }, "Models": { "Definitions": { "d": { "Provider": "p", "ModelId": "m" }, "f": { "Provider": "zzz", "ModelId": "m" } }, "Roles": { "Main": "d", "Fallback": "f" } } }""")]
+    public async Task InvalidModelsSection_DoesNotTriggerRestartAndIsReported(string config)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, config);
+
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+
+        Assert.Equal(0, _restartCoordinator.RequestCount);
+        Assert.NotNull(_rejectedConfig.Reason);
+    }
+
+    [Fact]
+    public async Task ValidEditAfterAnInvalidOne_IsAppliedAndClearsTheRejection()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Models": { "Roles": { "Main": "d" } } }""");
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+        Assert.NotNull(_rejectedConfig.Reason);
+
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": { "p": { "Type": "ollama" } }, "Models": { "Definitions": { "d": { "Provider": "p", "ModelId": "m" } }, "Roles": { "Main": "d" } } }""");
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+
+        Assert.Null(_rejectedConfig.Reason);
+        Assert.Equal(1, _restartCoordinator.RequestCount);
+    }
+
+    [Theory]
+    [InlineData("""{ "Models": { "Main": { "Provider": "p", "ModelId": "m" } } }""")]
+    [InlineData("""{ "Models": { "Definitions": { "d": { "Provider": "p", "ModelId": "m" } }, "Roles": { "Main": "d" } } }""")]
+    public async Task ValidModelsSection_TriggersRestart(string config)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, config);
+
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+
+        Assert.Equal(1, _restartCoordinator.RequestCount);
+        Assert.Null(_rejectedConfig.Reason);
     }
 
     [Theory]
@@ -69,6 +143,75 @@ public sealed class ConfigWatcherServiceTests : IDisposable
         await _sut.ApplyReloadAsync(CancellationToken.None);
 
         Assert.Equal(0, _restartCoordinator.RequestCount);
+        Assert.StartsWith("netclaw.json is not valid JSON", _rejectedConfig.Reason);
+        Assert.DoesNotContain('\n', _rejectedConfig.Reason!);
+    }
+
+    [Fact]
+    public async Task DuplicateModelsKeys_AreRejectedWithTheReason()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Models": { "Roles": { "Main": "a" } }, "models": { "Roles": { "Main": "b" } } }""");
+
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+
+        Assert.Equal(0, _restartCoordinator.RequestCount);
+        Assert.StartsWith("Cannot read netclaw.json or secrets.json", _rejectedConfig.Reason);
+        Assert.DoesNotContain('\n', _rejectedConfig.Reason!);
+    }
+
+    // Each of these passes the Models resolver and fails only where startup builds the provider.
+    [Theory]
+    [InlineData("""{ "Type": "banana" }""", "Unknown provider type 'banana'. Supported: ollama,")]
+    [InlineData("""{ "Type": "openai" }""", "requires authentication")]
+    [InlineData("""{ "Type": "anthropic" }""", "requires authentication")]
+    [InlineData("""{ "Type": "openai-compatible" }""", "Set Providers:p:Endpoint to a URL.")]
+    [InlineData("""{ "Type": "ollama", "AuthMethod": "banana" }""", "Providers:p is invalid: Failed to convert configuration value 'banana' at 'Providers:p:AuthMethod'")]
+    [InlineData("""{ "Type": "ollama", "VendorOptions": "x" }""", "Providers:p is invalid: Providers:<name>:VendorOptions must be an object.")]
+    [InlineData("""{ "Type": "ollama", "OAuthTokenExpiry": "garbage" }""", "at 'Providers:p:OAuthTokenExpiry'")]
+    public async Task ProviderThatStartupCannotBuild_IsRejectedWithTheReason(string provider, string expected)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{ \"Providers\": { \"p\": " + provider + " }, " + GoodModels + " }");
+
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+
+        Assert.Equal(0, _restartCoordinator.RequestCount);
+        Assert.Contains(expected, _rejectedConfig.Reason);
+        Assert.DoesNotContain('\n', _rejectedConfig.Reason!);
+        Assert.DoesNotContain("   at ", _rejectedConfig.Reason);
+    }
+
+    [Fact]
+    public async Task RejectionFollowsTheLatestEdit_NotTheFirstReason()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": { "p": { "Type": "ollama" } }, "Models": { "Definitions": { "d": { "Provider": "p", "ModelId": "m", "ContextWindow": 100 } }, "Roles": { "Main": "d" } } }""");
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+        Assert.Contains("ContextWindow", _rejectedConfig.Reason);
+
+        // Models is fixed; something else is now wrong.
+        File.WriteAllText(_paths.NetclawConfigPath, "{ \"Providers\": { \"p\": { \"Type\": \"ollama\", \"AuthMethod\": \"banana\" } }, " + GoodModels + " }");
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+        Assert.DoesNotContain("ContextWindow", _rejectedConfig.Reason);
+        Assert.Contains("Providers:p", _rejectedConfig.Reason);
+
+        File.WriteAllText(_paths.NetclawConfigPath, """{ broken json """);
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+        Assert.StartsWith("netclaw.json is not valid JSON", _rejectedConfig.Reason);
+        Assert.Equal(0, _restartCoordinator.RequestCount);
+    }
+
+    [Fact]
+    public async Task UnchangedInvalidFile_WarnsOnce()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Models": { "Roles": { "Main": "d" } } }""");
+
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+        Assert.Equal(1, _logger.Warnings);
+
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Models": { "Roles": { "Main": "e" } } }""");
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+        Assert.Equal(2, _logger.Warnings);
     }
 
     [Fact]

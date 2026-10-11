@@ -9,6 +9,8 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using static Netclaw.Actors.Tools.ToolApprovalProtocol;
 
@@ -81,56 +83,6 @@ internal sealed class ToolApprovalActor : ReceiveActor
                     candidateMatches)));
         });
 
-        Receive<RecordToolApproval>(msg =>
-        {
-            if (string.Equals(msg.ToolName.Value, ShellTool.ToolName, StringComparison.Ordinal))
-            {
-                Sender.Tell(new ToolApprovalRecorded(ApprovalStoreFailure.InvalidData));
-                return;
-            }
-
-            ApprovalStoreFailure? storeFailure = null;
-            foreach (var pattern in msg.Patterns)
-            {
-                if (msg.Persistent)
-                {
-                    // The cwd field encodes scope: a non-null value writes a
-                    // folder-scoped (verb, cwd) entry that matches future
-                    // invocations only under that directory tree, while null
-                    // writes a global wildcard (verb, null) that matches any
-                    // cwd. The caller (LlmSessionActor) chooses based on the
-                    // user's button click — Always here → cwd; Always
-                    // anywhere → null.
-                    if (_persistentStore is null)
-                    {
-                        storeFailure = ApprovalStoreFailure.IoFailure;
-                        break;
-                    }
-
-                    var change = _persistentStore.TryAddApproval(
-                        msg.Audience,
-                        msg.ToolName.Value,
-                        new ApprovalEntry(pattern) { Directory = msg.Cwd });
-                    ReportMigrationOmissions();
-                    if (change is ApprovalStoreChangeResult.Unavailable unavailable)
-                    {
-                        storeFailure = unavailable.Failure;
-                        break;
-                    }
-                }
-
-                AddSessionApproval(
-                    msg.SessionId,
-                    msg.Audience,
-                    msg.ToolName,
-                    new ApprovalEntry(pattern));
-            }
-
-            Sender.Tell(storeFailure is null
-                ? ToolApprovalRecorded.Success
-                : new ToolApprovalRecorded(storeFailure));
-        });
-
         Receive<RecordStructuredToolApproval>(msg =>
         {
             if (!TryCreateEntries(msg.ToolName, msg.Grants, out var persistentEntries, out var sessionEntries))
@@ -139,7 +91,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 return;
             }
 
-            if (msg.Persistent)
+            if (persistentEntries.Count > 0)
             {
                 if (_persistentStore is null)
                 {
@@ -219,7 +171,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
     {
         if (sessionId.HasValue &&
             IsSessionApproved(sessionId.Value, audience, toolName, candidate, cwd))
-            return new ToolApprovalMatch(candidate.Verb, "session", "this chat");
+            return new ToolApprovalMatch(candidate.Verb, GrantScope.Session.Instance);
 
         return MatchPersistedEntry(toolName, candidate, cwd, persistedApprovals);
     }
@@ -320,6 +272,11 @@ internal sealed class ToolApprovalActor : ReceiveActor
         }
     }
 
+    /// <summary>
+    /// Converts reviewed grants to store entries. It refuses the whole batch when
+    /// one grant does not fit its tool or when a repository grant no longer
+    /// resolves to the repository and worktree that the builder saw.
+    /// </summary>
     internal static bool TryCreateEntries(
         ToolName toolName,
         IReadOnlyList<ToolApprovalGrant> grants,
@@ -328,102 +285,94 @@ internal sealed class ToolApprovalActor : ReceiveActor
     {
         var persisted = new List<ApprovalEntry>(grants.Count);
         var session = new List<ApprovalEntry>(grants.Count);
+        persistentEntries = [];
+        sessionEntries = [];
         try
         {
             foreach (var grant in grants)
             {
-                ApprovalEntry persistedEntry;
-                if (string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal))
-                {
-                    if (grant.Candidate.Shell is not { } shell ||
-                        grant.Candidate.VerbTokens is not { } tokens)
-                    {
-                        persistentEntries = [];
-                        sessionEntries = [];
-                        return false;
-                    }
+                if (!TryCreateEntry(toolName, grant, out var entry))
+                    return false;
 
-                    if (grant.Repository is not null)
-                    {
-                        if (grant.Directory is not null
-                            || grant.RepositoryWorktree is null)
-                        {
-                            persistentEntries = [];
-                            sessionEntries = [];
-                            return false;
-                        }
+                if (grant.Scope.IsPersistent)
+                    persisted.Add(entry);
 
-                        var candidateResolved = GitRepositoryApprovalScope.TryResolveCandidate(
-                            grant.Candidate.Directory, cwd: null, out var scope);
-                        if (!candidateResolved)
-                        {
-                            persistentEntries = [];
-                            sessionEntries = [];
-                            return false;
-                        }
-
-                        if (!ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, grant.Repository)
-                            || !PathUtility.AreEquivalentPaths(
-                                scope.WorktreeRoot, grant.RepositoryWorktree))
-                        {
-                            persistentEntries = [];
-                            sessionEntries = [];
-                            return false;
-                        }
-
-                        persistedEntry = ApprovalEntry.CreateRepositoryTokenPrefix(
-                            shell,
-                            tokens,
-                            grant.Repository,
-                            assignmentDigest: grant.Candidate.AssignmentDigest);
-                    }
-                    else
-                    {
-                        if (grant.RepositoryWorktree is not null)
-                        {
-                            persistentEntries = [];
-                            sessionEntries = [];
-                            return false;
-                        }
-
-                        persistedEntry = ApprovalEntry.CreateTokenPrefix(
-                            shell,
-                            tokens,
-                            grant.Directory,
-                            assignmentDigest: grant.Candidate.AssignmentDigest);
-                    }
-                }
-                else
-                {
-                    if (grant.Repository is not null
-                        || grant.RepositoryWorktree is not null
-                        || grant.Candidate.AssignmentDigest is not null)
-                    {
-                        persistentEntries = [];
-                        sessionEntries = [];
-                        return false;
-                    }
-
-                    persistedEntry = ApprovalEntry.CreateNonShell(
-                        grant.Candidate.Verb,
-                        grant.Directory);
-                }
-
-                persisted.Add(persistedEntry);
-                session.Add(persistedEntry.Repository is null
-                    ? persistedEntry with { Directory = null }
-                    : persistedEntry);
+                // A session match ignores the folder, so the session copy of a
+                // folder grant drops it. A repository grant keeps its repository.
+                session.Add(entry.Repository is null
+                    ? entry with { Directory = null }
+                    : entry);
             }
         }
         catch (Exception ex) when (ex is ArgumentException or System.Text.Json.JsonException)
         {
-            persistentEntries = [];
-            sessionEntries = [];
             return false;
         }
 
         persistentEntries = persisted;
         sessionEntries = session;
+        return true;
+    }
+
+    private static bool TryCreateEntry(
+        ToolName toolName,
+        ToolApprovalGrant grant,
+        out ApprovalEntry entry)
+    {
+        entry = null!;
+        if (grant.Scope is not GrantScope.Repository && grant.RepositoryWorktree is not null)
+            return false;
+
+        // The v3 store encodes the scope in two nullable fields.
+        var directory = grant.Scope is GrantScope.Folder folder ? folder.Directory : null;
+        if (!string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal))
+        {
+            if (grant.Scope is GrantScope.Repository || grant.Candidate.AssignmentDigest is not null)
+                return false;
+
+            entry = ApprovalEntry.CreateNonShell(grant.Candidate.Verb, directory);
+            return true;
+        }
+
+        if (grant.Candidate.Shell is not { } shell ||
+            grant.Candidate.VerbTokens is not { } tokens)
+        {
+            return false;
+        }
+
+        if (grant.Scope is not GrantScope.Repository repository)
+        {
+            entry = ApprovalEntry.CreateTokenPrefix(
+                shell,
+                tokens,
+                directory,
+                assignmentDigest: grant.Candidate.AssignmentDigest);
+            return true;
+        }
+
+        // The approval actor is the last boundary before persistence. It reads
+        // the Git metadata again, so a worktree registration that changed after
+        // the prompt cannot redirect the grant.
+        if (grant.RepositoryWorktree is null)
+            return false;
+
+        var candidateResolved = RepositoryIdentity.TryResolve(
+            grant.Candidate.Directory, cwd: null, out var scope);
+        if (!candidateResolved)
+            return false;
+
+        if (!ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, repository.CommonDirectory)
+            || !PathUtility.AreEquivalentPaths(
+                scope.WorktreeRoot, grant.RepositoryWorktree))
+        {
+            return false;
+        }
+
+        entry = ApprovalEntry.CreateRepositoryTokenPrefix(
+            shell,
+            tokens,
+            repository.CommonDirectory,
+            assignmentDigest: grant.Candidate.AssignmentDigest);
         return true;
     }
 
@@ -436,7 +385,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 : ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb);
 
             if (matches)
-                return new ToolApprovalMatch(candidate.Verb, "persistent", entry.FormatScope());
+                return new ToolApprovalMatch(candidate.Verb, GrantScope.OfStoredEntry(entry));
         }
 
         return null;

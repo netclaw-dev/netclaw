@@ -124,7 +124,7 @@ internal sealed class OpenAiCodexRequestPolicy : PipelinePolicy
         return JwtAccountIdExtractor.ResolveAccountId(_entry!)
                ?? throw new InvalidOperationException(
                    $"OpenAI OAuth credential for provider '{_providerName}' is missing ChatGPT account ID. "
-                   + $"Re-authenticate with 'netclaw provider fix {_providerName}'.");
+                   + $"Re-authenticate '{_providerName}' with `netclaw provider`.");
     }
 
     private static void Modify(PipelineMessage message, string accountId)

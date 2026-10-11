@@ -27,12 +27,17 @@ public sealed record McpOAuthCallbackQuery(
 /// </summary>
 public sealed record McpOAuthStartResponse(string AuthorizationUrl, string State, DateTimeOffset ExpiresAt);
 
-/// <summary>Connection status for a single MCP server.</summary>
+/// <summary>
+/// Connection status for a single MCP server. <see cref="Degraded"/> marks a server that is
+/// still <c>Connected</c> but whose catalog refreshes keep failing, so its cached tools are
+/// likely to hang or fail.
+/// </summary>
 public sealed record McpServerStatusDto(
     string State,
     int ToolCount,
     string? Error,
-    DateTimeOffset? LastErrorAt);
+    DateTimeOffset? LastErrorAt,
+    bool Degraded = false);
 
 /// <summary>OAuth flow status for an MCP server or pending state token.</summary>
 public sealed record McpOAuthStatusResponse(string Status, McpErrorResponse? Error = null);
@@ -158,7 +163,8 @@ public static class McpEndpointRouteBuilderExtensions
                     kvp.Value.State.ToString(),
                     kvp.Value.ToolCount,
                     kvp.Value.ErrorMessage,
-                    kvp.Value.LastErrorAt));
+                    kvp.Value.LastErrorAt,
+                    kvp.Value.IsDegraded));
             return TypedResults.Ok(result);
         })
         .WithName("GetMcpServerStatuses")

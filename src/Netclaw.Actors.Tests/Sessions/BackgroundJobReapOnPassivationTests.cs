@@ -67,7 +67,7 @@ public sealed class BackgroundJobReapOnPassivationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Passivation_reaps_jobs_and_surfaces_reap_exactly_once_on_rehydration()
+    public async Task Idle_passivation_defers_for_active_job_then_restart_reaps_and_recovers_once()
     {
         var jobManagerProbe = CreateTestProbe("job-manager");
         ActorRegistry.For(Sys).Register<BackgroundJobManagerActorKey>(jobManagerProbe.Ref, overwrite: true);
@@ -119,22 +119,64 @@ public sealed class BackgroundJobReapOnPassivationTests : LlmSessionTestBase
             .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Watch(child);
 
-        // Drop the subscriber so passivation is not deferred, then trigger it.
-        child.Tell(new LeaveSession(subscriber) { SessionId = sessionId });
+        // The active job blocks idle passivation, even with no subscriber veto.
         child.Tell(ReceiveTimeout.Instance);
+        var activeJobJoin = await child.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, activeJobJoin.SessionId);
+        await jobManagerProbe.ExpectNoMsgAsync(
+            TimeSpan.FromMilliseconds(300),
+            TestContext.Current.CancellationToken);
 
-        // The passivating session must request the reap and wait for the ack.
+        // Explicit restart still reaps an active job and waits for the ack.
+        var restartTask = sessionManager.Ask<DaemonRestartPrepared>(
+            new PrepareForDaemonRestart(sessionId, "config-reload"),
+            TimeSpan.FromSeconds(10),
+            TestContext.Current.CancellationToken);
         var kill = await jobManagerProbe.ExpectMsgAsync<KillJobsForSession>(
             TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, kill.SessionId);
         jobManagerProbe.Reply(new SessionJobsReaped(sessionId, 1));
 
+        var restartAck = await restartTask;
+        Assert.Equal(sessionId, restartAck.SessionId);
         await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.FishForMessageAsync(
+            m => m is SessionDeactivated,
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
 
-        // Rehydrate: the next turn's context must surface the reaped job once.
+        // Rehydrate with a reaped record. That record must not block idle stop.
+        var subscriberB = CreateTestProbe("reap-sub-b");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        var rehydratedChild = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(rehydratedChild);
+        rehydratedChild.Tell(ReceiveTimeout.Instance);
+        var repeatedKill = await jobManagerProbe.ExpectMsgAsync<KillJobsForSession>(
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, repeatedKill.SessionId);
+        jobManagerProbe.Reply(new SessionJobsReaped(sessionId, 0));
+        await ExpectTerminatedAsync(
+            rehydratedChild,
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.FishForMessageAsync(
+            m => m is SessionDeactivated,
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // The next turn must surface the reaped job exactly once.
         _fakeChatClient.ToolCallsOnFirstCall = null;
         var llmCallsBefore = _fakeChatClient.ReceivedMessages.Count;
-        var subscriberB = CreateTestProbe("reap-sub-b");
         await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
         {
             SessionId = sessionId,
@@ -180,7 +222,7 @@ public sealed class BackgroundJobReapOnPassivationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Passivation_proceeds_loudly_when_reap_ack_never_arrives()
+    public async Task Idle_passivation_defers_for_active_job_and_restart_proceeds_without_reap_ack()
     {
         var jobManagerProbe = CreateTestProbe("job-manager-silent");
         ActorRegistry.For(Sys).Register<BackgroundJobManagerActorKey>(jobManagerProbe.Ref, overwrite: true);
@@ -229,11 +271,23 @@ public sealed class BackgroundJobReapOnPassivationTests : LlmSessionTestBase
             .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Watch(child);
 
-        child.Tell(new LeaveSession(subscriber) { SessionId = sessionId });
         child.Tell(ReceiveTimeout.Instance);
+        var activeJobJoin = await child.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, activeJobJoin.SessionId);
+        await jobManagerProbe.ExpectNoMsgAsync(
+            TimeSpan.FromMilliseconds(300),
+            TestContext.Current.CancellationToken);
 
-        // The reap request is sent but never acknowledged — passivation must
-        // still complete after the ask timeout (fail loud, never wedge).
+        // Restart starts the reap request. It must finish after the bounded
+        // acknowledgement timeout even when the manager stays silent.
+        var restartTask = sessionManager.Ask<DaemonRestartPrepared>(
+            new PrepareForDaemonRestart(sessionId, "config-reload"),
+            TimeSpan.FromSeconds(15),
+            TestContext.Current.CancellationToken);
         await jobManagerProbe.ExpectMsgAsync<KillJobsForSession>(
             TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -241,6 +295,8 @@ public sealed class BackgroundJobReapOnPassivationTests : LlmSessionTestBase
             child,
             TimeSpan.FromSeconds(20),
             cancellationToken: TestContext.Current.CancellationToken);
+        var restartAck = await restartTask;
+        Assert.Equal(sessionId, restartAck.SessionId);
     }
 
     private static int CountOccurrences(string haystack, string needle)

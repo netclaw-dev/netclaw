@@ -239,6 +239,7 @@ public static class MagicByteValidator
         ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = IsZip,
         ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] = IsZip,
         ["application/vnd.openxmlformats-officedocument.presentationml.presentation"] = IsZip,
+        ["application/vnd.openxmlformats-officedocument.presentationml.template"] = IsZip,
 
         // OpenDocument (also ZIP-based)
         ["application/vnd.oasis.opendocument.text"] = IsZip,

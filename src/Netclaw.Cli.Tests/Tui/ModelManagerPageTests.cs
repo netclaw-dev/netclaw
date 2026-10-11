@@ -99,6 +99,54 @@ public sealed class ModelManagerPageTests : IDisposable
     }
 
     [Fact]
+    public async Task RoleOverview_At120Columns_ShowsFullModelIdAndAlignsHeaderWithRows()
+    {
+        const string longModelId = "Qwen3.6-35B-A3B-UD-Q4_K_XL-gguf-v2-final";
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-compatible"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://gateway.example.test:8080/v1"
+                }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Definitions"] = new Dictionary<string, object>
+                {
+                    ["main"] = new Dictionary<string, object>
+                    {
+                        ["Provider"] = "openai-compatible",
+                        ["ModelId"] = longModelId
+                    }
+                },
+                ["Roles"] = new Dictionary<string, object> { ["Main"] = "main" }
+            }
+        });
+
+        var (terminal, app) = CreateHeadlessApp(out var input, width: 120);
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var lines = terminal.GetAllLines();
+        var header = lines.Single(l => l.Contains("Role") && l.Contains("Model ID"));
+        var row = lines.Single(l => l.Contains("Main") && l.Contains("openai-compatible"));
+
+        // Long provider label is capped, so the model ID gets the room and is not cut.
+        Assert.Contains(longModelId, row);
+        Assert.Equal(header.IndexOf("Role", StringComparison.Ordinal), row.IndexOf("Main", StringComparison.Ordinal));
+        Assert.Equal(header.IndexOf("Provider", StringComparison.Ordinal),
+            row.IndexOf("openai-compatible (", StringComparison.Ordinal));
+        Assert.Equal(header.IndexOf("Model ID", StringComparison.Ordinal),
+            row.IndexOf(longModelId, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ModelAssignment_WhenTheUserChangesProvider_ShowsTheSelectedProvidersModels()
     {
         WriteConfig(new Dictionary<string, object>
@@ -154,9 +202,9 @@ public sealed class ModelManagerPageTests : IDisposable
     }
 
     private (VirtualTerminal Terminal, TerminaApplication App) CreateHeadlessApp(
-        out VirtualInputSource input)
+        out VirtualInputSource input, int width = 160)
     {
-        var terminal = new VirtualTerminal(160, 40);
+        var terminal = new VirtualTerminal(width, 40);
         var virtualInput = new VirtualInputSource();
         input = virtualInput;
 
@@ -167,7 +215,7 @@ public sealed class ModelManagerPageTests : IDisposable
         {
             builder.RegisterRoute<ModelManagerPage, ModelManagerViewModel>(
                 "/model",
-                _ => new ModelManagerPage(),
+                _ => new ModelManagerPage(terminal),
                 _ => new ModelManagerViewModel(_paths, _fakeProbe, _registry));
         });
 

@@ -141,21 +141,9 @@ internal sealed record TestToolExecutionContextOptions
 }
 
 /// <summary>
-/// Fails tests that unexpectedly request approval through the parent bridge.
+/// A parent approval handle with no consent contract. A sub-agent that needs
+/// consent through it fails with <see cref="ParentApprovalUnavailableException"/>.
 /// </summary>
 internal sealed class TestParentApprovalBridge : IParentApprovalBridge
 {
-    /// <inheritdoc />
-    public Task<ParentApprovalDecision> RequestApprovalAsync(
-        ToolCallId callId,
-        string toolName,
-        string displayText,
-        IReadOnlyList<string> patterns,
-        IReadOnlyList<string> candidateVerbs,
-        IReadOnlyList<ParentApprovalCandidate> candidates,
-        string? cwd,
-        IReadOnlyList<ParentApprovalOption> options,
-        bool isMessy,
-        CancellationToken ct) =>
-        throw new InvalidOperationException("This test context does not service parent approval requests.");
 }

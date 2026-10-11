@@ -26,7 +26,7 @@ namespace Netclaw.Daemon.Tests.Configuration;
 /// exercises the live <c>AkkaLogState</c> shape that the unit tests can only simulate, plus the
 /// real <c>SessionLogDispatcher</c> and <c>SessionLogActor</c> file write.
 /// </summary>
-public sealed class SessionLogPartitionIntegrationTests : TestKit
+public sealed class SessionLogPartitionIntegrationTests : TestKit, IAsyncDisposable
 {
     private readonly string _logDir = Path.Join(Path.GetTempPath(), $"netclaw-logpart-int-{Guid.NewGuid():N}");
     private readonly FakeTimeProvider _time = new(DateTimeOffset.Parse("2026-05-07T12:00:00Z"));
@@ -93,8 +93,6 @@ public sealed class SessionLogPartitionIntegrationTests : TestKit
             ? string.Empty
             : await ReadSharedAsync(daemonFiles[0], TestContext.Current.CancellationToken);
         Assert.DoesNotContain(marker, daemonText, StringComparison.Ordinal);
-
-        TryCleanup();
     }
 
     private static async Task<string> ReadSharedAsync(string path, CancellationToken ct)
@@ -104,16 +102,22 @@ public sealed class SessionLogPartitionIntegrationTests : TestKit
         return await reader.ReadToEndAsync(ct);
     }
 
-    private void TryCleanup()
+    // TestKit stops the actor system only after AfterAllAsync returns, and the host
+    // does not dispose a provider that the test registers as an instance. Close the
+    // log files and then delete the folder. Windows refuses to delete an open file.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
+            await base.DisposeAsync();
+        }
+        finally
+        {
+            if (_provider is not null)
+                _provider.Dispose();
+
             if (Directory.Exists(_logDir))
                 Directory.Delete(_logDir, recursive: true);
-        }
-        catch (IOException ex)
-        {
-            Console.Error.WriteLine($"[SessionLogPartitionIntegrationTests] cleanup failed: {ex.Message}");
         }
     }
 

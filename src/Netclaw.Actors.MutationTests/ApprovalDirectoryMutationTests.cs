@@ -4,10 +4,14 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Actors.MutationTests;
@@ -73,6 +77,67 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
         Assert.True(Matches(Path.Combine(_grantRoot, "src"), _grantRoot));
     }
 
+    [Fact]
+    public void Folder_grant_trusts_a_link_at_its_own_root()
+    {
+        // A folder grant refuses links only below its root (R3). The operator
+        // approved the root by name, and an OS alias such as macOS /tmp can be it.
+        var alias = Path.Combine(_basePath, "app-alias");
+        Directory.CreateSymbolicLink(alias, _grantRoot);
+        var grant = ApprovalEntry.CreateTokenPrefix(_shell, ["git", "status"], alias);
+
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+            CreateCandidate(_shell, Path.Combine(alias, "src")), alias, [grant]));
+    }
+
+    [Fact]
+    public void Folder_grant_compares_posix_paths_with_case()
+    {
+        // R4: allow checks keep case on POSIX hosts, macOS included.
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.False(Matches(_grantRoot.ToUpperInvariant(), _grantRoot));
+        Assert.False(Matches(Path.Combine(_grantRoot, "src").ToUpperInvariant(), _grantRoot));
+        Assert.True(Matches(Path.Combine(_grantRoot, "src"), _grantRoot));
+    }
+
+    // The OS follows the link before it applies "..", so link/../notes.txt
+    // names app-other/notes.txt. Its lexical form stays inside the grant. A
+    // link above the segment that ".." leaves, such as a root alias, is safe.
+    [Fact]
+    public void Folder_grant_does_not_cover_a_parent_segment_after_a_link()
+    {
+        Directory.CreateSymbolicLink(Path.Combine(_grantRoot, "link"), Path.Combine(_outside, "nested"));
+        var alias = Path.Combine(_basePath, "app-alias");
+        Directory.CreateSymbolicLink(alias, _grantRoot);
+        var matcher = new ShellApprovalMatcher(OperatingSystem.IsWindows()
+            ? ShellExecutionEnvironment.CreatePowerShell(
+                @"C:\Program Files\PowerShell\7\pwsh.exe",
+                PwshDialect.PowerShell7)
+            : ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+        var verb = OperatingSystem.IsWindows() ? "Get-Content" : "cat";
+        Assert.True(CommandMatches(_grantRoot, Path.Combine(_grantRoot, "src", "..", "notes.txt")));
+        Assert.True(CommandMatches(alias, Path.Combine(alias, "src", "..", "notes.txt")));
+        Assert.False(CommandMatches(_grantRoot, Path.Combine(_grantRoot, "link", "..", "notes.txt")));
+
+        bool CommandMatches(string root, string path)
+        {
+            var grant = ApprovalEntry.CreateTokenPrefix(_shell, [verb], root);
+            var analysis = matcher.AnalyzeInvocation(
+                new ToolName(ShellTool.ToolName),
+                new Dictionary<string, object?>
+                {
+                    ["Command"] = $"{verb} '{path}'",
+                    ["WorkingDirectory"] = root,
+                });
+            return !analysis.IsMessy
+                   && analysis.Candidates.Count > 0
+                   && analysis.Candidates.All(candidate =>
+                       ApprovalPatternMatching.MatchesShellApproval(candidate, root, [grant]));
+        }
+    }
+
     [Theory]
     [InlineData(@"C:\repo\app", true)]
     [InlineData(@"c:\REPO\APP\src", true)]
@@ -80,6 +145,8 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
     [InlineData(@"C:\repo\app\..\app-other", false)]
     [InlineData(@"D:\repo\app\src", false)]
     [InlineData(@"..\app-other", false)]
+    [InlineData(@"\repo\app\src", false)]
+    [InlineData(@"~\src", false)]
     public void PowerShell_scope_preserves_windows_path_boundaries(string directory, bool allowed)
     {
         var grant = ApprovalEntry.CreateTokenPrefix(ApprovalShell.PowerShell, ["git", "status"], @"C:\repo\app");
@@ -109,18 +176,10 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
             CreateCandidate(ApprovalShell.Bash, null), sibling, [otherRepositoryGrant]));
         Assert.False(ApprovalPatternMatching.MatchesShellApproval(
             CreateCandidate(ApprovalShell.Bash, _outside), sibling, [grant]));
-        Assert.False(GitRepositoryApprovalScope.TryResolveCandidate("relative", cwd: null, out _));
+        Assert.False(RepositoryIdentity.TryResolve("relative", cwd: null, out _));
 
-        Assert.True(GitRepositoryApprovalScope.TryResolveCandidates(
-            [CreateCandidate(ApprovalShell.Bash, main),
-                CreateCandidate(ApprovalShell.Bash, sibling)],
-            _outside,
-            out _));
-        Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
-            [CreateCandidate(ApprovalShell.Bash, main),
-                CreateCandidate(ApprovalShell.Bash, unrelated)],
-            _outside,
-            out _));
+        Assert.True(RepositoryIdentity.TryResolveAll([main, sibling], _outside, out _));
+        Assert.False(RepositoryIdentity.TryResolveAll([main, unrelated], _outside, out _));
     }
 
     [Fact]
@@ -136,16 +195,15 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
         Directory.CreateDirectory(candidateDirectory);
 
         var candidate = CreateCandidate(ApprovalShell.Bash, candidateDirectory);
-        var grant = new ToolApprovalGrant(candidate, Directory: null)
+        var grant = new ToolApprovalGrant(candidate, new GrantScope.Repository(Path.Combine(main, ".git")))
         {
-            Repository = Path.Combine(main, ".git"),
             RepositoryWorktree = sibling,
         };
         Assert.True(ToolApprovalActor.TryCreateEntries(
             new ToolName(ShellTool.ToolName), [grant], out var persistent, out _));
         Assert.Single(persistent);
 
-        var wrongIdentity = grant with { Repository = Path.Combine(unrelated, ".git") };
+        var wrongIdentity = grant with { Scope = new GrantScope.Repository(Path.Combine(unrelated, ".git")) };
         Assert.False(ToolApprovalActor.TryCreateEntries(
             new ToolName(ShellTool.ToolName), [wrongIdentity], out _, out _));
         var wrongRoot = grant with { RepositoryWorktree = main };
@@ -163,14 +221,116 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
 
         Directory.Delete(candidateDirectory);
         RunGit(main, "worktree", "add", "--orphan", "-b", "nested-candidate", candidateDirectory);
-        Assert.True(GitRepositoryApprovalScope.TryResolveCandidate(
+        Assert.True(RepositoryIdentity.TryResolve(
             candidateDirectory, cwd: null, out var nestedScope));
         Assert.True(PathUtility.AreEquivalentPaths(
-            nestedScope!.CommonDirectory, grant.Repository));
+            nestedScope!.CommonDirectory, ((GrantScope.Repository)grant.Scope).CommonDirectory));
         Assert.False(PathUtility.AreEquivalentPaths(
             nestedScope.WorktreeRoot, grant.RepositoryWorktree));
         Assert.False(ToolApprovalActor.TryCreateEntries(
             new ToolName(ShellTool.ToolName), [grant], out _, out _));
+    }
+
+    [Fact]
+    public void Folder_grant_uses_the_directory_where_each_occurrence_runs()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var policy = new ShellCommandPolicy(environment);
+        var analysis = policy.Analyze("cd /work/sub && inspect; cat *.md", "/work");
+        Assert.True(BashDirectoryScopeProjection.TryCreate(
+            analysis,
+            policy,
+            new ShellApprovalMatcher(environment),
+            out var projection));
+
+        var grants = GrantBuilder.Build(
+            projection.Candidates,
+            GrantScopeKind.Folder,
+            "/work",
+            "/session",
+            repositoryCommonDirectory: null);
+        // A candidate without its own directory uses the call directory, not everywhere.
+        var bare = Assert.Single(GrantBuilder.Build(
+            [CreateCandidate(ApprovalShell.Bash, directory: null)],
+            GrantScopeKind.Folder,
+            "/work",
+            "/session",
+            repositoryCommonDirectory: null));
+
+        // After cd, a folder grant never falls back to the session working directory.
+        Assert.Equal(
+            ["cd@/work/sub", "inspect@/work/sub", "cat@/work", "cat@/work/sub"],
+            grants.Select(static grant =>
+                $"{grant.Candidate.Verb}@{Assert.IsType<GrantScope.Folder>(grant.Scope).Directory}"));
+        Assert.Equal("/work", Assert.IsType<GrantScope.Folder>(bare.Scope).Directory);
+    }
+
+    // Issue #2375: a word that names a link has two scopes, the link folder and
+    // the final target. A folder grant covers the word only when it covers both.
+    [Fact]
+    public void Folder_grant_covers_a_link_word_only_when_it_covers_the_target()
+    {
+        File.WriteAllText(Path.Combine(_grantRoot, "notes.txt"), "synthetic test data");
+        File.WriteAllText(Path.Combine(_outside, "notes.txt"), "synthetic test data");
+        File.CreateSymbolicLink(Path.Combine(_grantRoot, "ext.txt"), Path.Combine(_outside, "notes.txt"));
+        File.CreateSymbolicLink(Path.Combine(_grantRoot, "extlink"), Path.Combine(_outside, "notes.txt"));
+        File.CreateSymbolicLink(Path.Combine(_grantRoot, "inner.txt"), "notes.txt");
+        File.CreateSymbolicLink(Path.Combine(_grantRoot, "innerlink"), "notes.txt");
+        File.CreateSymbolicLink(Path.Combine(_outside, "backlink"), Path.Combine(_grantRoot, "notes.txt"));
+        Directory.CreateSymbolicLink(Path.Combine(_grantRoot, "outlnk"), Path.Combine(_outside, "nested"));
+        File.CreateSymbolicLink(Path.Combine(_grantRoot, "dotdot.txt"), Path.Combine("outlnk", "..", "notes.txt"));
+        var matcher = new ShellApprovalMatcher(OperatingSystem.IsWindows()
+            ? ShellExecutionEnvironment.CreatePowerShell(
+                @"C:\Program Files\PowerShell\7\pwsh.exe",
+                PwshDialect.PowerShell7)
+            : ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+        var verb = OperatingSystem.IsWindows() ? "Get-Content" : "cat";
+
+        // A path word.
+        Assert.True(CommandMatches(_grantRoot, $"{verb} inner.txt"));
+        Assert.False(CommandMatches(_grantRoot, $"{verb} ext.txt"));
+        // The OS applies ".." after the link, so the target is not known.
+        Assert.Equal(
+            LinkChainEnd.Unknown,
+            FileSystemAuthority.FollowLinkChain(Path.Combine(_grantRoot, "dotdot.txt"), out _));
+        Assert.False(CommandMatches(_grantRoot, $"{verb} dotdot.txt"));
+
+        // The same link without a file extension gets the same answer.
+        Assert.True(CommandMatches(_grantRoot, $"{verb} {Path.Combine(".", "innerlink")}"));
+        Assert.False(CommandMatches(_grantRoot, $"{verb} {Path.Combine(".", "extlink")}"));
+        // The link folder is a scope too.
+        Assert.False(CommandMatches(_outside, $"{verb} {Path.Combine(".", "backlink")}"));
+
+        // A plain word. The Bash parser reads each operand of cat as a path, so
+        // these cases use a program that it does not know. The Linux mutation
+        // job runs them.
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.True(CommandMatches(_grantRoot, "mytool read innerlink"));
+        Assert.False(CommandMatches(_grantRoot, "mytool read extlink"));
+        // The link folder is a scope too.
+        Assert.False(CommandMatches(_outside, "mytool read backlink"));
+
+        // The grant uses the command words of the candidate, so only the scope decides.
+        bool CommandMatches(string cwd, string command)
+        {
+            var analysis = matcher.AnalyzeInvocation(
+                new ToolName(ShellTool.ToolName),
+                new Dictionary<string, object?>
+                {
+                    ["Command"] = command,
+                    ["WorkingDirectory"] = cwd,
+                });
+            return !analysis.IsMessy
+                   && analysis.Candidates.Count > 0
+                   && analysis.Candidates.All(candidate =>
+                       candidate is { Unresolved: ShellUnresolvedPart.None, VerbTokens: { Count: > 0 } tokens }
+                       && ApprovalPatternMatching.MatchesShellApproval(
+                           candidate,
+                           cwd,
+                           [ApprovalEntry.CreateTokenPrefix(_shell, tokens, _grantRoot)]));
+        }
     }
 
     public void Dispose() => Directory.Delete(_basePath, recursive: true);

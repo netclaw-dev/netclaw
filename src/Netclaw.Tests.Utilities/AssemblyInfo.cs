@@ -6,6 +6,7 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Netclaw.Actors.Tests")]
+[assembly: InternalsVisibleTo("Netclaw.Channels.Mattermost.IntegrationTests")]
 [assembly: InternalsVisibleTo("Netclaw.Cli.Tests")]
 [assembly: InternalsVisibleTo("Netclaw.Configuration.Tests")]
 [assembly: InternalsVisibleTo("Netclaw.Daemon.IntegrationTests")]

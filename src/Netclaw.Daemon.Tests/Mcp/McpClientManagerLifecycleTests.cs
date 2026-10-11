@@ -1015,6 +1015,7 @@ public sealed class McpClientManagerLifecycleTests
     internal sealed class ManagerHarness : IAsyncDisposable
     {
         private readonly McpOAuthFlowBroker _flowBroker;
+        private readonly DisposableTempDir _temp = new();
         private bool _stopFailureObserved;
         private bool _managerDisposed;
 
@@ -1058,7 +1059,7 @@ public sealed class McpClientManagerLifecycleTests
             IOperationalNotificationSink notificationSink,
             Dictionary<string, McpServerEntry> serverEntries)
         {
-            var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+            var paths = new NetclawPaths(_temp.Path);
             paths.EnsureDirectoriesExist();
             Credentials = new McpOAuthCredentialStore(
                 paths,
@@ -1114,11 +1115,18 @@ public sealed class McpClientManagerLifecycleTests
 
         public async ValueTask DisposeAsync()
         {
-            if (!_stopFailureObserved && !_managerDisposed)
-                await Manager.StopAsync(TestContext.Current.CancellationToken);
-            if (!_managerDisposed)
-                Manager.Dispose();
-            _flowBroker.Dispose();
+            try
+            {
+                if (!_stopFailureObserved && !_managerDisposed)
+                    await Manager.StopAsync(TestContext.Current.CancellationToken);
+                if (!_managerDisposed)
+                    Manager.Dispose();
+                _flowBroker.Dispose();
+            }
+            finally
+            {
+                _temp.Dispose();
+            }
         }
     }
 

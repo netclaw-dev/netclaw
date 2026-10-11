@@ -12,12 +12,18 @@ Markdown heading above the table.
 
 Outcome direction rule (plan decision D1):
 
-    Allowed          -> anything else   always fails (regression)
+    Allowed          -> anything else   fails unless an intended change has approvedBy
+                                        and names a negative control
     Denied           -> anything else   fails unless an intended change has approvedBy
     RequiresApproval -> Allowed         fails unless an intended change names a negative control
     RequiresApproval -> Denied          fails unless an intended change has approvedBy
+    RequiresAgentCorrection -> Allowed  fails unless an intended change names a negative control
+    RequiresAgentCorrection -> Denied   fails unless an intended change has approvedBy
+    RequiresApproval <-> RequiresAgentCorrection  passes (neither runs the call)
     case removed                        always fails
     case added                          passes (reported)
+    case renamed                        the old row's Result moves to the new ID;
+                                        the rules above apply to the pair
 
 Intended-changes file (JSON):
 
@@ -36,10 +42,16 @@ Intended-changes file (JSON):
     }
 
 - "section", "id", "from", "to", and "reason" are required.
-- "negativeControl" is required for RequiresApproval -> Allowed. It names a case
-  ID in the same section. That case must exist in the baseline and in the
-  candidate snapshot, and it must not be Allowed in either one.
-- "approvedBy" is required for Denied -> other and RequiresApproval -> Denied.
+- "negativeControl" is required for RequiresApproval -> Allowed and for
+  Allowed -> other. It names a case ID in the same section. That case must
+  exist in the baseline and in the candidate snapshot, and it must not be
+  Allowed in either one.
+- "approvedBy" is required for Allowed -> other, Denied -> other, and
+  RequiresApproval -> Denied.
+- "renamedFrom" names the old case ID of a renamed row. The old ID must be in
+  the baseline and not in the candidate. The new ID must be in the candidate
+  and not in the baseline. The check compares the old Result with the new
+  Result. "from" and "to" can be equal for a rename with no outcome change.
 - Each entry that is new since the baseline must match an actual transition.
   A new entry that does not match fails the check (stale entry).
 - An entry that is also in the baseline version of the file is history. The
@@ -67,8 +79,9 @@ DEFAULT_BASE_REF = "origin/dev"
 
 ALLOWED = "Allowed"
 REQUIRES_APPROVAL = "RequiresApproval"
+REQUIRES_AGENT_CORRECTION = "RequiresAgentCorrection"
 DENIED = "Denied"
-OUTCOMES = (ALLOWED, REQUIRES_APPROVAL, DENIED)
+OUTCOMES = (ALLOWED, REQUIRES_APPROVAL, REQUIRES_AGENT_CORRECTION, DENIED)
 
 # Only an unescaped pipe separates cells. The review table renderer writes a
 # pipe inside a cell as "\|", and cell separators are " | ".
@@ -180,7 +193,8 @@ def parse_intended_changes(text: str | None, label: str) -> list[dict]:
         raise InputError(f"{label}: invalid JSON: {error}") from error
     if not isinstance(document, dict) or not isinstance(document.get("changes"), list):
         raise InputError(f"{label}: expected an object with a 'changes' array")
-    allowed_keys = {"section", "id", "from", "to", "reason", "negativeControl", "approvedBy"}
+    allowed_keys = {
+        "section", "id", "from", "to", "reason", "negativeControl", "approvedBy", "renamedFrom"}
     entries = []
     for index, entry in enumerate(document["changes"]):
         where = f"{label}: changes[{index}]"
@@ -195,7 +209,7 @@ def parse_intended_changes(text: str | None, label: str) -> list[dict]:
         for key in ("from", "to"):
             if entry[key] not in OUTCOMES:
                 raise InputError(f"{where}: '{key}' must be one of {', '.join(OUTCOMES)}")
-        for key in ("negativeControl", "approvedBy"):
+        for key in ("negativeControl", "approvedBy", "renamedFrom"):
             if key in entry and (not isinstance(entry[key], str) or not entry[key].strip()):
                 raise InputError(f"{where}: '{key}' must be a non-empty string when present")
         entries.append(entry)
@@ -227,18 +241,52 @@ def check(
             continue
         active[case_key] = entry
 
+    # A rename joins the old baseline row and the new candidate row into one
+    # transition. Both IDs must be unambiguous, so a rename cannot hide a
+    # removed row or reuse a live one.
+    renamed_old: dict[tuple[str, str], tuple[str, str]] = {}
+    for key, entry in active.items():
+        if "renamedFrom" not in entry:
+            continue
+        old_key = (entry["section"], entry["renamedFrom"])
+        if (old_key not in baseline or old_key in candidate
+                or key in baseline or key not in candidate or old_key in renamed_old):
+            report.errors.append(
+                f"rename {entry['renamedFrom']!r} -> {entry['id']!r} needs the old ID only in "
+                "the baseline and the new ID only in the candidate")
+            continue
+        renamed_old[old_key] = key
+    renamed_new = {new: old for old, new in renamed_old.items()}
+
     used: set[tuple[str, str]] = set()
     for key in sorted(set(baseline) | set(candidate)):
-        before = baseline[key].result if key in baseline else None
+        if key in renamed_old:
+            continue
+        source = renamed_new.get(key, key)
+        before = baseline[source].result if source in baseline else None
         after = candidate[key].result if key in candidate else None
-        if before == after:
+        if before == after and source == key:
             continue
         transition = Transition(key[0], key[1], before, after)
+        if source != key and before == after:
+            entry = active[key]
+            used.add(key)
+            report.transitions.append(transition)
+            if entry["from"] != before or entry["to"] != after:
+                transition.note = (
+                    f"intended change says {entry['from']} -> {entry['to']}, "
+                    f"actual is {before} -> {after}")
+                continue
+            transition.status = "ok"
+            transition.note = f"renamed from {source[1]}"
+            continue
         report.transitions.append(transition)
         entry = active.get(key)
         if entry is not None:
             used.add(key)
         evaluate(transition, entry, baseline, candidate)
+        if source != key:
+            transition.note = f"renamed from {source[1]}; {transition.note}"
 
     for key, entry in active.items():
         if key in used:
@@ -264,7 +312,14 @@ def evaluate(transition: Transition, entry: dict | None, baseline: dict, candida
             f"actual is {before} -> {after}")
         return
     if before == ALLOWED:
-        transition.note = "Allowed must stay Allowed"
+        # A tighter grant contract can stop an old Allowed case. Only an owner
+        # can approve it, and a control case must still prompt or deny.
+        if entry is None or "approvedBy" not in entry:
+            transition.note = "Allowed must stay Allowed unless an intended change has approvedBy"
+            return
+        if check_negative_control(transition, entry, baseline, candidate):
+            transition.status = "ok"
+            transition.note = f"approved by {entry['approvedBy']}; {transition.note}"
         return
     if before == DENIED:
         if entry is None or "approvedBy" not in entry:
@@ -275,35 +330,46 @@ def evaluate(transition: Transition, entry: dict | None, baseline: dict, candida
         return
     if after == ALLOWED:
         if entry is None:
-            transition.note = "RequiresApproval -> Allowed needs an intended change"
+            transition.note = f"{before} -> Allowed needs an intended change"
             return
-        control_id = entry.get("negativeControl")
-        if control_id is None:
-            transition.note = "intended change has no negativeControl"
-            return
-        # The control must be an existing case that prompts or denies before
-        # and after the change. A control that the same PR adds proves nothing.
-        control_key = (transition.section, control_id)
-        control_before = baseline.get(control_key)
-        control_after = candidate.get(control_key)
-        if control_before is None or control_after is None:
-            transition.note = (
-                f"negative control {control_id!r} must exist in the baseline and the candidate")
-            return
-        if control_id == transition.case_id or ALLOWED in (control_before.result, control_after.result):
-            transition.note = (
-                f"negative control {control_id!r} is Allowed in the baseline or the candidate; "
-                "it must prompt or deny in both")
+        if check_negative_control(transition, entry, baseline, candidate):
+            transition.status = "ok"
+        return
+    if after == DENIED:
+        if entry is None or "approvedBy" not in entry:
+            transition.note = f"{before} -> Denied needs an intended change with approvedBy"
             return
         transition.status = "ok"
-        transition.note = f"negative control {control_id} is {control_after.result}"
+        transition.note = f"approved by {entry['approvedBy']}"
         return
-    # RequiresApproval -> Denied
-    if entry is None or "approvedBy" not in entry:
-        transition.note = "RequiresApproval -> Denied needs an intended change with approvedBy"
-        return
+    # RequiresApproval <-> RequiresAgentCorrection: neither outcome runs the call.
     transition.status = "ok"
-    transition.note = f"approved by {entry['approvedBy']}"
+    transition.note = "consent or correction; the call does not run"
+    return
+
+
+def check_negative_control(transition: Transition, entry: dict, baseline: dict, candidate: dict) -> bool:
+    """Validates the entry's negative control and records the result in the note."""
+    control_id = entry.get("negativeControl")
+    if control_id is None:
+        transition.note = "intended change has no negativeControl"
+        return False
+    # The control must be an existing case that prompts or denies before
+    # and after the change. A control that the same PR adds proves nothing.
+    control_key = (transition.section, control_id)
+    control_before = baseline.get(control_key)
+    control_after = candidate.get(control_key)
+    if control_before is None or control_after is None:
+        transition.note = (
+            f"negative control {control_id!r} must exist in the baseline and the candidate")
+        return False
+    if control_id == transition.case_id or ALLOWED in (control_before.result, control_after.result):
+        transition.note = (
+            f"negative control {control_id!r} is Allowed in the baseline or the candidate; "
+            "it must prompt or deny in both")
+        return False
+    transition.note = f"negative control {control_id} is {control_after.result}"
+    return True
 
 
 def summarize(rows: dict[tuple[str, str], Row]) -> str:

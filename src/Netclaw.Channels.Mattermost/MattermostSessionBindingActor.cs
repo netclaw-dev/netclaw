@@ -60,7 +60,24 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ReinitializeDelay = TimeSpan.FromSeconds(2);
     private static readonly object ReinitializeTimerKey = new();
-    private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
+    // A Mattermost client clears a typing pulse after about five seconds (the
+    // server default for TimeBetweenUserTypingUpdatesMilliseconds). The repeat
+    // interval stays below that window so a long turn stays visible. See
+    // issue #2347.
+    private static readonly TimeSpan TypingPulseInterval = TimeSpan.FromSeconds(3);
+    // The actor awaits each pulse on its message path. The limit stays below
+    // the repeat interval so a stalled transport cannot delay session output
+    // for longer than one interval.
+    private static readonly TimeSpan TypingPulseTimeout = TimeSpan.FromSeconds(2);
+    // Upper bound for one processing phase. The idle signal is lost when the
+    // session actor fails during a turn: the new incarnation emits no
+    // ProcessingStateOutput(false), and the output stream stays open. Without
+    // this bound the binding sends pulses until the daemon stops, and each
+    // timer message also resets the idle passivation timeout.
+    private static readonly TimeSpan TypingPulseMaxDuration = TimeSpan.FromMinutes(10);
+    private static readonly object TypingPulseTimerKey = new();
+    private bool _processingIndicatorActive;
+    private DateTimeOffset _typingPulseDeadline;
     private string? _cursorPostId;
 
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
@@ -119,7 +136,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             uploadFileAsync: SafeUploadFileAsync,
             postApprovalPromptAsync: SafeReplyWithApprovalPromptAsync,
             readPromptIdValue: promptPostId => promptPostId.Value,
-            onApprovalPromptFailedAsync: request => SendApprovalDenyOnFailureAsync(request.CallId),
+            onApprovalPromptFailedAsync: SendApprovalPromptUnavailableAsync,
             persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
             handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
             advanceCursor: AdvanceCursor,
@@ -198,6 +215,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     protected override void PostStop()
     {
+        // The timer scheduler cancels the typing pulse timer when the actor stops.
         _handle.Dispose();
         base.PostStop();
     }
@@ -205,7 +223,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private SessionPipelineOptions BuildOptions() => new()
     {
         ChannelType = ChannelType.Mattermost,
-        Filter = OutputFilter.Text | OutputFilter.Files
+        Filter = OutputFilter.Text | OutputFilter.Files | OutputFilter.ProcessingState
     };
 
     private void Initializing()
@@ -266,6 +284,28 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         CommandAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
         CommandAsync<OutputReceived>(HandleOutputReceivedAsync);
 
+        CommandAsync<SendTypingPulse>(async _ =>
+        {
+            if (!_processingIndicatorActive)
+                return;
+
+            if (_dependencies.TimeProvider.GetUtcNow() >= _typingPulseDeadline)
+            {
+                _log.Info(
+                    "Session reported processing for {0}; stopping Mattermost typing pulses",
+                    TypingPulseMaxDuration);
+                StopTypingPulses();
+                return;
+            }
+
+            ScheduleNextTypingPulse();
+            await RenderTypingPulseAsync(new ProcessingStateOutput(true)
+            {
+                IsRequired = false,
+                SessionId = _sessionId
+            });
+        });
+
         Command<OutputStreamTerminated>(msg =>
         {
             if (msg.Generation != _handle.Generation)
@@ -281,6 +321,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         CommandAsync<ReinitializePipeline>(async msg =>
         {
+            // The binding abandons its record of the turn in flight, and the
+            // new subscription does not replay the processing state. Stop the
+            // pulses here so a lost ProcessingStateOutput(false) cannot leave
+            // the thread in the typing state.
+            StopTypingPulses();
             _outputEngine.ResetForPipelineReinitialize(msg.Reason);
             await _handle.ReinitializeAsync(
                 msg.Reason,
@@ -289,20 +334,13 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                     new ReinitializePipeline("retry after failed reinit"),
                     ReinitializeDelay));
         });
+    }
 
-        Command<ReceiveTimeout>(_ =>
-        {
-            if (_pendingApprovalRequests.Count > 0)
-            {
-                _log.Info("Session idle but {0} approval(s) pending; deferring passivation", _pendingApprovalRequests.Count);
-                return;
-            }
-
-            _log.Info("Session idle for 1 hour, passivating");
-            Context.Stop(Self);
-        });
-
-        Context.SetReceiveTimeout(IdlePassivationTimeout);
+    private async Task HandleSessionDeactivatedAsync()
+    {
+        StopTypingPulses();
+        await _handle.DrainAsync();
+        Context.Stop(Self);
     }
 
     private async Task EnsureInitializedAsync()
@@ -605,6 +643,12 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private async Task HandleOutputReceivedAsync(OutputReceived msg)
     {
+        if (msg.Output is SessionDeactivated)
+        {
+            await HandleSessionDeactivatedAsync();
+            return;
+        }
+
         var clearedPrompts = await _outputEngine.HandleOutputAsync(msg.Output);
         if (clearedPrompts.Count > 0)
             PersistAll(clearedPrompts, ApplyPendingApprovalPromptCleared);
@@ -612,14 +656,92 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     /// <summary>
     /// Handles the outputs the shared engine leaves to the channel. Mattermost
-    /// supports none of them, so every one is ignored here. Mattermost threads
-    /// cannot be renamed, so a <c>SessionTitleOutput</c> has no effect, and the
-    /// binding renders no processing indicator. The missing processing
-    /// indicator is a capability difference from Slack and Discord. Whether
-    /// Mattermost should gain one is a product question, recorded as an open
-    /// question in the OpenSpec design for this change.
+    /// cannot rename threads, so a <c>SessionTitleOutput</c> has no effect. A
+    /// <c>ProcessingStateOutput</c> drives a native typing pulse for the
+    /// channel and its thread root.
     /// </summary>
-    private Task HandleChannelSpecificOutputAsync(SessionOutput output) => Task.CompletedTask;
+    private async Task HandleChannelSpecificOutputAsync(SessionOutput output)
+    {
+        switch (output)
+        {
+            case ProcessingStateOutput processing:
+                await RenderProcessingStateAsync(processing);
+                break;
+        }
+    }
+
+    private async Task RenderProcessingStateAsync(ProcessingStateOutput output)
+    {
+        if (!output.IsProcessing)
+        {
+            StopTypingPulses();
+            return;
+        }
+
+        // The session emits ProcessingStateOutput(true) once for each
+        // processing phase, and a Mattermost typing pulse is transient, so the
+        // binding repeats it. Schedule the repeat before the first pulse: a
+        // required first pulse that throws must not leave the flag set with
+        // no timer.
+        _processingIndicatorActive = true;
+        _typingPulseDeadline = _dependencies.TimeProvider.GetUtcNow() + TypingPulseMaxDuration;
+        ScheduleNextTypingPulse();
+        await RenderTypingPulseAsync(output);
+    }
+
+    /// <summary>
+    /// Schedules one repeat pulse. Each handled pulse schedules the next one,
+    /// so at most one timer message waits in the mailbox while the actor
+    /// awaits a slow post or upload. A periodic timer would queue one message
+    /// for each interval, and the actor would send them all after the reply.
+    /// </summary>
+    private void ScheduleNextTypingPulse()
+        => Timers.StartSingleTimer(
+            TypingPulseTimerKey,
+            SendTypingPulse.Instance,
+            TypingPulseInterval);
+
+    private void StopTypingPulses()
+    {
+        // The flag also stops a timer message that is already in the mailbox.
+        _processingIndicatorActive = false;
+        Timers.Cancel(TypingPulseTimerKey);
+    }
+
+    private async Task RenderTypingPulseAsync(ProcessingStateOutput output)
+    {
+        var requirement = output.IsRequired
+            ? ChannelOutputRequirement.Required
+            : ChannelOutputRequirement.Optional;
+        var request = new ChannelOutputRenderRequest(
+            BuildTypingRenderTarget(),
+            output,
+            ChannelOutputEffectKind.ProcessingIndicator,
+            requirement);
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TypingPulseTimeout);
+            await _dependencies.ChannelRegistry.RenderOutputAsync(request, cts.Token);
+        }
+        catch (Exception ex) when (!output.IsRequired)
+        {
+            _log.Warning(ex, "Failed rendering optional Mattermost processing indicator");
+        }
+    }
+
+    private ChannelDeliveryTarget BuildTypingRenderTarget()
+    {
+        var channelKey = ChannelDescriptorKey.FromChannelType(ChannelType.Mattermost);
+        return new ChannelDeliveryTarget(
+            channelKey,
+            new ResolvedChannelAddress(
+                channelKey,
+                ChannelAddressKind.Destination,
+                _channelId.Value,
+                _channelId.Value),
+            _rootPostId.Value);
+    }
 
     private async Task<MattermostPostId?> SafeReplyWithApprovalPromptAsync(ToolInteractionRequest request)
     {
@@ -686,9 +808,9 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
         catch (Exception ex)
         {
-            // The shared output engine auto-denies the request when this
+            // The shared output engine refuses the call as prompt_unavailable when this
             // returns null, so the blocked tool call still unwinds.
-            _log.Error(ex, "Failed posting Mattermost approval prompt; auto-denying request");
+            _log.Error(ex, "Failed posting Mattermost approval prompt; refusing the call");
             ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("approvalFallbackActivated", "auto_deny");
             return null;
         }
@@ -782,8 +904,20 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
     }
 
-    private async Task SendApprovalDenyOnFailureAsync(ToolCallId callId)
+    /// <summary>
+    /// Tells the session that the approval prompt could not be posted. The
+    /// session refuses the call with <c>approval_prompt_unavailable</c>, so the
+    /// call does not run and the model does not read the failure as a user
+    /// decision. The requester sender ID passes the session's requester check.
+    /// </summary>
+    private async Task SendApprovalPromptUnavailableAsync(ToolInteractionRequest request)
     {
+        var callId = request.CallId;
+        _log.Warning(
+            "Refusing {CallId} ({ToolName}) because the approval prompt could not be posted",
+            callId,
+            request.ToolName);
+
         var pending = _pendingApprovalRequests.LastOrDefault(p =>
             p.CallId == callId);
         if (pending is not null)
@@ -795,13 +929,13 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             {
                 SessionId = _sessionId,
                 CallId = callId,
-                SelectedKey = ApprovalOptionKeys.DenyKey,
-                SenderId = new SenderId("system")
+                SelectedKey = ApprovalOptionKeys.PromptUnavailableKey,
+                SenderId = request.RequesterSenderId ?? new SenderId(string.Empty)
             });
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to send auto-deny feedback for call {CallId}", callId);
+            _log.Error(ex, "Failed to send prompt-unavailable feedback for call {CallId}", callId);
         }
     }
 
@@ -988,4 +1122,9 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private sealed record OutputStreamTerminated(int Generation, Exception? Cause);
 
     private sealed record ReinitializePipeline(string Reason);
+
+    private sealed record SendTypingPulse
+    {
+        public static readonly SendTypingPulse Instance = new();
+    }
 }

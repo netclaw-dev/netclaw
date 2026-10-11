@@ -189,6 +189,77 @@ public sealed class InitWizardPageTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("ollama", "Enter the URL of your Ollama server, for example http://localhost:11434. Press Enter to accept.")]
+    [InlineData("openai-compatible", "Enter the base URL of your server, with or without /v1. Press Enter to accept.")]
+    public async Task EndpointStep_ShowsEndpointHintAndTypingAppendsToTheDefault(string providerType, string expectedHint)
+    {
+        var (terminal, app, vm) = HeadlessTerminaFixture.Create<InitWizardPage, InitWizardViewModel>(
+            "/init", _ => new InitWizardPage(), CreateViewModel, out var input);
+        var defaultEndpoint = _registry.Get(providerType).DefaultEndpoint;
+
+        foreach (var _ in _registry.KnownTypeKeys.TakeWhile(type => type != providerType))
+            input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("/x");
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.True(terminal.Contains(expectedHint));
+        Assert.False(terminal.Contains("Enter your API key"));
+        Assert.True(terminal.Contains(defaultEndpoint + "/x"),
+            "Typing into the pre-filled endpoint must append to the default, not insert before it");
+        Assert.Equal(providerType, vm.ProviderStep.SelectedProviderType);
+    }
+
+    [Fact]
+    public async Task ApiKeyStep_DoesNotShowTheEndpointHint()
+    {
+        var (terminal, app, vm) = HeadlessTerminaFixture.Create<InitWizardPage, InitWizardViewModel>(
+            "/init", _ => new InitWizardPage(), CreateViewModel, out var input);
+
+        foreach (var _ in _registry.KnownTypeKeys.TakeWhile(type => type != "anthropic"))
+            input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter); // provider
+        input.EnqueueKey(ConsoleKey.Enter); // "API Key" authentication
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal("anthropic", vm.ProviderStep.SelectedProviderType);
+        Assert.True(terminal.Contains("Enter your API key"));
+        Assert.False(terminal.Contains("base URL of your server"));
+        Assert.False(terminal.Contains("Ollama server"));
+    }
+
+    /// <summary>
+    /// Every pre-filled wizard text input must put the cursor at the end, so the first
+    /// keystroke appends to the default rather than inserting in front of it. Each row
+    /// confirms <paramref name="enters"/> earlier sub-steps, then types into the seeded input.
+    /// </summary>
+    [Theory]
+    [InlineData(0, "Netclaw")]
+    [InlineData(3, "{timezone}")]
+    public async Task IdentityInputs_AppendTypedTextToTheSeed(int enters, string seed)
+    {
+        seed = seed.Replace("{timezone}", TimeZoneInfo.Local.Id);
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+
+        AdvanceToStep(vm, WizardStepIds.Identity);
+        for (var i = 0; i < enters; i++)
+            input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("ZZ");
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.True(terminal.Contains(seed + "ZZ"), $"Typed text must append to '{seed}'");
+    }
+
     // ── Config integrity: wizard choices must match written config ──────────
 
     /// <summary>
@@ -340,7 +411,7 @@ public sealed class InitWizardPageTests : IDisposable
         CreateHeadlessApp(out VirtualInputSource input)
         => HeadlessTerminaFixture.Create<InitWizardPage, InitWizardViewModel>(
             "/init",
-            () => new InitWizardPage(),
+            _ => new InitWizardPage(),
             CreateViewModel,
             out input);
 

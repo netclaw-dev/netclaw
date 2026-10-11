@@ -35,7 +35,7 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
 {
     private static readonly SessionId TestSessionId = new("test-channel/curation-parity");
 
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-curation-evaluator-parity-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-curation-evaluator-parity-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 

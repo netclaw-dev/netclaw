@@ -3,9 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -40,20 +42,11 @@ internal static class ToolApprovalProtocol
 
     // ===== Commands =====
 
-    internal sealed record RecordToolApproval(
-        SessionId SessionId,
-        TrustAudience Audience,
-        ToolName ToolName,
-        IReadOnlyList<string> Patterns,
-        bool Persistent,
-        string? Cwd);
-
     internal sealed record RecordStructuredToolApproval(
         SessionId SessionId,
         TrustAudience Audience,
         ToolName ToolName,
-        IReadOnlyList<ToolApprovalGrant> Grants,
-        bool Persistent);
+        IReadOnlyList<ToolApprovalGrant> Grants);
 }
 
 internal interface IShellApprovalMatchService
@@ -137,12 +130,12 @@ internal sealed class ShellGrantCandidateResult
 
     private ShellGrantCandidateResult(
         ShellGrantCandidate sourceCandidate,
-        ShellCoverageKind coverage,
+        Coverage.Stored? coverage,
         ApprovalEntry? persistentGrant,
         ShellApprovalNearMiss? nearMiss)
     {
         SourceCandidate = sourceCandidate;
-        Coverage = coverage;
+        Grant = coverage;
         _persistentGrant = persistentGrant;
         NearMiss = nearMiss;
     }
@@ -153,11 +146,10 @@ internal sealed class ShellGrantCandidateResult
 
     internal ShellApprovalNearMiss? NearMiss { get; }
 
-    internal ShellCoverageKind Coverage { get; }
+    /// <summary>The stored grant that covers the candidate, or null when none does.</summary>
+    internal Coverage.Stored? Grant { get; }
 
     internal bool HasPersistentEvidence => _persistentGrant is not null;
-
-    internal DateTimeOffset? GrantCreatedAt => _persistentGrant?.CreatedAt;
 
     internal static ShellGrantCandidateResult Uncovered(
         ShellGrantCandidate candidate,
@@ -169,7 +161,7 @@ internal sealed class ShellGrantCandidateResult
             : ValidateNearMiss(candidate, nearMiss);
         return new ShellGrantCandidateResult(
             candidate,
-            ShellCoverageKind.Uncovered,
+            coverage: null,
             persistentGrant: null,
             validatedNearMiss);
     }
@@ -179,7 +171,7 @@ internal sealed class ShellGrantCandidateResult
         ArgumentNullException.ThrowIfNull(candidate);
         return new ShellGrantCandidateResult(
             candidate,
-            ShellCoverageKind.Session,
+            new Coverage.Stored(GrantScope.Session.Instance, GrantedAt: null),
             persistentGrant: null,
             nearMiss: null);
     }
@@ -202,7 +194,7 @@ internal sealed class ShellGrantCandidateResult
 
         return new ShellGrantCandidateResult(
             candidate,
-            PersistentCoverage(validatedGrant),
+            new Coverage.Stored(GrantScope.OfStoredEntry(validatedGrant), validatedGrant.CreatedAt),
             validatedGrant,
             nearMiss: null);
     }
@@ -234,24 +226,10 @@ internal sealed class ShellGrantCandidateResult
     internal ToolApprovalMatch FormatMatch(ApprovalCandidate candidate)
     {
         ArgumentNullException.ThrowIfNull(candidate);
-        return Coverage switch
-        {
-            ShellCoverageKind.Session =>
-                new ToolApprovalMatch(candidate.Verb, "session", "this chat"),
-            ShellCoverageKind.PersistentGlobal
-                or ShellCoverageKind.PersistentFolder
-                or ShellCoverageKind.PersistentRepository =>
-                new ToolApprovalMatch(candidate.Verb, "persistent", _persistentGrant!.FormatScope()),
-            _ => throw new InvalidOperationException("An uncovered candidate has no approval match."),
-        };
+        return Grant is { } stored
+            ? new ToolApprovalMatch(candidate.Verb, stored.Scope)
+            : throw new InvalidOperationException("An uncovered candidate has no approval match.");
     }
-
-    private static ShellCoverageKind PersistentCoverage(ApprovalEntry grant)
-        => grant.Repository is not null
-            ? ShellCoverageKind.PersistentRepository
-            : grant.Directory is null
-                ? ShellCoverageKind.PersistentGlobal
-                : ShellCoverageKind.PersistentFolder;
 
     private static ShellApprovalNearMiss ValidateNearMiss(
         ShellGrantCandidate candidate,

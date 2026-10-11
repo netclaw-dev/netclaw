@@ -89,7 +89,14 @@ public static partial class SessionProtocol
 
         public required string Result { get; init; }
 
-        /// <summary>The stable preflight failure code, or null after execution.</summary>
+        /// <summary>The <see cref="FailureCode"/> of a call that authorization refused: policy, hard deny, a consent that nobody could give, or a path rule. An operating system permission error does not carry it.</summary>
+        public const string AccessDeniedFailureCode = "access_denied";
+
+        /// <summary>
+        /// The stable failure code: a preflight rejection code for a call that never ran,
+        /// <see cref="AccessDeniedFailureCode"/> for a call that authorization denied, or null
+        /// after a normal execution.
+        /// </summary>
         public string? FailureCode { get; init; }
     }
 
@@ -173,6 +180,12 @@ public static partial class SessionProtocol
         /// </summary>
         public ReminderId? SourceReminderId { get; init; }
     }
+
+    /// <summary>
+    /// Signals that the session actor will stop after committed passivation.
+    /// Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
+    /// </summary>
+    public sealed record SessionDeactivated : SessionOutput;
 
     /// <summary>
     /// Session title was generated or updated by the LLM.

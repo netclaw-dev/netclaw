@@ -35,7 +35,7 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
 
     private static readonly float[] QueryVector = [1f, 0f];
 
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-recall-gate-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-recall-gate-tests-{Guid.NewGuid():N}");
     private readonly FakeTimeProvider _timeProvider = new();
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;

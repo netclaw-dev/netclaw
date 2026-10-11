@@ -201,7 +201,8 @@ public sealed class ToolApprovalStore
             {
                 CurrentSchemaVersion => ApprovalStoreCodec.ReadVersion3(
                     document.RootElement,
-                    _migrationContext?.ShellToolName ?? "shell_execute"),
+                    _migrationContext?.ShellToolName ?? "shell_execute",
+                    LaunchHomeDirectory),
                 2 => ConvertVersion2(document.RootElement, sourceBytes),
                 1 => ConvertVersion1(sourceBytes),
                 > CurrentSchemaVersion => throw new ApprovalStoreException(
@@ -236,6 +237,7 @@ public sealed class ToolApprovalStore
         var data = ApprovalStoreCodec.ConvertVersion2(
             root,
             _migrationContext,
+            LaunchHomeDirectory,
             out var omittedEntries);
         var contents = ApprovalStoreCodec.Serialize(data);
         _fileAccess.ReplaceVersion2(
@@ -319,6 +321,18 @@ public sealed class ToolApprovalStore
     /// <summary>
     /// Adds one reviewed batch under one lock and one atomic file replace.
     /// </summary>
+    /// <remarks>
+    /// Hygiene, under the lock, for each grant:
+    /// <list type="bullet">
+    ///   <item>A shell folder grant with a file word in its own folder is
+    ///   refused, and the batch fails (<see cref="ShellGrantFileWords"/>).</item>
+    ///   <item>A grant that a stored grant already covers is not saved
+    ///   (<see cref="ApprovalGrantHygiene.Covers"/>). The store never removes a
+    ///   stored grant here, so a later revoke keeps its meaning.
+    ///   <c>netclaw doctor --fix</c> removes covered grants.</item>
+    /// </list>
+    /// </remarks>
+    /// <returns>The count of saved grants.</returns>
     public int AddApprovals(
         TrustAudience audience,
         string toolName,
@@ -327,7 +341,19 @@ public sealed class ToolApprovalStore
         ArgumentNullException.ThrowIfNull(entriesToAdd);
         ApprovalStoreCodec.ValidateToolName(toolName);
         var normalizedEntries = entriesToAdd
-            .Select(entry => NormalizeForVersion3(toolName, entry))
+            .Select(entry =>
+            {
+                var normalized = NormalizeForVersion3(toolName, entry);
+                if (normalized is { Repository: null, Directory: { } folder }
+                    && ApprovalGrantHygiene.FileWords(normalized, folder).Count > 0)
+                {
+                    throw new ApprovalStoreException(
+                        ApprovalStoreFailure.InvalidData,
+                        "A shell folder grant must not name a file or directory of its folder after its verb slot.");
+                }
+
+                return normalized;
+            })
             .ToArray();
 
         lock (_lock)
@@ -351,7 +377,8 @@ public sealed class ToolApprovalStore
             var added = 0;
             foreach (var normalized in normalizedEntries)
             {
-                if (entries.Any(existing => ToolApprovalEntryComparer.Equals(existing, normalized)))
+                if (entries.Any(existing => ToolApprovalEntryComparer.Equals(existing, normalized)
+                                            || ApprovalGrantHygiene.Covers(existing, normalized)))
                 {
                     continue;
                 }
@@ -388,6 +415,61 @@ public sealed class ToolApprovalStore
         string toolName,
         IReadOnlyList<ApprovalEntry> entries) => TryChange(
         () => AddApprovals(audience, toolName, entries));
+
+    /// <summary>
+    /// Returns the grants that <c>netclaw doctor</c> reports, and the store text
+    /// without the removable ones. The store does not change.
+    /// </summary>
+    public ApprovalHygieneReport AnalyzeHygiene()
+    {
+        lock (_lock)
+        {
+            using var lease = _fileAccess.AcquireLock(LockPath, _lockTimeout);
+            var data = CloneData(LoadLocked());
+            var findings = new List<ApprovalHygieneFinding>();
+            foreach (var (audience, tools) in data.Audiences)
+            foreach (var (toolName, entries) in tools)
+                findings.AddRange(ApprovalGrantHygiene.Analyze(audience, toolName, entries));
+
+            var removable = findings.Where(static finding => finding.Removable).ToArray();
+            if (removable.Length == 0 || !File.Exists(_filePath))
+                return new ApprovalHygieneReport(findings, OriginalText: null, UpdatedText: null);
+
+            foreach (var finding in removable)
+                data.Audiences[finding.Audience][finding.ToolName].Remove(finding.Entry);
+
+            foreach (var finding in removable)
+                CleanupEmptySections(data, finding.Audience, finding.ToolName);
+
+            return new ApprovalHygieneReport(
+                findings,
+                Encoding.UTF8.GetString(_fileAccess.ReadAllBytes(_filePath)),
+                ApprovalStoreCodec.Serialize(data));
+        }
+    }
+
+    /// <summary>
+    /// Writes the cleaned store text of <see cref="AnalyzeHygiene"/>. The write
+    /// fails when the store changed after the analysis.
+    /// </summary>
+    public ApprovalStoreChangeResult TryApplyHygiene(ApprovalHygieneReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        if (report.OriginalText is null || report.UpdatedText is null)
+            return new ApprovalStoreChangeResult.Completed(0);
+
+        return TryChange(() =>
+        {
+            lock (_lock)
+            {
+                using var lease = _fileAccess.AcquireLock(LockPath, _lockTimeout);
+                _fileAccess.WriteAtomic(_filePath, report.UpdatedText, Encoding.UTF8.GetBytes(report.OriginalText));
+                _cachedData = null;
+                _cachedSourceBytes = null;
+                return report.Findings.Count(static finding => finding.Removable);
+            }
+        });
+    }
 
     /// <summary>
     /// Returns the approved entries for a specific tool and audience.
@@ -620,8 +702,13 @@ public sealed class ToolApprovalStore
             ? entry
             : entry with { Directory = directory };
         ApprovalEntryValidation.ValidateVersion3(normalized);
-        return normalized;
+        return isShellTool ? ShellProgramPath.NormalizeGrant(normalized, LaunchHomeDirectory) : normalized;
     }
+
+    // The shell launcher gives this value to HOME. A "~/x" program in an older
+    // grant named the file below it.
+    private static string LaunchHomeDirectory
+        => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     private static string? NormalizeVersion3Directory(
         string? directory,

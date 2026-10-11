@@ -23,11 +23,14 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly string? _originalDaemonEndpoint;
+    private readonly string? _originalDaemonPort;
 
     public DaemonApiAuthenticationTests()
     {
         _originalDaemonEndpoint = Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT");
         Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", null);
+        _originalDaemonPort = Environment.GetEnvironmentVariable("NETCLAW_Daemon__Port");
+        Environment.SetEnvironmentVariable("NETCLAW_Daemon__Port", null);
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
@@ -35,6 +38,7 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
     public void Dispose()
     {
         Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", _originalDaemonEndpoint);
+        Environment.SetEnvironmentVariable("NETCLAW_Daemon__Port", _originalDaemonPort);
         _dir.Dispose();
     }
 
@@ -284,6 +288,19 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         var endpoint = DaemonApi.ResolveEndpoint(_paths);
 
         Assert.Equal("http://10.0.0.20:6200", endpoint);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_DaemonPortEnvironmentVariable_WinsOverConfigFile()
+    {
+        // The container HEALTHCHECK relies on this: the CLI must find the daemon wherever
+        // the daemon's own config chain (file, then env) put it.
+        File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Daemon\":{\"Port\":6200}}");
+        Environment.SetEnvironmentVariable("NETCLAW_Daemon__Port", "5200");
+
+        var endpoint = DaemonApi.ResolveEndpoint(_paths);
+
+        Assert.Equal("http://127.0.0.1:5200", endpoint);
     }
 
     [Fact]

@@ -11,7 +11,6 @@ on:
       - master
       - dev
       - main
-      - feature/*
   pull_request:
     branches:
       - master
@@ -96,6 +95,19 @@ jobs:
             echo "No blame Sequence file — no test hang detected."
           fi
 
+      # The VSTest adapter shows only "Test Assembly Cleanup Failure" for the temp-leak gate.
+      # The gate also writes its report next to the test assembly. Print it here.
+      - name: "Show test temp leaks (if a test leaked)"
+        if: always()
+        shell: bash
+        run: |
+          reports=$(find ./src ./tests -name 'test-temp-leaks.txt' 2>/dev/null || true)
+          if [ -n "$reports" ]; then
+            for f in $reports; do echo "===== TEST TEMP LEAKS: $f ====="; cat "$f"; echo; done
+          else
+            echo "No test temp leak report."
+          fi
+
       # Upload the hang dump + sequence file so a dedicated agent can open the dump (dotnet-dump
       # analyze / lldb) and read the stalled thread stacks. Per-OS name; only the macOS run is
       # expected to produce one today.
@@ -135,10 +147,27 @@ jobs:
         env:
           NETCLAW_CLI: ./install-test/netclaw
 
-  path-access-mutation:
-    name: Path Access Mutation Tests
+  mutation-gates:
+    # One job definition for every focused Stryker gate. Each matrix group shares
+    # one checkout, SDK install, and tool restore. To add a gate, add its script
+    # name (scripts/run-<name>-mutations.sh) to the lightest group. The groups
+    # are balanced by measured gate time (about 13 to 14 minutes each) so each
+    # one finishes well inside the job timeout and before the Windows test job.
+    name: Mutation Gates (${{ matrix.group }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: shell-analysis
+            gates: shell-command-analysis tool-authorizer-order mcp-artifact-admission
+          - group: shell-assignment-and-paths
+            gates: shell-assignment shell-config-read path-access
+          - group: verb-chain-and-reminder
+            gates: exact-verb-chain reminder-execution literal-twin
+          - group: approval-and-authorization
+            gates: tool-authorization approval-directory skill-manage-guard no-program
 
     steps:
       - name: "Checkout"
@@ -154,232 +183,34 @@ jobs:
       - name: "Restore .NET tools"
         run: dotnet tool restore
 
-      - name: "Test path-access mutants"
-        run: ./scripts/run-path-access-mutations.sh
+      # Run every gate in the group, even after a failure, so one run reports
+      # all failed gates. The step fails if any gate fails.
+      - name: "Run mutation gates"
+        env:
+          GATES: ${{ matrix.gates }}
+        run: |
+          failed=()
+          for gate in $GATES; do
+            echo "::group::$gate"
+            if "./scripts/run-${gate}-mutations.sh"; then
+              echo "- \`$gate\`: passed" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`$gate\`: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              failed+=("$gate")
+            fi
+            echo "::endgroup::"
+          done
+          if (( ${#failed[@]} > 0 )); then
+            echo "::error::Mutation gates failed: ${failed[*]}"
+            exit 1
+          fi
 
-      - name: "Upload mutation report"
+      - name: "Upload mutation reports"
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: path-access-mutation-report
-          path: ./artifacts/stryker/path-access-policy
-          if-no-files-found: ignore
-          retention-days: 14
-
-  tool-authorization-mutation:
-    name: Tool Authorization Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test tool authorization mutants"
-        run: ./scripts/run-tool-authorization-mutations.sh
-
-      - name: "Upload mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: tool-authorization-mutation-report
-          path: ./artifacts/stryker/tool-authorization
-          if-no-files-found: ignore
-          retention-days: 14
-
-  mcp-artifact-admission-mutation:
-    name: MCP Artifact Admission Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test MCP artifact admission mutants"
-        run: ./scripts/run-mcp-artifact-admission-mutations.sh
-
-      - name: "Upload MCP artifact admission mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: mcp-artifact-admission-mutation-report
-          path: ./artifacts/stryker/mcp-artifact-admission
-          if-no-files-found: ignore
-          retention-days: 14
-
-  shell-analysis-mutation:
-    name: Shell Analysis Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test shell-analysis mutants"
-        run: ./scripts/run-shell-command-analysis-mutations.sh
-
-      - name: "Upload shell-analysis mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shell-command-analysis-mutation-report
-          path: ./artifacts/stryker/shell-command-analysis
-          if-no-files-found: ignore
-          retention-days: 14
-
-  shell-assignment-mutation:
-    name: Shell Assignment Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test shell-assignment mutants"
-        run: ./scripts/run-shell-assignment-mutations.sh
-
-      - name: "Upload shell-assignment mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shell-assignment-mutation-report
-          path: ./artifacts/stryker/shell-assignment
-          if-no-files-found: ignore
-          retention-days: 14
-
-  approval-directory-mutation:
-    name: Approval Directory Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test approval directory mutants"
-        run: ./scripts/run-approval-directory-mutations.sh
-
-      - name: "Upload mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: approval-directory-mutation-report
-          path: ./artifacts/stryker/approval-directory
-          if-no-files-found: ignore
-          retention-days: 14
-
-  reminder-execution-mutation:
-    name: Reminder Execution Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test reminder execution mutants"
-        run: ./scripts/run-reminder-execution-mutations.sh
-
-      - name: "Upload mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: reminder-execution-mutation-report
-          path: ./artifacts/stryker/reminder-execution
-          if-no-files-found: ignore
-          retention-days: 14
-
-  skill-manage-guard-mutation:
-    name: Skill Manage Guard Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test skill_manage guard mutants"
-        run: ./scripts/run-skill-manage-guard-mutations.sh
-
-      - name: "Upload mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: skill-manage-guard-mutation-report
-          path: ./artifacts/stryker/skill-manage-guard
+          name: mutation-reports-${{ matrix.group }}
+          path: ./artifacts/stryker
           if-no-files-found: ignore
           retention-days: 14
 
@@ -485,6 +316,8 @@ jobs:
           bash -n evals/cycle_evals.sh
           python3 -m unittest discover -s evals -p test_background_evals.py -v
           python3 -m unittest discover -s evals -p test_cycle_evals.py -v
+          python3 -m unittest discover -s evals -p test_cli_detector_evals.py -v
+          python3 -m unittest discover -s evals -p test_spill_steer_evals.py -v
 
   approval-outcome-direction:
     name: Approval Outcome Direction
@@ -520,6 +353,11 @@ jobs:
             push)
               if [[ "$PUSH_BEFORE_SHA" =~ ^0+$ ]]; then
                 echo "New branch push: compare with the merge base of origin/dev."
+                python3 scripts/check-approval-outcome-direction.py --base-ref origin/dev
+              elif ! git merge-base --is-ancestor "$PUSH_BEFORE_SHA" HEAD 2>/dev/null; then
+                # A force push (for example, GitHub rebasing a stacked PR) replaces
+                # the history. The previous head is then not in this clone.
+                echo "Force push: $PUSH_BEFORE_SHA is not an ancestor of HEAD. Compare with the merge base of origin/dev."
                 python3 scripts/check-approval-outcome-direction.py --base-ref origin/dev
               else
                 python3 scripts/check-approval-outcome-direction.py --base-rev "$PUSH_BEFORE_SHA"

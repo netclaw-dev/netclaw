@@ -23,7 +23,7 @@ using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 namespace Netclaw.Actors.Tests.Jobs;
 
 [Collection(BackgroundJobProcessCollection.Name)]
-public class BackgroundJobExecutionActorTests : TestKit
+public class BackgroundJobExecutionActorTests : TestKit, IAsyncDisposable
 {
     private static readonly ShellExecutionEnvironment ShellEnvironment = TestShellEnvironment.Current;
     private readonly DisposableTempDir _dir = new();
@@ -38,10 +38,19 @@ public class BackgroundJobExecutionActorTests : TestKit
         _store = new BackgroundJobDefinitionStore(paths);
     }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns. An actor can
+    // still write into the directory until then. Delete the directory after TestKit
+    // has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
-        _dir.Dispose();
-        await base.AfterAllAsync();
+        try
+        {
+            await base.DisposeAsync();
+        }
+        finally
+        {
+            _dir.Dispose();
+        }
     }
 
     private static string LongRunningCommand => TestShellEnvironment.LongRunningCommand;

@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Netclaw.Actors.Reminders;
 using Netclaw.Cli.Daemon;
 
@@ -18,8 +17,7 @@ internal static class ReminderCommand
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        WriteIndented = true,
-        Converters = { new JsonStringEnumConverter() }
+        WriteIndented = true
     };
 
     public static async Task<int> RunAsync(
@@ -65,49 +63,123 @@ internal static class ReminderCommand
 
         return subcommand switch
         {
-            "list" => await RunListAsync(daemonApi),
+            "list" => await RunListAsync(daemonApi, args, output, error),
             "create" => await RunCreateAsync(daemonApi, args),
             "cancel" => await RunCancelAsync(daemonApi, args),
             "delete" => await RunDeleteAsync(daemonApi, args),
             "disable" => await RunDisableAsync(daemonApi, args),
             "enable" => await RunEnableAsync(daemonApi, args),
-            "import" => await RunImportAsync(daemonApi, args),
-            "show" => await RunShowAsync(daemonApi, args),
-            "history" => await RunHistoryAsync(daemonApi, args),
+            "import" => await RunImportAsync(daemonApi, args, output, error),
+            "show" => await RunShowAsync(daemonApi, args, output, error),
+            "history" => await RunHistoryAsync(daemonApi, args, output, error),
             "status" => await RunStatusAsync(daemonApi, args),
+            // Program.cs opens a chat for `reminder run <id>`. Other forms are a usage error.
+            "run" => WriteRunUsage(error),
             _ => WriteHelp(output)
         };
     }
 
-    private static async Task<int> RunListAsync(DaemonApi api)
+    private static async Task<int> RunListAsync(DaemonApi api, string[] args, TextWriter output, TextWriter error)
     {
+        foreach (var arg in args.Skip(2))
+        {
+            if (arg != "--json")
+            {
+                error.WriteLine($"[FAIL] list options: Unknown option '{arg}'.");
+                error.WriteLine("       usage: netclaw reminder list [--json]");
+                return 1;
+            }
+        }
+
         try
         {
             using var response = await api.ListRemindersAsync();
             if (!response.IsSuccessStatusCode)
             {
-                Console.Error.WriteLine($"[FAIL] daemon returned {(int)response.StatusCode}");
+                error.WriteLine($"[FAIL] daemon returned {(int)response.StatusCode}");
                 return 1;
             }
 
             var json = await response.Content.ReadAsStringAsync();
             var reminders = JsonSerializer.Deserialize<JsonElement>(json);
+            var asJson = args.Length > 2;
 
             if (reminders.ValueKind == JsonValueKind.Array && reminders.GetArrayLength() == 0)
             {
-                Console.WriteLine("No active reminders.");
+                // --json keeps the text it has always printed so scripts see no change.
+                output.WriteLine(asJson ? "No active reminders." : "No reminders.");
                 return 0;
             }
 
-            Console.WriteLine(JsonSerializer.Serialize(reminders, JsonOptions));
+            if (asJson)
+            {
+                output.WriteLine(JsonSerializer.Serialize(reminders, JsonOptions));
+                return 0;
+            }
+
+            var rows = JsonSerializer.Deserialize<ReminderListRow[]>(json, JsonOptions) ?? [];
+            WriteListTable(output, rows);
             return 0;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
-            Console.Error.WriteLine("       fix: run `netclaw daemon start` and retry.");
+            error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            error.WriteLine("       fix: run `netclaw daemon start` and retry.");
             return 1;
         }
+    }
+
+    /// <summary>CLI-side projection of one entry in the daemon's reminder list JSON.</summary>
+    private sealed record ReminderListRow(
+        string Id,
+        string Title,
+        bool Enabled,
+        string Schedule,
+        string NextFire,
+        int ConsecutiveFailures,
+        string? TerminalOutcome);
+
+    /// <summary>
+    /// Prints id, status, failures, schedule, next fire (UTC) and title. Every column but the
+    /// title is sized from the data; the title is last so it never needs padding.
+    /// </summary>
+    private static void WriteListTable(TextWriter output, IReadOnlyList<ReminderListRow> reminders)
+    {
+        var rows = reminders.Select(r => new[]
+        {
+            r.Id,
+            r.TerminalOutcome?.ToLowerInvariant() ?? (r.Enabled ? "enabled" : "disabled"),
+            r.ConsecutiveFailures.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            r.Schedule,
+            FormatNextFire(r.NextFire),
+            r.Title
+        }).ToArray();
+        string[] headers = ["id", "status", "failures", "schedule", "next_fire", "title"];
+
+        var widths = new int[headers.Length - 1];
+        for (var i = 0; i < widths.Length; i++)
+            widths[i] = Math.Max(headers[i].Length, rows.Max(row => row[i].Length));
+
+        string Line(string[] cells)
+            => string.Join("  ", cells.Take(widths.Length).Select((c, i) => c.PadRight(widths[i])).Append(cells[^1]));
+
+        output.WriteLine(Line(headers));
+        output.WriteLine(new string('-', widths.Sum() + 2 * widths.Length + headers[^1].Length));
+        foreach (var row in rows)
+            output.WriteLine(Line(row));
+    }
+
+    /// <summary>
+    /// The daemon formats next-fire as a sentence ("Thursday, October 8 at 9:00 AM EDT (2026-10-08 13:00:00Z)");
+    /// the table keeps only the UTC stamp in parentheses.
+    /// </summary>
+    private static string FormatNextFire(string nextFire)
+    {
+        var open = nextFire.LastIndexOf('(');
+        if (open >= 0 && nextFire.EndsWith(')'))
+            return nextFire[(open + 1)..^1];
+
+        return string.Equals(nextFire, "unknown", StringComparison.Ordinal) ? "-" : nextFire;
     }
 
     private static async Task<int> RunCreateAsync(DaemonApi api, string[] args)
@@ -315,18 +387,18 @@ internal static class ReminderCommand
         }
     }
 
-    private static async Task<int> RunImportAsync(DaemonApi api, string[] args)
+    private static async Task<int> RunImportAsync(DaemonApi api, string[] args, TextWriter output, TextWriter error)
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder import <file> [--replace|--upsert]");
+            error.WriteLine("Usage: netclaw reminder import <file> [--replace|--upsert]");
             return 1;
         }
 
         var filePath = args[2];
         if (!File.Exists(filePath))
         {
-            Console.Error.WriteLine($"[FAIL] file not found: {filePath}");
+            error.WriteLine($"[FAIL] file not found: {filePath}");
             return 1;
         }
 
@@ -345,20 +417,20 @@ internal static class ReminderCommand
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[FAIL] invalid JSON: {ex.Message}");
+            error.WriteLine($"[FAIL] invalid JSON: {ex.Message}");
             return 1;
         }
 
         if (definition is null)
         {
-            Console.Error.WriteLine("[FAIL] file does not contain a reminder definition.");
+            error.WriteLine("[FAIL] file does not contain a reminder definition.");
             return 1;
         }
 
         var validation = ValidateDefinition(definition);
         if (validation is not null)
         {
-            Console.Error.WriteLine($"[FAIL] {validation}");
+            error.WriteLine($"[FAIL] {validation}");
             return 1;
         }
 
@@ -371,26 +443,19 @@ internal static class ReminderCommand
             }, JsonOptions);
 
             var body = await response.Content.ReadAsStringAsync();
-            var result = JsonSerializer.Deserialize<JsonElement>(body);
 
             if (response.IsSuccessStatusCode)
             {
-                if (result.TryGetProperty("message", out var msg))
-                    Console.WriteLine(msg.GetString());
-                else
-                    Console.WriteLine(body);
+                output.WriteLine(TryGetJsonString(body, "message") ?? body);
                 return 0;
             }
 
-            if (result.TryGetProperty("error", out var err))
-                Console.Error.WriteLine($"[FAIL] {err.GetString()}");
-            else
-                Console.Error.WriteLine($"[FAIL] {body}");
+            error.WriteLine($"[FAIL] {DescribeFailure(response, body)}");
             return 1;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
             return 1;
         }
     }
@@ -458,18 +523,18 @@ internal static class ReminderCommand
                 return "Interval reminders require schedule.intervalTicks.";
             case ReminderScheduleType.Cron when string.IsNullOrWhiteSpace(definition.Schedule.CronExpression):
                 return "Cron reminders require schedule.cronExpression.";
-            case ReminderScheduleType.Cron when !CronScheduleHelper.TryParse(definition.Schedule.CronExpression!):
-                return "Cron expression is invalid.";
+            case ReminderScheduleType.Cron when !CronScheduleHelper.TryParse(definition.Schedule.CronExpression!, out _, out var prefixError):
+                return prefixError ?? "Cron expression is invalid.";
             default:
                 return null;
         }
     }
 
-    private static async Task<int> RunShowAsync(DaemonApi api, string[] args)
+    private static async Task<int> RunShowAsync(DaemonApi api, string[] args, TextWriter output, TextWriter error)
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder show <id>");
+            error.WriteLine("Usage: netclaw reminder show <id>");
             return 1;
         }
 
@@ -482,29 +547,75 @@ internal static class ReminderCommand
             if (response.IsSuccessStatusCode)
             {
                 var result = JsonSerializer.Deserialize<JsonElement>(json);
-                Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+                output.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
                 return 0;
             }
 
-            var err = JsonSerializer.Deserialize<JsonElement>(json);
-            if (err.TryGetProperty("error", out var errMsg))
-                Console.Error.WriteLine($"[FAIL] {errMsg.GetString()}");
-            else
-                Console.Error.WriteLine($"[FAIL] {json}");
+            error.WriteLine($"[FAIL] {DescribeFailure(response, json)}");
             return 1;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
             return 1;
         }
     }
 
-    private static async Task<int> RunHistoryAsync(DaemonApi api, string[] args)
+    private const int HistoryColFiredAt = 25;
+    private const int HistoryColStatus = 8;
+    private const int HistoryColDuration = 12;
+
+    internal static readonly string HistoryHeader =
+        $"{"fired_at",-HistoryColFiredAt}  {"status",-HistoryColStatus}  {"duration_ms",-HistoryColDuration}  session_id";
+
+    internal static string FormatHistoryRow(HistoryRecord r)
+    {
+        return $"{r.FiredAt.ToString("u"),-HistoryColFiredAt}  {r.Status,-HistoryColStatus}  {r.DurationMs,-HistoryColDuration}  {r.SessionId}";
+    }
+
+    /// <summary>
+    /// Describes a non-success daemon reply. The daemon was reached, so the text
+    /// comes from its answer: the <c>error</c> field of a Netclaw error body, the
+    /// <c>detail</c> of a problem document, the raw body, or the status line when
+    /// the body is empty.
+    /// </summary>
+    private static string DescribeFailure(HttpResponseMessage response, string body)
+    {
+        var message = TryGetJsonString(body, "error") ?? TryGetJsonString(body, "detail");
+        if (message is not null)
+            return message;
+
+        return string.IsNullOrWhiteSpace(body)
+            ? $"daemon returned {(int)response.StatusCode} {response.ReasonPhrase}".TrimEnd()
+            : body;
+    }
+
+    private static string? TryGetJsonString(string body, string property)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return document.RootElement.ValueKind is JsonValueKind.Object
+                && document.RootElement.TryGetProperty(property, out var value)
+                && value.ValueKind is JsonValueKind.String
+                    ? value.GetString()
+                    : null;
+        }
+        catch (JsonException)
+        {
+            // Not JSON (for example a plain-text proxy error): the caller falls back to the raw body.
+            return null;
+        }
+    }
+
+    private static async Task<int> RunHistoryAsync(DaemonApi api, string[] args, TextWriter output, TextWriter error)
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder history <id> [--last N]");
+            error.WriteLine("Usage: netclaw reminder history <id> [--last N]");
             return 1;
         }
 
@@ -526,13 +637,13 @@ internal static class ReminderCommand
 
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                Console.Error.WriteLine($"[FAIL] Reminder '{id}' not found.");
+                error.WriteLine($"[FAIL] Reminder '{id}' not found.");
                 return 1;
             }
 
             if (!response.IsSuccessStatusCode)
             {
-                Console.Error.WriteLine($"[FAIL] daemon returned {(int)response.StatusCode}");
+                error.WriteLine($"[FAIL] daemon returned {(int)response.StatusCode}");
                 return 1;
             }
 
@@ -541,29 +652,24 @@ internal static class ReminderCommand
 
             if (records is null || records.Length == 0)
             {
-                Console.WriteLine($"No execution history recorded for {id}.");
+                output.WriteLine($"No execution history recorded for {id}.");
                 return 0;
             }
 
-            const int colFiredAt = 25;
-            const int colStatus = 8;
-            const int colDuration = 12;
-
-            Console.WriteLine($"{"fired_at",-colFiredAt}  {"status",-colStatus}  {"duration_ms",-colDuration}  session_id");
-            Console.WriteLine(new string('-', colFiredAt + colStatus + colDuration + 34));
+            output.WriteLine(HistoryHeader);
+            output.WriteLine(new string('-', HistoryColFiredAt + HistoryColStatus + HistoryColDuration + 34));
 
             foreach (var r in records)
             {
-                var status = r.Success ? "ok" : "failed";
-                Console.WriteLine($"{r.FiredAt:u,-colFiredAt}  {status,-colStatus}  {r.DurationMs,-colDuration}  {r.SessionId}");
+                output.WriteLine(FormatHistoryRow(r));
             }
 
             return 0;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
-            Console.Error.WriteLine("       fix: run `netclaw daemon start` and retry.");
+            error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            error.WriteLine("       fix: run `netclaw daemon start` and retry.");
             return 1;
         }
     }
@@ -632,9 +738,8 @@ internal static class ReminderCommand
                 // (the ones an operator diagnosing a failure cares about) lead.
                 foreach (var r in history.Reverse())
                 {
-                    var outcome = r.Success ? "ok" : "failed";
                     var err = string.IsNullOrEmpty(r.ErrorMessage) ? "" : $" — {r.ErrorMessage}";
-                    Console.WriteLine($"  {r.FiredAt:u}  {outcome}{err}");
+                    Console.WriteLine($"  {r.FiredAt:u}  {r.Status}{err}");
                 }
             }
 
@@ -667,12 +772,25 @@ internal static class ReminderCommand
         string? LastFailureReason,
         string CompletionStatus);
 
+    /// <summary>
+    /// Returns the reminder ID of <c>netclaw reminder run &lt;id&gt;</c>, or null for any other
+    /// form. Program.cs opens a chat with <c>/run-reminder &lt;id&gt;</c> for that ID.
+    /// </summary>
+    internal static string? GetRunReminderId(string[] args)
+        => args is [_, "run", var id] && !CliArgsParser.IsHelpToken(id) ? id : null;
+
+    private static int WriteRunUsage(TextWriter error)
+    {
+        error.WriteLine("Usage: netclaw reminder run <id>");
+        return 1;
+    }
+
     private static int WriteHelp(TextWriter output)
     {
         output.WriteLine("Usage: netclaw reminder <subcommand>");
         output.WriteLine();
         output.WriteLine("Subcommands:");
-        output.WriteLine("  list                                          List all active reminders");
+        output.WriteLine("  list [--json]                                 List reminders as a table (--json: raw JSON for scripts)");
         output.WriteLine("  create <id> <type> <schedule> \"<prompt>\"      Create or update a reminder");
         output.WriteLine("  cancel <id>                                   Cancel a reminder (disables, keeps definition)");
         output.WriteLine("  delete <id>                                   Permanently delete a reminder and its history");
@@ -683,6 +801,7 @@ internal static class ReminderCommand
         output.WriteLine("  show <id>                                     Show reminder details");
         output.WriteLine("  history <id>                                  Show recent execution history (default: 20)");
         output.WriteLine("  status <id>                                   Show execution, retry, terminal, and history status");
+        output.WriteLine("  run <id>                                      Test a reminder now in a new chat (/run-reminder <id>)");
         output.WriteLine();
         output.WriteLine("Create options:");
         output.WriteLine("  --name <title>           Human-readable title (defaults to <id>)");

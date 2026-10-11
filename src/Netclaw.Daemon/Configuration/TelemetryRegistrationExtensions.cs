@@ -9,6 +9,7 @@ using Microsoft.Extensions.Options;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using OpenTelemetry;
+using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -54,7 +55,7 @@ public static class TelemetryRegistrationExtensions
             options.IncludeScopes = true;
             options.ParseStateValues = true;
             options.SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(resource.Attributes));
-            options.AddOtlpExporter(otlp => otlp.Endpoint = endpoint);
+            options.AddOtlpExporter(otlp => otlp.Endpoint = ResolveSignalEndpoint(endpoint, otlp.Protocol, "v1/logs"));
         });
 
         builder.Services.AddOpenTelemetry()
@@ -63,9 +64,39 @@ public static class TelemetryRegistrationExtensions
             {
                 metrics.AddMeter(ChannelTelemetry.MeterName);
                 metrics.AddMeter(SessionTelemetry.MeterName);
-                metrics.AddOtlpExporter(otlp => otlp.Endpoint = endpoint);
+                metrics.AddOtlpExporter(otlp => otlp.Endpoint = ResolveSignalEndpoint(endpoint, otlp.Protocol, "v1/metrics"));
             });
     }
+
+    /// <summary>
+    /// Returns the URL an OTLP exporter posts to. The SDK appends the signal path only when
+    /// the endpoint comes from the OTEL_EXPORTER_OTLP_* environment variables; an endpoint set
+    /// in code is used verbatim, so HTTP/protobuf would post to "/". Following the
+    /// OpenTelemetry specification, <c>Telemetry:Otlp:Endpoint</c> is a base URL and HTTP/protobuf
+    /// appends <paramref name="signalPath"/> (<c>v1/logs</c>, <c>v1/metrics</c>). An endpoint that
+    /// already ends with a signal path is reduced to its base first: before this method existed, a
+    /// full <c>.../v1/logs</c> URL was the only setting that delivered logs over HTTP/protobuf, and
+    /// it keeps working. gRPC uses the endpoint unchanged.
+    /// </summary>
+    internal static Uri ResolveSignalEndpoint(Uri endpoint, OtlpExportProtocol protocol, string signalPath)
+    {
+        if (protocol != OtlpExportProtocol.HttpProtobuf)
+            return endpoint;
+
+        var basePath = endpoint.AbsolutePath.TrimEnd('/');
+        foreach (var knownSignalPath in OtlpSignalPaths)
+        {
+            if (basePath.EndsWith("/" + knownSignalPath, StringComparison.OrdinalIgnoreCase))
+            {
+                basePath = basePath[..^(knownSignalPath.Length + 1)];
+                break;
+            }
+        }
+
+        return new UriBuilder(endpoint) { Path = $"{basePath}/{signalPath}" }.Uri;
+    }
+
+    private static readonly string[] OtlpSignalPaths = ["v1/logs", "v1/metrics", "v1/traces"];
 
     /// <summary>
     /// Projects the OpenTelemetry <c>service.*</c> resource attributes into a

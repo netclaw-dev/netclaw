@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Daemon;
+
 namespace Netclaw.Cli.Tui;
 
 /// <summary>
@@ -12,6 +14,9 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class ChatNavigationState
 {
+    /// <summary>The final result survives page disposal for the terminal notice.</summary>
+    public ChatCloseReceipt? CloseReceipt { get; internal set; }
+
     /// <summary>
     /// When set, <see cref="ChatViewModel"/> will resume this session ID
     /// instead of creating a new one. Consumed (cleared) on first read.
@@ -43,5 +48,22 @@ public sealed class ChatNavigationState
         var msg = InitialMessage;
         InitialMessage = null;
         return msg;
+    }
+
+    /// <summary>
+    /// True once <see cref="StartOnboarding"/> queued the onboarding trigger. Stays set after
+    /// the message is taken so a failed daemon connection can still point the operator at
+    /// <c>netclaw chat --onboarding</c>.
+    /// </summary>
+    public bool IsOnboarding { get; private set; }
+
+    /// <summary>
+    /// Queues the onboarding trigger as the chat's first turn. The init wizard, the redo
+    /// identity flow and <c>netclaw chat --onboarding</c> all start the interview through here.
+    /// </summary>
+    public void StartOnboarding(string trigger)
+    {
+        InitialMessage = trigger;
+        IsOnboarding = true;
     }
 }
