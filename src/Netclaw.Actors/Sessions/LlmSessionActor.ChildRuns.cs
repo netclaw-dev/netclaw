@@ -532,7 +532,7 @@ public sealed partial class LlmSessionActor
                 try
                 {
                     finalizationToken.ThrowIfCancellationRequested();
-                    if (!ToolOutputSpillLocation.TryEnsureSessionDirectory(anchor)
+                    if (ToolOutputSpillLocation.EnsureSessionWorkspaceDirectory(anchor) is not null
                         || !ToolOutputSpillLocation.IsSafeForIo(anchor, artifact))
                         throw new IOException("The child artifact directory crosses a filesystem link.");
                     Directory.CreateDirectory(artifact);
