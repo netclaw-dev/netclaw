@@ -146,6 +146,30 @@ public sealed class ShellProcessLaunchTests
         Assert.False(File.Exists(Path.Combine(denied.FullName, "marker.txt")));
     }
 
+    [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "POSIX-only symbolic-link semantics")]
+    public async Task Launch_rejects_a_link_at_the_parent_of_the_session_workspace()
+    {
+        using var directory = new DisposableTempDir();
+        var target = Directory.CreateDirectory(Path.Combine(directory.Path, "target"));
+        var link = Path.Combine(directory.Path, "link");
+        Directory.CreateSymbolicLink(link, target.FullName);
+        var workspace = Path.Combine(link, "workspace");
+        var environment = TestShellEnvironment.Current;
+        var context = TestToolExecutionContext.CreateBound("launch/parent-link", workspace, TrustAudience.Personal);
+        var launch = new ShellProcessLaunch("echo ok", workspace, context.Invocation,
+            new ShellCommandPolicy(environment), new ToolPathPolicy(environment, []), static _ => Task.CompletedTask);
+
+        var error = await Assert.ThrowsAsync<ShellProcessStartException>(() =>
+            launch.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("session folder above the workspace", error.Message, StringComparison.OrdinalIgnoreCase);
+        // Nothing was created behind the link, not even the managed temporary
+        // directory, because the workspace check runs before its creation.
+        Assert.False(Directory.Exists(Path.Combine(target.FullName, "workspace")));
+    }
+
     [SlopwatchSuppress("SW001", "This test uses the native Bash TCP redirection and process identifiers.")]
     [Theory(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
         Skip = "Native Bash process-tree proof")]
