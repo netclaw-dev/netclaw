@@ -32,7 +32,7 @@ public static class NetclawAkkaHostingExtensions
     /// its due time; without it, one-shot occurrences are immortal and replay
     /// after a binary swap.
     /// </summary>
-    internal static readonly TimeSpan ReminderDefaultMaxDeliveryWindow = TimeSpan.FromHours(24);
+    internal static readonly TimeSpan ReminderDefaultMaxDeliveryWindow = TimeSpan.FromDays(7);
 
     public sealed record ReminderStorageOptions
     {
@@ -81,7 +81,7 @@ public static class NetclawAkkaHostingExtensions
     /// Registers the reminder manager as a singleton actor and wires
     /// the local Akka.Reminders scheduler to deliver payloads to it.
     /// Uses a 70-minute acknowledgement lease for one-hour LLM attempts.
-    /// Pruning matches Netclaw's terminal-reminder retention; a 24-hour default
+    /// Pruning matches Netclaw's terminal-reminder retention; a 7-day default
     /// delivery window bounds unacknowledged replay. Other Akka.Reminders
     /// settings use their library defaults.
     /// </summary>
