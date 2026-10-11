@@ -2263,7 +2263,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     private bool SaveSkillFeedsConfig(SkillFeedsConfigDocument feeds)
         => TryEditConfig(root =>
         {
-            if (feeds.Feeds.Count == 0)
+            if (feeds.Feeds.Count == 0 && feeds.Plugins.Count == 0)
                 root.Remove("SkillFeeds");
             else
                 root["SkillFeeds"] = BuildSkillFeedsSection(feeds);
@@ -2522,6 +2522,24 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
                 return (object)item;
             }).ToArray(),
+            ["Plugins"] = config.Plugins.Select(static plugin =>
+            {
+                var item = new Dictionary<string, object>
+                {
+                    ["Id"] = plugin.Id,
+                    ["Repository"] = plugin.Repository,
+                    ["Format"] = plugin.Format,
+                    ["ReferenceKind"] = plugin.ReferenceKind.ToString(),
+                    ["Reference"] = plugin.Reference,
+                    ["Enabled"] = plugin.Enabled,
+                    ["TimeoutSeconds"] = plugin.TimeoutSeconds,
+                };
+
+                if (!string.IsNullOrWhiteSpace(plugin.Subdirectory))
+                    item["Subdirectory"] = plugin.Subdirectory;
+
+                return (object)item;
+            }).ToArray(),
         };
 
     private static LocalSkillScanDisplay ScanLocalSkills(string directory, bool allowSymlinks)
@@ -2617,6 +2635,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         public int SyncIntervalMinutes { get; set; } = 60;
 
         public List<SkillFeedConfigEntry> Feeds { get; set; } = [];
+
+        public List<ManagedPluginSource> Plugins { get; set; } = [];
     }
 
     private sealed class SkillFeedConfigEntry
