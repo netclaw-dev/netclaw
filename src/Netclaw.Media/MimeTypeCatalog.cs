@@ -170,7 +170,7 @@ public static class MimeTypeCatalog
     {
         return FileExtension.FromPath(path).Value switch
         {
-            ".docx" or ".xlsx" or ".pptx" or ".odt" or ".ods" or ".odp" => true,
+            ".docx" or ".xlsx" or ".pptx" or ".potx" or ".odt" or ".ods" or ".odp" => true,
             _ => false
         };
     }
@@ -212,6 +212,7 @@ public static class MimeTypeCatalog
         Binary("application/vnd.openxmlformats-officedocument.wordprocessingml.document", AttachmentCategory.Document, MediaKind.Document, true, false, ".docx", ".docx"),
         Binary("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", AttachmentCategory.Document, MediaKind.Document, true, false, ".xlsx", ".xlsx"),
         Binary("application/vnd.openxmlformats-officedocument.presentationml.presentation", AttachmentCategory.Document, MediaKind.Document, true, false, ".pptx", ".pptx"),
+        Binary("application/vnd.openxmlformats-officedocument.presentationml.template", AttachmentCategory.Document, MediaKind.Document, true, false, ".potx", ".potx"),
         Binary("application/vnd.oasis.opendocument.text", AttachmentCategory.Document, MediaKind.Document, true, false, ".odt", ".odt"),
         Binary("application/vnd.oasis.opendocument.spreadsheet", AttachmentCategory.Document, MediaKind.Document, true, false, ".ods", ".ods"),
         Binary("application/vnd.oasis.opendocument.presentation", AttachmentCategory.Document, MediaKind.Document, true, false, ".odp", ".odp"),
