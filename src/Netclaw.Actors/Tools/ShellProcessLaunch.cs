@@ -181,24 +181,27 @@ public sealed class ShellProcessLaunch
 
     private void PrepareDirectories()
     {
-        // Reject unsafe filesystem links before the child can use session temporary storage.
-        // Prepare creates the directory and sets TMPDIR, TMP, and TEMP on the child environment only.
-        var temporaryError = ManagedTemporaryEnvironment.Prepare(_startInfo, Storage.ManagedTemporary);
-        if (temporaryError is not null)
-            throw new ShellProcessStartException(temporaryError);
-
         if (_context.SessionDirectory is { } sessionDirectory
             && PathUtility.AreEquivalentPaths(WorkingDirectory, sessionDirectory))
         {
+            // One shared creator builds the session workspace folder (with a link
+            // check at the path and at its parent) for the spill writer and this
+            // launcher. This runs before the temporary directory, because that
+            // creation also builds the workspace folder as an intermediate in the
+            // legacy layout and would do so behind a link.
+            string? error;
             try
             {
-                Directory.CreateDirectory(WorkingDirectory);
+                error = ToolOutputSpillLocation.EnsureSessionWorkspaceDirectory(sessionDirectory);
             }
             catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException
                                        or UnauthorizedAccessException or System.Security.SecurityException)
             {
                 throw new ShellProcessStartException($"Error preparing session working directory: {ex.Message}", ex);
             }
+
+            if (error is not null)
+                throw new ShellProcessStartException(error);
         }
         else if (!Directory.Exists(WorkingDirectory))
         {
@@ -208,6 +211,12 @@ public sealed class ShellProcessLaunch
             throw new ShellProcessStartException(
                 $"Error: Working directory '{WorkingDirectory}' does not exist. Create it first, e.g.: {CreateDirectoryHint()}");
         }
+
+        // Reject unsafe filesystem links before the child can use session temporary storage.
+        // Prepare creates the directory and sets TMPDIR, TMP, and TEMP on the child environment only.
+        var temporaryError = ManagedTemporaryEnvironment.Prepare(_startInfo, Storage.ManagedTemporary);
+        if (temporaryError is not null)
+            throw new ShellProcessStartException(temporaryError);
 
         Environment.ApplyWorkingDirectory(_startInfo, WorkingDirectory);
     }
