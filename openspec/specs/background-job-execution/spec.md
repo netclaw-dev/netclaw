@@ -295,20 +295,19 @@ The working context or system prompt SHALL surface pending jobs to the LLM.
 
 ### Requirement: Background jobs are reaped on session passivation
 
-When a session enters passivation, it SHALL request that the background job
-manager kill all running or pending jobs owned by that session, and SHALL wait
-for the manager's acknowledgement (bounded by a short timeout) before taking
-its final snapshot. The manager SHALL kill each owned job's entire process
-tree and mark the job definitions with a distinct `Reaped` status,
-distinguishable from agent- or user-initiated cancellation. Reaping SHALL NOT
-produce a `DeliverTrustedSessionTurn` — delivering a turn would rehydrate the
-session being torn down. If the acknowledgement times out, the session SHALL
-log the failure loudly and proceed with passivation; the manager's kill
-operation SHALL be idempotent.
+When explicit shutdown or restart requires a session to passivate, the session
+SHALL ask the background job manager to kill its running or pending jobs. It
+SHALL wait for a bounded acknowledgement before the final snapshot. The manager
+SHALL kill each job's full process tree. It SHALL mark each job with a distinct
+`Reaped` status. This status SHALL differ from agent- or user-initiated
+cancellation. Reaping SHALL NOT produce a `DeliverTrustedSessionTurn`. Such a
+turn would rehydrate the session during shutdown. If the acknowledgement times
+out, the session SHALL log the failure and proceed. The manager's kill
+operation SHALL be idempotent. Active jobs SHALL defer idle-driven passivation.
 
-#### Scenario: Running jobs reaped at passivation
+#### Scenario: Running jobs are reaped at explicit shutdown or restart
 
-- **GIVEN** a session with running background jobs reaches its idle timeout
+- **GIVEN** a daemon shutdown or restart requires session passivation while jobs run
 - **WHEN** the session enters passivation
 - **THEN** the manager kills the process trees of all jobs owned by that
   session
@@ -340,11 +339,42 @@ operation SHALL be idempotent.
 - **THEN** job-ID deduplication ensures the session processes at most one
   terminal outcome for the job
 
+### Requirement: Active background jobs defer idle session passivation
+
+Before idle passivation, the session SHALL check its actor-local background-job
+state. A shell job SHALL count as active only while it lacks a reap timestamp.
+A reaped job record SHALL NOT block idle passivation. A completed job SHALL
+release the idle-passivation guard when the session removes its active record.
+This rule applies to idle passivation only. It does not block explicit shutdown
+or restart passivation.
+
+#### Scenario: Active shell job defers idle passivation
+
+- **GIVEN** a session has a shell background job without a reap timestamp
+- **AND** the session is in phase `Ready`
+- **WHEN** the idle timeout fires
+- **THEN** the session remains active
+- **AND** it does not start idle passivation
+
+#### Scenario: Reaped shell job record does not defer idle passivation
+
+- **GIVEN** a session has a shell background job record with a reap timestamp
+- **AND** the session is in phase `Ready`
+- **WHEN** the idle timeout fires
+- **THEN** the job record does not block idle passivation
+
+#### Scenario: Job completion releases the idle-passivation guard
+
+- **GIVEN** a session has an active shell background job
+- **WHEN** the session processes the job result and removes its active record
+- **THEN** the job no longer blocks idle passivation
+
 ### Requirement: check_background_job tool
 
 The system SHALL provide a `check_background_job` tool only when shell
-execution is available. The tool SHALL use the `shell` grant category and SHALL
-accept a `JobId` parameter and an optional `Cancel` boolean parameter. When
+execution is available. Its admission SHALL follow `shell_execute`: the
+Personal audience and a host shell mode (`tool-authorization` TA-4). Its
+`shell` grant category is metadata only. The tool SHALL accept a `JobId` parameter and an optional `Cancel` boolean parameter. When
 `Cancel` is false or absent, the tool SHALL return job status (running,
 completed, failed, cancelled, timed_out), output tail (last N characters if
 still running, full truncated result if complete), and the output file path.

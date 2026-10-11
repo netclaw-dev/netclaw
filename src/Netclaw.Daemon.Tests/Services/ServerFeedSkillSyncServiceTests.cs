@@ -218,6 +218,54 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         Assert.False(Directory.Exists(_paths.ServerFeedAgentDirectory("team")));
     }
 
+    // Owner decision (2026-10-05): the agent can write to a feed skill folder. The
+    // next sync restores the published files, with no new published version.
+    [Fact]
+    public async Task SyncOnce_restores_a_locally_changed_skill_of_the_same_version()
+    {
+        var skillContent = Encoding.UTF8.GetBytes("---\nname: disk-cleanup\ndescription: Disk cleanup\n---\n\n# Disk Cleanup\n");
+        var scriptContent = Encoding.UTF8.GetBytes("#!/bin/bash\necho audit\n");
+        var archive = BuildArchive(
+            ("SKILL.md", skillContent, 0x1A4),
+            ("scripts/audit.sh", scriptContent, 0x1ED));
+        var digest = SkillSyncHelpers.ComputeSha256(archive);
+        var handler = new FakeHttpMessageHandler();
+        handler.AddStringResponse(
+            BaseUrl + ".well-known/agent-skills/index.json",
+            $$"""
+            {
+              "skills": [
+                {
+                  "name": "disk-cleanup",
+                  "type": "archive",
+                  "description": "Disk cleanup",
+                  "url": "{{BaseUrl}}skills/disk-cleanup/1.0.0/skill.zip",
+                  "digest": "sha256:{{digest}}",
+                  "version": "1.0.0"
+                }
+              ]
+            }
+            """,
+            "application/json");
+        handler.AddByteResponse(BaseUrl + "skills/disk-cleanup/1.0.0/skill.zip", archive, "application/zip");
+        handler.AddErrorResponse(BaseUrl + "subagents/v1/index.json", HttpStatusCode.NotFound);
+        var service = CreateService(handler);
+        var skillDir = Path.Combine(_paths.ServerFeedDirectory("team"), "disk-cleanup");
+        var scriptPath = Path.Combine(skillDir, "scripts", "audit.sh");
+        var ct = TestContext.Current.CancellationToken;
+
+        await service.SyncAsync(ct);
+        var unchanged = Assert.Single((await service.SyncAsync(ct)).Sources);
+        await File.WriteAllTextAsync(scriptPath, "#!/bin/bash\necho changed\n", ct);
+        await File.WriteAllTextAsync(Path.Combine(skillDir, "added.md"), "local note", ct);
+        var restored = Assert.Single((await service.SyncAsync(ct)).Sources);
+
+        Assert.Equal((0, 1), (unchanged.ChangedCount, unchanged.UnchangedCount));
+        Assert.Equal((1, 0), (restored.ChangedCount, restored.UnchangedCount));
+        Assert.Equal(scriptContent, await File.ReadAllBytesAsync(scriptPath, ct));
+        Assert.False(File.Exists(Path.Combine(skillDir, "added.md")));
+    }
+
     [Fact]
     public async Task SyncOnce_digest_failure_keeps_existing_managed_subagents_and_skips_prune()
     {

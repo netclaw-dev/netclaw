@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Netclaw.Cli;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Provider;
@@ -13,8 +14,12 @@ using Xunit;
 namespace Netclaw.Cli.Tests.Doctor;
 
 [Collection(Netclaw.Cli.Tests.LegacyModelEnvironmentCollection.Name)]
-public sealed class ChatClientDoctorCheckTests
+public sealed class ChatClientDoctorCheckTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     [Fact]
     public async Task ReturnsWarning_WhenNoProvidersConfigured()
     {
@@ -312,6 +317,81 @@ public sealed class ChatClientDoctorCheckTests
     }
 
     [Fact]
+    public async Task ReturnsError_WhenDefinitionProviderValueIsNotString()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "local-ollama": { "Type": "ollama" }
+              },
+              "Models": {
+                "Definitions": { "fast": { "Provider": 123, "ModelId": "qwen3:30b" } },
+                "Roles": { "Main": "fast" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Models.Definitions.fast.Provider", result.Message);
+        Assert.Contains("must be a string", result.Message);
+    }
+
+    [Fact]
+    public async Task ReturnsError_NamingTheConflictAndSayingTheDaemonWillNotStart_WhenModelsMixShapes()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "local-ollama": { "Type": "ollama" }
+              },
+              "Models": {
+                "Main": { "Provider": "local-ollama", "ModelId": "qwen3:30b" },
+                "Definitions": { "fast": { "Provider": "local-ollama", "ModelId": "qwen3:30b" } },
+                "Roles": { "Main": "fast" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("mixes legacy inline roles (Models:Main)", result.Message);
+        Assert.Contains("The daemon will not start with this configuration. A running daemon keeps using its previous configuration", result.Message);
+        Assert.DoesNotContain("configuration banner", result.Message);
+        Assert.DoesNotContain("doctor --fix", result.Message + result.Remediation);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenARoleBoundContextWindowIsBelowTheStartupMinimum()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "local-ollama": { "Type": "ollama" }
+              },
+              "Models": {
+                "Definitions": { "fast": { "Provider": "local-ollama", "ModelId": "qwen3:30b", "ContextWindow": 100 } },
+                "Roles": { "Main": "fast" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Models:Definitions:fast:ContextWindow (100) is below minimum", result.Message);
+        Assert.StartsWith("Invalid model configuration: Models:", result.Message);
+    }
+
+    [Fact]
     public async Task ReturnsError_WhenModelProviderValueIsNotString()
     {
         var paths = CreatePathsWithConfig("""
@@ -396,7 +476,7 @@ public sealed class ChatClientDoctorCheckTests
         }
     }
 
-    private static NetclawPaths CreatePathsWithConfig(string configJson)
+    private NetclawPaths CreatePathsWithConfig(string configJson)
     {
         var basePath = CreateTempBasePath();
         var paths = new NetclawPaths(basePath);
@@ -418,9 +498,9 @@ public sealed class ChatClientDoctorCheckTests
     private static void WriteSecrets(NetclawPaths paths, string secretsJson) =>
         File.WriteAllText(paths.SecretsPath, secretsJson);
 
-    private static string CreateTempBasePath()
+    private string CreateTempBasePath()
     {
-        var path = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
     }

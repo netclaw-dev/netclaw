@@ -49,6 +49,77 @@ public sealed class OpenAiCompatibleHttpTests
         Assert.Equal(expectedAuthorization, authorization);
     }
 
+    [Theory]
+    [InlineData("http://host:8080", "http://host:8080/v1/models")]
+    [InlineData("http://host:8080/", "http://host:8080/v1/models")]
+    [InlineData("http://host:8080/v1", "http://host:8080/v1/models")]
+    [InlineData("http://host:8080/v1/", "http://host:8080/v1/models")]
+    [InlineData("http://host:8080/V1", "http://host:8080/V1/models")]
+    [InlineData("http://host:8080/openai/v1", "http://host:8080/openai/v1/models")]
+    [InlineData("http://host:8080/openai", "http://host:8080/openai/v1/models")]
+    [InlineData("http://host:8080/api/v1", "http://host:8080/api/v1/models")]
+    [InlineData("", "http://localhost:11434/v1/models")]
+    public async Task DescriptorProbe_RequestsSameModelsUrlAsChatEndpoint(
+        string configuredEndpoint,
+        string expectedModelsUrl)
+    {
+        Uri? requested = null;
+        using var handler = new FakeHttpMessageHandler(request =>
+        {
+            requested = request.RequestUri;
+            return FakeHttpMessageHandler.JsonResponse(new
+            {
+                data = new[] { new { id = "test-model" } }
+            });
+        });
+        using var httpClient = new HttpClient(handler);
+        var descriptor = new OpenAiCompatibleDescriptor(httpClient);
+
+        var result = await descriptor.ProbeAsync(
+            new ProviderEntry { Type = "openai-compatible", Endpoint = configuredEndpoint },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal(expectedModelsUrl, requested?.ToString());
+
+        var chatEndpoint = OpenAiCompatibleEndpoint.FromBaseUrl(
+            string.IsNullOrEmpty(configuredEndpoint) ? descriptor.DefaultEndpoint : configuredEndpoint);
+        Assert.Equal(new Uri(expectedModelsUrl).AbsolutePath, chatEndpoint.ModelsPath);
+    }
+
+    [Fact]
+    public async Task DescriptorProbe_NotFound_NamesRequestedUrl()
+    {
+        using var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        using var httpClient = new HttpClient(handler);
+        var descriptor = new OpenAiCompatibleDescriptor(httpClient);
+
+        var result = await descriptor.ProbeAsync(
+            new ProviderEntry { Type = "openai-compatible", Endpoint = "http://host:8080/v1" },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Contains("http://host:8080/v1/models", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task DescriptorProbe_NotFound_DoesNotEchoUserinfoOrQuery()
+    {
+        using var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        using var httpClient = new HttpClient(handler);
+        var descriptor = new OpenAiCompatibleDescriptor(httpClient);
+
+        var result = await descriptor.ProbeAsync(
+            new ProviderEntry { Type = "openai-compatible", Endpoint = "http://user:secret@host:8080/v1?token=abc" },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Contains("http://host:8080/v1/models", result.ErrorMessage);
+        Assert.DoesNotContain("secret", result.ErrorMessage);
+        Assert.DoesNotContain("user", result.ErrorMessage);
+        Assert.DoesNotContain("token", result.ErrorMessage);
+    }
+
     [Fact]
     public async Task RegistryCompatibilityProbe_SelectsApiKeyAuthForSuppliedKey()
     {

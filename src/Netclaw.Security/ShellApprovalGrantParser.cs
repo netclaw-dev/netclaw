@@ -20,7 +20,8 @@ public static class ShellApprovalGrantParser
     /// <summary>
     /// Parses one exact static grant phrase. This method does not accept all
     /// legal shell spellings or analyze a runtime command string. Extra source
-    /// text fails instead of broadening the stored token prefix.
+    /// text fails instead of changing the stored command words. The grant covers
+    /// a call only when the call's command words equal these words.
     /// </summary>
     public static bool TryCreateTokenPrefix(
         ApprovalShell shell,
@@ -160,13 +161,33 @@ public static class ShellApprovalGrantParser
             return false;
         }
 
-        var tokens = clause.Verb.Tokens.ToArray();
+        // The same identity as a call: the command words of the phrase.
+        if (occurrence.CommandWords is not ShellCommandWords.Known { Words: { Count: > 0 } words })
+        {
+            error = "The shell phrase must have known command words.";
+            return false;
+        }
+
+        var tokens = words.ToArray();
         if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
         {
             tokens[0] = canonicalVerb;
         }
 
-        var canonicalSource = string.Join(" ", tokens);
+        // A Bash grant names a program file by its absolute path (R1). A
+        // relative path names a different file in each directory.
+        if (shell == ApprovalShell.Bash && ShellProgramPath.IsPath(tokens[0]))
+        {
+            if (!ShellProgramPath.TryResolve(tokens[0], workingDirectory: null, out var programPath))
+            {
+                error = "The program path must be absolute, for example /home/user/bin/tool.";
+                return false;
+            }
+
+            tokens[0] = programPath;
+        }
+
+        var canonicalSource = ShellCommandWordText.FormatPhrase(shell, tokens);
         if (!string.Equals(source, canonicalSource, StringComparison.Ordinal))
         {
             error = $"The shell phrase must equal its canonical form: {canonicalSource}";

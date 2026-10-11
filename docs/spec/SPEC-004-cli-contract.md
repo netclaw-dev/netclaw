@@ -7,6 +7,42 @@ Source PRDs: `PRD-004`, `PRD-002`, `PRD-001`
 Define the command-line contract for operator onboarding, configuration,
 security diagnostics, and session operations.
 
+## CLI Execution Environment
+
+The internal `CliContext` holds the environment for `pair`, `update`, and `approvals`.
+It contains `NetclawPaths`, `TimeProvider`, input, output, and error streams.
+The caller owns the streams. The context does not dispose them.
+Other commands retain their current signatures in this first slice.
+
+`Program.cs` owns composition. Offline branches use their existing paths.
+Host branches resolve the context from the final path and clock registrations.
+TUI components retain their terminal services.
+Inner services receive only the dependencies that they need.
+Arguments, cancellation tokens, HTTP clients, and update policy remain separate.
+The context contains no service provider, actor, transport, or mutable state.
+
+`pair` uses the supplied input and its clock for the exchange deadline.
+`approvals` uses the supplied home and clock for its store and grant timestamps.
+`update` sends command progress and warnings to the supplied streams.
+The background update notice retains stderr after the TUI closes.
+The update daemon manager uses the supplied home and clock.
+The systemd owner check uses that same home.
+
+For example, an update for a custom home cannot stop a unit that serves another home.
+An approval grant uses the supplied clock timestamp, not the process clock.
+The commands retain their current endpoint, manifest, file, and approval checks.
+No configuration or stored-data migration applies.
+See the [engineering glossary](GLOSSARY.md) for shared terms.
+
+```text
+Program -> existing paths, clock, and streams -> CliContext
+  pair -> protected exchange -> existing client and secrets files
+  approvals -> existing grant rules -> store for the supplied home
+  update -> verified manifest and assets -> daemon owner check for the supplied home
+```
+
+This flow is schematic. It omits individual security gates and file operations.
+
 ## Command Families
 
 ### 1) Initialization
@@ -33,9 +69,15 @@ Guided setup sequence:
 
 - `netclaw config show [--format text|json]`
 - `netclaw config validate [--strict]`
+- `netclaw config retention [--logs-days <days>]`
 
 Behavior:
 
+- `netclaw config retention` shows how long the daemon keeps data. Each option sets one
+  `Retention:*:Days` key in `netclaw.json` and rejects a value that is not a whole number
+  of days from 0 to 36500 with exit code 1. Zero keeps the data forever.
+- The shared config editor session validates the final document after the version assignment and before persistence.
+  If the runtime configuration loader rejects the document, the editor preserves the original file.
 - structured validation with property path and remediation hints
 - non-zero exit code on validation failure
 

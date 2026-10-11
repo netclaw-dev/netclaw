@@ -55,6 +55,45 @@ public sealed class ToolInteractionResponseParserTests
     }
 
     [Theory]
+    [InlineData("this chat", ApprovalOptionKeys.ApproveAssignmentSessionV1)]
+    [InlineData("always here", ApprovalOptionKeys.ApproveAssignmentAlwaysV1)]
+    [InlineData("this repository", ApprovalOptionKeys.ApproveAssignmentRepositoryV1)]
+    [InlineData("always anywhere", ApprovalOptionKeys.ApproveAssignmentEverywhereV1)]
+    public void Named_response_maps_to_the_offered_assignment_variant(
+        string input,
+        string expected)
+    {
+        var options = new[]
+        {
+            new ToolInteractionOption(
+                ApprovalOptionKeys.ApproveAssignmentSessionV1Key,
+                ApprovalOptionKeys.ApproveSessionLabel),
+            new ToolInteractionOption(
+                ApprovalOptionKeys.ApproveAssignmentAlwaysV1Key,
+                ApprovalOptionKeys.ApproveAlwaysLabel),
+            new ToolInteractionOption(
+                ApprovalOptionKeys.ApproveAssignmentRepositoryV1Key,
+                ApprovalOptionKeys.ApproveRepositoryLabel),
+            new ToolInteractionOption(
+                ApprovalOptionKeys.ApproveAssignmentEverywhereV1Key,
+                ApprovalOptionKeys.ApproveEverywhereLabel),
+        };
+
+        var ok = ToolInteractionResponseParser.TryParseApprovalResponse(
+            input,
+            options,
+            out var selectedKey);
+
+        Assert.True(ok);
+        Assert.Equal(expected, selectedKey);
+    }
+
+    [Fact]
+    public void Assignment_everywhere_variant_keeps_danger_style()
+        => Assert.True(ApprovalOptionKeys.IsDangerStyled(
+            ApprovalOptionKeys.ApproveAssignmentEverywhereV1));
+
+    [Theory]
     [InlineData("A")]
     [InlineData("5")]
     [InlineData("approve everywhere")]

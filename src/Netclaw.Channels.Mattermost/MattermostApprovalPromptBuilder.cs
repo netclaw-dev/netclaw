@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Text;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
@@ -14,12 +15,27 @@ namespace Netclaw.Channels.Mattermost;
 internal static class MattermostApprovalPromptBuilder
 {
     /// <summary>
-    /// Display-text budget. Mattermost's hard message cap is 16000 chars,
-    /// but approval prompts bypass the regular chunking path in
-    /// <c>MattermostSessionBindingActor</c> — so an oversized command
-    /// would be rejected outright and trigger an auto-deny.
+    /// Mattermost rejects a post with more than about 16000 characters.
+    /// Approval prompts bypass the regular chunking path in
+    /// <c>MattermostSessionBindingActor</c>, so an oversized prompt does not
+    /// post, the user sees no prompt, and the call does not run.
+    /// </summary>
+    internal const int MaxMessageChars = 16000;
+
+    /// <summary>
+    /// Display-text budget. With the field budgets below, the largest prompt
+    /// stays under <see cref="MaxMessageChars"/>.
     /// </summary>
     internal const int MaxDisplayTextChars = 12000;
+
+    // Field budgets. A pattern can be the full text of one command, so the
+    // pattern list bounds it again.
+    private const int MaxToolNameChars = 200;
+    private const int MaxListedPatternChars = 500;
+    private const int MaxPatternListChars = 2000;
+    private const int PatternLineOverheadChars = 8;
+    private const int MaxSpeakerListChars = 500;
+
     public static (string Text, IReadOnlyList<MattermostAttachment> Attachments) BuildButtonPrompt(
         ToolInteractionRequest request,
         string callbackUrl,
@@ -36,7 +52,7 @@ internal static class MattermostApprovalPromptBuilder
 
         var requesterSenderId = request.RequesterSenderId?.Value ?? string.Empty;
         var actions = request.Options
-            .Select(option =>
+            .Select((option, optionIndex) =>
             {
                 var optionKey = option.Key.Value;
                 var actionToken = actionStore?.CreateAction(
@@ -54,7 +70,9 @@ internal static class MattermostApprovalPromptBuilder
                     };
 
                 return new MattermostAttachmentAction(
-                    Id: $"tool_approval_{optionKey}",
+                    // Mattermost routes action IDs with [A-Za-z0-9]+.
+                    // The token retains the original approval option key.
+                    Id: $"toolapproval{optionIndex.ToString(CultureInfo.InvariantCulture)}",
                     Name: option.Label,
                     IntegrationUrl: callbackUrl,
                     Context: context,
@@ -67,7 +85,7 @@ internal static class MattermostApprovalPromptBuilder
             Color: "#3AA3E3",
             Actions: actions);
 
-        return (sb.ToString().TrimEnd(), [attachment]);
+        return (FitMessage(sb.ToString().TrimEnd()), [attachment]);
     }
 
     public static string BuildTextPrompt(ToolInteractionRequest request)
@@ -79,7 +97,7 @@ internal static class MattermostApprovalPromptBuilder
         sb.AppendLine();
         sb.AppendLine("Reply with:");
         AppendReplyOptions(sb, request.Options);
-        return sb.ToString().TrimEnd();
+        return FitMessage(sb.ToString().TrimEnd());
     }
 
     public static string BuildDecisionStatus(string selectedKey, ToolName toolName)
@@ -106,7 +124,7 @@ internal static class MattermostApprovalPromptBuilder
 
         sb.Append("**Decision:** ").Append(decisionLabel);
         sb.Append(" (by @").Append(senderId).Append(')');
-        return sb.ToString();
+        return FitMessage(sb.ToString());
     }
 
     public static MattermostAttachment BuildResolvedAttachment(
@@ -154,7 +172,7 @@ internal static class MattermostApprovalPromptBuilder
 
         if (!string.IsNullOrEmpty(toolName) && !string.IsNullOrEmpty(displayText))
         {
-            sb.Append("**Tool:** `").Append(toolName).AppendLine("`");
+            sb.Append("**Tool:** `").Append(ToolNameText(toolName)).AppendLine("`");
             sb.Append(isMcpTool ? "**Invocation:** `" : "**Action:** `")
                 .Append(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))
                 .AppendLine("`");
@@ -163,7 +181,7 @@ internal static class MattermostApprovalPromptBuilder
         sb.Append("**Decision:** ").Append(decisionLabel);
         sb.Append(" (by @").Append(senderId).Append(')');
 
-        var resolvedText = sb.ToString();
+        var resolvedText = FitMessage(sb.ToString());
         var color = selectedKey == ApprovalOptionKeys.Deny ? "#CC0000" : "#2EA44F";
 
         return new MattermostAttachment(
@@ -177,7 +195,7 @@ internal static class MattermostApprovalPromptBuilder
         ToolInteractionRequest request,
         bool includeApprovalQuestion)
     {
-        sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
+        sb.Append("**Tool:** `").Append(ToolNameText(request.ToolName.Value)).AppendLine("`");
         sb.Append(request.ToolName.IsMcp ? "**Invocation:** `" : "**Action:** `")
             .Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
 
@@ -187,14 +205,16 @@ internal static class MattermostApprovalPromptBuilder
         }
         else if (request.Patterns.Count > 0)
         {
+            var patterns = ApprovalDisplayTextFormatter.TruncateList(
+                request.Patterns, MaxListedPatternChars, MaxPatternListChars, PatternLineOverheadChars);
             if (request.Patterns.Count == 1)
             {
-                sb.Append("**Pattern:** `").Append(request.Patterns[0]).AppendLine("`");
+                sb.Append("**Pattern:** `").Append(patterns[0]).AppendLine("`");
             }
             else
             {
                 sb.AppendLine("**Patterns:**");
-                foreach (var pattern in request.Patterns)
+                foreach (var pattern in patterns)
                     sb.Append("  - `").Append(pattern).AppendLine("`");
             }
         }
@@ -213,8 +233,22 @@ internal static class MattermostApprovalPromptBuilder
             return;
 
         sb.Append("**Adopted context:** present").AppendLine();
-        sb.Append("**Speakers:** `").Append(string.Join(", ", request.AdoptedSpeakerIds)).AppendLine("`");
+        sb.Append("**Speakers:** `").Append(SpeakerList(request)).AppendLine("`");
     }
+
+    private static string SpeakerList(ToolInteractionRequest request)
+        => ApprovalDisplayTextFormatter.Truncate(string.Join(", ", request.AdoptedSpeakerIds), MaxSpeakerListChars);
+
+    private static string ToolNameText(string toolName)
+        => ApprovalDisplayTextFormatter.Truncate(toolName, MaxToolNameChars);
+
+    /// <summary>
+    /// The field budgets keep a prompt under <see cref="MaxMessageChars"/>;
+    /// this last bound also covers a field that a later change adds without a
+    /// budget.
+    /// </summary>
+    private static string FitMessage(string text)
+        => ApprovalDisplayTextFormatter.Truncate(text, MaxMessageChars);
 
     private static void AppendReplyOptions(StringBuilder sb, IReadOnlyList<ToolInteractionOption> options)
     {
@@ -229,10 +263,9 @@ internal static class MattermostApprovalPromptBuilder
         => ((char)('A' + index)).ToString();
 
     private static string GetButtonStyle(string optionKey)
-        => optionKey switch
-        {
-            ApprovalOptionKeys.Deny => "danger",
-            ApprovalOptionKeys.ApproveOnce => "primary",
-            _ => "default"
-        };
+    {
+        if (ApprovalOptionKeys.IsDangerStyled(optionKey))
+            return "danger";
+        return optionKey == ApprovalOptionKeys.ApproveOnce ? "primary" : "default";
+    }
 }

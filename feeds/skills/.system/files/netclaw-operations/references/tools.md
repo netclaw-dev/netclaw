@@ -84,16 +84,40 @@ TUI.
 The `--grant-all` option skips the closed grants for Team and Public.
 The option does not change the approval defaults.
 
+`netclaw mcp add` on a name that already exists replaces only the connection
+definition (URL, command, headers, environment, client ID and secret). The
+command does not touch the audience entries. The grants, approval modes, and
+allow-list entries stay as they are, and a disabled server stays disabled and
+keeps its grant category. Pass every connection flag again: a header, client
+ID, client secret, scope, or environment variable that the command line omits
+is dropped, and the command prints which fields it replaced and dropped. Use
+this to change a URL or rotate a secret.
+
+`netclaw mcp remove <name>` deletes everything keyed by the name: the profile,
+its secrets, its stored OAuth tokens, its entries in every audience profile
+(`AllowedMcpServers`, `McpServerToolGrants`, `McpServerDefaults`, and the
+`ToolOverrides` for its tools), and its saved approvals. A server added again
+under the same name starts clean and needs a new `netclaw mcp auth <name>`.
+Names are case-sensitive: `remove GITHUB` is refused when only `github` is
+configured. When the approval store cannot be read, the command changes nothing.
+
 Inside the TUI (`netclaw mcp permissions`):
 
-- `Enter` toggles the highlighted tool. In the `All` MCP server mode, the toggle sets
+- `Space` toggles the highlighted tool. In the `All` MCP server mode, the toggle sets
   `Deny` (disabled) or clears it (inherit the server default). In `Allowlist`
   mode, it adds or removes the tool from the grant list.
 - `A` toggles all tools on/off for the current audience
-- `E` enables/disables the whole server for the current audience
+- `E` enables or disables the whole server for the current audience. In `Allowlist` mode,
+  enabling grants every tool on the server, so it asks first
+  (`Grant all N tools on '<server>' to <audience>?`). Only `Y` grants; `N`, `Esc` and `Enter`
+  cancel. The footer shows `[E] Enable all` in that case, `[E] Enable` where nothing new is
+  granted (`All` mode), and `[E] Disable` when the server is enabled. `Space` and the arrow
+  keys on the "Server enabled" row ask the same question.
+- `A` toggles all tools on/off for the current audience. Granting every tool (when none is
+  granted) asks the same question first
 - `M` cycles the **server default** approval mode (`Auto → Approval → Deny → Auto`)
 - `P` cycles the **highlighted tool's explicit override** (`inherit → Auto → Approval → Deny → inherit`) — `inherit` removes any explicit override so the tool inherits the server default
-- `S` saves pending changes to `netclaw.json`
+- `Enter` finishes: with unsaved changes it asks `Save changes?` (`Enter` or `Y` saves, `N` discards, `Esc` keeps editing)
 - `←/→` cycles the selected audience
 
 Approval-mode resolution precedence (for MCP tools):
@@ -115,6 +139,17 @@ The MCP server mode controls tool grants:
 Use `--revoke` to write a `Deny` override in the `All` mode.
 Use `--grant` to remove a `Deny` override or enable a tool above a `Deny` default.
 
+In `Allowlist` mode, `netclaw mcp tools <server> --grant <tools> --audience <name>` also adds
+the server to that audience's `AllowedMcpServers` when it is missing, and prints
+`Also allowed server '<server>' for <Audience>.` Without that entry the grant has no effect.
+The result of a `--grant` that allows the server is exactly the tools named on the command line.
+Grants left from before the server was allowed are dropped, and the command prints their names.
+The command then prints `<Audience> can now call: <tool> (mode: <mode>)`, using the approval
+mode the authorizer will apply. A tool whose mode is `Deny` stays granted but cannot be called;
+the command says so and names `ApprovalPolicy.McpServerDefaults.<server>`. It never changes
+approval modes. `--revoke` never changes `AllowedMcpServers`: on a server the audience does not
+allow it changes nothing and exits 1, and revoking the last tool keeps the server in the list.
+
 ### MCP servers in old configurations
 
 Servers added to `netclaw.json` before this behavior shipped stay untouched —
@@ -131,7 +166,7 @@ Personal can reach (`McpServersMode = All`) but has no
 
 To resolve: run `netclaw mcp permissions`, pick the server, switch to the
 Personal audience, press `M` to set a server default (`Approval` is the
-safe choice), `S` to save, then restart the daemon. Repeat for each
+safe choice), `S` to save (a running daemon applies the change automatically). Repeat for each
 audience you want to tighten. `doctor` stops warning once the default is
 set.
 

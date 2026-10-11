@@ -330,38 +330,40 @@ public sealed class ToolRegistry
 
     /// <summary>
     /// Search tools by keyword, matching against name and description.
-    /// Returns up to <paramref name="maxResults"/> matching tools.
+    /// Returns up to <paramref name="maxResults"/> matching tools, best match first.
     /// </summary>
+    /// <remarks>
+    /// A tool matches when it contains one or more query words. The order is: most
+    /// query words matched, then most query words matched in the tool name, then
+    /// registration order. Callers cut this list to a small number, so an unranked
+    /// list lets a tool that matches one common word ("list") hide the tool that
+    /// matches the whole query ("list reminders" -> list_reminders).
+    /// </remarks>
     public IReadOnlyList<INetclawTool> SearchTools(string query, McpServerName? serverFilter, int maxResults)
     {
-        var queryParts = TokenizeQuery(query);
+        var queryParts = TokenizeQuery(query).Distinct(StringComparer.Ordinal).ToList();
 
         if (queryParts.Count == 0)
             return [];
 
         return GetRegistrationsSnapshot()
-            .Where(t =>
+            .Where(t => PassesServerFilter(t.Tool, serverFilter))
+            .Select(t =>
             {
-                // Apply server filter if specified
-                if (serverFilter is not null && t.Tool is McpToolAdapter mcp)
-                {
-                    if (!string.Equals(mcp.ServerName, serverFilter.Value.Value, StringComparison.OrdinalIgnoreCase))
-                        return false;
-                }
-                else if (serverFilter is not null)
-                {
-                    return false; // non-MCP tools filtered out when server filter is set
-                }
-
                 var nameLower = t.Tool.Name.ToLowerInvariant();
                 var descLower = t.Tool.Description.ToLowerInvariant();
-
-                return queryParts.Any(p =>
+                var nameMatches = queryParts.Count(p => nameLower.Contains(p, StringComparison.Ordinal));
+                var wordMatches = queryParts.Count(p =>
                     nameLower.Contains(p, StringComparison.Ordinal)
                     || descLower.Contains(p, StringComparison.Ordinal));
+                return (t.Tool, WordMatches: wordMatches, NameMatches: nameMatches);
             })
+            .Where(static x => x.WordMatches > 0)
+            // OrderBy is a stable sort, so equal ranks keep registration order.
+            .OrderByDescending(static x => x.WordMatches)
+            .ThenByDescending(static x => x.NameMatches)
             .Take(maxResults)
-            .Select(t => t.Tool)
+            .Select(static x => x.Tool)
             .ToList();
     }
 
@@ -456,7 +458,7 @@ public sealed class ToolRegistry
             if (sb.Length > 0)
                 sb.AppendLine();
 
-            sb.AppendLine("[deferred first-party tools - discover with search_tools]");
+            sb.AppendLine("[deferred first-party tools - call load_tool(name), then call the tool]");
             foreach (var entry in deferredFirstPartyTools.OrderBy(
                          static entry => entry.Registration.Tool.Name,
                          StringComparer.Ordinal))

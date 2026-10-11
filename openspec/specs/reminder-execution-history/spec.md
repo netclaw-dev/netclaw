@@ -113,15 +113,14 @@ persisted trust context.
 
 ### Requirement: Soft deletion retains reminder history
 
-Netclaw SHALL retain execution history when it soft-deletes a one-shot that reached its poison threshold. Only an explicit delete command SHALL remove that history file.
+Netclaw SHALL retain execution history when it soft-deletes a one-shot that reached its poison threshold, and when a one-shot completes. The history file is removed with its definition: by an explicit delete command, or by pruning once a completed one-shot has been complete for more than 12 days. Failed reminders and recurring reminders are never pruned. The history of an id that never existed is reported as not found.
 
-A successful one-shot is not soft-deleted: Netclaw removes its definition and its history file together, so no orphaned history remains.
-
-#### Scenario: Completed one-shot removes its history with its definition
+#### Scenario: Completed one-shot keeps its history for the retention period
 
 - **GIVEN** a one-shot has a successful execution record
 - **WHEN** Netclaw settles it as complete
-- **THEN** Netclaw deletes the definition and the history file together
+- **THEN** reminder history for the id returns the record
+- **AND** Netclaw deletes the definition and the history file together after the retention period
 
 #### Scenario: Failed one-shot retains history
 

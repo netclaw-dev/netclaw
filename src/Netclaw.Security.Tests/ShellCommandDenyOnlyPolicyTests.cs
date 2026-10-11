@@ -17,7 +17,7 @@ public sealed class ShellCommandDenyOnlyPolicyTests
 
     [Theory]
     [InlineData("netclaw daemon stop")]
-    [InlineData("Stop-Process -Id $processId")]
+    [InlineData("Stop-Process -Name netclawd -Id $processId")]
     public void Static_categorical_facts_deny_with_dynamic_trailing_arguments(string source)
     {
         var policy = new ShellCommandPolicy(PowerShellEnvironment);

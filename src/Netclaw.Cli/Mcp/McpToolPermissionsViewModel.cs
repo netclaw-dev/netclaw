@@ -123,7 +123,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         ToolAudienceProfiles profiles;
         try
         {
-            profiles = LoadToolConfig().AudienceProfiles;
+            profiles = ConfigFileHelper.LoadToolConfig(_paths).AudienceProfiles;
         }
         catch (Exception ex)
         {
@@ -173,7 +173,22 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         SelectedServer = serverName.Value;
         DiscoveredTools.Clear();
         DiscoveredTools.AddRange(tools);
-        Profiles = LoadToolConfig().AudienceProfiles;
+        Profiles = ConfigFileHelper.LoadToolConfig(_paths).AudienceProfiles;
+        if (!_pendingGrants.ContainsKey(serverName.Value))
+            InitializePendingGrantsFromConfig(serverName);
+        CurrentState.Value = ToolPermissionsState.ToolGrid;
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Test seam for a second server in the same session. Like <see cref="SelectServer"/>, it does
+    /// not reload the audience profiles from disk.
+    /// </summary>
+    internal void SelectServerForTests(McpServerName serverName, IEnumerable<string> tools)
+    {
+        SelectedServer = serverName.Value;
+        DiscoveredTools.Clear();
+        DiscoveredTools.AddRange(tools);
         if (!_pendingGrants.ContainsKey(serverName.Value))
             InitializePendingGrantsFromConfig(serverName);
         CurrentState.Value = ToolPermissionsState.ToolGrid;
@@ -559,12 +574,16 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             SaveToolOverrides(profilesSection);
 
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+
+            // The next edit and the next save start from what the file now says. A stale All
+            // profile would seed a later allowlist with a server that this save disabled.
+            Profiles = ConfigFileHelper.LoadToolConfig(_paths).AudienceProfiles;
             _pendingGrants.Clear();
             _pendingServerAccess.Clear();
             _pendingServerDefaults.Clear();
             _pendingToolOverrides.Clear();
 
-            StatusMessage.Value = "✓ Saved to netclaw.json. Restart daemon to apply changes.";
+            StatusMessage.Value = $"✓ Saved to netclaw.json. {ConfigFileHelper.DaemonAppliesChange}";
             CurrentState.Value = ToolPermissionsState.ToolGrid;
             NotifyStateChanged();
             return true;
@@ -582,30 +601,31 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     {
         var knownServers = GetKnownMcpServers(config);
 
-        // Accumulate per-audience working lists WITHOUT mutating the live in-memory profile objects
+        // Build each audience's list WITHOUT mutating the live in-memory profile objects
         // (Profiles.Public/Team/Personal back the runtime ACL queries — IsServerAllowed, etc. — so
         // coercing them here would leave the ACL in a post-save state if Save throws before the file
-        // write). Seed each audience's working list from its ORIGINAL profile the first time it is
-        // touched; later changes for the same audience build on the working list rather than re-reading
-        // a profile that an earlier iteration would have coerced.
-        var workingLists = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var ((audienceName, serverName), allowed) in _pendingServerAccess)
+        // write). Each list starts from the ORIGINAL profile.
+        foreach (var audienceChanges in _pendingServerAccess.GroupBy(change => change.Key.Audience, StringComparer.Ordinal))
         {
-            var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
-            if (!workingLists.TryGetValue(audienceName, out var serverList))
+            var profile = ResolveProfile(AudienceFromName(audienceChanges.Key));
+            var allServers = profile.McpServersMode == ToolProfileMode.All;
+
+            // An All profile already allows each server, so a pending "allowed" entry there is a
+            // toggle that the user reversed. Only a disabled server needs an allowlist. Writing
+            // one for no change would stop the profile from following servers added later.
+            if (allServers && audienceChanges.All(change => change.Value))
+                continue;
+
+            var serverList = allServers ? knownServers.ToList() : profile.AllowedMcpServers.ToList();
+            foreach (var ((_, serverName), allowed) in audienceChanges)
             {
-                var profile = ResolveProfile(AudienceFromName(audienceName));
-                serverList = profile.McpServersMode == ToolProfileMode.All
-                    ? knownServers.ToList()
-                    : profile.AllowedMcpServers.ToList();
-                workingLists[audienceName] = serverList;
+                if (allowed)
+                    AddServer(serverList, serverName);
+                else
+                    serverList.RemoveAll(s => s.Equals(serverName, StringComparison.OrdinalIgnoreCase));
             }
 
-            if (allowed)
-                AddServer(serverList, serverName);
-            else
-                serverList.RemoveAll(s => s.Equals(serverName, StringComparison.OrdinalIgnoreCase));
-
+            var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceChanges.Key);
             audienceSection["McpServersMode"] = ToolProfileMode.Allowlist.ToString();
             audienceSection["AllowedMcpServers"] = serverList;
         }
@@ -723,6 +743,22 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         return IsServerAllowed(new McpServerName(SelectedServer), profile);
     }
 
+    /// <summary>
+    /// Whether enabling the selected server for the selected audience grants every discovered
+    /// tool. An All-mode profile already allows the server and keeps no grant list.
+    /// </summary>
+    public bool EnablingServerGrantsAllTools()
+        => SelectedServer is not null
+           && DiscoveredTools.Count > 0
+           && !UsesAllMcpServersMode()
+           && !IsServerAllowedForSelectedAudience();
+
+    /// <summary>Whether <see cref="ToggleAll"/> would grant every tool, because none is granted now.</summary>
+    public bool ToggleAllGrantsAllTools()
+        => SelectedServer is not null
+           && DiscoveredTools.Count > 0
+           && !DiscoveredTools.Any(t => IsToolGranted(new ToolName(t)));
+
     public void ToggleServerAccess()
     {
         if (SelectedServer is null)
@@ -732,7 +768,13 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         var audienceName = AudienceName(SelectedAudience);
         _pendingServerAccess[(audienceName, SelectedServer)] = !allowed;
 
-        if (!allowed)
+        // An All profile ignores McpServerToolGrants, and it already allows this server, so an
+        // "enable" there only reverses a pending disable. A grant list would be dead config.
+        if (!allowed && UsesAllMcpServersMode())
+        {
+            _pendingServerAccess.Remove((audienceName, SelectedServer));
+        }
+        else if (!allowed)
         {
             if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
             {
@@ -833,20 +875,5 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         StateVersion.Dispose();
         StatusMessage.Dispose();
         base.Dispose();
-    }
-
-    private ToolConfig LoadToolConfig()
-    {
-        if (!File.Exists(_paths.NetclawConfigPath))
-            return new ToolConfig();
-
-        var text = File.ReadAllText(_paths.NetclawConfigPath);
-        using var doc = JsonDocument.Parse(text);
-
-        if (!doc.RootElement.TryGetProperty("Tools", out var toolsSection))
-            return new ToolConfig();
-
-        return JsonSerializer.Deserialize<ToolConfig>(toolsSection.GetRawText(), JsonDefaults.EnumAware)
-            ?? throw new InvalidDataException("Tools section could not be deserialized.");
     }
 }

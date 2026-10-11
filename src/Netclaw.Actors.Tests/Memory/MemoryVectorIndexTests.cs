@@ -13,7 +13,7 @@ public sealed class MemoryVectorIndexTests : IAsyncLifetime
     private const string ModelId = "test-model";
     private const int Dimensions = 3;
 
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-vector-index-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-vector-index-tests-{Guid.NewGuid():N}");
     private SQLiteMemoryStore _store = null!;
     private MemoryVectorIndex _index = null!;
 

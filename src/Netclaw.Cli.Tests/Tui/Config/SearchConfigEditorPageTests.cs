@@ -99,7 +99,7 @@ public sealed class SearchConfigEditorPageTests : IDisposable
         CreateHeadlessApp(out VirtualInputSource input, IHttpClientFactory? httpClientFactory = null)
         => HeadlessTerminaFixture.Create<SearchConfigEditorPage, SearchConfigEditorViewModel>(
             "/search",
-            () => new SearchConfigEditorPage(),
+            _ => new SearchConfigEditorPage(),
             () => new SearchConfigEditorViewModel(_paths, httpClientFactory),
             out input);
 

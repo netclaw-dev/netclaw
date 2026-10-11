@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -67,9 +68,8 @@ public sealed class WindowsPowerShellTreeApprovalTests(
         var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("shell_unresolved_trust_zone_input", decision.DenyReason);
+        Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, decision.DenyReason);
         Assert.Null(decision.ApprovalContext);
-        Assert.Equal(0, harness.ApprovalService.CheckCount);
     }
 
     [Fact]

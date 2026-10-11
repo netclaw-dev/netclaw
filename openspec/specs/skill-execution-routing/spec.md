@@ -70,11 +70,11 @@ path and SHALL NOT execute inline path for the same activation.
 
 ### Requirement: Routed tool authorization remains audience-governed for MVP
 
-On routed executions, the system SHALL apply existing audience/boundary policy
-and subagent tool registration constraints.
+On routed executions, the system SHALL apply the same tool authorization as any
+other subagent run (`tool-authorization` TA-3 and TA-12) and the subagent tool
+registration constraints.
 
-This change SHALL NOT introduce an additional runtime tool gate based on skill
-`allowed-tools` metadata.
+Skill `allowed-tools` metadata SHALL NOT be an additional runtime tool gate.
 
 #### Scenario: Routed execution honors existing audience policy
 

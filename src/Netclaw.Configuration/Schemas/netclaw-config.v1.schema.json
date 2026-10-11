@@ -153,6 +153,7 @@
         },
         "IdleTimeout": {
           "type": "string",
+          "default": "01:00:00",
           "description": "Session idle timeout in HH:mm:ss format. Set to 00:00:00 to disable."
         },
         "TurnLlmTimeoutSeconds": {
@@ -236,6 +237,29 @@
           "type": "boolean",
           "description": "Legacy root-level alias for Session.Tuning.DeterministicRetrievalEnabled."
         },
+        "MemoryDistillationTurnInterval": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 5,
+          "description": "Legacy root-level alias for Session.Tuning.MemoryDistillationTurnInterval."
+        },
+        "MinimumRecallCompositeScore": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Legacy root-level alias for Session.Tuning.MinimumRecallCompositeScore."
+        },
+        "MaxToolDescriptionChars": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2048,
+          "description": "Legacy root-level alias for Session.Tuning.MaxToolDescriptionChars."
+        },
+        "MaxToolSchemaWarnChars": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 8000,
+          "description": "Legacy root-level alias for Session.Tuning.MaxToolSchemaWarnChars."
+        },
         "Tuning": {
           "type": "object",
           "description": "Internal tuning constants. Not part of the documented operator surface.",
@@ -249,7 +273,24 @@
             "KeepRecentMessages": { "type": "integer", "minimum": 1 },
             "TitleGenerationInterval": { "type": "integer", "minimum": 0 },
             "DeterministicRetrievalEnabled": { "type": "boolean" },
-            "MemoryDistillationTurnInterval": { "type": "integer", "minimum": 0 },
+            "MemoryDistillationTurnInterval": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 5,
+              "description": "Completed turns between memory distillation runs during a long active session. The idle timeout still applies. Set to 0 to disable."
+            },
+            "MaxToolDescriptionChars": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 2048,
+              "description": "Maximum characters kept from an MCP tool description. Longer descriptions are truncated when the tool is registered. Set to 0 to disable truncation."
+            },
+            "MaxToolSchemaWarnChars": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 8000,
+              "description": "Size in characters of an MCP tool schema above which the daemon logs a warning. The schema itself is never truncated. Set to 0 to disable the warning."
+            },
             "MinimumRecallCompositeScore": {
               "type": ["number", "null"],
               "minimum": 0,
@@ -260,6 +301,31 @@
               "minimum": 0,
               "default": 2000,
               "description": "Character budget for memory content injected by automatic recall per turn. Items are admitted in rank order until the budget is exhausted; whole items are dropped, never truncated. Set to 0 to disable."
+            },
+            "StreamingRetryPolicy": {
+              "type": "object",
+              "description": "Retry policy for transient streaming LLM failures (HTTP 408, 429 and 5xx). It applies only before the first streamed data arrives.",
+              "properties": {
+                "MaxRetries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 3,
+                  "description": "Maximum number of retries after the first attempt."
+                },
+                "BaseDelay": {
+                  "type": "string",
+                  "pattern": "^(\\d+\\.)?\\d{1,2}:\\d{2}:\\d{2}(\\.\\d{1,7})?$",
+                  "default": "00:00:01",
+                  "description": "Delay before the first retry in HH:mm:ss format. The delay doubles on each retry, with jitter."
+                },
+                "MaxDelay": {
+                  "type": "string",
+                  "pattern": "^(\\d+\\.)?\\d{1,2}:\\d{2}:\\d{2}(\\.\\d{1,7})?$",
+                  "default": "00:00:30",
+                  "description": "Upper limit on the delay between retries in HH:mm:ss format."
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false
@@ -330,7 +396,53 @@
     },
     "Providers": {
       "type": "object",
-      "additionalProperties": true
+      "description": "LLM provider connections. Each key is a provider name that Models definitions refer to.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "Type": {
+            "type": "string",
+            "default": "ollama",
+            "description": "Provider type, for example ollama, openai-compatible, openrouter, openai, anthropic, deepseek, github-copilot or veniceai."
+          },
+          "Endpoint": {
+            "type": ["string", "null"],
+            "description": "Base URL of the provider API. Leave empty to use the provider's own default."
+          },
+          "AuthMethod": {
+            "type": "string",
+            "enum": ["None", "ApiKey", "OAuthDevice", "OAuthPkce"],
+            "default": "None",
+            "description": "How Netclaw authenticates to the provider."
+          },
+          "ApiKey": {
+            "type": ["string", "null"],
+            "description": "Provider API key. Store it in secrets.json."
+          },
+          "OAuthAccessToken": {
+            "type": ["string", "null"],
+            "description": "OAuth access token. Netclaw writes it to secrets.json when you sign in with an OAuth auth method."
+          },
+          "OAuthRefreshToken": {
+            "type": ["string", "null"],
+            "description": "OAuth refresh token. Netclaw writes it to secrets.json when you sign in with an OAuth auth method."
+          },
+          "OAuthAccountId": {
+            "type": ["string", "null"],
+            "description": "OAuth account identifier. Netclaw writes it to secrets.json when you sign in with an OAuth auth method."
+          },
+          "OAuthTokenExpiry": {
+            "type": ["string", "null"],
+            "description": "Expiry time of the OAuth access token in ISO 8601 format. Netclaw writes it to netclaw.json when you sign in with an OAuth auth method."
+          },
+          "VendorOptions": {
+            "type": ["object", "null"],
+            "description": "Provider-specific non-secret options, for example GitHubHost and GitHubApiBase for github-copilot.",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
     },
     "Models": {
       "description": "Named model definitions and role assignments. The legacy inline role shape remains accepted for upgrades.",
@@ -737,6 +849,26 @@
       },
       "additionalProperties": false
     },
+    "Retention": {
+      "type": "object",
+      "description": "How long the daemon keeps data before a scheduled clean-up deletes it.",
+      "properties": {
+        "Logs": {
+          "type": "object",
+          "properties": {
+            "Days": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 36500,
+              "default": 14,
+              "description": "Days to keep daemon-yyyy-MM-dd.log and crash-*.log files in the logs directory. The daemon deletes older files shortly after it starts and every 12 hours; the newest 3 daemon logs and the newest 3 crash logs are always kept. 0 keeps them forever. Per-session logs are not affected."
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
     "Daemon": {
       "type": "object",
       "description": "Daemon network and exposure configuration.",
@@ -829,6 +961,7 @@
           "Enabled": { "type": "boolean", "default": true },
           "GrantCategory": { "type": ["string", "null"] },
           "OAuthClientId": { "type": ["string", "null"] },
+          "OAuthClientSecret": false,
           "OAuthScope": { "type": ["string", "null"] }
         },
         "additionalProperties": false
@@ -897,8 +1030,7 @@
         "AllowedCategories": {
           "type": "array",
           "items": { "$ref": "#/$defs/AttachmentCategory" },
-          "default": [],
-          "description": "Attachment categories permitted for this audience. Empty rejects all inbound attachments."
+          "description": "Attachment categories permitted for this audience. Empty rejects all inbound attachments. When the key is absent, Public allows Image, Team allows everything except Other, and Personal allows every category."
         },
         "MaxFileBytes": {
           "type": "integer",

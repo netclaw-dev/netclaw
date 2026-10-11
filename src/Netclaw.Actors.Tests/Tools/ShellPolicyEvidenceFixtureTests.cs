@@ -10,6 +10,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Security.Tests;
 using Netclaw.Tools;
 using Xunit;
@@ -36,8 +37,8 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             CultureInfo.InvariantCulture));
         var expectedRows = new List<string>();
         var actualRows = new List<string>();
-        var expectedOutcomes = new List<ToolAuthorizationOutcome>();
-        var actualOutcomes = new List<ToolAuthorizationOutcome>();
+        var expectedOutcomes = new List<ApprovalOutcome>();
+        var actualOutcomes = new List<ApprovalOutcome>();
 
         foreach (var policyCase in catalog.Cases)
         {
@@ -57,26 +58,26 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
                     catalog.FixtureDefaults.Session.SessionId,
                     policyCase.Available.OneTimeApprovalKeys),
                 CreateSafeVerbs(policyCase.Available, invocation.CreateEnvironment()));
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
             TestContext.Current.TestOutputHelper?.WriteLine(
-                $"{policyCase.EvidenceId}: outcome={decision.Outcome}; "
-                + $"candidates={string.Join(", ", decision.ApprovalContext?.CandidateVerbs ?? [])}; "
-                + $"messy={decision.ApprovalContext?.IsMessy}\n"
-                + string.Join(Environment.NewLine, decision.ShellPolicyTrace.Rows.Select(FormatActualTraceRow)));
+                $"{policyCase.EvidenceId}: outcome={observed.Outcome}; "
+                + $"candidates={string.Join(", ", observed.Prompt?.CandidateVerbs ?? [])}; "
+                + $"messy={observed.Prompt?.IsMessy}\n"
+                + string.Join(Environment.NewLine, observed.TraceRows));
 
             expectedOutcomes.Add(ParseOutcome(policyCase.ExpectedFinal.Outcome));
-            actualOutcomes.Add(decision.Outcome);
+            actualOutcomes.Add(observed.Outcome);
             Assert.Equal(
-                policyCase.ExpectedFinal.ApprovalCandidates,
-                decision.ApprovalContext?.CandidateVerbs);
-            Assert.Equal(policyCase.ExpectedFinal.IsMessy, decision.ApprovalContext?.IsMessy);
+                ExpectedPromptCandidates(policyCase.ExpectedFinal.ApprovalCandidates, observed),
+                observed.Prompt?.CandidateVerbs);
+            Assert.Equal(policyCase.ExpectedFinal.IsMessy, observed.Prompt?.IsMessy);
             Assert.Equal(
-                policyCase.ExpectedFinal.AgentCorrection,
-                decision.AgentCorrection?.GetType().Name);
+                ParseCorrection(policyCase.ExpectedFinal.AgentCorrection),
+                observed.AgentCorrection);
             expectedRows.AddRange(policyCase.ExpectedTrace.Select(row =>
                 $"{policyCase.EvidenceId}|{FormatExpectedTraceRow(row)}"));
-            actualRows.AddRange(decision.ShellPolicyTrace.Rows.Select(row =>
-                $"{policyCase.EvidenceId}|{FormatActualTraceRow(row)}"));
+            actualRows.AddRange(observed.TraceRows.Select(row =>
+                $"{policyCase.EvidenceId}|{row}"));
         }
 
         Assert.Equal(expectedOutcomes, actualOutcomes);
@@ -96,9 +97,33 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
 
         foreach (var policyCase in catalog.AdversarialCases)
         {
-            await AssertPolicyCaseAsync(catalog, timeProvider, policyCase);
+            await AssertPolicyCaseAsync(
+                catalog,
+                timeProvider,
+                policyCase with { Expected = CurrentAdversarialExpected(policyCase) });
         }
     }
+
+    // The archived A06 result kept the whole loop as one exact prompt. Each
+    // command now gets its own decision (approval taxonomy PR 5): the global
+    // cat grant covers cat "$f" under owner decision D1, and the iterator
+    // program still prompts with normal options.
+    private static PolicyAdversarialExpected CurrentAdversarialExpected(PolicyAdversarialCase policyCase)
+        => policyCase.Id == "A06"
+            ? policyCase.Expected with
+            {
+                ApprovalCandidates = ["list-files"],
+                IsMessy = false,
+                OptionKeys =
+                [
+                    ApprovalOptionKeys.ApproveOnce,
+                    ApprovalOptionKeys.ApproveSession,
+                    ApprovalOptionKeys.ApproveEverywhere,
+                    ApprovalOptionKeys.Deny
+                ],
+                ActorCheckCount = 1
+            }
+            : policyCase.Expected;
 
     public static TheoryData<string> LiveRegressionCaseIds => new(
         Enumerable.Range(1, 32).Select(number => $"L{number:00}"));
@@ -132,23 +157,103 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         PolicyAdversarialCase policyCase)
     {
         // The archived fixture keeps the prior exact-only result.
-        // These rows state the current finite-scope contract.
-        // macOS resolves /tmp through a link, so the redirect paths in L17 stay exact.
-        if (OperatingSystem.IsMacOS() && policyCase.Id == "L17")
-            return policyCase.Expected;
+        // These rows state the current finite-scope contract. In an
+        // interactive run on a POSIX host, the reviewed catalog covers a cd and
+        // a read in each directory that the audience may read, so no row lists
+        // cd there. A Windows host keeps the project-root results.
+        // The reviewed catalog lists sort, so L05 needs no prompt. In an
+        // interactive run a reviewed phrase covers each path that the audience
+        // may read, so the external reads in L18, L21, and L28 need no prompt.
+        // The fixtures use POSIX paths. Only a POSIX host can read them, so a
+        // Windows host keeps the archived project-root results.
+        var posixHost = !OperatingSystem.IsWindows();
+        if (policyCase.Id is "L05" || posixHost && policyCase.Id is "L18" or "L21" or "L28")
+        {
+            return policyCase.Expected with
+            {
+                Outcome = "Allow",
+                ApprovalCandidates = null,
+                IsMessy = null,
+                OptionKeys = null,
+                ActorCheckCount = 1
+            };
+        }
 
+        // Each command gets its own decision (approval taxonomy PR 5). An
+        // unresolved command is one exact candidate with only "Once" and "Deny".
+        // In L27 the dynamic -C value comes before the verb, so its command
+        // words are unknown, and the model gets a rewrite correction.
+        if (policyCase.Id == "L27")
+        {
+            return policyCase.Expected with
+            {
+                Outcome = "RequiresAgentCorrection",
+                AgentCorrection = "ShellCommandWordsRewriteSuggested",
+                ApprovalCandidates = null,
+                IsMessy = null,
+                OptionKeys = null,
+                ActorCheckCount = 1
+            };
+        }
+
+        // Host facts change the lists. The Windows bundled catalog has no cd or
+        // grep entry, so those commands stay in the prompt. On macOS, /tmp is a
+        // link, so a command that writes below /tmp stays exact. The macOS host
+        // also gives no proved scope to any L17 command, so each one is exact.
+        const string sedRange = "sed -n \"$(grep -n 'FAIL' /tmp/test.log | cut -d: -f1),+4p\" /tmp/test.log";
+        var windowsHost = OperatingSystem.IsWindows();
+        var macHost = OperatingSystem.IsMacOS();
+        List<string>? exactCandidates = policyCase.Id switch
+        {
+            "L10" when windowsHost => ["dotnet test", "grep FAIL", sedRange],
+            "L10" when macHost => ["dotnet test > /tmp/test.log", sedRange],
+            "L10" => ["dotnet test", sedRange],
+            "L13" when windowsHost => ["cd", "ls -la \"$project\"", "head"],
+            "L13" => ["ls -la \"$project\"", "head"],
+            "L17" when macHost =>
+            [
+                "git diff --name-only origin/dev...HEAD",
+                "sort > /tmp/old-files",
+                "git diff --name-only origin/dev...feature/example",
+                "sort > /tmp/new-files",
+                "comm /tmp/old-files /tmp/new-files"
+            ],
+            _ => null
+        };
+        if (exactCandidates is not null)
+        {
+            return policyCase.Expected with
+            {
+                ApprovalCandidates = exactCandidates,
+                IsMessy = false,
+                OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+                ActorCheckCount = 1
+            };
+        }
+
+        // The Windows bundled catalog has no cd entry, so L22 keeps cd on a Windows host.
+        // The catalog lists git diff, git show, and sort. In L17 each sort writes a
+        // file outside the project, so it still prompts.
         List<string>? candidates = policyCase.Id switch
         {
-            "L12" => ["mkdir", "cd", "git clone"],
-            "L14" => ["cd", "git remote", "git fetch origin", "git fetch upstream"],
-            "L15" => ["cd", "find", "head"],
-            "L16" => ["cd", "git add", "git rebase"],
-            "L17" => ["cd", "git diff", "sort", "comm"],
+            "L12" => posixHost ? ["mkdir", "git clone"] : ["mkdir", "cd", "git clone"],
+            "L14" => ["git remote", "git fetch origin", "git fetch upstream"],
+            "L15" => posixHost ? ["find f"] : ["cd", "find f", "head"],
+            "L16" => ["git add", "git rebase"],
+            "L17" => ["sort", "comm"],
             "L18" => ["cd", "ls", "head"],
-            "L21" => ["cd", "git log", "grep"],
-            "L22" => ["cd", "python3"],
-            "L29" => ["cd", "docker compose config", "git diff"],
-            "L30" => ["cd", "sed", "git show"],
+            "L21" => ["cd", "git log", "grep Marker"],
+            "L22" => windowsHost ? ["cd", "python3"] : ["python3"],
+            "L24" when posixHost => ["external-crm deals list"],
+            "L24" => ["external-crm deals list", "jq length"],
+            // The verb is the command words. The parser gives "-o" one value, so
+            // the second option value and the host are command words.
+            "L25" => ["ssh BatchMode=yes service.example.invalid"],
+            // A POSIX host allows L28 above. The Windows catalog has no grep entry.
+            "L28" => ["grep ApiMarker", "ls"],
+            "L29" => ["docker compose config"],
+            "L30" => ["sed"],
+            "L32" => ["gh api"],
             _ => null
         };
         if (candidates is null)
@@ -159,6 +264,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             ApprovalOptionKeys.ApproveOnce,
             ApprovalOptionKeys.ApproveSession
         };
+
         if (policyCase.Id is "L18" or "L21")
             optionKeys.Add(ApprovalOptionKeys.ApproveAlways);
         optionKeys.Add(ApprovalOptionKeys.ApproveEverywhere);
@@ -191,7 +297,28 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         var liveCase = Assert.Single(
             catalog.LiveRegressionCases,
             item => item.PolicyCase.Id == caseId);
-        await AssertPolicyCaseAsync(catalog, timeProvider, liveCase.PolicyCase);
+        var policyCase = liveCase.PolicyCase;
+        // The archived R05 result prompts for cat and rg outside the project.
+        // An interactive reviewed phrase now covers each path that the
+        // audience may read, so the call needs no prompt.
+        if (policyCase.Id == "R05")
+        {
+            policyCase = policyCase with
+            {
+                Expected = policyCase.Expected with
+                {
+                    Outcome = "Allow",
+                    ApprovalCandidates = null,
+                    IsMessy = null,
+                    OptionKeys = null,
+                    ActorCheckCount = 1,
+                    CandidateCoverage = null,
+                    Trace = null
+                }
+            };
+        }
+
+        await AssertPolicyCaseAsync(catalog, timeProvider, policyCase);
     }
 
     private async Task AssertPolicyCaseAsync(
@@ -203,7 +330,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         var approvals = CreateApprovals(policyCase.Available);
         var environment = invocation.CreateEnvironment();
         var materializeFileSystemFacts = policyCase.UsePhysicalHarnessScope
-                                         && ShellPathRules.UsesHostPathStyle(
+                                         && CanonicalPath.IsHostPathStyle(
                                              environment.PathStyle);
         var scope = materializeFileSystemFacts
             ? null
@@ -226,47 +353,55 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             policyCase.DeniedPaths);
         ApplyFileSystemFacts(policyCase, harness, materializeFileSystemFacts);
 
-        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
         TestContext.Current.TestOutputHelper?.WriteLine(
-            $"{policyCase.Id} ({policyCase.Category}): outcome={decision.Outcome}; "
-            + $"deny={decision.DenyReason}; "
-            + $"candidates={string.Join(", ", decision.ApprovalContext?.CandidateVerbs ?? [])}; "
-            + $"messy={decision.ApprovalContext?.IsMessy}; "
-            + $"options={string.Join(",", decision.ApprovalContext?.Options.Select(option => option.Key.Value) ?? [])}; "
-            + $"correction={decision.AgentCorrection?.GetType().Name}; "
-            + $"checks={harness.ApprovalService.CheckCount}; "
-            + $"allow={decision.AllowReason}; "
-            + $"matches={string.Join(", ", decision.ApprovalMatches.Select(item => item.Pattern))}; "
+            $"{policyCase.Id} ({policyCase.Category}): outcome={observed.Outcome}; "
+            + $"deny={observed.DenyReason}; "
+            + $"candidates={string.Join(", ", observed.Prompt?.CandidateVerbs ?? [])}; "
+            + $"messy={observed.Prompt?.IsMessy}; "
+            + $"options={string.Join(",", observed.Prompt?.OptionKeys ?? [])}; "
+            + $"correction={observed.AgentCorrection}; "
+            + $"checks={observed.ApprovalChecks}; "
+            + $"allow={observed.AllowReason}; "
+            + $"matches={string.Join(", ", observed.ApprovalMatches)}; "
             + "trace:\n"
-            + string.Join(Environment.NewLine, decision.ShellPolicyTrace.Rows.Select(FormatActualTraceRow)));
+            + string.Join(Environment.NewLine, observed.TraceRows));
 
-        Assert.Equal(ParseOutcome(policyCase.Expected.Outcome), decision.Outcome);
-        Assert.Equal(policyCase.Expected.DenyReason, decision.DenyReason);
+        Assert.Equal(ParseOutcome(policyCase.Expected.Outcome), observed.Outcome);
+        Assert.Equal(policyCase.Expected.DenyReason, observed.DenyReason);
         Assert.Equal(
-            policyCase.Expected.AgentCorrection,
-            decision.AgentCorrection?.GetType().Name);
-        Assert.Equal(policyCase.Expected.ApprovalCandidates, decision.ApprovalContext?.CandidateVerbs);
-        Assert.Equal(policyCase.Expected.IsMessy, decision.ApprovalContext?.IsMessy);
+            ParseCorrection(policyCase.Expected.AgentCorrection),
+            observed.AgentCorrection);
         Assert.Equal(
-            policyCase.Expected.OptionKeys,
-            decision.ApprovalContext?.Options.Select(option => option.Key.Value).ToList());
-        Assert.Equal(policyCase.Expected.ActorCheckCount, harness.ApprovalService.CheckCount);
+            ExpectedPromptCandidates(policyCase.Expected.ApprovalCandidates, observed),
+            observed.Prompt?.CandidateVerbs);
+        Assert.Equal(policyCase.Expected.IsMessy, observed.Prompt?.IsMessy);
+        Assert.Equal(policyCase.Expected.OptionKeys, observed.Prompt?.OptionKeys);
+        Assert.Equal(policyCase.Expected.ActorCheckCount, observed.ApprovalChecks);
         if (policyCase.Expected.CandidateCoverage is { } expectedCoverage)
         {
             Assert.Equal(
                 expectedCoverage.Select(item => (item.CandidateId, item.Coverage)),
-                decision.ShellPolicyTrace.Rows
-                    .Where(row => row.CandidateId is not null && row.Coverage is not null)
-                    .Select(row => (row.CandidateId!.Value.Value, row.Coverage!.Value.ToString())));
+                observed.CandidateCoverage);
         }
 
         if (policyCase.Expected.Trace is { } expectedTrace)
         {
             Assert.Equal(
                 expectedTrace.Select(FormatExpectedTraceRow),
-                decision.ShellPolicyTrace.Rows.Select(FormatActualTraceRow));
+                observed.TraceRows);
         }
     }
+
+    // The evidence records an empty candidate list for a prompt that names no
+    // command. Owner decision (October 2026): such a prompt shows its full
+    // command text as its one candidate.
+    private static IReadOnlyList<string>? ExpectedPromptCandidates(
+        IReadOnlyList<string>? expected,
+        ApprovalObservation observed)
+        => expected is { Count: 0 } && observed.Prompt is { Patterns.Count: 0 } prompt
+            ? [prompt.DisplayText]
+            : expected;
 
     private static void ApplyFileSystemFacts(
         PolicyAdversarialCase policyCase,
@@ -304,27 +439,34 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         if (hasCausalMetadata)
         {
             Assert.All(policyCase.Candidates, candidate => Assert.NotNull(candidate.Role));
-            var analysis = new ShellCommandAnalyzer(environment).Analyze(
+            var policy = new ShellCommandPolicy(environment);
+            var analysis = policy.Analyze(
                 policyCase.Command,
                 policyCase.InitialWorkingDirectory);
             AssertWorkingDirectoryEffects(policyCase, analysis);
-            Assert.True(BashCausalApprovalIntent.TryProject(
-                environment,
+            Assert.True(BashDirectoryScopeProjection.TryCreate(
                 analysis,
+                policy,
                 new ShellApprovalMatcher(environment),
-                TemporaryPathCorrectionPolicy.Create(environment).IsEligiblePlatformTemporaryPath,
-                out var causalCandidates));
-            Assert.Equal(policyCase.Candidates.Count, causalCandidates.Count);
+                out var projection));
+            Assert.True(projection.IsCausalList);
+            var scoped = projection.Slices
+                .SelectMany(static slice => slice.Approval.Candidates.Select(candidate => (candidate, slice)))
+                .ToArray();
+            Assert.Equal(policyCase.Candidates.Count, scoped.Length);
             for (var index = 0; index < policyCase.Candidates.Count; index++)
             {
                 var expected = policyCase.Candidates[index];
-                var candidate = causalCandidates[index];
+                var (candidate, slice) = scoped[index];
                 Assert.Equal(index, expected.Id);
-                Assert.Equal(expected.Tokens, candidate.Candidate.VerbTokens);
-                Assert.Equal(expected.RealDirectory, candidate.Candidate.Directory);
-                Assert.Equal(expected.IntentDirectory, candidate.IntentDirectory);
-                Assert.Equal(expected.Role, candidate.Role.ToString());
-                Assert.Equal(expected.PrerequisiteIds ?? [], candidate.PrerequisiteIndexes);
+                Assert.Equal(expected.Tokens, candidate.VerbTokens);
+                Assert.Equal(expected.RealDirectory, candidate.Directory);
+                Assert.Equal(expected.IntentDirectory, slice.IntentDirectory);
+                Assert.Equal(
+                    expected.Role,
+                    slice.IntentDirectory is null
+                        ? nameof(ShellPolicyCandidateRole.CausalPrerequisite)
+                        : nameof(ShellPolicyCandidateRole.CausalIntentConsumer));
             }
 
             return;
@@ -446,16 +588,18 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         var pathStyle = host == ShellApprovalHost.Bash
             ? ShellPathStyle.Posix
             : ShellPathStyle.Windows;
-        if (!CanonicalShellPath.TryCreate(
+        if (!CanonicalPath.TryCreate(
                 policyCase.ProjectDirectory,
+                relativeBase: null,
                 pathStyle,
                 out var normalizedProjectDirectory)
             || !string.Equals(
                 normalizedProjectDirectory.Value,
                 policyCase.ProjectDirectory,
                 StringComparison.Ordinal)
-            || !CanonicalShellPath.TryCreate(
+            || !CanonicalPath.TryCreate(
                 policyCase.SessionDirectory,
+                relativeBase: null,
                 pathStyle,
                 out var normalizedSessionDirectory)
             || !string.Equals(
@@ -560,25 +704,25 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             row.ScopeRelation ?? string.Empty,
             row.GrantTimestamp ?? string.Empty);
 
-    private static string FormatActualTraceRow(ShellPolicyTraceRow row)
-        => string.Join(
-            '|',
-            row.Stage,
-            row.CandidateId?.Value.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
-            row.ExecutableBasename ?? string.Empty,
-            row.Outcome,
-            row.Reason,
-            row.Coverage?.ToString() ?? string.Empty,
-            row.ScopeRelation,
-            row.GrantTimestamp?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty);
-
-    private static ToolAuthorizationOutcome ParseOutcome(string outcome)
+    private static ApprovalOutcome ParseOutcome(string outcome)
         => outcome switch
         {
-            "Allow" => ToolAuthorizationOutcome.Allowed,
-            "RequiresApproval" => ToolAuthorizationOutcome.RequiresApproval,
-            "Deny" => ToolAuthorizationOutcome.Denied,
+            "Allow" => ApprovalOutcome.Allowed,
+            "RequiresApproval" => ApprovalOutcome.RequiresApproval,
+            "Deny" => ApprovalOutcome.Denied,
+            "RequiresAgentCorrection" => ApprovalOutcome.RequiresAgentCorrection,
             _ => throw new InvalidDataException($"Unsupported fixture outcome: {outcome}.")
+        };
+
+    private static ApprovalCorrection? ParseCorrection(string? correction)
+        => correction switch
+        {
+            null => null,
+            "ManagedTemporaryDirectorySuggested" => ApprovalCorrection.ManagedTemporaryDirectory,
+            "NativeToolSuggested" => ApprovalCorrection.NativeTool,
+            "ShellWorkingDirectorySuggested" => ApprovalCorrection.ShellWorkingDirectory,
+            "ShellCommandWordsRewriteSuggested" => ApprovalCorrection.ShellCommandWords,
+            _ => throw new InvalidDataException($"Unsupported fixture correction: {correction}.")
         };
 
     private static string EvidencePath(string fileName = PolicyFixturesFile)

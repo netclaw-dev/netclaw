@@ -78,6 +78,26 @@ internal sealed class ActiveToolBatchTracker
     public void MarkExecutionTaskCompleted()
         => ExecutionTaskCompleted = true;
 
+    public bool HasOnlyPendingDurableApprovals(Func<string, bool> hasDurableApproval)
+    {
+        if (_expectedCallIds.Count == 0)
+            return false;
+
+        var hasUnfinishedApproval = false;
+        foreach (var callId in _expectedCallIds)
+        {
+            if (_completedCallIds.Contains(callId))
+                continue;
+
+            if (!hasDurableApproval(callId))
+                return false;
+
+            hasUnfinishedApproval = true;
+        }
+
+        return hasUnfinishedApproval;
+    }
+
     public void Clear()
     {
         ClearExpectedCallIds();

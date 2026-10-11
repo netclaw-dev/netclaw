@@ -19,6 +19,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     private readonly StringWriter _output = new();
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
     private readonly ToolApprovalStore _store;
+    private readonly CliContext _cli;
 
     public static TheoryData<string[], string> FlagWithoutValueCases { get; } = new()
     {
@@ -30,6 +31,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
+        _cli = new CliContext(_paths, _time, TextReader.Null, _output, TextWriter.Null);
         _store = new ToolApprovalStore(
             _paths.ToolApprovalsPath,
             _time,
@@ -66,7 +68,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task List_empty_file_prints_message_and_exits_zero()
     {
-        var exit = await ApprovalsCommand.RunAsync(["approvals", "list"], _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "list"]);
 
         Assert.Equal(0, exit);
         Assert.Contains("No persistent approvals.", _output.ToString());
@@ -77,7 +79,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         SeedDefault();
 
-        var exit = await ApprovalsCommand.RunAsync(["approvals", "list"], _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "list"]);
 
         Assert.Equal(0, exit);
         var text = _output.ToString();
@@ -93,7 +95,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         SeedDefault();
 
-        await ApprovalsCommand.RunAsync(["approvals", "list", "--json"], _paths, _output);
+        await ApprovalsCommand.RunAsync(_cli, ["approvals", "list", "--json"]);
 
         using var doc = JsonDocument.Parse(_output.ToString());
         var audiences = doc.RootElement.GetProperty("audiences");
@@ -123,7 +125,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         SeedDefault();
         _time.Advance(TimeSpan.FromDays(3));
 
-        var exit = await ApprovalsCommand.RunAsync(["approvals", "list"], _paths, _output, _time);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "list"]);
 
         Assert.Equal(0, exit);
         Assert.Contains("added 3 days ago", _output.ToString());
@@ -141,7 +143,7 @@ public sealed class ApprovalsCommandTests : IDisposable
             }
             """);
 
-        var exit = await ApprovalsCommand.RunAsync(["approvals", "list"], _paths, _output, _time);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "list"]);
 
         Assert.Equal(0, exit);
         Assert.Contains("added —", _output.ToString());
@@ -164,7 +166,7 @@ public sealed class ApprovalsCommandTests : IDisposable
             }
             """);
 
-        await ApprovalsCommand.RunAsync(["approvals", "list", "--json"], _paths, _output, _time);
+        await ApprovalsCommand.RunAsync(_cli, ["approvals", "list", "--json"]);
 
         using var doc = JsonDocument.Parse(_output.ToString());
         var entries = doc.RootElement
@@ -199,12 +201,7 @@ public sealed class ApprovalsCommandTests : IDisposable
             """);
         using var diagnostics = new StringWriter();
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "list", "--json"],
-            _paths,
-            _output,
-            _time,
-            diagnostics);
+        var exit = await ApprovalsCommand.RunAsync(_cli with { Error = diagnostics }, ["approvals", "list", "--json"]);
 
         Assert.Equal(0, exit);
         using var _ = JsonDocument.Parse(_output.ToString());
@@ -218,9 +215,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         SeedDefault();
 
-        await ApprovalsCommand.RunAsync(
-            ["approvals", "list", "--audience", "personal", "--tool", "shell_execute"],
-            _paths, _output);
+        await ApprovalsCommand.RunAsync(_cli, ["approvals", "list", "--audience", "personal", "--tool", "shell_execute"]);
 
         var text = _output.ToString();
         Assert.Contains("personal / shell_execute", text);
@@ -233,9 +228,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         SeedDefault();
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "git push anywhere", "--audience", "personal", "--tool", "shell_execute"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "git push anywhere", "--audience", "personal", "--tool", "shell_execute"]);
 
         Assert.Equal(0, exit);
         var remaining = _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute");
@@ -248,11 +241,11 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         var repository = ApprovalEntry.CreateRepositoryTokenPrefix(
             ApprovalShell.Bash, ["./scripts/bump-version.sh"], "/work/main/.git");
-        var folder = InDir("./scripts/bump-version.sh", "/work/main");
+        var folder = InDir("/work/main/scripts/bump-version.sh", "/work/main");
         _store.AddApproval(TrustAudience.Personal, "shell_execute", repository);
         _store.AddApproval(TrustAudience.Personal, "shell_execute", folder);
 
-        var listExit = await ApprovalsCommand.RunAsync(["approvals", "list"], _paths, _output);
+        var listExit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "list"]);
         var label = repository.FormatScope();
 
         Assert.Equal(0, listExit);
@@ -260,8 +253,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         Assert.Contains(folder.FormatScope(), _output.ToString());
 
         _output.GetStringBuilder().Clear();
-        var revokeExit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", label, "--tool", "shell_execute"], _paths, _output);
+        var revokeExit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", label, "--tool", "shell_execute"]);
 
         Assert.Equal(0, revokeExit);
         var remaining = _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute");
@@ -275,9 +267,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         SeedDefault();
         var beforeCount = _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute").Count;
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "git pull anywhere", "--audience", "personal", "--tool", "shell_execute"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "git pull anywhere", "--audience", "personal", "--tool", "shell_execute"]);
 
         Assert.Equal(1, exit);
         Assert.Equal(beforeCount, _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute").Count);
@@ -289,9 +279,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         SeedDefault();
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "--tool", "shell_execute", "--all"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "--tool", "shell_execute", "--all"]);
 
         Assert.Equal(0, exit);
         Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
@@ -304,9 +292,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         SeedDefault();
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "--tool", "shell_execute", "--all", "--audience", "personal"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "--tool", "shell_execute", "--all", "--audience", "personal"]);
 
         Assert.Equal(0, exit);
         Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
@@ -322,9 +308,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         SeedDefault();
         var beforeCount = _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute").Count;
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "--all"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "--all"]);
 
         Assert.Equal(1, exit);
         Assert.Equal(beforeCount, _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute").Count);
@@ -336,9 +320,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         SeedDefault();
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "list", "--audience", "foo"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "list", "--audience", "foo"]);
 
         Assert.Equal(1, exit);
         Assert.Contains("Unknown audience 'foo'", _output.ToString());
@@ -348,7 +330,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     [MemberData(nameof(FlagWithoutValueCases))]
     public async Task Flag_without_value_exits_one_with_specific_message(string[] args, string expectedMessage)
     {
-        var exit = await ApprovalsCommand.RunAsync(args, _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, args);
 
         Assert.Equal(1, exit);
         Assert.Contains(expectedMessage, _output.ToString());
@@ -357,7 +339,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task Help_subcommand_exits_zero_and_prints_usage()
     {
-        var exit = await ApprovalsCommand.RunAsync(["approvals", "help"], _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "help"]);
 
         Assert.Equal(0, exit);
         Assert.Contains("Usage: netclaw approvals", _output.ToString());
@@ -369,9 +351,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("ls"));
         _store.AddApproval(TrustAudience.Public, "shell_execute", Verb("ls"));
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "ls anywhere"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "ls anywhere"]);
 
         Assert.Equal(1, exit);
         Assert.Contains("matches more than one typed phrase", _output.ToString());
@@ -386,9 +366,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         _store.AddApproval(TrustAudience.Personal, "shell_execute", InDir("git remote", "/home/user/repos/foo"));
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "git remote in /home/user/repos/foo"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "git remote in /home/user/repos/foo"]);
 
         Assert.Equal(0, exit);
         Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
@@ -400,9 +378,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         // The store has a (verb, null) entry; a folder-scoped revoke should not remove it.
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git remote"));
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "git remote in /home/user/repos/foo"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "git remote in /home/user/repos/foo"]);
 
         Assert.Equal(1, exit);
         var remaining = _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute");
@@ -414,9 +390,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     public async Task Revoke_unrecognized_pattern_exits_one_without_a_change()
     {
         // No "anywhere" suffix and no " in " separator — not a valid revoke pattern.
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "git remote"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "git remote"]);
 
         Assert.Equal(1, exit);
         Assert.Contains("No matching approval found", _output.ToString());
@@ -427,14 +401,13 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task TrustVerb_adds_global_wildcard_with_default_audience_and_tool()
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", "freshdesk"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "freshdesk"]);
 
         Assert.Equal(0, exit);
         var entries = _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute");
         Assert.Single(entries);
         Assert.Equal("freshdesk", entries[0].Verb);
+        Assert.Equal(_time.GetUtcNow(), entries[0].CreatedAt);
         Assert.Null(entries[0].Directory);
         var expectedShell = OperatingSystem.IsWindows()
             ? ApprovalShell.PowerShell
@@ -446,12 +419,10 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task TrustVerb_is_idempotent_on_repeated_invocation()
     {
-        await ApprovalsCommand.RunAsync(["approvals", "trust-verb", "freshdesk"], _paths, _output);
+        await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "freshdesk"]);
         _output.GetStringBuilder().Clear();
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", "freshdesk"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "freshdesk"]);
 
         Assert.Equal(0, exit);
         var entries = _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute");
@@ -462,9 +433,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task TrustVerb_honors_audience_and_tool_flags()
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", "freshdesk", "--audience", "team", "--tool", "shell_execute"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "freshdesk", "--audience", "team", "--tool", "shell_execute"]);
 
         Assert.Equal(0, exit);
         Assert.Single(_store.GetApprovedEntries(TrustAudience.Team, "shell_execute"));
@@ -474,10 +443,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task TrustVerb_shell_selector_creates_requested_phrase_type()
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", "Get-Content", "--shell", "powershell"],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "Get-Content", "--shell", "powershell"]);
 
         Assert.Equal(0, exit);
         var entry = Assert.Single(
@@ -490,10 +456,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task TrustVerb_abstract_PowerShell_prefers_PowerShell7_canonical_tokens()
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", "curl", "--shell", "powershell"],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "curl", "--shell", "powershell"]);
 
         Assert.Equal(0, exit);
         var entry = Assert.Single(
@@ -505,10 +468,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task TrustVerb_abstract_PowerShell_uses_legacy_fallback_when_preferred_parse_fails()
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", "gerr", "--shell", "powershell"],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "gerr", "--shell", "powershell"]);
 
         Assert.Equal(0, exit);
         var entry = Assert.Single(
@@ -524,10 +484,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         string phrase,
         string expectedTokens)
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", phrase, "--shell", "powershell"],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", phrase, "--shell", "powershell"]);
 
         Assert.Equal(0, exit);
         var entry = Assert.Single(
@@ -545,10 +502,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     [InlineData("git push ")]
     public async Task TrustVerb_rejects_shell_effects_without_file_change(string phrase)
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", phrase, "--shell", "bash"],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", phrase, "--shell", "bash"]);
 
         Assert.Equal(1, exit);
         Assert.False(File.Exists(_paths.ToolApprovalsPath));
@@ -557,44 +511,108 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task TrustVerb_keeps_non_shell_tool_exact()
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", "create-page", "--tool", "notion/create-page"],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "notion/create-page", "--tool", "notion/create-page"]);
 
         Assert.Equal(0, exit);
         var entry = Assert.Single(
             _store.GetApprovedEntries(TrustAudience.Personal, "notion/create-page"));
         Assert.Null(entry.Shell);
         Assert.Null(entry.Match);
-        Assert.Equal("create-page", entry.Verb);
+        Assert.Equal("notion/create-page", entry.Verb);
     }
 
     [Theory]
-    [InlineData("tool in mode")]
-    [InlineData("status anywhere")]
     [InlineData("-private-operation")]
     public async Task TrustVerb_keeps_arbitrary_non_shell_phrase_exact(string phrase)
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", phrase, "--tool", "custom/tool"],
-            _paths,
-            _output);
+        // The phrase is the tool name, so a name that starts like a flag stays a literal.
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", phrase, "--tool", phrase]);
 
         Assert.Equal(0, exit);
-        var entry = Assert.Single(
-            _store.GetApprovedEntries(TrustAudience.Personal, "custom/tool"));
+        var entry = Assert.Single(_store.GetApprovedEntries(TrustAudience.Personal, phrase));
         Assert.Equal(phrase, entry.Verb);
         Assert.Null(entry.Shell);
+    }
+
+    [Theory]
+    [InlineData("calculate", "demo-utilities/calculate", "personal")]
+    [InlineData("create-page", "notion/create-page", "personal")]
+    [InlineData("demo-utilities", "demo-utilities/calculate", "personal")]
+    [InlineData("web_fetch extra", "web_fetch", "team")]
+    [InlineData("fetch", "web_fetch", "public")]
+    public async Task TrustVerb_refuses_a_non_shell_phrase_that_the_tool_name_does_not_equal(
+        string phrase,
+        string tool,
+        string audience)
+    {
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", phrase, "--tool", tool, "--audience", audience]);
+
+        Assert.Equal(1, exit);
+        Assert.False(File.Exists(_paths.ToolApprovalsPath));
+        Assert.Contains(
+            $"Error: '{phrase}' never matches a call to {tool}. Grants for this tool match only the phrase '{tool}'.",
+            _output.ToString());
+        Assert.Contains(
+            $"If the tool is named '{tool}', run: netclaw approvals trust-verb {tool} --tool {tool} --audience {audience}",
+            _output.ToString());
+    }
+
+    [Fact]
+    public async Task TrustVerb_judges_a_case_different_non_shell_phrase_by_the_platform_comparison()
+    {
+        // Verb comparison is ordinal on POSIX and ignores case on Windows.
+        const string phrase = "DEMO-UTILITIES/CALCULATE";
+        const string tool = "demo-utilities/calculate";
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", phrase, "--tool", tool]);
+
+        if (string.Equals(phrase, tool, ToolApprovalEntryComparer.Comparison))
+        {
+            Assert.Equal(0, exit);
+            Assert.Single(_store.GetApprovedEntries(TrustAudience.Personal, tool));
+        }
+        else
+        {
+            Assert.Equal(1, exit);
+            Assert.False(File.Exists(_paths.ToolApprovalsPath));
+        }
+    }
+
+    [Theory]
+    [InlineData("demo-utilities/calculate", "demo-utilities/calculate", "personal")]
+    [InlineData("web_fetch", "web_fetch", "team")]
+    [InlineData("file_write", "file_write", "public")]
+    public async Task TrustVerb_saves_a_non_shell_phrase_that_equals_the_tool_name(
+        string phrase,
+        string tool,
+        string audience)
+    {
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", phrase, "--tool", tool, "--audience", audience]);
+
+        Assert.Equal(0, exit);
+        var wire = TrustAudiences.All.Single(a => a.ToWireValue() == audience);
+        Assert.Equal(phrase, Assert.Single(_store.GetApprovedEntries(wire, tool)).Verb);
+    }
+
+    [Fact]
+    public async Task TrustVerb_resolves_the_llm_alias_before_it_compares_the_phrase()
+    {
+        // `demo-utilities__calculate` is the alias the model sees. The grant is stored
+        // and matched under the canonical name, so the phrase must be the canonical name.
+        var refused = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "demo-utilities__calculate", "--tool", "demo-utilities__calculate"]);
+        Assert.Equal(1, refused);
+        Assert.Contains(
+            "If the tool is named 'demo-utilities/calculate', run: netclaw approvals trust-verb demo-utilities/calculate --tool demo-utilities/calculate --audience personal",
+            _output.ToString());
+
+        var saved = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "demo-utilities/calculate", "--tool", "demo-utilities__calculate"]);
+        Assert.Equal(0, saved);
+        Assert.Single(_store.GetApprovedEntries(TrustAudience.Personal, "demo-utilities/calculate"));
     }
 
     [Fact]
     public async Task TrustVerb_rejects_shell_selector_for_non_shell_tool()
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", "create-page", "--tool", "notion/create-page", "--shell", "bash"],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "notion/create-page", "--tool", "notion/create-page", "--shell", "bash"]);
 
         Assert.Equal(1, exit);
         Assert.False(File.Exists(_paths.ToolApprovalsPath));
@@ -603,19 +621,20 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task Revoke_old_scope_rejects_ambiguous_typed_phrases()
     {
-        _store.AddApproval(
-            TrustAudience.Personal,
-            "shell_execute",
-            ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"]));
-        _store.AddApproval(
-            TrustAudience.Personal,
-            "shell_execute",
-            ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, "git push"));
+        // The store no longer saves a grant that another grant covers, so an
+        // older store file holds the two equal phrases.
+        Directory.CreateDirectory(Path.GetDirectoryName(_paths.ToolApprovalsPath)!);
+        await File.WriteAllTextAsync(
+            _paths.ToolApprovalsPath,
+            """
+            {"version":3,"audiences":{"personal":{"shell_execute":[
+              {"shell":"Bash","match":"TokenPrefix","verbTokens":["git","push"],"directory":null,"createdAt":null},
+              {"shell":"Bash","match":"LegacyExact","verb":"git push","directory":null,"createdAt":null}
+            ]}}}
+            """,
+            TestContext.Current.CancellationToken);
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "git push anywhere"],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "git push anywhere"]);
 
         Assert.Equal(1, exit);
         Assert.Contains("matches more than one typed phrase", _output.ToString());
@@ -631,10 +650,7 @@ public sealed class ApprovalsCommandTests : IDisposable
             "/work/repo ");
         _store.AddApproval(TrustAudience.Personal, "shell_execute", entry);
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", entry.FormatScope()],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", entry.FormatScope()]);
 
         Assert.Equal(0, exit);
         Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
@@ -649,10 +665,7 @@ public sealed class ApprovalsCommandTests : IDisposable
             @"C:\Work\Repo");
         _store.AddApproval(TrustAudience.Personal, "shell_execute", entry);
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "powershell token-prefix \"get-content\" in c:\\work\\repo"],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "powershell token-prefix \"get-content\" in c:\\work\\repo"]);
 
         Assert.Equal(0, exit);
         Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
@@ -667,10 +680,7 @@ public sealed class ApprovalsCommandTests : IDisposable
             "/work/repo");
         _store.AddApproval(TrustAudience.Personal, "shell_execute", entry);
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "tool in mode in /work/repo"],
-            _paths,
-            _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "tool in mode in /work/repo"]);
 
         Assert.Equal(0, exit);
         Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
@@ -687,7 +697,7 @@ public sealed class ApprovalsCommandTests : IDisposable
             ? new[] { "approvals", "list" }
             : ["approvals", "trust-verb", "git push", "--shell", "bash"];
 
-        var exit = await ApprovalsCommand.RunAsync(args, _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, args);
 
         Assert.Equal(1, exit);
         Assert.Contains("approval store is unavailable", _output.ToString());
@@ -697,9 +707,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task TrustVerb_without_verb_argument_exits_one_with_usage()
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb"]);
 
         Assert.Equal(1, exit);
         Assert.Contains("Usage: netclaw approvals trust-verb", _output.ToString());
@@ -708,9 +716,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task TrustVerb_unknown_audience_exits_one()
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", "freshdesk", "--audience", "bogus"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "freshdesk", "--audience", "bogus"]);
 
         Assert.Equal(1, exit);
         Assert.Contains("Unknown audience 'bogus'", _output.ToString());
@@ -727,9 +733,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         _store.AddApproval(TrustAudience.Personal, "notion/create-pages",
             new ApprovalEntry("notion/create-pages") { Directory = null });
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "--tool", "notion__create-pages", "--all", "--audience", "personal"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "revoke", "--tool", "notion__create-pages", "--all", "--audience", "personal"]);
 
         Assert.Equal(0, exit);
         Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "notion/create-pages"));
@@ -743,9 +747,7 @@ public sealed class ApprovalsCommandTests : IDisposable
             new ApprovalEntry("notion/create-pages") { Directory = null });
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
 
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "list", "--tool", "notion__create-pages"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "list", "--tool", "notion__create-pages"]);
 
         Assert.Equal(0, exit);
         var text = _output.ToString();
@@ -759,9 +761,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         // If the operator passes the LLM-facing alias to trust-verb, the
         // grant should land under the canonical key so the runtime
         // approval gate — which queries canonical — finds it.
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "trust-verb", "freshdesk", "--tool", "notion__create-pages"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(_cli, ["approvals", "trust-verb", "notion/create-pages", "--tool", "notion__create-pages"]);
 
         Assert.Equal(0, exit);
         Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "notion__create-pages"));
@@ -774,10 +774,10 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task Help_lists_trust_verb_subcommand()
     {
-        await ApprovalsCommand.RunAsync(["approvals", "help"], _paths, _output);
+        await ApprovalsCommand.RunAsync(_cli, ["approvals", "help"]);
 
         var output = _output.ToString();
         Assert.Contains("trust-verb", output);
-        Assert.Contains("typed token prefixes", output);
+        Assert.Contains("A one-word phrase covers the program alone", output);
     }
 }

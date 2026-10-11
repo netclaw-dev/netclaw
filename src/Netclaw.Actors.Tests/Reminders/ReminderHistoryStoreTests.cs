@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -90,6 +92,62 @@ public class ReminderHistoryStoreTests : IDisposable
         Assert.Equal("session-2", records[0].SessionId);
         Assert.Equal("session-4", records[2].SessionId);
     }
+
+    [Fact]
+    public async Task Denied_record_round_trips_as_denied()
+    {
+        await _store.AppendAsync(TestId, MakeRecord(false) with { ToolDenied = true });
+
+        var record = Assert.Single(await _store.ReadAsync(TestId, 10));
+        Assert.True(record.ToolDenied);
+        Assert.Equal("denied", record.Status);
+    }
+
+    [Theory]
+    [InlineData("true", "ok")]
+    [InlineData("false", "failed")]
+    public async Task History_written_before_the_denied_status_existed_still_loads(string success, string status)
+    {
+        // The exact line shape that 0.27.1 wrote: five properties, no toolDenied.
+        await File.WriteAllTextAsync(
+            HistoryPath(),
+            $$"""{"firedAt":"2026-10-07T08:00:03+00:00","success":{{success}},"durationMs":42,"sessionId":"s","errorMessage":null}""" + "\n",
+            TestContext.Current.CancellationToken);
+
+        var record = Assert.Single(await _store.ReadAsync(TestId, 10));
+
+        Assert.False(record.ToolDenied);
+        Assert.Equal(status, record.Status);
+    }
+
+    [Fact]
+    public async Task A_denied_run_reads_as_failed_to_a_reader_without_the_denied_flag()
+    {
+        await _store.AppendAsync(TestId, MakeRecord(false) with { ToolDenied = true });
+
+        var line = Assert.Single(await File.ReadAllLinesAsync(
+            HistoryPath(), TestContext.Current.CancellationToken));
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter() }
+        };
+        var older = JsonSerializer.Deserialize<Release0271HistoryRecord>(line, options);
+
+        Assert.NotNull(older);
+        Assert.False(older.Success);
+        Assert.Equal("test error", older.ErrorMessage);
+    }
+
+    private string HistoryPath()
+        => Path.Combine(new NetclawPaths(_dir.Path).RemindersDirectory, $"{TestId.Value}.history.jsonl");
+
+    // The HistoryRecord shape of release 0.27.1.
+    private sealed record Release0271HistoryRecord(
+        DateTimeOffset FiredAt,
+        bool Success,
+        long DurationMs,
+        string SessionId,
+        string? ErrorMessage);
 
     private static HistoryRecord MakeRecord(bool success, string? sessionId = null) =>
         new(

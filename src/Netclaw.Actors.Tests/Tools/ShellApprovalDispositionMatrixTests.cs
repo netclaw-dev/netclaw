@@ -3,8 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Netclaw.Actors.Protocol;
-using Netclaw.Actors.Tools;
+using Netclaw.Actors.Authorization;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -25,6 +25,29 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
     public Task Power_shell_approval_contract(string caseId)
         => AssertApprovalContract(caseId);
 
+    // An interactive reviewed phrase covers each path that the audience may
+    // read. These cases need the project and session roots only, so the
+    // profile reads no other root.
+    private Task<ShellApprovalHarness> CreateWithConfinedReadsAsync(ShellApprovalCase testCase)
+        => ShellApprovalHarness.CreateAsync(
+            testCase.Id,
+            testCase.Invocation,
+            testCase.Approvals,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken,
+            policy: new ShellApprovalHarnessPolicy
+            {
+                ConfigureTools = config =>
+                {
+                    config.AudienceProfiles.GlobalReadRoots = [];
+                    config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+                    {
+                        Mode = ToolFilesystemMode.Roots,
+                        Roots = []
+                    };
+                }
+            });
+
     private async Task AssertApprovalContract(string caseId)
     {
         await AssertApprovalContract(ShellApprovalCases.Get(caseId));
@@ -42,11 +65,46 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         Assert.Equal(testCase.Expected.Outcome, observed.Outcome);
         Assert.Equal(testCase.Expected.AllowReason, observed.AllowReason);
         Assert.Equal(testCase.Expected.DenyReason, observed.DenyReason);
-        Assert.Equal(testCase.Expected.Candidates, observed.CandidateVerbs);
-        Assert.Equal(testCase.Expected.IsMessy, observed.IsMessy);
-        Assert.Equal(testCase.Expected.ApprovalChecks, harness.ApprovalService.CheckCount);
+        // A prompt that names no command shows its full command text, or the
+        // statement patterns when it has them (PowerShell).
+        IReadOnlyList<string> expectedCandidates = testCase.Expected.Candidates is [ExpectedApproval.FullCommandText]
+            ? observed.Prompt is { Patterns.Count: > 0 }
+                ? []
+                : [observed.Prompt?.DisplayText ?? ExpectedApproval.FullCommandText]
+            : testCase.Expected.Candidates;
+        Assert.Equal(expectedCandidates, observed.Prompt?.CandidateVerbs ?? []);
+        Assert.Equal(testCase.Expected.IsMessy, observed.Prompt?.IsMessy);
+        Assert.Equal(testCase.Expected.ApprovalChecks, observed.ApprovalChecks);
         Assert.Equal(testCase.Expected.ApprovalMatches, observed.ApprovalMatches);
     }
+
+    // The rows come from the bundled catalog, so a new catalog entry gets this
+    // proof with no test edit. The bare phrase runs in the project through the
+    // production approval path and must need no prompt.
+    public static TheoryData<string> BundledBashPhrases
+        => new(SafeVerbLoader.Load(isWindows: false).Verbs);
+
+    public static TheoryData<string> BundledPowerShellPhrases
+        => new(SafeVerbLoader.Load(isWindows: true).Verbs);
+
+    [SlopwatchSuppress("SW001", "The Bash catalog rows require a POSIX filesystem.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "Bash catalog rows require POSIX filesystem semantics.")]
+    [MemberData(nameof(BundledBashPhrases))]
+    public Task Bundled_bash_catalog_phrase_needs_no_prompt_in_the_project(string phrase)
+        => AssertApprovalContract(new ShellApprovalCase(
+            $"bundled-bash-catalog:{phrase}",
+            new ShellApprovalInvocation(phrase),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)));
+
+    [Theory]
+    [MemberData(nameof(BundledPowerShellPhrases))]
+    public Task Bundled_power_shell_catalog_phrase_needs_no_prompt_in_the_project(string phrase)
+        => AssertApprovalContract(new ShellApprovalCase(
+            $"bundled-powershell-catalog:{phrase}",
+            new ShellApprovalInvocation(phrase, Host: ShellApprovalHost.PowerShell7),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)));
 
     [Fact]
     public Task Interactive_reviewed_safe_candidate_uses_reviewed_policy()
@@ -60,16 +118,18 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             "interactive-reviewed-safe-allows",
             invocation,
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)));
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)));
     }
 
     [Fact]
-    public Task Noninteractive_reviewed_safe_candidate_stays_uncovered()
+    public Task Noninteractive_reviewed_safe_candidate_uses_reviewed_policy()
         => AssertApprovalContract(new ShellApprovalCase(
-            "noninteractive-reviewed-safe-requires-approval",
-            new ShellApprovalInvocation("git status", Interactive: false),
+            "noninteractive-reviewed-safe-allows",
+            OperatingSystem.IsWindows()
+                ? new ShellApprovalInvocation("Get-Date", Host: ShellApprovalHost.PowerShell7, Interactive: false)
+                : new ShellApprovalInvocation("git status", Interactive: false),
             Approvals.None,
-            ExpectedApproval.Require(["git status"])));
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)));
 
     [Fact]
     public Task Noninteractive_candidate_can_use_an_explicit_persistent_grant()
@@ -78,9 +138,29 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             new ShellApprovalInvocation("git status", Interactive: false),
             Approvals.PersistentAnywhere("git status"),
             ExpectedApproval.Allow(
-                ToolAllowReason.StoredApproval,
+                ApprovalAllowReason.StoredApproval,
                 1,
                 "persistent:git status")));
+
+    [SlopwatchSuppress("SW001", "The command uses a POSIX Bash status parameter.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case requires POSIX Bash semantics.")]
+    public async Task Unquoted_status_output_offers_reusable_grant_for_unapproved_verb()
+    {
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            ShellApprovalCases.Get("unquoted-status-output-prompts-for-unapproved-verb"),
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken);
+
+        var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
+        var approval = Assert.IsType<ApprovalPromptObservation>(decision.Prompt);
+        Assert.False(approval.IsMessy);
+        Assert.Equal(["git push"], approval.CandidateVerbs);
+        Assert.Contains(
+            approval.OptionKeys,
+            key => key == ObservedOptionKeys.ApproveSession);
+    }
 
     [SlopwatchSuppress("SW001", "The observed compound uses POSIX Bash directory and pipeline semantics.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "This case requires POSIX Bash semantics.")]
@@ -92,19 +172,20 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                 "cd sub && cat result.txt | sed -n '1p'; ls .",
                 ApprovalDirectoryShape.None),
             Approvals.PersistentAnywhere("cd", "cat", "sed", "ls"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0));
+            ExpectedApproval.RequireFullText());
         await using var harness = await ShellApprovalHarness.CreateAsync(
             testCase,
             fixture.ActorSystem,
             TestContext.Current.CancellationToken);
         harness.CreateProjectDirectory("sub");
 
-        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        Assert.True(decision.ApprovalContext?.IsMessy);
-        Assert.Empty(decision.ApprovalContext!.CandidateVerbs);
-        Assert.Equal(0, harness.ApprovalService.CheckCount);
+        // The relative cd has no proved target, so each later command is one
+        // exact candidate. The grant covers only the cd.
+        Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
+        Assert.Equal(["cat result.txt", "sed -n '1p'", "ls ."], decision.Prompt!.CandidateVerbs);
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], decision.Prompt.OptionKeys);
     }
 
     [SlopwatchSuppress("SW001", "This case requires POSIX Bash directory and pipeline semantics.")]
@@ -130,10 +211,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-scopes",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
-            Assert.Equal(ToolAllowReason.StoredApproval, decision.AllowReason);
+            Assert.Equal(ApprovalOutcome.Allowed, decision.Outcome);
+            Assert.Equal(ApprovalAllowReason.StoredApproval, decision.AllowReason);
 
             await using var missingStage = await ShellApprovalHarness.CreateAsync(
                 "static-shell-missing-stage",
@@ -146,17 +227,17 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     project.FullName,
                     "signalr/static-shell-missing-stage",
                     []));
-            var missingDecision = await missingStage.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, missingDecision.Outcome);
-            Assert.False(missingDecision.ApprovalContext?.IsMessy);
-            Assert.Equal(["sed"], missingDecision.ApprovalContext?.CandidateVerbs);
+            var missingDecision = await missingStage.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, missingDecision.Outcome);
+            Assert.False(missingDecision.Prompt?.IsMessy);
+            Assert.Equal(["sed"], missingDecision.Prompt?.CandidateVerbs);
             Assert.Contains(
-                missingDecision.ApprovalContext!.Options,
-                option => option.Key.Value == ApprovalOptionKeys.ApproveSession);
-            missingStage.SeedOneTimeApproval(missingDecision.ApprovalContext!);
-            var retryDecision = await missingStage.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(ToolAuthorizationOutcome.Allowed, retryDecision.Outcome);
-            Assert.Equal(ToolAllowReason.OneTimeApproval, retryDecision.AllowReason);
+                missingDecision.Prompt!.OptionKeys,
+                key => key == ObservedOptionKeys.ApproveSession);
+            missingStage.SeedOneTimeApproval(missingDecision.Prompt!);
+            var retryDecision = await missingStage.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ApprovalOutcome.Allowed, retryDecision.Outcome);
+            Assert.Equal(ApprovalAllowReason.OneTimeApproval, retryDecision.AllowReason);
         }
         finally
         {
@@ -190,9 +271,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-link-parent",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+            Assert.Equal(ApprovalOutcome.Denied, decision.Outcome);
             Assert.Equal("shell_invalid_working_directory", decision.DenyReason);
         }
         finally
@@ -226,12 +307,12 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-failed-cd",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-            Assert.False(decision.ApprovalContext?.IsMessy);
-            Assert.Equal(["touch"], decision.ApprovalContext?.CandidateVerbs);
-            Assert.Equal(project.FullName, Assert.Single(decision.ApprovalContext!.Candidates!).Directory);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
+            Assert.False(decision.Prompt?.IsMessy);
+            Assert.Equal(["touch"], decision.Prompt?.CandidateVerbs);
+            Assert.Equal(project.FullName, Assert.Single(decision.Prompt!.CandidateDirectories!));
         }
         finally
         {
@@ -265,12 +346,12 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-sibling-scope",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-            Assert.False(decision.ApprovalContext?.IsMessy);
-            Assert.Equal(["touch"], decision.ApprovalContext?.CandidateVerbs);
-            Assert.Equal(sibling.FullName, Assert.Single(decision.ApprovalContext!.Candidates!).Directory);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
+            Assert.False(decision.Prompt?.IsMessy);
+            Assert.Equal(["touch"], decision.Prompt?.CandidateVerbs);
+            Assert.Equal(sibling.FullName, Assert.Single(decision.Prompt!.CandidateDirectories!));
         }
         finally
         {
@@ -302,9 +383,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-link-escape",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.NotEqual(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+            Assert.NotEqual(ApprovalOutcome.Allowed, decision.Outcome);
         }
         finally
         {
@@ -341,9 +422,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                         []),
                     deniedPaths: ["/etc/passwd"]);
 
-                var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+                var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-                Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+                Assert.Equal(ApprovalOutcome.Denied, decision.Outcome);
             }
         }
         finally
@@ -366,9 +447,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                 Interactive: false);
             var cases = new[]
             {
-                (Name: "current", Grants: Approvals.Session("cd", "cat", "sed", "touch"), Expected: ToolAuthorizationOutcome.Allowed),
-                (Name: "other", Grants: Approvals.SessionForOtherSession("cd", "cat", "sed", "touch"), Expected: ToolAuthorizationOutcome.RequiresApproval),
-                (Name: "audience", Grants: Approvals.PersistentForOtherAudience("cd", "cat", "sed", "touch"), Expected: ToolAuthorizationOutcome.RequiresApproval)
+                (Name: "current", Grants: Approvals.Session("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.Allowed),
+                // An unattended call that would prompt is denied (D2).
+                (Name: "other", Grants: Approvals.SessionForOtherSession("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.Denied),
+                (Name: "audience", Grants: Approvals.PersistentForOtherAudience("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.Denied)
             };
             foreach (var testCase in cases)
             {
@@ -384,7 +466,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                         "signalr/static-shell-session",
                         []));
 
-                var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+                var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
                 Assert.True(
                     decision.Outcome == testCase.Expected,
@@ -419,10 +501,12 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-deep-glob",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-            Assert.True(decision.ApprovalContext?.IsMessy);
+            // The deep glob and the command after the list are exact candidates.
+            Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
+            Assert.Equal(["cat */result.txt", "ls ."], decision.Prompt!.CandidateVerbs);
+            Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], decision.Prompt.OptionKeys);
         }
         finally
         {
@@ -445,7 +529,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     $"cd {child.FullName} && touch {marker}; cat */result.txt",
                     ApprovalDirectoryShape.None),
                 Approvals.None,
-                ExpectedApproval.Require([]));
+                ExpectedApproval.Correct());
             await using var harness = await ShellApprovalHarness.CreateAsync(
                 testCase.Id,
                 testCase.Invocation,
@@ -458,12 +542,12 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/directory-advice",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-            var correction = Assert.IsType<ToolCorrection.ShellWorkingDirectorySuggested>(decision.AgentCorrection);
-            Assert.Equal(child.FullName, correction.Directory);
-            Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ApprovalCorrection.ShellWorkingDirectory, decision.AgentCorrection);
+            Assert.Equal(child.FullName, decision.AgentCorrectionTarget);
+            Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, decision.Outcome);
 
-            await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
+            await Assert.ThrowsAsync<ShellApprovalCorrectionRequiredException>(() =>
                 harness.ExecuteAsync(TestContext.Current.CancellationToken));
             Assert.False(File.Exists(marker));
 
@@ -478,9 +562,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     project.FullName,
                     "signalr/directory-advice",
                     []));
-            var exactDecision = await exactHarness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, exactDecision.Outcome);
-            Assert.IsNotType<ToolCorrection.ShellWorkingDirectorySuggested>(exactDecision.AgentCorrection);
+            var exactDecision = await exactHarness.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, exactDecision.Outcome);
+            Assert.NotEqual(ApprovalCorrection.ShellWorkingDirectory, exactDecision.AgentCorrection);
         }
         finally
         {
@@ -515,9 +599,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                         "signalr/directory-boundary",
                         []));
 
-                var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+                var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-                Assert.IsNotType<ToolCorrection.ShellWorkingDirectorySuggested>(decision.AgentCorrection);
+                Assert.NotEqual(ApprovalCorrection.ShellWorkingDirectory, decision.AgentCorrection);
             }
         }
         finally
@@ -549,10 +633,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/directory-behavior",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.IsNotType<ToolCorrection.ShellWorkingDirectorySuggested>(decision.AgentCorrection);
-            Assert.NotEqual(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
+            Assert.NotEqual(ApprovalCorrection.ShellWorkingDirectory, decision.AgentCorrection);
+            Assert.NotEqual(ApprovalOutcome.RequiresAgentCorrection, decision.Outcome);
         }
         finally
         {
@@ -562,10 +646,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX glob, symlink, and Bash authorization behavior.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The project glob regression defines POSIX behavior.")]
-    [InlineData("grep -rn \"Mode B\" docs/ *.md 2>/dev/null | head -20", true, "grep")]
-    [InlineData("grep -rn \"Mode B\" docs/ *.md 2>/dev/null | head -20", false, "grep|head")]
-    [InlineData("rm *.md", true, "rm")]
-    [InlineData("rm *.md", false, "rm")]
+    // A bare glob gets a rewrite correction (#2306), so the cases use the path glob ./*.md.
+    // The read is a reviewed diagnostic, attended or not (D2); the next test covers it.
+    [InlineData("rm ./*.md", true, "rm")]
+    [InlineData("rm ./*.md", false, "rm")]
     public async Task Project_glob_with_in_root_file_alias_remains_approval_gated(
         string command,
         bool interactive,
@@ -587,21 +671,120 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
         var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, observed.Outcome);
-        Assert.Equal(expectedCandidates.Split('|'), observed.CandidateVerbs);
-        Assert.False(observed.IsMessy);
-        Assert.Equal(1, harness.ApprovalService.CheckCount);
+        Assert.Equal(1, observed.ApprovalChecks);
+        if (!interactive)
+        {
+            // Nobody can answer the prompt in an unattended run (D2).
+            Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
+            Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, observed.DenyReason);
+            return;
+        }
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+        Assert.Equal(expectedCandidates.Split('|'), observed.Prompt?.CandidateVerbs);
+        Assert.False(observed.Prompt?.IsMessy);
     }
 
-    [Fact]
-    public Task Noninteractive_safe_candidate_does_not_fill_a_partial_grant_gap()
+    // The in-root alias only keeps the analysis complete. The reviewed catalog
+    // then decides: an interactive read of project files runs with no prompt,
+    // and a redirect to /dev/null writes no file. A real output file still prompts.
+    [SlopwatchSuppress("SW001", "This regression requires POSIX glob, symlink, and Bash authorization behavior.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The project glob regression defines POSIX behavior.")]
+    [InlineData("grep -rn \"Mode B\" docs/ ./*.md 2>/dev/null | head -20", null)]
+    [InlineData("grep -rn \"Mode B\" docs/ ./*.md | head -20", null)]
+    [InlineData("grep -rn \"Mode B\" docs/ ./*.md > hits.txt", "grep")]
+    public async Task Project_glob_with_in_root_file_alias_reads_with_reviewed_catalog(
+        string command,
+        string? expectedCandidates)
+    {
+        var testCase = new ShellApprovalCase(
+            "project-glob-with-in-root-alias-reads-with-reviewed-catalog",
+            new ShellApprovalInvocation(command),
+            Approvals.None,
+            expectedCandidates is null
+                ? ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)
+                : ExpectedApproval.Require(expectedCandidates.Split('|')));
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            testCase,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken);
+        harness.CreateProjectDirectory("docs");
+        harness.CreateProjectFileSymlink("CLAUDE.md", "AGENTS.md");
+
+        var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+
+        if (expectedCandidates is null)
+        {
+            Assert.Equal(ApprovalOutcome.Allowed, observed.Outcome);
+            Assert.Equal(ApprovalAllowReason.ReviewedSafePolicy, observed.AllowReason);
+        }
+        else
+        {
+            Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+            Assert.Equal(expectedCandidates.Split('|'), observed.Prompt?.CandidateVerbs);
+        }
+    }
+
+    // A reviewed cd into a project folder needs no prompt. It covers only the
+    // directory change: each later command keeps its own check. {src} is the
+    // absolute path of a project folder; the parser does not resolve a relative cd.
+    [SlopwatchSuppress("SW001", "This regression requires POSIX directory and Bash authorization behavior.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The cd regression defines Bash behavior.")]
+    [InlineData("cd {src} && git status", null)]
+    [InlineData("cd {src} && ls -la; pwd", null)]
+    [InlineData("cd {src} && rm -rf build", "rm")]
+    [InlineData("cd {src} && git push", "git push")]
+    // The cd leaves the project. An interactive run may read there, so it needs no prompt.
+    [InlineData("cd {src}/../.. && ls", null)]
+    public async Task Reviewed_cd_into_project_folder_keeps_later_checks(
+        string command,
+        string? expectedCandidates)
+    {
+        var project = Directory.CreateTempSubdirectory("netclaw-reviewed-cd-");
+        try
+        {
+            var source = project.CreateSubdirectory("src");
+            await using var harness = await ShellApprovalHarness.CreateAsync(
+                "reviewed-cd-into-project-folder",
+                new ShellApprovalInvocation(
+                    command.Replace("{src}", source.FullName, StringComparison.Ordinal),
+                    ApprovalDirectoryShape.None),
+                Approvals.None,
+                fixture.ActorSystem,
+                TestContext.Current.CancellationToken,
+                scope: new ShellApprovalHarnessScope(
+                    project.FullName,
+                    project.FullName,
+                    "signalr/reviewed-cd",
+                    []));
+
+            var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+
+            if (expectedCandidates is null)
+            {
+                Assert.Equal(ApprovalOutcome.Allowed, observed.Outcome);
+                Assert.Equal(ApprovalAllowReason.ReviewedSafePolicy, observed.AllowReason);
+            }
+            else
+            {
+                Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+                Assert.Equal(expectedCandidates.Split('|'), observed.Prompt?.CandidateVerbs);
+            }
+        }
+        finally
+        {
+            project.Delete(recursive: true);
+        }
+    }
+
+    [SlopwatchSuppress("SW001", "The git status phrase is in the Bash reviewed catalog only.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The git status phrase is in the Bash reviewed catalog only.")]
+    public Task Noninteractive_safe_candidate_fills_the_gap_of_a_partial_grant()
         => AssertApprovalContract(new ShellApprovalCase(
-            "noninteractive-partial-grant-keeps-safe-candidate-uncovered",
+            "noninteractive-partial-grant-and-safe-candidate-allow",
             new ShellApprovalInvocation("git push && git status", Interactive: false),
             Approvals.PersistentAnywhere("git push"),
-            ExpectedApproval.Require(
-                ["git status"],
-                approvalMatches: ["persistent:git push"])));
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git push")));
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX symlink and Bash authorization behavior.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The symlink retry regression defines Bash authorization behavior.")]
@@ -612,20 +795,17 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             new ShellApprovalInvocation("cat leak/secret.txt && git push"),
             Approvals.None,
             ExpectedApproval.Require(["git push"]));
-        await using var harness = await ShellApprovalHarness.CreateAsync(
-            testCase,
-            fixture.ActorSystem,
-            TestContext.Current.CancellationToken);
+        await using var harness = await CreateWithConfinedReadsAsync(testCase);
 
-        var initial = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(["git push"], initial.ApprovalContext!.CandidateVerbs);
-        harness.SeedOneTimeApproval(initial.ApprovalContext);
+        var initial = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["git push"], initial.Prompt!.CandidateVerbs);
+        harness.SeedOneTimeApproval(initial.Prompt);
         harness.ReplaceProjectDirectoryWithExternalSymlink("leak");
 
-        var retry = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var retry = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, retry.Outcome);
-        Assert.Equal(["cat", "git push"], retry.ApprovalContext!.CandidateVerbs);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, retry.Outcome);
+        Assert.Equal(["cat", "git push"], retry.Prompt!.CandidateVerbs);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]
@@ -639,13 +819,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                 ApprovalDirectoryShape.External),
             Approvals.None,
             ExpectedApproval.Require(["head"]));
-        await using var harness = await ShellApprovalHarness.CreateAsync(
-            testCase,
-            fixture.ActorSystem,
-            TestContext.Current.CancellationToken);
+        await using var harness = await CreateWithConfinedReadsAsync(testCase);
 
-        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+        var context = Assert.IsType<ApprovalPromptObservation>(decision.Prompt);
 
         Assert.True(decision.NeedsApproval);
         Assert.Null(decision.AgentCorrection);
@@ -668,8 +845,8 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             fixture.ActorSystem,
             TestContext.Current.CancellationToken);
 
-        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+        var context = Assert.IsType<ApprovalPromptObservation>(decision.Prompt);
 
         Assert.Null(decision.AgentCorrection);
     }
@@ -689,16 +866,17 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             TestContext.Current.CancellationToken);
         harness.CreateProjectDirectory("artifacts");
 
-        var initial = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(["git push"], initial.ApprovalContext!.CandidateVerbs);
-        harness.SeedOneTimeApproval(initial.ApprovalContext);
+        var initial = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["git push"], initial.Prompt!.CandidateVerbs);
+        harness.SeedOneTimeApproval(initial.Prompt);
         harness.CreateProjectFileSymlinkToExternalFile("artifacts/leak");
 
-        var retry = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var retry = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, retry.Outcome);
-        Assert.True(retry.ApprovalContext!.IsMessy);
-        Assert.Empty(retry.ApprovalContext.CandidateVerbs);
+        // The glob is now exact. The "Once" answer for git push does not cover it.
+        Assert.Equal(ApprovalOutcome.RequiresApproval, retry.Outcome);
+        Assert.Contains("cat artifacts/*", retry.Prompt!.CandidateVerbs);
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], retry.Prompt.OptionKeys);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX symlink and Bash authorization behavior.")]
@@ -716,15 +894,15 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             TestContext.Current.CancellationToken);
         harness.CreateProjectDirectory("repo");
 
-        var initial = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(["gh pr merge"], initial.ApprovalContext!.CandidateVerbs);
-        harness.SeedOneTimeApproval(initial.ApprovalContext);
+        var initial = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["gh pr merge"], initial.Prompt!.CandidateVerbs);
+        harness.SeedOneTimeApproval(initial.Prompt);
         harness.ReplaceProjectDirectoryWithExternalSymlink("repo");
 
-        var retry = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var retry = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, retry.Outcome);
-        Assert.Equal(["git push", "gh pr merge"], retry.ApprovalContext!.CandidateVerbs);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, retry.Outcome);
+        Assert.Equal(["git push", "gh pr merge"], retry.Prompt!.CandidateVerbs);
     }
 
     [Fact]

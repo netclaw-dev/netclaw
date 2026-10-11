@@ -102,14 +102,14 @@ public sealed class DaemonClientReconnectIntegrationTests
                 if (!string.IsNullOrWhiteSpace(sessionId) && _sessions.Contains(sessionId))
                 {
                     _connectionSessions[connectionId] = sessionId;
-                    result = new SessionEnsureResultDto(sessionId, false);
+                    result = new SessionEnsureResultDto(sessionId, false) { TextAdmissionVersion = 1 };
                 }
                 else
                 {
                     var created = $"signalr/{Guid.NewGuid():N}";
                     _sessions.Add(created);
                     _connectionSessions[connectionId] = created;
-                    result = new SessionEnsureResultDto(created, true);
+                    result = new SessionEnsureResultDto(created, true) { TextAdmissionVersion = 1 };
                 }
             }
 

@@ -153,6 +153,34 @@ runtime detection for an affected definition.
 | `InputModalities` | string? | `null` | Manual override for input modalities. Comma-separated flags from `Text`, `Image`, `Audio`, `Video` — e.g. `"Text"` or `"Text, Image"`. When set, bypasses automated capability detection. |
 | `OutputModalities` | string? | `null` | Manual override for output modalities. Same form as `InputModalities`. |
 
+**Invalid Models configuration.** One check, `ModelConfigurationValidation.Check`, validates the
+Models section. The daemon runs it at startup. The config watcher runs it before it restarts the
+daemon. It rejects these cases:
+
+- legacy keys (`Main`, `Fallback`, `Compaction`) mixed with `Definitions`/`Roles`, in the file or in
+  `NETCLAW_Models__*` environment variables
+- `Definitions` without `Roles`, or `Roles` without `Definitions`
+- a role that names an unknown definition
+- a definition with a value that cannot be read (for example `InputModalities: "banana"`)
+- a role-bound `ContextWindow` below 4,096
+- a Fallback or Compaction model whose provider is not configured
+- a provider that a role uses and that cannot be built: an unknown `Type`, a missing credential for
+  `openai` or `anthropic`, an `openai-compatible` provider without `Endpoint`, or a `Providers` entry
+  with a value that cannot be read (`AuthMethod`, `VendorOptions`, `OAuthTokenExpiry`). The check builds
+  each role's client once and discards it; this makes no network call.
+- a `netclaw.json` or `secrets.json` that the configuration source cannot read: invalid JSON, or a
+  key written twice (`Models` and `models`)
+
+At startup the daemon stops with exit code 1. It prints one `error:` line to stderr and writes the
+same text to `daemon.log`. It writes no stack trace and no crash log. The message names the keys and
+says what to remove or run. A missing Main model is not an error: it selects the No-Op chat client.
+
+When the watcher finds the file invalid (any of the cases above, or invalid JSON), it logs one
+warning per distinct reason and file content and does not restart the daemon. The
+daemon keeps its previous configuration and applies no change from `netclaw.json` until the file is
+fixed. `netclaw status` shows `config on disk not applied: <reason>` and reports
+`overall: degraded`. `netclaw doctor` reports the same message.
+
 ### Session
 
 Tuning parameters for LLM session behavior.
@@ -185,9 +213,32 @@ Tuning parameters for LLM session behavior.
 
 Configuration for first-party tool execution.
 
-`netclaw init` now scaffolds recommended audience profiles here, and `netclaw doctor`
-validates unsafe profile combinations such as unrestricted `public` or `team`
-settings.
+`netclaw init` writes only the posture: `Security.DeploymentPosture`,
+`Security.ShellExecutionMode`, `Security.StrictDefaults`, and `Tools.ShellMode`. It does not
+write `Tools.AudienceProfiles` or any other default list. A second `netclaw init` replaces the
+`Tools` section, so it deletes stored profiles; it does not write the defaults again.
+
+The daemon computes each value in `Tools` in this order (`PolicyConfiguration.Bind`, at
+startup; the result is process-wide):
+
+1. It resolves the posture from `Security` (`SecurityPolicyDefaults.Resolve`).
+2. It starts from the posture defaults (`ToolAudienceProfileDefaults.CreateProfilesForPosture`).
+   For the Personal posture, the defaults include
+   `Personal.ApprovalPolicy.ToolOverrides.shell_execute = Approval`.
+3. It binds the `Tools` section on top. An absent key keeps the posture default. A present key
+   is the operator's choice.
+
+Examples:
+
+- Positive: a Personal-posture file with no `ApprovalPolicy` gives `shell_execute = Approval`
+  for Personal. A file where `netclaw mcp` wrote only `McpServerDefaults` for Personal keeps
+  that rule.
+- Negative: a file that sets `"shell_execute": "Auto"` for Personal gets `Auto`. The posture
+  default does not override an explicit value.
+
+`netclaw doctor` binds `netclaw.json` the same way. It does not report an absent profile,
+because an absent profile is the posture default. It validates unsafe profile combinations
+such as unrestricted `public` or `team` settings.
 
 Audience profiles are independent from `Daemon.ExposureMode`: audience controls
 who can interact with the bot in chat channels, while exposure mode controls
@@ -197,6 +248,10 @@ Use `netclaw doctor` when you want to inspect the effective audience-profile
 shape, confirm that strict-default fallback is active, or verify that
 `SandboxOnly` shell mode is still blocked until a sandbox backend is configured.
 
+The example below shows the default profiles written out in full. Do not copy it into
+`netclaw.json`: a stored copy of a default list does not get the tools that later releases add.
+Write only the keys that you change.
+
 ```json
 {
   "Tools": {
@@ -205,7 +260,10 @@ shape, confirm that strict-default fallback is active, or verify that
     "AudienceProfiles": {
       "Public": {
         "ToolsMode": "Allowlist",
-        "AllowedTools": ["file_read", "file_list", "attach_file"],
+        "AllowedTools": [
+          "file_read", "file_list", "file_search", "tool_output_read",
+          "attach_file"
+        ],
         "McpServersMode": "Allowlist",
         "AllowedMcpServers": [],
         "ReadFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
@@ -215,9 +273,9 @@ shape, confirm that strict-default fallback is active, or verify that
       "Team": {
         "ToolsMode": "Allowlist",
         "AllowedTools": [
-          "file_read", "file_list", "file_write", "file_edit", "attach_file",
-          "web_search", "web_fetch", "skill_manage", "set_reminder",
-          "list_reminders", "cancel_reminder", "get_reminder_history",
+          "file_read", "file_list", "file_search", "tool_output_read",
+          "file_write", "file_edit", "attach_file", "web_search", "web_fetch", "skill_manage", "set_reminder",
+          "list_reminders", "cancel_reminder", "get_reminder_history", "run_reminder",
           "set_working_directory"
         ],
         "McpServersMode": "Allowlist",
@@ -242,7 +300,70 @@ shape, confirm that strict-default fallback is active, or verify that
 |-------|------|---------|-------------|
 | `ShellMode` | string? | `null` | Optional shell mode override (`Off`, `SandboxOnly`, `HostAllowed`). Falls back to security posture defaults when omitted. |
 | `MaxOutputChars` | int | `32000` | Maximum characters captured from tool output. |
-| `AudienceProfiles` | object | built-in defaults | Per-audience tool, MCP server, and filesystem permissions. Default tool grants are monotonic — `public` ⊆ `team` ⊆ `personal`. `public` gets read-only file tools only (`file_read`, `file_list`, `attach_file`) — no file mutation and no outbound web tools; `team` adds file mutation, web (`web_search`/`web_fetch`), scheduling, and skill tools but not `shell_execute`, webhook tools, or any MCP server; `personal` defaults to unrestricted interactive tool/file access and all MCP servers. `public` and `team` file operations remain bounded by configured trusted roots, including the shared Netclaw sessions root, until the operator opts in to broader roots. |
+| `AudienceProfiles` | object | built-in defaults | Per-audience tool, MCP server, and filesystem permissions. Default tool grants are monotonic — `public` ⊆ `team` ⊆ `personal`. `public` gets read-only file tools only (`file_read`, `file_list`, `file_search`, `tool_output_read`, `attach_file`) — no file mutation and no outbound web tools; `team` adds file mutation, web (`web_search`/`web_fetch`), scheduling, skill, and working-directory tools but not `shell_execute`, webhook tools, or any MCP server; `personal` defaults to unrestricted interactive tool/file access and all MCP servers. `AllowedTools` restricts only profile-managed tools. `public` and `team` file operations remain bounded by configured trusted roots and by their own session storage envelope. Only `personal` gets the shared Netclaw sessions root. See [tool authorization](../architecture/tool-authorization.md). |
+
+A list in `Tools` that has default items replaces its default list. It does not add to it.
+`ToolConfig.BindFromConfiguration` applies these rules to each such list (the
+`ToolConfig.DefaultedLists` table): `AllowedTools` for Public and Team,
+`ReadFiles`/`WriteFiles`/`AttachFiles` `Roots` for Public and Team,
+`ChannelAttachments.AllowedCategories` for all three audiences, `GlobalReadRoots`, and
+`WebFetch.HttpAllowList`.
+
+- An absent key keeps the default list.
+- Configured items replace the default list. For example,
+  `"Team": { "AllowedTools": ["file_read", "file_list"] }` grants Team only those two tools.
+  To add one entry, write the complete list, for example
+  `"GlobalReadRoots": ["{skills_dir}", "{identity_dir}", "{workspaces_dir}", "/srv/docs"]`.
+- `[]` or an empty `NETCLAW_*` variable gives an empty list.
+- JSON `null` or `{}` gives an empty list, and the daemon logs a startup warning that names
+  the key. These lists are all allow lists, so an empty list grants less.
+- These shapes stop daemon startup with an error that names the key, and they do not print
+  the value: a scalar value; an empty `NETCLAW_*` variable when `netclaw.json` or
+  `secrets.json` sets items for the same key; an attachment category that is not one defined
+  name (for example `"Bogus"`, `"3"`, or `"Pdf, Document"`). Category names match without case.
+
+`netclaw doctor` warns, with no auto-fix, when a Public or Team allowlist does not include
+`tool_output_read`. A large tool result spills to a file, and the notice tells the model to
+call that tool.
+
+Older installs: `netclaw init` 0.8.0 to 0.25.4, and 0.26.0-beta.1 to beta.5, wrote the
+complete Public and Team default `AllowedTools` lists. Later releases changed those defaults;
+for example, 0.26.0 added `file_search` and `tool_output_read`. The old binder added the current
+defaults to the stored list, so those installs ran with the current defaults. The daemon keeps
+that result with these rules:
+
+- A Public or Team `AllowedTools` list in `Allowlist` mode that exactly matches an older
+  shipped default (same tools in any order, no extra, missing, or repeated tool, same case) maps
+  to the current default. The daemon logs a startup warning that names the audience, the tool
+  changes, and the fix. A 0.8.0 to 0.19.0 Public list maps to the current Public default, which
+  does not have `file_write`.
+- A list that differs in any way is applied as written, and the daemon never widens it. This
+  includes an edited older list, for example with Web Access turned off in the TUI, and the
+  17-tool list that the 0.24 TUI wrote when it changed a profile from `All` to `Allowlist`. Such
+  a list does not get `file_search` or `tool_output_read`.
+- A list that exactly matches the current default is applied as written, with no warning.
+- `netclaw doctor` reports each exact shipped list, which includes a copy of the current
+  default. A stored copy does not get the tools that later releases add to the default.
+- `netclaw doctor --fix` copies `netclaw.json` to `netclaw.json.legacy-tool-defaults.bak`, or to
+  the next free `netclaw.json.legacy-tool-defaults.N.bak`, then deletes each Public or Team
+  `AllowedTools` key in `Allowlist` mode that exactly matches a shipped list. The rest of the
+  profile stays. The audience then follows the default, so the daemon applies the same tools
+  before and after the fix. The fix never writes a default list. It never overwrites a backup,
+  and a failed copy stops the write. A list that differs by one tool, and `[]`, stay.
+- `ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools` and
+  `LegacyTeamDefaultAllowedTools` hold the shipped lists as policy data. The last row of each
+  table is the current default, which `netclaw init` wrote from 0.26.0 to 0.27.1-beta.1. A test
+  fails when the current default is not equal to the last row. The tables are closed: from the
+  next 0.27.1 build, `netclaw init` writes no lists.
+
+The daemon reads `netclaw.json`, then `secrets.json`, then `NETCLAW_*` variables. A later
+source wins for each key. `netclaw doctor` reads only `netclaw.json`.
+
+A later source does not replace a whole list. `IConfiguration` merges list items by index. For
+example, `secrets.json` with `"AllowedTools": ["file_list"]` over `netclaw.json` with
+`"AllowedTools": ["file_read", "attach_file"]` gives `["file_list", "attach_file"]`. The
+`NETCLAW_*` form sets one index, for example `NETCLAW_Tools__WebFetch__HttpAllowList__0`. To
+change a list, set it in one source only.
 
 ### MCP Servers
 
@@ -277,7 +398,7 @@ shape, confirm that strict-default fallback is active, or verify that
 | `EnvironmentVariables` | object? | `null` | Environment overlay for stdio-launched MCP processes. |
 | `Headers` | object? | `null` | Additional headers for remote HTTP/SSE MCP servers. |
 | `Enabled` | bool | `true` | Whether the server is loaded at startup. |
-| `GrantCategory` | string? | `null` | Optional ACL grant category. Defaults to `mcp:{serverName}` when omitted. |
+| `GrantCategory` | string? | `null` | Tool metadata category. Defaults to `mcp:{serverName}` when omitted. Authorization does not read it; use audience `AllowedMcpServers` and `McpServerToolGrants`. |
 | `OAuthClientId` | string? | `null` | Static OAuth client ID for servers without dynamic client registration. |
 | `OAuthScope` | string? | `null` | Optional OAuth scope override. |
 
@@ -344,6 +465,28 @@ are not size-rotated today (tracked separately).
 |-------|------|---------|-------------|
 | `LogLevel:Default` | string | `Warning` | Minimum log level (`Debug`, `Information`, `Warning`, `Error`, etc.) shared by MEL and Akka.NET. Standard `Logging:LogLevel:{Category}` overrides also apply. |
 | `Console:Enabled` | bool | `false` | Enables console logger provider output for daemon debugging. |
+
+### Retention
+
+A daemon actor (`DataRetentionActor`) deletes expired data shortly after the daemon starts and then every
+12 hours. Each kind of data is one retention job with its own `Days` setting; a value is read once, at
+daemon start. A change to `netclaw.json` restarts the daemon in process, so a running daemon uses the new
+value without a manual restart. Set a value in the `netclaw config` dashboard (Data Retention) or with
+`netclaw config retention --logs-days <days>`.
+
+```json
+{
+  "Retention": {
+    "Logs": {
+      "Days": 14
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Logs:Days` | int | `14` | Days to keep `daemon-{yyyy-MM-dd}.log` and `crash-*.log` in `~/.netclaw/logs`, judged by the date in the file name. `0` keeps them forever. The newest 3 daemon logs and the newest 3 crash logs are always kept, so a wrong clock cannot delete the whole history. A value that is not an integer falls back to `14` with a startup warning. `logs/sessions/` and other files in the directory are never pruned. Environment form: `NETCLAW_Retention__Logs__Days`. |
 
 ### Webhooks
 

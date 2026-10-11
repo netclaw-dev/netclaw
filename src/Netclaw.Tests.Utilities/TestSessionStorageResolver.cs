@@ -15,8 +15,11 @@ internal sealed class TestSessionStorageResolver(
     NetclawPaths paths,
     string? sessionLogsDirectory = null) : ISessionStorageResolver
 {
+    // Shared by every test in the process, so no single test can delete it.
+    // It lives in the build output folder, like the other shared test session paths,
+    // and not in the temp directory.
     private static readonly NetclawPaths SharedPaths = new(Path.Combine(
-        Path.GetTempPath(),
+        AppContext.BaseDirectory,
         "netclaw-test-session-storage"));
 
     /// <summary>

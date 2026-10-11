@@ -3,14 +3,19 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Doctor;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
 
-public sealed class SystemdUnitPathDoctorCheckTests
+public sealed class SystemdUnitPathDoctorCheckTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     [Fact]
     public async Task ReturnsPass_WhenPlatformDisabled()
     {
@@ -27,7 +32,7 @@ public sealed class SystemdUnitPathDoctorCheckTests
     [Fact]
     public async Task ReturnsPass_WhenUnitFileDoesNotExist()
     {
-        var unitPath = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"), "netclaw.service");
+        var unitPath = Path.Combine(_temp.Path, "netclaw.service");
         var check = new SystemdUnitPathDoctorCheck(unitPath, enabledOnThisPlatform: true);
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
@@ -163,9 +168,9 @@ public sealed class SystemdUnitPathDoctorCheckTests
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
 
-    private static (string unitPath, string dir) WriteUnitDir()
+    private (string unitPath, string dir) WriteUnitDir()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         return (Path.Combine(dir, "netclaw.service"), dir);
     }

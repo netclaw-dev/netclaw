@@ -530,6 +530,8 @@ public sealed class MattermostConversationActorTests(ITestOutputHelper output) :
                 AllowedChannelIds = ["ch-1"]
             },
             DefaultChannelId: null,
+            ChannelRegistry: TestChannelRegistries.MattermostWithProcessingRenderer(
+                replyClient ?? new UnconfiguredMattermostReplyClient()),
             ReplyClient: replyClient ?? new UnconfiguredMattermostReplyClient(),
             ContentScanner: new NullContentScanner(),
             AudienceProfiles: TestMattermostGatewayDeps.DefaultAudienceProfiles,

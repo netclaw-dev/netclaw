@@ -320,7 +320,7 @@ public sealed class SessionsPageTests : IDisposable
             // "/chat" after setting resume state. The stub terminates immediately so the
             // app loop exits without waiting on the cancellation timeout.
             builder.RegisterRoute<StubChatPage, StubChatViewModel>(
-                "/chat",
+                ChatViewModel.Route,
                 _ => new StubChatPage(),
                 _ => new StubChatViewModel());
         });

@@ -36,6 +36,65 @@ internal static class SkillSyncHelpers
         return Convert.ToHexStringLower(hash);
     }
 
+    /// <summary>Returns the SHA-256 of each file that the sync installs, keyed by its relative path.</summary>
+    internal static Dictionary<string, string> HashInstalledFiles(IReadOnlyList<DownloadedSkillFile> files)
+        => files.ToDictionary(
+            static file => file.RelativePath,
+            static file => ComputeSha256(file.Content),
+            StringComparer.Ordinal);
+
+    /// <summary>
+    /// Returns true when the skill directory holds exactly the recorded files,
+    /// with the recorded content.
+    /// </summary>
+    /// <remarks>
+    /// The agent can write to a feed skill folder (owner decision, 2026-10-05).
+    /// A changed, added, or removed file, a link, or a file that Netclaw cannot
+    /// read gives false. The caller then installs the published version again.
+    /// </remarks>
+    internal static bool InstalledFilesMatch(string skillDirectory, IReadOnlyDictionary<string, string> recorded)
+    {
+        try
+        {
+            if (!Directory.Exists(skillDirectory)
+                || File.GetAttributes(skillDirectory).HasFlag(FileAttributes.ReparsePoint))
+            {
+                return false;
+            }
+
+            var options = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                AttributesToSkip = 0,
+                IgnoreInaccessible = false,
+            };
+            var fileCount = 0;
+            foreach (var entry in Directory.EnumerateFileSystemEntries(skillDirectory, "*", options))
+            {
+                var attributes = File.GetAttributes(entry);
+                if (attributes.HasFlag(FileAttributes.ReparsePoint))
+                    return false;
+                if (attributes.HasFlag(FileAttributes.Directory))
+                    continue;
+
+                var relativePath = Path.GetRelativePath(skillDirectory, entry).Replace(Path.DirectorySeparatorChar, '/');
+                if (!recorded.TryGetValue(relativePath, out var expected)
+                    || !string.Equals(expected, ComputeSha256(File.ReadAllBytes(entry)), StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                fileCount++;
+            }
+
+            return fileCount == recorded.Count;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     internal static string? ValidateResourcePath(string path)
     {
         if (string.IsNullOrWhiteSpace(path))

@@ -11,10 +11,34 @@ namespace Netclaw.Security.Tests;
 
 public sealed class ShellApprovalGrantParserTests
 {
+    // A word with a digit ends the chain, as for a call. A program path names
+    // its file by the lexical absolute path (R1). A phrase in another form is
+    // not canonical, so the CLI names the canonical phrase instead.
+    [Theory]
+    [InlineData("git show b42bf5a", "git show")]
+    [InlineData("git push origin v0.4.0", "git push origin")]
+    [InlineData("/opt/./tools//bin/../ilspycmd", "/opt/tools/ilspycmd")]
+    // A word with a space has one canonical form: single quotes.
+    [InlineData("\"/opt/My App/bin/tool\"", "'/opt/My App/bin/tool'")]
+    public void Phrase_that_is_not_canonical_names_the_canonical_phrase(string source, string canonical)
+    {
+        var parsed = ShellApprovalGrantParser.TryCreateTokenPrefix(
+            ApprovalShell.Bash,
+            source,
+            out var entry,
+            out var error);
+
+        Assert.False(parsed);
+        Assert.Null(entry);
+        Assert.Contains(canonical, error);
+    }
+
     [Theory]
     [InlineData(ApprovalShell.Bash, "git push", "git", "push")]
     [InlineData(ApprovalShell.Bash, "git push origin", "git", "push", "origin")]
     [InlineData(ApprovalShell.Bash, "status-report", "status-report")]
+    [InlineData(ApprovalShell.Bash, "/opt/tools/ilspycmd", "/opt/tools/ilspycmd")]
+    [InlineData(ApprovalShell.Bash, "'/opt/My App/bin/tool'", "/opt/My App/bin/tool")]
     [InlineData(ApprovalShell.PowerShell, "Get-Content", "Get-Content")]
     [InlineData(ApprovalShell.PowerShell, "curl", "curl")]
     [InlineData(ApprovalShell.PowerShell, "gerr", "gerr")]
@@ -45,6 +69,9 @@ public sealed class ShellApprovalGrantParserTests
     [InlineData(ApprovalShell.Bash, "git  push")]
     [InlineData(ApprovalShell.Bash, "$command")]
     [InlineData(ApprovalShell.Bash, "bash -c echo")]
+    // A relative program path names a different file in each directory.
+    [InlineData(ApprovalShell.Bash, "./ilspycmd")]
+    [InlineData(ApprovalShell.Bash, "../tools/ilspycmd")]
     [InlineData(ApprovalShell.PowerShell, "Get-Content file.txt")]
     [InlineData(ApprovalShell.PowerShell, "gci")]
     [InlineData(ApprovalShell.PowerShell, "Get-Content; Remove-Item")]

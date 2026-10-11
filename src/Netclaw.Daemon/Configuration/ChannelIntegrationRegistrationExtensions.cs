@@ -194,7 +194,10 @@ public static class ChannelIntegrationRegistrationExtensions
 
     internal static void AddMattermostChannel(IServiceCollection services, IConfiguration configuration)
     {
-        services.AddRemoteChatChannel<MattermostChannel, MattermostChannelOptions>(ChannelType.Mattermost, configuration)
+        services.AddRemoteChatChannel<MattermostChannel, MattermostChannelOptions>(
+                ChannelType.Mattermost,
+                configuration,
+                new HashSet<ChannelOutputEffectKind> { ChannelOutputEffectKind.ProcessingIndicator })
             // Token and server-URL validity are NOT checked here: an exception
             // thrown from this registration path aborts host construction and
             // crashes the daemon. A missing/invalid token or URL is handled as a
@@ -229,6 +232,7 @@ public static class ChannelIntegrationRegistrationExtensions
             })
             .WithTransport<IMattermostGatewayClient, MattermostNetGatewayClient>()
             .WithReplyClient<IMattermostReplyClient, MattermostNetReplyClient>()
+            .WithRenderer<MattermostProcessingOutputRenderer>()
             .WithThreadHistory((sp, options) =>
             {
                 var client = sp.GetRequiredService<MattermostClient>();

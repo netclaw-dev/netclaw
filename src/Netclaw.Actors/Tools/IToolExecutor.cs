@@ -20,8 +20,6 @@ public interface IToolExecutor
 {
     Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default);
 
-    Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default);
-
     /// <summary>Creates the exact launch that the background actor must reauthorize before process creation.</summary>
     Task<ShellProcessLaunch> PrepareShellLaunchAsync(
         FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)

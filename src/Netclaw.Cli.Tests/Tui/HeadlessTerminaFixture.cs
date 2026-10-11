@@ -23,7 +23,7 @@ internal static class HeadlessTerminaFixture
 {
     public static (VirtualTerminal Terminal, TerminaApplication App, TVm Vm) Create<TPage, TVm>(
         string route,
-        Func<TPage> createPage,
+        Func<IServiceProvider, TPage> createPage,
         Func<TVm> createViewModel,
         out VirtualInputSource input,
         int width = 120,
@@ -44,7 +44,7 @@ internal static class HeadlessTerminaFixture
         {
             builder.RegisterRoute<TPage, TVm>(
                 route,
-                _ => createPage(),
+                createPage,
                 _ =>
                 {
                     capturedVm = createViewModel();

@@ -98,7 +98,7 @@ public sealed class ProviderOAuthRefreshingProbeTests
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
-        Assert.Contains("provider fix test-provider", result.ErrorMessage);
+        Assert.Contains("netclaw provider", result.ErrorMessage);
         Assert.Null(descriptor.ProbedAccessToken);
     }
 

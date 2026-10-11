@@ -278,19 +278,23 @@ public sealed class ShellCommandAnalysisTests
         Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
     }
 
+    // SECURITY: a loop item list is an authored value with no typed domain. It
+    // can name a path outside every candidate scope, so the operand is unknown
+    // (decision D1). Only the operand is unknown: the structure stays proved.
     [Fact]
-    public void Bash_finite_loop_data_keeps_static_structure()
+    public void Bash_finite_loop_item_without_a_typed_domain_is_an_unknown_operand()
     {
         var analysis = _analyzer.Analyze(
             "for value in first second; do status-report \"$value\"; done",
             "/work");
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
-        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
-        var argument = Assert.Single(Assert.Single(analysis.Commands).Arguments);
+        var command = Assert.Single(analysis.Commands);
+        var argument = Assert.Single(command.Arguments);
         Assert.IsType<ShellValueDomain.Unknown>(argument.Value);
         var authored = Assert.IsType<ShellValueDomain.FiniteSet>(argument.AuthoredValue);
         Assert.Equal(["first", "second"], authored.Values);
+        Assert.Equal(ShellUnresolvedPart.Operand, analysis.GetUnresolvedPart(command));
     }
 
     [Fact]
@@ -463,7 +467,7 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Theory]
-    [InlineData("echo $(git push)")]
+    [InlineData("cat $(git push)")]
     public void Dynamic_command_syntax_is_explicit(string command)
     {
         var analysis = _analyzer.Analyze(command);
@@ -523,13 +527,36 @@ public sealed class ShellCommandAnalysisTests
             || analysis.HasDynamicSyntax);
     }
 
-    [Fact]
-    public void Background_list_fails_closed_when_parser_omits_its_tail()
+    // A bracket pattern in the program word names no fixed program, so the
+    // command stays unresolved, as with ShellSyntaxTree 0.4.0-beta.10. Other
+    // program words without command words keep their earlier decision.
+    [Theory]
+    [InlineData("[\"ci\",\"build\"]", true)]
+    [InlineData("[\"batch one\"]", true)]
+    [InlineData("{\"b\":2,\"nested\":{\"c\":3}}", false)]
+    [InlineData("^\\d{4}-\\d{2}-\\d{2}$", false)]
+    [InlineData("[ -d /work ]", false)]
+    public void Bracket_program_word_stays_unresolved(string command, bool unresolved)
     {
-        var analysis = _analyzer.Analyze("git status & git push");
+        var analysis = new ShellCommandAnalyzer(
+                ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)))
+            .Analyze(command, "/work");
 
-        Assert.Equal(ShellAnalysisFailure.Unresolved, analysis.Failure);
-        Assert.Empty(analysis.Commands);
+        Assert.Equal(unresolved, analysis.HasDynamicSyntax);
+    }
+
+    // ShellSyntaxTree 0.4.0-beta.14 parses a background list as a group, so
+    // each command in it and after it has its own facts.
+    [Fact]
+    public void Background_list_exposes_each_command()
+    {
+        var analysis = _analyzer.Analyze("git status & git push", "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax);
+        Assert.Equal(
+            ["git status", "git push"],
+            analysis.Commands.Select(static command => string.Join(' ', command.Clause.Verb.Tokens)));
     }
 
     [Fact]
@@ -550,6 +577,15 @@ public sealed class ShellCommandAnalysisTests
     [InlineData("cat <<'EOF'\nbody\nEOF", typeof(HereDocumentRedirectAnalysis))]
     [InlineData("cat <<< \"body\"", typeof(HereStringRedirectAnalysis))]
     [InlineData("cat 0<<< \"body\"", typeof(HereStringRedirectAnalysis))]
+    // Owner decision 2026-10-07 (heredoc parity): fixed text on stdin is data
+    // for each receiver that is not a shell.
+    [InlineData("cat -n <<< \"body\"", typeof(HereStringRedirectAnalysis))]
+    [InlineData("command cat <<< \"body\"", typeof(HereStringRedirectAnalysis))]
+    [InlineData("python3 - <<'EOF'\nprint(1)\nEOF", typeof(HereDocumentRedirectAnalysis))]
+    [InlineData("python3 - <<< 'print(1)'", typeof(HereStringRedirectAnalysis))]
+    [InlineData("grep x <<\"EOF\"\nx\nEOF", typeof(HereDocumentRedirectAnalysis))]
+    [InlineData(": <<'EOF'\nnote\nEOF", typeof(HereDocumentRedirectAnalysis))]
+    [InlineData("echo x <<< 'y'", typeof(HereStringRedirectAnalysis))]
     public void Bounded_data_only_stdin_is_not_dynamic(
         string command,
         Type expectedType)
@@ -579,9 +615,31 @@ public sealed class ShellCommandAnalysisTests
     [InlineData("cat <<< \"$value\"")]
     [InlineData("cat <<EOF\nbody\nEOF")]
     [InlineData("cat <<EOF\n$value\nEOF")]
-    [InlineData("cat -n <<< \"body\"")]
-    [InlineData("command cat <<< \"body\"")]
+    [InlineData("python3 - <<EOF\nprint(1)\nEOF")]
+    [InlineData("python3 - <<< \"$code\"")]
+    [InlineData("cat 3<<'EOF'\nbody\nEOF")]
     [InlineData("bash <<< \"echo ok\"")]
+    [InlineData("bash <<'EOF'\necho ok\nEOF")]
+    [InlineData("command bash <<< \"echo ok\"")]
+    [InlineData("env sh <<'EOF'\necho ok\nEOF")]
+    [InlineData("xargs bash <<< \"script.sh\"")]
+    [InlineData("/usr/local/bin/bash <<'EOF'\necho ok\nEOF")]
+    [InlineData("./bash <<'EOF'\necho ok\nEOF")]
+    [InlineData("fish <<'EOF'\necho ok\nEOF")]
+    [InlineData("bash.exe <<'EOF'\necho ok\nEOF")]
+    [InlineData("/bin/BASH.EXE <<'EOF'\necho ok\nEOF")]
+    [InlineData("rbash <<'EOF'\necho ok\nEOF")]
+    [InlineData("env -S 'bash -s' <<'EOF'\necho ok\nEOF")]
+    [InlineData("ssh host 'bash -s' <<'EOF'\necho ok\nEOF")]
+    [InlineData("sg grp 'bash -s' <<'EOF'\necho ok\nEOF")]
+    [InlineData("flock x -c 'bash -s' <<'EOF'\necho ok\nEOF")]
+    [InlineData("script -c 'bash -s' <<'EOF'\necho ok\nEOF")]
+    [InlineData("grep 'run bash now' <<'EOF'\nx\nEOF")]
+    [InlineData("timeout 5 /opt/x/bash <<'EOF'\necho ok\nEOF")]
+    [InlineData("for f in a b; do python3 - \"$f\" <<'EOF'\nprint(1)\nEOF\ndone")]
+    [InlineData("pwsh -Command - <<'EOF'\nGet-Date\nEOF")]
+    [InlineData("xargs $tool <<< \"value\"")]
+    [InlineData("env \"$tool\" <<'EOF'\necho ok\nEOF")]
     [InlineData("cat <<< \"$(printf payload)\"")]
     public void Unproved_or_unsupported_stdin_receiver_stays_dynamic(string command)
     {

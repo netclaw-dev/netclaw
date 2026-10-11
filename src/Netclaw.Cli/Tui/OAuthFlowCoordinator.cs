@@ -216,7 +216,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
                     return new OAuthDeviceFlowResult(
                         new SensitiveString(accessToken),
                         refreshToken is not null ? new SensitiveString(refreshToken) : null,
-                        expiresAt is not null ? DateTimeOffset.Parse(expiresAt) : null,
+                        expiresAt is not null ? DateTimeOffset.Parse(expiresAt, System.Globalization.CultureInfo.InvariantCulture) : null,
                         accountId is not null ? new SensitiveString(accountId) : null);
                 }
 

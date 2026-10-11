@@ -73,7 +73,7 @@ public static class NetclawAkkaHostingExtensions
     /// Registers the reminder manager as a singleton actor and wires
     /// the local Akka.Reminders scheduler to deliver payloads to it.
     /// Uses a 70-minute acknowledgement lease for one-hour LLM attempts.
-    /// Other Akka.Reminders settings use their library defaults.
+    /// Pruning matches Netclaw's terminal-reminder retention; other Akka.Reminders settings use their library defaults.
     /// </summary>
     public static AkkaConfigurationBuilder WithReminderManager(
         this AkkaConfigurationBuilder builder,
@@ -89,7 +89,8 @@ public static class NetclawAkkaHostingExtensions
             {
                 reminders.WithSettings(new ReminderSettings
                 {
-                    AckTimeout = ReminderAckTimeout
+                    AckTimeout = ReminderAckTimeout,
+                    PruneOlderThan = ReminderManagerActor.TerminalRetention
                 });
 
                 if (!string.IsNullOrWhiteSpace(storageOptions?.SqliteConnectionString))

@@ -10,7 +10,9 @@ user's local `~/.netclaw/bin/` install for live testing.
 
 ## Safety Protocol
 
-1. **Stop the daemon first** — never overwrite a running binary
+1. **Stop the daemon first** — never overwrite a running binary. If systemd
+   manages the daemon, stop the systemd unit. `netclaw daemon stop` is not
+   sufficient, because systemd restarts the daemon in a few seconds.
 2. **Back up originals** — always create `.bak` copies before overwriting
 3. **Confirm with user** before swapping if unsure about their intent
 4. **Always re-launch the daemon after swap** — the swap procedure leaves the
@@ -21,11 +23,32 @@ user's local `~/.netclaw/bin/` install for live testing.
 
 ### 1. Stop any running daemon
 
+First, find out if a systemd user service manages the daemon:
+
+```bash
+systemctl --user is-enabled netclaw.service
+systemctl --user is-active netclaw.service
+```
+
+If either command prints `enabled` or `active`, systemd manages the daemon.
+`netclaw daemon stop` stops the unit for you when `NETCLAW_HOME` is unset or is
+`~/.netclaw` (the unit serves only that home), so it is safe in both cases:
+
 ```bash
 netclaw daemon stop 2>&1 || true
 ```
 
-If a daemon is still running (check `pgrep netclawd`), warn the user and abort.
+To stop the unit directly instead, run `systemctl --user stop netclaw.service`.
+Never use `pkill`; the unit has a restart policy, and a killed daemon returns
+in a few seconds.
+
+In both cases, make sure that no daemon process remains:
+
+```bash
+pgrep netclawd   # must print nothing
+```
+
+If `pgrep netclawd` finds a process, warn the user and abort.
 
 ### 2. Back up existing binaries
 
@@ -99,6 +122,16 @@ The swap procedure stops the daemon in step 1 and never restarts it. You MUST
 start it again before the install is usable — channels, webhooks, and the
 doctor's daemon/MCP-connectivity checks all stay broken until the daemon is up.
 
+If systemd manages the daemon (step 1), start the unit with systemd:
+
+```bash
+systemctl --user start netclaw.service
+systemctl --user is-active netclaw.service   # must print "active"
+netclaw daemon status                        # confirm it came up cleanly
+```
+
+If no systemd unit exists, use the CLI:
+
 ```bash
 netclaw daemon start
 netclaw daemon status   # confirm it came up cleanly
@@ -108,15 +141,36 @@ If `daemon status` shows a crash or the PID never appears, check
 `~/.netclaw/logs/crash-*.log` — a missing `IncludeNativeLibrariesForSelfExtract`
 flag in step 3 is the most common cause.
 
+**Check the crash-log timestamp before you blame the new binary.** The old
+daemon can write a crash log while it stops. An example is a SlackNet socket
+"Failed to open socket" unobserved-task crash. Such a log does not show that
+the new binary is broken. Compare the crash-log time with the time of the swap.
+Only a crash log written after the new daemon started applies to the new binary.
+
 ## Restore Procedure
 
-To revert to the original binaries:
+To revert to the original binaries, use the same stop and start method as the
+swap. If systemd manages the daemon:
+
+```bash
+systemctl --user stop netclaw.service
+pgrep netclawd   # must print nothing
+cp ~/.netclaw/bin/netclaw.bak ~/.netclaw/bin/netclaw
+cp ~/.netclaw/bin/netclawd.bak ~/.netclaw/bin/netclawd
+systemctl --user start netclaw.service
+systemctl --user is-active netclaw.service   # must print "active"
+netclaw daemon status
+```
+
+If no systemd unit exists:
 
 ```bash
 netclaw daemon stop 2>&1 || true
+pgrep netclawd   # must print nothing
 cp ~/.netclaw/bin/netclaw.bak ~/.netclaw/bin/netclaw
 cp ~/.netclaw/bin/netclawd.bak ~/.netclaw/bin/netclawd
 netclaw daemon start
+netclaw daemon status
 ```
 
 ## Platform-Specific RIDs
@@ -135,6 +189,8 @@ netclaw daemon start
 | Missing `IncludeNativeLibrariesForSelfExtract` | `TypeInitializationException` for `SqliteConnection`, memory health doctor check fails | Republish with all flags |
 | Missing `EnableCompressionInSingleFile` | Binary is 2-3x larger than expected | Republish with all flags |
 | Forgot to stop daemon before swap | Binary overwrite fails or daemon crashes | Always `netclaw daemon stop` first |
+| Used `netclaw daemon stop` on a systemd-managed daemon | Systemd restarts the daemon in seconds; the copy fails with "Text file busy" or replaces a running binary | Use `systemctl --user stop netclaw.service`, then confirm `pgrep netclawd` prints nothing |
+| Blamed the new binary for an old crash log | A crash log (for example, SlackNet "Failed to open socket") appears near the swap | Compare the crash-log time with the swap time; a log from before the new start is from the old daemon |
 | Forgot to copy system skills | New/updated skills not available | Copy from `feeds/skills/.system/files/` |
 | Used `-p:` instead of `/p:` | May work but inconsistent with CI | Use `/p:` to match production |
 | Forgot to re-launch daemon after swap | Channels offline, webhooks dead, doctor reports daemon unreachable | `netclaw daemon start` — swap leaves daemon stopped from step 1 |

@@ -6,11 +6,12 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <UseTestRunTempRoot>true</UseTestRunTempRoot>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.v3.mtp-off" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
 
@@ -20,14 +21,15 @@
     <ProjectReference Include="../Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />
   </ItemGroup>
 
+  <!-- Evidence/ is the stable home of the approval and tool-friction evidence.
+       Netclaw.Actors.Tests links files from this folder too. See Evidence/README.md. -->
   <ItemGroup>
-    <None Include="../../openspec/changes/archive/2026-08-15-structure-shell-approval-policy/evidence/*.json"
+    <None Remove="Evidence/**" />
+    <None Include="Evidence/README.md" />
+    <None Include="Evidence/ApprovalEvidence/*.json"
           Link="ApprovalEvidence/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../openspec/changes/reduce-fresh-session-approval-spam/evidence/*.json"
-          Link="ApprovalEvidence/%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../openspec/changes/make-agent-tools-pit-of-success/evidence/tool-friction-fixtures.json"
+    <None Include="Evidence/ToolFrictionEvidence/tool-friction-fixtures.json"
           Link="ToolFrictionEvidence/tool-friction-fixtures.json"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

@@ -6,13 +6,15 @@ Define how Netclaw bounds tool output in memory, windows oversized results for
 inline delivery, spills full output to a session-scoped file, and steers the
 model toward targeted reads rather than re-running tools.
 
+Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for cross-cutting terms used in this specification.
+
 ## Requirements
 
 ### Requirement: Central bound + spill for every tool result
 
 `DispatchingToolExecutor` SHALL bound every tool result to an inline budget and,
-when the result exceeds that budget, return a head+tail window of the budget plus
-a steer pointing the model at the full output. This applies uniformly to every
+when the result exceeds that budget, return only its last budget characters plus
+a separator and a continuation notice. This applies uniformly to every
 tool, for the main session and for sub-agents (both run tools through the
 dispatcher). The bound SHALL be applied after the dispatcher's central secret
 redaction, so the inline result and any spilled file are redacted from one pass.
@@ -25,11 +27,12 @@ their own capture for memory safety and return the raw bounded result.
 - **THEN** the dispatcher returns it unchanged
 - **AND** no spill file is created
 
-#### Scenario: Result over budget windowed to head and tail
+#### Scenario: Result over budget windowed to tail only
 
 - **WHEN** a tool returns a result larger than its inline budget
-- **THEN** the inline result contains the head and the tail of the result within
-  the budget, with the discarded middle marked
+- **THEN** the inline result contains only the last budget characters of the result
+- **AND** a separator marks the discarded prefix
+- **AND** the retained spill contains the prefix that the inline result omits
 
 #### Scenario: Same bounding for sub-agent tool calls
 
@@ -60,13 +63,39 @@ positive, else the session content budget.
 
 ### Requirement: Spill to a session-scoped file with a steer
 
-When a result exceeds its inline budget, the dispatcher SHALL write the full
-redacted result to an internal file under the current session `tool-calls`
-directory. It SHALL derive the file name from the sanitized call id and return
-the opaque call id with a steer to `tool_output_read`. It SHALL NOT reveal the
-raw spill path or direct the model to shell, grep, or `file_read`. When no
-session directory or call id is available, the dispatcher SHALL return the
-inline window without a spill steer.
+When a result exceeds its inline budget, the dispatcher SHALL write the full redacted result to an internal file under the current session `tool-calls` directory. The dispatcher SHALL derive the file name from the sanitized call id. It SHALL return the opaque call id and a steer to `tool_output_read`. It SHALL NOT reveal the raw spill path or direct the model to shell, grep, or `file_read`. When no session directory or call id is available, the dispatcher SHALL return the inline window without a spill steer.
+
+Concrete result shape:
+
+```text
+tool result size = 40,000 characters
+inline budget    = 12,000 characters
+call id          = call-example
+
+model receives:
+  <bounded tail>
+
+  [output truncated to 12000 chars of 40000; continue with
+   tool_output_read using CallId='call-example' and a bounded Start/Limit
+   window instead of re-running]
+
+internal storage may use:
+  <session>/tool-calls/call-example.txt
+
+model never receives:
+  <session>/tool-calls/call-example.txt
+  "run grep on the saved file"
+  "use file_read on the saved file"
+```
+
+Counterexamples:
+
+| Input state | Required behavior |
+|---|---|
+| Result fits the inline budget | Return it without a spill or continuation steer. |
+| Result is oversized but the call id is absent | Return only the bounded inline window. Do not invent an id or reveal a path. |
+| Call id is `../../outside` | Sanitize or reject the spill location; never write outside the session spill directory. |
+| Spill write fails | Preserve the bounded inline result without claiming that continuation exists. |
 
 #### Scenario: Spill file stays internal
 
@@ -78,7 +107,7 @@ inline window without a spill steer.
 
 #### Scenario: Spilled file is redacted
 
-- **WHEN** a result containing a secret is spilled
+- **WHEN** a result that contains a secret is spilled
 - **THEN** the internal spill file has the secret redacted
 - **AND** redaction occurs before the spill write
 
@@ -138,3 +167,27 @@ return more than the configured limit.
 - **WHEN** `tool_output_read` executes
 - **THEN** the outcome is `not_found`
 - **AND** the bounded result suggests a narrower source call
+
+### Requirement: Shell exit status survives inline truncation
+
+`ShellTool` SHALL include the process exit status in every successful process-completion result.
+For an oversized result, it SHALL place that status at the end of its result before the dispatcher applies the inline budget.
+The dispatcher SHALL retain that status in the inline tail.
+This rule applies to both execution paths and to zero and nonzero exit codes.
+The status describes the process outcome, not approval or tool authorization.
+
+#### Scenario: Oversized successful command retains its exit status
+
+- **GIVEN** an authorized shell command produces more than 2,000 result characters
+- **WHEN** the command exits with code zero through either execution path
+- **THEN** the inline result contains `Exit code: 0` and the output tail
+- **AND** the inline result omits the output prefix
+- **AND** the retained spill contains the bounded capture and its exit status
+
+#### Scenario: Oversized failed command retains its exit status
+
+- **GIVEN** an authorized shell command produces more than 2,000 result characters
+- **WHEN** the command exits with a nonzero code through either execution path
+- **THEN** the inline result contains that exact exit code and the output tail
+- **AND** the inline result does not report `Exit code: 0`
+- **AND** the retained spill contains the same exit status

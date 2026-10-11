@@ -8,7 +8,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Invariant mode keeps the binary free of ICU. On Windows it also stops .NET from mapping IANA
+         time zone ids (America/Chicago) to Windows zones, so the Windows build and any build run on
+         Windows (including cross-OS `dotnet test`) must not be invariant. Unix reads tzdata directly. -->
+    <InvariantGlobalization Condition="!$([MSBuild]::IsOSPlatform('Windows')) And !$(RuntimeIdentifier.StartsWith('win'))">true</InvariantGlobalization>
     <!-- `netclaw doctor` now loads SkiaSharp's native libSkiaSharp (the image-egress
          probe). The release publish script passes this flag to every component, but
          set it here too — intrinsic to the binary, like the daemon's csproj — so a

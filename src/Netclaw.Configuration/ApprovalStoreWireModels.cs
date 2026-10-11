@@ -20,14 +20,14 @@ internal sealed class ApprovalStoreWire
 [JsonDerivedType(typeof(NonShellApprovalEntryWire))]
 internal abstract class ApprovalEntryWire
 {
-    [JsonPropertyOrder(3)]
+    [JsonPropertyOrder(4)]
     public string? Directory { get; init; }
 
-    [JsonPropertyOrder(4)]
+    [JsonPropertyOrder(5)]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Repository { get; init; }
 
-    [JsonPropertyOrder(5)]
+    [JsonPropertyOrder(6)]
     public DateTimeOffset? CreatedAt { get; init; }
 }
 
@@ -41,6 +41,10 @@ internal sealed class TokenPrefixApprovalEntryWire : ApprovalEntryWire
 
     [JsonPropertyOrder(2)]
     public required string?[]? VerbTokens { get; init; }
+
+    [JsonPropertyOrder(3)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssignmentDigest { get; init; }
 }
 
 internal sealed class LegacyExactApprovalEntryWire : ApprovalEntryWire

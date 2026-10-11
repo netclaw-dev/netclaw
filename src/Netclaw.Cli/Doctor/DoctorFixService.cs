@@ -44,6 +44,7 @@ public sealed class DoctorFixService
         // evaluated even when the app config file is absent, so it runs before the
         // config-file early-return below.
         TryAddDaemonPathEnvironmentFix(fixes);
+        TryAddToolApprovalHygieneFix(fixes);
 
         if (!File.Exists(_paths.NetclawConfigPath))
             return Task.FromResult(new DoctorFixPlan(fixes));
@@ -76,6 +77,9 @@ public sealed class DoctorFixService
         }
 
         // --- Manual fixes (not derivable from schema alone) ---
+
+        if (TryDeleteDefaultAllowedToolsCopies(obj))
+            appliedFixes.Add(LegacyAllowedToolsFixName);
 
         if (obj["configVersion"] is null)
         {
@@ -151,6 +155,39 @@ public sealed class DoctorFixService
         }
 
         return Task.FromResult(new DoctorFixPlan(fixes));
+    }
+
+    private const string LegacyAllowedToolsFixName = "remove copied default audience tool lists";
+
+    /// <summary>
+    /// Deletes each Public or Team AllowedTools key that exactly matches a default list that a
+    /// release shipped, which includes the current default. The audience then follows the
+    /// default of each later release. The daemon already applies the current default for such a
+    /// list, so the bound tools do not change. A list that differs from every shipped default is
+    /// operator intent, so this fix keeps it. The fix never writes a default list.
+    /// </summary>
+    private static bool TryDeleteDefaultAllowedToolsCopies(JsonObject config)
+    {
+        var changed = false;
+        foreach (var copy in DefaultAllowedToolsCopies.Find(config))
+        {
+            copy.Profile.Remove(copy.AllowedToolsKey);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    // Returns netclaw.json.<name>.bak, then .<name>.2.bak, and so on: the first name that is
+    // not a file. A directory at a candidate name is not skipped, so the copy fails loudly
+    // instead of the fix writing without a backup.
+    internal static string NextBackupPath(string configPath, string name)
+    {
+        var candidate = $"{configPath}.{name}.bak";
+        for (var number = 2; File.Exists(candidate); number++)
+            candidate = $"{configPath}.{name}.{number}.bak";
+
+        return candidate;
     }
 
     private static void TryApplySchemaFixes(JsonObject config, List<string> appliedFixes)
@@ -267,10 +304,98 @@ public sealed class DoctorFixService
             UpdatedText: updated));
     }
 
-    public Task ApplyAsync(DoctorFixPlan plan, CancellationToken cancellationToken = default)
+    // Removes the grants that add nothing. The store text of the plan comes from
+    // the store itself, and the apply step writes it only when the store did not
+    // change in between.
+    private void TryAddToolApprovalHygieneFix(List<DoctorFileFix> fixes)
     {
+        if (!File.Exists(_paths.ToolApprovalsPath))
+            return;
+
+        ApprovalHygieneReport report;
+        try
+        {
+            report = ToolApprovalHygieneDoctorCheck.CreateStore(_paths).AnalyzeHygiene();
+        }
+        catch (Exception)
+        {
+            // The hygiene check reports an unreadable store. The fix plan has nothing to change.
+            return;
+        }
+
+        if (report is { OriginalText: { } original, UpdatedText: { } updated })
+        {
+            fixes.Add(new DoctorFileFix(
+                _paths.ToolApprovalsPath,
+                $"{ToolApprovalHygieneFixName}: remove {report.Findings.Count(static finding => finding.Removable)} grant(s) "
+                + "that another grant covers.",
+                original,
+                updated));
+        }
+    }
+
+    /// <summary>
+    /// The backup files that applying the fix writes: the audience tool list fix, the legacy
+    /// model migration and the property removal each delete or rewrite user data.
+    /// </summary>
+    public static IReadOnlyList<string> PlannedBackups(DoctorFileFix fix)
+    {
+        if (!File.Exists(fix.FilePath))
+            return [];
+
+        var backups = new List<string>();
+        if (fix.Description.Contains("named model definitions", StringComparison.Ordinal))
+            backups.Add(NextBackupPath(fix.FilePath, "legacy-models"));
+        if (fix.Description.Contains(LegacyAllowedToolsFixName, StringComparison.Ordinal))
+            backups.Add(NextBackupPath(fix.FilePath, "legacy-tool-defaults"));
+        if (fix.Description.Contains(SchemaFixResolver.RemovedPropertyPrefix, StringComparison.Ordinal))
+            backups.Add(NextBackupPath(fix.FilePath, "removed-keys"));
+        return backups;
+    }
+
+    private static void CopyFileMode(string source, string temp)
+    {
+        if (!OperatingSystem.IsWindows() && File.Exists(source))
+            File.SetUnixFileMode(temp, File.GetUnixFileMode(source));
+    }
+
+    internal const string ToolApprovalHygieneFixName = "tool approval grants";
+
+    /// <summary>
+    /// Writes every fix in the plan. A fix that deletes user data first copies the original file
+    /// to a backup. All backups are written before the first file changes, so a failed backup
+    /// leaves every file as it was. Returns the backup paths.
+    /// </summary>
+    public Task<IReadOnlyList<string>> ApplyAsync(DoctorFixPlan plan, CancellationToken cancellationToken = default)
+    {
+        var backups = new List<string>();
         foreach (var fix in plan.Fixes)
         {
+            // A failed copy throws before any write. An older backup is never overwritten: each
+            // run that applies one of these fixes writes a new file.
+            foreach (var backupPath in PlannedBackups(fix))
+            {
+                File.Copy(fix.FilePath, backupPath, overwrite: false);
+                backups.Add(backupPath);
+            }
+        }
+
+        foreach (var fix in plan.Fixes)
+        {
+            // The grant store has its own lock. The write fails when the store changed after the plan.
+            if (string.Equals(fix.FilePath, _paths.ToolApprovalsPath, StringComparison.Ordinal))
+            {
+                var change = ToolApprovalHygieneDoctorCheck.CreateStore(_paths).TryApplyHygiene(
+                    new ApprovalHygieneReport([], fix.OriginalText, fix.UpdatedText));
+                if (change is ApprovalStoreChangeResult.Unavailable unavailable)
+                {
+                    throw new InvalidOperationException(
+                        $"The grant store changed or is unavailable ({unavailable.Failure}). Run `netclaw doctor --fix` again.");
+                }
+
+                continue;
+            }
+
             // Ensure the parent directory exists before writing. The daemon-PATH fix can
             // target ~/.netclaw/config even after that directory has been removed, so a bare
             // File.WriteAllTextAsync would throw DirectoryNotFoundException and abort the run.
@@ -279,20 +404,78 @@ public sealed class DoctorFixService
                 Directory.CreateDirectory(dir);
 
             cancellationToken.ThrowIfCancellationRequested();
-            if (fix.Description.Contains("named model definitions", StringComparison.Ordinal)
-                && File.Exists(fix.FilePath))
-            {
-                var backupPath = fix.FilePath + ".legacy-models.bak";
-                if (!File.Exists(backupPath))
-                    File.Copy(fix.FilePath, backupPath);
-            }
-
-            AtomicFile.WriteAllText(fix.FilePath, fix.UpdatedText);
+            // The rewrite keeps the file's mode: a netclaw.json that holds a token and is
+            // owner-only must not come back readable by others.
+            AtomicFile.WriteAllText(fix.FilePath, fix.UpdatedText, temp => CopyFileMode(fix.FilePath, temp));
         }
 
-        return Task.CompletedTask;
+        return Task.FromResult<IReadOnlyList<string>>(backups);
     }
 
+}
+
+/// <summary>
+/// Finds the Public and Team <c>AllowedTools</c> keys in netclaw.json that exactly match a
+/// shipped default list. <c>netclaw doctor</c> reports them and <c>netclaw doctor --fix</c>
+/// deletes them. It reads the raw JSON because a bound profile cannot show whether the key is
+/// present: an absent key binds to the current default.
+/// </summary>
+internal static class DefaultAllowedToolsCopies
+{
+    internal sealed record Copy(TrustAudience Audience, JsonObject Profile, string AllowedToolsKey, IReadOnlyList<string> AllowedTools);
+
+    internal static IReadOnlyList<Copy> Find(JsonObject config)
+    {
+        if (Get(config, "Tools") is not JsonObject tools || Get(tools, "AudienceProfiles") is not JsonObject profiles)
+            return [];
+
+        var copies = new List<Copy>();
+        foreach (var audience in (TrustAudience[])[TrustAudience.Public, TrustAudience.Team])
+        {
+            if (Get(profiles, audience.ToString()) is not JsonObject profile
+                || FindKey(profile, "AllowedTools") is not { } allowedToolsKey
+                || profile[allowedToolsKey] is not JsonArray allowedTools
+                || !IsAllowlistMode(profile))
+            {
+                continue;
+            }
+
+            var stored = new List<string>();
+            foreach (var item in allowedTools)
+            {
+                if (item is not JsonValue value || !value.TryGetValue<string>(out var tool))
+                    break;
+                stored.Add(tool);
+            }
+
+            if (stored.Count == allowedTools.Count
+                && ToolAudienceProfileDefaults.IsLegacyDefaultAllowedTools(audience, stored))
+            {
+                copies.Add(new Copy(audience, profile, allowedToolsKey, stored));
+            }
+        }
+
+        return copies;
+    }
+
+    // AllowedTools applies only in Allowlist mode, which is the default when ToolsMode is absent.
+    // Any other value, which includes a number, is not a match, so the key stays.
+    private static bool IsAllowlistMode(JsonObject profile)
+        => Get(profile, "ToolsMode") switch
+        {
+            null => FindKey(profile, "ToolsMode") is null,
+            JsonValue value when value.TryGetValue<string>(out var mode)
+                => string.Equals(mode, nameof(ToolProfileMode.Allowlist), StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+
+    // The daemon reads configuration keys without case, so this lookup does the same.
+    private static JsonNode? Get(JsonObject parent, string name)
+        => FindKey(parent, name) is { } key ? parent[key] : null;
+
+    private static string? FindKey(JsonObject parent, string name)
+        => parent.Select(property => property.Key)
+            .FirstOrDefault(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase));
 }
 
 public sealed record DoctorFixPlan(IReadOnlyList<DoctorFileFix> Fixes)

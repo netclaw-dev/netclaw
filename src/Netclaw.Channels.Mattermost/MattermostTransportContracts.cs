@@ -118,6 +118,17 @@ public interface IMattermostReplyClient
         string filePath,
         string? fileName = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sends a native typing pulse for the channel, or for a specific thread
+    /// when <paramref name="rootPostId"/> is supplied. The pulse is transient:
+    /// the client clears it after a short window, so callers must repeat the
+    /// pulse while the session still reports active work.
+    /// </summary>
+    Task SendTypingAsync(
+        MattermostChannelId channelId,
+        string? rootPostId,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -250,4 +261,11 @@ public sealed class UnconfiguredMattermostReplyClient : IMattermostReplyClient
         CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(
             "Mattermost channel attempted to upload a file, but no Mattermost reply client is configured.");
+
+    public Task SendTypingAsync(
+        MattermostChannelId channelId,
+        string? rootPostId,
+        CancellationToken cancellationToken = default)
+        => throw new InvalidOperationException(
+            "Mattermost channel attempted to send a typing pulse, but no Mattermost reply client is configured.");
 }

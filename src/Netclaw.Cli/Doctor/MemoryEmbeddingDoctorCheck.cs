@@ -46,6 +46,14 @@ public sealed class MemoryEmbeddingDoctorCheck(
         }
 
         var modelId = memoryConfig.Embeddings.ModelId;
+        if (!allowlist.ContainsKey(modelId))
+        {
+            return DoctorCheckResult.Error(
+                CheckName,
+                $"Unknown embedding model id '{modelId}'. The daemon logs an error at startup and runs full-text recall only.",
+                $"Set Memory.Embeddings.ModelId to one of: {string.Join(", ", allowlist.Keys.Order(StringComparer.Ordinal))}.");
+        }
+
         var modelDirectory = paths.EmbeddingModelDirectory(modelId);
 
         try

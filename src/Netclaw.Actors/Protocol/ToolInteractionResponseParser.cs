@@ -56,10 +56,12 @@ public static class ToolInteractionResponseParser
         if (!TryParseNamedSelection(trimmed, out var parsedKey))
             return false;
 
-        if (!options.Any(option => string.Equals(option.Key.Value, parsedKey, StringComparison.Ordinal)))
+        var offered = options.FirstOrDefault(option =>
+            ApprovalOptionKeys.HasSameDecision(option.Key.Value, parsedKey!));
+        if (offered is null)
             return false;
 
-        selectedKey = parsedKey;
+        selectedKey = offered.Key.Value;
         return true;
     }
 

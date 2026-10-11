@@ -37,9 +37,9 @@ public sealed record SessionConfig
     /// How long a session can be idle before passivating.
     /// The actor saves a snapshot and stops itself; re-creation by
     /// <c>GenericChildPerEntityParent</c> on next message recovers state from journal.
-    /// Default 30 minutes. Set to <see cref="TimeSpan.Zero"/> to disable.
+    /// Default one hour. Set to <see cref="TimeSpan.Zero"/> to disable.
     /// </summary>
-    public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
+    public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromHours(1);
 
     /// <summary>
     /// Timeout for the primary per-turn LLM streaming call.
@@ -174,7 +174,7 @@ public sealed record SessionConfig
     {
         public int MaxToolIterationsPerTurn { get; init; } = 60;
         public int MemoryObserverIdleSeconds { get; init; } = 90;
-        public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
+        public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromHours(1);
         public int TurnLlmTimeoutSeconds { get; init; } = 180;
         public int ToolExecutionTimeoutSeconds { get; init; } = 90;
         public int SidecarLlmTimeoutSeconds { get; init; } = 90;

@@ -21,6 +21,7 @@ using Netclaw.Actors.Tests.Sessions;
 using FakeChatClient = Netclaw.Tests.Utilities.FakeChatClient;
 using Netclaw.Channels.Discord;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Netclaw.Security;
 using Xunit;
 
@@ -31,7 +32,7 @@ namespace Netclaw.Actors.Tests.Channels;
 /// end-to-end without a live Discord connection. Mirrors
 /// <see cref="SlackFileFlowIntegrationTests"/> for the Discord adapter.
 /// </summary>
-public sealed class DiscordFileFlowIntegrationTests : TestKit
+public sealed class DiscordFileFlowIntegrationTests : TestKit, IAsyncDisposable
 {
     private static readonly byte[] FakePngBytes = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==");
@@ -39,13 +40,27 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
     private readonly FakeChatClient _chatClient = new();
     private readonly RecordingDiscordReplyClient _replyClient = new();
     private readonly FakeDiscordFileHandler _httpHandler = new();
-    private readonly NetclawPaths _paths = new(Path.Combine(
-        Path.GetTempPath(),
-        $"netclaw-discord-file-tests-{Guid.NewGuid():N}"));
+    private readonly TestSessionTempDirectory _tempDir =
+        TestSessionTempDirectory.Create(prefix: "netclaw-discord-file-tests-", createDirectoryTree: true);
+    private NetclawPaths _paths => _tempDir.Paths;
 
     public DiscordFileFlowIntegrationTests(ITestOutputHelper output) : base(output: output)
     {
-        _paths.EnsureDirectoriesExist();
+    }
+
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directory
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        try
+        {
+            await base.DisposeAsync();
+        }
+        finally
+        {
+            await _tempDir.DisposeAsync();
+        }
     }
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)

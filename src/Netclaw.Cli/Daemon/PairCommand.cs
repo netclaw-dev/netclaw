@@ -27,31 +27,26 @@ internal static class PairCommand
     /// <summary>
     /// Entry point for <c>netclaw pair [endpoint]</c>.
     /// </summary>
-    public static async Task<int> RunAsync(string[] args, NetclawPaths paths)
+    public static async Task<int> RunAsync(CliContext cli, string[] args)
     {
         using var handler = CreateHttpHandler();
         using var httpClient = new HttpClient(handler) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
         return await RunAsync(
+            cli,
             args,
-            paths,
             httpClient,
-            Console.In,
-            Console.Out,
-            Console.Error,
-            TimeProvider.System,
             CancellationToken.None);
     }
 
     internal static async Task<int> RunAsync(
+        CliContext cli,
         string[] args,
-        NetclawPaths paths,
         HttpClient httpClient,
-        TextReader input,
-        TextWriter output,
-        TextWriter error,
-        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
+        var paths = cli.Paths;
+        var output = cli.Output;
+        var error = cli.Error;
         var endpoint = args.Length > 1 ? args[1] : null;
 
         if (string.IsNullOrWhiteSpace(endpoint) || IsHelpToken(endpoint))
@@ -68,7 +63,7 @@ internal static class PairCommand
 
         endpoint = normalizedEndpoint;
 
-        var pairingInput = await ReadPairingInputAsync(input, output, error, cancellationToken);
+        var pairingInput = await ReadPairingInputAsync(cli.Input, output, error, cancellationToken);
         if (pairingInput is null)
             return 1;
 
@@ -79,7 +74,7 @@ internal static class PairCommand
             pairingInput.Code,
             pairingInput.DeviceName,
             error,
-            timeProvider,
+            cli.Time,
             cancellationToken);
         if (token is null)
             return 1;
@@ -286,6 +281,39 @@ internal static class PairCommand
             return null;
 
         return body[..totalRead];
+    }
+
+    /// <summary>
+    /// Writes the <c>netclaw pair</c> instruction shown by <c>netclaw daemon pair</c>.
+    /// The daemon endpoint is printed only when <see cref="TryNormalizeEndpoint"/> accepts it,
+    /// and is reachable from another machine, so the printed command can never be one this client
+    /// then refuses or one a remote device cannot reach. Behind a proxy or tunnel the daemon does
+    /// not know its public HTTPS address, so the operator must supply it.
+    /// </summary>
+    internal static void WriteClientInstructions(TextWriter output, string daemonEndpoint, ExposureMode exposureMode)
+    {
+        output.WriteLine("On the remote device, run:");
+        string reason;
+        if (!TryNormalizeEndpoint(daemonEndpoint, out var normalizedEndpoint, out var endpointError))
+        {
+            reason = $"{daemonEndpoint} cannot be used with `netclaw pair`. {endpointError}";
+        }
+        else if (exposureMode != ExposureMode.Local && DaemonClientFactory.IsLoopback(normalizedEndpoint))
+        {
+            // Behind a proxy or tunnel, a loopback address is where the daemon binds, which a
+            // remote device cannot reach.
+            reason = $"The daemon is exposed through {exposureMode.ToWireValue()}, and {daemonEndpoint} is reachable only from this machine.";
+        }
+        else
+        {
+            output.WriteLine($"  netclaw pair {normalizedEndpoint}");
+            return;
+        }
+
+        output.WriteLine("  netclaw pair <https-address>");
+        output.WriteLine();
+        output.WriteLine($"The daemon does not know its public address. {reason}");
+        output.WriteLine("Replace <https-address> with the HTTPS address this daemon is published at.");
     }
 
     private static bool TryNormalizeEndpoint(

@@ -3,6 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
+using System.Text.RegularExpressions;
+
 namespace Netclaw.Configuration;
 
 public static class CrashLogWriter
@@ -76,6 +79,29 @@ public static class CrashLogWriter
         writer.WriteLine(ex.ToString());
         return writer.ToString();
     }
+
+    /// <summary>
+    /// Parses a crash log file name back to its UTC timestamp. Accepts exactly what
+    /// <see cref="TryWrite"/> produces: <c>crash-yyyyMMdd-HHmmss.log</c>, optionally with the
+    /// numeric uniqueness suffix <c>-{pid}-{fff}-{n}</c> or <c>-{pid}-{guid32}</c>. Anything else,
+    /// including a file a user named <c>crash-20200101-000000-notes.log</c>, does not parse.
+    /// </summary>
+    public static bool TryParseFileName(string fileName, out DateTimeOffset timestamp)
+    {
+        timestamp = default;
+        var match = CrashFileNamePattern.Match(fileName);
+        return match.Success
+            && DateTimeOffset.TryParseExact(
+                match.Groups[1].Value,
+                "yyyyMMdd-HHmmss",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out timestamp);
+    }
+
+    private static readonly Regex CrashFileNamePattern = new(
+        "^crash-([0-9]{8}-[0-9]{6})(-[0-9]+-[0-9]{3}-[0-9]+|-[0-9]+-[0-9a-f]{32})?\\.log$",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
     private static string EnsureUniquePath(string basePath, DateTimeOffset now)
     {

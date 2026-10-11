@@ -325,12 +325,10 @@ public sealed class DaemonConfigTests
     [Fact]
     public void ShutdownBudgetLayering_matches_the_documented_second_values()
     {
-        // Pins the concrete values referenced in netclaw-dev/netclaw#1665's evidence trail
-        // (200s phase timeout, 230s TimeoutStopSec) so a change to any constant is a visible,
-        // deliberate diff rather than a silent drift.
-        Assert.Equal(TimeSpan.FromSeconds(190), DaemonConfig.BoundedDrainTimeout);
-        Assert.Equal(TimeSpan.FromSeconds(200), DaemonConfig.GracefulShutdownBudget);
-        Assert.Equal(TimeSpan.FromSeconds(215), DaemonConfig.CliForceKillBudget);
-        Assert.Equal(TimeSpan.FromSeconds(230), DaemonConfig.SystemdTimeoutStopSec);
+        // Pin the agreed stop limits so a later change to any layer stays visible.
+        Assert.Equal(TimeSpan.FromSeconds(20), DaemonConfig.BoundedDrainTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(30), DaemonConfig.GracefulShutdownBudget);
+        Assert.Equal(TimeSpan.FromSeconds(45), DaemonConfig.CliForceKillBudget);
+        Assert.Equal(TimeSpan.FromSeconds(60), DaemonConfig.SystemdTimeoutStopSec);
     }
 }

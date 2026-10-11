@@ -344,7 +344,7 @@ public sealed class OpenAiCodexTests
 
             Assert.NotNull(capturedRequest);
             Assert.Equal(
-                $"{OpenAiDescriptor.CodexBackendEndpoint}/models?client_version=0.147.0",
+                $"{OpenAiDescriptor.CodexBackendEndpoint}/models?client_version=0.159.0",
                 capturedRequest!.RequestUri!.ToString());
             Assert.Equal("Bearer", capturedRequest.Headers.Authorization!.Scheme);
             Assert.Equal("oauth-token", capturedRequest.Headers.Authorization.Parameter);
@@ -457,7 +457,7 @@ public sealed class OpenAiCodexTests
 
             Assert.False(result.Success);
             Assert.Contains("expired", result.ErrorMessage);
-            Assert.Contains("netclaw provider fix", result.ErrorMessage);
+            Assert.Contains("netclaw provider", result.ErrorMessage);
             Assert.Empty(result.Models);
         }
 

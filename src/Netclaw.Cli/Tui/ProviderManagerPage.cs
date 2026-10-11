@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
@@ -24,10 +25,12 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 {
+    private readonly IAnsiTerminal _terminal;
     private readonly IClipboardService? _clipboardService;
 
-    public ProviderManagerPage(IClipboardService? clipboardService = null)
+    public ProviderManagerPage(IAnsiTerminal terminal, IClipboardService? clipboardService = null)
     {
+        _terminal = terminal;
         _clipboardService = clipboardService;
     }
 
@@ -235,6 +238,8 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         IsConfigured = false
     };
 
+    private static string ProviderLabel(ProviderDisplayItem p) => $"{p.ConfiguredName} ({p.DisplayName})";
+
     private ILayoutNode BuildProviderListView()
     {
         // Keep the list typed so keybindings can read the live HighlightedItem
@@ -243,9 +248,21 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         // matched by reference.
         var items = ViewModel.DisplayProviders.ToList();
 
+        // Size the Provider column to the longest label (capped, so a long type label
+        // like OpenAI-compatible cannot crowd out Endpoint) and give Endpoint the rest.
+        // Auth (12) and a 24-column Endpoint floor are reserved out of the terminal
+        // width, and the list's selection prefix and panel border take the remainder.
+        const int AuthWidth = 12;
+        const int MinEndpointWidth = 24;
+        const int ChromeWidth = 12;
+        var providerWidth = NetclawTuiChrome.FitColumnWidth(
+            items.Select(static p => p.IsConfigured ? ProviderLabel(p) : p.DisplayName),
+            "Provider",
+            Math.Min(NetclawTuiChrome.MaxProviderColumnWidth, _terminal.Width - ChromeWidth - AuthWidth - MinEndpointWidth));
+
         _providerList = Layouts.SelectionList(
                 items.Concat(new[] { AddNewProviderItem }),
-                static p =>
+                p =>
                 {
                     if (ReferenceEquals(p, AddNewProviderItem))
                         return AddNewProviderSentinel;
@@ -260,11 +277,10 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                             _ => " "
                         };
 
-                        var nameLabel = $"{p.ConfiguredName} ({p.DisplayName})";
-                        return $"{statusChar} {nameLabel,-36} {p.DisplayAuth,-12} {p.DisplayEndpoint}";
+                        return $"{statusChar} {NetclawTuiChrome.FitColumn(ProviderLabel(p), providerWidth)} {p.DisplayAuth,-AuthWidth} {p.DisplayEndpoint}";
                     }
 
-                    return $"  {p.DisplayName,-36} {"(not configured)",-12}";
+                    return $"  {NetclawTuiChrome.FitColumn(p.DisplayName, providerWidth)} {"(not configured)",-AuthWidth}";
                 })
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
@@ -295,7 +311,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode($"  {"",2}{"Provider",-36} {"Auth",-12} Endpoint")
+            .WithChild(new TextNode($"  {"",3}{NetclawTuiChrome.FitColumn("Provider", providerWidth)} {"Auth",-AuthWidth} Endpoint")
                 .WithForeground(Color.White).Bold())
             .WithChild(_providerList.WithFillHeight());
     }
@@ -340,11 +356,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         children.WithChild(new TextNode("").Height(1));
 
         _nameInput = new TextInputNode().WithPlaceholder($"my-{providerType}");
-        _nameInput.Text = ViewModel.NewProviderName ?? string.Empty;
-        // Termina's Text setter leaves the cursor at position 0. Synthesize
-        // End so the user can immediately edit the suffix instead of having
-        // their first keystroke insert before the pre-filled name.
-        _nameInput.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+        NetclawTuiChrome.SeedTextInput(_nameInput, ViewModel.NewProviderName);
         _nameInput.OnFocused();
         _lastFocusedInput = _nameInput;
 
@@ -448,7 +460,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         _githubCopilotHostInput = new TextInputNode()
             .WithPlaceholder("https://ghe.example.com");
         if (!string.IsNullOrWhiteSpace(ViewModel.NewGitHubCopilotHost))
-            _githubCopilotHostInput.Text = ViewModel.NewGitHubCopilotHost;
+            NetclawTuiChrome.SeedTextInput(_githubCopilotHostInput, ViewModel.NewGitHubCopilotHost);
         _githubCopilotHostInput.OnFocused();
         _lastFocusedInput = _githubCopilotHostInput;
 
@@ -486,7 +498,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         _githubCopilotApiBaseInput = new TextInputNode()
             .WithPlaceholder(placeholder);
         if (!string.IsNullOrWhiteSpace(ViewModel.NewGitHubCopilotApiBase))
-            _githubCopilotApiBaseInput.Text = ViewModel.NewGitHubCopilotApiBase;
+            NetclawTuiChrome.SeedTextInput(_githubCopilotApiBaseInput, ViewModel.NewGitHubCopilotApiBase);
         _githubCopilotApiBaseInput.OnFocused();
         _lastFocusedInput = _githubCopilotApiBaseInput;
 
@@ -601,10 +613,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .WithPlaceholder(isFixFlow
                 ? "Enter the replacement API key..."
                 : "Leave blank for no authentication...");
-        _apiKeyInput.Text = isFixFlow
-            ? ViewModel.FixApiKey ?? string.Empty
-            : ViewModel.NewApiKey ?? string.Empty;
-        _apiKeyInput.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+        NetclawTuiChrome.SeedTextInput(_apiKeyInput, isFixFlow ? ViewModel.FixApiKey : ViewModel.NewApiKey);
         _apiKeyInput.OnFocused();
         _lastFocusedInput = _apiKeyInput;
 
@@ -844,11 +853,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         children.WithChild(new TextNode("").Height(1));
 
         _renameInput = new TextInputNode().WithPlaceholder(item.ConfiguredName ?? "");
-        _renameInput.Text = ViewModel.RenameNewName ?? item.ConfiguredName ?? string.Empty;
-        // Termina's Text setter leaves the cursor at position 0. Synthesize
-        // End so the user can immediately edit the suffix instead of having
-        // their first keystroke insert before the pre-filled name.
-        _renameInput.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+        NetclawTuiChrome.SeedTextInput(_renameInput, ViewModel.RenameNewName ?? item.ConfiguredName);
         _renameInput.OnFocused();
         _lastFocusedInput = _renameInput;
 
@@ -861,7 +866,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         children.WithChild(new TextNode("").Height(1));
         children.WithChild(new TextNode("  Renames the provider and cascades the change to any model")
             .WithForeground(Color.Gray));
-        children.WithChild(new TextNode("  role(s) that reference it. Restart the daemon for changes to take effect.")
+        children.WithChild(new TextNode($"  role(s) that reference it. {ConfigFileHelper.DaemonAppliesChange}")
             .WithForeground(Color.Gray));
 
         return children;
@@ -925,9 +930,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithPlaceholder(item.Entry?.Endpoint ?? descriptor.DefaultEndpoint);
             if (!string.Equals(ViewModel.FixEndpoint, item.Entry?.Endpoint, StringComparison.Ordinal))
             {
-                _endpointInput.Text = ViewModel.FixEndpoint ?? string.Empty;
-                _endpointInput.HandleInput(
-                    new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+                NetclawTuiChrome.SeedTextInput(_endpointInput, ViewModel.FixEndpoint);
             }
             _endpointInput.OnFocused();
             _lastFocusedInput = _endpointInput;

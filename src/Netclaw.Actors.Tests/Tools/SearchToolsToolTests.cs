@@ -120,6 +120,39 @@ public class SearchToolsToolTests
         Assert.Contains("shell_execute", result);
     }
 
+    // Regression: a production search for "list reminders" returned ten tools that
+    // matched only "list", in registration order, and the cut removed list_reminders.
+    // The agent then ran `netclaw reminder list` through the shell.
+    [Theory]
+    [InlineData("list reminders")]
+    [InlineData("reminder list")]
+    public async Task Search_RanksToolThatMatchesWholeQueryAheadOfOneWordMatches(string query)
+    {
+        var registry = new ToolRegistry();
+        registry.RegisterCore(CreateFakeToolInRegistry("file_list", "List the files of a directory"), "file");
+        for (var i = 0; i < 12; i++)
+        {
+            registry.Register(new McpToolAdapter(
+                CreateFakeAIFunction($"list_items_{i}", "List items of a project"),
+                "tracker",
+                $"list_items_{i}"));
+        }
+
+        registry.Register(
+            CreateFakeToolInRegistry("list_reminders", "List reminder definitions with IDs and schedules."),
+            "scheduling");
+
+        var result = await CreateSearchTool(registry).ExecuteAsync(
+            ToolInput.Create("Query", query),
+            PersonalContext,
+            CancellationToken.None);
+
+        var firstTool = result
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .First(static line => line.StartsWith("  ", StringComparison.Ordinal));
+        Assert.StartsWith("  list_reminders ", firstTool);
+    }
+
     [Fact]
     public void GrantCategory_IsBuiltin()
     {

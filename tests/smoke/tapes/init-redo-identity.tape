@@ -50,13 +50,18 @@ Enter
 Wait+Screen@10s /Your timezone/
 
 # The submit that used to loop back to this field forever — it must now
-# advance to the saved screen.
-Type "UTC"
+# advance to the saved screen. The field is pre-filled with the host's time
+# zone, which is a valid IANA id, so the tape accepts it. Typing here would
+# insert in front of the pre-filled text and fail time zone validation.
 Enter
 Wait+Screen@10s /Identity updated/
 
-# ─── Exit the saved screen back to the shell ────────────────────────
-Enter
+# ─── Skip the guided chat: Esc exits to the shell, no chat opens ─────
+# Enter would start the guided identity chat (see init-redo-chat.tape). This seed
+# has no provider, so only the skip path is exercised here.
+Wait+Screen@10s /Start guided identity chat/
+Escape
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "exit"

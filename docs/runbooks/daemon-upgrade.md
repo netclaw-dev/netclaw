@@ -19,7 +19,8 @@ data.
 
 ## Docker Upgrade
 
-1. Stop old container.
+1. Stop old container. (`netclaw daemon stop` inside a running container only
+   bounces the daemon: the container supervisor restarts it.)
 2. Keep the existing persistent volume mounted at the same data path.
 3. Start new image version.
 4. Wait for startup migration + readiness:
@@ -35,16 +36,17 @@ active or enabled systemd user unit is stopped and restarted with
 control.
 
 1. Stop daemon:
-   - `netclaw daemon stop`
+   - `netclaw daemon stop` (goes through the systemd user unit when one is
+     installed for the default `~/.netclaw` home)
    - or `systemctl --user stop netclaw`
 2. Optional backup:
    - `cp ~/.netclaw/netclaw.db ~/.netclaw/netclaw.db.bak.$(date +%s)`
 3. Replace binaries with new version.
 4. Start daemon:
-   - `netclaw daemon start`
+   - `netclaw daemon start` (starts the unit when one owns the daemon)
    - or `systemctl --user start netclaw`
 5. Verify health:
-    - `netclaw daemon status`
+    - `netclaw daemon status` (exits 1 until `/api/health/ready` answers)
     - `netclaw status`
     - `curl http://127.0.0.1:5199/api/health/ready`
     - `curl http://127.0.0.1:5199/api/health/status`

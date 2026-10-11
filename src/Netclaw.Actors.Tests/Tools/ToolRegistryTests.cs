@@ -186,7 +186,7 @@ public class ToolRegistryTests
 
         var index = registry.GenerateCompressedIndex();
 
-        Assert.Contains("[deferred first-party tools - discover with search_tools]", index);
+        Assert.Contains("[deferred first-party tools - call load_tool(name), then call the tool]", index);
         Assert.Contains("set_reminder: Schedule a future reminder", index);
         Assert.DoesNotContain("deliveryTarget", index);
         Assert.DoesNotContain("inputSchema", index);

@@ -5,10 +5,14 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Authorization.Consent;
+using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
+using Netclaw.Tools.Authorization.Consent;
 using Xunit;
 
 namespace Netclaw.Actors.MutationTests;
@@ -68,9 +72,8 @@ public sealed class ToolAuthorizationMutationTests : IDisposable
             profile.AllowedMcpServers = [];
 
         var deniedContext = CreateContext(audience);
-        deniedContext.Approval.SeedOneTimeApproval(
-            context.Approval.OneTimeApprovedToolName ?? tool.Name,
-            context.Approval.OneTimeApprovedPatterns);
+        deniedContext.Approval.SeedOneTimeConsent(
+            context.Approval.OneTimeConsent ?? new OneTimeConsent(tool.Name, []));
         var denied = await Assert.ThrowsAsync<ToolAccessDeniedException>(() =>
             executor.ExecuteAsync(call, deniedContext, CancellationToken.None));
 
@@ -99,28 +102,59 @@ public sealed class ToolAuthorizationMutationTests : IDisposable
         var permitted = CreateExecutor(tool, config, new ShellCommandPolicy());
 
         await SeedApprovalAsync(permitted, call, context, mode);
-        if (mode == ToolApprovalMode.Approval)
-        {
-            Assert.Equal("mutation-probe", await permitted.ExecuteAsync(call, context, CancellationToken.None));
-            Assert.Equal(1, tool.Calls);
-        }
+        var allowed = await permitted.EvaluateAuthorizationAsync(call, context, CancellationToken.None);
+        Assert.IsType<AuthorizationDecision.Allowed>(allowed);
 
         var restricted = CreateExecutor(tool, config, new ShellCommandPolicy(["echo mutation-probe"]));
         var deniedContext = CreateContext(TrustAudience.Personal);
-        deniedContext.Approval.SeedOneTimeApproval(
-            context.Approval.OneTimeApprovedToolName ?? tool.Name,
-            context.Approval.OneTimeApprovedPatterns);
+        deniedContext.Approval.SeedOneTimeConsent(
+            context.Approval.OneTimeConsent ?? new OneTimeConsent(tool.Name, []));
         var denied = await Assert.ThrowsAsync<ToolAccessDeniedException>(() =>
             restricted.ExecuteAsync(call, deniedContext, CancellationToken.None));
 
         Assert.Equal("hard_deny_custom_deny", denied.DenyReason);
-        Assert.Equal(mode == ToolApprovalMode.Approval ? 1 : 0, tool.Calls);
+        Assert.Equal(0, tool.Calls);
+    }
 
-        if (mode == ToolApprovalMode.Auto)
-        {
-            Assert.Equal("mutation-probe", await permitted.ExecuteAsync(call, context, CancellationToken.None));
-            Assert.Equal(1, tool.Calls);
-        }
+    [Fact]
+    public void Shell_evidence_rejects_foreign_candidate_facts()
+    {
+        var expected = new ShellGrantCandidate(
+            new ShellPolicyCandidateId(0),
+            ShellCandidate("git push"),
+            RealDirectory: null);
+        var foreign = new ShellGrantCandidate(
+            expected.CandidateId,
+            ShellCandidate("git status"),
+            RealDirectory: null);
+
+        Assert.Throws<ArgumentException>(() => ShellApprovalMatchResult.Create(
+            [expected],
+            persistentStoreFailure: null,
+            [ShellGrantCandidateResult.Session(foreign)]));
+    }
+
+    [Fact]
+    public void Covered_candidate_rejects_actor_evidence()
+    {
+        var candidate = new ShellPolicyCandidate(
+            new ShellPolicyCandidateId(0),
+            ShellCandidate("git status"),
+            SourceOccurrence: null);
+        var pathFacts = Assert.Single(ShellPolicyPathFacts.Create(
+            [candidate],
+            ShellPathStyle.Posix));
+        var state = new ShellPolicyEvaluation.CandidateState(candidate, pathFacts);
+        state.Cover(new Coverage.ReviewedSafe(ReviewedSafeRoot.Real));
+        var grantCandidate = new ShellGrantCandidate(
+            candidate.Id,
+            candidate.Candidate,
+            RealDirectory: null);
+
+        Assert.Throws<InvalidOperationException>(() => state.ApplyActorEvidence(
+            ShellGrantCandidateResult.Uncovered(grantCandidate),
+            order: 0));
+        Assert.Equal(new Coverage.ReviewedSafe(ReviewedSafeRoot.Real), state.Coverage);
     }
 
     public void Dispose() => Directory.Delete(_paths.BasePath, recursive: true);
@@ -171,17 +205,24 @@ public sealed class ToolAuthorizationMutationTests : IDisposable
         return new FunctionCallContent("mutation-call", name, arguments);
     }
 
+    private static ApprovalCandidate ShellCandidate(string verb) => new(
+        verb,
+        Directory: null)
+    {
+        Shell = ApprovalShell.Bash,
+        VerbTokens = verb.Split(' ')
+    };
+
     private static async Task SeedApprovalAsync(
         DispatchingToolExecutor executor, FunctionCallContent call, ToolExecutionContext context, ToolApprovalMode mode)
     {
         if (mode != ToolApprovalMode.Approval)
             return;
 
-        var decision = await executor.EvaluateAuthorizationAsync(call, context, CancellationToken.None);
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        Assert.NotNull(decision.ApprovalContext);
-        context.Approval.SeedOneTimeApproval(
-            decision.ApprovalContext.ToolName, OneTimeApprovalKeys.Create(decision.ApprovalContext));
+        var consent = Assert.IsType<AuthorizationDecision.NeedsConsent>(
+            await executor.EvaluateAuthorizationAsync(call, context, CancellationToken.None));
+        context.Approval.SeedOneTimeConsent(
+            OneTimeApprovalKeys.CreateConsent(consent.Request.ToolName, consent.Request));
     }
 
     // The real dispatcher and shell policy use this probe. No mutant can start a host process.
@@ -204,12 +245,9 @@ public sealed class ToolAuthorizationMutationTests : IDisposable
         }
     }
 
-    private sealed class UnexpectedApprovalBridge : IParentApprovalBridge
+    private sealed class UnexpectedApprovalBridge : IParentConsentBridge
     {
-        public Task<ParentApprovalDecision> RequestApprovalAsync(
-            ToolCallId callId, string toolName, string displayText, IReadOnlyList<string> patterns,
-            IReadOnlyList<string> candidateVerbs, IReadOnlyList<ParentApprovalCandidate> candidates,
-            string? cwd, IReadOnlyList<ParentApprovalOption> options, bool isMessy, CancellationToken ct) =>
+        public Task<ConsentStep> RequestConsentAsync(ParentApprovalRequest request, CancellationToken ct) =>
             throw new InvalidOperationException("The dispatcher must not request user approval through the bridge.");
     }
 }

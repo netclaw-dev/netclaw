@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -18,6 +19,13 @@ namespace Netclaw.Cli.Config;
 internal static class ConfigFileHelper
 {
     /// <summary>
+    /// Appended to TUI status messages after a config write. True whether or not a daemon is
+    /// running: the daemon's config watcher reloads on change, and with none running the next
+    /// start reads the file.
+    /// </summary>
+    internal const string DaemonAppliesChange = "A running daemon applies the change automatically.";
+
+    /// <summary>
     /// Load both netclaw.json and secrets.json as mutable dictionaries.
     /// Missing files get a default <c>{ "configVersion": 1 }</c> skeleton.
     /// </summary>
@@ -27,6 +35,55 @@ internal static class ConfigFileHelper
         var config = LoadJsonDict(paths.NetclawConfigPath);
         var secrets = LoadJsonDict(paths.SecretsPath);
         return (config, secrets);
+    }
+
+    /// <summary>
+    /// Binds the <c>Tools</c> section of netclaw.json the same way as the daemon: on top of the
+    /// defaults for the configured posture. A missing file gives the defaults.
+    /// </summary>
+    /// <remarks>
+    /// Do not deserialize <see cref="ToolConfig"/> from the raw JSON. A deserializer replaces a
+    /// partial audience profile with an empty one, so an unset <c>McpServersMode</c> reads as an
+    /// empty allowlist while the daemon reads the posture default. An editor that saves from that
+    /// view narrows the profile (issue #2362).
+    /// </remarks>
+    internal static ToolConfig LoadToolConfig(Configuration.NetclawPaths paths)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
+            .Build();
+        return PolicyConfiguration.Bind(configuration).Tools;
+    }
+
+    /// <summary>
+    /// Returns <paramref name="path"/> with each segment replaced by the key that the file already
+    /// has, when one differs only in letter case. The daemon reads keys without case, so a write
+    /// to <c>AllowedTools</c> beside an existing <c>allowedTools</c> gives a duplicate key, and
+    /// the daemon then stops at startup.
+    /// </summary>
+    internal static string ResolveExistingKeyPath(Dictionary<string, object> root, string path)
+    {
+        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        object? current = root;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            // A loaded file holds nested objects as JsonElement until a writer converts them.
+            IEnumerable<string>? keys = current switch
+            {
+                Dictionary<string, object> dictionary => dictionary.Keys,
+                JsonElement { ValueKind: JsonValueKind.Object } element => element.EnumerateObject().Select(static property => property.Name),
+                _ => null
+            };
+            var segment = segments[i];
+            var existing = keys?.FirstOrDefault(key => string.Equals(key, segment, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+                break;
+
+            segments[i] = existing;
+            current = current is Dictionary<string, object> parent ? parent[existing] : ((JsonElement)current!).GetProperty(existing);
+        }
+
+        return string.Join('.', segments);
     }
 
     /// <summary>
@@ -157,11 +214,53 @@ internal static class ConfigFileHelper
 
     /// <summary>
     /// Serialize a config dictionary and write it to disk, creating parent directories if needed.
+    /// The file keeps its mode (an owner-only netclaw.json stays owner-only), and a symbolic link is
+    /// followed so the file it points at is rewritten and the link stays a link. When the link's
+    /// target is not writable (permission denied, read-only, or busy), the link itself is replaced; any other write error is thrown.
     /// </summary>
     internal static void WriteConfigFile(string path, Dictionary<string, object> data)
+        => WriteConfigFile(path, data, AtomicFile.WriteAllText);
+
+    // The writer is a parameter so a test can make the write fail like a full disk.
+    internal static void WriteConfigFile(
+        string path,
+        Dictionary<string, object> data,
+        Action<string, string, Action<string>?> atomicWrite)
+    {
+        var info = new FileInfo(path);
+        var target = info.LinkTarget is null ? path : info.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? path;
+        var json = JsonSerializer.Serialize(data, JsonDefaults.ConfigFile);
+
+        try
+        {
+            WriteKeepingMode(target, data, json, atomicWrite);
+        }
+        catch (Exception ex) when (target != path && CanReplaceLink(ex))
+        {
+            // The link's target cannot take a new file: another owner, a read-only file system, or
+            // a single file mounted into a container (busy). Replace the link itself, as saves did
+            // before links were followed. Any other write failure, such as a full disk, is a save
+            // error: replacing the link would detach it.
+            WriteKeepingMode(path, data, json, atomicWrite);
+        }
+    }
+
+    // .NET on Unix puts the errno in IOException.HResult. These values are the same on Linux and macOS.
+    private const int BusyErrno = 16;
+    private const int ReadOnlyFileSystemErrno = 30;
+
+    /// <summary>
+    /// True for the write errors that mean the link's target cannot take the file: permission
+    /// denied, a read-only file system, or a busy file (a single-file bind mount).
+    /// </summary>
+    internal static bool CanReplaceLink(Exception ex)
+        => ex is UnauthorizedAccessException
+           || (ex is IOException { HResult: BusyErrno or ReadOnlyFileSystemErrno } && !OperatingSystem.IsWindows());
+
+    private static void WriteKeepingMode(string path, Dictionary<string, object> data, string json, Action<string, string, Action<string>?> atomicWrite)
     {
         PreserveLegacyModelsBackup(path, data);
-        AtomicFile.WriteAllText(path, JsonSerializer.Serialize(data, JsonDefaults.ConfigFile));
+        atomicWrite(path, json, temp => AtomicFile.CopyUnixMode(path, temp));
     }
 
     private static void PreserveLegacyModelsBackup(string path, Dictionary<string, object> data)
@@ -179,9 +278,7 @@ internal static class ConfigFileHelper
 
         ModelEntryWriter.ThrowIfLegacyEnvironmentOverride();
 
-        var backupPath = path + ".legacy-models.bak";
-        if (!File.Exists(backupPath))
-            File.Copy(path, backupPath);
+        File.Copy(path, Doctor.DoctorFixService.NextBackupPath(path, "legacy-models"), overwrite: false);
     }
 
     /// <summary>

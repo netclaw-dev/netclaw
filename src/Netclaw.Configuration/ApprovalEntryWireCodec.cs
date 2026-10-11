@@ -10,7 +10,7 @@ namespace Netclaw.Configuration;
 internal static class ApprovalEntryWireCodec
 {
     private static readonly HashSet<string> AllowedMembers =
-        ["shell", "match", "verbTokens", "verb", "directory", "repository", "createdAt"];
+        ["shell", "match", "verbTokens", "verb", "assignmentDigest", "directory", "repository", "createdAt"];
 
     internal static ApprovalEntry ReadVersion3(JsonElement element)
     {
@@ -27,9 +27,15 @@ internal static class ApprovalEntryWireCodec
         var hasMatch = members.TryGetValue("match", out var matchElement);
         var hasTokens = members.ContainsKey("verbTokens");
         var hasVerb = members.ContainsKey("verb");
+        var hasAssignmentDigest = members.ContainsKey("assignmentDigest");
+        if (hasAssignmentDigest
+            && members["assignmentDigest"].ValueKind != JsonValueKind.String)
+        {
+            throw new JsonException("The assignment digest must be canonical text.");
+        }
 
         ApprovalEntry entry;
-        if (!hasShell && !hasMatch && !hasTokens && hasVerb)
+        if (!hasShell && !hasMatch && !hasTokens && hasVerb && !hasAssignmentDigest)
         {
             var wire = element.Deserialize(ApprovalStoreJsonContext.Default.NonShellApprovalEntryWire)
                        ?? throw new JsonException("The non-shell approval entry is null.");
@@ -47,6 +53,11 @@ internal static class ApprovalEntryWireCodec
             }
 
             var match = ReadMatch(matchElement);
+            if (hasAssignmentDigest && match != ApprovalMatchKind.TokenPrefix)
+            {
+                throw new JsonException(
+                    "Only a token-prefix shell entry can have an assignment digest.");
+            }
             entry = match switch
             {
                 ApprovalMatchKind.TokenPrefix when hasTokens && !hasVerb =>
@@ -80,6 +91,7 @@ internal static class ApprovalEntryWireCodec
                 Shell = entry.Shell!.Value.ToString(),
                 Match = ApprovalMatchKind.TokenPrefix.ToString(),
                 VerbTokens = entry.VerbTokens!.Cast<string?>().ToArray(),
+                AssignmentDigest = entry.AssignmentDigest?.Value,
                 Directory = entry.Directory,
                 Repository = entry.Repository,
                 CreatedAt = entry.CreatedAt,
@@ -106,11 +118,25 @@ internal static class ApprovalEntryWireCodec
     {
         var wire = element.Deserialize(ApprovalStoreJsonContext.Default.TokenPrefixApprovalEntryWire)
                    ?? throw new JsonException("The token-prefix approval entry is null.");
+        ApprovalAssignmentDigest? assignmentDigest = null;
+        if (wire.AssignmentDigest is not null)
+        {
+            try
+            {
+                assignmentDigest = new ApprovalAssignmentDigest(wire.AssignmentDigest);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new JsonException("The assignment digest is invalid.", ex);
+            }
+        }
+
         return ApprovalEntry.CreateTokenPrefix(
             ReadShell(ReadRequiredString(wire.Shell, "shell")),
             ReadTokens(wire.VerbTokens),
             wire.Directory,
-            wire.CreatedAt);
+            wire.CreatedAt,
+            assignmentDigest);
     }
 
     private static ApprovalEntry ReadLegacyExact(JsonElement element)

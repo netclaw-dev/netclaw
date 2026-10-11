@@ -2009,6 +2009,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             """
             {
               "configVersion": 1,
+              "Security": { "DeploymentPosture": "Personal" },
               "Slack": {
                 "Enabled": true,
                 "SocketMode": true,
@@ -2056,6 +2057,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             """
             {
               "configVersion": 1,
+              "Security": { "DeploymentPosture": "Personal" },
               "Slack": {
                 "Enabled": true,
                 "SocketMode": true,

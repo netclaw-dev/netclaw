@@ -49,9 +49,49 @@ public static partial class SessionProtocol
         /// </summary>
         public BackgroundJobId? SourceBackgroundJobId { get; init; }
 
+        public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
+
         public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 
         public DateTimeOffset Timestamp => RecordedAt;
+    }
+
+    /// <summary>
+    /// Records accepted input and its original authority before the input ack.
+    /// Runtime actor references remain outside the journal.
+    /// </summary>
+    public sealed record InputAdmitted : ISessionEvent
+    {
+        public SessionId SessionId { get; init; }
+
+        public InputId InputId { get; init; }
+
+        public string? SourceMessageId { get; init; }
+
+        public required SerializableChatMessage UserMessage { get; init; }
+
+        /// <summary>The executable form when it differs from the user-visible content.</summary>
+        public string? ExecutableText { get; init; }
+
+        public required TurnContextRecord TurnContext { get; init; }
+
+        public long AdmittedAtMs { get; init; }
+
+        public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(AdmittedAtMs);
+    }
+
+    /// <summary>
+    /// Closes admitted input when a turn ends without a recorded model reply.
+    /// </summary>
+    public sealed record InputClosed : ISessionEvent
+    {
+        public SessionId SessionId { get; init; }
+
+        public IReadOnlyList<InputId> InputIds { get; init; } = [];
+
+        public long ClosedAtMs { get; init; }
+
+        public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(ClosedAtMs);
     }
 
     /// <summary>
@@ -69,6 +109,8 @@ public static partial class SessionProtocol
         public SerializableChatMessage AssistantMessage { get; init; } = new();
 
         public long StartedAtMs { get; init; }
+
+        public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(StartedAtMs);
     }

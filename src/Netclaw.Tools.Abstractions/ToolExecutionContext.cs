@@ -3,9 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Collections.Frozen;
 using Netclaw.Configuration;
 using Netclaw.Media;
+using Netclaw.Tools.Authorization.Consent;
 
 namespace Netclaw.Tools;
 
@@ -36,7 +36,9 @@ internal enum ToolRemediationCode
     ProvideUniqueOldString,
     UseNativeTool,
     BreakToolCycle,
-    UseShellWorkingDirectory
+    UseShellWorkingDirectory,
+    RewriteShellCommandWords,
+    ShortenShellCommand
 }
 
 internal enum ToolFileActivityKind
@@ -103,6 +105,18 @@ internal abstract class ToolInvocationReceipt
                 throw new ArgumentOutOfRangeException(nameof(category));
             if (category is ToolInvocationOutcomeCategory.Success or ToolInvocationOutcomeCategory.RecoverableCorrection)
                 throw new ArgumentException("This outcome requires its dedicated receipt case.", nameof(category));
+        }
+    }
+
+    /// <summary>
+    /// The call was refused by authorization (policy, hard deny, a consent that nobody can give, or a path
+    /// rule). It is <see cref="ToolInvocationOutcomeCategory.AccessDenied"/>, kept apart from an operating
+    /// system refusal such as a file permission error, which is an ordinary tool failure.
+    /// </summary>
+    internal sealed class AuthorizationDenied : ToolInvocationReceipt
+    {
+        public AuthorizationDenied() : base(ToolInvocationOutcomeCategory.AccessDenied)
+        {
         }
     }
 
@@ -433,10 +447,6 @@ internal readonly record struct ManagedTemporaryCorrectionTarget
 /// </summary>
 public sealed class ToolApprovalAttempt
 {
-    private static readonly IReadOnlySet<string> EmptyPatterns =
-        Array.Empty<string>().ToFrozenSet(StringComparer.OrdinalIgnoreCase);
-    private IReadOnlySet<string>? _oneTimeApprovedPatterns;
-
     public ToolApprovalAttempt()
     {
         AuthorizationAttemptId = AuthorizationAttemptId.New();
@@ -445,37 +455,21 @@ public sealed class ToolApprovalAttempt
     internal AuthorizationAttemptId AuthorizationAttemptId { get; private set; }
 
     public string? Cwd { get; private set; }
-    public string? OneTimeApprovedToolName { get; private set; }
-    public IReadOnlySet<string> OneTimeApprovedPatterns => _oneTimeApprovedPatterns ?? EmptyPatterns;
-    public string? AppliedDecision { get; private set; }
-    public string? AppliedPattern { get; private set; }
+
+    /// <summary>The "Once" answer that this attempt may use, or null.</summary>
+    public OneTimeConsent? OneTimeConsent { get; private set; }
+
     internal ManagedTemporaryCorrectionTarget? ManagedTemporaryRetry { get; private set; }
 
     public void SetCwd(string? cwd) => Cwd = cwd;
 
-    public void SeedOneTimeApproval(string toolName, IEnumerable<string> patterns)
+    public void SeedOneTimeConsent(OneTimeConsent consent)
     {
-        OneTimeApprovedToolName = toolName;
-        _oneTimeApprovedPatterns = patterns.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+        ArgumentNullException.ThrowIfNull(consent);
+        OneTimeConsent = consent;
     }
 
-    public void ClearOneTimeApproval()
-    {
-        OneTimeApprovedToolName = null;
-        _oneTimeApprovedPatterns = null;
-    }
-
-    public void ApplyDecision(string decision, string? pattern)
-    {
-        AppliedDecision = decision;
-        AppliedPattern = pattern;
-    }
-
-    public void ClearAppliedDecision()
-    {
-        AppliedDecision = null;
-        AppliedPattern = null;
-    }
+    public void ClearOneTimeConsent() => OneTimeConsent = null;
 
     internal void MarkManagedTemporaryRetry(ManagedTemporaryCorrectionTarget retry)
         => ManagedTemporaryRetry = retry;
@@ -763,27 +757,15 @@ public sealed class ToolExecutionContext
     public string? ResolveShellCwd(string? explicitArg)
         => Invocation.ResolveShellCwd(explicitArg);
 
-    internal string? OneTimeApprovedToolName
-    {
-        get => Approval.OneTimeApprovedToolName;
-        set
-        {
-            if (value is null)
-                Approval.ClearOneTimeApproval();
-            else
-                Approval.SeedOneTimeApproval(value, Approval.OneTimeApprovedPatterns);
-        }
-    }
+    /// <summary>
+    /// The tool of the seeded "Once" answer, or null. A frozen contract test
+    /// (<c>ApprovalRehydrationTests</c>) reads it.
+    /// </summary>
+    internal string? OneTimeApprovedToolName => Approval.OneTimeConsent?.ToolName;
 
-    internal string? AppliedApprovalDecision => Approval.AppliedDecision;
-    internal string? AppliedApprovalPattern => Approval.AppliedPattern;
-    internal IReadOnlySet<string> OneTimeApprovedPatterns => Approval.OneTimeApprovedPatterns;
     internal string? Cwd
     {
         get => Approval.Cwd;
         set => Approval.SetCwd(value);
     }
-
-    internal void SetOneTimeApprovedPatterns(IEnumerable<string> patterns)
-        => Approval.SeedOneTimeApproval(Approval.OneTimeApprovedToolName ?? string.Empty, patterns);
 }

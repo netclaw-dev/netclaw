@@ -70,6 +70,7 @@ internal static class MemoryCommand
         output.WriteLine("                                   embed memories missing a current-model embedding.");
         output.WriteLine("                                   --force re-scans every recallable document instead");
         output.WriteLine("                                   of only ones missing a current-model embedding.");
+        output.WriteLine("                                   Does nothing when Memory.Embeddings.Enabled is false.");
         return 0;
     }
 
@@ -83,6 +84,16 @@ internal static class MemoryCommand
     {
         var force = args.Contains("--force", StringComparer.OrdinalIgnoreCase);
         var memoryConfig = configuration.GetSection("Memory").Get<MemoryConfig>() ?? new MemoryConfig();
+
+        // Same switch the daemon's warmup honours: disabled means no model download and no
+        // embedding, --force included.
+        if (!memoryConfig.Embeddings.Enabled)
+        {
+            output.WriteLine("Embeddings are disabled (Memory.Embeddings.Enabled is false); nothing to backfill. " +
+                "Set Memory.Embeddings.Enabled to true to embed memories.");
+            return 0;
+        }
+
         var modelId = memoryConfig.Embeddings.ModelId;
         var modelDirectory = paths.EmbeddingModelDirectory(modelId);
 

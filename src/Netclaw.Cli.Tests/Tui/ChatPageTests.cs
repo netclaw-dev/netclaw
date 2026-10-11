@@ -317,6 +317,167 @@ public sealed class ChatPageTests
         Assert.Equal("Last request failed. Ready to retry.", vm.StatusMessage.Value);
     }
 
+    // What web_fetch hands back for a large page: a multi-line summary whose
+    // preview carries converted markdown and, for raw fetches, HTML.
+    private const string WebFetchSummary =
+        "Fetched: http://example.test/weather\n" +
+        "Title: Seattle Weather Forecast\n" +
+        "Saved to: /data/web/example_test_weather.md (40,194 chars, 612 lines)\n" +
+        "\n" +
+        "Preview (first lines):\n" +
+        "# Seattle, WA\n" +
+        "Today: **71°F** and sunny\n" +
+        "<!DOCTYPE html><html><body><table><tr><td>raw markup</td></tr></table></body></html>\n" +
+        "... (597 more lines — use file_read or grep to search)";
+
+    [Fact]
+    public async Task MultiLineToolResult_RendersOnOneRowAndNextOutputStartsOnNewRow()
+    {
+        var screen = await RenderSessionOutputsAsync(
+            ToolCall("web_fetch"),
+            ToolResult("web_fetch", WebFetchSummary),
+            new TextDeltaOutput("Done fetching") { SessionId = new SessionId("tui/test") },
+            new TurnCompleted { SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1) });
+
+        var rows = ChatRows(screen);
+        var toolRow = Assert.Single(rows, r => r.Contains("✓ web_fetch", StringComparison.Ordinal));
+        var replyRow = Assert.Single(rows, r => r.Contains("Netclaw: Done fetching", StringComparison.Ordinal));
+
+        // The tool line used to carry the raw newlines of the result and was
+        // never terminated, so the reply was appended to the end of it.
+        Assert.NotEqual(toolRow, replyRow);
+        Assert.Contains("Fetched: http://example.test/weather Title: Seattle Weather Forecast", toolRow, StringComparison.Ordinal);
+        Assert.DoesNotContain(rows, r => r.StartsWith("Title:", StringComparison.Ordinal)
+            || r.StartsWith("Preview (first lines):", StringComparison.Ordinal)
+            || r.Contains("<table>", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ConsecutiveToolCalls_RenderOnSeparateRows()
+    {
+        var screen = await RenderSessionOutputsAsync(
+            ToolCall("web_fetch", "call-1"),
+            ToolResult("web_fetch", "Fetched: http://example.test/a", "call-1"),
+            ToolCall("web_search", "call-2"));
+
+        var rows = ChatRows(screen);
+        var fetchRow = Assert.Single(rows, r => r.Contains("web_fetch", StringComparison.Ordinal));
+        Assert.DoesNotContain("web_search", fetchRow, StringComparison.Ordinal);
+        Assert.Single(rows, r => r.Contains("web_search", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ToolCallPreviews_CollapseAllWhitespaceAndTrimBeforeTruncating()
+    {
+        // 100 leading spaces: truncating before collapsing would leave only
+        // whitespace inside the 80-character budget.
+        var result = new string(' ', 100) + "Fetched:\t\tok\r\n\r\n  done\n\n";
+        var screen = await RenderSessionOutputsAsync(
+            ToolCall("web_fetch", "call-1", "{\n  \"url\":\t\"http://example.test/a\",\n  \"mode\": \"raw\"\n}"),
+            new SessionJoined { SessionId = new SessionId("tui/test") },
+            ToolResult("web_fetch", result, "call-1"));
+
+        var rows = ChatRows(screen);
+        // Arguments stay on the tool row; nothing after them starts a row of its own.
+        Assert.DoesNotContain(rows, r => r.StartsWith("\"url\"", StringComparison.Ordinal)
+            || r.StartsWith("\"mode\"", StringComparison.Ordinal) || r.StartsWith('}'));
+        // Single space between tokens, trimmed at both ends: "→ Fetched: ok done (0.0s)".
+        Assert.Matches(@"✓ web_fetch → Fetched: ok done \(\d", Assert.Single(rows, r => r.Contains("✓ web_fetch", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task PendingToolCall_EndsItsRowBeforeLaterOutput()
+    {
+        var screen = await RenderSessionOutputsAsync(
+            ToolCall("web_fetch", "call-1", "{\n  \"url\": \"http://example.test/a\"\n}"),
+            new SessionJoined { SessionId = new SessionId("tui/test"), Title = "after the call" });
+
+        var rows = ChatRows(screen);
+        var callRow = Assert.Single(rows, r => r.Contains("web_fetch(", StringComparison.Ordinal));
+        Assert.Contains("{ \"url\": \"http://example.test/a\" }", callRow, StringComparison.Ordinal);
+        Assert.DoesNotContain("System:", callRow, StringComparison.Ordinal);
+        Assert.Single(rows, r => r.StartsWith("System: Session started. Title: after the call", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task WhitespaceOnlyTextBeforeToolCall_DoesNotJoinTheToolLine()
+    {
+        var screen = await RenderSessionOutputsAsync(
+            new TextDeltaOutput("\n\n") { SessionId = new SessionId("tui/test") },
+            ToolCall("web_fetch"),
+            ToolResult("web_fetch", "Fetched: ok"),
+            new TextDeltaOutput("All done") { SessionId = new SessionId("tui/test") },
+            new TurnCompleted { SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1) });
+
+        var rows = ChatRows(screen);
+        var toolRow = Assert.Single(rows, r => r.Contains("✓ web_fetch", StringComparison.Ordinal));
+        Assert.DoesNotContain("Netclaw:", toolRow, StringComparison.Ordinal);
+        Assert.Single(rows, r => r.StartsWith("Netclaw: All done", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TextToolText_RendersEachOnceOnItsOwnRow()
+    {
+        var sid = new SessionId("tui/test");
+        var screen = await RenderSessionOutputsAsync(
+            new TextDeltaOutput("Let me check") { SessionId = sid },
+            new TextOutput("Let me check") { SessionId = sid },
+            ToolCall("web_fetch", "call-1"),
+            ToolResult("web_fetch", "Fetched: ok", "call-1"),
+            // Streamed deltas with no closing TextOutput before the second tool call.
+            new TextDeltaOutput("Now the second") { SessionId = sid },
+            ToolCall("web_search", "call-2"),
+            ToolResult("web_search", "Found: ok", "call-2"),
+            new TextDeltaOutput("Done") { SessionId = sid },
+            new TextOutput("Done") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) });
+
+        var rows = ChatRows(screen);
+        Assert.Single(rows, r => r == "Netclaw: Let me check");
+        Assert.Single(rows, r => r == "Netclaw: Now the second");
+        Assert.Single(rows, r => r == "Netclaw: Done");
+        Assert.DoesNotContain(rows, r => r.Contains("✓", StringComparison.Ordinal) && r.Contains("Netclaw:", StringComparison.Ordinal));
+        Assert.Equal(3, rows.Count(r => r.Contains("Netclaw:", StringComparison.Ordinal)));
+    }
+
+    private static ToolCallOutput ToolCall(
+        string toolName, string callId = "call-1", string argumentsJson = "{\"url\":\"http://example.test/weather\"}") => new()
+    {
+        SessionId = new SessionId("tui/test"),
+        CallId = new Netclaw.Tools.ToolCallId(callId),
+        ToolName = new Netclaw.Tools.ToolName(toolName),
+        ArgumentsJson = argumentsJson
+    };
+
+    private static ToolResultOutput ToolResult(string toolName, string result, string callId = "call-1") => new()
+    {
+        SessionId = new SessionId("tui/test"),
+        CallId = new Netclaw.Tools.ToolCallId(callId),
+        ToolName = new Netclaw.Tools.ToolName(toolName),
+        Result = result
+    };
+
+    /// <summary>
+    /// Runs the chat page headlessly with <paramref name="outputs"/> replayed
+    /// as if the daemon had sent them, then quits and returns the final frame.
+    /// </summary>
+    private static async Task<string> RenderSessionOutputsAsync(params SessionOutput[] outputs)
+    {
+        var (terminal, app, _) = CreateHeadlessApp(null, out var input, replay: outputs);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+        return terminal.ToString();
+    }
+
+    /// <summary>The text inside the chat history border, one entry per terminal row.</summary>
+    private static string[] ChatRows(string screen) =>
+        screen.Split('\n')
+            .Where(l => l.StartsWith('│'))
+            .Select(l => l.Trim('│').TrimEnd())
+            .ToArray();
+
     [Fact]
     public async Task NarrowTerminal_PreservesCtrlOHint()
     {
@@ -494,21 +655,25 @@ public sealed class ChatPageTests
                         "test-session")),
                 Audience = TrustAudience.Personal,
                 InlineOutputBudget = InlineOutputBudget.Default,
-                InteractiveApproval = new InteractiveApprovalCapability.Unavailable()
+                // A chat can answer the prompt. An unattended run would deny the call (D2).
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             },
             ToolExecutionTimeout.Default);
-        var decision = policy.AuthorizeInvocation(
-            tool,
-            executionContext,
-            new Dictionary<string, object?>
+        var registry = new ToolRegistry();
+        registry.Register(tool);
+        var executor = new DispatchingToolExecutor(registry, policy);
+        var consent = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() => executor.ExecuteAsync(
+            new FunctionCallContent("call-upload", tool.Name, new Dictionary<string, object?>
             {
                 ["contents"] = content,
                 ["source_path"] = "/home/operator/reports/2026/Q3/quarterly-results-final.pdf",
                 ["destination_directory"] = "/Finance/Board Pack/2026/Q3",
                 ["access_token"] = "must-never-render",
                 ["_rationale"] = "Upload the requested board report"
-            });
-        var approvalContext = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+            }),
+            executionContext,
+            TestContext.Current.CancellationToken));
+        var approvalContext = consent.ApprovalContext;
         var approval = BuildApproval(approvalContext.DisplayText, approvalContext.ToolName) with
         {
             Patterns = approvalContext.Patterns,
@@ -606,7 +771,8 @@ public sealed class ChatPageTests
         CreateHeadlessApp(ToolInteractionRequest? seed, out VirtualInputSource input,
             int width = 120, int height = 40,
             IReadOnlyList<ToolInteractionOption>? options = null,
-            bool startGenerating = false)
+            bool startGenerating = false,
+            IReadOnlyList<SessionOutput>? replay = null)
     {
         var terminal = new VirtualTerminal(width, height);
         var virtualInput = new VirtualInputSource();
@@ -629,7 +795,7 @@ public sealed class ChatPageTests
                         : options is null
                             ? seed
                             : seed with { Options = options };
-                    capturedVm = new TestChatViewModel(effectiveSeed, startGenerating);
+                    capturedVm = new TestChatViewModel(effectiveSeed, startGenerating, replay);
                     return capturedVm;
                 });
         });
@@ -651,6 +817,7 @@ public sealed class ChatPageTests
     {
         private readonly ToolInteractionRequest? _seed;
         private readonly bool _startGenerating;
+        private readonly IReadOnlyList<SessionOutput>? _replay;
 
         /// <summary>
         /// Set when the page routes Escape to app shutdown (the pre-#1757
@@ -674,7 +841,8 @@ public sealed class ChatPageTests
         /// </summary>
         public string? LastSubmittedInteractionKey { get; private set; }
 
-        public TestChatViewModel(ToolInteractionRequest? seed, bool startGenerating = false)
+        public TestChatViewModel(ToolInteractionRequest? seed, bool startGenerating = false,
+            IReadOnlyList<SessionOutput>? replay = null)
             : base(
                 // 127.0.0.1:1 is never dialed: InitializeSessionAsync is
                 // overridden to no-op, so the underlying HubConnection stays
@@ -688,9 +856,15 @@ public sealed class ChatPageTests
         {
             _seed = seed;
             _startGenerating = startGenerating;
+            _replay = replay;
         }
 
-        protected override Task InitializeSessionAsync() => Task.CompletedTask;
+        protected override Task InitializeSessionAsync()
+        {
+            foreach (var output in _replay ?? [])
+                ProcessOutputForTesting(output);
+            return Task.CompletedTask;
+        }
 
         public override void OnActivated()
         {
@@ -707,7 +881,8 @@ public sealed class ChatPageTests
         public override void RequestAppShutdown()
         {
             LifecycleEvents.Add("shutdown");
-            base.RequestAppShutdown();
+            // This fixture covers presentation. ChatAdmissionTests covers the real close protocol.
+            Shutdown();
         }
 
         internal override Task DenyPendingInteractionAsync()

@@ -139,6 +139,13 @@ public sealed record EffectivePolicyDefaults(
 
 public static class SecurityPolicyDefaults
 {
+    /// <summary>
+    /// Reason code for an operation that Netclaw refused because it could not
+    /// resolve the trust audience. Netclaw never replaces a missing audience
+    /// with <see cref="TrustAudience.Public"/>.
+    /// </summary>
+    public const string AudienceUnresolvedReason = "audience_unresolved";
+
     public static string ToWireValue(this TrustAudience audience) => audience switch
     {
         TrustAudience.Public => "public",
@@ -201,7 +208,7 @@ public static class SecurityPolicyDefaults
         return ResolveBoundaryFromAudience(audience);
     }
 
-    public static TrustBoundary ResolveBoundaryFromSessionId(string? sessionId, TrustAudience audience = TrustAudience.Public)
+    public static TrustBoundary ResolveBoundaryFromSessionId(string? sessionId, TrustAudience audience)
     {
         if (string.IsNullOrWhiteSpace(sessionId))
             return ResolveBoundaryFromAudience(audience);
@@ -235,21 +242,16 @@ public static class SecurityPolicyDefaults
     }
 
     /// <summary>
-    /// Resolves the effective audience for a tool invocation, preferring the
-    /// explicit parsed <paramref name="configuredAudience"/> when present and
-    /// falling back to <see cref="ResolveAudienceFromSessionId"/> only when no
-    /// audience was supplied at all. There is no wire-string parsing here — the
-    /// audience is parsed once, upstream, when the execution context is built.
+    /// Maps an audience to its boundary. An undefined audience value is an
+    /// invariant violation, so this method throws. It does not map the value
+    /// to the Public boundary.
     /// </summary>
-    public static TrustAudience ResolveAudienceWithFallback(TrustAudience? configuredAudience, string? sessionId)
-        => configuredAudience ?? ResolveAudienceFromSessionId(sessionId);
-
     public static TrustBoundary ResolveBoundaryFromAudience(TrustAudience audience) => audience switch
     {
         TrustAudience.Public => TrustBoundary.Public,
         TrustAudience.Team => TrustBoundary.Team,
         TrustAudience.Personal => TrustBoundary.Personal,
-        _ => TrustBoundary.Public
+        _ => throw new ArgumentOutOfRangeException(nameof(audience), audience, "Undefined trust audience.")
     };
 
     /// <summary>

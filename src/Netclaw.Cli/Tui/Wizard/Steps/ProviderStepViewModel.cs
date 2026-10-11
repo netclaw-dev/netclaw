@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Json;
+using Netclaw.Cli.Model;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
@@ -87,7 +88,11 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
     {
         0 => "  Select your LLM provider. Ollama runs locally (no auth required).",
         1 => "  Choose how to authenticate with this provider.",
-        2 => "  Enter your API key. It will be stored in secrets.json.",
+        2 => !SelectedProviderTakesEndpoint
+            ? "  Enter your API key. It will be stored in secrets.json."
+            : SelectedProviderType == "ollama"
+                ? $"  Enter the URL of your Ollama server, for example {SelectedProviderDefaultEndpoint}. Press Enter to accept."
+                : "  Enter the base URL of your server, with or without /v1. Press Enter to accept.",
         3 => "  Validating connection and discovering available models...",
         4 => "  Select the model to use for conversations.",
         5 => "  Complete the authorization in your browser.",
@@ -98,6 +103,17 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         10 => "  Enter an API key if the endpoint requires one, or press Enter to skip.",
         _ => ""
     };
+
+    /// <summary>
+    /// True when sub-step 2 asks for a server URL (credential-optional providers such
+    /// as Ollama and OpenAI-compatible) rather than an API key.
+    /// </summary>
+    private bool SelectedProviderTakesEndpoint =>
+        !string.IsNullOrWhiteSpace(SelectedProviderType)
+        && _registry.TryGet(SelectedProviderType!, out var descriptor)
+        && descriptor.Auth.IsCredentialOptional();
+
+    private string SelectedProviderDefaultEndpoint => _registry.Get(SelectedProviderType!).DefaultEndpoint;
 
     /// <summary>
     /// True when the selected provider accepts an optional Bearer key in addition
@@ -626,21 +642,17 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
     }
 
     private static string? ReadExistingProviderType(WizardContext context)
-    {
-        if (context.ExistingConfig is null
-            || !ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Models.Main.Provider", out var provider)
-            || provider is not string providerText)
-        {
-            return null;
-        }
-
-        return providerText;
-    }
+        => ReadExistingMain(context)?.Provider is { Length: > 0 } provider ? provider : null;
 
     private static string? ReadExistingModelId(WizardContext context)
+        => ReadExistingMain(context)?.ModelId is { Length: > 0 } modelId ? modelId : null;
+
+    // Same resolver as `netclaw model list`, so both the Definitions/Roles and legacy inline shapes prefill.
+    // An unresolvable Models section prefills nothing; the wizard rewrites it.
+    private static ModelReference? ReadExistingMain(WizardContext context)
         => context.ExistingConfig is not null
-           && ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Models.Main.ModelId", out var model)
-            ? model as string
+           && ModelCommand.TryLoadModelSelection(context.ExistingConfig, out var models, out _)
+            ? models?.Main
             : null;
 
     private Dictionary<string, object> BuildProvidersDictionary(ProviderStepViewModel vm, string providerType)

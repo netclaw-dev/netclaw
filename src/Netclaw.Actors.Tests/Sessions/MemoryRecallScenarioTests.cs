@@ -72,10 +72,7 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
     // qualifying candidate yields a healthy empty result, never a degraded one.
     private static readonly float[] NonMatchingQueryVector = [0f, 1f];
 
-    private readonly string _baseDir = Path.Combine(
-        Path.GetTempPath(),
-        "netclaw-recall-scenarios",
-        Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-recall-scenarios-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 

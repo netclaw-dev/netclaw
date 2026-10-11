@@ -159,7 +159,7 @@ public sealed class ProviderOAuthTokenRefreshServiceTests
             service.GetValidAccessTokenAsync(
                 "openai-codex", entry, OpenAiOAuth, TestContext.Current.CancellationToken));
 
-        Assert.Contains("provider fix openai-codex", ex.Message);
+        Assert.Contains("netclaw provider", ex.Message);
         Assert.Equal("access-old", entry.OAuthAccessToken!.Value);
         Assert.Equal("refresh-old", entry.OAuthRefreshToken!.Value);
         Assert.Equal("account-old", entry.OAuthAccountId!.Value);

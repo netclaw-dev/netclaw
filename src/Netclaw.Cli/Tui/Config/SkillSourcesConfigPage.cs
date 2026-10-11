@@ -664,9 +664,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         if (isPassword)
             input.AsPassword();
 
-        input.Text = ViewModel.Draft.Value;
-        if (!string.IsNullOrEmpty(input.Text))
-            input.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+        NetclawTuiChrome.SeedTextInput(input, ViewModel.Draft.Value);
 
         _textInput = input;
         _textInputScreen = screen;

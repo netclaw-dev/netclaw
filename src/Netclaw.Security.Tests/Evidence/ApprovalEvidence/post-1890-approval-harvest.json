@@ -1,0 +1,245 @@
+{
+  "schemaVersion": 1,
+  "sourceRuntime": {
+    "version": "0.26.0",
+    "commit": "e35444c",
+    "windowStartUtc": "2026-08-13T01:16:00Z",
+    "windowEndUtc": "2026-08-13T01:46:00Z",
+    "shellCallCount": 112,
+    "approvalPromptCount": 25
+  },
+  "sanitization": {
+    "home": "/home/user",
+    "repositoryRoot": "/work/project",
+    "remoteRepository": "example/project",
+    "internalHost": "service.example.invalid",
+    "inlineBodies": "Long inline programs were replaced by a semantic placeholder."
+  },
+  "cases": [
+    {
+      "id": "P01",
+      "sourcePromptTimeUtc": "2026-08-13T01:24:54.961Z",
+      "commandShape": "gh pr update-branch 42 --repo example/project; gh pr update-branch 40 --repo example/project; gh pr merge 40 --repo example/project --squash --auto",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call mutates remote pull requests and merge state."
+    },
+    {
+      "id": "P02",
+      "sourcePromptTimeUtc": "2026-08-13T01:26:03.524Z",
+      "commandShape": "cd /work/project && for i in $(seq 1 25); do output=$(dotnet test); inspect \"$output\"; done",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "Runtime iteration and command substitution hide future command data."
+    },
+    {
+      "id": "P03",
+      "sourcePromptTimeUtc": "2026-08-13T01:26:18.620Z",
+      "commandShape": "cat > /tmp/probe.csx <<'EOF'\n<inline program>\nEOF\ndotnet script /tmp/probe.csx",
+      "observedResponse": "Session",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call writes and executes an authored program."
+    },
+    {
+      "id": "P04",
+      "sourcePromptTimeUtc": "2026-08-13T01:26:26.509Z",
+      "commandShape": "python3 - <<'PY'\n<inline database program>\nPY",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "An inline interpreter can perform arbitrary effects."
+    },
+    {
+      "id": "P05",
+      "sourcePromptTimeUtc": "2026-08-13T01:26:45.478Z",
+      "commandShape": "mkdir -p /tmp/probe && cd /tmp/probe && cat > probe.csproj <<'EOF'\n<project>\nEOF\ndotnet run",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates files and executes restored code."
+    },
+    {
+      "id": "P06",
+      "sourcePromptTimeUtc": "2026-08-13T01:26:57.675Z",
+      "commandShape": "cd /tmp/probe && mv Program.cs Program.old.cs && cat > Program.cs <<'EOF'\n<program>\nEOF\ndotnet run",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call moves files, replaces source, and executes it."
+    },
+    {
+      "id": "P07",
+      "sourcePromptTimeUtc": "2026-08-13T01:27:10.483Z",
+      "commandShape": "cd /tmp/probe && rm Program.old.cs && dotnet run | tail -8",
+      "observedResponse": "Session",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call deletes a file before program execution."
+    },
+    {
+      "id": "P08",
+      "sourcePromptTimeUtc": "2026-08-13T01:27:41.061Z",
+      "commandShape": "cd /tmp/probe && cat > Program.cs <<'EOF'\n<program>\nEOF\ndotnet run",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call replaces source and executes it."
+    },
+    {
+      "id": "P09",
+      "sourcePromptTimeUtc": "2026-08-13T01:27:43.124Z",
+      "commandShape": "gh --version; which gh; dpkg -l | grep gh; apt-cache policy gh; snap list gh",
+      "observedResponse": "Session",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The exact flags are read-only, but several executables can mutate state with other arguments."
+    },
+    {
+      "id": "P10",
+      "sourcePromptTimeUtc": "2026-08-13T01:27:55.469Z",
+      "commandShape": "curl -sS https://service.example.invalid/api/signals | python3 -c '<inline parser>'",
+      "observedResponse": "Session",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent used an inline interpreter for a read-only HTTP inspection."
+    },
+    {
+      "id": "P11",
+      "sourcePromptTimeUtc": "2026-08-13T01:28:24.290Z",
+      "commandShape": "curl -sS https://api.github.com/repos/example/project/releases/latest | python3 -c '<inline parser>'",
+      "observedResponse": "Session",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "A structured HTTP or GitHub tool can avoid an inline interpreter."
+    },
+    {
+      "id": "P12",
+      "sourcePromptTimeUtc": "2026-08-13T01:29:13.402Z",
+      "commandShape": "cd /work/project && for i in $(seq 1 30); do output=$(dotnet test); inspect \"$output\"; done",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "Runtime iteration and command substitution remain unresolved."
+    },
+    {
+      "id": "P13",
+      "sourcePromptTimeUtc": "2026-08-13T01:29:26.116Z",
+      "commandShape": "cd /work/project && git fetch origin && echo \"origin/dev: $(git rev-parse --short origin/dev)\" && git -C /work/project-worktree log -3 && echo \"behind: $(git -C /work/project-worktree rev-list --count HEAD..origin/dev)\"",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "Git fetch mutates repository state and contacts a remote."
+    },
+    {
+      "id": "P14",
+      "sourcePromptTimeUtc": "2026-08-13T01:29:42.585Z",
+      "commandShape": "git -C /work/project-worktree merge origin/dev 2>&1 | tail -4 && git -C /work/project-worktree push origin feature/update 2>&1 | tail -3 && echo \"behind: $(git -C /work/project-worktree rev-list --count HEAD..origin/dev)\"",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call mutates local history and a remote branch."
+    },
+    {
+      "id": "P15",
+      "sourcePromptTimeUtc": "2026-08-13T01:31:28.359Z",
+      "commandShape": "for pr in 37 36 15; do gh api --method POST repos/example/project/pulls/$pr/update-branch; done",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call uses runtime iteration to mutate remote pull requests."
+    },
+    {
+      "id": "P16",
+      "sourcePromptTimeUtc": "2026-08-13T01:32:52.729Z",
+      "commandShape": "cd /work/project && for branch in <fixed branch tuples>; do git branch -f; git checkout; git merge origin/dev; git push origin; git checkout dev; git branch -D; done",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The loop creates and deletes local branches, merges commits, and force-updates remote branch refs."
+    },
+    {
+      "id": "P17",
+      "sourcePromptTimeUtc": "2026-08-13T01:34:04.438Z",
+      "commandShape": "cd /work/project && git checkout dev && git fetch origin && git merge --ff-only origin/dev && echo \"dev: $(git rev-parse --short HEAD)\" && git worktree add /work/project-worktree -b feature/update dev",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call changes branches, fetches, merges, and creates a worktree."
+    },
+    {
+      "id": "P18",
+      "sourcePromptTimeUtc": "2026-08-13T01:34:28.861Z",
+      "commandShape": "ls -la /work/project/tests && cat /work/project/tests/project.csproj",
+      "observedResponse": "Everywhere",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The subagent used shell inspection although file tools were available."
+    },
+    {
+      "id": "P19",
+      "sourcePromptTimeUtc": "2026-08-13T01:35:54.318Z",
+      "commandShape": "rg -l 'Metric' /work/project/tests /work/project/src",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The subagent repeated shell search after it had file access."
+    },
+    {
+      "id": "P20",
+      "sourcePromptTimeUtc": "2026-08-13T01:36:01.530Z",
+      "commandShape": "cd /work/project-worktree && grep -rn 'Metric' tests src; cat tests/project.csproj",
+      "observedResponse": "Once",
+      "classification": "NetclawPolicyDebt",
+      "owner": "NetclawPolicy",
+      "reason": "The read-only fallback named an exact worktree, but no scope correction reached the subagent."
+    },
+    {
+      "id": "P21",
+      "sourcePromptTimeUtc": "2026-08-13T01:38:40.173Z",
+      "commandShape": "find /home/user/.nuget/packages/xunit.execution -name '*.dll' | head; dll=$(find /home/user/.nuget/packages/xunit.execution -name 'xunit.execution.dll'); inspect \"$dll\"",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The subagent used broad search and command substitution for package inspection."
+    },
+    {
+      "id": "P22",
+      "sourcePromptTimeUtc": "2026-08-13T01:40:02.975Z",
+      "commandShape": "cd /work/project-worktree && for i in $(seq 1 40); do output=$(dotnet test); inspect \"$output\"; done",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "Runtime iteration and command substitution remain unresolved."
+    },
+    {
+      "id": "P23",
+      "sourcePromptTimeUtc": "2026-08-13T01:42:28.911Z",
+      "commandShape": "cd /work/project-worktree && for i in $(seq 1 40); do output=$(dotnet test); inspect \"$output\"; done",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The repeated call has the same unresolved runtime structure."
+    },
+    {
+      "id": "P24",
+      "sourcePromptTimeUtc": "2026-08-13T01:44:09.424Z",
+      "commandShape": "cd /work/project-worktree && for i in $(seq 1 40); do output=$(dotnet test); inspect \"$output\"; done",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The repeated call has the same unresolved runtime structure."
+    },
+    {
+      "id": "P25",
+      "sourcePromptTimeUtc": "2026-08-13T01:45:54.517Z",
+      "commandShape": "gh pr create --base dev --head feature/update --title '<title>' --body '<body>'",
+      "observedResponse": "Session",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates remote pull-request state."
+    }
+  ]
+}

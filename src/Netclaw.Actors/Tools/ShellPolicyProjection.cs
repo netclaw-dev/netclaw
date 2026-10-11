@@ -3,37 +3,12 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Collections.Frozen;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
+using Netclaw.Tools.Authorization.Consent;
 
 namespace Netclaw.Actors.Tools;
-
-internal enum ShellCoverageKind
-{
-    Uncovered = 0,
-    OneTime = 1,
-    Session = 2,
-    PersistentGlobal = 3,
-    PersistentFolder = 4,
-    ReviewedSafePolicy = 5,
-    Denied = 6,
-    PersistentRepository = 7,
-}
-
-internal enum ShellPolicyCoverageSource
-{
-    Uncovered = 0,
-    OneTime = 1,
-    Session = 2,
-    PersistentGlobal = 3,
-    PersistentFolder = 4,
-    ReviewedSafeReal = 5,
-    ReviewedSafeIntent = 6,
-    ApprovalExemptSideEffect = 7,
-    PersistentRepository = 8,
-}
 
 internal readonly record struct ShellPolicyCandidateId
 {
@@ -46,6 +21,11 @@ internal readonly record struct ShellPolicyCandidateId
     internal int Value { get; }
 }
 
+/// <summary>
+/// Selects the coverage rules of a candidate. A causal list keeps the rules that it had before
+/// its candidates came from the directory proof: no reviewed-safe policy of the real directory.
+/// Only its diagnostics can use the intent rule. The side-effect exemption does not read the role.
+/// </summary>
 internal enum ShellPolicyCandidateRole
 {
     Ordinary = 0,
@@ -60,15 +40,17 @@ internal sealed record ShellPolicyCandidate(
 {
     internal ShellPolicyCandidateRole Role { get; init; }
 
+    /// <summary>The directory that a causal list changed to before this diagnostic, or null.</summary>
     internal string? IntentDirectory { get; init; }
 
-    internal IReadOnlyList<string> IntentFallbackDirectories { get; init; } = [];
+    // A command that runs no program needs no grant: the file rules judge its redirects.
+    internal bool CanRequestStoredGrant =>
+        !ApprovalPatternMatching.IsPureSideEffect(Candidate)
+        && !Candidate.RunsNoProgram;
 
-    internal IReadOnlyList<ShellPolicyCandidateId> IntentPrerequisites { get; init; } = [];
-
-    internal bool CanMatchStoredGrant => Role != ShellPolicyCandidateRole.CausalIntentConsumer;
-
-    internal bool CanUseRealReviewedSafePolicy => Role == ShellPolicyCandidateRole.Ordinary;
+    internal bool CanUseRealReviewedSafePolicy =>
+        Role == ShellPolicyCandidateRole.Ordinary
+        && Candidate.AssignmentDigest is null;
 }
 
 /// <summary>
@@ -78,97 +60,46 @@ internal sealed record ShellPolicyProjection
 {
     private ShellPolicyProjection(
         ShellExecutionEnvironment environment,
-        ShellCommandAnalysis? execution,
-        ToolRunScope runScope,
         ToolApprovalContext approvalContext,
         IReadOnlyList<ShellPolicyCandidate> candidates,
-        IReadOnlyList<ShellPolicyCandidatePathFacts> pathFacts,
-        IReadOnlySet<string> approvedOneTimeKeys,
-        string? approvedOneTimeToolName)
+        OneTimeConsent? oneTimeConsent)
     {
         Environment = environment;
-        Execution = execution;
-        RunScope = runScope;
         ApprovalContext = approvalContext;
         Candidates = candidates;
-        GrantCandidates = Array.AsReadOnly(candidates
-            .Where(static candidate =>
-                candidate.CanMatchStoredGrant
-                && !ApprovalPatternMatching.IsPureSideEffect(candidate.Candidate))
-            .ToArray());
-        PathFacts = pathFacts;
-        ApprovedOneTimeKeys = approvedOneTimeKeys;
-        ApprovedOneTimeToolName = approvedOneTimeToolName;
+        OneTimeConsent = oneTimeConsent;
     }
 
     internal ShellExecutionEnvironment Environment { get; }
-
-    internal ShellCommandAnalysis? Execution { get; }
-
-    internal ToolRunScope RunScope { get; }
 
     internal ToolApprovalContext ApprovalContext { get; }
 
     internal IReadOnlyList<ShellPolicyCandidate> Candidates { get; }
 
-    internal IReadOnlyList<ShellPolicyCandidatePathFacts> PathFacts { get; }
-
-    internal IReadOnlySet<string> ApprovedOneTimeKeys { get; }
-
-    internal string? ApprovedOneTimeToolName { get; }
-
-    internal IReadOnlyList<ShellPolicyCandidate> GrantCandidates { get; }
-
-    internal bool HasCausalIntent => Candidates.Any(static candidate =>
-        candidate.Role != ShellPolicyCandidateRole.Ordinary);
+    /// <summary>The "Once" answer that this attempt carries, or null.</summary>
+    internal OneTimeConsent? OneTimeConsent { get; }
 
     internal bool HasExactOneTimeApproval(
         string toolName,
         ToolApprovalContext approvalContext)
-        => OneTimeApprovalKeys.Matches(
-            ApprovedOneTimeToolName,
-            ApprovedOneTimeKeys,
-            toolName,
-            approvalContext);
+        => OneTimeApprovalKeys.Matches(OneTimeConsent, toolName, approvalContext);
 
     internal static bool TryCreate(
         ShellExecutionEnvironment environment,
-        ShellApprovalMatcher matcher,
-        ShellCommandAnalysis? execution,
         ToolApprovalContext approvalContext,
+        BashDirectoryScopeProjection? directoryScopes,
         ToolExecutionContext context,
-        Func<string, bool> isAllowedHostPath,
         out ShellPolicyProjection? projection)
     {
         ArgumentNullException.ThrowIfNull(environment);
-        ArgumentNullException.ThrowIfNull(matcher);
         ArgumentNullException.ThrowIfNull(approvalContext);
         ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(isAllowedHostPath);
 
         projection = null;
         if (approvalContext.Candidates is null)
             return false;
 
-        if (approvalContext.IsMessy
-            && approvalContext.Candidates.Count == 0
-            && execution is not null
-            && BashCausalApprovalIntent.TryProject(
-                environment,
-                execution,
-                matcher,
-                isAllowedHostPath,
-                out var causalCandidates))
-        {
-            return TryCreateCausal(
-                environment,
-                execution,
-                approvalContext,
-                context,
-                causalCandidates,
-                out projection);
-        }
-
+        var isCausalList = directoryScopes?.IsCausalList == true;
         var candidates = new ShellPolicyCandidate[approvalContext.Candidates.Count];
         var candidateCopies = new ApprovalCandidate[approvalContext.Candidates.Count];
         for (var index = 0; index < approvalContext.Candidates.Count; index++)
@@ -176,6 +107,20 @@ internal sealed record ShellPolicyProjection
             var source = approvalContext.Candidates[index];
             if (source is null)
                 return false;
+
+            var role = ShellPolicyCandidateRole.Ordinary;
+            string? intentDirectory = null;
+            if (isCausalList)
+            {
+                // Every causal candidate comes from one slice of the directory proof.
+                if (directoryScopes!.FindSlice(source.SourceOccurrence) is not { } slice)
+                    return false;
+
+                intentDirectory = slice.IntentDirectory;
+                role = intentDirectory is null
+                    ? ShellPolicyCandidateRole.CausalPrerequisite
+                    : ShellPolicyCandidateRole.CausalIntentConsumer;
+            }
 
             var copy = source with
             {
@@ -188,94 +133,41 @@ internal sealed record ShellPolicyProjection
             candidates[index] = new ShellPolicyCandidate(
                 new ShellPolicyCandidateId(index),
                 copy,
-                source.SourceOccurrence);
+                source.SourceOccurrence)
+            {
+                Role = role,
+                IntentDirectory = intentDirectory
+            };
         }
 
-        var contextCopy = approvalContext with
-        {
-            Patterns = Array.AsReadOnly(approvalContext.Patterns.ToArray()),
-            CandidateVerbs = Array.AsReadOnly(approvalContext.CandidateVerbs.ToArray()),
-            Options = Array.AsReadOnly(approvalContext.Options.ToArray()),
-            Candidates = Array.AsReadOnly(candidateCopies)
-        };
-        var runScopeCopy = context.RunScope with
-        {
-            RecentFiles = Array.AsReadOnly(context.RunScope.RecentFiles.ToArray())
-        };
-        var candidateView = Array.AsReadOnly(candidates);
-        projection = new ShellPolicyProjection(
+        projection = Create(
             environment,
-            execution,
-            runScopeCopy,
-            contextCopy,
-            candidateView,
-            ShellPolicyPathFacts.Create(candidateView, environment.PathStyle),
-            context.Approval.OneTimeApprovedPatterns.ToFrozenSet(StringComparer.OrdinalIgnoreCase),
-            context.Approval.OneTimeApprovedToolName);
+            approvalContext,
+            context,
+            candidates,
+            candidateCopies);
         return true;
     }
 
-    private static bool TryCreateCausal(
+    private static ShellPolicyProjection Create(
         ShellExecutionEnvironment environment,
-        ShellCommandAnalysis execution,
         ToolApprovalContext approvalContext,
         ToolExecutionContext context,
-        IReadOnlyList<BashCausalApprovalCandidate> causalCandidates,
-        out ShellPolicyProjection? projection)
+        ShellPolicyCandidate[] candidates,
+        IReadOnlyList<ApprovalCandidate> approvalCandidates)
     {
-        projection = null;
-        var candidates = new ShellPolicyCandidate[causalCandidates.Count];
-        for (var index = 0; index < causalCandidates.Count; index++)
-        {
-            var source = causalCandidates[index];
-            if (source.PrerequisiteIndexes.Any(prerequisite =>
-                    prerequisite < 0 || prerequisite >= causalCandidates.Count))
-            {
-                return false;
-            }
-
-            var candidateCopy = source.Candidate with
-            {
-                VerbTokens = source.Candidate.VerbTokens is null
-                    ? null
-                    : Array.AsReadOnly(source.Candidate.VerbTokens.ToArray()),
-                SourceOccurrence = null
-            };
-            candidates[index] = new ShellPolicyCandidate(
-                new ShellPolicyCandidateId(index),
-                candidateCopy,
-                source.SourceOccurrence)
-            {
-                Role = source.Role,
-                IntentDirectory = source.IntentDirectory,
-                IntentFallbackDirectories = Array.AsReadOnly(source.FallbackDirectories.ToArray()),
-                IntentPrerequisites = Array.AsReadOnly(source.PrerequisiteIndexes
-                    .Select(static prerequisite => new ShellPolicyCandidateId(prerequisite))
-                    .ToArray())
-            };
-        }
-
         var contextCopy = approvalContext with
         {
             Patterns = Array.AsReadOnly(approvalContext.Patterns.ToArray()),
             CandidateVerbs = Array.AsReadOnly(approvalContext.CandidateVerbs.ToArray()),
             Options = Array.AsReadOnly(approvalContext.Options.ToArray()),
-            Candidates = Array.AsReadOnly(approvalContext.Candidates!.ToArray())
-        };
-        var runScopeCopy = context.RunScope with
-        {
-            RecentFiles = Array.AsReadOnly(context.RunScope.RecentFiles.ToArray())
+            Candidates = Array.AsReadOnly(approvalCandidates.ToArray())
         };
         var candidateView = Array.AsReadOnly(candidates);
-        projection = new ShellPolicyProjection(
+        return new ShellPolicyProjection(
             environment,
-            execution,
-            runScopeCopy,
             contextCopy,
             candidateView,
-            ShellPolicyPathFacts.Create(candidateView, environment.PathStyle),
-            context.Approval.OneTimeApprovedPatterns.ToFrozenSet(StringComparer.OrdinalIgnoreCase),
-            context.Approval.OneTimeApprovedToolName);
-        return true;
+            context.Approval.OneTimeConsent);
     }
 }

@@ -4,6 +4,9 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Tools;
+using Netclaw.Actors.Channels;
+using static Netclaw.Cli.Daemon.ChatClientProtocol;
 using Netclaw.Cli.Daemon;
 
 namespace Netclaw.Cli.Tests.Cli;
@@ -19,7 +22,9 @@ internal sealed class FakeDaemonHubTransport : IDaemonHubTransport
 {
     private readonly object _gate = new();
     private volatile bool _connected;
-    private Action<SessionOutputDto>? _outputHandler;
+    private Action<TransportEvent>? _notify;
+    private int _active;
+    public int PeakConcurrency { get; private set; }
 
     /// <summary>Override to make <see cref="StartAsync"/> fail (throw) or delay.</summary>
     public Func<CancellationToken, Task>? StartHook { get; set; }
@@ -31,6 +36,12 @@ internal sealed class FakeDaemonHubTransport : IDaemonHubTransport
     /// </summary>
     public Func<object?[], SessionEnsureResultDto> EnsureSessionResponder { get; set; } = DefaultEnsureResponder();
 
+    /// <summary>
+    /// Awaited before every EnsureSession RPC is answered. A test completes it later to hold a
+    /// session set-up in flight without blocking a thread.
+    /// </summary>
+    public Func<object?[], Task>? EnsureSessionGate { get; set; }
+
     /// <summary>Override to make a value-less RPC (SendMessage / RespondToInteraction) delay or fail.</summary>
     public Func<string, object?[], CancellationToken, Task>? VoidInvokeHook { get; set; }
 
@@ -40,18 +51,15 @@ internal sealed class FakeDaemonHubTransport : IDaemonHubTransport
 
     public bool IsConnected => _connected;
 
-    public event Func<Exception?, Task>? Closed;
-
-    public IDisposable On<TMessage>(string methodName, Action<TMessage> handler)
+    public IDisposable Subscribe(Action<TransportEvent> notify)
     {
-        if (typeof(TMessage) == typeof(SessionOutputDto))
-            _outputHandler = dto => handler((TMessage)(object)dto);
-
-        return new Registration();
+        _notify = notify;
+        return new Registration(() => _notify = null);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        using var operation = BeginOperation();
         lock (_gate)
             StartAttempts++;
 
@@ -67,22 +75,33 @@ internal sealed class FakeDaemonHubTransport : IDaemonHubTransport
         _connected = true;
     }
 
-    public Task<TResult> InvokeAsync<TResult>(string methodName, object?[] args, CancellationToken cancellationToken)
+    public async Task<SessionBinding> EnsureSessionAsync(SessionId? sessionId, ChannelType channel, CancellationToken cancellationToken)
     {
-        Record(methodName, args);
-
-        if (methodName == "EnsureSession")
-            return Task.FromResult((TResult)(object)EnsureSessionResponder(args));
-
-        throw new InvalidOperationException($"FakeDaemonHubTransport has no value result for '{methodName}'.");
+        using var operation = BeginOperation();
+        object?[] args = [sessionId?.Value, channel.ToWireValue()];
+        Record("EnsureSession", args);
+        if (EnsureSessionGate is not null) await EnsureSessionGate(args);
+        var result = EnsureSessionResponder(args);
+        return new SessionBinding(new SessionId(result.SessionId), result.TextAdmissionVersion);
     }
 
-    public async Task InvokeAsync(string methodName, object?[] args, CancellationToken cancellationToken)
-    {
-        Record(methodName, args);
+    public Task SendAsync(SessionId sessionId, string text, CancellationToken cancellationToken)
+        => InvokeAsync("SendMessage", [sessionId.Value, text], cancellationToken);
 
-        if (VoidInvokeHook is not null)
-            await VoidInvokeHook(methodName, args, cancellationToken);
+    public Task RespondAsync(SessionId sessionId, ToolCallId callId, ApprovalOptionKey selection, CancellationToken cancellationToken)
+        => InvokeAsync("RespondToInteraction", [sessionId.Value, callId.Value, selection.Value], cancellationToken);
+
+    private async Task InvokeAsync(string methodName, object?[] args, CancellationToken cancellationToken)
+    {
+        using var operation = BeginOperation();
+        Record(methodName, args);
+        if (VoidInvokeHook is not null) await VoidInvokeHook(methodName, args, cancellationToken);
+    }
+
+    private IDisposable BeginOperation()
+    {
+        lock (_gate) { _active++; PeakConcurrency = Math.Max(PeakConcurrency, _active); }
+        return new Registration(() => { lock (_gate) _active--; });
     }
 
     public ValueTask DisposeAsync()
@@ -95,11 +114,11 @@ internal sealed class FakeDaemonHubTransport : IDaemonHubTransport
     public void RaiseClosed(Exception? error = null)
     {
         _connected = false;
-        _ = Closed?.Invoke(error);
+        _notify?.Invoke(new TransportDropped(error));
     }
 
     /// <summary>Pushes a server-to-client output through the registered handler.</summary>
-    public void PushOutput(SessionOutputDto dto) => _outputHandler?.Invoke(dto);
+    public void PushOutput(SessionOutputDto dto) => _notify?.Invoke(new OutputReceived(SessionOutputDtoMapper.FromDto(dto)));
 
     private void Record(string methodName, object?[] args)
     {
@@ -120,18 +139,16 @@ internal sealed class FakeDaemonHubTransport : IDaemonHubTransport
         return args =>
         {
             if (args[0] is string requested)
-                return new SessionEnsureResultDto(requested, false);
+                return new SessionEnsureResultDto(requested, false) { TextAdmissionVersion = 1 };
 
-            var result = new SessionEnsureResultDto(createdId, !created);
+            var result = new SessionEnsureResultDto(createdId, !created) { TextAdmissionVersion = 1 };
             created = true;
             return result;
         };
     }
 
-    private sealed class Registration : IDisposable
+    private sealed class Registration(Action dispose) : IDisposable
     {
-        public void Dispose()
-        {
-        }
+        public void Dispose() => dispose();
     }
 }

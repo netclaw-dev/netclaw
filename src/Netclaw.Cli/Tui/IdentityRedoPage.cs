@@ -64,7 +64,7 @@ public sealed class IdentityRedoPage : ReactivePage<IdentityRedoViewModel>
             if (ViewModel.IsSaved.Value)
                 return WorkflowViewComponents.BuildSavedScreen(
                     "Identity updated.",
-                    "Press Enter to exit. Run `netclaw chat` to talk to your agent.");
+                    "Press Enter to start the guided identity chat, or Esc to skip it.");
 
             // Clear old subscriptions before creating new ones — the view is a
             // singleton and each rebuild creates new TextInputNodes whose
@@ -96,14 +96,14 @@ public sealed class IdentityRedoPage : ReactivePage<IdentityRedoViewModel>
         => ViewModel.Context.StatusMessage
             .Select(msg => (ILayoutNode)(string.IsNullOrWhiteSpace(msg)
                 ? Layouts.Empty()
-                : new TextNode($"  {msg}").WithForeground(Color.Green)))
+                : new TextNode($"  {msg}").WithForeground(Color.Red)))
             .AsLayout()
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
         => ViewModel.IsSaved
             .Select(saved => (ILayoutNode)new TextNode(saved
-                    ? " [Enter] Exit  [Ctrl+Q] Quit"
+                    ? " [Enter] Start guided identity chat  [Esc] Skip  [Ctrl+Q] Quit"
                     : " [↑/↓] Navigate  [Enter] Next/Save  [Esc] Back  [Ctrl+Q] Quit")
                 .WithForeground(Color.BrightBlack))
             .AsLayout()
@@ -156,6 +156,7 @@ public sealed class IdentityRedoPage : ReactivePage<IdentityRedoViewModel>
             InvalidateHelp = () => _helpTextNode?.Invalidate(),
             AdvanceStep = ViewModel.GoNext,
             RequestRedraw = ViewModel.RequestRedraw,
+            SetStatusMessage = message => ViewModel.Context.StatusMessage.Value = message,
         };
 
     public override void Dispose()

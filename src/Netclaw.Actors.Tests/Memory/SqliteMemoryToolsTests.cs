@@ -13,7 +13,7 @@ namespace Netclaw.Actors.Tests.Memory;
 
 public sealed class SqliteMemoryToolsTests : IAsyncDisposable
 {
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-sqlite-memory-tool-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-sqlite-memory-tool-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly FakeTimeProvider _timeProvider;
     private readonly SQLiteMemoryStore _store;
@@ -471,6 +471,210 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
         Assert.Contains("espresso", hydrated);
         Assert.DoesNotContain("flat white", hydrated);
         Assert.DoesNotContain("cortado", hydrated);
+    }
+
+    [Fact]
+    public async Task UpdateMemory_edit_re_embeds_the_document_with_the_new_text()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var holder = AvailableEmbedderHolder();
+        await StoreEmbeddedDocumentAsync(holder, "doc-vec", "Favorite color", "The user's favorite color is blue.");
+        Assert.Equal(
+            await TextVectorEmbedder.VectorOf("Favorite color\nThe user's favorite color is blue."),
+            Assert.Single(await _store.GetEmbeddingsForModelAsync(TextVectorEmbedder.Model, TestContext.Current.CancellationToken)).Vector.ToArray());
+
+        var update = new SqliteUpdateMemoryTool(_store, holder);
+        await update.ExecuteAsync(
+            new Dictionary<string, object?> { ["id"] = "doc-vec", ["old_text"] = "blue", ["new_text"] = "green" },
+            PersonalContext(),
+            CancellationToken.None);
+        await update.ExecuteAsync(
+            new Dictionary<string, object?> { ["id"] = "doc-vec", ["new_content"] = "Prefers teal." },
+            PersonalContext(),
+            CancellationToken.None);
+
+        var row = Assert.Single(await _store.GetEmbeddingsForModelAsync(TextVectorEmbedder.Model, TestContext.Current.CancellationToken));
+        Assert.Equal(await TextVectorEmbedder.VectorOf("Favorite color\nPrefers teal."), row.Vector.ToArray());
+        var coverage = await _store.GetEmbeddingCoverageAsync(TextVectorEmbedder.Model, TestContext.Current.CancellationToken);
+        Assert.Equal(1, coverage.EmbeddedCurrentHashCount);
+    }
+
+    [Fact]
+    public async Task UpdateMemory_find_and_replace_edit_stores_the_vector_of_the_new_text()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var holder = AvailableEmbedderHolder();
+        await StoreEmbeddedDocumentAsync(holder, "doc-vec", "Favorite color", "The user's favorite color is blue.");
+
+        await new SqliteUpdateMemoryTool(_store, holder).ExecuteAsync(
+            new Dictionary<string, object?> { ["id"] = "doc-vec", ["old_text"] = "blue", ["new_text"] = "green" },
+            PersonalContext(),
+            CancellationToken.None);
+
+        var row = Assert.Single(await _store.GetEmbeddingsForModelAsync(TextVectorEmbedder.Model, TestContext.Current.CancellationToken));
+        Assert.Equal(await TextVectorEmbedder.VectorOf("Favorite color\nThe user's favorite color is green."), row.Vector.ToArray());
+    }
+
+    [Fact]
+    public async Task UpdateMemory_delete_removes_the_vector()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var holder = AvailableEmbedderHolder();
+        await StoreEmbeddedDocumentAsync(holder, "doc-vec", "Favorite color", "Blue.");
+
+        await new SqliteUpdateMemoryTool(_store, holder).ExecuteAsync(
+            new Dictionary<string, object?> { ["id"] = "doc-vec", ["delete"] = true },
+            PersonalContext(),
+            CancellationToken.None);
+
+        Assert.Empty(await _store.GetEmbeddingsForModelAsync(TextVectorEmbedder.Model, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task UpdateMemory_edit_succeeds_without_a_vector_when_the_embedder_is_unavailable()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        await StoreDocumentAsync("doc-vec", "Favorite color", "Blue.", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+        var unavailable = new MemoryEmbedderHolder(
+            new UnavailableMemoryEmbedder(TextVectorEmbedder.Model, "not provisioned"), initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: null);
+
+        foreach (var tool in new[] { new SqliteUpdateMemoryTool(_store, unavailable), new SqliteUpdateMemoryTool(_store) })
+        {
+            var result = await tool.ExecuteAsync(
+                new Dictionary<string, object?> { ["id"] = "doc-vec", ["old_text"] = "Blue", ["new_text"] = "Red" },
+                PersonalContext(),
+                CancellationToken.None);
+
+            Assert.Contains("updated", result);
+            Assert.Empty(await _store.GetEmbeddingsForModelAsync(TextVectorEmbedder.Model, TestContext.Current.CancellationToken));
+            await _store.UpdateDocumentTextAsync("doc-vec", "Red", "Blue", TestContext.Current.CancellationToken);
+        }
+
+        // The existing gap-repair/backfill query still sees the edited document as needing a vector.
+        var missing = await _store.GetDocumentsNeedingEmbeddingAsync(TextVectorEmbedder.Model, force: false, TestContext.Current.CancellationToken);
+        Assert.Equal("doc-vec", Assert.Single(missing).DocumentId);
+    }
+
+    [Fact]
+    public async Task UpdateMemory_overlapping_edits_leave_exactly_the_vector_of_the_final_text()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var gated = new GatedTextVectorEmbedder(gatedText: "first edit");
+        var holder = new MemoryEmbedderHolder(gated, initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: null);
+        await StoreEmbeddedDocumentAsync(holder, "doc-vec", "Favorite color", "Blue.");
+        var update = new SqliteUpdateMemoryTool(_store, holder);
+
+        // Edit A commits its text, then blocks inside the embed call.
+        var editA = update.ExecuteAsync(
+            new Dictionary<string, object?> { ["id"] = "doc-vec", ["new_content"] = "first edit" },
+            PersonalContext(),
+            CancellationToken.None);
+        await gated.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        // Edit B commits and embeds while A is still mid-embed.
+        await update.ExecuteAsync(
+            new Dictionary<string, object?> { ["id"] = "doc-vec", ["new_content"] = "second edit" },
+            PersonalContext(),
+            CancellationToken.None);
+
+        // A resumes holding a vector for text that is no longer the document's text.
+        gated.Release.SetResult();
+        await editA.WaitAsync(TestContext.Current.CancellationToken);
+
+        var rows = await _store.GetEmbeddingsForModelAsync(TextVectorEmbedder.Model, TestContext.Current.CancellationToken);
+        Assert.Equal(await TextVectorEmbedder.VectorOf("Favorite color\nsecond edit"), Assert.Single(rows).Vector.ToArray());
+    }
+
+    [Fact]
+    public async Task UpdateMemory_returns_only_after_the_new_vector_is_stored()
+    {
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
+        var gated = new GatedTextVectorEmbedder(gatedText: "new body");
+        var holder = new MemoryEmbedderHolder(gated, initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: null);
+        await StoreEmbeddedDocumentAsync(holder, "doc-vec", "Favorite color", "Blue.");
+
+        var edit = new SqliteUpdateMemoryTool(_store, holder).ExecuteAsync(
+            new Dictionary<string, object?> { ["id"] = "doc-vec", ["new_content"] = "new body" },
+            PersonalContext(),
+            CancellationToken.None);
+        await gated.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        gated.Release.SetResult();
+        await edit.WaitAsync(TestContext.Current.CancellationToken);
+
+        var rows = await _store.GetEmbeddingsForModelAsync(TextVectorEmbedder.Model, TestContext.Current.CancellationToken);
+        Assert.Equal(await TextVectorEmbedder.VectorOf("Favorite color\nnew body"), Assert.Single(rows).Vector.ToArray());
+    }
+
+    private static MemoryEmbedderHolder AvailableEmbedderHolder()
+        => new(new TextVectorEmbedder(), initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: null);
+
+    private async Task StoreEmbeddedDocumentAsync(MemoryEmbedderHolder holder, string id, string title, string content)
+    {
+        await StoreDocumentAsync(id, title, content, _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+        await MemoryEmbedOnWriteCoordinator.EmbedWrittenDocumentsAsync(
+            holder, _store, [new MemoryDocumentWriteResult(id, title, content)],
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Deterministic embedder whose vector depends on the exact text, so a stale vector is distinguishable from a fresh one.</summary>
+    private sealed class TextVectorEmbedder : IMemoryEmbedder
+    {
+        public const string Model = "text-vector-model";
+
+        public string ModelId => Model;
+
+        public int Dimensions => 2;
+
+        public bool IsAvailable => true;
+
+        public static async Task<float[]> VectorOf(string text)
+            => (await new TextVectorEmbedder().EmbedAsync(text, EmbeddingPurpose.Passage, CancellationToken.None)).ToArray();
+
+        // Yields so the call completes asynchronously, as the real ONNX embedder's does.
+        public async ValueTask<ReadOnlyMemory<float>> EmbedAsync(string text, EmbeddingPurpose purpose, CancellationToken ct)
+        {
+            await Task.Yield();
+            return new float[] { text.Length, text.Sum(c => c) % 9973 };
+        }
+
+        public async ValueTask<IReadOnlyList<ReadOnlyMemory<float>>> EmbedBatchAsync(IReadOnlyList<string> texts, EmbeddingPurpose purpose, CancellationToken ct)
+        {
+            var results = new List<ReadOnlyMemory<float>>(texts.Count);
+            foreach (var text in texts)
+                results.Add(await EmbedAsync(text, purpose, ct));
+            return results;
+        }
+    }
+
+    /// <summary>Embedder that blocks the first call whose text contains <c>gatedText</c> until the test releases it.</summary>
+    private sealed class GatedTextVectorEmbedder(string gatedText) : IMemoryEmbedder
+    {
+        private readonly TextVectorEmbedder _inner = new();
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string ModelId => _inner.ModelId;
+
+        public int Dimensions => _inner.Dimensions;
+
+        public bool IsAvailable => true;
+
+        public async ValueTask<ReadOnlyMemory<float>> EmbedAsync(string text, EmbeddingPurpose purpose, CancellationToken ct)
+        {
+            if (text.Contains(gatedText, StringComparison.Ordinal) && Entered.TrySetResult())
+                await Release.Task.WaitAsync(ct);
+            return await _inner.EmbedAsync(text, purpose, ct);
+        }
+
+        public async ValueTask<IReadOnlyList<ReadOnlyMemory<float>>> EmbedBatchAsync(IReadOnlyList<string> texts, EmbeddingPurpose purpose, CancellationToken ct)
+        {
+            var results = new List<ReadOnlyMemory<float>>(texts.Count);
+            foreach (var text in texts)
+                results.Add(await EmbedAsync(text, purpose, ct));
+            return results;
+        }
     }
 
     public async ValueTask DisposeAsync()

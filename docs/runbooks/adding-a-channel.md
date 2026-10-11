@@ -164,10 +164,10 @@ the enum value (`configuration.GetSection("Xxx")`).
 
 > **Config schema sync rule (CLAUDE.md):** add a matching top-level `"Xxx"`
 > section to `src/Netclaw.Configuration/Schemas/netclaw-config.v1.schema.json`
-> in the same PR. The schema is `"additionalProperties": false` throughout —
-> unlisted properties are rejected by `ConfigSchemaDoctorCheck` at runtime.
-> New required properties need a `"default"`; enums must be `"type": "string"`
-> with named values.
+> in the same PR. Schema objects reject unlisted properties
+> (`"additionalProperties": false`), and `ConfigSchemaDoctorCheck` flags them at
+> runtime. New required properties need a `"default"`; enums must be
+> `"type": "string"` with named values.
 
 ### 3. Implement the transport adapter and connect-failure classifier
 

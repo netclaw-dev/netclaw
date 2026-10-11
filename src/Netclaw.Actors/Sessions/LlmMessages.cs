@@ -110,6 +110,7 @@ internal sealed record WorkingContextSnapshotReady(
     long Generation,
     bool ForceNoTools,
     string? TurnRestartNotice,
+    string? SlashCommandSkillContent,
     WorkingContextSnapshot Snapshot) : INoSerializationVerificationNeeded;
 
 internal sealed record WorkingContextSnapshotCancelled(long Generation)
@@ -119,6 +120,7 @@ internal sealed record WorkingContextSnapshotFailed(
     long Generation,
     bool ForceNoTools,
     string? TurnRestartNotice,
+    string? SlashCommandSkillContent,
     WorkingContext WorkingContext,
     Exception Cause) : INoSerializationVerificationNeeded;
 

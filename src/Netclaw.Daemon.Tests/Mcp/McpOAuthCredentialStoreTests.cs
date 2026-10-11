@@ -19,6 +19,10 @@ namespace Netclaw.Daemon.Tests.Mcp;
 public sealed class McpOAuthCredentialStoreTests : IDisposable
 {
     private static readonly McpServerName ServerName = new("test-server");
+    private static readonly McpOAuthClientIdentity ConfiguredClient = new(
+        "static-client",
+        clientSecret: null,
+        dynamicClientRegistration: false);
     private const string Resource = "https://mcp.example.com/tools?tenant=one";
     private readonly DisposableTempDir _dir = new();
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 7, 22, 12, 0, 0, TimeSpan.Zero));
@@ -29,7 +33,7 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         var paths = Paths();
         var store = CreateStore(paths);
         var active = await PublishStaticAsync(store, "active-access", "active-refresh");
-        var candidate = store.CreateTokenCache(ServerName, Resource, "static-client", true);
+        var candidate = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, true);
 
         await candidate.StoreTokensAsync(Tokens("candidate-access", "candidate-refresh"), CancellationToken.None);
 
@@ -45,7 +49,7 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
     {
         var paths = Paths();
         var store = CreateStore(paths);
-        var candidate = store.CreateTokenCache(ServerName, Resource, "static-client", true);
+        var candidate = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, true);
         await candidate.StoreTokensAsync(Tokens("authorized", "first-refresh"), CancellationToken.None);
         store.Publish(candidate, CancellationToken.None);
 
@@ -57,12 +61,60 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ConfiguredSecretFeedsSdkCacheWithoutBecomingTokenRecordAuthority()
+    {
+        var paths = Paths();
+        var store = CreateStore(paths);
+        var candidate = store.CreateTokenCache(
+            ServerName,
+            Resource,
+            new McpOAuthClientIdentity(
+                "configured-client",
+                new SensitiveString("first-configured-secret"),
+                dynamicClientRegistration: false),
+            true);
+
+        await candidate.StoreTokensAsync(Tokens("authorized", "refresh-token"), CancellationToken.None);
+        store.Publish(candidate, CancellationToken.None);
+
+        Assert.Null(store.GetActiveForTests(ServerName)?.ClientSecret);
+        Assert.Equal(
+            "first-configured-secret",
+            (await candidate.GetTokensAsync(CancellationToken.None))?.ClientSecret);
+
+        var restarted = CreateStore(paths).CreateTokenCache(
+            ServerName,
+            Resource,
+            new McpOAuthClientIdentity(
+                "configured-client",
+                new SensitiveString("replacement-configured-secret"),
+                dynamicClientRegistration: false),
+            false);
+        Assert.Equal(
+            "replacement-configured-secret",
+            (await restarted.GetTokensAsync(CancellationToken.None))?.ClientSecret);
+    }
+
+    [Fact]
+    public void ConfidentialClientIdentityRejectsWhitespace()
+    {
+        Assert.Throws<ArgumentException>(() => new McpOAuthClientIdentity(
+            " ",
+            new SensitiveString("orphan-secret"),
+            dynamicClientRegistration: false));
+        Assert.Throws<ArgumentException>(() => new McpOAuthClientIdentity(
+            "configured-client",
+            new SensitiveString(" "),
+            dynamicClientRegistration: false));
+    }
+
+    [Fact]
     public async Task CommitFailureLeavesActiveStateUntouched()
     {
         var paths = Paths();
         Directory.CreateDirectory(paths.SecretsPath);
         var store = CreateStore(paths);
-        var candidate = store.CreateTokenCache(ServerName, Resource, "static-client", true);
+        var candidate = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, true);
         await candidate.StoreTokensAsync(Tokens("not-published", null), CancellationToken.None);
 
         // A directory standing where the file should be surfaces as IOException on Unix and
@@ -93,7 +145,7 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
     {
         var store = CreateStore();
         var active = await PublishStaticAsync(store, "old-access", "old-refresh");
-        var candidate = store.CreateTokenCache(ServerName, Resource, "static-client", true);
+        var candidate = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, true);
         await active.StoreTokensAsync(Tokens("raced-access", "raced-refresh"), CancellationToken.None);
         await candidate.StoreTokensAsync(Tokens("authorized-access", null), CancellationToken.None);
 
@@ -110,7 +162,7 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         var paths = Paths();
         var store = CreateStore(paths);
         var active = await PublishStaticAsync(store, "seed", "seed-refresh");
-        var candidate = store.CreateTokenCache(ServerName, Resource, "static-client", false);
+        var candidate = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, false);
 
         await candidate.StoreTokensAsync(Tokens("rotated", "rotated-refresh"), CancellationToken.None);
         store.Discard(candidate);
@@ -120,30 +172,171 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task RetiredCacheCannotOverwritePublishedCredentials()
+    public async Task RetiredWriterRotationPersistsItsRefreshToken()
+    {
+        var paths = Paths();
+        var store = CreateStore(paths);
+        var retired = await PublishStaticAsync(store, "generation-one", "refresh-one");
+        var current = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, false);
+        store.Publish(current, CancellationToken.None);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        // The old connection finishes a refresh after the replacement was published. The
+        // provider already consumed refresh-one, so refresh-two is the only live token.
+        await retired.StoreTokensAsync(Tokens("generation-two", "refresh-two"), CancellationToken.None);
+
+        var committed = CreateStore(paths).GetActiveForTests(ServerName);
+        Assert.Equal("generation-two", committed?.AccessToken.Value);
+        Assert.Equal("refresh-two", committed?.RefreshToken?.Value);
+        Assert.Equal("refresh-two", (await current.GetTokensAsync(CancellationToken.None))?.RefreshToken);
+    }
+
+    [Fact]
+    public async Task RetiredWriterOfSupersededRegistrationCannotOverwriteCredentials()
     {
         var store = CreateStore();
-        var retired = await PublishStaticAsync(store, "generation-one", "refresh-one");
-        var current = store.CreateTokenCache(ServerName, Resource, "static-client", false);
-        store.Publish(current, CancellationToken.None);
+        var retired = await PublishDynamicAsync(store);
+        var reauthorized = store.CreateTokenCache(ServerName, Resource, null, true);
+        store.AdoptClientIdentity(reauthorized, new McpOAuthClientIdentity(
+            "new-client",
+            new SensitiveString("new-secret"),
+            dynamicClientRegistration: true));
+        await reauthorized.StoreTokensAsync(Tokens("new-access", "new-refresh"), CancellationToken.None);
+        store.Publish(reauthorized, CancellationToken.None);
 
         await Assert.ThrowsAsync<McpOAuthRetiredCredentialWriterException>(async () =>
             await retired.StoreTokensAsync(Tokens("stale", "stale-refresh"), CancellationToken.None));
 
-        Assert.Equal("generation-one", store.GetActiveForTests(ServerName)?.AccessToken.Value);
+        Assert.Equal("new-access", store.GetActiveForTests(ServerName)?.AccessToken.Value);
+        Assert.Equal("new-refresh", store.GetActiveForTests(ServerName)?.RefreshToken?.Value);
     }
 
     [Fact]
-    public async Task OrdinaryCandidateCannotOverwriteConcurrentRefresh()
+    public async Task OrdinaryCandidateReadsRefreshTokenRotatedByLiveConnection()
     {
         var store = CreateStore();
         var active = await PublishStaticAsync(store, "seed", "seed-refresh");
-        var candidate = store.CreateTokenCache(ServerName, Resource, "static-client", false);
+        var candidate = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, false);
+
         await active.StoreTokensAsync(Tokens("latest", "latest-refresh"), CancellationToken.None);
+
+        var read = await candidate.GetTokensAsync(CancellationToken.None);
+        Assert.Equal("latest", read?.AccessToken);
+        Assert.Equal("latest-refresh", read?.RefreshToken);
+    }
+
+    [Fact]
+    public async Task OlderGrantFromStaleCandidateDoesNotReplaceNewerGrant()
+    {
+        var store = CreateStore();
+        var active = await PublishStaticAsync(store, "seed", "seed-refresh");
+        var candidate = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, false);
+        var candidateObtainedAt = _time.GetUtcNow();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await active.StoreTokensAsync(Tokens("latest", "latest-refresh"), CancellationToken.None);
+
+        await candidate.StoreTokensAsync(
+            Tokens("older-candidate", "candidate-refresh", candidateObtainedAt), CancellationToken.None);
+
+        // Access token and refresh token come from one grant, the newer one.
+        var committed = store.GetActiveForTests(ServerName);
+        Assert.Equal("latest", committed?.AccessToken.Value);
+        Assert.Equal("latest-refresh", committed?.RefreshToken?.Value);
+    }
+
+    [Fact]
+    public async Task PublishedConnectionThatMissedANewerGrantDoesNotReplaceIt()
+    {
+        var store = CreateStore();
+        var published = await PublishStaticAsync(store, "seed", "seed-refresh");
+        var publishedObtainedAt = _time.GetUtcNow();
+        var candidate = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, false);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await candidate.StoreTokensAsync(Tokens("candidate-access", "candidate-refresh"), CancellationToken.None);
+
+        // The published connection read the record before the candidate wrote, and stores
+        // an older grant afterwards.
+        await published.StoreTokensAsync(
+            Tokens("published-access", "published-refresh", publishedObtainedAt), CancellationToken.None);
+
+        var committed = store.GetActiveForTests(ServerName);
+        Assert.Equal("candidate-access", committed?.AccessToken.Value);
+        Assert.Equal("candidate-refresh", committed?.RefreshToken?.Value);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RefreshOfRetiredConnectionCannotReplaceExplicitReauthorizationWithSameClient(bool refreshIsNewer)
+    {
+        var store = CreateStore();
+        var retired = await PublishStaticAsync(store, "old-access", "old-refresh");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        var reauthorized = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, true);
+        await reauthorized.StoreTokensAsync(Tokens("new-access", "new-refresh"), CancellationToken.None);
+        store.Publish(reauthorized, CancellationToken.None);
+        var refreshObtainedAt = _time.GetUtcNow() + (refreshIsNewer ? TimeSpan.FromMinutes(1) : -TimeSpan.FromSeconds(30));
+
         await Assert.ThrowsAsync<McpOAuthRetiredCredentialWriterException>(async () =>
-            await candidate.StoreTokensAsync(
-                Tokens("stale-candidate", "stale-refresh"), CancellationToken.None));
-        Assert.Equal("latest", store.GetActiveForTests(ServerName)?.AccessToken.Value);
+            await retired.StoreTokensAsync(
+                Tokens("old-access-2", "old-refresh-2", refreshObtainedAt), CancellationToken.None));
+
+        var committed = store.GetActiveForTests(ServerName);
+        Assert.Equal("new-access", committed?.AccessToken.Value);
+        Assert.Equal("new-refresh", committed?.RefreshToken?.Value);
+        Assert.Equal("old-access", (await retired.GetTokensAsync(CancellationToken.None))?.AccessToken);
+    }
+
+    [Fact]
+    public async Task RefreshOfRetiredConnectionCannotReplaceDynamicReauthorizationThatReusedRegistration()
+    {
+        var store = CreateStore();
+        var retired = await PublishDynamicAsync(store);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        // Reauthorization without a configured identity reuses the stored registration.
+        var reauthorized = store.CreateTokenCache(ServerName, Resource, null, true);
+        Assert.Equal("dynamic-client", reauthorized.Identity?.ClientId);
+        await reauthorized.StoreTokensAsync(Tokens("new-access", "new-refresh"), CancellationToken.None);
+        store.Publish(reauthorized, CancellationToken.None);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        await Assert.ThrowsAsync<McpOAuthRetiredCredentialWriterException>(async () =>
+            await retired.StoreTokensAsync(Tokens("old-access-2", "old-refresh-2"), CancellationToken.None));
+
+        Assert.Equal("new-refresh", store.GetActiveForTests(ServerName)?.RefreshToken?.Value);
+    }
+
+    [Fact]
+    public async Task CacheDoesNotAdoptActiveTokensOfAnotherClient()
+    {
+        var store = CreateStore();
+        var original = await PublishStaticAsync(store, "original-access", "original-refresh");
+        var other = store.CreateTokenCache(
+            ServerName,
+            Resource,
+            new McpOAuthClientIdentity("other-client", clientSecret: null, dynamicClientRegistration: false),
+            false);
+
+        await other.StoreTokensAsync(Tokens("other-access", "other-refresh"), CancellationToken.None);
+
+        Assert.Equal("other-client", store.GetActiveForTests(ServerName)?.ClientId);
+        Assert.Equal("original-access", (await original.GetTokensAsync(CancellationToken.None))?.AccessToken);
+    }
+
+    [Fact]
+    public async Task ExplicitCandidateKeepsItsOwnTokensWhenActiveRecordChanges()
+    {
+        var store = CreateStore();
+        var active = await PublishStaticAsync(store, "active-access", "active-refresh");
+        var unauthorized = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, true);
+        var candidate = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, true);
+        await candidate.StoreTokensAsync(Tokens("candidate-access", "candidate-refresh"), CancellationToken.None);
+
+        await active.StoreTokensAsync(Tokens("refreshed-access", "refreshed-refresh"), CancellationToken.None);
+
+        Assert.Null(await unauthorized.GetTokensAsync(CancellationToken.None));
+        Assert.Equal("candidate-access", (await candidate.GetTokensAsync(CancellationToken.None))?.AccessToken);
     }
 
     [Fact]
@@ -152,7 +345,10 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         var paths = Paths();
         var store = CreateStore(paths);
         var candidate = store.CreateTokenCache(ServerName, Resource, null, true);
-        store.AdoptClientIdentity(candidate, new McpOAuthClientIdentity("dynamic-client", "dynamic-secret", DynamicClientRegistration: true));
+        store.AdoptClientIdentity(candidate, new McpOAuthClientIdentity(
+            "dynamic-client",
+            new SensitiveString("dynamic-secret"),
+            dynamicClientRegistration: true));
         await candidate.StoreTokensAsync(Tokens("access", "refresh"), CancellationToken.None);
         store.Publish(candidate, CancellationToken.None);
 
@@ -160,8 +356,9 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         var restored = restarted.GetIdentity(
             restarted.CreateTokenCache(ServerName, Resource, null, false));
 
+        Assert.NotNull(restored);
         Assert.Equal("dynamic-client", restored.ClientId);
-        Assert.Equal("dynamic-secret", restored.ClientSecret);
+        Assert.Equal("dynamic-secret", restored.ClientSecret?.Value);
         Assert.True(restored.DynamicClientRegistration);
     }
 
@@ -173,7 +370,10 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         var store = new McpOAuthCredentialStore(
             paths, _time, protector, NullLogger<McpOAuthCredentialStore>.Instance);
         var candidate = store.CreateTokenCache(ServerName, Resource, null, true);
-        store.AdoptClientIdentity(candidate, new McpOAuthClientIdentity("dynamic-client", "client-secret-must-not-leak", DynamicClientRegistration: true));
+        store.AdoptClientIdentity(candidate, new McpOAuthClientIdentity(
+            "dynamic-client",
+            new SensitiveString("client-secret-must-not-leak"),
+            dynamicClientRegistration: true));
         await candidate.StoreTokensAsync(
             Tokens("access-must-not-leak", "refresh-must-not-leak"), CancellationToken.None);
         store.Publish(candidate, CancellationToken.None);
@@ -220,7 +420,7 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         var cache = store.CreateTokenCache(ServerName, "https://other.example/mcp", null, false);
 
         Assert.Null(await cache.GetTokensAsync(CancellationToken.None));
-        Assert.Null(store.GetIdentity(cache).ClientId);
+        Assert.Null(store.GetIdentity(cache));
         Assert.True(store.RequiresAuthorization(ServerName, "https://other.example/mcp"));
         Assert.Equal("access", store.GetActiveForTests(ServerName)?.AccessToken.Value);
     }
@@ -230,10 +430,18 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
     {
         var store = CreateStore();
         var cache = store.CreateTokenCache(
-            ServerName, "https://other.example/mcp", "configured-client", false);
+            ServerName,
+            "https://other.example/mcp",
+            new McpOAuthClientIdentity(
+                "configured-client",
+                clientSecret: null,
+                dynamicClientRegistration: false),
+            false);
 
-        Assert.Equal("configured-client", store.GetIdentity(cache).ClientId);
-        Assert.False(store.GetIdentity(cache).DynamicClientRegistration);
+        var identity = store.GetIdentity(cache);
+        Assert.NotNull(identity);
+        Assert.Equal("configured-client", identity.ClientId);
+        Assert.False(identity.DynamicClientRegistration);
     }
 
     [Fact]
@@ -246,8 +454,10 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         var cache = store.CreateTokenCache(ServerName, Resource, null, false);
 
         Assert.Equal("legacy-access", (await cache.GetTokensAsync(CancellationToken.None))?.AccessToken);
-        Assert.Equal("legacy-client", store.GetIdentity(cache).ClientId);
-        Assert.True(store.GetIdentity(cache).DynamicClientRegistration);
+        var identity = store.GetIdentity(cache);
+        Assert.NotNull(identity);
+        Assert.Equal("legacy-client", identity.ClientId);
+        Assert.True(identity.DynamicClientRegistration);
         var migrated = store.GetActiveForTests(ServerName);
         Assert.Equal(Resource, migrated?.ResourceIdentity);
 
@@ -256,7 +466,7 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         Assert.Equal(Resource, migrated?.McpServerUrl);
         var restartedStore = CreateStore(paths);
         var restarted = restartedStore.CreateTokenCache(ServerName, Resource, null, false);
-        Assert.Equal("legacy-client", restartedStore.GetIdentity(restarted).ClientId);
+        Assert.Equal("legacy-client", restartedStore.GetIdentity(restarted)?.ClientId);
     }
 
     [Fact]
@@ -340,7 +550,7 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         var cache = store.CreateTokenCache(ServerName, Resource, null, false);
 
         Assert.Null(await cache.GetTokensAsync(CancellationToken.None));
-        Assert.Null(store.GetIdentity(cache).ClientId);
+        Assert.Null(store.GetIdentity(cache));
         Assert.Contains("legacy-access", File.ReadAllText(paths.SecretsPath), StringComparison.Ordinal);
     }
 
@@ -388,7 +598,7 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
 
         // The identity is gone, so the next authorization registers afresh instead of
         // reusing an id the server has already refused.
-        Assert.Null(store.GetIdentity(store.CreateTokenCache(ServerName, Resource, null, true)).ClientId);
+        Assert.Null(store.GetIdentity(store.CreateTokenCache(ServerName, Resource, null, true)));
         var active = store.GetActiveForTests(ServerName);
         Assert.Null(active?.ClientId);
         Assert.False(active?.DynamicClientRegistration);
@@ -407,7 +617,10 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         await PublishDynamicAsync(store);
         store.ForgetClientIdentity(ServerName, Resource, CancellationToken.None);
         var replacement = store.CreateTokenCache(ServerName, Resource, null, true);
-        store.AdoptClientIdentity(replacement, new McpOAuthClientIdentity("new-client", "new-secret", DynamicClientRegistration: true));
+        store.AdoptClientIdentity(replacement, new McpOAuthClientIdentity(
+            "new-client",
+            new SensitiveString("new-secret"),
+            dynamicClientRegistration: true));
         await replacement.StoreTokensAsync(Tokens("new-access", null), CancellationToken.None);
 
         store.Publish(replacement, CancellationToken.None);
@@ -420,7 +633,7 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
         string accessToken,
         string? refreshToken)
     {
-        var cache = store.CreateTokenCache(ServerName, Resource, "static-client", false);
+        var cache = store.CreateTokenCache(ServerName, Resource, ConfiguredClient, false);
         await cache.StoreTokensAsync(Tokens(accessToken, refreshToken), CancellationToken.None);
         store.Publish(cache, CancellationToken.None);
         return cache;
@@ -429,20 +642,26 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
     private async Task<McpOAuthTokenCache> PublishDynamicAsync(McpOAuthCredentialStore store)
     {
         var cache = store.CreateTokenCache(ServerName, Resource, null, true);
-        store.AdoptClientIdentity(cache, new McpOAuthClientIdentity("dynamic-client", "dynamic-secret", DynamicClientRegistration: true));
+        store.AdoptClientIdentity(cache, new McpOAuthClientIdentity(
+            "dynamic-client",
+            new SensitiveString("dynamic-secret"),
+            dynamicClientRegistration: true));
         await cache.StoreTokensAsync(Tokens("access", "refresh"), CancellationToken.None);
         store.Publish(cache, CancellationToken.None);
         return cache;
     }
 
-    private TokenContainer Tokens(string accessToken, string? refreshToken) => new()
+    private TokenContainer Tokens(
+        string accessToken,
+        string? refreshToken,
+        DateTimeOffset? obtainedAt = null) => new()
     {
         AccessToken = accessToken,
         RefreshToken = refreshToken,
         TokenType = "Bearer",
         Scope = "read write",
         ExpiresIn = 3600,
-        ObtainedAt = _time.GetUtcNow(),
+        ObtainedAt = obtainedAt ?? _time.GetUtcNow(),
     };
 
     private NetclawPaths Paths()

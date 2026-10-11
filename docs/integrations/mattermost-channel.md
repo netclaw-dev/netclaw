@@ -99,6 +99,11 @@ Mattermost delivers interactive button clicks over an inbound HTTP POST, unlike
 Slack Socket Mode or the Discord gateway. When `CallbackUrl` is configured the
 daemon exposes `/api/mattermost/actions`:
 
+- The user's client sends the click to Mattermost. The Mattermost server sends
+  the callback to Netclaw; the client does not need access to `CallbackUrl`.
+- Button action IDs contain only ASCII letters and digits. Mattermost 11.7.7
+  rejects other characters before it calls Netclaw. Approval option keys stay in the
+  token store and do not become action IDs.
 - Button callbacks carry opaque one-time action tokens. Tokens are consumed once,
   expire automatically, and buttons minted by a previous daemon process are
   rejected after a restart.
@@ -146,6 +151,12 @@ Reminder channel delivery maps to the generic `send_channel_message` tool with
   accepting ingress again.
 - SDK event handlers are subscribed for the lifecycle actor lifetime, not on
   each reconnect attempt, so reconnect cycles do not duplicate message handlers.
+- Netclaw sends a native typing pulse to the thread while a session processes
+  an accepted message. The pulse repeats every three seconds. It stops when the
+  session becomes idle, when the session pipeline resets, or when the thread
+  binding stops. One processing phase sends pulses for ten minutes at most, so
+  a lost idle signal cannot leave a thread in the typing state. A pulse that fails is logged as a warning and does not affect
+  the turn.
 
 Common failure patterns:
 

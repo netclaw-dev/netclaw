@@ -49,6 +49,12 @@ public sealed class HeadlessChannel : IChannel
     private long _promptSentTicks;
     private long _firstDeltaTicks;
 
+    /// <summary>
+    /// The process exit code for this run: 1 once the session reports a failed turn
+    /// (provider unreachable, timeout, tool failure), otherwise 0.
+    /// </summary>
+    internal int ExitCode { get; private set; }
+
     public Actors.Channels.ChannelType ChannelType => Actors.Channels.ChannelType.Headless;
     public string DisplayName => "Headless Prompt";
 
@@ -149,6 +155,8 @@ public sealed class HeadlessChannel : IChannel
             _logger.LogInformation("Headless session started: {SessionId} (log: {LogPath})", sessionId, logPath);
 
             await turnCompleted.Task.WaitAsync(stopping);
+            if (ExitCode != 0)
+                Environment.ExitCode = ExitCode;
             _lifetime.StopApplication();
         }
         catch (OperationCanceledException ex)
@@ -171,7 +179,7 @@ public sealed class HeadlessChannel : IChannel
         }
     }
 
-    private void HandleOutput(SessionOutput output, StreamWriter? log)
+    internal void HandleOutput(SessionOutput output, StreamWriter? log)
     {
         switch (output)
         {
@@ -277,6 +285,9 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case TurnCompleted msg:
+                if (msg.Outcome == TurnOutcome.Failed)
+                    ExitCode = 1;
+
                 if (_jsonOutput)
                 {
                     WriteJsonEnvelope();

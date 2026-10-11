@@ -36,8 +36,7 @@ public sealed class MemoryCurationActorNominatorTests : TestKit
     private static readonly float[] ExistingVector = [1f, 0f];
     private static readonly float[] QueryVectorAt093 = [0.93f, 0.367623f];
 
-    private readonly string _dbDir = Path.Combine(
-        Path.GetTempPath(), "netclaw-curation-actor-nominator-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _dbDir = Path.Combine(Path.GetTempPath(), $"netclaw-curation-actor-nominator-tests-{Guid.NewGuid():N}");
 
     public MemoryCurationActorNominatorTests(ITestOutputHelper output) : base(output: output)
     {

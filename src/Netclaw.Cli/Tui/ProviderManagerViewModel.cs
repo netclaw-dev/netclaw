@@ -917,9 +917,11 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public void ConfirmAdd()
     {
         if (!_newProviderPersisted)
+        {
             WriteProviderConfig();
+            StatusMessage.Value = $"Added provider '{NewProviderName}'. {ConfigFileHelper.DaemonAppliesChange}";
+        }
 
-        StatusMessage.Value = $"Added provider '{NewProviderName}'. Restart daemon for changes to take effect.";
         ClearAddState();
         RefreshAndProbeAll();
     }
@@ -936,6 +938,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         DetailProvider = item;
         StartRemove();
+
+        // A refused removal leaves the list showing; do not keep a detail provider the user never opened.
+        if (CurrentState.Value != ProviderManagerState.RemoveConfirm)
+            DetailProvider = null;
     }
 
     /// <summary>
@@ -950,8 +956,15 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         RemoveBlockingRoles.Clear();
         ErrorMessage.Value = "";
 
-        var roles = Provider.ProviderCommand.GetReferencingModelRoles(RemoveProviderName, _paths);
-        RemoveBlockingRoles.AddRange(roles);
+        if (!Provider.ProviderCommand.TryGetReferencingModelRoleEntries(RemoveProviderName, _paths, out var entries, out _))
+        {
+            RemoveProviderName = null;
+            ErrorMessage.Value = Model.ModelCommand.InvalidConfigurationMessage;
+            RequestRedraw();
+            return;
+        }
+
+        RemoveBlockingRoles.AddRange(entries.Select(e => e.Role));
 
         CurrentState.Value = ProviderManagerState.RemoveConfirm;
         NotifyStateChanged();
@@ -970,15 +983,23 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         var (config, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
 
+        var wrote = false;
         var providers = ConfigFileHelper.GetSectionOrNull(config, "Providers");
         if (providers?.Remove(RemoveProviderName) == true)
+        {
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+            wrote = true;
+        }
 
         var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
         if (secretProviders?.Remove(RemoveProviderName) == true)
+        {
             ConfigFileHelper.WriteSecretsFile(_paths, secrets);
+            wrote = true;
+        }
 
-        StatusMessage.Value = $"Removed provider '{RemoveProviderName}'. Restart daemon for changes to take effect.";
+        if (wrote)
+            StatusMessage.Value = $"Removed provider '{RemoveProviderName}'. {ConfigFileHelper.DaemonAppliesChange}";
         RemoveProviderName = null;
         DetailProvider = null;
         RefreshAndProbeAll();
@@ -1036,8 +1057,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         }
 
         StatusMessage.Value = result.ReassignedModelRoles.Count > 0
-            ? $"Renamed '{oldName}' to '{trimmed}'. Reassigned model role(s): {string.Join(", ", result.ReassignedModelRoles)}. Restart daemon for changes to take effect."
-            : $"Renamed '{oldName}' to '{trimmed}'. Restart daemon for changes to take effect.";
+            ? $"Renamed '{oldName}' to '{trimmed}'. Reassigned model role(s): {string.Join(", ", result.ReassignedModelRoles)}. {ConfigFileHelper.DaemonAppliesChange}"
+            : $"Renamed '{oldName}' to '{trimmed}'. {ConfigFileHelper.DaemonAppliesChange}";
 
         RenameNewName = null;
         DetailProvider = null;
@@ -1392,14 +1413,14 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
                 // Fix flow: re-probe all providers so list shows fresh health
                 IsFixFlow = false;
-                StatusMessage.Value = "Credentials updated successfully. Restart daemon for changes to take effect.";
+                StatusMessage.Value = $"Credentials updated successfully. {ConfigFileHelper.DaemonAppliesChange}";
                 RefreshAndProbeAll();
             }
             else
             {
                 WriteProviderConfig();
                 _newProviderPersisted = true;
-                StatusMessage.Value = $"Added provider '{NewProviderName}'. Restart daemon for changes to take effect.";
+                StatusMessage.Value = $"Added provider '{NewProviderName}'. {ConfigFileHelper.DaemonAppliesChange}";
                 CurrentState.Value = ProviderManagerState.AddComplete;
             }
         }

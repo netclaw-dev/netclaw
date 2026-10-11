@@ -11,4 +11,9 @@ namespace Netclaw.Actors.Protocol;
 /// <param name="Created">
 /// True when a new session was created; false when existing session was reattached.
 /// </param>
-public sealed record SessionEnsureResultDto(string SessionId, bool Created);
+public sealed record SessionEnsureResultDto(string SessionId, bool Created)
+{
+    public const int SupportedTextAdmissionVersion = 1;
+    public const string TextRejectionPrefix = "Text rejected: ";
+    public int TextAdmissionVersion { get; init; }
+}

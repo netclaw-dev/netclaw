@@ -57,6 +57,9 @@ internal static class ToolOutcomeResults
     public static string AccessDenied(this ToolInvocationContext context, string result)
         => Complete(context, result, new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied));
 
+    public static string AuthorizationDenied(this ToolInvocationContext context, string result)
+        => Complete(context, result, new ToolInvocationReceipt.AuthorizationDenied());
+
     public static string NotFound(this ToolInvocationContext context, string result)
         => Complete(context, result, new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.NotFound));
 
@@ -83,7 +86,7 @@ internal static class ToolOutcomeResults
                     result,
                     ToolRemediationCode.SetWorkingDirectory),
             PathAccessPolicy.PathAccessFailure.InvalidInput => context.InvalidInput(result),
-            _ => context.AccessDenied(result)
+            _ => context.AuthorizationDenied(result)
         };
 
     private static string Complete(

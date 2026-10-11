@@ -6,23 +6,29 @@
 using System.Collections.Concurrent;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Skills;
 
-public sealed class SkillInventoryRefresherTests : IDisposable
+public sealed class SkillInventoryRefresherTests : IAsyncLifetime
 {
-    private readonly string _home = Path.Join(
-        Path.GetTempPath(), $"netclaw-inventory-test-{Guid.NewGuid():N}");
+    private readonly TestSessionTempDirectory _tempDir =
+        TestSessionTempDirectory.Create("netclaw-inventory-test-", createDirectoryTree: true);
+    private readonly string _home;
     private readonly NetclawPaths _paths;
     private readonly SkillRegistry _registry = new();
     private readonly SkillIndexContextLayer _index = new();
 
     public SkillInventoryRefresherTests()
     {
-        _paths = new NetclawPaths(_home);
-        _paths.EnsureDirectoriesExist();
+        _home = _tempDir.Path;
+        _paths = _tempDir.Paths;
     }
+
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+    public ValueTask DisposeAsync() => _tempDir.DisposeAsync();
 
     [Fact]
     public void Refresh_discovers_server_feed_directory_created_after_construction()
@@ -114,12 +120,6 @@ public sealed class SkillInventoryRefresherTests : IDisposable
             ---
             # {{name}}
             """);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_home))
-            Directory.Delete(_home, recursive: true);
     }
 
     private SkillInventoryRefresher CreateRefresher(

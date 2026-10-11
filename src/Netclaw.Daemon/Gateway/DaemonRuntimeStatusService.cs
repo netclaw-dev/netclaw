@@ -33,6 +33,7 @@ internal sealed class DaemonRuntimeStatusService(
     NetclawPaths paths,
     IChatClientProvider chatClientProvider,
     ProviderRuntimeValidation providerValidation,
+    RejectedConfigState rejectedConfig,
     McpClientManager? mcpClientManager = null,
     SQLiteMemoryStore? sqliteMemoryStore = null,
     MemoryEmbedderHolder? memoryEmbedderHolder = null,
@@ -50,11 +51,13 @@ internal sealed class DaemonRuntimeStatusService(
         connectors.AddRange(BuildMcpStatuses());
 
         var degraded = chatClientProvider.IsDegraded;
-        var overall = ResolveOverallStatus(connectors, degraded);
+        var configNotApplied = rejectedConfig.Reason;
+        var overall = ResolveOverallStatus(connectors, degraded, configNotApplied is not null);
 
         return new DaemonRuntimeStatus.Response
         {
             Overall = overall,
+            ConfigNotApplied = configNotApplied,
             Build = new DaemonRuntimeStatus.Build
             {
                 Version = BuildInfo.Version,
@@ -172,6 +175,15 @@ internal sealed class DaemonRuntimeStatusService(
                 Enabled = false,
                 Status = "disabled",
                 Message = "MCP server is disabled in configuration."
+            },
+
+            McpConnectionState.Connected when status.IsDegraded => new DaemonRuntimeStatus.Connector
+            {
+                Key = key,
+                DisplayName = displayName,
+                Enabled = true,
+                Status = "degraded",
+                Message = $"Connected but not responding ({status.ToolCount} cached tools): {status.ErrorMessage}"
             },
 
             McpConnectionState.Connected when status.ToolCount > 0 => new DaemonRuntimeStatus.Connector
@@ -363,12 +375,17 @@ internal sealed class DaemonRuntimeStatusService(
 
     internal static string ResolveOverallStatus(
         IReadOnlyList<DaemonRuntimeStatus.Connector> connectors,
-        bool chatClientDegraded = false)
+        bool chatClientDegraded = false,
+        bool configNotApplied = false)
     {
         // A No-Op chat client means the daemon can't actually serve model
         // responses — surface that at the top level rather than reporting
         // "healthy" while every chat turn returns the configuration banner.
         if (chatClientDegraded)
+            return "degraded";
+
+        // The daemon runs a configuration that differs from the file on disk.
+        if (configNotApplied)
             return "degraded";
 
         if (connectors.Any(c => c.Enabled && c.Status is "disconnected" or "auth-failed" or "auth-required"))

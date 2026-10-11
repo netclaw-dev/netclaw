@@ -201,6 +201,15 @@ public sealed class CliArgsParserTests
         Assert.Equal(expected, CliArgsParser.HasTrailingHelpToken(args, startIndex: 2));
     }
 
+    [Theory]
+    [InlineData(new[] { "secrets", "set", "help" }, false)]
+    [InlineData(new[] { "secrets", "set", "--help" }, true)]
+    [InlineData(new[] { "secrets", "set", "key", "-h" }, true)]
+    public void HasTrailingHelpToken_without_bare_help_only_counts_the_flags(string[] args, bool expected)
+    {
+        Assert.Equal(expected, CliArgsParser.HasTrailingHelpToken(args, startIndex: 2, includeBareHelp: false));
+    }
+
     [Fact]
     public void HasTrailingHelpToken_ignores_tokens_before_startIndex()
     {

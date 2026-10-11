@@ -21,6 +21,11 @@ internal static class SecretsCommand
         var writer = output ?? Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "help";
 
+        // The value operand is free text and a key may be called "help", so only a help flag
+        // in the key slot asks for help.
+        if (CliArgsParser.HasTrailingHelpToken(args[..Math.Min(args.Length, 3)], startIndex: 2, includeBareHelp: false))
+            return RunHelp(writer);
+
         return subcommand switch
         {
             "set" or "add" => RunSet(args, paths, writer),

@@ -497,7 +497,7 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
         name = null;
         headerValue = null;
         error = string.Empty;
-        if (value.Contains('\r') || value.Contains('\n'))
+        if (value.Contains('\r', StringComparison.Ordinal) || value.Contains('\n', StringComparison.Ordinal))
         {
             error = "Outbound webhook auth header must be a single line.";
             return false;

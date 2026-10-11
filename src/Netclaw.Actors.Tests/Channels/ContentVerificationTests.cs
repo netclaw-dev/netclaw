@@ -6,6 +6,7 @@
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -14,10 +15,20 @@ namespace Netclaw.Actors.Tests.Channels;
 /// Direct coverage of the single content-verification decision shared by the
 /// live and historical ingress pipelines.
 /// </summary>
-public sealed class ContentVerificationTests
+public sealed class ContentVerificationTests : IAsyncLifetime
 {
     private static readonly byte[] PngBytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     private static readonly byte[] WindowsExecutableBytes = [0x4D, 0x5A, 0x90, 0x00];
+    private readonly List<TestSessionTempDirectory> _tempDirs = [];
+
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var dir in _tempDirs)
+            await dir.DisposeAsync();
+        _tempDirs.Clear();
+    }
 
     private static IContentScanner RealScanner => new MagicByteContentScanner(new ContentPolicy());
 
@@ -28,9 +39,11 @@ public sealed class ContentVerificationTests
         MaxFilesPerMessage = 10
     };
 
-    private static string WriteTempFile(byte[] bytes, string extension)
+    private string WriteTempFile(byte[] bytes, string extension)
     {
-        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + extension);
+        var dir = TestSessionTempDirectory.Create();
+        _tempDirs.Add(dir);
+        var path = Path.Join(dir.Path, Guid.NewGuid().ToString("N") + extension);
         File.WriteAllBytes(path, bytes);
         return path;
     }

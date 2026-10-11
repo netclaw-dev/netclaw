@@ -26,6 +26,8 @@ public sealed class ToolApprovalStoreTests : IDisposable
             TimeSpan.Zero);
     }
 
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
     private static ApprovalShell NativeShell => OperatingSystem.IsWindows()
         ? ApprovalShell.PowerShell
         : ApprovalShell.Bash;
@@ -166,6 +168,21 @@ public sealed class ToolApprovalStoreTests : IDisposable
         Assert.Single(entries);
     }
 
+    // The save-time skip uses the matcher rule: a verb grant covers a longer
+    // grant, and a program-only grant covers no longer grant.
+    [Theory]
+    [InlineData("git push", "git push upstream", false)]
+    [InlineData("git push", "git push origin main", false)]
+    [InlineData("git push upstream", "git push origin main", true)]
+    [InlineData("git push origin feature-x", "git push origin main", true)]
+    [InlineData("gh", "gh auth logout", true)]
+    public void AddApproval_skips_a_grant_that_a_stored_grant_covers(string stored, string added, bool saved)
+    {
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb(stored));
+
+        Assert.Equal(saved, _store.AddApproval(TrustAudience.Personal, "shell_execute", InDir(added, "/home/user/repo")));
+    }
+
     [Fact]
     public void AddApproval_normalizes_trailing_slash_in_directory()
     {
@@ -278,6 +295,58 @@ public sealed class ToolApprovalStoreTests : IDisposable
         Assert.Equal(2, reloaded.Count);
         Assert.Contains(reloaded, e => e.Verb == "freshdesk" && e.Directory is null);
         Assert.Contains(reloaded, e => e.Verb == "grep" && e.Directory == "/home/user/logs");
+    }
+
+    // R1 load/round-trip: grants that older versions saved by program spelling
+    // load in the absolute-path shape that the shell matcher reads, and a later
+    // write keeps that shape. A relative program with no folder stays legacy.
+    [SlopwatchSuppress("SW001", "Bash program paths and the home directory need a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "Bash program paths and the home directory need a POSIX host.")]
+    public void Program_spellings_load_and_save_as_program_paths()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        File.WriteAllText(_file, $$"""
+            {
+              "version": 3,
+              "audiences": { "personal": { "shell_execute": [
+                { "shell": "Bash", "match": "LegacyExact", "verb": "~/.dotnet/dotnet build", "directory": null, "createdAt": "2026-06-26T19:57:52+00:00" },
+                { "shell": "Bash", "match": "LegacyExact", "verb": "{{home}}/.dotnet/dotnet build", "directory": null, "createdAt": "2026-06-27T00:00:00+00:00" },
+                { "shell": "Bash", "match": "TokenPrefix", "verbTokens": ["~/.dotnet/dotnet", "slopwatch", "analyze"], "directory": null, "createdAt": null },
+                { "shell": "Bash", "match": "TokenPrefix", "verbTokens": ["/opt/./tools//bin/../ilspycmd"], "directory": null, "createdAt": null },
+                { "shell": "Bash", "match": "LegacyExact", "verb": "./prune.sh", "directory": "/opt/skills/disk-cleanup", "createdAt": null },
+                { "shell": "Bash", "match": "TokenPrefix", "verbTokens": ["scripts/../tools/build.sh"], "directory": null, "repository": "/src/repo/.git", "createdAt": null },
+                { "shell": "Bash", "match": "TokenPrefix", "verbTokens": ["../shared/build.sh"], "directory": null, "repository": "/src/repo/.git", "createdAt": null },
+                { "shell": "Bash", "match": "TokenPrefix", "verbTokens": ["./ilspycmd"], "directory": null, "createdAt": null },
+                { "shell": "Bash", "match": "TokenPrefix", "verbTokens": ["dotnet", "build"], "directory": null, "createdAt": null },
+                { "shell": "Bash", "match": "LegacyExact", "verb": "REPOS_DIR=$HOME/repositories bash", "directory": "/opt/scripts", "createdAt": null }
+              ] } }
+            }
+            """);
+
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git status"));
+        var reloaded = new ToolApprovalStore(
+            _file,
+            timeProvider: null,
+            migrationContext: new ApprovalStoreMigrationContext(NativeShell),
+            lockTimeout: TimeSpan.Zero).GetApprovedEntries(TrustAudience.Personal, "shell_execute");
+
+        Assert.Equal(
+            [
+                $"Bash legacy-exact \"{home}/.dotnet/dotnet build\" anywhere",
+                $"Bash token-prefix \"{home}/.dotnet/dotnet slopwatch analyze\" anywhere",
+                "Bash token-prefix \"/opt/tools/ilspycmd\" anywhere",
+                "Bash legacy-exact \"/opt/skills/disk-cleanup/prune.sh\" in /opt/skills/disk-cleanup",
+                "Bash token-prefix \"./tools/build.sh\" in repository /src/repo/.git",
+                "Bash token-prefix \"../shared/build.sh\" in repository /src/repo/.git (legacy program spelling)",
+                "Bash token-prefix \"./ilspycmd\" anywhere (legacy program spelling)",
+                "Bash token-prefix \"dotnet build\" anywhere",
+                "Bash legacy-exact \"REPOS_DIR=$HOME/repositories bash\" in /opt/scripts",
+                "Bash token-prefix \"git status\" anywhere",
+            ],
+            reloaded.Select(static entry => entry.FormatScope()));
+        // Two spellings of one file are one grant; the earlier grant stays.
+        Assert.Equal(DateTimeOffset.Parse("2026-06-26T19:57:52+00:00"), reloaded[0].CreatedAt);
+        Assert.DoesNotContain("~/", File.ReadAllText(_file), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -820,4 +889,15 @@ public sealed class ToolApprovalStoreTests : IDisposable
 
         public void EnsureNotLink(string path) => _inner.EnsureNotLink(path);
     }
+}
+
+/// <summary>
+/// Supplies source-level Slopwatch suppressions without a runtime package dependency.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
+internal sealed class SlopwatchSuppressAttribute(string ruleId, string reason) : Attribute
+{
+    public string RuleId { get; } = ruleId;
+
+    public string Reason { get; } = reason;
 }

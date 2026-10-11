@@ -42,8 +42,7 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         if (ids.Length == 0)
             return "No memory IDs provided.";
 
-        var sessionId = string.IsNullOrWhiteSpace(context.SessionId) ? "manual/tool" : context.SessionId!;
-        var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionId);
+        var audience = context.Audience;
         var boundary = MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary?.Value);
         var resolved = await _store.ResolveMemoryHandlesAsync(ids, boundary, audience, ct);
         var unresolved = resolved.Where(x => !x.Resolved).ToArray();

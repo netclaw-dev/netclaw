@@ -9,7 +9,9 @@ narrow a glossary term only when it states the exception.
 
 - `SPEC-001-runtime-boundaries.md` (PRD-001, PRD-002)
 - `SPEC-002-session-lifecycle-and-protocol.md` (PRD-001)
-- `SPEC-003-acl-policy-and-security-controls.md` (PRD-001, PRD-002)
+- `SPEC-003-acl-policy-and-security-controls.md` (PRD-001, PRD-002) — pointer to
+  [`docs/architecture/tool-authorization.md`](../architecture/tool-authorization.md)
+  and the `tool-authorization` OpenSpec capability
 - `SPEC-004-cli-contract.md` (PRD-004)
 - `SPEC-005-operator-ui-contract.md` (PRD-003)
 - `SPEC-006-gateway-exposure-and-remote-access.md` (PRD-002, PRD-004)
@@ -21,3 +23,4 @@ narrow a glossary term only when it states the exception.
 - `SPEC-016-tool-liveness-and-stall-detection.md` (PRD-001, PRD-006)
 
 OpenSpec equivalents live in `openspec/specs/` and should remain aligned.
+Architecture documents for people live in [`docs/architecture/`](../architecture/README.md).

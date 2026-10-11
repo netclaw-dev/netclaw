@@ -205,7 +205,7 @@ public sealed class ProviderStepView : IWizardStepView
         _githubCopilotHostInput = new TextInputNode()
             .WithPlaceholder("https://ghe.example.com");
         if (!string.IsNullOrWhiteSpace(vm.GitHubCopilotHostInput))
-            _githubCopilotHostInput.Text = vm.GitHubCopilotHostInput;
+            WizardStepHelpers.SeedTextInput(_githubCopilotHostInput, vm.GitHubCopilotHostInput);
         _githubCopilotHostInput.OnFocused();
         _lastFocusedInput = _githubCopilotHostInput;
 
@@ -241,7 +241,7 @@ public sealed class ProviderStepView : IWizardStepView
         _githubCopilotApiBaseInput = new TextInputNode()
             .WithPlaceholder(placeholder);
         if (!string.IsNullOrWhiteSpace(vm.GitHubCopilotApiBaseInput))
-            _githubCopilotApiBaseInput.Text = vm.GitHubCopilotApiBaseInput;
+            WizardStepHelpers.SeedTextInput(_githubCopilotApiBaseInput, vm.GitHubCopilotApiBaseInput);
         _githubCopilotApiBaseInput.OnFocused();
         _lastFocusedInput = _githubCopilotApiBaseInput;
 
@@ -282,7 +282,7 @@ public sealed class ProviderStepView : IWizardStepView
         {
             var defaultEndpoint = descriptor.DefaultEndpoint;
             _endpointInput = new TextInputNode().WithPlaceholder(defaultEndpoint);
-            _endpointInput.Text = vm.EndpointInput ?? defaultEndpoint;
+            WizardStepHelpers.SeedTextInput(_endpointInput, vm.EndpointInput ?? defaultEndpoint);
             _endpointInput.OnFocused();
             _lastFocusedInput = _endpointInput;
 
@@ -318,7 +318,7 @@ public sealed class ProviderStepView : IWizardStepView
             .WithPlaceholder($"Enter {displayName} API key...");
 
         if (!string.IsNullOrWhiteSpace(vm.ApiKeyInput))
-            _apiKeyInput.Text = vm.ApiKeyInput;
+            WizardStepHelpers.SeedTextInput(_apiKeyInput, vm.ApiKeyInput);
 
         _apiKeyInput.OnFocused();
         _lastFocusedInput = _apiKeyInput;
@@ -354,7 +354,7 @@ public sealed class ProviderStepView : IWizardStepView
         _apiKeyInput = new TextInputNode()
             .AsPassword()
             .WithPlaceholder("Leave blank for no authentication...");
-        _apiKeyInput.Text = vm.ApiKeyInput ?? string.Empty;
+        WizardStepHelpers.SeedTextInput(_apiKeyInput, vm.ApiKeyInput ?? string.Empty);
         _apiKeyInput.OnFocused();
         _lastFocusedInput = _apiKeyInput;
 

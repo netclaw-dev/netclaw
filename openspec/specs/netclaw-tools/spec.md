@@ -4,6 +4,9 @@
 
 Define Netclaw's first-party and integrated tool execution behavior, including
 authorization, approval, and filesystem tooling.
+
+Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for tool call, dispatcher, tool result, tool receipt, outcome category, application error, and tool-declared error.
+
 ## Requirements
 
 ### Requirement: First-party tool outcomes are machine-actionable
@@ -12,31 +15,203 @@ First-party workspace tool execution SHALL produce exactly one call-local
 outcome category: `success`, `invalid_input`, `access_denied`, `not_found`,
 `transient_failure`, or `recoverable_correction`. The category SHALL be separate
 from the model-facing string. The system SHALL NOT infer it from that string.
-The outcome MAY carry a bounded remediation code and canonical file activity.
-It SHALL NOT change the public string-returning `INetclawTool` contract.
+The outcome MAY carry canonical file activity. A `recoverable_correction`
+outcome SHALL carry exactly one closed internal remediation code. Every other
+outcome SHALL reject remediation. Dynamic facts SHALL remain in the bounded
+model-facing result and SHALL NOT become a free-form receipt field. It SHALL NOT
+change the public string-returning `INetclawTool` contract.
+
+The shared dispatcher, `DispatchingToolExecutor`, SHALL classify a terminal policy denial as `access_denied` for parent and child callers. An approval request SHALL NOT create a terminal receipt before its final decision.
+
+The receipt category answers what happened in a stable machine-readable form.
+The separate bounded result explains why to the model. The receipt does not copy
+or parse that text.
+
+The parent and child execution paths SHALL use one shared presenter to turn a
+validated remediation into one model-facing next action. The presenter SHALL
+omit a next action that names a tool hidden from the current audience. It SHALL
+NOT grant authority, execute a tool, rewrite a tool call, or persist the
+remediation.
+
+The following pseudocode shows the required separation:
+
+```text
+tool implementation returns:
+  result  = raw factual text
+  receipt = trusted internal facts for the actor
+
+dispatcher normal-return path:
+  redact and bound the factual text
+
+shared presenter receives:
+  current model-result text
+  receipt.RemediationCode
+  current tool visibility
+
+shared presenter returns:
+  one final tool-role message for the model
+```
+
+Example receipt shapes:
+
+```text
+successful file read:
+  category      = Success
+  file activity = Read("/workspace/project/README.md")
+  remediation   = none
+
+policy denial before tool execution:
+  category      = AccessDenied
+  file activity = empty
+  remediation   = none
+  model result  = "Tool access denied: tool_not_allowed_for_audience_profile"
+
+path access denial inside file_read:
+  category      = AccessDenied
+  file activity = empty
+  remediation   = none
+  model result  = "Error: Path is outside trusted roots: /workspace."
+
+correctable missing path base:
+  category      = RecoverableCorrection
+  file activity = empty
+  remediation   = SetWorkingDirectory
+  model result  = "Error: invalid_context: No project or session directory is available."
+```
+
+Counterexamples:
+
+| Result | Why it is invalid |
+|---|---|
+| `AccessDenied` plus successful file activity | A denied call did not read or change the file. |
+| `Success` plus `SetWorkingDirectory` remediation | Only a recoverable correction may carry remediation. |
+| Approval request plus terminal `AccessDenied` receipt | Approval is a paused, undecided call rather than a denial. |
+| Inferring `not_found` because the string contains “not found” | The typed receipt, not prose, owns the outcome. |
 
 #### Scenario: Access denial has no successful file activity
 
-- **GIVEN** `file_read` is called for a path outside the current read authority
-- **WHEN** scoped access denies the call
+- **GIVEN** `file_read` is called for a path outside the current audience's read authority
+- **WHEN** the path access decision denies the call
 - **THEN** the outcome category is `access_denied`
 - **AND** the outcome contains no successful file activity
+- **AND** the outcome contains no remediation
 - **AND** the model receives a bounded denial string
+
+#### Scenario: Dispatcher denial has one category
+
+- **GIVEN** policy denies a tool before its implementation runs
+- **WHEN** a parent or child actor invokes the tool
+- **THEN** the receipt category is `access_denied`
+- **AND** neither actor reports `transient_failure`
+- **AND** the separate model-facing result includes the bounded policy reason
+
+#### Scenario: Approval request is not terminal
+
+- **GIVEN** a tool requires human approval
+- **WHEN** the dispatcher parks the call for that decision
+- **THEN** no terminal denial receipt is recorded
+- **AND** an approved retry can execute the tool
 
 #### Scenario: Recoverable correction stays distinct from failure
 
 - **GIVEN** a workspace tool can continue after the project directory is declared
+- **AND** `set_working_directory` is visible to the current model
 - **WHEN** the missing declaration is the only blocker
 - **THEN** the outcome category is `recoverable_correction`
-- **AND** its remediation code identifies `set_working_directory`
+- **AND** its remediation code is `SetWorkingDirectory`
+- **AND** the shared presenter tells the model to call `set_working_directory`
 - **AND** no authority is granted by the outcome itself
+
+#### Scenario: Parent and child present the same correction
+
+- **GIVEN** the same validated recoverable correction reaches a parent and child session
+- **WHEN** each path creates its tool-role message
+- **THEN** both messages contain the same single next action
+- **AND** neither path parses the original result to choose that action
+
+#### Scenario: Hidden declaration tool is not revealed
+
+- **GIVEN** a corrective receipt uses `SetWorkingDirectory`
+- **AND** `set_working_directory` is hidden from the current audience
+- **WHEN** the shared presenter creates the tool-role message
+- **THEN** it does not add an action that names the hidden tool
+- **AND** it returns the factual tool result unchanged
+
+#### Scenario: Ambiguous file edit has one next action
+
+- **GIVEN** `file_edit` finds more than one `OldString` match
+- **WHEN** `ReplaceAll` is false
+- **THEN** the tool changes no file
+- **AND** the result reports the match count
+- **AND** the remediation code is `ProvideUniqueOldString`
+- **AND** the presenter adds one fixed retry action
+
+#### Scenario: Host temporary path suggests the managed temporary directory
+
+- **GIVEN** shell policy proposes the managed temporary directory for a host temporary path
+- **WHEN** the call returns a recoverable correction
+- **THEN** the remediation code is `UseManagedTemporaryDirectory`
+- **AND** the presenter adds one fixed managed-temporary-directory action
+- **AND** a later retry still runs normal shell authorization
+
+#### Scenario: Recoverable correction requires a known value
+
+- **WHEN** an internal caller creates a recoverable correction without a remediation
+- **THEN** receipt construction fails closed
+- **AND** an undefined remediation code also fails closed
+
+### Requirement: MCP tool outcomes are machine-actionable
+
+An MCP tool call that ends in an exception SHALL produce a tool receipt under the same rules as the requirement "First-party tool outcomes are machine-actionable". The category SHALL follow the failure kind: an HTTP 401 or 403 is `access_denied`, an HTTP 404 is `not_found`, and every other exception is `transient_failure`. The tool result SHALL stay a factual error string that names the tool. A tool-declared error is not an exception and SHALL keep its current result path. The receipt SHALL NOT grant authority, retry the call, or replay it.
+
+#### Scenario: HTTP 500 becomes a transient failure receipt
+
+- **GIVEN** an MCP tool call that the server answers with HTTP 500
+- **WHEN** the adapter returns the tool result
+- **THEN** the outcome category is `transient_failure`
+- **AND** the tool result names the tool and the HTTP status
+- **AND** the receipt records no file activity
+
+#### Scenario: HTTP 403 becomes an access-denied receipt
+
+- **GIVEN** an MCP tool call that the server answers with HTTP 403
+- **WHEN** the adapter returns the tool result
+- **THEN** the outcome category is `access_denied`
+- **AND** no authority changes
+
+#### Scenario: Tool-declared error keeps the result path
+
+- **GIVEN** an MCP tool call that the server answers with HTTP 200 and a tool-declared error, for example `{"content":[{"type":"text","text":"Internal Server Error"}],"isError":true}`
+- **WHEN** the adapter returns the tool result
+- **THEN** the tool result carries the error text the tool declared
+- **AND** no exception outcome is produced
+- **AND** no reconnect occurs
 
 ### Requirement: Working context records successful file activity only
 
-`WorkingContext.RecentFiles` SHALL update only from canonical file activity in a
-successful tool outcome. Failed, denied, missing, malformed, or corrective tool
-results SHALL NOT update recent files. The session pipeline SHALL NOT infer file
-activity only from authored argument names.
+`WorkingContext.RecentFiles` SHALL update only from canonical file activity in a successful tool outcome. Failed, denied, missing, malformed, or corrective tool results SHALL NOT update recent files. The session pipeline SHALL NOT infer file activity only from authored argument names. Only a successful `set_working_directory` receipt MAY replace the declared project directory.
+
+Concrete activity example:
+
+```text
+project = /workspace/project
+
+file_read(Path = "README.md")
+  -> Success + Read("/workspace/project/README.md")
+
+file_read(Path = "./README.md")
+  -> Success + Read("/workspace/project/README.md")
+
+RecentFiles contains one canonical entry:
+  /workspace/project/README.md
+
+file_write(Path = "../denied.txt") -> AccessDenied
+  -> no RecentFiles entry for ../denied.txt
+
+file_read receipt carries DeclaredProjectDirectory("/outside")
+  -> file activity may be applied when otherwise valid
+  -> project effect is rejected because the producer is not set_working_directory
+```
 
 #### Scenario: Failed write does not become recent
 
@@ -46,10 +221,18 @@ activity only from authored argument names.
 
 #### Scenario: Successful batch read records canonical files
 
-- **GIVEN** `file_read_many` successfully reads two authorized relative paths
-- **WHEN** the session applies the tool receipt
-- **THEN** both canonical resolved paths are added to `RecentFiles`
+- **GIVEN** `README.md` and `docs/guide.md` resolve under `/workspace/project`
+- **AND** separate `file_read` calls read both paths in one tool batch
+- **WHEN** the session applies their successful receipts
+- **THEN** `/workspace/project/README.md` and `/workspace/project/docs/guide.md` are added to `RecentFiles`
 - **AND** no authored relative spelling becomes a separate file
+
+#### Scenario: Another tool cannot declare a project
+
+- **GIVEN** a successful receipt from a tool other than `set_working_directory`
+- **WHEN** the receipt contains a project directory
+- **THEN** the actor rejects that project effect
+- **AND** the current project directory remains unchanged
 
 ### Requirement: Recursive workspace search is bounded and structured
 
@@ -72,50 +255,6 @@ filesystem APIs instead of an external executable.
 - **WHEN** `file_search` reaches the ceiling
 - **THEN** it stops further content enumeration
 - **AND** the result reports that it was truncated
-
-### Requirement: Batch file reads validate before content access
-
-The system SHALL provide a `file_read_many` tool that accepts a bounded path
-list plus per-file and total output ceilings. It SHALL authorize the complete
-path list before it reads content. If one member is malformed, missing, denied,
-or outside the batch limits, the tool SHALL return no content from another
-member.
-
-#### Scenario: Denied member makes batch atomic
-
-- **GIVEN** a batch contains one authorized file and one denied file
-- **WHEN** `file_read_many` validates the batch
-- **THEN** the outcome is `access_denied`
-- **AND** no content from the authorized file is returned
-- **AND** no file activity is recorded
-
-#### Scenario: Authorized batch returns bounded sections
-
-- **GIVEN** a batch of authorized text files within count limits
-- **WHEN** `file_read_many` reads them
-- **THEN** the result contains one labeled bounded section per file
-- **AND** total output does not exceed the declared ceiling
-
-### Requirement: JSON projection uses bounded data semantics
-
-The system SHALL provide a `json_read` tool that reads one authorized JSON file
-and projects a bounded list of RFC 6901 JSON Pointers. It SHALL reject duplicate
-or invalid pointers. It SHALL bound input bytes, pointer count, and output
-characters. It SHALL NOT accept executable query languages.
-
-#### Scenario: Selected JSON properties returned without shell
-
-- **GIVEN** an authorized JSON document
-- **WHEN** `json_read` receives pointers `/status` and `/items/0/name`
-- **THEN** it returns the selected values with their pointers
-- **AND** the outcome is `success`
-
-#### Scenario: Invalid pointer fails before partial projection
-
-- **GIVEN** one valid pointer and one malformed pointer
-- **WHEN** `json_read` validates the request
-- **THEN** the outcome is `invalid_input`
-- **AND** no selected value is returned
 
 ### Requirement: File inspection exposes bounded image metadata
 
@@ -150,81 +289,25 @@ matching branches before tool execution.
 - **GIVEN** `file_list` has one argument shape
 - **WHEN** its schema is generated
 - **THEN** its existing object schema and accepted calls remain unchanged
-### Requirement: Policy-gated tool invocation
-
-The system SHALL check ACL grants and approval policy before every tool
-execution. Tool invocations SHALL be logged with audit records including tool
-name, invoking session, timestamp, allow/deny/approval result, and approval
-decision details when applicable. The `ToolAccessDecision` SHALL support three
-outcomes: `Allow`, `Deny(reason)`, and `RequiresApproval(context)`.
-
-When `RequiresApproval` is returned, the tool execution pipeline SHALL pause
-the individual tool task and emit a `ToolInteractionRequest` to session
-subscribers. The pipeline SHALL NOT block other tool calls in the same batch.
-
-#### Scenario: Granted tool executes successfully
-
-- **GIVEN** the session has an ACL grant for `web_search`
-- **AND** `web_search` is in Auto approval mode
-- **WHEN** the LLM requests a web search tool call
-- **THEN** the ACL check passes
-- **AND** the tool executes
-- **AND** an audit record is logged with tool name, session ID, timestamp, and
-  `allow` result
-
-#### Scenario: Ungrantable tool denied at invocation
-
-- **GIVEN** the session does not have an ACL grant for `shell`
-- **WHEN** the LLM requests a shell tool call
-- **THEN** the ACL check fails
-- **AND** the tool is not executed
-- **AND** a policy denial with reason code is returned to the LLM
-- **AND** an audit record is logged with tool name, session ID, timestamp, and
-  `deny` result
-
-#### Scenario: Tool requires approval and is approved
-
-- **GIVEN** the session has an ACL grant for `shell`
-- **AND** `shell_execute` is in Approval mode for the session's audience
-- **AND** the command pattern is not already approved in `IToolApprovalService`
-- **WHEN** the LLM requests a shell tool call
-- **THEN** `ToolAccessPolicy` returns `RequiresApproval`
-- **AND** `DispatchingToolExecutor` consults `IToolApprovalService`
-- **AND** the pipeline emits a `ToolInteractionRequest` and pauses the task
-- **AND** when the user approves, the tool executes
-- **AND** an audit record is logged with `approved` result
-
-#### Scenario: Tool requires approval and is denied by user
-
-- **GIVEN** the pipeline has emitted an approval prompt
-- **WHEN** the user denies
-- **THEN** the tool result is "Command denied by user"
-- **AND** an audit record is logged with `denied_by_user` result
-
-#### Scenario: Audit records available in diagnostics
-
-- **GIVEN** tool invocations have occurred
-- **WHEN** the operator views diagnostics
-- **THEN** audit records show tool name, invoking session, timestamp, and
-  allow/deny/approval result for each invocation
 
 ### Requirement: Shell execution tool
 
 The system SHALL provide a shell execution tool that runs commands as the
 Netclaw process user context. Stdin SHALL be closed (no interactive commands).
-Execution SHALL enforce a configurable timeout (default: 60 seconds). The tool
+Execution SHALL enforce a configurable timeout: `Session.ToolExecutionTimeoutSeconds`
+(default: 90 seconds), or the agent's per-call timeout hint when present. The tool
 SHALL drain stdout and stderr in bounded memory (each to the capture ceiling
 `ToolConfig.MaxOutputChars`) and return the combined output bounded to the
 ceiling — it does NOT itself window, redact, or spill (the central
 `bounded-tool-output` mechanism does, after redaction). `shell_execute` SHALL
 declare a small verbose inline budget (`InlineOutputBudgetChars`) so its skimmable
-output is bounded aggressively. Before execution, the shell tool SHALL check the
-hard deny list via `ShellCommandPolicy`; hard-denied commands SHALL be rejected
-before `ToolPathPolicy` path checks.
+output is bounded aggressively. Authorization, including hard deny and the
+launch re-check, SHALL complete before the process starts (`tool-authorization`
+TA-5 and TA-14).
 
 #### Scenario: Execute command and return output
 
-- **GIVEN** the `shell` grant is available for the session
+- **GIVEN** the audience and shell mode admit `shell_execute` for the session
 - **WHEN** the agent invokes the shell tool with a command
 - **THEN** the command is executed as the Netclaw process user
 - **AND** stdout and stderr are captured
@@ -233,14 +316,14 @@ before `ToolPathPolicy` path checks.
 #### Scenario: Hard-denied command rejected before execution
 
 - **GIVEN** the agent invokes `shell_execute` with `netclaw daemon stop`
-- **WHEN** `ShellCommandPolicy` evaluates the command
-- **THEN** the command is rejected with "Command blocked by hard deny policy"
+- **WHEN** authorization evaluates the command
+- **THEN** the tool result is `Tool access denied: hard_deny_self_destructive`
 - **AND** the shell process is never started
 
 #### Scenario: Execution timeout enforced
 
 - **GIVEN** a shell command is running
-- **WHEN** the command exceeds the configured timeout (default: 60 seconds)
+- **WHEN** the command exceeds the configured timeout (default: 90 seconds)
 - **THEN** the process is terminated
 - **AND** the tool returns a timeout error message to the LLM
 
@@ -266,46 +349,17 @@ before `ToolPathPolicy` path checks.
 - **WHEN** the shell tool executes a command
 - **THEN** the working directory is set to the project's registered path
 
-### Requirement: Tool execution context carries a parsed audience
-
-`ToolExecutionContext` SHALL represent the execution audience as a parsed
-`TrustAudience`, not as an unvalidated wire string. The audience SHALL be
-parsed when the context is built, so an unparseable value fails at construction
-rather than at a later tool authorization check. Tool authorization SHALL read
-the parsed audience directly and SHALL NOT re-parse a string or apply a
-parse-failure fallback to `Public`.
-
-#### Scenario: Context built with an unparseable audience fails loud
-
-- **WHEN** a `ToolExecutionContext` is built from an audience value that cannot
-  be parsed
-- **THEN** construction throws an explicit parse error
-- **AND** the failure occurs before any tool runs
-
-#### Scenario: Tool authorization reads the parsed audience
-
-- **GIVEN** a `ToolExecutionContext` carrying a parsed `TrustAudience`
-- **WHEN** `ToolAccessPolicy` evaluates a tool invocation
-- **THEN** it reads the audience as a typed value
-- **AND** it performs no string parsing and applies no `Public` parse-failure
-  fallback
-
 ### Requirement: Directory enumeration tool
 
 The system SHALL provide a `file_list` first-party tool that returns a
 single-level listing of a directory's entries, each entry identified by name
-and type (file or directory). `file_list` SHALL be read-only and SHALL NOT
-create, modify, or remove any filesystem entry.
+and type. It SHALL be read-only and SHALL NOT create, modify, or remove a
+filesystem entry.
 
-`file_list` SHALL be a profile-managed tool gated by the audience profile
-`AllowedTools` allowlist. Its target directory SHALL be authorized through the
-same scoped read-access policy used by `file_read`, so the directories an
-audience may list are exactly that audience's resolved read roots. A target
-outside the audience's read roots SHALL be denied, and the denial message
-SHALL NOT disclose configured root paths. Interactive Personal-audience
-sessions are the exception: they get shell-equivalent reach, so a target
-outside the read roots SHALL resolve when the session is interactive and the
-audience is Personal. Autonomous sessions keep the hard denial.
+`file_list` SHALL be gated by the audience profile `AllowedTools` allowlist.
+It SHALL authorize its target through the shared `Read` path access decision.
+An explicit `Roots` or `None` read profile SHALL remain authoritative in every
+interaction mode. User approval SHALL NOT widen that file profile.
 
 #### Scenario: Team session lists a directory within its read roots
 
@@ -317,10 +371,16 @@ audience is Personal. Autonomous sessions keep the hard denial.
 #### Scenario: Public session cannot list outside its session directory
 
 - **GIVEN** a session resolved to the `Public` audience
-- **WHEN** the agent invokes `file_list` on a path outside the session
-  directory
+- **WHEN** the agent invokes `file_list` outside its permitted read roots
 - **THEN** the invocation is denied
 - **AND** the denial message does not disclose configured root paths
+
+#### Scenario: Counterexample - approval cannot widen explicit read roots
+
+- **GIVEN** an interactive Personal profile explicitly limits reads to one root
+- **WHEN** the agent invokes `file_list` outside that root
+- **THEN** file protection denies the invocation
+- **AND** the invocation does not reach user approval
 
 #### Scenario: file_list denied when not granted to the audience
 
@@ -456,11 +516,13 @@ supported values. The applied filter SHALL be echoed in the result.
 ### Requirement: File read tool
 
 The system SHALL provide a `file_read` first-party tool that authorizes the
-requested path through the audience-scoped read-file policy before inspecting or
-reading bytes. Interactive Personal-audience sessions are the exception: they
-get shell-equivalent reach, so a path outside the read roots SHALL resolve when
-the session is interactive and the audience is Personal. Autonomous sessions
-keep the hard denial. Text-like files SHALL return decoded text for UTF-8,
+requested path through the shared `Read` path access decision before inspecting
+or reading bytes. An explicit `Roots` or `None` read profile SHALL remain
+authoritative in every interaction mode. The default interactive Personal
+`All` profile MAY read outside configured roots because the file profile itself
+grants that authority, not because shell or approval policy widens it.
+
+Text-like files SHALL return decoded text for UTF-8,
 UTF-16/UTF-32
 Unicode, and common Windows-1252 text files using the existing offset/limit and
 output-truncation behavior.
@@ -484,6 +546,13 @@ be built into `file_read`.
 - **WHEN** the agent invokes `file_read` with optional offset and limit values
 - **THEN** the tool returns text content with the existing line pagination and
   truncation behavior
+
+#### Scenario: Counterexample - approval cannot widen explicit read policy
+
+- **GIVEN** an interactive Personal profile explicitly denies or limits reads
+- **WHEN** the agent invokes `file_read` for a path outside that authority
+- **THEN** file protection denies the invocation
+- **AND** no shell setting or approval mode widens the read policy
 
 #### Scenario: Image read on image-capable model becomes model-visible
 
@@ -589,24 +658,6 @@ These checks are call-local. They do not form an operating-system sandbox agains
 - **WHEN** the agent invokes `attach_file`
 - **THEN** the tool copies the source and emits the attachment
 - **AND** an existing destination file retains its bytes through the existing suffix rule
-
-### Requirement: Working directory declaration stays scoped
-
-The system SHALL provide a `set_working_directory` first-party tool that sets
-the session's project root. The path access decision SHALL use the read file
-operation without interactive Personal shell-equivalent reach. A successful
-declaration adds the project directory to the trusted roots that reviewed
-safe policy uses. It also loads project identity files into the system
-prompt. Thus, every audience and mode SHALL limit declarations to the session
-directory, project directory, and configured global read roots.
-
-#### Scenario: Interactive Personal session cannot widen the working directory
-
-- **GIVEN** an interactive Personal session requests a directory outside the
-  trusted roots permitted for project declaration
-- **WHEN** the agent invokes `set_working_directory`
-- **THEN** the project directory remains unchanged
-- **AND** the tool reports that the directory is outside the trusted roots
 
 ### Requirement: File read tool bounds its read for memory safety
 
@@ -728,67 +779,6 @@ process-start builder. The tool schema SHALL remain unchanged.
 - **AND** both use the same fixed arguments in the same order
 - **AND** both append the submitted command as one argument
 
-### Requirement: Session file authority
-
-`PathAccessPolicy` SHALL derive session authority from the invocation audience
-and the current session storage. Personal MAY use the shared sessions and
-legacy logs roots. Public and Team SHALL NOT receive these shared roots as
-implicit authority. Explicit configured roots SHALL retain their authority.
-
-The current envelope and workspace SHALL remain roots for parent and child
-runs. A child SHALL inherit its parent's audience and workspace restrictions.
-Each legacy run MAY access its exact raw log through its operation profile.
-This exact-file grant SHALL NOT authorize the log's parent directory, adjacent
-files, or project declarations. Legacy cross-run logs SHALL receive no implicit
-grant. Child summaries and workspace artifacts SHALL remain available.
-
-The path decision SHALL retain profile, link, and protected-path checks.
-A storage ancestor used to inspect links SHALL NOT grant directory authority.
-Public and Team shell capability SHALL remain denied. Storage paths, audience
-derivation on resumption, and memory policy SHALL remain unchanged.
-
-The system SHALL NOT add a log-specific tool, ownership registry, projection,
-or query language. `file_read` SHALL support an exact legacy log. Directory
-search SHALL require directory authority. Reads SHALL remain compatible with
-an active log writer on POSIX and Windows.
-
-#### Scenario: Restricted session reads its own log
-
-- **GIVEN** a Public or Team session with the default file profiles
-- **WHEN** it requests its exact versioned or legacy raw log through `file_read`
-- **THEN** the path decision allows the read and applies normal output bounds
-- **AND** a `None` profile or protected path still denies access
-
-#### Scenario: Restricted session cannot inspect a sibling session
-
-- **GIVEN** a Public or Team session without an explicit root for a sibling
-- **WHEN** it reads, lists, searches, or attaches the sibling's files
-- **THEN** the path decision denies access before content or filenames escape
-- **AND** a Team write cannot change or create a sibling file
-
-#### Scenario: Personal session retains cross-session access
-
-- **GIVEN** a Personal session whose operation profile admits shared roots
-- **WHEN** it requests another session's ordinary raw log
-- **THEN** the same path decision permits the read
-- **AND** link and protected-path checks still apply
-
-#### Scenario: Parent and child share versioned session authority
-
-- **GIVEN** a Team parent and child with the same versioned envelope
-- **WHEN** either reads the other's log or shared workspace artifact
-- **THEN** its inherited roots permit the operation
-- **AND** neither can read an unrelated session without explicit authority
-
-#### Scenario: Legacy child keeps only its own raw log grant
-
-- **GIVEN** a Team parent and child with separate legacy raw log paths
-- **WHEN** either reads its own exact log
-- **THEN** the operation succeeds
-- **WHEN** either reads the other's log or enumerates the shared log parent
-- **THEN** access is denied without explicit authority
-- **AND** the parent can still read the child's shared-workspace artifacts
-
 ### Requirement: Generated fetch destinations
 
 `PathAccessPolicy` SHALL check generated fetch paths before directory creation or file writes.
@@ -815,3 +805,165 @@ These checks do not prevent another process from replacing a directory after val
 - **GIVEN** an output directory that the protected-path policy denies for writes
 - **WHEN** the tool receives a response
 - **THEN** it returns `AccessDenied` without creating that directory or an output file
+
+### Requirement: Attachment tool accepts an authorized source path directly
+
+The parent-session model-visible `attach_file` definition SHALL tell the agent
+to pass the existing authorized source path directly. The agent SHALL NOT need
+to copy the file into managed temporary storage first.
+
+Netclaw SHALL retain the existing audience, read-deny, proximity, and safe-copy
+behavior. Subagents SHALL NOT receive this tool until an internal attachment
+handoff can deliver child attachments to the parent invocation.
+
+Example:
+
+```text
+interactive Personal parent model calls:
+  attach_file(Path = "/workspace/project/report.pdf")
+
+Netclaw:
+  authorizes the source path
+  copies it to the session attachment directory when required
+  returns the attachment through the parent invocation
+
+subagent:
+  does not receive, find, load, or dispatch attach_file
+  can report a saved path to the parent instead
+```
+
+Authority examples and counterexamples:
+
+| Caller and source | Required result |
+|---|---|
+| Interactive Personal parent with an authorized project file | Attach it directly. Copy it into the session when required. |
+| Parent with a protected credential path | Deny it. Core exposure does not bypass the read deny. |
+| Team or non-interactive parent with a source outside the session tree | Deny it through the existing proximity rule. |
+| Subagent with any source | Do not expose, find, load, or dispatch `attach_file`. |
+
+#### Scenario: Interactive Personal agent attaches an existing project file directly
+
+- **GIVEN** an interactive Personal parent session can attach an existing project file under current policy
+- **WHEN** the model needs to send that file to the user
+- **THEN** the initial tool set contains `attach_file`
+- **AND** its definition accepts the source path directly
+- **AND** Netclaw performs any required copy into the session attachments directory
+- **AND** no shell copy is required
+
+#### Scenario: Core exposure does not widen attachment reach
+
+- **GIVEN** the path access decision denies an attachment source
+- **WHEN** `attach_file` is present in the registered core
+- **THEN** the model-visible set still filters the tool by audience policy
+- **AND** the tool still rejects the denied source when invoked
+
+### Requirement: Spawned child references are machine-actionable
+
+A successful `spawn_agent` result SHALL return the child run identifier, an
+exact child log path, and the exact child artifact directory. These paths SHALL
+be below the current session envelope, so the parent can compose existing file
+tools through the shared path access decision. A failed spawn SHALL NOT return
+locations that appear usable.
+
+The system SHALL resolve and create the child log target before it returns a
+successful result. The log can be empty. An immediate authorized `file_read`
+SHALL NOT fail because the log path is not ready.
+
+The result shape SHALL be equivalent to:
+
+```text
+run_id: "run-7"
+log_path: "/srv/netclaw/sessions/s-42/subagents/run-7/logs/session.log"
+artifact_dir: "/srv/netclaw/sessions/s-42/subagents/run-7/artifacts"
+```
+
+#### Scenario: Example - successful spawn returns child references
+
+- **WHEN** a parent successfully starts a child run
+- **THEN** the tool result contains the child run identifier
+- **AND** it contains the exact child log path and artifact directory
+- **AND** both paths belong to that parent session
+
+#### Scenario: Example - parent reads a child artifact with an existing tool
+
+- **GIVEN** a successful spawn returned the child artifact directory
+- **WHEN** the owning parent calls `file_read` or `attach_file` for a file below
+  that directory
+- **THEN** the shared path access decision evaluates the file operation
+- **AND** no new artifact-reference reader is required
+
+#### Scenario: Example - parent reads child logs with existing tools
+
+- **GIVEN** a successful spawn returned the exact child log path
+- **WHEN** the owning parent uses `file_read`, `file_search`, or `file_list`
+- **THEN** the existing tool performs its normal bounded operation
+- **AND** no special child-log tool is required
+
+#### Scenario: Counterexample - read permission does not grant writes
+
+- **GIVEN** the parent audience permits reads but not writes
+- **WHEN** it calls `file_write` or `file_edit` for that log
+- **THEN** the `Write` path access decision denies the mutation
+- **AND** the trusted-root relationship does not change that result
+
+#### Scenario: Counterexample - failed spawn has no usable child references
+
+- **WHEN** the child run is not created
+- **THEN** the tool result reports failure
+- **AND** it contains no child log path or artifact directory
+
+#### Scenario: Example - successful child log path is ready
+
+- **WHEN** `spawn_agent` returns a successful child result
+- **THEN** the returned log path identifies an existing file
+- **AND** an authorized `file_read` can open it immediately
+
+### Requirement: Git worktrees compose existing tools
+
+The existing `[session]` context SHALL announce the exact `worktree_dir`.
+Agents SHALL create Git worktrees by calling `shell_execute` with a destination
+below that directory. Normal shell authorization SHALL decide the command.
+After Git succeeds, the agent SHALL use the existing
+`set_working_directory` tool to adopt the created worktree as project scope.
+The shared path access decision and normal shell authorization SHALL decide
+the destination. The operation SHALL NOT use a separate worktree permission.
+
+The system SHALL NOT add `worktree_create`, a worktree-specific authorization
+model, or a worktree ownership record. It SHALL NOT parse private Git option
+grammar to infer authority. Automatic cleanup remains out of scope.
+
+#### Scenario: Example - current project gets a managed worktree
+
+- **GIVEN** the current project is an authorized Git repository
+- **AND** session context provides
+  `worktree_dir=/srv/netclaw/sessions/s-42/worktrees`
+- **WHEN** the agent runs `git worktree add` through `shell_execute` with a
+  destination below `worktree_dir`
+- **AND** Git succeeds
+- **THEN** the agent can pass that destination to `set_working_directory`
+- **AND** existing project-scope behavior loads project instructions
+
+#### Scenario: Counterexample - external destination gets no special authority
+
+- **WHEN** an agent authors `git worktree add /tmp/fix-branch branch-name`
+- **THEN** normal shell policy evaluates the authored command
+- **AND** `worktree_dir` guidance does not rewrite or auto-approve it
+
+#### Scenario: Counterexample - unauthorized source repository is denied
+
+- **GIVEN** a requested source repository is outside current authority
+- **WHEN** the agent submits the Git command through `shell_execute`
+- **THEN** authorization denies the operation
+- **AND** no worktree-specific tool bypasses that decision
+
+#### Scenario: Counterexample - failed worktree does not change project scope
+
+- **WHEN** worktree creation fails or is denied
+- **THEN** the project scope remains unchanged
+- **AND** the agent does not call `set_working_directory` for a failed result
+
+#### Scenario: Counterexample - no custom worktree tool is exposed
+
+- **WHEN** the dynamic tool catalog is assembled
+- **THEN** it contains the existing shell and working-directory tools
+- **AND** it does not contain `worktree_create`

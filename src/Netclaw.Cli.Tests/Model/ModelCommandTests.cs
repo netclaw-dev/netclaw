@@ -618,7 +618,8 @@ public sealed class ModelCommandTests : IDisposable
         var exitCode = await ModelCommand.RunAsync(["model", "list"], _paths, output: _output);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("could not be parsed", _output.ToString());
+        Assert.Contains("Models:Main:InputModalities", _output.ToString());
+        Assert.Contains("text_and_image", _output.ToString());
     }
 
     [Fact]
@@ -785,6 +786,46 @@ public sealed class ModelCommandTests : IDisposable
         {
             Environment.SetEnvironmentVariable(envVar, previous);
         }
+    }
+
+    private const string Ollama = """{"my-ollama":{"Type":"ollama","Endpoint":"http://localhost:11434"}}""";
+
+    [Theory]
+    [InlineData("""{"Definitions":{"d":{"Provider":"my-ollama","ModelId":"m1"}},"Roles":{"Main":"nope"}}""", "main")]
+    [InlineData("""{"Definitions":{"d":{"Provider":"my-ollama","ModelId":"m1"}},"Roles":{"Main":"d","Compaction":"nope"}}""", "compaction")]
+    [InlineData("""{"Definitions":{"d":{"Provider":"my-ollama","ModelId":"m1"}},"Roles":{"Main":"d","Fallback":"nope"}}""", "fallback")]
+    [InlineData("""{"Definitions":{"d":{"Provider":"my-ollama","ModelId":"m1"}},"Roles":{"Fallback":"d"}}""", "main")]
+    [InlineData("""{"Definitions":{},"Roles":{"Main":"d"}}""", "main")]
+    [InlineData("""{"Definitions":{"d":{"Provider":"my-ollama","ModelId":"m1"}},"Roles":{}}""", "main")]
+    public async Task Set_RepairsTheShapeWhoseResolverMessageAdvertisesIt(string modelsJson, string role)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, $$"""{"configVersion":1,"Providers":{{Ollama}},"Models":{{modelsJson}}}""");
+        Assert.False(ModelCommand.TryLoadModelSelection(_paths, out _, out var error));
+        Assert.Contains($"`netclaw model set {role} <provider> <model>`", error);
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", role, "my-ollama", "qwen3:30b"], _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+        Assert.True(ModelCommand.TryLoadModelSelection(_paths, out var models, out _));
+        Assert.Equal("qwen3:30b", role == "main" ? models!.Main.ModelId : (role == "fallback" ? models!.Fallback! : models!.Compaction!).ModelId);
+    }
+
+    [Theory]
+    [InlineData("""{"Main":{"Provider":"my-ollama","ModelId":"m1"},"Definitions":{"d":{"Provider":"my-ollama","ModelId":"m2"}},"Roles":{"Main":"d"}}""")]
+    [InlineData("""{"Definitions":{"d":{"Provider":"my-ollama","ModelId":"m1"}}}""")]
+    [InlineData("""{"Roles":{"Main":"d"}}""")]
+    public async Task Set_DoesNotRepairTheShapesThatNeedAHandEdit(string modelsJson)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, $$"""{"configVersion":1,"Providers":{{Ollama}},"Models":{{modelsJson}}}""");
+        var original = File.ReadAllText(_paths.NetclawConfigPath);
+        Assert.False(ModelCommand.TryLoadModelSelection(_paths, out _, out _));
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b"], _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(original, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     private static Dictionary<string, object> WithMainEntry(Dictionary<string, object> main)

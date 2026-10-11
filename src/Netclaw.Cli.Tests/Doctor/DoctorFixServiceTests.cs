@@ -3,18 +3,26 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Netclaw.Cli.Daemon;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Doctor;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Configuration;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
 
 [Collection(Netclaw.Cli.Tests.LegacyModelEnvironmentCollection.Name)]
-public sealed class DoctorFixServiceTests
+public sealed class DoctorFixServiceTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     // POSIX install dir: systemd units are always POSIX-style regardless of the host OS
     // running the test, and TryGetInstallDir parses forward-slash ExecStart accordingly.
     private const string InstallDir = "/opt/netclaw";
@@ -152,6 +160,49 @@ public sealed class DoctorFixServiceTests
         Assert.DoesNotContain("CapabilityClass", plan.Fixes[0].UpdatedText, StringComparison.Ordinal);
         Assert.Contains("memorizer", plan.Fixes[0].UpdatedText, StringComparison.Ordinal);
         Assert.Contains("stdio", plan.Fixes[0].UpdatedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SchemaFixPreservesNamedModelsWhenRemovingStaleProperty()
+    {
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Models": {
+                "Definitions": {
+                  "primary": {
+                    "Provider": "example-provider",
+                    "ModelId": "example-model"
+                  }
+                },
+                "Roles": {
+                  "Main": "primary"
+                }
+              },
+              "SkillSync": {
+                "Enabled": true,
+                "DisableSystemSkillSync": true
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+
+        var fix = Assert.Single(plan.Fixes);
+        using var updated = JsonDocument.Parse(fix.UpdatedText);
+        var root = updated.RootElement;
+        var models = root.GetProperty("Models");
+        Assert.Equal("example-model",
+            models.GetProperty("Definitions").GetProperty("primary").GetProperty("ModelId").GetString());
+        Assert.Equal("primary", models.GetProperty("Roles").GetProperty("Main").GetString());
+        Assert.False(root.GetProperty("SkillSync").TryGetProperty("DisableSystemSkillSync", out _));
+
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+        var result = await new ConfigSchemaDoctorCheck(paths).RunAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
 
     [Fact]
@@ -363,7 +414,197 @@ public sealed class DoctorFixServiceTests
         }
     }
 
-    private static NetclawPaths NewPaths()
+    private const string Netclaw0254ToolsConfig =
+        """
+        {
+          "configVersion": 1,
+          "Tools": {
+            "AudienceProfiles": {
+              "Public": {
+                "ToolsMode": "Allowlist",
+                "AllowedTools": ["file_read", "file_list", "attach_file"]
+              },
+              "Team": {
+                "ToolsMode": "Allowlist",
+                "AllowedTools": [
+                  "file_read", "file_list", "file_write", "file_edit", "attach_file",
+                  "web_search", "web_fetch", "skill_manage", "set_reminder",
+                  "list_reminders", "cancel_reminder", "get_reminder_history",
+                  "set_working_directory"
+                ]
+              }
+            }
+          }
+        }
+        """;
+
+    private const string FixName = "remove copied default audience tool lists";
+
+    public static TheoryData<TrustAudience, int> ShippedDefaultRows()
+    {
+        var rows = new TheoryData<TrustAudience, int>();
+        for (var row = 0; row < ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools.Count; row++)
+            rows.Add(TrustAudience.Public, row);
+        for (var row = 0; row < ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools.Count; row++)
+            rows.Add(TrustAudience.Team, row);
+        return rows;
+    }
+
+    // Each shipped list, which includes the current default, is deleted. The daemon applies the
+    // same effective ToolConfig before and after the fix, and the rest of the profile stays.
+    [Theory]
+    [MemberData(nameof(ShippedDefaultRows))]
+    public async Task Deletes_each_shipped_default_allowlist_and_keeps_the_bound_result(TrustAudience audience, int row)
+    {
+        var table = audience == TrustAudience.Public
+            ? ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools
+            : ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools;
+        var original = ProfileConfig(audience, table[row]);
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, original, TestContext.Current.CancellationToken);
+        var before = SerializeBound(BindDaemonToolConfig(paths, out _));
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        Assert.Contains(plan.Fixes, fix => fix.Description.Contains(FixName, StringComparison.Ordinal));
+        Assert.Equal(
+            original,
+            await File.ReadAllTextAsync(paths.NetclawConfigPath + ".legacy-tool-defaults.bak", TestContext.Current.CancellationToken));
+
+        var profile = ReadProfile(paths, audience);
+        Assert.Null(profile["AllowedTools"]);
+        Assert.Equal("Allowlist", profile["ToolsMode"]!.GetValue<string>());
+        Assert.Equal("/srv/kept", profile["ReadFiles"]!["Roots"]![0]!.GetValue<string>());
+
+        Assert.Equal(before, SerializeBound(BindDaemonToolConfig(paths, out var warnings)));
+        Assert.Empty(warnings);
+    }
+
+    public static TheoryData<TrustAudience, string[]> NotShippedAllowLists()
+    {
+        string[] team = [.. ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(TrustAudience.Team)];
+        string[] publicTools = [.. ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(TrustAudience.Public)];
+        return new()
+        {
+            // One tool less, one tool more, and an empty list are operator intent.
+            { TrustAudience.Team, [.. team.Where(tool => tool != ToolAudienceProfileToolCatalog.WebFetch)] },
+            { TrustAudience.Public, [.. publicTools, ToolAudienceProfileToolCatalog.FileWrite] },
+            { TrustAudience.Team, [.. ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools[1].Skip(1)] },
+            { TrustAudience.Team, [] },
+            { TrustAudience.Public, [] },
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(NotShippedAllowLists))]
+    public async Task Keeps_an_allowlist_that_is_not_a_shipped_default(TrustAudience audience, string[] tools)
+    {
+        var original = ProfileConfig(audience, tools);
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, original, TestContext.Current.CancellationToken);
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(plan.Fixes, fix => fix.Description.Contains(FixName, StringComparison.Ordinal));
+        Assert.Equal(tools, ReadProfile(paths, audience)["AllowedTools"]!.AsArray().Select(tool => tool!.GetValue<string>()).ToArray());
+        Assert.False(File.Exists(paths.NetclawConfigPath + ".legacy-tool-defaults.bak"));
+    }
+
+    [Fact]
+    public async Task Keeps_a_shipped_list_when_the_profile_is_not_in_allowlist_mode()
+    {
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(
+            paths.NetclawConfigPath,
+            ProfileConfig(TrustAudience.Team, ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(TrustAudience.Team))
+                .Replace("\"Allowlist\"", "\"All\"", StringComparison.Ordinal),
+            TestContext.Current.CancellationToken);
+
+        var plan = await ConfigOnlyService(paths).BuildPlanAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(plan.Fixes, fix => fix.Description.Contains(FixName, StringComparison.Ordinal));
+    }
+
+    private static string ProfileConfig(TrustAudience audience, IEnumerable<string> tools)
+        => $$"""
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "{{audience}}": {
+                    "ToolsMode": "Allowlist",
+                    "AllowedTools": [{{string.Join(", ", tools.Select(tool => $"\"{tool}\""))}}],
+                    "ReadFiles": { "Mode": "Roots", "Roots": ["/srv/kept"] }
+                  }
+                }
+              }
+            }
+            """;
+
+    private static JsonObject ReadProfile(NetclawPaths paths, TrustAudience audience)
+        => (JsonObject)JsonNode.Parse(File.ReadAllText(paths.NetclawConfigPath))!["Tools"]!["AudienceProfiles"]![audience.ToString()]!;
+
+    // The full bound object graph, not only AllowedTools.
+    private static string SerializeBound(ToolConfig toolConfig) => JsonSerializer.Serialize(toolConfig);
+
+    [Fact]
+    public async Task Existing_backup_is_kept_and_a_second_run_changes_nothing()
+    {
+        var paths = NewPaths();
+        var firstBackup = paths.NetclawConfigPath + ".legacy-tool-defaults.bak";
+        await File.WriteAllTextAsync(firstBackup, "older backup", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, Netclaw0254ToolsConfig, TestContext.Current.CancellationToken);
+        var service = ConfigOnlyService(paths);
+
+        await service.ApplyAsync(
+            await service.BuildPlanAsync(TestContext.Current.CancellationToken),
+            TestContext.Current.CancellationToken);
+        var fixedText = await File.ReadAllTextAsync(paths.NetclawConfigPath, TestContext.Current.CancellationToken);
+        var secondPlan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(secondPlan, TestContext.Current.CancellationToken);
+
+        Assert.Equal("older backup", await File.ReadAllTextAsync(firstBackup, TestContext.Current.CancellationToken));
+        Assert.Equal(
+            Netclaw0254ToolsConfig,
+            await File.ReadAllTextAsync(paths.NetclawConfigPath + ".legacy-tool-defaults.2.bak", TestContext.Current.CancellationToken));
+        Assert.DoesNotContain(secondPlan.Fixes, fix => fix.FilePath == paths.NetclawConfigPath);
+        Assert.Equal(fixedText, await File.ReadAllTextAsync(paths.NetclawConfigPath, TestContext.Current.CancellationToken));
+        Assert.False(File.Exists(paths.NetclawConfigPath + ".legacy-tool-defaults.3.bak"));
+    }
+
+    [Fact]
+    public async Task Failed_backup_blocks_the_allowlist_deletion()
+    {
+        // A directory at the backup path makes the copy fail. The config file must not change.
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, Netclaw0254ToolsConfig, TestContext.Current.CancellationToken);
+        Directory.CreateDirectory(paths.NetclawConfigPath + ".legacy-tool-defaults.bak");
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+
+        var failure = await Record.ExceptionAsync(() => service.ApplyAsync(plan, TestContext.Current.CancellationToken));
+        Assert.True(failure is IOException or UnauthorizedAccessException, $"Unexpected failure: {failure}");
+        Assert.Equal(
+            Netclaw0254ToolsConfig,
+            await File.ReadAllTextAsync(paths.NetclawConfigPath, TestContext.Current.CancellationToken));
+    }
+
+    private static ToolConfig BindDaemonToolConfig(NetclawPaths paths, out IReadOnlyList<string> warnings)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddNetclawDaemonSources(paths)
+            .Build();
+        var bound = PolicyConfiguration.Bind(configuration);
+        warnings = bound.ToolWarnings;
+        return bound.Tools;
+    }
+
+    private NetclawPaths NewPaths()
     {
         var paths = new NetclawPaths(CreateTempBasePath());
         paths.EnsureDirectoriesExist();
@@ -373,7 +614,7 @@ public sealed class DoctorFixServiceTests
     private static DoctorFixService ConfigOnlyService(NetclawPaths paths)
         => new(paths, Path.Combine(paths.BasePath, "unused.service"), systemdEnabled: false);
 
-    private static string WriteWiredUnit(NetclawPaths paths)
+    private string WriteWiredUnit(NetclawPaths paths)
         // Forward-slash concatenation (NOT Path.Combine): systemd ExecStart is POSIX even
         // when the test runs on Windows, matching what TryGetInstallDir parses.
         => WriteRawUnit(DaemonManager.BuildDaemonUnitContent(
@@ -381,18 +622,18 @@ public sealed class DoctorFixServiceTests
             $"{InstallDir}/netclaw",
             paths.DaemonEnvironmentFilePath));
 
-    private static string WriteRawUnit(string content)
+    private string WriteRawUnit(string content)
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var unitPath = Path.Combine(dir, "netclaw.service");
         File.WriteAllText(unitPath, content);
         return unitPath;
     }
 
-    private static string CreateTempBasePath()
+    private string CreateTempBasePath()
     {
-        var path = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
     }

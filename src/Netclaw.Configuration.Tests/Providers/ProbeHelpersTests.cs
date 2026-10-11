@@ -15,13 +15,23 @@ namespace Netclaw.Configuration.Tests.Providers;
 
 public class ProbeHelpersTests
 {
+    private const string ModelsUrl = "http://host:8080/v1/models";
+
     // ── FailForStatus ──
+
+    [Fact]
+    public void FailForStatus_NotFound_NamesRequestedUrl()
+    {
+        var result = ProbeHelpers.FailForStatus(HttpStatusCode.NotFound, "openai-compatible", "http://host:8080/v1/v1/models");
+
+        Assert.Contains("http://host:8080/v1/v1/models", result.ErrorMessage);
+    }
 
     [Fact]
     public void FailForStatus_Forbidden_WithDetail_IncludesDetail()
     {
         var result = ProbeHelpers.FailForStatus(
-            HttpStatusCode.Forbidden, "openai", "Insufficient permissions for model listing.");
+            HttpStatusCode.Forbidden, "openai", ModelsUrl, "Insufficient permissions for model listing.");
 
         Assert.False(result.Success);
         Assert.Contains("Access denied by openai", result.ErrorMessage);
@@ -31,7 +41,7 @@ public class ProbeHelpersTests
     [Fact]
     public void FailForStatus_Forbidden_WithoutDetail_ShowsGenericMessage()
     {
-        var result = ProbeHelpers.FailForStatus(HttpStatusCode.Forbidden, "openai");
+        var result = ProbeHelpers.FailForStatus(HttpStatusCode.Forbidden, "openai", ModelsUrl);
 
         Assert.False(result.Success);
         Assert.Contains("credentials may lack model-listing permissions", result.ErrorMessage);
@@ -41,7 +51,7 @@ public class ProbeHelpersTests
     public void FailForStatus_Unauthorized_WithDetail_IncludesDetail()
     {
         var result = ProbeHelpers.FailForStatus(
-            HttpStatusCode.Unauthorized, "openai", "Invalid API key provided.");
+            HttpStatusCode.Unauthorized, "openai", ModelsUrl, "Invalid API key provided.");
 
         Assert.False(result.Success);
         Assert.Contains("Invalid credentials for openai", result.ErrorMessage);
@@ -53,7 +63,7 @@ public class ProbeHelpersTests
     [InlineData(HttpStatusCode.Forbidden)]
     public void FailForStatus_SaysCredentials_NotApiKey(HttpStatusCode status)
     {
-        var result = ProbeHelpers.FailForStatus(status, "openai");
+        var result = ProbeHelpers.FailForStatus(status, "openai", ModelsUrl);
 
         Assert.False(result.Success);
         Assert.Contains("credentials", result.ErrorMessage);

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 
@@ -36,113 +37,25 @@ internal sealed class ReviewedSafeShellPolicy
         _pathAccessPolicy = pathAccessPolicy;
     }
 
-    /// <summary>
-    /// Returns true when declaring <paramref name="cwd"/> as the project root
-    /// would make every candidate eligible for the reviewed-safe short circuit.
-    /// </summary>
-    /// <remarks>
-    /// This does not grant authority. It identifies a self-correction that the
-    /// agent can make through <c>set_working_directory</c>. Every candidate must
-    /// already use a reviewed phrase, and every effective directory must remain
-    /// beneath the exact cwd supplied for this shell invocation.
-    /// </remarks>
-    public bool CanShortCircuitAfterProjectDeclaration(
-        IReadOnlyList<ApprovalCandidate> candidates,
-        string? cwd,
-        ToolInvocationContext context)
-    {
-        if (context.Audience == TrustAudience.Public
-            || candidates.Count == 0
-            || string.IsNullOrWhiteSpace(cwd))
-        {
-            return false;
-        }
-
-        string fullCwd;
-        try
-        {
-            fullCwd = Path.GetFullPath(cwd);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return false;
-        }
-
-        var pathStyle = candidates[0].Shell == ApprovalShell.PowerShell
-            ? ShellPathStyle.Windows
-            : ShellPathStyle.Posix;
-        if (_pathAccessPolicy.EvaluateReviewedShellPath(fullCwd, context, pathStyle) is PathAccessDecision.Allowed)
-        {
-            return false;
-        }
-
-        var declaration = _pathAccessPolicy.Evaluate(
-            fullCwd,
-            context,
-            PathAccessPolicy.FileOperation.DeclareProjectScope);
-        if (declaration is not PathAccessDecision.Allowed admittedDeclaration)
-            return false;
-
-        foreach (var candidate in candidates)
-        {
-            var resolvedPaths = ResolveCompatibilityPaths(
-                candidate,
-                candidate.SourceOccurrence,
-                fullCwd);
-            if (!IsReviewedDiagnostic(
-                    candidate,
-                    candidate.SourceOccurrence,
-                    context,
-                    resolvedPaths,
-                    admittedDeclaration.CanonicalPath))
-            {
-                return false;
-            }
-
-            var effectiveDirectory = candidate.Directory ?? fullCwd;
-            if (string.IsNullOrWhiteSpace(effectiveDirectory))
-                return false;
-
-            string fullDirectory;
-            try
-            {
-                fullDirectory = Path.GetFullPath(effectiveDirectory);
-            }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-            {
-                return false;
-            }
-
-            if (_pathAccessPolicy.EvaluateReviewedShellPath(
-                    fullDirectory,
-                    context,
-                    pathStyle,
-                    admittedDeclaration.CanonicalPath) is not PathAccessDecision.Allowed)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     private bool IsReviewedDiagnostic(
         ApprovalCandidate candidate,
         CommandOccurrence? sourceOccurrence,
         ToolInvocationContext context,
         ShellPolicyResolvedPathView? resolvedPaths,
-        string? proposedProjectRoot = null,
-        bool includeTrustedRootInLinkCheck = true)
+        bool allowUnknownOperands = false)
     {
-        if (!IsReviewedDiagnosticSyntax(candidate, sourceOccurrence, resolvedPaths, out var shell))
+        // An unresolved program word, structure, directory, redirect, or glob
+        // scope is never a reviewed diagnostic.
+        if (candidate.Unresolved == ShellUnresolvedPart.Command
+            || candidate.Unresolved == ShellUnresolvedPart.Operand && !allowUnknownOperands
+            || !IsReviewedDiagnosticSyntax(candidate, sourceOccurrence, resolvedPaths, out var shell))
             return false;
 
         return AllAuthoredPathsStayWithinRoots(
             resolvedPaths,
             shell,
             context,
-            proposedProjectRoot,
-            includeTrustedRootInLinkCheck);
+            allowUnknownOperands);
     }
 
     internal bool ShortCircuitsCausalIntent(
@@ -199,11 +112,15 @@ internal sealed class ReviewedSafeShellPolicy
         ToolInvocationContext context)
     {
         var candidate = projected.Candidate;
+        // Owner decision D1: in an interactive call, a reviewed phrase also
+        // covers a command whose only unknown part is an operand value. The
+        // caller applies reviewed-safe coverage to interactive calls only.
         if (!IsReviewedDiagnostic(
                 candidate,
                 projected.SourceOccurrence,
                 context,
-                pathFacts.Real)
+                pathFacts.Real,
+                allowUnknownOperands: candidate.Unresolved == ShellUnresolvedPart.Operand)
             || pathFacts.RealScope is not
             {
                 State: ShellPolicyPathResolutionState.Known,
@@ -222,6 +139,9 @@ internal sealed class ReviewedSafeShellPolicy
             pathStyle) is PathAccessDecision.Allowed;
     }
 
+    // A redirect to the null device discards output and writes no file, so it
+    // does not disqualify a reviewed diagnostic. Every other output redirect does,
+    // including one into the project.
     private static bool HasFileWritingRedirect(ShellPolicyResolvedPathView? resolvedPaths)
         => resolvedPaths?.Facts.Any(static fact =>
             fact.Source is
@@ -229,7 +149,14 @@ internal sealed class ReviewedSafeShellPolicy
                 Origin: ShellPolicyPathOrigin.Redirect,
                 RedirectMode: { } mode
             }
-            && ShellRedirectPolicyFacts.IsFileWritingMode(mode)) == true;
+            && ShellRedirectPolicyFacts.IsFileWritingMode(mode)
+            && !IsNullDeviceSink(fact)) == true;
+
+    private static bool IsNullDeviceSink(ShellPolicyResolvedPathFact fact)
+        => fact.Source.RedirectIsComplete
+           && fact.State == ShellPolicyPathResolutionState.Known
+           && fact.Paths.Count > 0
+           && fact.Paths.All(ShellRedirectPolicyFacts.IsNullDevice);
 
     private static bool HasUnprovedNonFileSystemSemantics(
         ShellPolicyResolvedPathView? resolvedPaths)
@@ -258,14 +185,22 @@ internal sealed class ReviewedSafeShellPolicy
         out ApprovalShell shell)
     {
         shell = default;
+        if (candidate.AssignmentDigest is not null)
+        {
+            return false;
+        }
+
         if (candidate is not { Shell: { } candidateShell })
             return false;
 
-        if (candidate.VerbTokens is not { } verbTokens)
+        // The reviewed catalog lists parser verb phrases (git status), not grant
+        // command words, so it reads the parser verb chain of the occurrence.
+        if (sourceOccurrence is null || sourceOccurrence.Clause.Verb.Tokens.Count == 0)
             return false;
 
-        if (sourceOccurrence is null)
-            return false;
+        var verbTokens = sourceOccurrence.Clause.Verb.Tokens.ToArray();
+        if (sourceOccurrence.Clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
+            verbTokens[0] = canonicalVerb;
 
         if (ShellFileSystemTreeAccessPolicy.RequiresExactApproval(
                 candidateShell == ApprovalShell.PowerShell
@@ -300,8 +235,7 @@ internal sealed class ReviewedSafeShellPolicy
         ShellPolicyResolvedPathView? resolvedPaths,
         ApprovalShell shell,
         ToolInvocationContext context,
-        string? proposedProjectRoot,
-        bool includeTrustedRootInLinkCheck)
+        bool allowUnknownOperands)
     {
         if (resolvedPaths is null)
             return false;
@@ -313,13 +247,28 @@ internal sealed class ReviewedSafeShellPolicy
                      fact.Source.Origin is ShellPolicyPathOrigin.AuthoredArgument
                          or ShellPolicyPathOrigin.FileSystemTreeRoot))
         {
+            // D1: an unknown operand value adds no reach that a literal operand
+            // lacks. Each known path still needs read authority.
+            if (allowUnknownOperands
+                && fact.State == ShellPolicyPathResolutionState.UnknownDynamic)
+            {
+                continue;
+            }
+
             var validDomain = fact.Source.Origin == ShellPolicyPathOrigin.FileSystemTreeRoot
                 ? fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.PathPattern
-                : fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.FiniteSet;
+                : fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
+                  || IsLinkContainedGlob(fact.Source.Domain, pathStyle);
+            // The parser's Windows shape is lexical: a backslash, a leading
+            // "//", or a drive prefix. A backslash is a separator only under
+            // Windows path rules. Under POSIX rules it is an ordinary file-name
+            // character, so the POSIX-resolved paths are the real targets. The
+            // shape is a mismatch only when the paths used other rules than the
+            // shell. A POSIX shape under Windows path rules stays a mismatch.
             if (fact.Source.AuthoredPathShape == ShellPathShape.Posix
                     && pathStyle != ShellPathStyle.Posix
                 || fact.Source.AuthoredPathShape == ShellPathShape.Windows
-                    && pathStyle != ShellPathStyle.Windows
+                    && fact.Paths.Any(path => path.Style != pathStyle)
                 || !validDomain
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count == 0
@@ -327,9 +276,7 @@ internal sealed class ReviewedSafeShellPolicy
                     _pathAccessPolicy.EvaluateReviewedShellPath(
                         path.Value,
                         context,
-                        path.PathStyle,
-                        proposedProjectRoot,
-                        includeTrustedRootInLinkCheck) is not PathAccessDecision.Allowed))
+                        path.Style) is not PathAccessDecision.Allowed))
             {
                 return false;
             }
@@ -337,6 +284,14 @@ internal sealed class ReviewedSafeShellPolicy
 
         return true;
     }
+
+    // A glob word reads below its covering directory, to the segment depth. The
+    // read check then uses the covering directory, and a link must not take a
+    // match out of it.
+    private static bool IsLinkContainedGlob(ShellValueDomain domain, ShellPathStyle pathStyle)
+        => ShellGlobScope.AsGlobPattern(domain) is { } pattern
+           && CanonicalPath.TryCreate(pattern.CoveringDirectory, relativeBase: null, pathStyle, out var covering)
+           && ShellGlobScope.IsLinkContained(covering, pattern.Glob!);
 
     private static bool AllPathsStayWithinIntent(
         ShellPolicyResolvedPathView? resolvedPaths,
@@ -375,59 +330,12 @@ internal sealed class ReviewedSafeShellPolicy
         return true;
     }
 
-    private static ShellPolicyResolvedPathView? ResolveCompatibilityPaths(
-        ApprovalCandidate candidate,
-        CommandOccurrence? occurrence,
-        string? workingDirectoryOverride = null)
-    {
-        if (candidate.Shell is not { } shell || occurrence is null)
-            return null;
-
-        var workingDirectory = workingDirectoryOverride
-            ?? (occurrence.WorkingDirectory is ShellValueDomain.Exact exact
-                ? exact.Value
-                : null);
-        var pathStyle = OperatingSystem.IsWindows()
-            ? ShellPathStyle.Windows
-            : ShellPathStyle.Posix;
-        return ShellPolicyOccurrencePathFacts.Create(occurrence)
-            .Resolve(workingDirectory, pathStyle, shell);
-    }
-
     // A parser-derived intent is approval scope, not a trusted root. Permit a
-    // root alias such as macOS /tmp,
-    // while still rejecting linked descendants below it.
+    // root alias such as macOS /tmp, while still rejecting linked descendants below it.
     private static bool IsWithinCausalIntent(string path, string intentRoot)
-        => IsWithinShellRoot(path, intentRoot, ShellPathStyle.Posix, includeRoot: false);
-
-    private static bool IsWithinShellRoot(
-        string path,
-        string root,
-        ShellPathStyle pathStyle,
-        bool includeRoot = true)
-    {
-        try
-        {
-            return ShellPathRules.TryNormalize(path, pathStyle, out var normalizedPath)
-                   && ShellPathRules.TryNormalize(root, pathStyle, out var normalizedRoot)
-                   && ShellPathRules.IsWithinRoot(
-                       normalizedPath,
-                       normalizedRoot,
-                       pathStyle)
-                   && (!ShellPathRules.UsesHostPathStyle(pathStyle)
-                       || !PathUtility.ContainsSymlinkSegment(
-                           normalizedRoot,
-                           normalizedPath,
-                           includeRoot));
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                      or IOException
-                                      or NotSupportedException
-                                      or UnauthorizedAccessException
-                                      or System.Security.SecurityException)
-        {
-            return false;
-        }
-    }
-
+        => CanonicalPath.TryCreate(path, relativeBase: null, ShellPathStyle.Posix, out var candidate)
+           && CanonicalPath.TryCreate(intentRoot, relativeBase: null, ShellPathStyle.Posix, out var root)
+           && FileSystemAuthority.EvaluateMembership(
+               candidate,
+               [new PathBoundary.Folder(root, LinkRule.BelowRoot)]) is PathDecision.Allowed;
 }

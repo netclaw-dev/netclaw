@@ -7,12 +7,16 @@ using System.Security.Cryptography;
 using System.Text;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools.Authorization.Consent;
 
 namespace Netclaw.Actors.Tools;
 
 internal static class OneTimeApprovalKeys
 {
-    private const string CandidateKeyPrefix = "\0candidate-v2:";
+    private const int NoAssignmentDigestKeyKind = 1;
+    private const int ExactAssignmentDigestKeyKind = 2;
+
+    private const string CandidateKeyPrefix = "\0candidate-v3:";
 
     public static IReadOnlyList<string> Create(ToolApprovalContext context)
         => Create(context.Patterns, context.Candidates ?? [], context.Cwd);
@@ -28,14 +32,15 @@ internal static class OneTimeApprovalKeys
         return keys;
     }
 
+    /// <summary>Creates the "Once" answer for the prompt of <paramref name="toolName"/>.</summary>
+    public static OneTimeConsent CreateConsent(string toolName, ToolApprovalContext context)
+        => new(toolName, Create(context));
+
     public static bool Matches(
-        string? approvedToolName,
-        IReadOnlySet<string> approvedKeys,
+        OneTimeConsent? consent,
         string toolName,
         ToolApprovalContext approvalContext)
-        => !string.IsNullOrEmpty(approvedToolName)
-           && string.Equals(approvedToolName, toolName, StringComparison.Ordinal)
-           && approvedKeys.SetEquals(Create(approvalContext));
+        => consent is not null && consent.Covers(toolName, Create(approvalContext));
 
     private static string CreateCandidateKey(ApprovalCandidate candidate, string? cwd)
     {
@@ -55,6 +60,11 @@ internal static class OneTimeApprovalKeys
             payloadBuilder.Append(normalizedToken.Length).Append(':').Append(normalizedToken);
         }
 
+        var assignmentDigest = candidate.AssignmentDigest?.Value ?? string.Empty;
+        payloadBuilder.Append(candidate.AssignmentDigest is null
+            ? NoAssignmentDigestKeyKind
+            : ExactAssignmentDigestKeyKind).Append(':');
+        payloadBuilder.Append(assignmentDigest.Length).Append(':').Append(assignmentDigest);
         payloadBuilder.Append(effectiveDirectory.Length).Append(':').Append(effectiveDirectory);
         var payload = payloadBuilder.ToString();
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));

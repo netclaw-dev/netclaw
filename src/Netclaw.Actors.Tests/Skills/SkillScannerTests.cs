@@ -5,26 +5,26 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using System.Linq;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Skills;
 
-public class SkillScannerTests : IDisposable
+public class SkillScannerTests : IAsyncLifetime
 {
+    private readonly TestSessionTempDirectory _tempDir =
+        TestSessionTempDirectory.Create("netclaw-skills-test-");
     private readonly string _skillsDir;
 
     public SkillScannerTests()
     {
-        _skillsDir = Path.Combine(Path.GetTempPath(), $"netclaw-skills-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_skillsDir);
+        _skillsDir = _tempDir.Path;
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_skillsDir))
-            Directory.Delete(_skillsDir, recursive: true);
-    }
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+    public ValueTask DisposeAsync() => _tempDir.DisposeAsync();
 
     [Fact]
     public void Empty_directory_returns_empty_list()
@@ -394,10 +394,44 @@ public class SkillScannerTests : IDisposable
         Assert.NotNull(result.AcceptedSkills[0].SkillDirectory);
     }
 
-    [Fact]
-    public void Duplicate_skill_names_are_rejected_with_explicit_issues()
+    [Theory]
+    [InlineData("shared-name")]
+    [InlineData("team/shared-name")]
+    public void System_skill_wins_over_user_skill_with_same_name(string userLocation)
     {
-        WriteSkill("shared-name", """
+        // A user-tier copy must not disable a system skill by claiming its name.
+        WriteSkill(userLocation, """
+            ---
+            name: shared-name
+            description: User copy.
+            ---
+
+            # User
+            """);
+        WriteSkill(".system/shared-name", """
+            ---
+            name: shared-name
+            description: System copy.
+            ---
+
+            # System
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        var accepted = Assert.Single(result.AcceptedSkills);
+        Assert.Equal(SkillScanner.SystemCategory, accepted.Category);
+        Assert.Equal("System copy.", accepted.Description);
+        var issue = Assert.Single(result.Issues);
+        Assert.Equal(SkillScanIssueKind.DuplicateName, issue.Kind);
+        Assert.Equal(Path.GetFullPath(Path.Combine(_skillsDir, userLocation, "SKILL.md")), issue.Path);
+        Assert.Contains(Path.Combine(_skillsDir, ".system", "shared-name", "SKILL.md"), issue.Message);
+    }
+
+    [Fact]
+    public void Same_tier_duplicate_skill_names_are_rejected_with_explicit_issues()
+    {
+        WriteSkill("alpha/shared-name", """
             ---
             name: shared-name
             description: First copy.
@@ -405,10 +439,7 @@ public class SkillScannerTests : IDisposable
 
             # First
             """);
-
-        var secondDir = Path.Combine(_skillsDir, ".system", "shared-name");
-        Directory.CreateDirectory(secondDir);
-        File.WriteAllText(Path.Combine(secondDir, "SKILL.md"), """
+        WriteSkill("beta/shared-name", """
             ---
             name: shared-name
             description: Second copy.

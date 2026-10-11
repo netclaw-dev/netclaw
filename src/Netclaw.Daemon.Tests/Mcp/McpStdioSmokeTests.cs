@@ -3,10 +3,13 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using Microsoft.Extensions.AI;
 using ModelContextProtocol.Client;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -75,6 +78,133 @@ public class McpStdioSmokeTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task MultiContentResult_ProjectsTextAndMarkerWithoutImageBytes()
+    {
+        _client = await CreateClientAsync("multi-content");
+        var tools = await _client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var tool = Assert.Single(tools, candidate => candidate.Name == "image-with-notes");
+
+        var result = await tool.InvokeAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.IsType<AIContent[]>(result);
+        var projection = McpToolResultFormatter.Project(result, "smoke/image-with-notes");
+        var artifact = Assert.Single(projection.Artifacts);
+        Assert.Equal("[image: image/png]\nchart-notes", projection.Text);
+        Assert.Equal(new byte[] { 0x89, 0x50, 0x4E, 0x47 }, artifact.Data.Span[..4].ToArray());
+        Assert.DoesNotContain(Convert.ToBase64String(artifact.Data.Span), projection.Text);
+    }
+
+    [Fact]
+    public async Task MetadataResult_ProjectsTextAndMarkerWithoutImageBytes()
+    {
+        _client = await CreateClientAsync("metadata-content");
+        var tools = await _client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var tool = Assert.Single(tools, candidate => candidate.Name == "image-with-metadata");
+
+        var result = await tool.InvokeAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.IsType<JsonElement>(result);
+        var projection = McpToolResultFormatter.Project(result, "smoke/image-with-metadata");
+        var artifact = Assert.Single(projection.Artifacts);
+        Assert.Equal("[image: image/png]", projection.Text);
+        Assert.Equal(new byte[] { 0x89, 0x50, 0x4E, 0x47 }, artifact.Data.Span[..4].ToArray());
+        Assert.DoesNotContain(Convert.ToBase64String(artifact.Data.Span), projection.Text);
+        Assert.DoesNotContain("_meta", projection.Text);
+    }
+
+    [Fact]
+    public async Task McpClientManager_RejectsInvalidImageBytesFromRealStdioServer()
+    {
+        // The real SDK returns a JSON result whose server MIME claims image/png.
+        // This test proves that the manager rejects its invalid bytes before storage.
+        // Arrange
+        using var directory = new DisposableTempDir();
+        var registry = new ToolRegistry();
+        await using var harness = McpSmokeHarness.Create(
+            new Dictionary<string, McpServerEntry> { ["smoke"] = CreateEntry() }, registry);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+        harness.AssertConnected("smoke");
+        var context = CreateStoredContext(directory, ModelModality.Text | ModelModality.Image);
+        var arguments = new Dictionary<string, object?> { ["validContent"] = false };
+
+        // Act
+        var result = await harness.Manager.InvokeAsync(
+            "smoke",
+            "image-with-metadata",
+            arguments,
+            context.Invocation,
+            TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Contains("[image: image/png]", result);
+        Assert.Contains("content validation failed", result);
+        Assert.Empty(context.Outputs.FileAttachments);
+        Assert.Empty(context.Outputs.ModelInputFiles);
+        Assert.False(Directory.Exists(context.SessionStorage!.ArtifactDirectory.Value));
+    }
+
+    [Fact]
+    public async Task McpClientManager_PreservesTextWhenRealStdioImageFailsAdmission()
+    {
+        // An invalid artifact must not discard readable text from the same MCP result.
+        // This test proves that the manager keeps the text and adds a visible rejection.
+        // Arrange
+        using var directory = new DisposableTempDir();
+        var registry = new ToolRegistry();
+        await using var harness = McpSmokeHarness.Create(
+            new Dictionary<string, McpServerEntry> { ["smoke"] = CreateEntry() }, registry);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+        harness.AssertConnected("smoke");
+        var context = CreateStoredContext(directory, ModelModality.Text | ModelModality.Image);
+        var arguments = new Dictionary<string, object?> { ["validContent"] = false };
+
+        // Act
+        var result = await harness.Manager.InvokeAsync(
+            "smoke",
+            "image-with-notes",
+            arguments,
+            context.Invocation,
+            TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.StartsWith("[image: image/png]\nchart-notes", result, StringComparison.Ordinal);
+        Assert.Contains("content validation failed", result);
+        Assert.Empty(context.Outputs.FileAttachments);
+        Assert.Empty(context.Outputs.ModelInputFiles);
+    }
+
+    [Fact]
+    public async Task McpClientManager_RoutesValidImageThroughExistingToolOutputs()
+    {
+        // The manager joins the MCP result path to the normal session tool-output path.
+        // This test proves that a verified STDIO image becomes one user and model output.
+        // Arrange
+        using var directory = new DisposableTempDir();
+        var registry = new ToolRegistry();
+        await using var harness = McpSmokeHarness.Create(
+            new Dictionary<string, McpServerEntry> { ["smoke"] = CreateEntry() }, registry);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+        harness.AssertConnected("smoke");
+        var context = CreateStoredContext(directory, ModelModality.Text | ModelModality.Image);
+
+        // Act
+        var result = await harness.Manager.InvokeAsync(
+            "smoke",
+            "image-with-metadata",
+            null,
+            context.Invocation,
+            TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Equal("[image: image/png]", result);
+        var userOutput = Assert.Single(context.Outputs.FileAttachments);
+        var modelOutput = Assert.Single(context.Outputs.ModelInputFiles);
+        Assert.Equal(userOutput.FilePath, modelOutput.FilePath);
+        Assert.Equal("image/png", userOutput.MimeType.Value);
+        Assert.True(File.Exists(userOutput.FilePath));
+    }
+
+    [Fact]
     public async Task McpClientManager_ConnectsAndRegistersTools()
     {
         var registry = new ToolRegistry();
@@ -126,6 +256,24 @@ public class McpStdioSmokeTests : IAsyncDisposable
             Arguments = [SmokeMcpServerLocator.LocateDll()],
             Enabled = true,
         };
+
+    private static ToolExecutionContext CreateStoredContext(
+        DisposableTempDir directory,
+        ModelModality modalities)
+    {
+        var storage = SessionStoragePaths.CreateLegacy(
+            Path.Combine(directory.Path, "session"),
+            Path.Combine(directory.Path, "logs"),
+            "test-thread");
+        return TestToolExecutionContext.CreateBoundWithStorage(
+            "test/thread",
+            storage,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ModelInputModalities = modalities,
+            });
+    }
 
     public async ValueTask DisposeAsync()
     {

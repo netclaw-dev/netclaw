@@ -6,6 +6,7 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Actors.Reminders;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
@@ -38,7 +39,17 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
     public string AgentName { get; set; } = "Netclaw";
     public string? CommunicationStyle { get; set; }
     public string? UserName { get; set; }
-    public string UserTimezone { get; set; } = TimeZoneInfo.Local.Id;
+    public string UserTimezone { get; set; } = DefaultTimezone;
+
+    /// <summary>The local zone as an id the reminder scheduler accepts, else UTC.</summary>
+    internal static string DefaultTimezone => SchedulerTimeZones.DefaultId(TimeZoneInfo.Local);
+
+    /// <summary>
+    /// Returns why the scheduler cannot use <paramref name="timezone"/>, or null when it can.
+    /// Uses the reminder scheduler's own resolution so the wizard and a <c>CRON_TZ</c> reminder agree.
+    /// </summary>
+    internal static string? ValidateTimezone(string timezone)
+        => SchedulerTimeZones.TryResolve(timezone, out _, out var error) ? null : error;
 
     public bool IsApplicable(WizardContext context) => true;
 
@@ -211,9 +222,16 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
     /// Builds the initial onboarding chat message for the first conversation.
     /// </summary>
     public string BuildOnboardingTrigger(NetclawPaths paths)
+        => BuildOnboardingTrigger(paths, UserName, CommunicationStyle);
+
+    /// <summary>
+    /// Same trigger from saved identity values, for callers that have no step instance
+    /// (<c>netclaw chat --onboarding</c>).
+    /// </summary>
+    public static string BuildOnboardingTrigger(NetclawPaths paths, string? savedUserName, string? savedCommunicationStyle)
     {
-        var userName = string.IsNullOrWhiteSpace(UserName) ? "User" : UserName;
-        var commStyle = CommunicationStyle ?? "Concise & casual";
+        var userName = string.IsNullOrWhiteSpace(savedUserName) ? "User" : savedUserName;
+        var commStyle = savedCommunicationStyle ?? "Concise & casual";
         var soulPath = paths.SoulPath;
         var agentsPath = paths.AgentsPath;
 

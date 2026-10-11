@@ -4,12 +4,16 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Services;
+using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -128,13 +132,14 @@ public sealed class SessionStorageResolverTests : IDisposable
     }
 
     [Fact]
-    public async Task Persisted_binding_wins_after_the_configured_sessions_root_changes()
+    public async Task Current_sessions_directory_wins_over_the_stored_root_when_it_changes()
     {
         var paths = CreatePaths();
         await MigrateAsync(paths, paths.SqliteDbPath);
         var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider());
         var sessionId = new SessionId("signalr/stable-session");
         var first = resolver.Resolve(sessionId);
+        Directory.CreateDirectory(first.Binding!.EnvelopeRoot.Value);
         var alternateSessionsRoot = Path.Combine(_basePath, "alternate-sessions");
 
         var second = new SqliteSessionStorageResolver(
@@ -142,8 +147,271 @@ public sealed class SessionStorageResolverTests : IDisposable
             new FakeTimeProvider(),
             alternateSessionsRoot).Resolve(sessionId);
 
-        Assert.Equal(first.Binding, second.Binding);
-        Assert.False(second.SessionDirectory.Value.StartsWith(alternateSessionsRoot, StringComparison.Ordinal));
+        Assert.Equal(
+            Path.Combine(alternateSessionsRoot, Path.GetFileName(first.Binding.EnvelopeRoot.Value)),
+            second.Binding!.EnvelopeRoot.Value);
+    }
+
+    [Fact]
+    public async Task Restored_home_at_another_path_resolves_sessions_under_the_new_home()
+    {
+        var oldHome = Path.Combine(Path.GetTempPath(), $"netclaw-old-{Guid.NewGuid():N}");
+        var oldPaths = new NetclawPaths(oldHome);
+        oldPaths.EnsureDirectoriesExist();
+        var newPaths = CreatePaths();
+        try
+        {
+            await MigrateAsync(oldPaths, oldPaths.SqliteDbPath);
+            var sessionId = new SessionId("signalr/restored-session");
+            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider()).Resolve(sessionId);
+            var envelopeName = Path.GetFileName(original.Binding!.EnvelopeRoot.Value);
+            Directory.CreateDirectory(original.SessionDirectory.Value);
+            File.WriteAllText(Path.Combine(original.SessionDirectory.Value, "notes.txt"), "kept");
+
+            // Restore: the database and the sessions tree move together; the old path no longer exists.
+            SqliteTestPools.Clear(oldPaths);
+            File.Copy(oldPaths.SqliteDbPath, newPaths.SqliteDbPath);
+            Directory.Delete(newPaths.SessionsDirectory);
+            Directory.Move(oldPaths.SessionsDirectory, newPaths.SessionsDirectory);
+            Directory.Delete(oldHome, recursive: true);
+
+            var restored = new SqliteSessionStorageResolver(newPaths, new FakeTimeProvider()).Resolve(sessionId);
+
+            Assert.Equal(Path.Combine(newPaths.SessionsDirectory, envelopeName), restored.Binding!.EnvelopeRoot.Value);
+            Assert.Equal("kept", File.ReadAllText(Path.Combine(restored.SessionDirectory.Value, "notes.txt")));
+            Assert.StartsWith(newPaths.SessionsDirectory, restored.LogPath.Value, StringComparison.Ordinal);
+            Assert.Equal(1, CountBindings(newPaths));
+        }
+        finally
+        {
+            SqliteTestPools.Clear(oldPaths);
+            if (Directory.Exists(oldHome))
+                Directory.Delete(oldHome, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("/home/alice/.netclaw/sessions/signalr_a-0123456789abcdef", "signalr_a-0123456789abcdef")]
+    [InlineData("/srv/sessions/data/.netclaw/sessions/signalr_a-0123456789abcdef", "signalr_a-0123456789abcdef")]
+    [InlineData(@"C:\Users\alice\.netclaw\sessions\signalr_a-0123456789abcdef", "signalr_a-0123456789abcdef")]
+    [InlineData(@"C:\Users\alice\.netclaw\sessions/signalr_a-0123456789abcdef", "signalr_a-0123456789abcdef")]
+    public void Stored_root_that_does_not_exist_is_rebased_onto_the_current_sessions_directory(
+        string stored,
+        string envelopeName)
+    {
+        var sessionsDirectory = Path.Combine(_basePath, "sessions");
+
+        var resolved = SqliteSessionStorageResolver.ResolveStoredEnvelopeRoot(stored, sessionsDirectory);
+
+        Assert.Equal(Path.Combine(sessionsDirectory, envelopeName), resolved);
+    }
+
+    [Fact]
+    public void Stored_root_already_under_the_current_sessions_directory_is_unchanged()
+    {
+        var sessionsDirectory = Path.Combine(_basePath, "sessions");
+        var stored = Path.Combine(sessionsDirectory, "signalr_a-0123456789abcdef");
+
+        Assert.Equal(stored, SqliteSessionStorageResolver.ResolveStoredEnvelopeRoot(stored, sessionsDirectory));
+    }
+
+    [Fact]
+    public void Stored_root_that_still_exists_elsewhere_is_still_rebased()
+    {
+        var elsewhere = Path.Combine(_basePath, "other-home", "sessions", "signalr_a-0123456789abcdef");
+        Directory.CreateDirectory(elsewhere);
+        var sessionsDirectory = Path.Combine(_basePath, "sessions");
+
+        var resolved = SqliteSessionStorageResolver.ResolveStoredEnvelopeRoot(elsewhere, sessionsDirectory);
+
+        Assert.Equal(Path.Combine(sessionsDirectory, "signalr_a-0123456789abcdef"), resolved);
+    }
+
+    [Theory]
+    [InlineData("/home/alice/.netclaw/elsewhere/signalr_a-0123456789abcdef")]
+    [InlineData("/home/alice/.netclaw/sessions")]
+    [InlineData("/home/alice/.netclaw/sessions/")]
+    [InlineData("/home/alice/.netclaw/sessions/..")]
+    [InlineData("/home/alice/.netclaw/sessions//empty-segment")]
+    [InlineData("/home/alice/.netclaw/sessions/a/b/c")]
+    [InlineData("/home/alice/.netclaw/Sessions/signalr_a-0123456789abcdef")]
+    [InlineData("signalr_a-0123456789abcdef")]
+    public void Stored_root_without_a_single_segment_envelope_under_sessions_is_unchanged(string stored)
+    {
+        Assert.Equal(
+            stored,
+            SqliteSessionStorageResolver.ResolveStoredEnvelopeRoot(stored, Path.Combine(_basePath, "sessions")));
+    }
+
+    [Fact]
+    public async Task Old_directory_that_exists_and_a_current_folder_that_exists_resolve_to_the_current_home()
+    {
+        var oldHome = Path.Combine(Path.GetTempPath(), $"netclaw-old-{Guid.NewGuid():N}");
+        var oldPaths = new NetclawPaths(oldHome);
+        oldPaths.EnsureDirectoriesExist();
+        var currentPaths = CreatePaths();
+        try
+        {
+            await MigrateAsync(oldPaths, oldPaths.SqliteDbPath);
+            var sessionId = new SessionId("signalr/copied-home");
+            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider()).Resolve(sessionId);
+            Directory.CreateDirectory(original.SessionDirectory.Value);
+            File.WriteAllText(Path.Combine(original.SessionDirectory.Value, "notes.txt"), "original");
+            SqliteTestPools.Clear(oldPaths);
+            File.Copy(oldPaths.SqliteDbPath, currentPaths.SqliteDbPath);
+            var currentEnvelope = Path.Combine(currentPaths.SessionsDirectory, Path.GetFileName(original.Binding!.EnvelopeRoot.Value));
+            Directory.CreateDirectory(Path.Combine(currentEnvelope, "workspace"));
+            File.WriteAllText(Path.Combine(currentEnvelope, "workspace", "notes.txt"), "copy");
+
+            var log = new CapturingLogger();
+            var resolved = new SqliteSessionStorageResolver(currentPaths, new FakeTimeProvider(), log).Resolve(sessionId);
+
+            Assert.Equal(currentEnvelope, resolved.Binding!.EnvelopeRoot.Value);
+            Assert.Equal("copy", File.ReadAllText(Path.Combine(resolved.SessionDirectory.Value, "notes.txt")));
+            var warning = Assert.Single(log.Warnings);
+            Assert.Contains(original.Binding.EnvelopeRoot.Value, warning, StringComparison.Ordinal);
+            Assert.Contains(currentEnvelope, warning, StringComparison.Ordinal);
+            Assert.DoesNotContain("does not exist yet", warning, StringComparison.Ordinal);
+        }
+        finally
+        {
+            SqliteTestPools.Clear(oldPaths);
+            if (Directory.Exists(oldHome))
+                Directory.Delete(oldHome, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Old_directory_that_exists_and_a_missing_current_folder_resolve_to_a_fresh_current_folder()
+    {
+        var oldHome = Path.Combine(Path.GetTempPath(), $"netclaw-old-{Guid.NewGuid():N}");
+        var oldPaths = new NetclawPaths(oldHome);
+        oldPaths.EnsureDirectoriesExist();
+        var currentPaths = CreatePaths();
+        try
+        {
+            await MigrateAsync(oldPaths, oldPaths.SqliteDbPath);
+            var sessionId = new SessionId("signalr/recreated-old-path");
+            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider()).Resolve(sessionId);
+            Directory.CreateDirectory(original.SessionDirectory.Value);
+            File.WriteAllText(Path.Combine(original.SessionDirectory.Value, "notes.txt"), "stranded");
+            SqliteTestPools.Clear(oldPaths);
+            File.Copy(oldPaths.SqliteDbPath, currentPaths.SqliteDbPath);
+
+            var log = new CapturingLogger();
+            var resolver = new SqliteSessionStorageResolver(currentPaths, new FakeTimeProvider(), log);
+            var resolved = resolver.Resolve(sessionId);
+            resolver.Resolve(sessionId);
+
+            var currentEnvelope = Path.Combine(currentPaths.SessionsDirectory, Path.GetFileName(original.Binding!.EnvelopeRoot.Value));
+            Assert.Equal(currentEnvelope, resolved.Binding!.EnvelopeRoot.Value);
+            Assert.False(File.Exists(Path.Combine(resolved.SessionDirectory.Value, "notes.txt")));
+            var warning = Assert.Single(log.Warnings);
+            Assert.Contains("does not exist yet", warning, StringComparison.Ordinal);
+        }
+        finally
+        {
+            SqliteTestPools.Clear(oldPaths);
+            if (Directory.Exists(oldHome))
+                Directory.Delete(oldHome, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Spill_after_a_home_move_uses_the_session_folder_of_the_current_home()
+    {
+        // The spill writer creates the session folder when it is missing. It must
+        // create the folder that the resolver gives for the current home, which is
+        // the folder that the shell launcher and tool_output_read also use.
+        var oldHome = Path.Combine(Path.GetTempPath(), $"netclaw-old-{Guid.NewGuid():N}");
+        var oldPaths = new NetclawPaths(oldHome);
+        oldPaths.EnsureDirectoriesExist();
+        var currentPaths = CreatePaths();
+        try
+        {
+            await MigrateAsync(oldPaths, oldPaths.SqliteDbPath);
+            var sessionId = new SessionId("signalr/moved-spill");
+            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider()).Resolve(sessionId);
+            SqliteTestPools.Clear(oldPaths);
+            File.Copy(oldPaths.SqliteDbPath, currentPaths.SqliteDbPath);
+            var resolved = new SqliteSessionStorageResolver(currentPaths, new FakeTimeProvider()).Resolve(sessionId);
+            Assert.False(Directory.Exists(resolved.SessionDirectory.Value));
+            var options = new TestToolExecutionContextOptions { Audience = TrustAudience.Personal };
+
+            var result = await ToolOutputSpill.BoundAndSpillAsync(
+                new string('H', 200) + new string('M', 200) + new string('T', 200),
+                "call_moved",
+                budget: 100,
+                TestToolExecutionContext.CreateBoundWithStorage(sessionId.Value, resolved, options).Invocation,
+                NullLogger.Instance,
+                TestContext.Current.CancellationToken);
+            var continuation = await new ToolOutputReadTool().ExecuteAsync(
+                ToolInput.Create("CallId", "call_moved", "Start", 200, "Limit", 200),
+                TestToolExecutionContext.CreateBoundWithStorage(sessionId.Value, resolved, options),
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains("CallId='call_moved'", result, StringComparison.Ordinal);
+            Assert.StartsWith(new string('M', 100), continuation, StringComparison.Ordinal);
+            Assert.StartsWith(currentPaths.SessionsDirectory, resolved.SessionDirectory.Value, StringComparison.Ordinal);
+            Assert.True(Directory.Exists(Path.Combine(resolved.SessionDirectory.Value, "tool-calls")));
+            Assert.False(Directory.Exists(original.SessionDirectory.Value));
+        }
+        finally
+        {
+            SqliteTestPools.Clear(oldPaths);
+            if (Directory.Exists(oldHome))
+                Directory.Delete(oldHome, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Concurrent_first_resolution_of_a_moved_session_logs_one_warning()
+    {
+        var paths = CreatePaths();
+        await MigrateAsync(paths, paths.SqliteDbPath);
+        var sessionId = new SessionId("signalr/moved-race");
+        var stored = Path.Combine(Path.GetTempPath(), "netclaw-gone", "sessions", "signalr_moved-race-0123456789abcdef");
+        using (var connection = new SqliteConnection($"Data Source={paths.SqliteDbPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                "INSERT INTO session_storage_bindings(session_id, layout_version, envelope_root, created_at) VALUES ($id, 2, $root, 0)";
+            command.Parameters.AddWithValue("$id", sessionId.Value);
+            command.Parameters.AddWithValue("$root", stored);
+            command.ExecuteNonQuery();
+        }
+
+        var log = new CapturingLogger();
+        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), log);
+        using var ready = new CountdownEvent(16);
+        using var start = new ManualResetEventSlim();
+        var tasks = Enumerable.Range(0, 16)
+            .Select(_ => Task.Factory.StartNew(
+                () => ResolveAfterSignal(resolver, sessionId, ready, start),
+                TestContext.Current.CancellationToken,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default))
+            .ToArray();
+        ready.Wait(TestContext.Current.CancellationToken);
+        start.Set();
+        await Task.WhenAll(tasks);
+
+        Assert.Single(log.Warnings);
+    }
+
+    [Fact]
+    public async Task Unmoved_home_logs_no_warning()
+    {
+        var paths = CreatePaths();
+        await MigrateAsync(paths, paths.SqliteDbPath);
+        var log = new CapturingLogger();
+        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), log);
+        var sessionId = new SessionId("signalr/unmoved");
+        resolver.Resolve(sessionId);
+        new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), log).Resolve(sessionId);
+
+        Assert.Empty(log.Warnings);
     }
 
     [Fact]
@@ -282,6 +550,26 @@ public sealed class SessionStorageResolverTests : IDisposable
 
         Assert.Null(storage.Binding);
         Assert.Equal(0, CountBindings(paths));
+    }
+
+    private sealed class CapturingLogger : ILogger<SqliteSessionStorageResolver>
+    {
+        public List<string> Warnings { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                Warnings.Add(formatter(state, exception));
+        }
     }
 
     private NetclawPaths CreatePaths()

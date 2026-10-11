@@ -244,7 +244,7 @@ public sealed class CopilotTokenExchangerTests
                 PublicOAuth,
                 TestContext.Current.CancellationToken));
 
-        Assert.Contains("provider fix copilot", ex.Message);
+        Assert.Contains("netclaw provider", ex.Message);
     }
 
     [Theory]

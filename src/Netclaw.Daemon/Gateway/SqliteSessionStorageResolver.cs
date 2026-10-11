@@ -7,6 +7,8 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -20,7 +22,7 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
 {
     private abstract record SessionStorageDatabaseState
     {
-        public sealed record Version2(SessionStorageBinding Binding) : SessionStorageDatabaseState;
+        public sealed record Version2(string StoredEnvelopeRoot) : SessionStorageDatabaseState;
 
         public sealed record Legacy : SessionStorageDatabaseState;
 
@@ -31,6 +33,9 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
     private readonly string _sessionsDirectory;
     private readonly string _sessionLogsDirectory;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<SqliteSessionStorageResolver> _logger;
+    // GetOrAdd can run the resolve factory twice for one session; this keeps the re-root warning to once.
+    private readonly ConcurrentDictionary<string, byte> _reRootedSessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SessionStoragePaths> _resolved =
         new(StringComparer.Ordinal);
 
@@ -39,15 +44,17 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
     /// <param name="timeProvider">The clock used for binding timestamps.</param>
     public SqliteSessionStorageResolver(
         NetclawPaths paths,
-        TimeProvider timeProvider)
-        : this(paths, timeProvider, paths.SessionsDirectory)
+        TimeProvider timeProvider,
+        ILogger<SqliteSessionStorageResolver>? logger = null)
+        : this(paths, timeProvider, paths.SessionsDirectory, logger)
     {
     }
 
     internal SqliteSessionStorageResolver(
         NetclawPaths paths,
         TimeProvider timeProvider,
-        string sessionsDirectory)
+        string sessionsDirectory,
+        ILogger<SqliteSessionStorageResolver>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -63,6 +70,7 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
         _sessionsDirectory = Path.GetFullPath(sessionsDirectory);
         _sessionLogsDirectory = paths.SessionLogsDirectory;
         _timeProvider = timeProvider;
+        _logger = logger ?? NullLogger<SqliteSessionStorageResolver>.Instance;
     }
 
     /// <inheritdoc />
@@ -91,8 +99,20 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
         SessionStoragePaths storage;
         switch (state)
         {
-            case SessionStorageDatabaseState.Version2(var binding):
-                storage = SessionStoragePaths.CreateVersion2(binding.EnvelopeRoot);
+            case SessionStorageDatabaseState.Version2(var storedEnvelopeRoot):
+                var resolvedRoot = ResolveStoredEnvelopeRoot(storedEnvelopeRoot, _sessionsDirectory);
+                if (!string.Equals(resolvedRoot, storedEnvelopeRoot, StringComparison.Ordinal)
+                    && _reRootedSessions.TryAdd(sessionId.Value, 0))
+                {
+                    _logger.LogWarning(
+                        "Session {SessionId} was stored at {StoredEnvelopeRoot}; using {EnvelopeRoot} under the current data directory{Missing}",
+                        sessionId.Value,
+                        storedEnvelopeRoot,
+                        resolvedRoot,
+                        Directory.Exists(resolvedRoot) ? string.Empty : " (that folder does not exist yet, so the session starts with an empty workspace)");
+                }
+
+                storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(resolvedRoot));
                 break;
             case SessionStorageDatabaseState.Legacy:
                 storage = SessionStoragePaths.CreateLegacy(
@@ -113,6 +133,26 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
 
         transaction.Commit();
         return storage;
+    }
+
+    /// <summary>
+    /// Maps a persisted envelope root to this home. The database and the sessions directory always live
+    /// in the same home, so an envelope named <c>sessions/&lt;name&gt;</c> in the stored absolute path belongs under
+    /// <paramref name="sessionsDirectory"/> wherever the home was restored. Both separator styles are read, so a
+    /// Windows-written value moves to Linux. A stored value of any other shape is returned unchanged.
+    /// </summary>
+    internal static string ResolveStoredEnvelopeRoot(string stored, string sessionsDirectory)
+    {
+        var segments = stored.Split('/', '\\');
+        if (segments.Length < 2
+            || segments[^2] != "sessions"
+            || segments[^1].Length == 0
+            || segments[^1] is "." or "..")
+        {
+            return stored;
+        }
+
+        return Path.Combine(sessionsDirectory, segments[^1]);
     }
 
     private static SessionStorageDatabaseState ReadDatabaseState(
@@ -164,10 +204,7 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
                     $"Session '{sessionId.Value}' uses unsupported storage layout version {version.Value}.");
             }
 
-            return new SessionStorageDatabaseState.Version2(
-                new SessionStorageBinding(
-                    version,
-                    new SessionStorageEnvelopeRoot(reader.GetString(1))));
+            return new SessionStorageDatabaseState.Version2(reader.GetString(1));
         }
 
         var hasPersistedLegacySession = reader.GetInt64(2) != 0

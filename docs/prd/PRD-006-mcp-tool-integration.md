@@ -5,7 +5,7 @@
 - State: Draft for execution (revised)
 - Owner: Netclaw engineering
 - Date: 2026-02-21
-- Revised: 2026-08-10 (MCP tool and prompt catalog notifications)
+- Revised: 2026-09-23 (MCP result artifact admission and delivery)
 - Depends on: `PRD-001`, `PRD-002`, `PRD-004`
 
 ## Goal
@@ -23,6 +23,7 @@ learning.
 4. Memorizer provides durable cross-session knowledge that outlives compaction.
 5. MCP prompt workflows are discoverable through the existing skill system.
 6. Supported servers can publish tool and prompt catalog changes without a poll delay.
+7. Supported MCP artifacts reach users and compatible active models safely.
 
 ## Two-Tier Memory Architecture
 
@@ -160,6 +161,25 @@ servers.
 Notification compatibility and failures SHALL appear in safe structured logs.
 This requirement does not add status API, CLI, or TUI fields.
 
+### MCP-013 Result Artifact Admission and Delivery
+
+Netclaw SHALL treat MCP result names, MIME values, and bytes as untrusted input.
+It SHALL apply the existing content scanner before it writes an artifact file.
+
+Only scanner-verified file types SHALL enter the session artifact directory.
+The verified MIME SHALL select the final file extension and output MIME.
+
+Every verified artifact SHALL use the existing user file-output path. A verified
+artifact SHALL also use the existing model-input path when the active model
+supports its modality and the media catalog permits that MIME.
+
+Netclaw SHALL preserve readable tool text when an artifact fails admission. It
+SHALL add a visible rejection note without placing artifact bytes in model text.
+
+Netclaw SHALL accept at most ten artifact candidates and 25 MiB of aggregate
+candidate bytes from one result. Cancellation SHALL remove files that the call
+created and SHALL register no pending artifact outputs.
+
 ## Non-Goals (MVP)
 
 - Dynamic marketplace discovery of MCP servers
@@ -198,6 +218,10 @@ This requirement does not add status API, CLI, or TUI fields.
 16. An older server with `listChanged` support refreshes through direct notifications.
 17. A missed or unsupported notification is repaired by the existing catalog poll.
 18. A failed notification refresh keeps the last good tool and prompt generation.
+19. A valid MCP image reaches the user through the normal file-output path.
+20. A compatible active model receives that image through the normal model-input path.
+21. A text-only active model receives no image bytes and reports the modality limit.
+22. Invalid, unsupported, or oversized MCP artifact data creates no output file.
 
 ## Cross-References
 

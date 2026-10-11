@@ -44,6 +44,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     private readonly IOperationalNotificationSink _notificationSink;
     private readonly TimeProvider _timeProvider;
     private readonly IMcpClientRuntime _clientRuntime;
+    private readonly McpArtifactMaterializer _artifactMaterializer;
     private readonly ILogger<McpClientManager> _logger;
     private readonly int _maxToolDescriptionChars;
     private readonly int _maxToolSchemaWarnChars;
@@ -69,6 +70,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     internal static readonly TimeSpan CatalogRefreshTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
+    /// Consecutive failed catalog refreshes after which a still-connected server is
+    /// reported as degraded. Small on purpose: with backoff the third failure lands about
+    /// two minutes after the first, which is long enough to ride out a blip.
+    /// </summary>
+    internal const int CatalogRefreshDegradedThreshold = 3;
+
+    /// <summary>
     /// The <c>server/discover</c> probe budget for a stdio server. See the remarks on
     /// <see cref="BuildClientOptions"/> for why this must stay finite and why 5 seconds
     /// (the SDK default) is too short for a freshly spawned child process.
@@ -89,6 +97,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         IOperationalNotificationSink notificationSink,
         TimeProvider timeProvider,
         IMcpClientRuntime clientRuntime,
+        McpArtifactMaterializer artifactMaterializer,
         ILogger<McpClientManager> logger,
         SessionConfig sessionConfig)
     {
@@ -105,6 +114,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         _notificationSink = notificationSink;
         _timeProvider = timeProvider;
         _clientRuntime = clientRuntime;
+        _artifactMaterializer = artifactMaterializer;
         _logger = logger;
         _maxToolDescriptionChars = sessionConfig.Tuning.MaxToolDescriptionChars;
         _maxToolSchemaWarnChars = sessionConfig.Tuning.MaxToolSchemaWarnChars;
@@ -130,6 +140,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        var connections = new List<Task<bool>>(_serverEntries.Count);
         foreach (var (name, entry) in _serverEntries)
         {
             var serverName = new McpServerName(name);
@@ -142,8 +153,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
             var observed = lifecycle.Snapshot;
             if (observed is not null)
-                await ReconnectAsync(lifecycle, entry, observed, cancellationToken, null);
+                connections.Add(ReconnectAsync(lifecycle, entry, observed, cancellationToken, null));
         }
+
+        await Task.WhenAll(connections);
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
@@ -187,11 +200,55 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     public IReadOnlyDictionary<McpServerName, McpServerStatus> GetServerStatuses()
     {
         var statuses = _servers
-            .Select(pair => (pair.Key, Snapshot: pair.Value.Snapshot))
+            .Select(pair => (pair.Key, Snapshot: pair.Value.Snapshot, Health: pair.Value.CatalogRefreshHealth))
             .Where(pair => pair.Snapshot is not null)
-            .ToDictionary(pair => pair.Key, pair => pair.Snapshot!.Status);
+            .ToDictionary(pair => pair.Key, pair => WithCatalogRefreshHealth(pair.Snapshot!.Status, pair.Health));
         return new ReadOnlyDictionary<McpServerName, McpServerStatus>(statuses);
     }
+
+    /// <summary>
+    /// Overlays a connected server's catalog refresh health on its published status. This
+    /// is the only place that decides <see cref="McpServerStatus.IsDegraded"/>; the status
+    /// endpoints and CLI read the flag rather than re-deriving it. The streak lives on the
+    /// lifecycle rather than in the snapshot so a failed refresh does not republish the
+    /// catalog just to update health.
+    /// </summary>
+    internal static McpServerStatus WithCatalogRefreshHealth(McpServerStatus status, McpCatalogRefreshHealth health)
+    {
+        if (status.State is not McpConnectionState.Connected)
+            return status;
+
+        // A refresh failure newer than the recorded error is the latest thing that went
+        // wrong, and stays reported after the server recovers.
+        var lastErrorAt = status.LastErrorAt is null || health.LastFailureAt > status.LastErrorAt
+            ? health.LastFailureAt ?? status.LastErrorAt
+            : status.LastErrorAt;
+        if (health.ConsecutiveFailures == 0)
+            return status with { LastErrorAt = lastErrorAt };
+
+        return status with
+        {
+            ConsecutiveCatalogRefreshFailures = health.ConsecutiveFailures,
+            IsDegraded = health.ConsecutiveFailures >= CatalogRefreshDegradedThreshold,
+            // An error already on the status (a failed tool call, say) says more about
+            // what the operator should do than a failed re-list; keep it.
+            ErrorMessage = status.ErrorMessage
+                ?? $"Catalog refresh failed {health.ConsecutiveFailures} time(s) in a row: {health.LastFailureReason}",
+            LastErrorAt = lastErrorAt,
+        };
+    }
+
+    /// <summary>
+    /// Minimum wait before the next catalog refresh. A healthy server polls every
+    /// <see cref="CatalogRefreshInterval"/>; a failing one backs off on the same curve the
+    /// reconnection service uses, 30s doubling up to a 300s cap. The cap equals the
+    /// healthy interval, so a server that stays down ends up polled at the normal cadence
+    /// rather than on every 30s tick.
+    /// </summary>
+    internal static long ComputeCatalogRefreshIntervalMs(int consecutiveFailures)
+        => consecutiveFailures <= 0
+            ? (long)CatalogRefreshInterval.TotalMilliseconds
+            : McpReconnectionService.ComputeBackoffMs(consecutiveFailures);
 
     public IReadOnlyList<string> GetToolNames(McpServerName serverName)
     {
@@ -233,9 +290,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             || lifecycle.Snapshot is not { IsConnected: true })
             return false;
 
+        using var timeoutCancellation = new CancellationTokenSource(CatalogRefreshTimeout, _timeProvider);
         using var candidateCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            ct, _lifetimeCancellation.Token);
-        candidateCancellation.CancelAfter(CatalogRefreshTimeout);
+            ct, _lifetimeCancellation.Token, timeoutCancellation.Token);
         try
         {
             await lifecycle.Gate.WaitAsync(candidateCancellation.Token);
@@ -259,14 +316,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
             if (!lifecycle.TryClaimCatalogRefresh(
                     _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                    (long)CatalogRefreshInterval.TotalMilliseconds,
+                    ComputeCatalogRefreshIntervalMs(lifecycle.CatalogRefreshHealth.ConsecutiveFailures),
                     out var previousRefreshMs))
             {
                 return false;
             }
 
             var result = await RefreshCatalogCoreAsync(
-                lifecycle, entry, snapshot, previousRefreshMs, candidateCancellation.Token);
+                lifecycle, entry, snapshot, previousRefreshMs, candidateCancellation.Token, timeoutCancellation.Token);
             return result is McpCatalogRefreshResult.Changed;
         }
         finally
@@ -280,7 +337,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         McpServerEntry entry,
         McpServerSnapshot current,
         long previousRefreshMs,
-        CancellationToken ct)
+        CancellationToken ct,
+        CancellationToken timeoutToken)
     {
         try
         {
@@ -295,19 +353,22 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             // transient: keep the last good snapshot, retry on the next poll window.
             if (functions.Count == 0 && current.ToolFunctions.Count > 0)
             {
-                // Roll back the throttle claim so the next 30s tick retries instead of
-                // waiting 5 minutes, matching the failed-refresh path below.
-                lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
-                _logger.LogWarning(
-                    "MCP server '{Name}' catalog refresh returned no tools; keeping {ToolCount} existing tool(s)",
-                    current.Name.Value,
-                    current.ToolFunctions.Count);
+                // Counts as a failure, so the retry follows the same backoff as the
+                // exception path below.
+                RecordCatalogRefreshFailure(
+                    lifecycle,
+                    current,
+                    $"server reported no tools; keeping {current.ToolFunctions.Count} existing tool(s)",
+                    exception: null);
                 return McpCatalogRefreshResult.Failed;
             }
 
             var fingerprint = ComputeCatalogFingerprint(functions.Values, promptDescriptors.Values);
             if (string.Equals(fingerprint, current.CatalogFingerprint, StringComparison.Ordinal))
+            {
+                LogCatalogRefreshRecovery(current.Name, MarkCatalogRefreshSucceeded(lifecycle));
                 return McpCatalogRefreshResult.Unchanged;
+            }
 
             var publishedTools = ToolRegistrationExtensions.PrepareMcpTools(
                 current.Name.Value,
@@ -320,6 +381,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             LogToolDrift(current.Name, tools);
 
             McpServerSnapshot replacement;
+            int recoveredFailures;
             lock (_shutdownSync)
             {
                 if (_stopping)
@@ -327,6 +389,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
                     return McpCatalogRefreshResult.Failed;
                 }
+
+                // Clear the streak before the new catalog is visible, so a status read
+                // never pairs the fresh catalog with a stale degraded flag.
+                recoveredFailures = MarkCatalogRefreshSucceeded(lifecycle);
 
                 replacement = current with
                 {
@@ -344,6 +410,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 PublishConnectedCatalog(lifecycle, replacement, publishedTools);
             }
 
+            LogCatalogRefreshRecovery(current.Name, recoveredFailures);
             _logger.LogInformation(
                 "MCP server '{Name}' catalog refreshed as generation {Generation} ({ToolCount} tools, {PromptCount} prompts)",
                 current.Name.Value,
@@ -352,18 +419,22 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 promptDescriptors.Count);
             return McpCatalogRefreshResult.Changed;
         }
-        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested && !timeoutToken.IsCancellationRequested)
         {
+            // Shutdown, a caller giving up, or a deactivated notification lease: the
+            // attempt was abandoned, not failed, so it neither counts toward the streak
+            // nor holds the poll slot.
             lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
             return McpCatalogRefreshResult.Failed;
         }
         catch (Exception ex)
         {
-            // Invariant: a failed refresh must never empty the catalog. Roll back the
-            // throttle claim so the next 30s tick retries instead of waiting 5 minutes.
-            lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
+            // Invariant: a failed refresh must never empty the catalog.
             if (IsAuthFailure(ex))
             {
+                // The server leaves Connected below, which takes it off the refresh
+                // path; the claim is released so a reauthorized session polls normally.
+                lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
                 // AwaitingAuth sends the operator to `netclaw mcp auth`. That remedy fits
                 // two cases only: the daemon holds OAuth tokens, or the SDK raised a real
                 // OAuth challenge. Any other HTTP server gets AuthFailed, so the message
@@ -379,13 +450,71 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 return McpCatalogRefreshResult.Failed;
             }
 
-            _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex),
-                "MCP server '{Name}' catalog refresh failed; keeping generation {Generation} unchanged",
-                current.Name.Value,
-                current.Generation);
+            // Keep the claim at the attempt time and extend the backoff, so a server
+            // that stops answering is re-listed on a widening interval instead of on
+            // every reconnection-service tick.
+            var timedOut = ex is OperationCanceledException && timeoutToken.IsCancellationRequested;
+            var reason = timedOut
+                ? $"timed out after {CatalogRefreshTimeout.TotalSeconds:0}s"
+                : $"{ex.GetType().Name}: {SecretOutputRedactor.Redact(ex.Message)}";
+            RecordCatalogRefreshFailure(lifecycle, current, reason, ex);
             return McpCatalogRefreshResult.Failed;
         }
     }
+
+    private void RecordCatalogRefreshFailure(
+        McpServerLifecycle lifecycle,
+        McpServerSnapshot current,
+        string reason,
+        Exception? exception)
+    {
+        var failures = lifecycle.RecordCatalogRefreshFailure(reason, _timeProvider.GetUtcNow());
+
+        // Timeouts and transport errors are routine for a remote server; a stack trace
+        // adds nothing and, repeated, buries the rest of the log. Anything else may be a
+        // bug, so it keeps its stack trace.
+        var logged = exception is null || IsExpectedCatalogRefreshFailure(exception)
+            ? null
+            : SecretOutputRedactor.RedactForLogging(exception);
+        _logger.LogWarning(logged,
+            "MCP server '{Name}' catalog refresh failed: {Reason}; keeping generation {Generation} unchanged " +
+            "(consecutive failures: {Failures}, next attempt in ~{RetrySeconds}s)",
+            current.Name.Value,
+            reason,
+            current.Generation,
+            failures,
+            ComputeCatalogRefreshIntervalMs(failures) / 1000);
+
+        // Once, on the transition; the per-attempt warning covers later failures.
+        if (failures == CatalogRefreshDegradedThreshold)
+        {
+            _logger.LogWarning(
+                "MCP server '{Name}' reported degraded after {Failures} consecutive catalog refresh failures; " +
+                "its last good tools stay published but calls to it are likely to fail",
+                current.Name.Value,
+                failures);
+        }
+    }
+
+    private int MarkCatalogRefreshSucceeded(McpServerLifecycle lifecycle)
+        => lifecycle.MarkCatalogRefreshed(_timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+
+    private void LogCatalogRefreshRecovery(McpServerName name, int clearedFailures)
+    {
+        if (clearedFailures == 0)
+            return;
+
+        _logger.LogInformation(
+            "MCP server '{Name}' catalog refresh recovered after {Failures} consecutive failure(s)",
+            name.Value,
+            clearedFailures);
+    }
+
+    private static bool IsExpectedCatalogRefreshFailure(Exception ex)
+        => ex is OperationCanceledException
+            or TimeoutException
+            or HttpRequestException
+            or IOException;
 
     private async Task RefreshCatalogFromNotificationAsync(
         McpCatalogNotificationLease lease,
@@ -432,7 +561,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 entry,
                 snapshot,
                 previousRefreshMs,
-                refreshCancellation.Token);
+                refreshCancellation.Token,
+                timeoutCancellation.Token);
         }
         finally
         {
@@ -1112,13 +1242,36 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             ? new AIFunctionArguments(arguments)
             : null;
         var result = await _clientRuntime.InvokeAsync(function, aiArgs, ct);
+        var projection = McpToolResultFormatter.Project(result, qualifiedToolName);
 
-        if (McpToolResultFormatter.TryGetErrorDetail(result, out var detail))
+        if (projection.IsError)
         {
-            ReportToolFailure(serverName, qualifiedToolName, detail);
+            ReportToolFailure(serverName, qualifiedToolName, projection.ErrorDetail);
+            return McpToolResultFormatter.FormatWithReceipt(projection, context);
         }
 
-        return McpToolResultFormatter.FormatWithReceipt(result, qualifiedToolName, context);
+        var materializationNotes = await _artifactMaterializer.MaterializeAsync(
+            projection.Artifacts,
+            qualifiedToolName,
+            context,
+            ct);
+        return AppendArtifactNotes(projection.Text, projection.ArtifactNotes, materializationNotes);
+    }
+
+    private static string AppendArtifactNotes(
+        string text,
+        IReadOnlyList<string> projectionNotes,
+        IReadOnlyList<string> materializationNotes)
+    {
+        if (projectionNotes.Count == 0 && materializationNotes.Count == 0)
+            return text;
+
+        return string.Join(
+            "\n",
+            new[] { text }
+                .Concat(projectionNotes)
+                .Concat(materializationNotes)
+                .Where(static part => !string.IsNullOrWhiteSpace(part)));
     }
 
     /// <summary>
@@ -1251,7 +1404,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             oauthCache = _credentialStore.CreateTokenCache(
                 name,
                 entry.Url!,
-                entry.OAuthClientId,
+                CreateConfiguredOAuthIdentity(name, entry),
                 authorizationFlow is not null);
         }
 
@@ -1263,7 +1416,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             // client records for servers the operator never opted into.
             if (oauthCache is not null
                 && authorizationFlow is not null
-                && _credentialStore.GetIdentity(oauthCache).ClientId is null)
+                && _credentialStore.GetIdentity(oauthCache) is null)
             {
                 var registered = await _registrar.TryRegisterAsync(
                     name,
@@ -1416,8 +1569,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return new ClientOAuthOptions
         {
             RedirectUri = BuildRedirectUri(),
-            ClientId = entry.OAuthClientId ?? identity.ClientId,
-            ClientSecret = entry.OAuthClientId is null ? identity.ClientSecret : null,
+            ClientId = identity?.ClientId,
+            ClientSecret = identity?.ClientSecret?.Value,
             Scopes = ParseScopes(entry.OAuthScope),
             TokenCache = cache,
 
@@ -1428,6 +1581,27 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             // register against public-client-only servers (csharp-sdk#1611). A non-null
             // ClientId here short-circuits the SDK's registration path entirely.
         };
+    }
+
+    private static McpOAuthClientIdentity? CreateConfiguredOAuthIdentity(
+        McpServerName serverName,
+        McpServerEntry entry)
+    {
+        if (entry.OAuthClientId is { } clientId)
+        {
+            return new McpOAuthClientIdentity(
+                clientId,
+                entry.OAuthClientSecret,
+                dynamicClientRegistration: false);
+        }
+
+        if (entry.OAuthClientSecret is not null)
+        {
+            throw new InvalidOperationException(
+                $"MCP server '{serverName.Value}' has an OAuth client secret without a client ID.");
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1679,13 +1853,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     /// <summary>
     /// When a stored OAuth record can no longer produce a working access token, the SDK
-    /// 2.0 refresh path fails silently: a refresh is only attempted when the cached token
-    /// container matches the live provider on all four binding fields — AuthorizationServer,
-    /// ClientId, ClientSecret, and TokenEndpointAuthMethod — and even then the actual
-    /// refresh HTTP response is swallowed (returned as a null access token, surfaced as a
-    /// generic "null authorization result" failure). This method makes the failure
-    /// diagnosable by reporting exactly which binding field is missing or mismatched and
-    /// whether a refresh token existed to redeem at all.
+    /// falls through to interactive authorization and reports only a generic failure. SDK
+    /// 2.x sends a refresh grant only when a refresh token and a client id exist and the
+    /// stored authorization server is the exact string the resource advertises. Netclaw
+    /// builds the token container and the provider options from one identity, so the client
+    /// secret and the token endpoint auth method cannot block the refresh. A public client has
+    /// no secret by design. This line reports the stored fields that block a refresh. When
+    /// none block it, <see cref="OAuthRefreshGrantHandler"/> logs the token endpoint
+    /// response if the authorization server rejected the grant.
     /// </summary>
     private void LogOAuthRefreshFailureDiagnostics(string serverName, string? resourceUrl)
     {
@@ -1705,35 +1880,35 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 return;
             }
 
-            var missing = new List<string>();
+            var entry = _serverEntries.GetValueOrDefault(serverName);
+            var hasConfiguredClientSecret = entry is not null
+                                            && !string.IsNullOrWhiteSpace(entry.OAuthClientId)
+                                            && !entry.OAuthClientSecret.IsNullOrEmpty();
+            var blockers = new List<string>();
+            if (record.RefreshToken is null)
+                blockers.Add("RefreshToken");
+            if (string.IsNullOrWhiteSpace(entry?.OAuthClientId) && string.IsNullOrWhiteSpace(record.ClientId))
+                blockers.Add("ClientId");
             if (string.IsNullOrWhiteSpace(record.AuthorizationServer))
-                missing.Add("AuthorizationServer");
-            if (string.IsNullOrWhiteSpace(record.ClientId))
-                missing.Add("ClientId");
-            if (record.ClientSecret is null)
-                missing.Add("ClientSecret");
-            if (string.IsNullOrWhiteSpace(record.TokenEndpointAuthMethod))
-                missing.Add("TokenEndpointAuthMethod");
-
-            var hasRefreshToken = record.RefreshToken is not null;
-            var hasAccessToken = record.AccessToken is not null;
-            var expiresAt = record.ExpiresAt;
+                blockers.Add("AuthorizationServer");
 
             _logger.LogWarning(
                 "OAuth refresh failure diagnostics for MCP server '{Name}': stored record has refreshToken={HasRefresh}, " +
                 "accessToken={HasAccess}, expiresAt={ExpiresAt:o}, dynamicClientRegistration={Dcr}, " +
-                "bindingFieldsMissing=[{Missing}], authorizationServer={AuthServer}. " +
-                "The SDK 2.0 refresh gate requires AuthorizationServer, ClientId, ClientSecret, and " +
-                "TokenEndpointAuthMethod to all match the live provider; missing fields mean refresh is " +
-                "never attempted and every expiration falls through to interactive auth (the 'null " +
-                "authorization result' symptom).",
+                "clientSecret={HasClientSecret}, configuredClientSecret={HasConfiguredClientSecret}, " +
+                "authorizationServer={AuthServer}, refreshBlockedByMissing=[{Missing}]. " +
+                "A missing field stops the SDK before it sends a refresh grant. With no missing field, the SDK " +
+                "sends the grant only if the advertised authorization server equals the stored one exactly; a " +
+                "rejected grant is logged separately with the token endpoint error.",
                 serverName,
-                hasRefreshToken,
-                hasAccessToken,
-                expiresAt,
+                record.RefreshToken is not null,
+                record.AccessToken is not null,
+                record.ExpiresAt,
                 record.DynamicClientRegistration,
-                string.Join(", ", missing),
-                record.AuthorizationServer ?? "<null>");
+                record.ClientSecret is not null,
+                hasConfiguredClientSecret,
+                record.AuthorizationServer ?? "<null>",
+                string.Join(", ", blockers));
         }
         catch (Exception diagEx)
         {
@@ -2255,8 +2430,58 @@ internal interface IMcpClientRuntime
 
 internal sealed class McpClientRuntime : IMcpClientRuntime
 {
+    private readonly ILogger _logger;
+    private readonly TimeProvider _timeProvider;
+    private readonly HttpMessageHandler _primaryHandler;
+
+    public McpClientRuntime(ILogger<McpClientRuntime> logger, TimeProvider timeProvider)
+        : this(logger, timeProvider, McpHttpClientFactory.SharedPrimaryHandler)
+    {
+    }
+
+    /// <summary>
+    /// Builds the runtime over <paramref name="primaryHandler"/>, which the runtime never
+    /// disposes. Tests pass an in-memory server here to drive the production handler chain.
+    /// </summary>
+    internal McpClientRuntime(ILogger logger, TimeProvider timeProvider, HttpMessageHandler primaryHandler)
+    {
+        _logger = logger;
+        _timeProvider = timeProvider;
+        _primaryHandler = primaryHandler;
+    }
+
     public IClientTransport CreateHttpTransport(HttpClientTransportOptions options)
-        => new HttpClientTransport(options, McpHttpClientFactory.Shared);
+        => new HttpClientTransport(
+            options,
+            CreateHttpClient(options.OAuth?.TokenCache as McpOAuthTokenCache),
+            ownsHttpClient: true);
+
+    /// <summary>
+    /// Builds the HTTP client of one connection. Each connection gets its own
+    /// <see cref="OAuthRefreshGrantHandler"/> bound to its token cache, and disposing the
+    /// client disposes that handler. All connections share the process connection pool,
+    /// which <see cref="SharedHandlerLease"/> keeps open.
+    /// </summary>
+    internal HttpClient CreateHttpClient(McpOAuthTokenCache? tokenCache)
+        => McpHttpClientFactory.Create(
+            new OAuthRefreshGrantHandler(_logger, _timeProvider, tokenCache)
+            {
+                InnerHandler = new SharedHandlerLease { InnerHandler = _primaryHandler },
+            },
+            disposeHandler: true);
+
+    /// <summary>
+    /// Forwards to a handler that other connections share. Disposing the lease leaves the
+    /// shared handler open.
+    /// </summary>
+    private sealed class SharedHandlerLease : DelegatingHandler
+    {
+        protected override void Dispose(bool disposing)
+        {
+            // DelegatingHandler.Dispose disposes the inner handler. The shared pool outlives
+            // every connection, so the lease deliberately does not call the base method.
+        }
+    }
 
     public Task<McpClient> CreateAsync(
         IClientTransport transport,
@@ -2358,11 +2583,55 @@ internal sealed class McpServerLifecycle(McpServerSnapshot initialSnapshot)
         _lastCatalogRefreshMs = nowMs;
     }
 
-    /// <summary>Restores the claim timestamp after a failed refresh so the next tick retries.</summary>
+    /// <summary>
+    /// Restores the claim timestamp when a refresh was abandoned rather than failed
+    /// (shutdown), so the attempt neither counts as a failure nor consumes a poll slot.
+    /// </summary>
     public void RollbackCatalogRefreshClaim(long previousMs) => _lastCatalogRefreshMs = previousMs;
 
-    /// <summary>Records a successful catalog refresh (or connect) so the poll throttle starts from now.</summary>
-    public void MarkCatalogRefreshed(long nowMs) => _lastCatalogRefreshMs = nowMs;
+    /// <summary>
+    /// Records a successful catalog refresh (or connect) so the poll throttle starts from
+    /// now, and clears any failure streak. The last failure time is kept so status can
+    /// still report when the server last misbehaved. Returns the streak length cleared.
+    /// </summary>
+    public int MarkCatalogRefreshed(long nowMs)
+    {
+        _lastCatalogRefreshMs = nowMs;
+        var health = CatalogRefreshHealth;
+        if (health.ConsecutiveFailures == 0)
+            return 0;
+
+        Volatile.Write(ref _catalogRefreshHealth, health with { ConsecutiveFailures = 0, LastFailureReason = null });
+        return health.ConsecutiveFailures;
+    }
+
+    /// <summary>
+    /// Records a failed refresh. The claim timestamp stays at the attempt time, so the
+    /// next attempt waits out the backoff for the new streak length. Returns that length.
+    /// </summary>
+    public int RecordCatalogRefreshFailure(string reason, DateTimeOffset at)
+    {
+        var failures = CatalogRefreshHealth.ConsecutiveFailures + 1;
+        Volatile.Write(ref _catalogRefreshHealth, new McpCatalogRefreshHealth(failures, reason, at));
+        return failures;
+    }
+
+    /// <summary>
+    /// The current run of consecutive catalog refresh failures and the most recent
+    /// failure. Written under <see cref="Gate"/>, read lock-free by status queries, so it
+    /// is published as one immutable reference.
+    /// </summary>
+    public McpCatalogRefreshHealth CatalogRefreshHealth => Volatile.Read(ref _catalogRefreshHealth);
+
+    private McpCatalogRefreshHealth _catalogRefreshHealth = McpCatalogRefreshHealth.Healthy;
+}
+
+internal sealed record McpCatalogRefreshHealth(
+    int ConsecutiveFailures,
+    string? LastFailureReason,
+    DateTimeOffset? LastFailureAt)
+{
+    public static readonly McpCatalogRefreshHealth Healthy = new(0, null, null);
 }
 
 internal sealed record McpServerSnapshot(
@@ -2414,4 +2683,6 @@ internal sealed record McpServerStatus(
     McpConnectionState State,
     int ToolCount,
     string? ErrorMessage,
-    DateTimeOffset? LastErrorAt);
+    DateTimeOffset? LastErrorAt,
+    int ConsecutiveCatalogRefreshFailures = 0,
+    bool IsDegraded = false);

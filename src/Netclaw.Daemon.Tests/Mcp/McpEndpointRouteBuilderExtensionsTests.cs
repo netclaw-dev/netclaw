@@ -87,7 +87,8 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
             new DaemonConfig(),
             NullNotificationSink.Instance,
             TimeProvider.System,
-            new McpClientRuntime(),
+            new McpClientRuntime(NullLogger<McpClientRuntime>.Instance, TimeProvider.System),
+            dependencies.ArtifactMaterializer,
             NullLogger<McpClientManager>.Instance,
             new SessionConfig());
 
@@ -231,6 +232,7 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("Unreachable", body.GetProperty("broken").GetProperty("state").GetString());
         Assert.Equal(JsonValueKind.String, body.GetProperty("broken").GetProperty("lastErrorAt").ValueKind);
+        Assert.False(body.GetProperty("broken").GetProperty("degraded").GetBoolean());
         await manager.StopAsync(ct);
     }
 

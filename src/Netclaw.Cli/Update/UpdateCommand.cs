@@ -18,8 +18,8 @@ namespace Netclaw.Cli.Update;
 internal static class UpdateCommand
 {
     internal static Func<HttpMessageHandler>? TestHttpMessageHandlerFactory { get; set; }
-    internal static Func<NetclawPaths, IDaemonProcessLifecycle>? TestDaemonProcessManagerFactory { get; set; }
-    internal static Func<SystemdUserService>? TestSystemdUserServiceFactory { get; set; }
+    internal static Func<NetclawPaths, TimeProvider, IDaemonProcessLifecycle>? TestDaemonProcessManagerFactory { get; set; }
+    internal static Func<NetclawPaths, SystemdUserService>? TestSystemdUserServiceFactory { get; set; }
 
     internal static bool ShouldRunStartupUpdateCheck(string mode, string[] args)
     {
@@ -51,14 +51,15 @@ internal static class UpdateCommand
     }
 
     public static async Task<int> RunAsync(
+        CliContext cli,
         string[] args,
-        NetclawPaths paths,
         bool selfUpdateDisabled,
-        UpdateChannel channel,
-        TextReader input,
-        TextWriter output,
-        TextWriter error)
+        UpdateChannel channel)
     {
+        var paths = cli.Paths;
+        var input = cli.Input;
+        var output = cli.Output;
+        var error = cli.Error;
         var checkOnly = false;
         var force = false;
         UpdateChannel? channelOverride = null;
@@ -197,12 +198,14 @@ internal static class UpdateCommand
             }
         }
 
-        return await PerformUpdateAsync(result, paths, httpClient);
+        return await PerformUpdateAsync(result, cli, httpClient);
     }
 
     private static async Task<int> PerformUpdateAsync(
-        UpdateCheckResult result, NetclawPaths paths, HttpClient httpClient)
+        UpdateCheckResult result, CliContext cli, HttpClient httpClient)
     {
+        var output = cli.Output;
+        var error = cli.Error;
         var installDir = GetInstallDirectory();
         var tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-update-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
@@ -213,13 +216,13 @@ internal static class UpdateCommand
             var extractedPaths = new Dictionary<string, string>();
             foreach (var asset in result.MatchingAssets)
             {
-                Console.Write($"Downloading {asset.Component}...");
+                output.Write($"Downloading {asset.Component}...");
                 var archivePath = Path.Combine(tempDir, Path.GetFileName(new Uri(asset.Url).AbsolutePath));
 
-                if (!await DownloadAndVerifyAsync(httpClient, asset, archivePath))
+                if (!await DownloadAndVerifyAsync(httpClient, asset, archivePath, output))
                     return 1;
 
-                Console.WriteLine(" verified.");
+                output.WriteLine(" verified.");
 
                 // Extract
                 var extractDir = Path.Combine(tempDir, asset.Component);
@@ -234,8 +237,8 @@ internal static class UpdateCommand
             }
 
             // Check if daemon is running (we'll need to restart it)
-            var manager = CreateDaemonProcessManager(paths);
-            var systemdService = CreateSystemdUserService();
+            var manager = CreateDaemonProcessManager(cli.Paths, cli.Time);
+            var systemdService = CreateSystemdUserService(cli.Paths);
             var daemonStatus = manager.GetStatus();
             var stopResult = UpdateDaemonStopResult.Succeeded(
                 UpdateDaemonOwner.None,
@@ -243,19 +246,19 @@ internal static class UpdateCommand
 
             if (daemonStatus.IsRunning)
             {
-                Console.Write("Stopping daemon...");
+                output.Write("Stopping daemon...");
                 stopResult = await StopDaemonForUpdateAsync(manager, systemdService, daemonStatus);
                 if (!stopResult.Success)
                 {
-                    Console.WriteLine($" failed: {stopResult.Message}");
-                    Console.WriteLine("Update aborted. Stop the daemon manually, fix service state, and retry.");
+                    output.WriteLine($" failed: {stopResult.Message}");
+                    output.WriteLine("Update aborted. Stop the daemon manually, fix service state, and retry.");
                     return 1;
                 }
-                Console.WriteLine(" done.");
+                output.WriteLine(" done.");
             }
 
             // Replace binaries
-            Console.Write("Installing...");
+            output.Write("Installing...");
             Directory.CreateDirectory(installDir);
 
             foreach (var (component, extractDir) in extractedPaths)
@@ -267,7 +270,7 @@ internal static class UpdateCommand
                 var sourcePath = FindBinaryInExtracted(extractDir, binaryName);
                 if (sourcePath is null)
                 {
-                    Console.WriteLine($"\n  Could not find {binaryName} in downloaded archive.");
+                    output.WriteLine($"\n  Could not find {binaryName} in downloaded archive.");
                     return 1;
                 }
 
@@ -279,43 +282,43 @@ internal static class UpdateCommand
                     // Swap with automatic rollback: a failed swap restores the
                     // previous binary so the install directory is never left
                     // without an executable (which would brick the CLI).
-                    SwapBinaryIntoPlace(sourcePath, targetPath, backupPath);
+                    SwapBinaryIntoPlace(sourcePath, targetPath, backupPath, error);
                 }
                 catch (Exception ex)
                 {
                     var targetRestored = File.Exists(targetPath);
-                    Console.WriteLine($"\n  Failed to replace {binaryName}: {ex.Message}");
+                    output.WriteLine($"\n  Failed to replace {binaryName}: {ex.Message}");
                     if (targetRestored)
                     {
-                        Console.WriteLine("  The previous binary was restored. The daemon is stopped; start it with 'netclaw daemon start'.");
+                        output.WriteLine("  The previous binary was restored. The daemon is stopped; start it with 'netclaw daemon start'.");
                     }
                     else
                     {
-                        Console.WriteLine($"  The install directory is missing {binaryName}. Restore it from {binaryName}.backup, then start the daemon with 'netclaw daemon start'.");
+                        output.WriteLine($"  The install directory is missing {binaryName}. Restore it from {binaryName}.backup, then start the daemon with 'netclaw daemon start'.");
                     }
                     return 1;
                 }
 
                 // Set executable permission on Unix
                 if (!OperatingSystem.IsWindows())
-                    SetExecutable(targetPath);
+                    SetExecutable(targetPath, error);
             }
 
-            Console.WriteLine(" done.");
+            output.WriteLine(" done.");
 
             // Restart daemon if it was running
             if (stopResult.ShouldRestart)
             {
-                Console.Write("Restarting daemon...");
+                output.Write("Restarting daemon...");
                 var startResult = await StartDaemonAfterUpdateAsync(stopResult.Owner, manager, systemdService);
                 if (!startResult.Success)
                 {
-                    Console.WriteLine($" failed: {startResult.Message}");
-                    Console.WriteLine("Update installed, but daemon restart failed. Start the daemon manually and check `netclaw status`.");
+                    output.WriteLine($" failed: {startResult.Message}");
+                    output.WriteLine("Update installed, but daemon restart failed. Start the daemon manually and check `netclaw status`.");
                     return 1;
                 }
 
-                Console.WriteLine(" done.");
+                output.WriteLine(" done.");
             }
 
             // Clean up backup files. The backup of the currently running CLI
@@ -334,17 +337,17 @@ internal static class UpdateCommand
                     ? $"{component}.exe"
                     : component;
                 var backupPath = Path.Combine(installDir, binaryName + ".backup");
-                CleanupBackupFile(backupPath, runningBackupPath, OperatingSystem.IsWindows());
+                CleanupBackupFile(backupPath, runningBackupPath, OperatingSystem.IsWindows(), error);
             }
 
-            Console.WriteLine($"\nUpdated to v{result.LatestVersion}.");
+            output.WriteLine($"\nUpdated to v{result.LatestVersion}.");
             return 0;
         }
         finally
         {
             // Clean up temp directory
             try { Directory.Delete(tempDir, recursive: true); }
-            catch (Exception ex) { Console.Error.WriteLine($"warn: temp cleanup failed: {ex.Message}"); }
+            catch (Exception ex) { error.WriteLine($"warn: temp cleanup failed: {ex.Message}"); }
         }
     }
 
@@ -361,51 +364,84 @@ internal static class UpdateCommand
                 daemonStatus.Message);
         }
 
-        var systemdOwnership = await systemdService.GetOwnershipAsync();
-        switch (systemdOwnership.Kind)
+        return await StopDaemonAsync(manager, systemdService, "update");
+    }
+
+    /// <summary>
+    /// Stops this home's daemon so that nothing brings it back: the installed systemd user unit
+    /// first when it could (re)start a daemon for this home (its <c>Restart=always</c> would undo
+    /// a stop that went around it), then whatever daemon process is still alive.
+    /// </summary>
+    internal static async Task<UpdateDaemonStopResult> StopDaemonAsync(
+        IDaemonProcessLifecycle manager,
+        SystemdUserService systemdService,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        var systemdOwnership = await systemdService.GetStopOwnershipAsync(manager.GetStatus());
+        if (systemdOwnership.Kind == SystemdUserServiceOwnershipKind.Unknown)
         {
-            case SystemdUserServiceOwnershipKind.Unknown:
+            return UpdateDaemonStopResult.Failed(
+                UpdateDaemonOwner.None,
+                $"Could not determine whether systemd owns the daemon lifecycle: {systemdOwnership.Message}");
+        }
+
+        DaemonResult? unitStop = null;
+        if (systemdOwnership.Kind == SystemdUserServiceOwnershipKind.Managed)
+        {
+            unitStop = await systemdService.StopAsync();
+            if (!unitStop.Success)
+            {
                 return UpdateDaemonStopResult.Failed(
-                    UpdateDaemonOwner.None,
-                    $"Could not determine whether systemd owns the daemon lifecycle: {systemdOwnership.Message}");
-
-            case SystemdUserServiceOwnershipKind.Managed:
-            {
-                var systemdStop = await systemdService.StopAsync();
-                if (!systemdStop.Success)
-                {
-                    return UpdateDaemonStopResult.Failed(
-                        UpdateDaemonOwner.SystemdUserService,
-                        $"systemd stop failed: {systemdStop.Message}");
-                }
-
-                var remainingStatus = manager.GetStatus();
-                if (remainingStatus.IsRunning)
-                {
-                    var detachedStop = await manager.StopAsync("update", CancellationToken.None);
-                    if (!detachedStop.Success)
-                    {
-                        return UpdateDaemonStopResult.Failed(
-                            UpdateDaemonOwner.SystemdUserService,
-                            "systemd service stopped, but a detached daemon is still running and "
-                            + $"could not be stopped: {detachedStop.Message}");
-                    }
-                }
-
-                return UpdateDaemonStopResult.Succeeded(
                     UpdateDaemonOwner.SystemdUserService,
-                    systemdStop.Message);
-            }
-
-            case SystemdUserServiceOwnershipKind.Unmanaged:
-            default:
-            {
-                var detachedStop = await manager.StopAsync("update", CancellationToken.None);
-                return detachedStop.Success
-                    ? UpdateDaemonStopResult.Succeeded(UpdateDaemonOwner.DetachedProcess, detachedStop.Message)
-                    : UpdateDaemonStopResult.Failed(UpdateDaemonOwner.DetachedProcess, detachedStop.Message);
+                    $"systemd stop failed: {unitStop.Message}");
             }
         }
+
+        // Without a unit stop this also reports "Daemon is not running." when nothing runs.
+        if (unitStop is null || manager.GetStatus().IsRunning)
+        {
+            var processStop = await manager.StopAsync(reason, cancellationToken);
+            if (unitStop is null)
+            {
+                return processStop.Success
+                    ? UpdateDaemonStopResult.Succeeded(UpdateDaemonOwner.DetachedProcess, processStop.Message)
+                    : UpdateDaemonStopResult.Failed(UpdateDaemonOwner.DetachedProcess, processStop.Message);
+            }
+
+            return processStop.Success
+                ? UpdateDaemonStopResult.Succeeded(
+                    UpdateDaemonOwner.SystemdUserService, $"{unitStop.Message} {processStop.Message}")
+                : UpdateDaemonStopResult.Failed(
+                    UpdateDaemonOwner.SystemdUserService,
+                    "systemd service stopped, but a daemon process is still running and "
+                    + $"could not be stopped: {processStop.Message}");
+        }
+
+        return UpdateDaemonStopResult.Succeeded(UpdateDaemonOwner.SystemdUserService, unitStop.Message);
+    }
+
+    /// <summary>
+    /// Starts the daemon through whatever owns it. An installed systemd user unit starts the
+    /// daemon itself, so the CLI never spawns a second, detached copy beside it.
+    /// </summary>
+    internal static async Task<DaemonResult> StartDaemonAsync(
+        IDaemonProcessLifecycle manager,
+        SystemdUserService systemdService)
+    {
+        // A running daemon holds the home whoever started it: report it, and never queue a unit
+        // start whose daemon would only crash-loop on the singleton lock.
+        if (manager.GetStatus().IsRunning)
+            return manager.Start();
+
+        var systemdOwnership = await systemdService.GetStartOwnershipAsync();
+        return systemdOwnership.Kind switch
+        {
+            SystemdUserServiceOwnershipKind.Unknown => new DaemonResult(false,
+                $"Could not determine whether systemd owns the daemon lifecycle: {systemdOwnership.Message}"),
+            SystemdUserServiceOwnershipKind.Managed => await systemdService.StartAsync(),
+            _ => manager.Start()
+        };
     }
 
     internal static async Task<DaemonResult> StartDaemonAfterUpdateAsync(
@@ -422,19 +458,19 @@ internal static class UpdateCommand
         };
     }
 
-    private static IDaemonProcessLifecycle CreateDaemonProcessManager(NetclawPaths paths)
+    private static IDaemonProcessLifecycle CreateDaemonProcessManager(NetclawPaths paths, TimeProvider time)
     {
-        return TestDaemonProcessManagerFactory?.Invoke(paths)
-            ?? new DaemonProcessLifecycle(new DaemonManager(paths, TimeProvider.System));
+        return TestDaemonProcessManagerFactory?.Invoke(paths, time)
+            ?? new DaemonProcessLifecycle(new DaemonManager(paths, time));
     }
 
-    private static SystemdUserService CreateSystemdUserService()
+    private static SystemdUserService CreateSystemdUserService(NetclawPaths paths)
     {
-        return TestSystemdUserServiceFactory?.Invoke()
-            ?? new SystemdUserService();
+        return TestSystemdUserServiceFactory?.Invoke(paths)
+            ?? new SystemdUserService(homePath: paths.BasePath);
     }
 
-    private sealed class DaemonProcessLifecycle(DaemonManager manager) : IDaemonProcessLifecycle
+    internal sealed class DaemonProcessLifecycle(DaemonManager manager) : IDaemonProcessLifecycle
     {
         public DaemonStatus GetStatus() => manager.GetStatus();
 
@@ -445,7 +481,7 @@ internal static class UpdateCommand
     }
 
     private static async Task<bool> DownloadAndVerifyAsync(
-        HttpClient httpClient, BinaryAsset asset, string archivePath)
+        HttpClient httpClient, BinaryAsset asset, string archivePath, TextWriter output)
     {
         try
         {
@@ -458,7 +494,7 @@ internal static class UpdateCommand
         }
         catch (Exception ex)
         {
-            Console.WriteLine($" download failed: {ex.Message}");
+            output.WriteLine($" download failed: {ex.Message}");
             return false;
         }
 
@@ -466,7 +502,7 @@ internal static class UpdateCommand
         var hash = await ComputeFileSha256Async(archivePath);
         if (!string.Equals(hash, asset.Sha256, StringComparison.OrdinalIgnoreCase))
         {
-            Console.WriteLine($" checksum mismatch (expected {asset.Sha256}, got {hash})");
+            output.WriteLine($" checksum mismatch (expected {asset.Sha256}, got {hash})");
             return false;
         }
 
@@ -530,7 +566,8 @@ internal static class UpdateCommand
     /// <param name="sourcePath">The new binary to install.</param>
     /// <param name="targetPath">The installed binary to replace.</param>
     /// <param name="backupPath">Where the previous binary is preserved.</param>
-    internal static void SwapBinaryIntoPlace(string sourcePath, string targetPath, string backupPath)
+    /// <param name="error">The stream for rollback warnings.</param>
+    internal static void SwapBinaryIntoPlace(string sourcePath, string targetPath, string backupPath, TextWriter error)
     {
         var movedOldToBackup = false;
         try
@@ -556,7 +593,7 @@ internal static class UpdateCommand
                 {
                     // Best-effort rollback; the original swap failure is
                     // rethrown below and reported to the user.
-                    Console.Error.WriteLine($"warn: failed to restore {targetPath} from {backupPath}: {rollbackEx.Message}");
+                    error.WriteLine($"warn: failed to restore {targetPath} from {backupPath}: {rollbackEx.Message}");
                 }
             }
             throw;
@@ -578,7 +615,8 @@ internal static class UpdateCommand
     /// (<c>Environment.ProcessPath + ".backup"</c>), or <c>null</c> if unknown.
     /// </param>
     /// <param name="isWindows">True when running on Windows.</param>
-    internal static void CleanupBackupFile(string backupPath, string? runningBackupPath, bool isWindows)
+    /// <param name="error">The stream for cleanup warnings.</param>
+    internal static void CleanupBackupFile(string backupPath, string? runningBackupPath, bool isWindows, TextWriter error)
     {
         if (isWindows
             && runningBackupPath is not null
@@ -595,7 +633,7 @@ internal static class UpdateCommand
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"warn: could not remove backup {backupPath}: {ex.Message}");
+            error.WriteLine($"warn: could not remove backup {backupPath}: {ex.Message}");
         }
     }
 
@@ -612,7 +650,7 @@ internal static class UpdateCommand
             ".netclaw", "bin");
     }
 
-    private static void SetExecutable(string path)
+    private static void SetExecutable(string path, TextWriter error)
     {
         try
         {
@@ -626,7 +664,7 @@ internal static class UpdateCommand
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"warn: chmod +x failed for {path}: {ex.Message}");
+            error.WriteLine($"warn: chmod +x failed for {path}: {ex.Message}");
         }
     }
 
@@ -738,4 +776,6 @@ internal sealed record UpdateDaemonStopResult(
 
     public static UpdateDaemonStopResult Failed(UpdateDaemonOwner owner, string message) =>
         new(false, owner, message);
+
+    public DaemonResult ToDaemonResult() => new(Success, Message);
 }

@@ -12,12 +12,24 @@ using Netclaw.Channels.Discord.Transport;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
 
-public sealed class DiscordThreadHistoryFetcherTests
+public sealed class DiscordThreadHistoryFetcherTests : IAsyncLifetime
 {
+    private readonly List<TestSessionTempDirectory> _tempDirs = [];
+
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var dir in _tempDirs)
+            await dir.DisposeAsync();
+        _tempDirs.Clear();
+    }
+
     [Fact]
     public async Task Attachment_only_historical_message_is_preserved_and_inlined()
     {
@@ -237,7 +249,9 @@ public sealed class DiscordThreadHistoryFetcherTests
     [Fact]
     public async Task Historical_attachment_reuse_skips_repeat_downloads()
     {
-        var sessionsRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var tempDir = TestSessionTempDirectory.Create();
+        _tempDirs.Add(tempDir);
+        var sessionsRoot = tempDir.Path;
         var handler = new FakeHttpHandler();
 
         var fetcher = CreateFetcher(
@@ -259,7 +273,7 @@ public sealed class DiscordThreadHistoryFetcherTests
                     ])
             ]),
             handler: handler,
-            paths: new NetclawPaths(sessionsRoot));
+            paths: tempDir.Paths);
 
         var sessionId = new SessionId("ch-public/100000000000000005");
         var first = await fetcher.FetchThreadHistoryAsync(sessionId, TestContext.Current.CancellationToken);
@@ -471,7 +485,7 @@ public sealed class DiscordThreadHistoryFetcherTests
         Assert.Equal(PrincipalClassification.TrustedInternal, item.Principal);
     }
 
-    private static DiscordThreadHistoryFetcher CreateFetcher(
+    private DiscordThreadHistoryFetcher CreateFetcher(
         DiscordThreadHistoryFetcher.MessageFetcher? messageFetcher = null,
         HttpMessageHandler? handler = null,
         IContentScanner? scanner = null,
@@ -480,7 +494,10 @@ public sealed class DiscordThreadHistoryFetcherTests
         DiscordChannelOptions? options = null,
         NetclawPaths? paths = null)
     {
-        var testPaths = paths ?? new NetclawPaths(Path.GetTempPath());
+        var owningDir = paths is null ? TestDiscordGatewayDeps.NewTestPaths() : null;
+        if (owningDir is not null)
+            _tempDirs.Add(owningDir);
+        var testPaths = paths ?? owningDir!.Paths;
         return new DiscordThreadHistoryFetcher(
             messageFetcher ?? ((_, _) => Task.FromResult<IReadOnlyList<DiscordThreadHistoryFetcher.HistoricalMessage>>([])),
             options ?? new DiscordChannelOptions(),

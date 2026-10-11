@@ -105,6 +105,152 @@ public sealed class McpCommandTests : IDisposable
         Assert.Equal("Bearer tok-123", loaded["myapi"].Headers?["Authorization"].Value);
     }
 
+    [Fact]
+    public async Task Add_WithOAuthClientSecret_WritesOnlyEncryptedSecretAndReloadsIt()
+    {
+        const string clientSecret = "confidential-client-secret";
+        var args = new[]
+        {
+            "mcp", "add", "--transport", "http",
+            "--client-id", "confidential-client",
+            "--client-secret", clientSecret,
+            "github", "https://api.githubcopilot.com/mcp/",
+        };
+
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+        var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var configEntry = config.RootElement.GetProperty("McpServers").GetProperty("github");
+        Assert.Equal("confidential-client", configEntry.GetProperty("OAuthClientId").GetString());
+        Assert.False(configEntry.TryGetProperty("OAuthClientSecret", out _));
+
+        var secrets = ReadConfigFile(_paths.SecretsPath);
+        var encrypted = secrets.RootElement
+            .GetProperty("McpServers")
+            .GetProperty("github")
+            .GetProperty("OAuthClientSecret")
+            .GetString();
+        Assert.StartsWith("ENC:", encrypted);
+        Assert.DoesNotContain(clientSecret, File.ReadAllText(_paths.SecretsPath), StringComparison.Ordinal);
+
+        var loaded = McpCommand.LoadMcpServers(_paths);
+        Assert.Equal(clientSecret, loaded["github"].OAuthClientSecret?.Value);
+        Assert.DoesNotContain("OAuthClientSecret", JsonSerializer.Serialize(loaded["github"]), StringComparison.Ordinal);
+        Assert.DoesNotContain(clientSecret, _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Add_WithOAuthClientSecretWithoutClientId_RejectsBeforePersistence()
+    {
+        var configBefore = File.Exists(_paths.NetclawConfigPath)
+            ? File.ReadAllText(_paths.NetclawConfigPath)
+            : null;
+        var secretsBefore = File.Exists(_paths.SecretsPath)
+            ? File.ReadAllText(_paths.SecretsPath)
+            : null;
+
+        var exitCode = await McpCommand.RunAsync(
+            [
+                "mcp", "add", "--transport", "http",
+                "--client-secret", "orphan-secret",
+                "github", "https://api.githubcopilot.com/mcp/",
+            ],
+            _paths,
+            output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(configBefore, File.Exists(_paths.NetclawConfigPath) ? File.ReadAllText(_paths.NetclawConfigPath) : null);
+        Assert.Equal(secretsBefore, File.Exists(_paths.SecretsPath) ? File.ReadAllText(_paths.SecretsPath) : null);
+        Assert.DoesNotContain("orphan-secret", _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Add_PublicClientReplacement_RemovesPriorProfileSecrets()
+    {
+        var confidentialExitCode = await McpCommand.RunAsync(
+            [
+                "mcp", "add", "--transport", "http",
+                "--client-id", "confidential-client",
+                "--client-secret", "old-client-secret",
+                "github", "https://old.example/mcp",
+            ],
+            _paths,
+            output: _output);
+        var otherExitCode = await McpCommand.RunAsync(
+            [
+                "mcp", "add", "--transport", "http",
+                "--header", "Authorization: Bearer keep-this",
+                "other", "https://other.example/mcp",
+            ],
+            _paths,
+            output: _output);
+
+        var replacementExitCode = await McpCommand.RunAsync(
+            [
+                "mcp", "add", "--transport", "http",
+                "--client-id", "public-client",
+                "github", "https://new.example/mcp",
+            ],
+            _paths,
+            output: _output);
+        var getExitCode = await McpCommand.RunAsync(
+            ["mcp", "get", "github"],
+            _paths,
+            output: _output);
+
+        Assert.Equal(0, confidentialExitCode);
+        Assert.Equal(0, otherExitCode);
+        Assert.Equal(0, replacementExitCode);
+        Assert.Equal(0, getExitCode);
+
+        var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var configEntry = config.RootElement.GetProperty("McpServers").GetProperty("github");
+        Assert.Equal("public-client", configEntry.GetProperty("OAuthClientId").GetString());
+        Assert.Equal("https://new.example/mcp", configEntry.GetProperty("Url").GetString());
+
+        var secrets = ReadConfigFile(_paths.SecretsPath);
+        var secretServers = secrets.RootElement.GetProperty("McpServers");
+        Assert.False(secretServers.TryGetProperty("github", out _));
+        Assert.True(secretServers.TryGetProperty("other", out _));
+
+        var loaded = McpCommand.LoadMcpServers(_paths);
+        Assert.Null(loaded["github"].OAuthClientSecret);
+        Assert.DoesNotContain("Client secret: configured", _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Add_SecretWriteFailure_RestoresPriorPublicConfiguration()
+    {
+        var initialExitCode = await McpCommand.RunAsync(
+            ["mcp", "add", "--transport", "http", "github", "https://old.example/mcp"],
+            _paths,
+            output: _output);
+        Assert.Equal(0, initialExitCode);
+
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        const string unreadableSecrets = """
+            {
+              "broken": "ENC:not-valid-ciphertext"
+            }
+            """;
+        File.WriteAllText(_paths.SecretsPath, unreadableSecrets);
+
+        var exception = await Assert.ThrowsAsync<IOException>(() => McpCommand.RunAsync(
+            [
+                "mcp", "add", "--transport", "http",
+                "--client-id", "new-client",
+                "--client-secret", "new-secret",
+                "github", "https://new.example/mcp",
+            ],
+            _paths,
+            output: _output));
+
+        Assert.Contains("restored the prior configuration", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(unreadableSecrets, File.ReadAllText(_paths.SecretsPath));
+    }
+
     // ── Fail-closed defaults for new MCP servers ──
 
     [Fact]
@@ -417,6 +563,37 @@ public sealed class McpCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task List_ShowsDaemonReportedDegradedServerAsNotResponding()
+    {
+        await McpCommand.RunAsync(
+            ["mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp"],
+            _paths, output: _output);
+
+        var daemonApi = CreateDaemonApi(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/mcp/statuses" => FakeHttpMessageHandler.JsonResponse(new
+            {
+                memorizer = new
+                {
+                    state = "Connected",
+                    toolCount = 4,
+                    error = "Catalog refresh failed 3 time(s) in a row: timed out after 15s",
+                    degraded = true,
+                }
+            }),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+        });
+
+        using var listOutput = new StringWriter();
+        var exitCode = await McpCommand.RunAsync(["mcp", "list"], _paths, daemonApi, listOutput);
+        var output = listOutput.ToString();
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("connected but not responding (4 cached tools)", output);
+        Assert.Contains("timed out after 15s", output);
+    }
+
+    [Fact]
     public async Task List_WithoutDaemon_ShowsExplicitUnavailableStatus()
     {
         await McpCommand.RunAsync(
@@ -685,6 +862,46 @@ public sealed class McpCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Tools_Revoke_PersonalProfileWithoutModes_UsesTheAllDefaultLikeTheDaemon()
+    {
+        // Issue #2362: an unset McpServersMode on Personal is All, not an empty allowlist.
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Security": { "DeploymentPosture": "Personal" },
+          "Tools": { "AudienceProfiles": { "Personal": { "ApprovalPolicy": { "McpServerDefaults": { "dropbox": "Auto" } } } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--revoke", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var personal = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Personal");
+        Assert.Equal(
+            "Deny",
+            personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides").GetProperty("dropbox/delete").GetString());
+        Assert.False(personal.TryGetProperty("McpServerToolGrants", out _));
+    }
+
+    [Fact]
+    public async Task Tools_InvalidToolsSection_StopsWithAnError()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        { "configVersion": 1, "Tools": { "AudienceProfiles": { "Team": { "AllowedTools": "file_read" } } } }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy");
+
+        var exitCode = await McpCommand.RunAsync(["mcp", "tools", "dropbox"], _paths, daemonApi, _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("could not load the Tools configuration", _output.ToString());
+    }
+
+    [Fact]
     public async Task Tools_Grant_AllMcpServersMode_ClearsDenyOverride()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """
@@ -801,7 +1018,127 @@ public sealed class McpCommandTests : IDisposable
         Assert.Equal("Approval", overrides.GetProperty("dropbox/copy").GetString());
     }
 
-    private static DaemonApi ToolsDaemonApi(string serverName, params string[] tools)
+    private static string TeamProfileJson(string teamBody) => $$"""
+        { "configVersion": 1, "Tools": { "AudienceProfiles": { "Team": { {{teamBody}} } } } }
+        """;
+
+    private static List<string> ReadStrings(JsonElement array)
+        => array.EnumerateArray().Select(e => e.GetString()!).ToList();
+
+    [Fact]
+    public async Task Tools_Grant_ServerNotAllowed_AddsServerToAllowListAndSaysSo()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, TeamProfileJson("""
+            "McpServerToolGrants": { "dropbox": [] }
+            """));
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "copy", "--audience", "team"],
+            _paths, ToolsDaemonApi("dropbox", "copy", "delete", "move"), _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var team = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Team");
+        Assert.Equal(["dropbox"], ReadStrings(team.GetProperty("AllowedMcpServers")));
+        Assert.Equal(["copy"], ReadStrings(team.GetProperty("McpServerToolGrants").GetProperty("dropbox")));
+        Assert.Contains("Also allowed server 'dropbox' for Team.", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Tools_Grant_ServerNotAllowedAndNoGrantsEntry_GrantsOnlyTheNamedTool()
+    {
+        // No entry means "every tool" once the audience allows the server, so allowing it for
+        // one grant must start from nothing instead of from the full tool list.
+        File.WriteAllText(_paths.NetclawConfigPath, TeamProfileJson(""));
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "copy", "--audience", "team"],
+            _paths, ToolsDaemonApi("dropbox", "copy", "delete", "move"), _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var team = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Team");
+        Assert.Equal(["copy"], ReadStrings(team.GetProperty("McpServerToolGrants").GetProperty("dropbox")));
+        Assert.Equal(["dropbox"], ReadStrings(team.GetProperty("AllowedMcpServers")));
+    }
+
+    [Fact]
+    public async Task Tools_Grant_ServerAlreadyAllowed_LeavesAllowListAndPrintsNoExtraLine()
+    {
+        // The existing entry differs only by case. The runtime ignores case, so it counts.
+        File.WriteAllText(_paths.NetclawConfigPath, TeamProfileJson("""
+            "AllowedMcpServers": [ "Dropbox", "other" ],
+            "McpServerToolGrants": { "dropbox": [ "copy" ] }
+            """));
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "delete", "--audience", "team"],
+            _paths, ToolsDaemonApi("dropbox", "copy", "delete"), _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var team = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Team");
+        Assert.Equal(["Dropbox", "other"], ReadStrings(team.GetProperty("AllowedMcpServers")));
+        Assert.DoesNotContain("Also allowed", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Tools_Grant_PersonalInAllMode_DoesNotWriteAnAllowList()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        { "configVersion": 1, "Tools": { "AudienceProfiles": { "Personal": { "McpServersMode": "All" } } } }
+        """);
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "copy", "--audience", "personal"],
+            _paths, ToolsDaemonApi("dropbox", "copy", "delete"), _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var personal = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Personal");
+        Assert.False(personal.TryGetProperty("AllowedMcpServers", out _));
+        Assert.DoesNotContain("Also allowed", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Tools_Revoke_LastGrantedTool_KeepsTheServerAllowedAndSaysSo()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, TeamProfileJson("""
+            "AllowedMcpServers": [ "dropbox" ],
+            "McpServerToolGrants": { "dropbox": [ "copy" ] }
+            """));
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--revoke", "copy", "--audience", "team"],
+            _paths, ToolsDaemonApi("dropbox", "copy", "delete"), _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var team = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Team");
+        Assert.Equal(["dropbox"], ReadStrings(team.GetProperty("AllowedMcpServers")));
+        Assert.Equal(0, team.GetProperty("McpServerToolGrants").GetProperty("dropbox").GetArrayLength());
+        Assert.Contains("No tools remain granted. Server 'dropbox' stays in the Team AllowedMcpServers list.", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Tools_View_LeavesAConfigWithGrantsButNoAllowListUntouched()
+    {
+        // A 0.27.1 home can hold grants for a server the audience never allowed. Reading it
+        // does not repair it; only an explicit --grant does.
+        var original = TeamProfileJson("""
+            "McpServerToolGrants": { "dropbox": [ "copy" ] }
+            """);
+        File.WriteAllText(_paths.NetclawConfigPath, original);
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox"],
+            _paths, ToolsDaemonApi("dropbox", "copy", "delete"), _output);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(original, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    private DaemonApi ToolsDaemonApi(string serverName, params string[] tools)
     {
         var body = JsonSerializer.Serialize(tools);
         return CreateDaemonApi(request => request.RequestUri!.AbsolutePath == $"/api/mcp/tools/{serverName}"
@@ -817,10 +1154,10 @@ public sealed class McpCommandTests : IDisposable
         return JsonDocument.Parse(File.ReadAllText(path));
     }
 
-    private static DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
+    private DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
         var configuration = new ConfigurationBuilder().Build();
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-daemon-api-test-{Guid.NewGuid():N}"));
+        var paths = new NetclawPaths(Path.Combine(_dir.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
 
         return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths);

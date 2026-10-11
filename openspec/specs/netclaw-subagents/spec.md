@@ -5,14 +5,48 @@
 Define subagent execution contract, timeout enforcement, observability events,
 model role conventions, and context layer awareness for ephemeral autonomous
 LLM actors.
+
+Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for cross-cutting terms used in this specification.
+
 ## Requirements
 
 ### Requirement: Subagents use progressive tool disclosure
 
-A subagent SHALL begin with the same policy-exposed core tool set as a main
-session, minus tools prohibited by subagent policy. It SHALL NOT eagerly receive
-every discoverable first-party or MCP tool. `search_tools` and `load_tool` SHALL
-activate deferred schemas only in that child actor's ephemeral exposure set.
+A subagent SHALL begin with the same policy-exposed core tool set as a main session, minus tools prohibited by subagent policy. It SHALL NOT eagerly receive every discoverable first-party or MCP tool. `search_tools` and `load_tool` SHALL activate deferred schemas only in that child actor's ephemeral exposure set.
+
+A child policy denial SHALL produce the same `access_denied` receipt category as a parent policy denial. A replay that claims child catalog behavior SHALL create a real child actor and inspect that child's model-visible tools.
+
+A schema loaded by a child SHALL remain available for later model iterations in
+that same child run. It SHALL be discarded when the child completes, stops, or
+fails. Child exposure does not use the main session's configurable user-turn
+lease because a child run has no independent sequence of user turns.
+
+Netclaw intentionally prohibits recursive `spawn_agent` calls. A child cannot
+create another child, even when the parent audience can use `spawn_agent`. This
+keeps one parent tool call responsible for one bounded child actor and prevents
+recursive agent trees from multiplying inference requests on self-hosted models
+with limited concurrency.
+
+Concrete exposure examples:
+
+```text
+parent core: [file_read, shell_execute, spawn_agent, ...]
+child core:  [file_read, shell_execute, ...]
+             # spawn_agent is removed by child policy
+
+child calls load_tool(Name = "list_reminders")
+  -> next child model request includes list_reminders
+  -> later iterations in this same child still include list_reminders
+
+child completes; parent starts a fresh child
+  -> the fresh child does not inherit list_reminders
+
+child calls search_tools(Query = "spawn agent")
+  -> response does not confirm spawn_agent exists
+
+child directly calls spawn_agent from recalled text
+  -> dispatch cannot resolve or execute it from the child-private registry
+```
 
 #### Scenario: Child starts with core rather than full catalog
 
@@ -23,16 +57,39 @@ activate deferred schemas only in that child actor's ephemeral exposure set.
 
 #### Scenario: Child loads one deferred tool
 
-- **GIVEN** a subagent needs a visible deferred tool
-- **WHEN** it searches for and loads that exact tool
+- **GIVEN** a subagent knows the exact name of a visible deferred tool
+- **WHEN** it loads that exact tool
 - **THEN** the next child request contains the core plus that tool
+- **AND** later model iterations in the same child retain that tool
 - **AND** unrelated deferred schemas remain absent
+
+#### Scenario: Loaded child schema does not cross child lifetime
+
+- **GIVEN** one child loads an allowed Deferred tool
+- **WHEN** that child completes and the parent starts another child
+- **THEN** the second child's first model request omits the loaded tool
+- **AND** the first child created no durable or parent-owned exposure lease
 
 #### Scenario: Child cannot discover recursive delegation
 
 - **GIVEN** `spawn_agent` is registered for the parent session
 - **WHEN** a subagent searches for or attempts to load it
 - **THEN** the response does not confirm or activate `spawn_agent`
+- **AND** a direct child dispatch cannot start a grandchild
+
+#### Scenario: Child denial matches parent category
+
+- **GIVEN** policy denies the same tool for a parent and a child
+- **WHEN** each actor invokes that tool
+- **THEN** each receipt category is `access_denied`
+- **AND** neither actor records successful activity
+
+#### Scenario: Replay inspects a real child catalog
+
+- **GIVEN** a regression fixture asserts subagent catalog behavior
+- **WHEN** the fixture executes
+- **THEN** it creates a subagent through the production spawn path
+- **AND** it asserts the child model request omits the hidden tool
 
 ### Requirement: Subagent tool exposure is observable without payloads
 
@@ -45,6 +102,7 @@ command text, file paths, schema bodies, or hidden tool names.
 - **WHEN** a subagent begins a run
 - **THEN** one structured diagnostic records its three tool counts
 - **AND** the event contains no authored payload or path
+
 ### Requirement: Subagent execution contract
 
 The system SHALL run subagents as ephemeral actors (`SubAgentActor`) that
@@ -332,54 +390,6 @@ sub-agent denylist to prevent recursive delegation through `spawn_agent`.
 - **WHEN** a sub-agent is spawned
 - **THEN** `spawn_agent` is removed from the sub-agent's exposed tool surface
 - **AND** the sub-agent cannot recursively delegate to another sub-agent
-
-### Requirement: Sub-agent approval lifecycle is actor-local
-
-Sub-agent approval waits SHALL be owned by the live `SubAgentActor` run that encountered the approval-gated tool call. The sub-agent SHALL NOT persist approval wait state or reuse the session approval recovery/redrive lifecycle from `LlmSessionActor`.
-
-#### Scenario: Approval wait belongs to live child actor
-- **GIVEN** a sub-agent tool call requires approval
-- **WHEN** the sub-agent enters an approval wait
-- **THEN** the wait is tracked by the live `SubAgentActor`
-- **AND** no sub-agent approval wait state is written to the session journal
-
-#### Scenario: Parent stop cancels sub-agent approval wait
-- **GIVEN** a sub-agent is waiting for parent approval
-- **WHEN** the parent session stops or cancels the `spawn_agent` tool call
-- **THEN** the sub-agent approval wait is cancelled
-- **AND** the sub-agent completes at most once with a failed `SubAgentResult`
-- **AND** the gated tool is not executed after cancellation
-
-#### Scenario: Parent session recovery expires live-only prompt
-- **GIVEN** a sub-agent is waiting for parent approval
-- **WHEN** the parent session cold-recovers before the user responds
-- **THEN** the sub-agent approval prompt has no durable redrive state
-- **AND** a later approval response is rejected as expired
-
-### Requirement: Sub-agent approval uses parent turn authority
-
-Sub-agent approval prompts SHALL use the parent session turn's execution authority context for approval requester, principal, audience, boundary, channel capability, provenance, adopted-context safety, and filesystem grounding. The implementation SHALL reuse the `TurnContext` or shared execution-authority subset from #1213 when available, and SHALL keep any interim field mapping isolated to the parent-to-child spawn boundary.
-
-#### Scenario: Approval prompt carries parent requester context
-- **GIVEN** a sub-agent spawned from a parent turn with a requester sender id and principal
-- **WHEN** the sub-agent emits an approval prompt
-- **THEN** the prompt carries the parent requester sender id and principal
-- **AND** approval authorization is evaluated as if the parent turn had requested the tool
-
-#### Scenario: Missing authority fails closed
-- **GIVEN** a sub-agent approval-gated tool call has no parent approval bridge or required authority context
-- **WHEN** approval is required
-- **THEN** the gated tool is not executed
-- **AND** the sub-agent completes with a failed `SubAgentResult`
-- **AND** no default `Personal` audience or synthetic requester is substituted
-
-#### Scenario: Human approval requires requester binding
-- **GIVEN** a sub-agent approval-gated tool call has a parent approval bridge
-- **AND** the parent turn is not verified automation
-- **AND** the parent turn has no requester sender identity or no requester principal
-- **WHEN** approval is required
-- **THEN** no approval prompt is emitted
-- **AND** the sub-agent completes with a failed `SubAgentResult`
 
 ### Requirement: Sub-agent watchdog pauses during human approval
 

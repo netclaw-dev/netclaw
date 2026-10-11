@@ -89,7 +89,8 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
         using var output = new StringWriter();
         using var error = new StringWriter();
         var exitCode = await PairCommand.RunAsync(
-            ["pair", "http://localhost"], clientPaths, httpClient, input, output, error, TimeProvider.System, ct);
+            new CliContext(clientPaths, TimeProvider.System, input, output, error),
+            ["pair", "http://localhost"], httpClient, ct);
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, error.ToString());
         Assert.Equal("http://localhost", ClientConfigFile.ReadEndpoint(clientPaths));

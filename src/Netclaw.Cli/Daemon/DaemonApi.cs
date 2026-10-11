@@ -465,11 +465,37 @@ public sealed class DaemonApi
     /// reads the just-written <c>Daemon</c> section (and still honors an explicit
     /// <c>NETCLAW_DAEMON_ENDPOINT</c> / paired client endpoint when one is set).
     /// </remarks>
-    public async Task<DaemonReadiness> ProbeReadinessAsync(CancellationToken ct = default)
+    public Task<DaemonReadiness> ProbeReadinessAsync(CancellationToken ct = default)
+        => ProbeReadinessAsync(ResolveEndpoint(_paths), ct);
+
+    /// <summary>
+    /// Probes the daemon this home runs for <c>netclaw daemon status</c>: a plain anonymous GET of
+    /// <c>/api/health/ready</c> at the endpoint <see cref="ResolveLocalControlEndpoint"/> yields
+    /// (ignoring <c>NETCLAW_DAEMON_ENDPOINT</c> and any paired remote endpoint). It builds no host
+    /// and no authenticated client, so it reads no secrets or keys, and it never throws: any failure
+    /// reports not ready.
+    /// </summary>
+    internal static async Task<(bool Ready, string Endpoint)> ProbeLocalReadinessAsync(
+        NetclawPaths paths, CancellationToken ct = default)
+    {
+        var endpoint = DefaultEndpoint;
+        try
+        {
+            endpoint = ResolveLocalControlEndpoint(paths);
+            using var http = new HttpClient(CreateLocalControlHttpHandler()) { Timeout = DefaultTimeout };
+            using var response = await http.GetAsync($"{endpoint}/api/health/ready", ct);
+            return (response.IsSuccessStatusCode, endpoint);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            return (false, endpoint);
+        }
+    }
+
+    private async Task<DaemonReadiness> ProbeReadinessAsync(string endpoint, CancellationToken ct)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
         var client = CreateHttpClient();
-        var endpoint = ResolveEndpoint(_paths);
         using var response = await client.GetAsync($"{endpoint}/api/health/ready", cts.Token);
         if (!response.IsSuccessStatusCode)
             return new DaemonReadiness(false, null);

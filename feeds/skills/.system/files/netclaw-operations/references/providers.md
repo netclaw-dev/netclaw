@@ -54,8 +54,8 @@ report the exact role and missing definition. Repair the role manually or use
 `netclaw model set`; `netclaw doctor --fix` does not guess a replacement.
 
 If the operator reports seeing that banner, do not troubleshoot model behavior;
-the daemon has no working provider. Direct them through the recovery steps and
-restart the daemon after the provider/model config is fixed. `netclaw doctor`
+the daemon has no working provider. Direct them through the recovery steps. A
+running daemon applies the fixed provider/model config automatically. `netclaw doctor`
 reports the state as a warn-level "Chat Client" item.
 
 Malformed provider configuration, such as a declared provider missing required
@@ -67,7 +67,7 @@ For OpenAI ChatGPT subscription auth, Netclaw persists the OAuth access token,
 refresh token, and ChatGPT account ID returned by the OpenAI ID token. The
 account ID is required by the Codex backend. If OpenAI OAuth validation reports
 that the account ID is missing, re-authenticate the provider with `netclaw
-provider fix <name>` or remove and add it again. API-key OpenAI auth does not
+provider` or remove and add it again. API-key OpenAI auth does not
 use the Codex backend or this account-ID metadata.
 
 For `openai` OAuth providers, `netclaw model discover <provider>` queries the

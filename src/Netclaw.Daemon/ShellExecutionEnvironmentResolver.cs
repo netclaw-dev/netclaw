@@ -20,16 +20,20 @@ internal sealed record ShellEnvironmentResolution(
     PowerShellFallbackReason? FallbackReason = null,
     Version? RejectedPreferredVersion = null);
 
-internal sealed class ShellExecutionEnvironmentResolver(IPowerShellHostProbe powerShellProbe)
+internal sealed class ShellExecutionEnvironmentResolver(
+    IBashVersionProbe bashVersionProbe,
+    IPowerShellHostProbe powerShellProbe)
 {
     private static readonly Version MinimumPowerShell7 = new(7, 6, 4);
     private static readonly Version PowerShell7UpperBound = new(7, 7);
 
     public static ShellExecutionEnvironmentResolver CreateDefault(TimeProvider timeProvider) =>
-        new(new PowerShellHostProbe(
-            timeProvider,
-            new WindowsPathPowerShellExecutableLocator(),
-            new PowerShellProbeProcessFactory()));
+        new(
+            new BashVersionProbe(timeProvider),
+            new PowerShellHostProbe(
+                timeProvider,
+                new WindowsPathPowerShellExecutableLocator(),
+                new PowerShellProbeProcessFactory()));
 
     public static ShellPlatform DetectCurrentPlatform()
     {
@@ -49,7 +53,12 @@ internal sealed class ShellExecutionEnvironmentResolver(IPowerShellHostProbe pow
         CancellationToken cancellationToken = default)
     {
         if (platform is ShellPlatform.Linux or ShellPlatform.MacOS)
-            return new ShellEnvironmentResolution(ShellExecutionEnvironment.CreateBash(platform));
+        {
+            var bashVersion = await bashVersionProbe.ProbeAsync(platform, cancellationToken)
+                .ConfigureAwait(false);
+            return new ShellEnvironmentResolution(
+                ShellExecutionEnvironment.CreateBash(platform, bashVersion));
+        }
         if (platform != ShellPlatform.Windows)
             throw new ArgumentOutOfRangeException(nameof(platform), platform, "The shell platform is not supported.");
 

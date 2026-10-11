@@ -19,12 +19,23 @@ public sealed partial class DaemonManager
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly IContainerSupervisor _supervisor;
+    private readonly ISystemCommandRunner _commandRunner;
 
     public DaemonManager(NetclawPaths paths, TimeProvider timeProvider, IContainerSupervisor? supervisor = null)
+        : this(paths, timeProvider, supervisor ?? new ContainerSupervisor(), ProcessSystemCommandRunner.Instance)
+    {
+    }
+
+    internal DaemonManager(
+        NetclawPaths paths,
+        TimeProvider timeProvider,
+        IContainerSupervisor supervisor,
+        ISystemCommandRunner commandRunner)
     {
         _paths = paths;
         _timeProvider = timeProvider;
-        _supervisor = supervisor ?? new ContainerSupervisor();
+        _supervisor = supervisor;
+        _commandRunner = commandRunner;
     }
 
     /// <summary>
@@ -148,7 +159,7 @@ public sealed partial class DaemonManager
         // Best-effort — the daemon may already be unreachable.
         try
         {
-            var endpoint = DaemonApi.ResolveEndpoint(new NetclawPaths());
+            var endpoint = DaemonApi.ResolveEndpoint(_paths);
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
             await http.PostAsync(
                 $"{endpoint}/api/lifecycle/shutdown?reason={Uri.EscapeDataString(reason)}",
@@ -180,8 +191,8 @@ public sealed partial class DaemonManager
         // Wait for graceful exit. DaemonConfig.GracefulShutdownBudget matches the daemon's own
         // Akka CoordinatedShutdown "before-service-unbind" phase timeout — where session
         // draining (SessionDrainHelper.DrainAsync) actually happens — so the CLI does not give
-        // up on a daemon that is still legitimately draining in-flight sessions (TurnLlmTimeout
-        // defaults to 3 minutes). See DaemonConfig.GracefulShutdownBudget remarks for the full
+        // up on a daemon that is still draining in-flight sessions. See
+        // DaemonConfig.GracefulShutdownBudget remarks for the full
         // layering this must respect: bounded drain < Akka phase timeout < this budget + the
         // grace window below < systemd's TimeoutStopSec= (netclaw-dev/netclaw#1664, #1665).
         var exitedWithinBudget = await WaitForExitAsync(process, DaemonConfig.GracefulShutdownBudget, cancellationToken);
@@ -192,7 +203,7 @@ public sealed partial class DaemonManager
             // exactly this same budget boundary, and still needs to finish tearing down (actor
             // system termination, PID file cleanup) afterward. Poll a short additional grace
             // window before escalating to SIGKILL — production evidence (#1665) showed a
-            // daemon force-killed ~100ms from a clean exit because the CLI escalated the
+            // daemon was force-killed ~100ms from a clean exit because the CLI escalated the
             // instant its budget elapsed, with no headroom at all.
             exitedDuringGraceWindow = await WaitForExitAsync(process, DaemonConfig.CliForceKillGraceWindow, cancellationToken);
         }
@@ -229,8 +240,8 @@ public sealed partial class DaemonManager
         if (exitedDuringGraceWindow)
         {
             // Clean exit — no kill needed — but worth surfacing: the daemon used its full
-            // graceful-shutdown budget, which usually means a session was still mid-LLM-call
-            // at shutdown.
+            // graceful-shutdown budget, which can mean that a session task did not stop
+            // after cancellation.
             return new DaemonResult(true,
                 $"Daemon stopped (was PID {pid}); exited during the " +
                 $"{DaemonConfig.CliForceKillGraceWindow.TotalSeconds:F0}s grace window after the " +
@@ -241,7 +252,7 @@ public sealed partial class DaemonManager
         return new DaemonResult(true,
             $"Daemon stopped (was PID {pid}), but did not exit gracefully within " +
             $"{DaemonConfig.CliForceKillBudget.TotalSeconds:F0}s (budget + grace window) and had to be " +
-            "force-killed. This usually means a session was still mid-LLM-call at shutdown; if it " +
+            "force-killed. A session task or teardown step may have stalled; if it " +
             "recurs, check for stuck sessions before stopping the daemon.");
     }
 
@@ -312,6 +323,16 @@ public sealed partial class DaemonManager
             return new DaemonResult(false,
                 "Cannot find netclawd binary. Set NETCLAW_DAEMON_PATH or ensure it is " +
                 "in the same directory as the CLI.");
+
+        // Probe before writing anything: a host without a reachable user systemd (a plain
+        // container, WSL1, a minimal VM) would otherwise fail at daemon-reload and leave
+        // the generated unit and env file behind.
+        var userManager = await RunCommandAsync("systemctl", "--user show-environment");
+        if (!userManager.Success)
+            return new DaemonResult(false,
+                "Cannot install the service: systemd user services are not available on this host " +
+                $"({userManager.Message}). Run the daemon under a container supervisor, or start it " +
+                "with `netclaw daemon start` (it will not restart after a crash or reboot).");
 
         Directory.CreateDirectory(SystemdUserUnitDirectory);
 
@@ -527,8 +548,10 @@ public sealed partial class DaemonManager
                 bufferSize: 1);
             return false;
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // IOException: held by the daemon. UnauthorizedAccessException: we cannot open the
+            // file (daemon owned by another user, read-only home), so we cannot tell: same answer.
             return true;
         }
     }
@@ -661,9 +684,9 @@ public sealed partial class DaemonManager
         return $"{uptime.Minutes}m {uptime.Seconds}s";
     }
 
-    private static async Task<DaemonResult> RunCommandAsync(string command, string arguments)
+    private async Task<DaemonResult> RunCommandAsync(string command, string arguments)
     {
-        var result = await ProcessSystemCommandRunner.Instance.RunAsync(command, arguments);
+        var result = await _commandRunner.RunAsync(command, arguments);
         return result.Success
             ? new DaemonResult(true, "OK")
             : new DaemonResult(false, result.Message);
@@ -686,7 +709,7 @@ public sealed partial class DaemonManager
 
     /// <summary>
     /// Polls <paramref name="process"/> until it exits or <paramref name="timeout"/> elapses.
-    /// Internal (not private) so tests can drive the up-to-200-second graceful-shutdown wait
+    /// Internal (not private) so tests can drive the bounded graceful-shutdown wait
     /// via an injected <see cref="TimeProvider"/> without a real wall-clock sleep: the poll
     /// delay is scheduled against <see cref="_timeProvider"/> (matching this repo's virtualized-
     /// timer convention, e.g. <c>ConfigWatcherService</c>), not a bare <c>Task.Delay(ms)</c>.

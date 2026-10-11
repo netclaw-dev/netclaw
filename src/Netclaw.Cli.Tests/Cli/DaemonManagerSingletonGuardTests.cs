@@ -15,6 +15,7 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly DaemonManager _sut;
+    private readonly List<System.Diagnostics.Process> _fakeDaemons = [];
 
     public DaemonManagerSingletonGuardTests()
     {
@@ -132,6 +133,99 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
         Assert.DoesNotContain("Cannot find netclawd", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task StopAsync_ProceedsToStopTheProcess_WhenSupervised()
+    {
+        // `netclaw daemon stop` is the only CLI way to bounce a containerised daemon: the
+        // supervisor restarts it after the exit. Stop must act, not refuse: with the lock held and
+        // no usable PID it reaches the same "PID file is missing" outcome as an unsupervised stop.
+        using var holder = new FileStream(
+            _paths.LockFilePath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        var supervised = new DaemonManager(_paths, TimeProvider.System, new FakeSupervisor(true));
+
+        var result = await supervised.StopAsync("cli-stop", CancellationToken.None);
+
+        Assert.Contains("PID file is missing", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("supervisor", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public void GetStatus_KeepsThePidFile_WhenTheLockProbeSaysFree_ButTheProcessIsAlive()
+    {
+        // Where file locking is unsupported or disabled the probe always says "free". A status
+        // call must not delete the pid file of a live daemon (its watchdog would shut it down).
+        var daemon = StartFakeDaemon();
+        File.WriteAllText(_paths.PidFilePath, daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var status = _sut.GetStatus();
+
+        Assert.True(status.IsRunning);
+        Assert.Equal(daemon.Id, status.Pid);
+        Assert.True(File.Exists(_paths.PidFilePath));
+    }
+
+    [Fact]
+    public void IsLockFileHeld_DoesNotThrow_WhenTheLockFileCannotBeOpened()
+    {
+        // A directory at the lock path makes the open throw UnauthorizedAccessException, as a
+        // file owned by another user or a read-only home does.
+        Directory.CreateDirectory(_paths.LockFilePath);
+
+        var status = _sut.GetStatus();
+
+        Assert.True(_sut.IsLockFileHeld());
+        Assert.True(status.IsRunning);
+    }
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task StopAsync_SendsTheShutdownNoticeToThisHomesEndpoint()
+    {
+        // The notice must go to the daemon of the home the manager was built on, never to the
+        // default home's endpoint, or a test (or any non-default home) shuts down someone else's daemon.
+        var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        probe.Start();
+        var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+        using var listener = new System.Net.HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var requestTask = Task.Run(async () =>
+        {
+            var received = await listener.GetContextAsync();
+            received.Response.StatusCode = 200;
+            received.Response.Close();
+            return received.Request.Url!.AbsolutePath;
+        });
+        Netclaw.Cli.Config.ClientConfigFile.WriteEndpoint(_paths, $"http://127.0.0.1:{port}");
+        var daemon = StartFakeDaemon();
+        File.WriteAllText(_paths.PidFilePath, daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Message);
+        var path = await requestTask.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal("/api/lifecycle/shutdown", path);
+    }
+
+    public static bool IsLinux => OperatingSystem.IsLinux();
+
+    private System.Diagnostics.Process StartFakeDaemon()
+    {
+        var fakeDaemon = Path.Combine(_dir.Path, "netclawd");
+        File.Copy("/bin/sleep", fakeDaemon, overwrite: true);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(fakeDaemon, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(fakeDaemon, "600") { UseShellExecute = false })!;
+        _fakeDaemons.Add(process);
+        return process;
+    }
+
     private sealed class FakeSupervisor(bool supervised) : IContainerSupervisor
     {
         public bool IsExternallySupervised => supervised;
@@ -139,6 +233,13 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var process in _fakeDaemons)
+        {
+            if (!process.HasExited)
+                process.Kill();
+            process.Dispose();
+        }
+
         try { _dir.Dispose(); }
         catch (IOException) { } // slopwatch-ignore: SW003 test cleanup best-effort — directory may already be gone
     }

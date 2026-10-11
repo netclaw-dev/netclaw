@@ -367,9 +367,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         if (!string.IsNullOrWhiteSpace(field.Placeholder))
             _textInput.WithPlaceholder(field.Placeholder);
 
-        _textInput.Text = ViewModel.GetEditorSeed(field);
-        if (!string.IsNullOrEmpty(_textInput.Text))
-            _textInput.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+        NetclawTuiChrome.SeedTextInput(_textInput, ViewModel.GetEditorSeed(field));
 
         return _textInput;
     }

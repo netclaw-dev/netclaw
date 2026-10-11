@@ -61,6 +61,21 @@ public sealed class SlackApprovalBlockBuilderTests
         Assert.DoesNotContain("• `git status`", text); // No redundant bullet for single-verb
     }
 
+    // A prompt with no candidate has the full command text as its one display
+    // verb. The request line shows that text, so the header does not repeat it.
+    [Fact]
+    public void Prompt_without_a_candidate_uses_a_short_header()
+    {
+        var request = Request("$cmd > out.txt", ["$cmd > out.txt"], "/home/user/repos/foo", MessyRow(), isMessy: true)
+            with { Patterns = [] };
+
+        var text = SlackApprovalBlockBuilder.BuildApprovalText(request);
+
+        Assert.Contains("`shell_execute`: `$cmd > out.txt`", text);
+        Assert.Contains("Approve this command in /home/user/repos/foo?", text);
+        Assert.DoesNotContain("Approve $cmd", text);
+    }
+
     [Fact]
     public void Multi_verb_uses_generic_header_with_bulleted_verbs()
     {
@@ -381,5 +396,41 @@ public sealed class SlackApprovalBlockBuilderTests
             if (block is SectionBlock { Text: Markdown md })
                 Assert.True(md.Text.Length < 3001, $"SectionBlock text length {md.Text.Length} exceeded Slack's 3000-char cap");
         }
+    }
+
+    // Live regression: the exact candidate verb of a heredoc command went into
+    // the header block unbounded, and Slack rejected the post with
+    // invalid_blocks (/blocks/2/text/text over 3000 characters).
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Long_heredoc_command_builds_a_postable_prompt(bool withSiblingVerbs)
+    {
+        var request = LongApprovalCommand.Request(withSiblingVerbs);
+        Assert.True(LongApprovalCommand.ExactGhVerb.Length > 3000);
+
+        var blocks = SlackApprovalBlockBuilder.BuildApprovalBlocks(request);
+        var text = SlackApprovalBlockBuilder.BuildApprovalText(request);
+
+        Assert.InRange(blocks.Count, 1, 50);
+        var sections = blocks.OfType<SectionBlock>().Select(static block => ((Markdown)block.Text).Text).ToList();
+        Assert.All(sections, section => Assert.InRange(section.Length, 1, 3000));
+
+        // The decision stays possible: every option is a button and a reply letter.
+        var buttons = Assert.Single(blocks.OfType<ActionsBlock>()).Elements.OfType<Button>().ToList();
+        Assert.Equal(request.Options.Select(static o => o.Label), buttons.Select(static b => b.Text.Text));
+        Assert.Contains(sections, section => section.Contains("`A`, `B`", StringComparison.Ordinal));
+        Assert.Contains("*B)* Deny", text, StringComparison.Ordinal);
+
+        // The reader sees the head and the tail of the command and how much is hidden.
+        var header = withSiblingVerbs
+            ? sections.Single(static section => section.StartsWith("*Approve in ", StringComparison.Ordinal))
+            : sections.Single(static section => section.StartsWith("*Approve gh api repos/netclaw-dev/skill-server/pulls", StringComparison.Ordinal));
+        Assert.Contains("/home/user/repos/skill-server?", header, StringComparison.Ordinal);
+        Assert.Contains(sections, section => section.Contains("characters hidden", StringComparison.Ordinal)
+            && section.Contains("cd /home/user/repos/skill-server", StringComparison.Ordinal)
+            && section.Contains("EOF", StringComparison.Ordinal));
+        if (withSiblingVerbs)
+            Assert.Contains(sections, section => section.Contains("• `git push`", StringComparison.Ordinal));
     }
 }

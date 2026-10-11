@@ -14,6 +14,15 @@ When something seems wrong with Netclaw itself:
 3. Check daemon logs at `<NETCLAW_HOME>/logs/daemon-{yyyy-MM-dd}.log` (`NETCLAW_HOME` defaults to `~/.netclaw`)
 4. Check session logs at `<NETCLAW_HOME>/logs/sessions/{sanitized-session-id}/session.log`
 
+The daemon deletes `daemon-*.log` and `crash-*.log` files older than `Retention:Logs:Days`
+(default 14, `0` keeps them forever). It does not delete anything under `logs/sessions/`.
+To read or change the setting, run `netclaw config retention` or
+`netclaw config retention --logs-days <days>`. A running daemon applies the change
+automatically.
+
+If a config editor reports `The new netclaw.json would not load`, the original file remains intact.
+Inspect the reported duplicate key and correct the file before another save attempt.
+
 If `netclaw status` or `netclaw chat` prints `daemon not configured - please run
 netclaw init`, do not troubleshoot daemon reachability or model defaults. The
 install has no `netclaw.json`; run `netclaw init` first. If doctor prints the
@@ -87,6 +96,15 @@ debugging a daemon-wide problem → read `daemon.log`.
 Slack health reads the live Socket Mode state. The connection supervisor checks this state every five seconds.
 A disconnect emits `channel.disconnected`. The supervisor retries with exponential backoff up to five minutes.
 A successful recovery emits `channel.reconnected`.
+
+A graceful stop can resume a safe model turn through a standard reminder.
+The reminder expires ten minutes after the interruption. A completed reply,
+partial reply, or possible tool effect leaves the session quiet. A crash does
+not create a restart reminder.
+
+The daemon gives session drain 20 seconds within a 30-second shutdown phase.
+The CLI allows 45 seconds, and the generated systemd unit allows 60 seconds.
+A pod should set `terminationGracePeriodSeconds` to at least 60 seconds.
 
 If webhook notifications are configured, daemon crash paths emit
 `daemon.crashing` operational alerts with context (PID, reason, and latest known
@@ -166,12 +184,12 @@ active. Personal posture skips this step (all features enabled by default).
 | Runtime health | `netclaw status` |
 | Memory/token stats | `netclaw stats` |
 | Historical skill usage by method/name | `netclaw stats skills` |
-| List/manage skills | `netclaw skill list` |
 | List past sessions | `netclaw sessions --once` |
-| Inspect reminder history | `netclaw reminder history <id> --last 5` |
 | Permanently delete a reminder | `netclaw reminder delete <id>` |
 
-`netclaw update` preserves daemon ownership. When `netclaw.service` is active or
+`netclaw update` checks daemon ownership against the current `NETCLAW_HOME`.
+A unit that serves another home does not own this daemon.
+When `netclaw.service` owns this daemon and is active or
 enabled as a systemd user service, update restarts it with `systemctl --user`
 instead of launching a detached daemon. If restart fails, inspect
 `systemctl --user status netclaw.service`, then start it manually with

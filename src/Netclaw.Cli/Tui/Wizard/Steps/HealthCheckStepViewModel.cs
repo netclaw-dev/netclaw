@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Update;
 using R3;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -40,6 +41,9 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         _navigationState = navigationState;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
+
+    /// <summary>Test seam: the unit probe used by the daemon start; production uses the host's.</summary>
+    internal SystemdUserService? SystemdService { get; init; }
 
     public string StepId => WizardStepIds.HealthCheck;
     public string DisplayTitle => "Health Check";
@@ -221,22 +225,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         //     to disk and applied; the only cost is the wizard declaring "ready" a beat
         //     early against the reloading daemon — cosmetic, and gone once the daemon is on
         //     a build that emits the generation header.
-        var wasRunning = _daemonManager?.GetStatus().IsRunning ?? false;
-        int? generationBefore = null;
-        if (wasRunning && _daemonApi is not null)
-        {
-            try
-            {
-                generationBefore = (await _daemonApi.ProbeReadinessAsync(ct)).Generation;
-            }
-            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested)
-            {
-                // Running per GetStatus but not answering the probe right now. Fall back to
-                // "any live instance counts" (null) — at worst the readiness-race guard is
-                // relaxed for this run; it never produces a false "not ready".
-                generationBefore = null;
-            }
-        }
+        var daemonBeforeWrite = await CaptureDaemonStateAsync(ct);
 
         // Write config
         runner.Add(new HealthCheckItem("Writing configuration", null));
@@ -261,16 +250,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         var allPassed = runner.AllPassed;
         if (allPassed)
         {
-            runner.Add(new HealthCheckItem(ProgressLabel(wasRunning), null));
-            var daemonOk = await StartIfNeededAndPollAsync(wasRunning, generationBefore, ct);
-            if (daemonOk)
-            {
-                runner.UpdateLast(new HealthCheckItem("Daemon ready", true));
-            }
-            else if (LastResultPending())
-            {
-                runner.UpdateLast(new HealthCheckItem(NotReadyMessage, false));
-            }
+            await PrepareDaemonAsync(daemonBeforeWrite, ct);
         }
 
         IsRunning.Value = false;
@@ -292,13 +272,13 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         else if (_context is not null)
         {
             _context.StatusMessage.Value =
-                "Setup complete with warnings. Run `netclaw daemon start`, then `netclaw chat`. Adjust settings with `netclaw config`.";
+                "Setup complete with warnings. Run `netclaw daemon start`, then `netclaw chat --onboarding`. Adjust settings with `netclaw config`.";
         }
     }
 
     /// <summary>Launch the chat experience after a successful bootstrap. Routed through
     /// the wrapped <see cref="Navigate"/> delegate so the onboarding trigger is set first.</summary>
-    public void LaunchChat() => Navigate?.Invoke("/chat");
+    public void LaunchChat() => Navigate?.Invoke(ChatViewModel.Route);
 
     /// <summary>
     /// Applies the freshly-written config and waits for the daemon to be ready on it.
@@ -314,6 +294,40 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     // shared by the initial health item and the per-second poll relabel.
     private static string ProgressLabel(bool wasRunning) =>
         wasRunning ? "Applying configuration" : "Starting daemon";
+
+    internal async Task<(bool WasRunning, int? GenerationBefore)> CaptureDaemonStateAsync(CancellationToken ct)
+    {
+        var wasRunning = _daemonManager?.GetStatus().IsRunning ?? false;
+        int? generationBefore = null;
+        if (wasRunning && _daemonApi is not null)
+        {
+            try
+            {
+                generationBefore = (await _daemonApi.ProbeReadinessAsync(ct)).Generation;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested)
+            {
+                // Running per GetStatus but not answering the probe right now. Fall back to
+                // "any live instance counts" (null) — at worst the readiness-race guard is
+                // relaxed for this run; it never produces a false "not ready".
+                generationBefore = null;
+            }
+        }
+
+        return (wasRunning, generationBefore);
+    }
+
+    internal async Task<HealthCheckItem> PrepareDaemonAsync((bool WasRunning, int? GenerationBefore) beforeWrite, CancellationToken ct)
+    {
+        AddResult(new HealthCheckItem(ProgressLabel(beforeWrite.WasRunning), null));
+        NotifyChanged();
+        var ready = await StartIfNeededAndPollAsync(beforeWrite.WasRunning, beforeWrite.GenerationBefore, ct);
+        if (ready) SetLastResult(new HealthCheckItem("Daemon ready", true));
+        else if (LastResultPending()) SetLastResult(new HealthCheckItem(NotReadyMessage, false));
+        NotifyChanged();
+        lock (Results)
+            return Results[^1];
+    }
 
     private async Task<bool> StartIfNeededAndPollAsync(bool wasRunning, int? generationBefore, CancellationToken ct)
     {
@@ -335,7 +349,11 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
             // Nothing is running to reload the config, so start it. Guarded: under a
             // container supervisor Start defers (no spawn) and the supervisor starts it,
             // which we treat as success here and confirm via the readiness poll below.
-            var result = _daemonManager.Start();
+            // The same start `netclaw daemon start` uses: an installed unit starts the daemon
+            // itself, instead of a detached copy beside a unit that stays inactive.
+            var result = await UpdateCommand.StartDaemonAsync(
+                new UpdateCommand.DaemonProcessLifecycle(_daemonManager),
+                SystemdService ?? new SystemdUserService());
             if (!result.Success
                 && !result.Message.Contains("already running", StringComparison.OrdinalIgnoreCase)
                 && !result.Message.Contains("container supervisor", StringComparison.OrdinalIgnoreCase))

@@ -647,9 +647,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             return _singleInput;
 
         _singleInput = new TextInputNode().WithPlaceholder(placeholder);
-        _singleInput.Text = seed ?? string.Empty;
-        if (!string.IsNullOrEmpty(_singleInput.Text))
-            _singleInput.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+        NetclawTuiChrome.SeedTextInput(_singleInput, seed ?? string.Empty);
         _singleInputScreen = screen;
         _singleInputKey = key;
         return _singleInput;
@@ -670,9 +668,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
         if (field.IsSecret)
             input.AsPassword();
 
-        input.Text = ViewModel.GetCredentialDraftValue(field.Key) ?? string.Empty;
-        if (!string.IsNullOrEmpty(input.Text))
-            input.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+        NetclawTuiChrome.SeedTextInput(input, ViewModel.GetCredentialDraftValue(field.Key) ?? string.Empty);
 
         _credentialInputs[field.Key] = input;
         return input;

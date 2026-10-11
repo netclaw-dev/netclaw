@@ -125,7 +125,7 @@ run_headless() {
     local extra_args=("$@")
     NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
     NETCLAW_HOME="$EVAL_HOME" \
-        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" "${extra_args[@]}" 2>&1
+        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" "${extra_args[@]}" 2>&1 || true
 }
 
 assert_contains() {

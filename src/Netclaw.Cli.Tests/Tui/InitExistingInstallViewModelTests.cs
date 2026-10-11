@@ -6,6 +6,7 @@
 using System.Reflection;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Tests.Cli;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -205,7 +206,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
 
         vm.Dispose();
         _time.Advance(InitExistingInstallViewModel.CompletionPause);
-        await vm.ResetTask!.WaitAsync(TestContext.Current.CancellationToken);
+        await vm.ResetTask!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.Null(route);
     }
@@ -243,7 +244,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
 
             releaseStop.TrySetResult(new DaemonResult(true, "Daemon stopped."));
             await dispose.WaitAsync(TestContext.Current.CancellationToken);
-            await vm.ResetTask!.WaitAsync(TestContext.Current.CancellationToken);
+            await vm.ResetTask!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
             Assert.Null(route);
             Assert.False(deleteCalled, "Cancelling during daemon stop must not proceed into deletion.");
@@ -277,7 +278,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
 
         vm.RequestQuit();
         releaseStop.TrySetResult(new DaemonResult(true, "Daemon stopped."));
-        await vm.ResetTask!.WaitAsync(TestContext.Current.CancellationToken);
+        await vm.ResetTask!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.False(deleteCalled, "Ctrl+Q during daemon stop must cancel before deletion starts.");
         Assert.Null(route);
@@ -322,7 +323,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
 
         releaseDelete.TrySetResult();
         await dispose.WaitAsync(TestContext.Current.CancellationToken);
-        await vm.ResetTask!.WaitAsync(TestContext.Current.CancellationToken);
+        await vm.ResetTask!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.Null(route);
     }
@@ -342,7 +343,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
 
         StartFullReset(vm);
         await WaitForProgressMessageAsync(vm, "Reset failed:");
-        await vm.ResetTask!.WaitAsync(TestContext.Current.CancellationToken);
+        await vm.ResetTask!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.StartsWith("Reset failed:", vm.ProgressMessage.Value, StringComparison.Ordinal);
         Assert.Null(route);
@@ -373,7 +374,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
 
         releaseDelete.TrySetResult();
         await WaitForProgressMessageAsync(vm, "Reset failed:");
-        await vm.ResetTask!.WaitAsync(TestContext.Current.CancellationToken);
+        await vm.ResetTask!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.False(
             vm.StatusMessage.Value.StartsWith("Reset is deleting data;", StringComparison.Ordinal),
@@ -395,6 +396,135 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         await CompleteResetAsync(vm);
     }
 
+    [Fact]
+    public async Task Reset_Aborts_WhenTheDaemonIsStillRunningAfterAFailedStop_AndDeletesNothing()
+    {
+        // Ownership could not be determined (a unit is installed but there is no user bus), so
+        // the stop did nothing and a supervisor would restart the daemon on a wiped home.
+        File.WriteAllText(_paths.NetclawConfigPath, "{}");
+        File.WriteAllText(_paths.SqliteDbPath, "db");
+        var deleted = new List<string>();
+        var vm = new InitExistingInstallViewModel(
+            _paths,
+            _nav,
+            (_, _) => Task.FromResult(new DaemonResult(false, "Could not determine whether systemd owns the daemon lifecycle: bus")),
+            deleted.Add,
+            _time,
+            isDaemonRunning: () => true);
+        string? route = null;
+        SetNavigate(vm, requestedRoute => route = requestedRoute);
+
+        StartFullReset(vm);
+        await WaitForProgressMessageAsync(vm, "Reset failed:");
+        await vm.ResetTask!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        Assert.Contains("still running", vm.ProgressMessage.Value, StringComparison.Ordinal);
+        Assert.Contains("Could not determine whether systemd owns", vm.ProgressMessage.Value, StringComparison.Ordinal);
+        Assert.Contains("Nothing was deleted", vm.ProgressMessage.Value, StringComparison.Ordinal);
+        Assert.Contains("login session", vm.ProgressMessage.Value, StringComparison.Ordinal);
+        Assert.Contains("systemctl --user stop netclaw.service", vm.ProgressMessage.Value, StringComparison.Ordinal);
+        Assert.Empty(deleted);
+        Assert.True(File.Exists(_paths.SqliteDbPath));
+        Assert.True(File.Exists(_paths.NetclawConfigPath));
+        Assert.Null(route);
+    }
+
+    [Fact]
+    public async Task Reset_Aborts_WhenTheUnitStateCannotBeRead_EvenThoughNoDaemonRuns()
+    {
+        // No session bus: the unit may be crash-looping and about to start a daemon on the wiped
+        // home, so a reset with nothing visibly running must still refuse.
+        File.WriteAllText(_paths.SqliteDbPath, "db");
+        var unitPath = Path.Combine(_dir.Path, "netclaw.service");
+        File.WriteAllText(unitPath, "[Service]\nExecStart=/opt/netclaw/netclawd\n");
+        var systemd = new SystemdUserService(
+            unitPath, new BusUnreachableRunner(), enabledOnThisPlatform: true, homePath: SystemdUserService.DefaultHomePath);
+        var vm = new InitExistingInstallViewModel(
+            _paths, _nav, new DaemonManager(_paths, TimeProvider.System), systemd, _time);
+
+        StartFullReset(vm);
+        await WaitForProgressMessageAsync(vm, "Reset failed:");
+        await vm.ResetTask!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        Assert.Contains("Nothing was deleted", vm.ProgressMessage.Value, StringComparison.Ordinal);
+        Assert.True(File.Exists(_paths.SqliteDbPath));
+    }
+
+    private sealed class BusUnreachableRunner : ISystemCommandRunner
+    {
+        public Task<SystemCommandResult> RunAsync(string command, string arguments)
+            => Task.FromResult(new SystemCommandResult(1, "Failed to connect to bus: No medium found"));
+    }
+
+    [Fact]
+    public async Task Reset_Aborts_WhenTheStopReportedSuccessButTheDaemonIsStillRunning()
+    {
+        File.WriteAllText(_paths.SqliteDbPath, "db");
+        var vm = new InitExistingInstallViewModel(
+            _paths, _nav, DaemonStopped, DeleteDirectoryIfExists, _time, isDaemonRunning: () => true);
+
+        StartFullReset(vm);
+        await WaitForProgressMessageAsync(vm, "Reset failed:");
+        await vm.ResetTask!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        Assert.True(File.Exists(_paths.SqliteDbPath));
+    }
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task Reset_StopsTheDaemonThroughTheUnit_NotByKillingItDirectly()
+    {
+        // The unit's Restart=always would bring a directly killed daemon back under the data
+        // being deleted, so the reset has to use the same stop as `netclaw daemon stop`.
+        var fakeDaemon = Path.Combine(_dir.Path, "netclawd");
+        File.Copy("/bin/sleep", fakeDaemon, overwrite: true);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(fakeDaemon, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        using var daemon = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(fakeDaemon, "600") { UseShellExecute = false })!;
+        try
+        {
+            File.WriteAllText(_paths.PidFilePath, daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            // No lock file on purpose: a real daemon's lock dies with the process, but a lock held by
+            // this test process would be released by an Exited callback that can run after the stop
+            // has already seen the exit, making the reset abort as "still running".
+            var unitPath = Path.Combine(_dir.Path, "netclaw.service");
+            File.WriteAllText(unitPath, "[Service]\nExecStart=/opt/netclaw/netclawd\n");
+            var runner = new RecordingCommandRunner(daemon.Id);
+            var systemd = new SystemdUserService(unitPath, runner, enabledOnThisPlatform: true, homePath: _paths.BasePath,
+                environReader: _ => null);
+            using var vm = new InitExistingInstallViewModel(
+                _paths, _nav, new DaemonManager(_paths, TimeProvider.System), systemd, _time);
+
+            StartFullReset(vm);
+            await CompleteResetAsync(vm);
+            await runner.StopSeen.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            if (!daemon.HasExited)
+                daemon.Kill();
+        }
+    }
+
+    public static bool IsLinux => OperatingSystem.IsLinux();
+
+    private sealed class RecordingCommandRunner(int mainPid) : ISystemCommandRunner
+    {
+        private readonly TaskCompletionSource _stopSeen = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task StopSeen => _stopSeen.Task;
+
+        public Task<SystemCommandResult> RunAsync(string command, string arguments)
+        {
+            if (arguments.Contains("--user stop netclaw.service", StringComparison.Ordinal))
+                _stopSeen.TrySetResult();
+
+            return Task.FromResult(arguments.Contains("show", StringComparison.Ordinal)
+                ? new SystemCommandResult(0, string.Empty, StandardOutput: $"MainPID={mainPid}\nEnvironment=\n")
+                : new SystemCommandResult(0, string.Empty, StandardOutput: "active\n"));
+        }
+    }
+
     private static void StartFullReset(InitExistingInstallViewModel vm)
     {
         Select(vm, 2); // Start over
@@ -411,7 +541,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         // advance-before-registration lost wakeup this helper used to hit on loaded CI runners.
         await WaitForProgressAsync(vm, 3);
         _time.Advance(InitExistingInstallViewModel.CompletionPause);
-        await vm.ResetTask!.WaitAsync(TestContext.Current.CancellationToken);
+        await vm.ResetTask!.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
     }
 
     private static async Task WaitForProgressAsync(InitExistingInstallViewModel vm, int expectedStep)
@@ -431,7 +561,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         if (Matches())
             return;
 
-        await tcs.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
     }
 
     private static async Task WaitForProgressMessageAsync(InitExistingInstallViewModel vm, string prefix)
@@ -451,7 +581,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         if (Matches())
             return;
 
-        await tcs.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
     }
 
     private static async Task WaitForStatusMessageAsync(InitExistingInstallViewModel vm, string prefix)
@@ -471,7 +601,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         if (Matches())
             return;
 
-        await tcs.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
     }
 
     private static void SetNavigate(ReactiveViewModel vm, Action<string> navigate)

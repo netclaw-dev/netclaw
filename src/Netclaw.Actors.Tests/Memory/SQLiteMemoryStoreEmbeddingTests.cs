@@ -17,7 +17,7 @@ namespace Netclaw.Actors.Tests.Memory;
 /// </summary>
 public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
 {
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-sqlite-embedding-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-sqlite-embedding-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 
@@ -99,7 +99,24 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
         var updated = await _store.ReplaceDocumentTextAsync(
             "doc-1", "Second body", TestContext.Current.CancellationToken);
 
-        Assert.True(updated);
+        Assert.NotNull(updated);
+        Assert.Empty(await _store.GetEmbeddingsForModelAsync("model-a", TestContext.Current.CancellationToken));
+        Assert.True(_store.EmbeddingDataVersion > versionBeforeUpdate);
+    }
+
+    [Fact]
+    public async Task UpdateDocumentTextAsync_removes_the_stale_embedding()
+    {
+        await SeedDocumentAsync("doc-1", "Title", "First body");
+        await _store.UpsertEmbeddingAsync(
+            "doc-1", "document", "model-a", MemoryContentHasher.ComputeHash("Title", "First body"),
+            new float[] { 1f }, TestContext.Current.CancellationToken);
+        var versionBeforeUpdate = _store.EmbeddingDataVersion;
+
+        var updated = await _store.UpdateDocumentTextAsync(
+            "doc-1", "First", "Second", TestContext.Current.CancellationToken);
+
+        Assert.Equal(new MemoryDocumentWriteResult("doc-1", "Title", "Second body"), updated);
         Assert.Empty(await _store.GetEmbeddingsForModelAsync("model-a", TestContext.Current.CancellationToken));
         Assert.True(_store.EmbeddingDataVersion > versionBeforeUpdate);
     }

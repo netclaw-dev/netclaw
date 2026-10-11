@@ -16,7 +16,7 @@ namespace Netclaw.Actors.Reminders;
 /// LLM tool for listing reminder definitions.
 /// </summary>
 [NetclawTool("list_reminders",
-    "List reminder definitions with IDs, schedules, status, and next fire times.",
+    "List reminders (scheduled, recurring, and cron jobs) with IDs, schedules, status, and next fire times.",
     Grant = "scheduling")]
 public sealed partial class ListRemindersTool : NetclawTool<ListRemindersTool.Params>
 {
@@ -41,7 +41,11 @@ public sealed partial class ListRemindersTool : NetclawTool<ListRemindersTool.Pa
         var includeDisabled = string.Equals(args.Filter, "all", StringComparison.OrdinalIgnoreCase);
 
         var response = await _reminderManager.Ask<ReminderListResponse>(
-            new ListRemindersCommand(includeDisabled), TimeSpan.FromSeconds(10), ct);
+            new ListRemindersCommand(
+                new ReminderAudienceAuthorizationContext(context.Audience, context.SessionId ?? context.ChannelType),
+                includeDisabled),
+            TimeSpan.FromSeconds(10),
+            ct);
 
         if (response.Reminders.Count == 0)
             return includeDisabled ? "No reminders found." : "No active reminders.";
@@ -56,7 +60,7 @@ public sealed partial class ListRemindersTool : NetclawTool<ListRemindersTool.Pa
 
             sb.AppendLine($"  ID: {r.Id.Value}");
             sb.AppendLine($"  Title: {r.Title}");
-            sb.AppendLine($"  Status: {(r.Enabled ? "active" : "disabled")}");
+            sb.AppendLine($"  Status: {r.TerminalOutcome?.ToString().ToLowerInvariant() ?? (r.Enabled ? "active" : "disabled")}");
             sb.AppendLine($"  Schedule: {scheduleDesc}");
             if (r.NextFire is not null)
                 sb.AppendLine($"  Next fire: {SetReminderTool.FormatTimestamp(r.NextFire)}");

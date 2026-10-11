@@ -8,20 +8,25 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Reminders;
 
-public sealed class ReminderDefinitionStoreTests : IDisposable
+public sealed class ReminderDefinitionStoreTests : IAsyncLifetime
 {
-    private readonly string _basePath = Path.Combine(Path.GetTempPath(), $"netclaw-reminder-store-tests-{Guid.NewGuid():N}");
+    private readonly TestSessionTempDirectory _tempDir =
+        TestSessionTempDirectory.Create(prefix: "netclaw-reminder-store-tests-", createDirectoryTree: true);
     private readonly NetclawPaths _paths;
 
     public ReminderDefinitionStoreTests()
     {
-        _paths = new NetclawPaths(_basePath);
-        _paths.EnsureDirectoriesExist();
+        _paths = _tempDir.Paths;
     }
+
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+    public ValueTask DisposeAsync() => _tempDir.DisposeAsync();
 
     [Fact]
     public void Constructor_prunes_invalid_json_and_records_dropped_definition()
@@ -293,11 +298,6 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
         Assert.False(store.Exists(new ReminderId(maliciousId)));
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_basePath))
-            Directory.Delete(_basePath, recursive: true);
-    }
 }
 
 /// <summary>

@@ -122,7 +122,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         _healthCheckStep.Navigate = route =>
         {
             if (navigationState is not null)
-                navigationState.InitialMessage = identityStep.BuildOnboardingTrigger(paths);
+                navigationState.StartOnboarding(identityStep.BuildOnboardingTrigger(paths));
             Navigate?.Invoke(route);
         };
 

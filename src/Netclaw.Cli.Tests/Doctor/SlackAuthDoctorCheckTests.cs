@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using System.Text.Json;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Doctor;
@@ -13,8 +14,12 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
 
-public sealed class SlackAuthDoctorCheckTests
+public sealed class SlackAuthDoctorCheckTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     [Fact]
     public async Task ReturnsPass_WhenSlackDisabled()
     {
@@ -147,9 +152,9 @@ public sealed class SlackAuthDoctorCheckTests
         Assert.Equal(0, probe.ProbeCallCount);
     }
 
-    private static (NetclawPaths paths, string basePath) CreateTempPaths()
+    private (NetclawPaths paths, string basePath) CreateTempPaths()
     {
-        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var basePath = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         var paths = new NetclawPaths(basePath);
         paths.EnsureDirectoriesExist();
         return (paths, basePath);

@@ -378,6 +378,20 @@ public sealed class DiscordApprovalPromptBuilderTests
         Assert.Contains("• `git status`", text);
     }
 
+    // A prompt with no candidate has the full command text as its one display
+    // verb. The request line shows that text, so the header does not repeat it.
+    [Fact]
+    public void V2_prompt_without_a_candidate_uses_a_short_header()
+    {
+        var request = V2Request("$cmd > out.txt", ["$cmd > out.txt"], "/home/user/repos/foo", MessyRow(), isMessy: true)
+            with { Patterns = [] };
+
+        var text = DiscordApprovalPromptBuilder.BuildTextPrompt(request);
+
+        Assert.Contains("Approve this command in /home/user/repos/foo?", text);
+        Assert.DoesNotContain("Approve $cmd", text);
+    }
+
     [Fact]
     public void V2_messy_command_emits_complex_command_hint()
     {
@@ -532,5 +546,28 @@ public sealed class DiscordApprovalPromptBuilderTests
 
         Assert.True(textPrompt.Length < 2001, $"Text prompt length {textPrompt.Length} exceeded Discord's 2000-char cap");
         Assert.True(buttonPromptText.Length < 2001, $"Button prompt length {buttonPromptText.Length} exceeded Discord's 2000-char cap");
+    }
+
+    // A candidate verb can be the full text of one command. The header and the
+    // verb list must bound it, or Discord rejects the message.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Long_heredoc_command_builds_a_postable_prompt(bool withSiblingVerbs)
+    {
+        var request = LongApprovalCommand.Request(withSiblingVerbs);
+
+        var textPrompt = DiscordApprovalPromptBuilder.BuildTextPrompt(request);
+        var (buttonPrompt, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+        var resolved = DiscordApprovalPromptBuilder.BuildResolvedPromptText(request, ApprovalOptionKeys.ApproveOnce, "U123");
+
+        Assert.All([textPrompt, buttonPrompt, resolved], message => Assert.InRange(message.Length, 1, 2000));
+        Assert.Equal(request.Options.Select(static o => o.Label), buttons.Select(static b => b.Label));
+        Assert.Contains("B) Deny", textPrompt, StringComparison.Ordinal);
+        Assert.Contains("You can also reply with `A`, `B`", buttonPrompt, StringComparison.Ordinal);
+        Assert.Contains(withSiblingVerbs ? "**Approve in /home/user/repos/skill-server?**" : "**Approve gh api repos/netclaw-dev", buttonPrompt, StringComparison.Ordinal);
+        Assert.Contains("characters hidden", buttonPrompt, StringComparison.Ordinal);
+        if (withSiblingVerbs)
+            Assert.Contains("• `git push`", buttonPrompt, StringComparison.Ordinal);
     }
 }

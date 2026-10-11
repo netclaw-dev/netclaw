@@ -87,8 +87,9 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Subagents | 3 | Delegates through `spawn_agent`, completes ambiguous work, preserves specialized guidance, and declares a different named project before shell inspection |
 | Coding Context | 1 | Repeatedly switches between isolated linked worktrees, alternates branch and one-of-four target files by run, and verifies Git grounding, wrong-file/worktree safety, and path-free child handoff |
 | Session Storage | 4 | Verifies managed temporary APIs, parent-child log handoff, and managed worktree creation |
-| Complex Task Execution | 5 | Multi-step tool chains complete successfully, incl. bounded tool output — given only the goal (no handling hints), the agent retrieves a deep line from oversized shell output and from a large file, which is only possible by coping with the bound the way AGENTS.md/skills/steer text direct |
+| Complex Task Execution | 6 | Multi-step tool chains complete successfully, incl. bounded tool output — given only the goal (no handling hints), the agent retrieves a deep line from oversized shell output and from a large file, which is only possible by coping with the bound the way AGENTS.md/skills/steer text direct; and in a session with no shell call, the agent reads the middle of an oversized skill through `tool_output_read` |
 | Multi-Turn Conversation | 7 | Session resume and speaker attribution recall |
+| Built-in Tools Before CLI | 10 | The agent uses a built-in tool, not a `netclaw` shell command, when a tool exists: three regression cases, five guards, and two controls that need the CLI |
 
 Each case defines multiple natural phrasings of the same intent. Each
 run picks a random variant, testing whether behavior is robust across
@@ -120,6 +121,57 @@ conflated by a single case:
 This means `memory_checkpoint_enqueue` is the case to watch for automatic memory
 formation regressions, while `memory_identity_preference_routing` and
 `memory_explicit_store` cover user-facing routing behavior.
+
+### Built-in Tools Before CLI Cases
+
+These cases cover one production failure. The owner asked about a recurring job.
+The agent searched for "list reminders", and the search did not return
+`list_reminders`. The agent then read the scheduling reference and ran
+`netclaw reminder list` through `shell_execute`. That call needs a shell
+approval; the built-in tool needs none.
+
+Each assertion reads tool calls from the `--json` envelope and does not read
+the response text. Some prompts name a step on purpose: two cases tell the agent to
+read the scheduling reference, and one tells it to search. No prompt names the
+correct tool.
+
+| Case | Kind | Required evidence |
+|------|------|-------------------|
+| `cli_preference_reminder_schedule` | Regression | Turn 1 reads the scheduling reference. Turn 2 is the owner's exact question: `list_reminders` runs and shows the seeded reminder. No turn runs a `netclaw` shell command. |
+| `cli_preference_reminder_after_reference` | Regression | One turn. The agent reads the scheduling reference, `list_reminders` runs, and no `netclaw` shell command runs. |
+| `cli_preference_reminder_search` | Regression | A `search_tools` result for "list reminders" lists `list_reminders`. The tool runs, and no `netclaw` shell command runs. |
+| `cli_guard_reminder_question` | Guard | The owner's exact question in a new session: `list_reminders` runs and shows the seeded reminder; no `netclaw` shell command. |
+| `cli_guard_reminder_cancel` | Guard | `cancel_reminder` runs with the target ID; no `netclaw` shell command. |
+| `cli_guard_reminder_history` | Guard | `get_reminder_history` runs; no `netclaw` shell command. |
+| `cli_guard_webhook_list` | Guard | `list_webhooks` runs; no `netclaw` shell command. |
+| `cli_guard_approvals_read` | Guard | A tool call reads `tool-approvals.json`; no `netclaw` shell command. |
+| `cli_control_reminder_delete` | Control | No built-in tool deletes a reminder. `netclaw reminder delete <id>` runs through the shell. |
+| `cli_control_daemon_status` | Control | No built-in tool reports daemon health. `netclaw status` or `netclaw doctor` runs through the shell. |
+
+A regression case fails on the code before the fix. A guard case passes before
+the fix and keeps the correct behavior. A control case needs the CLI, so
+guidance that only tells the agent to avoid the `netclaw` CLI fails it.
+
+A case setup writes each reminder definition file after the daemon starts, so
+other categories have no reminders. The reminder tools read the files for each
+call. The daemon gives a schedule entry only to a file that exists at startup,
+so a seeded reminder cannot fire during a run.
+
+The `eval_workspace` MCP fixture adds 18 tools for every category. Their names
+share common words with the built-in tools, as a production catalog does. The
+search case needs them: without those tools, an unranked search still returns
+`list_reminders`.
+
+A shell command counts as a `netclaw` CLI call when `netclaw` is in the command
+position, with or without a path or an assignment prefix. A path such as
+`~/.netclaw/logs` does not count. A call behind `timeout 30` or `bash -c` is a
+known limit of the detector. `test_cli_detector_evals.py` holds the examples.
+
+Use a timeout of 240 seconds for this category. A case can need five model calls.
+
+```bash
+NETCLAW_EVAL_CATEGORY='Built-in Tools' NETCLAW_EVAL_TIMEOUT=240 ./evals/run-evals.sh
+```
 
 ### Tool Cycle Cases
 

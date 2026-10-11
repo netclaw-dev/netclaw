@@ -41,6 +41,27 @@ public sealed class DaemonCommandDispatchTests
     }
 
     [Theory]
+    [InlineData("daemon", "devices", "help")]
+    [InlineData("daemon", "devices", "--help")]
+    [InlineData("daemon", "devices", "list", "-h")]
+    [InlineData("daemon", "devices", "revoke", "--help")]
+    [InlineData("daemon", "devices", "revoke", "laptop", "-h")]
+    public void ShouldShowDevicesHelp_true_for_subcommand_help_and_trailing_flags(params string[] args)
+    {
+        Assert.True(DaemonCommandDispatch.ShouldShowDevicesHelp(args));
+    }
+
+    [Theory]
+    [InlineData("daemon", "devices")]
+    [InlineData("daemon", "devices", "list")]
+    [InlineData("daemon", "devices", "revoke", "laptop")]
+    [InlineData("daemon", "devices", "revoke", "help")]
+    public void ShouldShowDevicesHelp_false_when_a_device_is_called_help(params string[] args)
+    {
+        Assert.False(DaemonCommandDispatch.ShouldShowDevicesHelp(args));
+    }
+
+    [Theory]
     [InlineData("pair")]
     [InlineData("devices")]
     [InlineData("help")]

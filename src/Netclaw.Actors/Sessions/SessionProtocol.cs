@@ -25,6 +25,16 @@ namespace Netclaw.Actors.Sessions;
 /// </summary>
 public static partial class SessionProtocol
 {
+    /// <summary>
+    /// Identifies one input that the session journal accepted.
+    /// </summary>
+    public readonly record struct InputId(string Value)
+    {
+        public static InputId New() => new(Guid.NewGuid().ToString("N"));
+
+        public override string ToString() => Value;
+    }
+
     /// <summary>Marker for an imperative request received by the session actor.</summary>
     public interface ISessionCommand : IWithSessionId
     {

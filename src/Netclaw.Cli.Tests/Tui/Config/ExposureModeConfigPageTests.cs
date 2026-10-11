@@ -82,11 +82,27 @@ public sealed class ExposureModeConfigPageTests : IDisposable
         Assert.Equal(["10.0.0.0/24"], vm.Step.TrustedProxies);
     }
 
+    [Fact]
+    public async Task ReverseProxyHost_TypedTextAppendsToTheSavedHost()
+    {
+        var (terminal, app, _) = CreateHeadlessApp(out var input);
+
+        input.EnqueueKey(ConsoleKey.Enter); // saved mode is Reverse Proxy
+        input.EnqueueString("ZZ");
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.True(terminal.Contains("10.0.0.5ZZ"),
+            $"Typed text must append to the saved host. Screen:\n{terminal}");
+    }
+
     private (VirtualTerminal Terminal, TerminaApplication App, ExposureModeConfigViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input)
         => HeadlessTerminaFixture.Create<ExposureModeConfigPage, ExposureModeConfigViewModel>(
             "/exposure",
-            () => new ExposureModeConfigPage(),
+            _ => new ExposureModeConfigPage(),
             () => new ExposureModeConfigViewModel(_paths),
             out input);
 }

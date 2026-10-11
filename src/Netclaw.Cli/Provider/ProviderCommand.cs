@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
+using Netclaw.Cli.Model;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.GitHubCopilot;
@@ -28,6 +29,10 @@ internal static class ProviderCommand
         registry ??= CreateDefaultRegistry();
         var writer = output ?? Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "help";
+
+        // Each subcommand takes operands, so a help flag after it would be read as a name.
+        if (CliArgsParser.HasTrailingHelpToken(args, startIndex: 2, includeBareHelp: false))
+            return Task.FromResult(WriteHelp(registry, writer));
 
         return subcommand switch
         {
@@ -448,40 +453,39 @@ internal static class ProviderCommand
 
         var name = args[2];
 
-        // Check if any model roles reference this provider
-        var referencingRoles = GetReferencingModelRoles(name, paths);
-        if (referencingRoles.Count > 0)
+        var (config, secrets) = ConfigFileHelper.LoadConfigFiles(paths);
+        var providers = ConfigFileHelper.GetSectionOrNull(config, "Providers");
+        var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
+        if (providers?.ContainsKey(name) != true && secretProviders?.ContainsKey(name) != true)
         {
-            writer.WriteLine($"Error: Cannot remove provider '{name}' — referenced by model role(s): {string.Join(", ", referencingRoles)}");
+            writer.WriteLine($"Provider '{name}' not found.");
+            return 1;
+        }
+
+        // Check if any model roles reference this provider
+        if (!TryGetReferencingModelRoleEntries(name, paths, out var referencing, out var modelsError))
+        {
+            writer.WriteLine($"Error: Cannot remove provider '{name}': the Models section in netclaw.json cannot be resolved ({modelsError})");
+            writer.WriteLine("Fix the Models section first. If the Main role is the problem (missing, or pointing at an unknown definition),");
+            writer.WriteLine("`netclaw model set main <provider> <model-id>` repairs it. Otherwise edit the Models section in netclaw.json by hand.");
+            return 1;
+        }
+
+        if (referencing.Count > 0)
+        {
+            writer.WriteLine($"Error: Cannot remove provider '{name}' — referenced by model role(s): {string.Join(", ", referencing.Select(e => e.Role))}");
             writer.WriteLine("Run `netclaw model set` to reassign these roles first, or `netclaw model clear` for optional roles.");
             return 1;
         }
 
-        var (config, secrets) = ConfigFileHelper.LoadConfigFiles(paths);
-
-        var removed = false;
-        var providers = ConfigFileHelper.GetSectionOrNull(config, "Providers");
         if (providers?.Remove(name) == true)
-        {
             ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
-            removed = true;
-        }
 
-        var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
         if (secretProviders?.Remove(name) == true)
-        {
             ConfigFileHelper.WriteSecretsFile(paths, secrets);
-            removed = true;
-        }
 
-        if (removed)
-        {
-            writer.WriteLine($"Removed provider '{name}'");
-            return 0;
-        }
-
-        writer.WriteLine($"Provider '{name}' not found.");
-        return 1;
+        writer.WriteLine($"Removed provider '{name}'");
+        return 0;
     }
 
     /// <summary>
@@ -553,7 +557,7 @@ internal static class ProviderCommand
                 if (prop.Value.TryGetProperty("OAuthTokenExpiry", out var tokenExpiry))
                 {
                     var expiryStr = ConfigFileHelper.DecryptIfEncrypted(paths, tokenExpiry.GetString());
-                    if (!string.IsNullOrWhiteSpace(expiryStr) && DateTimeOffset.TryParse(expiryStr, out var parsed))
+                    if (!string.IsNullOrWhiteSpace(expiryStr) && DateTimeOffset.TryParse(expiryStr, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed))
                         entry.OAuthTokenExpiry = parsed;
                 }
             }
@@ -566,41 +570,29 @@ internal static class ProviderCommand
     }
 
     /// <summary>
-    /// Check which model roles reference the given provider name.
+    /// Finds the model roles that reference the given provider, with each role's current
+    /// <c>ModelId</c> so callers can build a fully copy-pasteable <c>netclaw model set</c> command
+    /// in their guidance output. Returns false with the resolver's <paramref name="error"/> when the
+    /// Models section cannot be resolved: the guard must not guess that a provider is unused.
     /// </summary>
-    internal static List<string> GetReferencingModelRoles(string providerName, NetclawPaths paths)
-        => GetReferencingModelRoleEntries(providerName, paths).Select(e => e.Role).ToList();
-
-    /// <summary>
-    /// Like <see cref="GetReferencingModelRoles"/> but also returns each role's current
-    /// <c>ModelId</c> so callers can build a fully copy-pasteable
-    /// <c>netclaw model set</c> command in their guidance output.
-    /// </summary>
-    internal static List<(string Role, string ModelId)> GetReferencingModelRoleEntries(
-        string providerName, NetclawPaths paths)
+    internal static bool TryGetReferencingModelRoleEntries(
+        string providerName, NetclawPaths paths,
+        out List<(string Role, string ModelId)> entries, out string? error)
     {
-        var entries = new List<(string, string)>();
-        if (!File.Exists(paths.NetclawConfigPath))
-            return entries;
+        entries = [];
+        if (!ModelCommand.TryLoadModelSelection(paths, out var models, out error))
+            return false;
 
-        using var doc = JsonDocument.Parse(File.ReadAllText(paths.NetclawConfigPath));
-        if (!doc.RootElement.TryGetProperty("Models", out var models))
-            return entries;
+        if (models is null)
+            return true;
 
-        foreach (var roleName in new[] { "Main", "Fallback", "Compaction" })
+        foreach (var (roleName, role) in new[] { ("Main", models.Main), ("Fallback", models.Fallback), ("Compaction", models.Compaction) })
         {
-            if (models.TryGetProperty(roleName, out var role) &&
-                role.TryGetProperty("Provider", out var provider) &&
-                string.Equals(provider.GetString(), providerName, StringComparison.OrdinalIgnoreCase))
-            {
-                var modelId = role.TryGetProperty("ModelId", out var mid)
-                    ? mid.GetString() ?? "<model-id>"
-                    : "<model-id>";
-                entries.Add((roleName, modelId));
-            }
+            if (role is not null && string.Equals(role.Provider, providerName, StringComparison.OrdinalIgnoreCase))
+                entries.Add((roleName, string.IsNullOrEmpty(role.ModelId) ? "<model-id>" : role.ModelId));
         }
 
-        return entries;
+        return true;
     }
 
     private static void WriteProviderGuidance(IProviderDescriptor descriptor, TextWriter writer)

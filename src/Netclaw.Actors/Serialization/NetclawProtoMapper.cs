@@ -20,6 +20,9 @@ namespace Netclaw.Actors.Serialization;
 
 internal static class NetclawProtoMapper
 {
+    private const int NoAssignmentDigestWireKind = 1;
+    private const int ExactAssignmentDigestWireKind = 2;
+
     internal static IMessage ToProtoMessage(object obj) => obj switch
     {
         SessionId v => ToProto(v),
@@ -28,6 +31,8 @@ internal static class NetclawProtoMapper
         SerializableMediaReference v => ToProto(v),
         SerializableToolCall v => ToProto(v),
         TurnRecorded v => ToProto(v),
+        InputAdmitted v => ToProto(v),
+        InputClosed v => ToProto(v),
         SessionTitleSet v => ToProto(v),
         SessionCompacted v => ToProto(v),
         ToolBatchStarted v => ToProto(v),
@@ -166,6 +171,7 @@ internal static class NetclawProtoMapper
             proto.SourceReminderId = reminderId.Value;
         if (evt.SourceBackgroundJobId is { } backgroundJobId)
             proto.SourceBackgroundJobId = backgroundJobId.Value;
+        proto.ConsumedInputIds.AddRange(evt.ConsumedInputIds.Select(static id => id.Value));
         return proto;
     }
 
@@ -176,7 +182,56 @@ internal static class NetclawProtoMapper
         AssistantReply = FromProto(proto.AssistantReply),
         RecordedAtMs = proto.RecordedAtMs,
         SourceReminderId = proto.HasSourceReminderId ? new ReminderId(proto.SourceReminderId) : (ReminderId?)null,
-        SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : (BackgroundJobId?)null
+        SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : (BackgroundJobId?)null,
+        ConsumedInputIds = proto.ConsumedInputIds.Select(static id => new InputId(id)).ToArray()
+    };
+
+    internal static Proto.InputAdmittedProto ToProto(InputAdmitted evt)
+    {
+        var proto = new Proto.InputAdmittedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            InputId = evt.InputId.Value,
+            UserMessage = ToProto(evt.UserMessage),
+            AdmittedAtMs = evt.AdmittedAtMs
+        };
+        if (evt.SourceMessageId is not null)
+            proto.SourceMessageId = evt.SourceMessageId;
+        if (evt.ExecutableText is not null)
+            proto.ExecutableText = evt.ExecutableText;
+        proto.TurnContext = ToProto(evt.TurnContext);
+        return proto;
+    }
+
+    internal static InputAdmitted FromProto(Proto.InputAdmittedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        InputId = new InputId(proto.InputId),
+        SourceMessageId = proto.HasSourceMessageId ? proto.SourceMessageId : null,
+        UserMessage = FromProto(proto.UserMessage),
+        ExecutableText = proto.HasExecutableText ? proto.ExecutableText : null,
+        TurnContext = proto.TurnContext is null
+            ? throw new InvalidDataException("An admitted input has no turn context.")
+            : FromProto(proto.TurnContext),
+        AdmittedAtMs = proto.AdmittedAtMs
+    };
+
+    internal static Proto.InputClosedProto ToProto(InputClosed evt)
+    {
+        var proto = new Proto.InputClosedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            ClosedAtMs = evt.ClosedAtMs
+        };
+        proto.InputIds.AddRange(evt.InputIds.Select(static id => id.Value));
+        return proto;
+    }
+
+    internal static InputClosed FromProto(Proto.InputClosedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        InputIds = proto.InputIds.Select(static id => new InputId(id)).ToArray(),
+        ClosedAtMs = proto.ClosedAtMs
     };
 
     // ── SessionTitleSet ──
@@ -224,20 +279,26 @@ internal static class NetclawProtoMapper
 
     // ── Tool batch / approval events ──
 
-    internal static Proto.ToolBatchStartedProto ToProto(ToolBatchStarted evt) => new()
+    internal static Proto.ToolBatchStartedProto ToProto(ToolBatchStarted evt)
     {
-        SessionId = ToProto(evt.SessionId),
-        UserMessage = ToProto(evt.UserMessage),
-        AssistantMessage = ToProto(evt.AssistantMessage),
-        StartedAtMs = evt.StartedAtMs
-    };
+        var proto = new Proto.ToolBatchStartedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            UserMessage = ToProto(evt.UserMessage),
+            AssistantMessage = ToProto(evt.AssistantMessage),
+            StartedAtMs = evt.StartedAtMs
+        };
+        proto.ConsumedInputIds.AddRange(evt.ConsumedInputIds.Select(static id => id.Value));
+        return proto;
+    }
 
     internal static ToolBatchStarted FromProto(Proto.ToolBatchStartedProto proto) => new()
     {
         SessionId = FromProto(proto.SessionId),
         UserMessage = FromProto(proto.UserMessage),
         AssistantMessage = FromProto(proto.AssistantMessage),
-        StartedAtMs = proto.StartedAtMs
+        StartedAtMs = proto.StartedAtMs,
+        ConsumedInputIds = proto.ConsumedInputIds.Select(static id => new InputId(id)).ToArray()
     };
 
     internal static Proto.ToolCallRecordedProto ToProto(ToolCallRecorded evt) => new()
@@ -389,7 +450,10 @@ internal static class NetclawProtoMapper
     {
         var proto = new Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto
         {
-            Verb = c.Verb
+            Verb = c.Verb,
+            AssignmentConstraintKind = c.AssignmentDigest is null
+                ? NoAssignmentDigestWireKind
+                : ExactAssignmentDigestWireKind,
         };
         if (c.Directory is not null)
             proto.Directory = c.Directory;
@@ -397,6 +461,8 @@ internal static class NetclawProtoMapper
             proto.VerbTokens.AddRange(c.VerbTokens);
         if (c.Shell is not null)
             proto.Shell = (int)c.Shell.Value;
+        if (c.AssignmentDigest is { } digest)
+            proto.AssignmentDigest = digest.Value;
         return proto;
     }
 
@@ -404,6 +470,7 @@ internal static class NetclawProtoMapper
         Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto proto) =>
         new(proto.Verb, proto.HasDirectory ? proto.Directory : null)
         {
+            AssignmentDigest = FromApprovalAssignmentDigestProto(proto),
             VerbTokens = proto.VerbTokens.Count == 0
                 ? null
                 : Array.AsReadOnly(proto.VerbTokens.ToArray()),
@@ -411,6 +478,37 @@ internal static class NetclawProtoMapper
                 ? (ApprovalShell)proto.Shell
                 : null,
         };
+
+    private static ApprovalAssignmentDigest? FromApprovalAssignmentDigestProto(
+        Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto proto)
+    {
+        if (!proto.HasAssignmentConstraintKind && !proto.HasAssignmentDigest)
+            return null;
+
+        if (!proto.HasAssignmentConstraintKind)
+        {
+            throw new InvalidOperationException(
+                "The approval assignment constraint has an invalid wire form.");
+        }
+
+        try
+        {
+            return proto.AssignmentConstraintKind switch
+            {
+                NoAssignmentDigestWireKind when !proto.HasAssignmentDigest => null,
+                ExactAssignmentDigestWireKind when proto.HasAssignmentDigest =>
+                    new ApprovalAssignmentDigest(proto.AssignmentDigest),
+                _ => throw new InvalidOperationException(
+                    "The approval assignment constraint has an invalid wire form."),
+            };
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidOperationException(
+                "The approval assignment constraint has an invalid wire form.",
+                ex);
+        }
+    }
 
     private static Proto.ToolApprovalRequestedProto.Types.TurnContextRecordProto ToProto(TurnContextRecord record)
     {
@@ -513,6 +611,8 @@ internal static class NetclawProtoMapper
         proto.History.AddRange(snap.History.Select(ToProto));
         proto.ActiveBackgroundJobs.AddRange(snap.ActiveBackgroundJobs.Select(ToProto));
         proto.AdoptedContextRecords.AddRange(snap.AdoptedContextRecords.Select(ToAdoptedContextSnapshotRecord));
+        proto.PendingInputs.AddRange(snap.PendingInputs.Select(ToProto));
+        proto.RecentSourceMessageKeys.AddRange(snap.RecentSourceMessageKeys);
         return proto;
     }
 
@@ -526,7 +626,9 @@ internal static class NetclawProtoMapper
         WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
         History = proto.History.Select(FromProto).ToArray(),
         ActiveBackgroundJobs = proto.ActiveBackgroundJobs.Select(FromProto).ToArray(),
-        AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray()
+        AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray(),
+        PendingInputs = proto.PendingInputs.Select(FromProto).ToArray(),
+        RecentSourceMessageKeys = proto.RecentSourceMessageKeys.ToArray()
     };
 
     private static Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord ToAdoptedContextSnapshotRecord(

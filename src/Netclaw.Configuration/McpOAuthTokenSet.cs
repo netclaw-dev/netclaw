@@ -10,6 +10,9 @@ namespace Netclaw.Configuration;
 /// </summary>
 public sealed class McpOAuthTokenSet
 {
+    /// <summary>Name of the secrets.json section that holds one token set per MCP server name.</summary>
+    public const string SecretsSectionKey = "McpOAuthTokens";
+
     /// <summary>The current access token.</summary>
     [ConfigValue(Key = "AccessToken", PersistTo = ConfigPersistStore.McpOAuthTokens)]
     public SensitiveString AccessToken { get; set; } = null!;

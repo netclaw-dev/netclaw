@@ -493,7 +493,8 @@ internal sealed class FakeToolExecutor : IToolExecutor
         result = Netclaw.Security.SecretOutputRedactor.Redact(result);
         var budget = context.MaxInlineToolResultChars;
         return await Netclaw.Actors.Tools.ToolOutputSpill.BoundAndSpillAsync(
-            result, toolCall.CallId, budget, context.Invocation, ct);
+            result, toolCall.CallId, budget, context.Invocation,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, ct);
     }
 }
 

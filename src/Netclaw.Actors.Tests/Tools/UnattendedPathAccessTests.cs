@@ -14,11 +14,10 @@ using Xunit;
 namespace Netclaw.Actors.Tests.Tools;
 
 /// <summary>
-/// Unattended sessions are confined to trusted roots even
-/// under the Personal audience (whose <c>Mode.All</c> would otherwise grant blanket
-/// access). The decision lives in <see cref="PathAccessPolicy"/>, so it covers
-/// shell and structured file tools alike. Interactive Personal sessions retain
-/// their broader filesystem reach because the live approval gate is available.
+/// Decision D2: an unattended session gets the same file reach as an attended
+/// session of the same audience. The decision lives in <see cref="PathAccessPolicy"/>,
+/// so it covers shell and structured file tools alike. A bounded (Roots)
+/// profile confines both kinds of session in the same way.
 /// </summary>
 public sealed class UnattendedPathAccessTests : IDisposable
 {
@@ -57,32 +56,31 @@ public sealed class UnattendedPathAccessTests : IDisposable
                 ChannelType = autonomous ? "reminder" : "signalr"
             }).Invocation;
 
-    [Fact]
-    public void Unattended_personal_write_outside_trusted_roots_is_denied()
+    public static TheoryData<string, bool> ReachCases() => new()
     {
-        var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
-        var ctx = Ctx(TrustAudience.Personal, autonomous: true);
+        { "outside/loot.txt", true },
+        { "outside/id_rsa", false },
+        { "identity/SOUL.md", true },
+        { "skills/netclaw-operations/SKILL.md", true },
+        { "workspaces/state.json", true },
+        { "config/secrets.json", false },
+        { "config/secrets.json", true },
+    };
 
-        var outside = Path.Combine(_outsideDir, "loot.txt");
-
-        AssertDenied(
-            policy.Evaluate(outside, ctx, PathAccessPolicy.FileOperation.Write),
-            Path.GetFullPath(outside));
-    }
-
-    [Fact]
-    public void Unattended_personal_read_outside_trusted_roots_is_denied()
+    [Theory]
+    [MemberData(nameof(ReachCases))]
+    public void Unattended_personal_reach_equals_attended_reach(string relativePath, bool write)
     {
-        // The file_read vector: confining only shell would let an injection read
-        // arbitrary files via file_read instead. The shared seam closes both.
-        var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
-        var ctx = Ctx(TrustAudience.Personal, autonomous: true);
+        var operation = write ? PathAccessPolicy.FileOperation.Write : PathAccessPolicy.FileOperation.Read;
+        var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([_paths.ConfigDirectory]));
+        var path = Path.GetFullPath(Path.Join(_dir.Path, relativePath));
 
-        var outside = Path.Combine(_outsideDir, "id_rsa");
+        var attended = policy.Evaluate(path, Ctx(TrustAudience.Personal, autonomous: false), operation);
+        var unattended = policy.Evaluate(path, Ctx(TrustAudience.Personal, autonomous: true), operation);
 
-        AssertDenied(
-            policy.Evaluate(outside, ctx, PathAccessPolicy.FileOperation.Read),
-            Path.GetFullPath(outside));
+        Assert.Equal(attended.GetType(), unattended.GetType());
+        if (relativePath.StartsWith("config/", StringComparison.Ordinal))
+            Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(unattended);
     }
 
     [Fact]
@@ -117,30 +115,6 @@ public sealed class UnattendedPathAccessTests : IDisposable
     }
 
     [Fact]
-    public void Unavailable_interactive_capability_enforces_unattended_path_policy()
-    {
-        var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
-        var ctx = TestToolExecutionContext.CreateBound(
-            "legacy/s1",
-            _sessionDir,
-            new TestToolExecutionContextOptions
-            {
-                Audience = TrustAudience.Personal,
-                InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
-                ProjectDirectory = _projectDir,
-            });
-
-        var outside = Path.Join(_outsideDir, "legacy.txt");
-        var decision = policy.Evaluate(
-            outside,
-            ctx.Invocation,
-            PathAccessPolicy.FileOperation.Write);
-
-        AssertDenied(decision, Path.GetFullPath(outside));
-        Assert.Contains("unattended session", Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error);
-    }
-
-    [Fact]
     public void Unattended_path_policy_does_not_widen_public_access()
     {
         // Public is Mode.Roots (session-scoped) — it never reaches the Mode.All
@@ -156,41 +130,6 @@ public sealed class UnattendedPathAccessTests : IDisposable
         AssertDenied(
             policy.Evaluate(projectFile, ctx, PathAccessPolicy.FileOperation.Read),
             Path.GetFullPath(projectFile));
-    }
-
-    [Fact]
-    public void Unattended_personal_can_write_workspaces_but_not_identity_or_skills()
-    {
-        // The workspace is the operator's designated writable working area, so an
-        // autonomous session may persist cross-run state there (e.g. a dedup file).
-        // Skills and identity are system-managed: readable via the global read
-        // roots, but never writable by an autonomous session — it must not be able
-        // to rewrite its own identity or skills.
-        var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
-        var ctx = Ctx(TrustAudience.Personal, autonomous: true);
-
-        var workspaceFile = Path.Combine(_paths.WorkspacesDirectory, "gotowebinar-last-run.json");
-        var identityFile = Path.Combine(_paths.IdentityDirectory, "SOUL.md");
-        var skillFile = Path.Combine(_paths.SkillsDirectory, "netclaw-operations", "SKILL.md");
-
-        // Reads reach all three global read roots.
-        AssertAllowed(
-            policy.Evaluate(workspaceFile, ctx, PathAccessPolicy.FileOperation.Read),
-            workspaceFile);
-        AssertAllowed(
-            policy.Evaluate(identityFile, ctx, PathAccessPolicy.FileOperation.Read),
-            identityFile);
-
-        // Writes reach the workspace but NOT the system-managed identity/skills trees.
-        AssertAllowed(
-            policy.Evaluate(workspaceFile, ctx, PathAccessPolicy.FileOperation.Write),
-            workspaceFile);
-        AssertDenied(
-            policy.Evaluate(identityFile, ctx, PathAccessPolicy.FileOperation.Write),
-            Path.GetFullPath(identityFile));
-        AssertDenied(
-            policy.Evaluate(skillFile, ctx, PathAccessPolicy.FileOperation.Write),
-            Path.GetFullPath(skillFile));
     }
 
     [Fact]
@@ -211,22 +150,6 @@ public sealed class UnattendedPathAccessTests : IDisposable
         AssertAllowed(
             policy.Evaluate(stateFile, ctx, PathAccessPolicy.FileOperation.Write),
             stateFile);
-    }
-
-    [Fact]
-    public void Unattended_personal_without_trusted_roots_fails_closed()
-    {
-        var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
-        var ctx = TestToolExecutionContext.CreateBound("reminder/none", null, new TestToolExecutionContextOptions
-        {
-            Audience = TrustAudience.Personal,
-            InteractiveApproval = new InteractiveApprovalCapability.Unavailable()
-        });
-
-        var outside = Path.Join(_outsideDir, "x.txt");
-        AssertDenied(
-            policy.Evaluate(outside, ctx.Invocation, PathAccessPolicy.FileOperation.Write),
-            Path.GetFullPath(outside));
     }
 
     [Fact]
@@ -381,7 +304,14 @@ public sealed class UnattendedPathAccessTests : IDisposable
     {
         var link = Path.Join(_projectDir, "escape");
         Directory.CreateSymbolicLink(link, _outsideDir);
-        var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
+        // A bounded profile confines attended and unattended sessions alike (D2).
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [_projectDir]
+        };
+        var policy = new PathAccessPolicy(config, _paths, new ToolPathPolicy([]));
         var context = Ctx(TrustAudience.Personal, autonomous: true);
 
         var requestedPath = Path.Join("escape", "secret.txt");
@@ -390,7 +320,7 @@ public sealed class UnattendedPathAccessTests : IDisposable
             context,
             PathAccessPolicy.FileOperation.Read);
 
-        AssertDenied(decision, null);
+        AssertDenied(decision, Path.GetFullPath(Path.Join(_projectDir, requestedPath)));
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses native POSIX link semantics.")]

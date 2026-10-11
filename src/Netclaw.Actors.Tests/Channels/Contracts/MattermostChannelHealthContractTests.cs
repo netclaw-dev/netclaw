@@ -25,6 +25,7 @@ public sealed class MattermostChannelHealthContractTests(ITestOutputHelper outpu
             Sys,
             new FailingSessionPipeline(new InvalidOperationException("not used")),
             new SessionIngressGate(),
+            TestChannelRegistries.MattermostWithProcessingRenderer(new RecordingMattermostReplyClient()),
             _gateway,
             new RecordingMattermostReplyClient(),
             new NullContentScanner(),

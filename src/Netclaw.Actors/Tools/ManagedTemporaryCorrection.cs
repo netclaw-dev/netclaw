@@ -5,7 +5,9 @@
 // -----------------------------------------------------------------------
 using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -22,11 +24,32 @@ internal abstract record ToolCorrection
     /// <summary>Suggests a native tool instead of invoking that tool name through the shell.</summary>
     internal sealed record NativeToolSuggested(ToolName ToolName) : ToolCorrection;
 
-    /// <summary>Suggests declaration of the shell directory as the current project.</summary>
-    internal sealed record ProjectDirectorySuggested(string Directory) : ToolCorrection;
-
     /// <summary>Suggests a one-call shell directory without changing the project declaration.</summary>
     internal sealed record ShellWorkingDirectorySuggested(string Directory) : ToolCorrection;
+
+    /// <summary>
+    /// Suggests a rewrite that gives the shell command known command words. A
+    /// grant can cover a call only by its command words, so the call does not run.
+    /// </summary>
+    internal sealed record ShellCommandWordsRewriteSuggested(
+        ShellCommandWordsRewrite Rewrite,
+        ApprovalShell Shell) : ToolCorrection;
+
+    /// <summary>
+    /// Suggests double quotes around each word that the shell can expand to
+    /// file names with a value that Netclaw cannot prove. The command words are
+    /// known, so a quoted word is one unknown operand that a grant for anywhere
+    /// can cover (decision D1). The call does not run.
+    /// </summary>
+    /// <param name="Words">The source text of each such word, in command order.</param>
+    internal sealed record ShellWordQuoteSuggested(IReadOnlyList<string> Words) : ToolCorrection;
+
+    /// <summary>
+    /// Asks for a shorter shell command. The approval prompt cannot show the
+    /// full command, so the operator could not see what they approve.
+    /// </summary>
+    /// <param name="Length">The length of the longest text that the prompt would show.</param>
+    internal sealed record ShellCommandTooLongToShow(int Length) : ToolCorrection;
 }
 
 /// <summary>Groups compatible correction facts for one tool attempt.</summary>
@@ -81,8 +104,10 @@ internal sealed record ToolCorrectionDelivery(
 
         return corrections.Items switch
         {
-            [ToolCorrection.ProjectDirectorySuggested project] => CreateProject(project.Directory),
             [ToolCorrection.ShellWorkingDirectorySuggested shell] => CreateShellDirectory(shell.Directory),
+            [ToolCorrection.ShellCommandWordsRewriteSuggested words] => CreateCommandWords(words),
+            [ToolCorrection.ShellWordQuoteSuggested quote] => CreateWordQuote(quote),
+            [ToolCorrection.ShellCommandTooLongToShow tooLong] => CreateShorterCommand(tooLong.Length),
             [ToolCorrection.NativeToolSuggested native] => CreateNative(native.ToolName, temporaryTarget: null),
             [ToolCorrection.ManagedTemporaryDirectorySuggested temporary] when managedTemporaryCall is not null
                 => CreateTemporary(temporary.Target, managedTemporaryCall),
@@ -96,14 +121,6 @@ internal sealed record ToolCorrectionDelivery(
         };
     }
 
-    private static ToolCorrectionDelivery CreateProject(string directory)
-        => new(
-            "Tool execution deferred: working_directory_not_declared\n" +
-            $"Project directory: '{directory}'.",
-            new ToolInvocationReceipt.Correction(ToolRemediationCode.SetWorkingDirectory),
-            NativeTool: null,
-            ManagedTemporaryStateChange: null);
-
     private static ToolCorrectionDelivery CreateShellDirectory(string directory)
         => new(
             "Tool execution deferred: use_shell_working_directory\n" +
@@ -111,6 +128,63 @@ internal sealed record ToolCorrectionDelivery(
             new ToolInvocationReceipt.Correction(ToolRemediationCode.UseShellWorkingDirectory),
             NativeTool: null,
             ManagedTemporaryStateChange: null);
+
+    private static ToolCorrectionDelivery CreateCommandWords(ToolCorrection.ShellCommandWordsRewriteSuggested words)
+        => new(
+            "Tool execution deferred: rewrite_shell_command_words\n" + DescribeRewrite(words),
+            new ToolInvocationReceipt.Correction(ToolRemediationCode.RewriteShellCommandWords),
+            NativeTool: null,
+            ManagedTemporaryStateChange: null);
+
+    private static ToolCorrectionDelivery CreateWordQuote(ToolCorrection.ShellWordQuoteSuggested quote)
+        => new(
+            "Tool execution deferred: rewrite_shell_command_words\n" + DescribeWordQuote(quote),
+            new ToolInvocationReceipt.Correction(ToolRemediationCode.RewriteShellCommandWords),
+            NativeTool: null,
+            ManagedTemporaryStateChange: null);
+
+    /// <summary>
+    /// Names each word and shows the word in double quotes. The example is
+    /// shown only when double quotes keep the meaning of every other part of
+    /// the word: a word with a quote, a backslash, a glob character, a brace,
+    /// or a tilde gets the advice without the example.
+    /// </summary>
+    internal static string DescribeWordQuote(ToolCorrection.ShellWordQuoteSuggested quote)
+    {
+        var lines = quote.Words.Select(static word =>
+            word.IndexOfAny(['"', '\'', '\\', '*', '?', '[', '{', '~']) < 0
+                ? $"The shell can expand the word {word} to file names, and Netclaw cannot prove its value. Put the word in double quotes: \"{word}\"."
+                : $"The shell can expand the word {word} to file names, and Netclaw cannot prove its value. Put each expansion in that word in double quotes.");
+        return string.Join('\n', lines)
+               + "\nA word in double quotes stays one word, and the shell does not expand it to file names. "
+               + "If the word must expand to file names, write each path literally.";
+    }
+
+    private static ToolCorrectionDelivery CreateShorterCommand(int length)
+        => new(
+            "Tool execution deferred: shorten_shell_command\n"
+            + $"This command is too long to show for approval ({length} characters, limit {ApprovalOptionKeys.MaxCommandTextChars}). "
+            + "Write long text (a body, a script, file contents) to a file, then pass the file to the command "
+            + "(for example `--body-file <file>` or `git commit -F <file>`). Then run the command again.",
+            new ToolInvocationReceipt.Correction(ToolRemediationCode.ShortenShellCommand),
+            NativeTool: null,
+            ManagedTemporaryStateChange: null);
+
+    internal static string DescribeRewrite(ToolCorrection.ShellCommandWordsRewriteSuggested words)
+        => (words.Rewrite, words.Shell) switch
+        {
+            (ShellCommandWordsRewrite.UsePathGlob, ApprovalShell.PowerShell) =>
+                "A bare wildcard pattern can expand to a command word. Quote the pattern, for example '*.cs', or use a path with a separator, for example ./*.cs.",
+            (ShellCommandWordsRewrite.UsePathGlob, _) =>
+                "A bare glob can expand to a command word. Use ./* (a path with /) instead of a bare glob, for example ./*.cs instead of *.cs.",
+            (ShellCommandWordsRewrite.WriteWordsLiterally, _) =>
+                "An expansion can change a command word. Write the command words literally.",
+            (ShellCommandWordsRewrite.RunCommandsSeparately, _) =>
+                "A brace list, word splitting, or an expansion can change the command words. Run each command separately, and write the command words literally.",
+            (ShellCommandWordsRewrite.WriteProgramPathInFull, _) =>
+                "A ~ in the program path is an expansion. Write the full path of the program, for example /home/user/bin/tool instead of ~/bin/tool.",
+            _ => throw new ArgumentOutOfRangeException(nameof(words), words.Rewrite, "Unknown command-word rewrite."),
+        };
 
     private static ToolCorrectionDelivery CreateNative(ToolName tool, ManagedTemporaryCorrectionTarget? temporaryTarget)
     {

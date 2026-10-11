@@ -16,7 +16,7 @@ namespace Netclaw.Actors.Tests.Memory;
 
 public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
 {
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-memory-redesigned-evals", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-memory-redesigned-evals-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly FakeTimeProvider _timeProvider;
     private readonly SQLiteMemoryStore _store;

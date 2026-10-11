@@ -280,6 +280,12 @@ When `netclaw init` runs on an existing install, it SHALL present an explicit
 action menu rather than silently re-entering the full bootstrap flow. Identity
 re-entry remains init-owned; all normal configuration edits route to
 `netclaw config`.
+Identity redo captures the daemon config generation before its save.
+An absent generation from a running daemon blocks the save with a visible error.
+An explicit guided chat choice waits for a healthy daemon.
+A daemon that already ran must report a newer generation.
+A daemon that was down must pass the existing start and health check.
+Skip and quit do not send the hidden chat input.
 
 ### CLI-008 Project Registration
 
@@ -314,7 +320,15 @@ builder.
 interactive TUI for agent conversations. The TUI SHALL:
 
 - Connect to the daemon's SignalR hub at `http://127.0.0.1:5199/hub/session`
-- Create a session via the hub and receive a session ID
+- Create a fresh session on the first input, including a hidden initial input
+- Attach a selected resume session when its page opens
+- Use one local client actor for connection, attachment, input order, and deadlines
+- Keep model calls, tool execution, and persistence in the daemon
+- Create no client actor system during offline bootstrap
+- Require explicit text admission support before each attachment permits text
+- Allow two seconds total for prior admission after normal quit starts
+- Report unsent text and unconfirmed delivery after the terminal UI closes
+- Avoid automatic replay after an uncertain request response
 - Send `ChannelInput` messages via SignalR
 - Subscribe to `SessionOutput` stream for rendering
 - Render session output as streaming text via StreamingTextNode

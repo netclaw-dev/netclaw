@@ -29,7 +29,7 @@ public sealed record ContextAssemblyInput(
     bool FileReadGranted,
     AutomaticRecallResult? ActiveRecall,
     string WorkingContextBlock,
-    TrustAudience Audience = TrustAudience.Personal,
+    TrustAudience Audience,
     string? SkillHint = null,
     // Maps canonical tool names (the form persisted in history) back
     // to the LLM-facing alias the model expects on the wire. Anthropic

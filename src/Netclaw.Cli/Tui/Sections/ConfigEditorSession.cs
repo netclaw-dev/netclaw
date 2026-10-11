@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Secrets;
@@ -45,6 +47,7 @@ internal sealed class ConfigEditorSession
     {
         _paths.EnsureDirectoriesExist();
         Config["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
+        EnsureLoads();
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, Config);
 
         if (_secretContributions.Count > 0)
@@ -60,19 +63,36 @@ internal sealed class ConfigEditorSession
         }
     }
 
+    // Validate after the version assignment, which can introduce a duplicate key.
+    private void EnsureLoads()
+    {
+        try
+        {
+            using var stream = new MemoryStream(JsonSerializer.SerializeToUtf8Bytes(Config, JsonDefaults.ConfigFile));
+            new ConfigurationBuilder().AddJsonStream(stream).Build();
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidDataException or JsonException)
+        {
+            throw new InvalidOperationException($"The new netclaw.json would not load: {ex.Message}");
+        }
+    }
+
     internal static bool ApplyFieldActions(Dictionary<string, object> config, SectionContribution contribution)
     {
         var changed = false;
         foreach (var action in contribution.FieldActionsOrEmpty)
         {
+            // The daemon reads keys without case: write into the spelling the file already has,
+            // or the file gets a second "Identity" beside "identity" and the daemon will not start.
+            var path = ConfigFileHelper.ResolveExistingKeyPath(config, action.Path);
             switch (action.Action)
             {
                 case SectionFieldActionKind.Set:
-                    ConfigFileHelper.SetPathValue(config, action.Path, action.Value);
+                    ConfigFileHelper.SetPathValue(config, path, action.Value);
                     changed = true;
                     break;
                 case SectionFieldActionKind.Delete:
-                    changed |= ConfigFileHelper.RemovePath(config, action.Path);
+                    changed |= ConfigFileHelper.RemovePath(config, path);
                     break;
             }
         }

@@ -30,6 +30,38 @@ public sealed class ProviderPluginFactory
             _plugins[plugin.TypeKey] = plugin;
     }
 
+    /// <summary>
+    /// Builds the client of every configured role once and drops it, so that what startup would
+    /// throw is found before startup: an unknown provider type, a missing credential, an endpoint
+    /// that is not a URL. Building a client makes no network call. Returns the error text, or null.
+    /// </summary>
+    public string? Validate(ModelSelection models)
+    {
+        foreach (var (role, model) in new[] { ("Main", models.Main), ("Fallback", models.Fallback), ("Compaction", models.Compaction) })
+        {
+            if (model is null || string.IsNullOrWhiteSpace(model.Provider))
+                continue;
+
+            try
+            {
+                (Create(model) as IDisposable)?.Dispose();
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or FormatException or ArgumentException)
+            {
+                // UriFormatException is a FormatException: its text does not say which key to fix.
+                var reason = ex is UriFormatException
+                    ? $"{ex.Message.TrimEnd('.')}. Set Providers:{model.Provider}:Endpoint to a URL."
+                    : ex.Message.TrimEnd();
+                if (!reason.EndsWith('.'))
+                    reason += ".";
+
+                return $"Invalid model configuration: model '{role}' uses provider '{model.Provider}', which cannot be used: {reason} Fix the Providers section of netclaw.json.";
+            }
+        }
+
+        return null;
+    }
+
     public IChatClient Create(ModelReference model)
     {
         if (!_providers.TryGetValue(model.Provider, out var provider))

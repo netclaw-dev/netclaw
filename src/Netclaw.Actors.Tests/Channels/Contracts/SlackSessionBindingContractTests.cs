@@ -22,10 +22,11 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.Tests.Channels.Contracts;
 
 public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
-    : SessionBindingContractTests(output)
+    : SessionBindingContractTests(output), IAsyncDisposable
 {
     private RecordingSlackReplyClient _replyClient = new();
     private int _actorCounter;
+    private readonly List<Netclaw.Tests.Utilities.TestSessionTempDirectory> _testTempDirs = [];
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
@@ -147,7 +148,9 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         IThreadHistoryFetcher? historyFetcher = null,
         IChannelRegistry? channelRegistry = null)
     {
-        var paths = TestSlackGatewayDeps.NewTestPaths();
+        var testTemp = TestSlackGatewayDeps.NewTestPaths();
+        _testTempDirs.Add(testTemp);
+        var paths = testTemp.Paths;
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
             IngressGate: null,
@@ -676,4 +679,20 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         }
     }
 
+    // TestKit stops the actor system only after AfterAllAsync returns, and it fails
+    // the test when AfterAllAsync takes more than 5 seconds. Delete the directories
+    // after TestKit has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        try
+        {
+            await base.DisposeAsync();
+        }
+        finally
+        {
+            foreach (var dir in _testTempDirs)
+                await dir.DisposeAsync();
+            _testTempDirs.Clear();
+        }
+    }
 }

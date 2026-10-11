@@ -138,7 +138,7 @@ public sealed class SessionRegistry
                         "Attaching connection {ConnectionId} to existing session {SessionId}.",
                         callerConnectionId.Value, requestedSessionId.Value);
 
-                    return new SessionEnsureResultDto(requestedSessionId.Value, Created: false);
+                    return new SessionEnsureResultDto(requestedSessionId.Value, Created: false) { TextAdmissionVersion = SessionEnsureResultDto.SupportedTextAdmissionVersion };
                 }
 
                 // Session ID provided but unknown — create a fresh session binding
@@ -148,11 +148,11 @@ public sealed class SessionRegistry
                 var gw2 = await _gatewayProvider.GetAsync();
                 gw2.Tell(new StartSignalRSession(requestedSessionId, ct, callerConnectionId));
 
-                return new SessionEnsureResultDto(requestedSessionId.Value, Created: false);
+                return new SessionEnsureResultDto(requestedSessionId.Value, Created: false) { TextAdmissionVersion = SessionEnsureResultDto.SupportedTextAdmissionVersion };
             }
 
             var createdSessionId = await CreateSessionCoreAsync(callerConnectionId, ct);
-            return new SessionEnsureResultDto(createdSessionId, Created: true);
+            return new SessionEnsureResultDto(createdSessionId, Created: true) { TextAdmissionVersion = SessionEnsureResultDto.SupportedTextAdmissionVersion };
         }
         finally
         {
@@ -240,7 +240,23 @@ public sealed class SessionRegistry
         };
 
         var gateway = await _gatewayProvider.GetAsync();
-        gateway.Tell(new EnqueueSignalRInput(attachedSessionId, input));
+        ISessionResponse response;
+        try
+        {
+            response = await gateway.Ask<ISessionResponse>(
+                (IActorRef replyTo) => new EnqueueSignalRInput(attachedSessionId, input with { AckTarget = replyTo }),
+                TimeSpan.FromSeconds(30), CancellationToken.None);
+        }
+        catch (AskTimeoutException)
+        {
+            // A lost acknowledgement does not prove that the journal rejected the input.
+            throw new HubException("Message admission is unconfirmed. Do not resend without checking the session.");
+        }
+
+        if (response is CommandNack rejected)
+            throw new HubException(SessionEnsureResultDto.TextRejectionPrefix + rejected.Reason);
+        if (response is not CommandAck)
+            throw new HubException("Message admission is unconfirmed. The daemon returned an invalid admission response.");
     }
 
     public async Task RespondToInteractionAsync(

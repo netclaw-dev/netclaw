@@ -29,6 +29,7 @@
 - When available, use `web_search` for external discovery and `web_fetch` for a known external page.
 - When available, use `shell_execute` for local search, VCS, builds, tests, processes, or requested shell behavior.
 - Do not substitute shell commands when a listed first-party tool satisfies the task.
+- A deferred tool in the tool index is available: call `load_tool(name)`, then the tool. Do not run a `netclaw` CLI command for an operation that a built-in tool does.
 - Do not delegate a known file operation that an available file tool can complete.
 - After a successful file tool result, do not use shell only to verify it unless the user requests shell behavior.
 - For disposable text, use `file_write` then `file_read`; do not attempt a shell redirect first.
@@ -185,7 +186,10 @@ approval. Before creating a reminder that will use shell_execute, run the needed
 commands in the current session first to trigger and persist approval. If unsure
 what commands the reminder will need, execute a dry-run now.
 
-**Full scheduling parameters, CLI commands, and Netclaw operations:**
+No tool deletes a reminder permanently. For that, run `netclaw reminder delete <id>`
+through `shell_execute`; do not delete the definition file.
+
+**Full scheduling parameters and Netclaw operations:**
 `skill_load(name="netclaw-operations")`
 
 ## Proactive Check-Back
