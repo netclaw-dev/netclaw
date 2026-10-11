@@ -55,7 +55,7 @@ public sealed class ToolRecurrenceMutationTests
     }
 
     [Fact]
-    public void A_corrected_episode_stops_after_unrelated_work_and_checkpoint_restore()
+    public void A_corrected_episode_stops_after_unrelated_work()
     {
         var tracker = new TurnStateTracker();
         var batch = Prepare("probe", 1);
@@ -63,9 +63,7 @@ public sealed class ToolRecurrenceMutationTests
         tracker.ObserveCompleted(Complete(batch, "same"));
         Assert.Equal(ToolCycleDecisionKind.Correct, tracker.EvaluateBeforeDispatch(batch).Kind);
         tracker.ObserveCompleted(Complete(Prepare("diagnostic", 1), "fresh"));
-        var restored = new TurnStateTracker();
-        restored.RestoreCheckpoint(tracker.CaptureCheckpoint("task"));
-        Assert.Equal(ToolCycleDecisionKind.Stop, restored.EvaluateBeforeDispatch(batch).Kind);
+        Assert.Equal(ToolCycleDecisionKind.Stop, tracker.EvaluateBeforeDispatch(batch).Kind);
     }
 
     [Fact]
@@ -89,7 +87,7 @@ public sealed class ToolRecurrenceMutationTests
                 call.ToolName.Value, call.ArgumentsHash, call.AllowsPendingJob)).ToArray()
         };
         var state = SessionState.Empty.ApplyLoopAdmission(new ToolBatchStarted
-        { LoopAdmission = admission, LoopDelta = new ToolLoopDelta { TaskId = "task", Reset = true } });
+        { LoopAdmission = admission });
         state = state.ApplyLoopObservation(new ToolCallRecorded
         {
             LoopObservation = new ToolLoopObservation
@@ -97,7 +95,6 @@ public sealed class ToolRecurrenceMutationTests
         });
         Assert.True(state.LoopReceiptFailure);
         Assert.Single(state.LoopObservations);
-        Assert.Empty(state.LoopCheckpoint.Entries);
     }
 
     private static PreparedToolCycleBatch Prepare(string tool, int duplicates)
@@ -105,13 +102,8 @@ public sealed class ToolRecurrenceMutationTests
             .Select(index => new FunctionCallContent($"call-{index}", tool, new Dictionary<string, object?>())).ToArray(), new Executor());
 
     private static CompletedToolCycleIteration Complete(PreparedToolCycleBatch batch, string exactResultHash, bool pending = false)
-        => ToolCycleSignatureFactory.CompleteEvidence(new ToolLoopAdmission
-        {
-            TaskId = "task", ActionHash = batch.Action.Value,
-            Calls = batch.Calls.Select(call => new ToolLoopPreparedCall(call.CallId.Value,
-                call.ToolName.Value, call.ArgumentsHash, call.AllowsPendingJob)).ToArray()
-        }, batch.Calls.Select(call => new ToolLoopObservation
-        { CallId = call.CallId.Value, Category = 0, ResultHash = exactResultHash, PendingJob = pending }).ToArray());
+        => ToolCycleSignatureFactory.Complete(batch, batch.Calls.ToDictionary(call => call.CallId.Value,
+            call => new ToolCycleResult(ToolInvocationOutcomeCategory.Success, exactResultHash) { PendingJob = pending }));
 
     private sealed class Executor : IToolExecutor
     {

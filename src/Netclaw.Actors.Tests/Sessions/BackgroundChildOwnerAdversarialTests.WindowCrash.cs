@@ -49,8 +49,7 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
             var accepted = Assert.Single((await ReadJournalAsync()).OfType<ChildRunAccepted>());
             var retained = Assert.IsType<ChildStartReply.Accepted>(await owner.Ask<ChildStartReply>(Retry(accepted), Ceiling,
                 TestContext.Current.CancellationToken));
-            Assert.Equal(2, Assert.Single(retained.Run.ParentCheckpoint.Entries,
-                entry => entry.ToolName == "neutral_probe").EqualRounds);
+            Assert.True(SessionState.SameCanonicalContext(accepted.Run.OriginalContext, retained.Run.OriginalContext));
             await EventFilter.Error(contains: "Failed to persist event type").ExpectOneAsync(async () =>
             {
                 _childRelease.TrySetResult();

@@ -7,7 +7,6 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Tools;
-using System.Text.Json;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -57,7 +56,7 @@ public sealed class ToolRecurrenceContractTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void Ten_thousand_checkpoint_sequences_preserve_outcome_changes_and_corrective_feedback()
+    public void Ten_thousand_live_sequences_preserve_outcome_changes_and_corrective_feedback()
     {
         const int sequences = 10_000;
         const int seed = 0x51_24_08;
@@ -84,21 +83,17 @@ public sealed class ToolRecurrenceContractTests(ITestOutputHelper output)
             tracker.ObserveCompleted(Complete(single, "new result"));
             tracker.ObserveCompleted(noise);
 
-            var restored = new TurnStateTracker();
-            restored.RestoreCheckpoint(tracker.CaptureCheckpoint("authorized-task"));
-            Require(restored.EvaluateBeforeDispatch(mixed).Kind == ToolCycleDecisionKind.Correct,
-                sequence, "A checkpoint must preserve established recurrence.");
-            var corrected = new TurnStateTracker();
-            corrected.RestoreCheckpoint(restored.CaptureCheckpoint("authorized-task"));
-            corrected.ObserveCompleted(noise);
-            Require(corrected.EvaluateBeforeDispatch(mixed).Kind == ToolCycleDecisionKind.Stop,
-                sequence, "A checkpoint must preserve unresolved corrective feedback.");
-            corrected.ResetForNewTurn();
-            Require(corrected.EvaluateBeforeDispatch(mixed).Kind == ToolCycleDecisionKind.Execute,
+            Require(tracker.EvaluateBeforeDispatch(mixed).Kind == ToolCycleDecisionKind.Correct,
+                sequence, "Live recurrence evidence must produce corrective feedback.");
+            tracker.ObserveCompleted(noise);
+            Require(tracker.EvaluateBeforeDispatch(mixed).Kind == ToolCycleDecisionKind.Stop,
+                sequence, "Unrelated work must not clear unresolved corrective feedback.");
+            tracker.ResetForNewTurn();
+            Require(tracker.EvaluateBeforeDispatch(mixed).Kind == ToolCycleDecisionKind.Execute,
                 sequence, "A fresh authorized task must reset its prior evidence.");
         }
 
-        output.WriteLine($"Executed {sequences} checkpoint sequences with seed {seed}.");
+        output.WriteLine($"Executed {sequences} live recurrence sequences with seed {seed}.");
     }
 
     [Fact]
@@ -118,9 +113,6 @@ public sealed class ToolRecurrenceContractTests(ITestOutputHelper output)
         for (var index = 257; index <= 600; index++)
             tracker.ObserveCompleted(Complete(Prepare("cold", index), "cold"));
         Assert.Equal(ToolCycleDecisionKind.Stop, tracker.EvaluateBeforeDispatch(pinned).Kind);
-        var checkpoint = tracker.CaptureCheckpoint("authorized-task");
-        Assert.Equal(256, checkpoint.ColdKeys.Count);
-        Assert.Contains(checkpoint.Entries, entry => entry.ToolName == "probe" && entry.Corrected);
     }
 
     [Fact]
@@ -139,50 +131,6 @@ public sealed class ToolRecurrenceContractTests(ITestOutputHelper output)
                 ["foreign"] = new(ToolInvocationOutcomeCategory.Success, "same")
             }));
         Assert.Equal(ToolCycleDecisionKind.Correct, tracker.EvaluateBeforeDispatch(batch).Kind);
-    }
-
-    [Theory]
-    [InlineData(false, 0)]
-    [InlineData(false, 4)]
-    [InlineData(false, 5)]
-    [InlineData(true, 0)]
-    public void Live_and_durable_evidence_produce_byte_identical_checkpoints_and_verdicts(bool pending, int category)
-    {
-        var batch = Prepare(pending ? "check_background_job" : "probe", 0, 3);
-        var receipt = pending ? new ToolInvocationReceipt.PendingBackgroundJob()
-            : Receipt((ToolInvocationOutcomeCategory)category);
-        var results = batch.Calls.ToDictionary(call => call.CallId.Value,
-            call => new ToolCycleResult(receipt.Category, call.CallId.Value == "call-2" ? "distinct result" : "equal result")
-                { PendingJob = pending });
-        var admission = new ToolLoopAdmission
-        {
-            TaskId = "authorized-task",
-            ActionHash = batch.Action.Value,
-            Calls = batch.Calls.Select(call => new ToolLoopPreparedCall(
-                call.CallId.Value, call.ToolName.Value, call.ArgumentsHash, call.AllowsPendingJob)).ToArray()
-        };
-        var observations = results.Select(pair => ToolCycleSignatureFactory.CreateObservation(
-            pair.Key, receipt, pair.Value.ModelVisibleText, synthetic: false)).Reverse().ToArray();
-        var actual = ToolCycleSignatureFactory.Complete(batch, results);
-        var replayed = ToolCycleSignatureFactory.CompleteEvidence(admission, observations);
-
-        Assert.Equal(actual.OutcomeValue, replayed.OutcomeValue);
-        Assert.Equal(actual.Groups.Select(group => group.Outcome), replayed.Groups.Select(group => group.Outcome));
-        var live = new TurnStateTracker();
-        var recovered = new TurnStateTracker();
-        for (var round = 0; round < 2; round++)
-        {
-            live.ObserveCompleted(actual);
-            recovered.ObserveCompleted(replayed);
-        }
-        Assert.Equal(JsonSerializer.SerializeToUtf8Bytes(live.CaptureCheckpoint("authorized-task")),
-            JsonSerializer.SerializeToUtf8Bytes(recovered.CaptureCheckpoint("authorized-task")));
-        Assert.Equal(pending ? ToolCycleDecisionKind.Execute : ToolCycleDecisionKind.Correct,
-            recovered.EvaluateBeforeDispatch(batch).Kind);
-        var restoredCorrection = new TurnStateTracker();
-        restoredCorrection.RestoreCheckpoint(recovered.CaptureCheckpoint("authorized-task"));
-        Assert.Equal(pending ? ToolCycleDecisionKind.Execute : ToolCycleDecisionKind.Stop,
-            restoredCorrection.EvaluateBeforeDispatch(batch).Kind);
     }
 
     [Theory]

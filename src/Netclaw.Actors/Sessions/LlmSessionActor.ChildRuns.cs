@@ -177,7 +177,6 @@ public sealed partial class LlmSessionActor
             AgentName = prepared.AgentName, ArgumentsDigest = prepared.ArgumentsDigest, SourceOperation = request.SourceOperation,
             OriginalContext = request.InvocationContext, OriginInputIds = _state.AdoptedTaskInputIds.ToArray(),
             InitialWorkingSnapshot = childScope.InitialWorkingSnapshot,
-            ParentCheckpoint = _state.LoopCheckpoint, ParentReceiptFailure = _state.LoopReceiptFailure,
             StartBatchSettled = request.StartKey is ChildRunStartKey.Slash, AcceptedAtMs = NowMs()
         };
         var evt = new ChildRunAccepted { SessionId = _sessionId, Run = accepted };
@@ -410,9 +409,7 @@ public sealed partial class LlmSessionActor
             return first.SourceChildRunId is null && next.SourceChildRunId is null;
         var firstRun = _state.GetChildContinuation(first);
         var nextRun = _state.GetChildContinuation(next);
-        return SessionState.SameCanonicalContext(firstRun.OriginalContext, nextRun.OriginalContext)
-            && BackgroundChildRun.SameCheckpoint(firstRun.ParentCheckpoint, nextRun.ParentCheckpoint)
-            && firstRun.ParentReceiptFailure == nextRun.ParentReceiptFailure;
+        return SessionState.SameCanonicalContext(firstRun.OriginalContext, nextRun.OriginalContext);
     }
 
     private void AppendAdmittedInput(InputAdmitted input)

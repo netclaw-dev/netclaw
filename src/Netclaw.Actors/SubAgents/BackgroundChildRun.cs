@@ -36,8 +36,6 @@ public sealed record BackgroundChildRun
     public required TurnContextRecord OriginalContext { get; init; }
     public required IReadOnlyList<InputId> OriginInputIds { get; init; }
     public required WorkingContextSnapshot InitialWorkingSnapshot { get; init; }
-    public required ToolLoopCheckpoint ParentCheckpoint { get; init; }
-    public bool ParentReceiptFailure { get; init; }
     public bool StartBatchSettled { get; init; }
     public long AcceptedAtMs { get; init; }
     public long? StartedAtMs { get; init; }
@@ -62,11 +60,6 @@ public sealed record BackgroundChildRun
         _ => BackgroundChildState.Accepted
     };
 
-    internal static bool SameCheckpoint(ToolLoopCheckpoint left, ToolLoopCheckpoint right)
-        => left.TaskId == right.TaskId && left.LastBlockedAction == right.LastBlockedAction
-           && left.Entries.SequenceEqual(right.Entries) && left.ColdKeys.SequenceEqual(right.ColdKeys)
-           && left.AdjacentHistory.SequenceEqual(right.AdjacentHistory);
-
     public void Validate()
     {
         if (!TurnContext.TryFromRecord(OriginalContext, out var context, out var reason) || context is null)
@@ -82,8 +75,6 @@ public sealed record BackgroundChildRun
         if (OriginInputIds.Count == 0 || OriginInputIds.Any(static id => string.IsNullOrWhiteSpace(id.Value))
             || OriginInputIds.Distinct().Count() != OriginInputIds.Count)
             throw new InvalidDataException("A child acceptance has invalid original input provenance.");
-        if (string.IsNullOrWhiteSpace(ParentCheckpoint.TaskId))
-            throw new InvalidDataException("A child acceptance has no parent detector task.");
         if (DispatchClosedAtMs is not null && CancellationRequestedAtMs is null
             || PreparedTerminal is not null && Terminal is null
             || DeliveryInputId is not null && PreparedTerminal is null)

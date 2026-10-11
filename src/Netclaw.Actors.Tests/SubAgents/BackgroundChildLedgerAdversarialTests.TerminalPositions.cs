@@ -32,8 +32,7 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
         var adoption = new ToolTaskAdopted(false)
         { SessionId = Owner, TurnContext = input.TurnContext, InputIds = [input.InputId] };
         var state = SessionState.Empty.Apply(input).Apply(adoption);
-        var run = prototype with
-        { OriginInputIds = [input.InputId], ParentCheckpoint = state.LoopCheckpoint, ParentReceiptFailure = false };
+        var run = prototype with { OriginInputIds = [input.InputId] };
         var accepted = new ChildRunAccepted { SessionId = Owner, Run = run };
         var started = new ChildRunEvent.Started { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123457 };
         var turn = new TurnRecorded
