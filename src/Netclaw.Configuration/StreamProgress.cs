@@ -5,7 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 
-namespace Netclaw.Actors.Sessions.Pipelines;
+namespace Netclaw.Configuration;
 
 /// <summary>
 /// Classifies streaming updates by whether they carry real model output. Shared by the

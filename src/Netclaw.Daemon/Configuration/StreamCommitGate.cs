@@ -4,7 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
-using Netclaw.Actors.Sessions.Pipelines;
+using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -46,6 +46,7 @@ internal sealed class StreamCommitGate
             return [update];
 
         _held.Add(update);
+        // Preserve liveness without exposing ids from an attempt that can still fail over.
         return [new ChatResponseUpdate()];
     }
 
