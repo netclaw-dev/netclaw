@@ -126,6 +126,34 @@ public sealed class MemoryCurationActorNominatorTests : TestKit
         }
     }
 
+    [Fact]
+    public async Task Curation_actor_requests_the_Main_model_role()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (store, _) = await CreateStoreAsync();
+
+        try
+        {
+            var clientProvider = new RoleRecordingClientProvider(new RecordingCurationChatClient("CREATE"));
+
+            Sys.ActorOf(
+                MemoryCurationActor.CreateProps(
+                    store, new SessionId("test-session"), new MemoryCurationConfig(),
+                    clientProvider),
+                "curation-role");
+
+            // ActorOf only enqueues creation; poll until the constructor has run and
+            // requested the role, rather than asserting on an unset value.
+            await AwaitAssertAsync(
+                () => Assert.Equal(ModelRole.Main, clientProvider.RequestedRole),
+                cancellationToken: ct);
+        }
+        finally
+        {
+            await CleanupAsync();
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private async Task<(SQLiteMemoryStore Store, string DbPath)> CreateStoreAsync()
@@ -164,6 +192,17 @@ public sealed class MemoryCurationActorNominatorTests : TestKit
     private sealed class SingleClientProvider(IChatClient client) : IChatClientProvider
     {
         public IChatClient GetClient(ModelRole role) => client;
+    }
+
+    private sealed class RoleRecordingClientProvider(IChatClient client) : IChatClientProvider
+    {
+        public ModelRole? RequestedRole { get; private set; }
+
+        public IChatClient GetClient(ModelRole role)
+        {
+            RequestedRole = role;
+            return client;
+        }
     }
 
     private sealed class ScriptedEmbedder(string modelId, int dimensions, float[] queryVector) : IMemoryEmbedder
