@@ -110,13 +110,13 @@ public sealed class MagicByteValidatorTests
     // ── OOXML / OLE / ODF documents ───────────────────────────────────────
 
     [Theory]
-    [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "report.docx")]
-    [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "budget.xlsx")]
-    [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.presentationml.presentation", "slides.pptx")]
-    [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.presentationml.template", "master.potx")]
-    [InlineData(nameof(ZipHeader), "application/vnd.oasis.opendocument.text", "notes.odt")]
-    [InlineData(nameof(OleHeader), "application/msword", "legacy.doc")]
-    [InlineData(nameof(OleHeader), "application/vnd.ms-excel", "legacy.xls")]
+    [InlineData(nameof(ZipHeader), MimeTypeCatalog.ApplicationDocx, "report.docx")]
+    [InlineData(nameof(ZipHeader), MimeTypeCatalog.ApplicationXlsx, "budget.xlsx")]
+    [InlineData(nameof(ZipHeader), MimeTypeCatalog.ApplicationPptx, "slides.pptx")]
+    [InlineData(nameof(ZipHeader), MimeTypeCatalog.ApplicationPotx, "master.potx")]
+    [InlineData(nameof(ZipHeader), MimeTypeCatalog.ApplicationOdt, "notes.odt")]
+    [InlineData(nameof(OleHeader), MimeTypeCatalog.ApplicationMsword, "legacy.doc")]
+    [InlineData(nameof(OleHeader), MimeTypeCatalog.ApplicationMsExcel, "legacy.xls")]
     public void Validate_DocumentWithMatchingMagic_Allowed(string headerField, string mime, string filename)
     {
         var header = ResolveHeader(headerField);
@@ -129,7 +129,7 @@ public sealed class MagicByteValidatorTests
     // WAV/MP4 differ only at a later offset (WAVE vs ftyp), so the stricter
     // check must still reject the cross-declaration.
     [Theory]
-    [InlineData(nameof(OleHeader), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "report.docx")]
+    [InlineData(nameof(OleHeader), MimeTypeCatalog.ApplicationDocx, "report.docx")]
     [InlineData(nameof(PngHeader), "application/rtf", "fake.rtf")]
     [InlineData(nameof(ZipHeader), "application/x-7z-compressed", "fake.7z")]
     [InlineData(nameof(WavHeader), "video/mp4", "fake.mp4")]

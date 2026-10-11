@@ -12,7 +12,7 @@ public sealed record MediaTypeDefinition
         AttachmentCategory category,
         MediaKind mediaKind,
         MediaContentKind contentKind,
-        bool supportsNativeSignatureValidation,
+        SignatureFamily signatureFamily,
         bool supportsModelInput,
         string defaultExtension,
         string[] extensions)
@@ -21,7 +21,7 @@ public sealed record MediaTypeDefinition
         Category = category;
         MediaKind = mediaKind;
         ContentKind = contentKind;
-        SupportsNativeSignatureValidation = supportsNativeSignatureValidation;
+        SignatureFamily = signatureFamily;
         SupportsModelInput = supportsModelInput;
         DefaultExtension = new FileExtension(defaultExtension);
         Extensions = extensions.Select(static e => new FileExtension(e)).ToArray();
@@ -35,7 +35,17 @@ public sealed record MediaTypeDefinition
 
     public MediaContentKind ContentKind { get; }
 
-    public bool SupportsNativeSignatureValidation { get; }
+    /// <summary>
+    /// Byte-signature family. The scanner derives its MIME → matcher table from
+    /// this value, so the catalog is the single source of truth.
+    /// </summary>
+    public SignatureFamily SignatureFamily { get; }
+
+    /// <summary>
+    /// True when the scanner has a byte-signature matcher for this type. A type
+    /// with no family (<see cref="SignatureFamily.None"/>) is not scannable.
+    /// </summary>
+    public bool SupportsNativeSignatureValidation => SignatureFamily != SignatureFamily.None;
 
     public bool SupportsModelInput { get; }
 

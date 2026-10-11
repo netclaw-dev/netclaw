@@ -136,7 +136,7 @@ public sealed class AttachmentCategoriesTests
     [InlineData("application/pdf", AttachmentCategory.Pdf)]
     [InlineData("APPLICATION/PDF", AttachmentCategory.Pdf)]
     [InlineData("application/msword", AttachmentCategory.Document)]
-    [InlineData("application/vnd.openxmlformats-officedocument.wordprocessingml.document", AttachmentCategory.Document)]
+    [InlineData(MimeTypeCatalog.ApplicationDocx, AttachmentCategory.Document)]
     [InlineData("text/plain", AttachmentCategory.Document)]
     [InlineData("text/markdown", AttachmentCategory.Document)]
     [InlineData("application/json", AttachmentCategory.Document)]

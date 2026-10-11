@@ -38,6 +38,22 @@ public static class MimeTypeCatalog
     public const string VideoMatroska = "video/x-matroska";
     public const string VideoAvi = "video/x-msvideo";
 
+    // OOXML (ZIP-backed) Office formats
+    public const string ApplicationDocx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    public const string ApplicationXlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    public const string ApplicationPptx = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    public const string ApplicationPotx = "application/vnd.openxmlformats-officedocument.presentationml.template";
+
+    // OpenDocument (ZIP-backed)
+    public const string ApplicationOdt = "application/vnd.oasis.opendocument.text";
+    public const string ApplicationOds = "application/vnd.oasis.opendocument.spreadsheet";
+    public const string ApplicationOdp = "application/vnd.oasis.opendocument.presentation";
+
+    // Legacy OLE Compound Document Office formats
+    public const string ApplicationMsword = "application/msword";
+    public const string ApplicationMsExcel = "application/vnd.ms-excel";
+    public const string ApplicationMsPowerpoint = "application/vnd.ms-powerpoint";
+
     private static readonly FrozenDictionary<string, string> AliasesByMime = BuildAliases()
         .ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
@@ -166,23 +182,20 @@ public static class MimeTypeCatalog
         return !ext.IsEmpty && definition.Extensions.Any(e => e.Value.Equals(ext.Value, StringComparison.OrdinalIgnoreCase));
     }
 
-    public static bool IsZipBackedOfficePath(string path)
-    {
-        return FileExtension.FromPath(path).Value switch
-        {
-            ".docx" or ".xlsx" or ".pptx" or ".potx" or ".odt" or ".ods" or ".odp" => true,
-            _ => false
-        };
-    }
+    public static bool IsZipBackedOfficePath(string path) =>
+        IsOfficeContainerPath(path, SignatureFamily.Zip);
 
-    public static bool IsOleBackedOfficePath(string path)
-    {
-        return FileExtension.FromPath(path).Value switch
-        {
-            ".doc" or ".xls" or ".ppt" => true,
-            _ => false
-        };
-    }
+    public static bool IsOleBackedOfficePath(string path) =>
+        IsOfficeContainerPath(path, SignatureFamily.Ole);
+
+    // A container-backed Office document is one whose signature family is the
+    // container (ZIP or OLE) and whose kind is Document. This excludes the
+    // generic .zip archive, which shares the ZIP family but is not a document.
+    private static bool IsOfficeContainerPath(string path, SignatureFamily family) =>
+        TryGetFromPathExtension(path, out var mimeType)
+        && TryGet(mimeType, out var definition)
+        && definition.SignatureFamily == family
+        && definition.MediaKind == MediaKind.Document;
 
     private static Dictionary<string, string> BuildAliases() => new(StringComparer.OrdinalIgnoreCase)
     {
@@ -198,28 +211,28 @@ public static class MimeTypeCatalog
 
     private static MediaTypeDefinition[] BuildDefinitions() =>
     [
-        Binary(ImagePng, AttachmentCategory.Image, MediaKind.Image, true, true, ".png", ".png"),
-        Binary(ImageJpeg, AttachmentCategory.Image, MediaKind.Image, true, true, ".jpg", ".jpg", ".jpeg"),
-        Binary(ImageGif, AttachmentCategory.Image, MediaKind.Image, true, true, ".gif", ".gif"),
-        Binary(ImageWebp, AttachmentCategory.Image, MediaKind.Image, true, true, ".webp", ".webp"),
+        Binary(ImagePng, AttachmentCategory.Image, MediaKind.Image, SignatureFamily.Png, true, ".png", ".png"),
+        Binary(ImageJpeg, AttachmentCategory.Image, MediaKind.Image, SignatureFamily.Jpeg, true, ".jpg", ".jpg", ".jpeg"),
+        Binary(ImageGif, AttachmentCategory.Image, MediaKind.Image, SignatureFamily.Gif, true, ".gif", ".gif"),
+        Binary(ImageWebp, AttachmentCategory.Image, MediaKind.Image, SignatureFamily.Webp, true, ".webp", ".webp"),
         // bmp/tiff are accepted as images but not model-input-eligible: providers
         // ingest png/jpeg/gif/webp, so these stay path-only (see AttachmentInlineDecision).
-        Binary(ImageBmp, AttachmentCategory.Image, MediaKind.Image, true, false, ".bmp", ".bmp"),
-        Binary(ImageTiff, AttachmentCategory.Image, MediaKind.Image, true, false, ".tiff", ".tif", ".tiff"),
+        Binary(ImageBmp, AttachmentCategory.Image, MediaKind.Image, SignatureFamily.Bmp, false, ".bmp", ".bmp"),
+        Binary(ImageTiff, AttachmentCategory.Image, MediaKind.Image, SignatureFamily.Tiff, false, ".tiff", ".tif", ".tiff"),
 
-        Binary(ApplicationPdf, AttachmentCategory.Pdf, MediaKind.Pdf, true, false, ".pdf", ".pdf"),
+        Binary(ApplicationPdf, AttachmentCategory.Pdf, MediaKind.Pdf, SignatureFamily.Pdf, false, ".pdf", ".pdf"),
 
-        Binary("application/vnd.openxmlformats-officedocument.wordprocessingml.document", AttachmentCategory.Document, MediaKind.Document, true, false, ".docx", ".docx"),
-        Binary("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", AttachmentCategory.Document, MediaKind.Document, true, false, ".xlsx", ".xlsx"),
-        Binary("application/vnd.openxmlformats-officedocument.presentationml.presentation", AttachmentCategory.Document, MediaKind.Document, true, false, ".pptx", ".pptx"),
-        Binary("application/vnd.openxmlformats-officedocument.presentationml.template", AttachmentCategory.Document, MediaKind.Document, true, false, ".potx", ".potx"),
-        Binary("application/vnd.oasis.opendocument.text", AttachmentCategory.Document, MediaKind.Document, true, false, ".odt", ".odt"),
-        Binary("application/vnd.oasis.opendocument.spreadsheet", AttachmentCategory.Document, MediaKind.Document, true, false, ".ods", ".ods"),
-        Binary("application/vnd.oasis.opendocument.presentation", AttachmentCategory.Document, MediaKind.Document, true, false, ".odp", ".odp"),
-        Binary("application/msword", AttachmentCategory.Document, MediaKind.Document, true, false, ".doc", ".doc"),
-        Binary("application/vnd.ms-excel", AttachmentCategory.Document, MediaKind.Document, true, false, ".xls", ".xls"),
-        Binary("application/vnd.ms-powerpoint", AttachmentCategory.Document, MediaKind.Document, true, false, ".ppt", ".ppt"),
-        Binary(ApplicationRtf, AttachmentCategory.Document, MediaKind.Document, true, false, ".rtf", ".rtf"),
+        Binary(ApplicationDocx, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Zip, false, ".docx", ".docx"),
+        Binary(ApplicationXlsx, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Zip, false, ".xlsx", ".xlsx"),
+        Binary(ApplicationPptx, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Zip, false, ".pptx", ".pptx"),
+        Binary(ApplicationPotx, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Zip, false, ".potx", ".potx"),
+        Binary(ApplicationOdt, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Zip, false, ".odt", ".odt"),
+        Binary(ApplicationOds, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Zip, false, ".ods", ".ods"),
+        Binary(ApplicationOdp, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Zip, false, ".odp", ".odp"),
+        Binary(ApplicationMsword, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Ole, false, ".doc", ".doc"),
+        Binary(ApplicationMsExcel, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Ole, false, ".xls", ".xls"),
+        Binary(ApplicationMsPowerpoint, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Ole, false, ".ppt", ".ppt"),
+        Binary(ApplicationRtf, AttachmentCategory.Document, MediaKind.Document, SignatureFamily.Rtf, false, ".rtf", ".rtf"),
 
         Text(TextPlain, ".txt", ".txt", ".log"),
         Text(TextMarkdown, ".md", ".md", ".markdown"),
@@ -230,35 +243,35 @@ public static class MimeTypeCatalog
         Text(ApplicationXml, ".xml", ".xml"),
         Text(ApplicationYaml, ".yaml", ".yml", ".yaml"),
 
-        Binary(ApplicationZip, AttachmentCategory.Archive, MediaKind.Archive, true, false, ".zip", ".zip"),
-        Binary("application/x-7z-compressed", AttachmentCategory.Archive, MediaKind.Archive, true, false, ".7z", ".7z"),
-        Binary("application/gzip", AttachmentCategory.Archive, MediaKind.Archive, true, false, ".gz", ".gz", ".tgz"),
-        Binary("application/x-bzip2", AttachmentCategory.Archive, MediaKind.Archive, true, false, ".bz2", ".bz2"),
-        Binary("application/x-xz", AttachmentCategory.Archive, MediaKind.Archive, true, false, ".xz", ".xz"),
+        Binary(ApplicationZip, AttachmentCategory.Archive, MediaKind.Archive, SignatureFamily.Zip, false, ".zip", ".zip"),
+        Binary("application/x-7z-compressed", AttachmentCategory.Archive, MediaKind.Archive, SignatureFamily.SevenZip, false, ".7z", ".7z"),
+        Binary("application/gzip", AttachmentCategory.Archive, MediaKind.Archive, SignatureFamily.Gzip, false, ".gz", ".gz", ".tgz"),
+        Binary("application/x-bzip2", AttachmentCategory.Archive, MediaKind.Archive, SignatureFamily.Bzip2, false, ".bz2", ".bz2"),
+        Binary("application/x-xz", AttachmentCategory.Archive, MediaKind.Archive, SignatureFamily.Xz, false, ".xz", ".xz"),
 
-        Binary(AudioMpeg, AttachmentCategory.Media, MediaKind.Audio, true, false, ".mp3", ".mp3"),
-        Binary(AudioMp4, AttachmentCategory.Media, MediaKind.Audio, true, false, ".m4a", ".m4a", ".mp4"),
-        Binary(AudioWav, AttachmentCategory.Media, MediaKind.Audio, true, false, ".wav", ".wav"),
-        Binary(AudioOgg, AttachmentCategory.Media, MediaKind.Audio, true, false, ".ogg", ".ogg", ".oga"),
-        Binary(VideoMp4, AttachmentCategory.Media, MediaKind.Video, true, false, ".mp4", ".mp4", ".m4v"),
-        Binary(VideoQuickTime, AttachmentCategory.Media, MediaKind.Video, true, false, ".mov", ".mov"),
-        Binary(VideoWebm, AttachmentCategory.Media, MediaKind.Video, true, false, ".webm", ".webm"),
-        Binary(VideoMatroska, AttachmentCategory.Media, MediaKind.Video, true, false, ".mkv", ".mkv"),
-        Binary(VideoAvi, AttachmentCategory.Media, MediaKind.Video, true, false, ".avi", ".avi")
+        Binary(AudioMpeg, AttachmentCategory.Media, MediaKind.Audio, SignatureFamily.Mp3, false, ".mp3", ".mp3"),
+        Binary(AudioMp4, AttachmentCategory.Media, MediaKind.Audio, SignatureFamily.Ftyp, false, ".m4a", ".m4a", ".mp4"),
+        Binary(AudioWav, AttachmentCategory.Media, MediaKind.Audio, SignatureFamily.Wav, false, ".wav", ".wav"),
+        Binary(AudioOgg, AttachmentCategory.Media, MediaKind.Audio, SignatureFamily.Ogg, false, ".ogg", ".ogg", ".oga"),
+        Binary(VideoMp4, AttachmentCategory.Media, MediaKind.Video, SignatureFamily.Ftyp, false, ".mp4", ".mp4", ".m4v"),
+        Binary(VideoQuickTime, AttachmentCategory.Media, MediaKind.Video, SignatureFamily.Ftyp, false, ".mov", ".mov"),
+        Binary(VideoWebm, AttachmentCategory.Media, MediaKind.Video, SignatureFamily.Ebml, false, ".webm", ".webm"),
+        Binary(VideoMatroska, AttachmentCategory.Media, MediaKind.Video, SignatureFamily.Ebml, false, ".mkv", ".mkv"),
+        Binary(VideoAvi, AttachmentCategory.Media, MediaKind.Video, SignatureFamily.Avi, false, ".avi", ".avi")
     ];
 
     private static MediaTypeDefinition Text(string mimeType, string defaultExtension, params string[] extensions) =>
-        new(mimeType, AttachmentCategory.Document, MediaKind.Text, MediaContentKind.Text, true, false, defaultExtension, extensions);
+        new(mimeType, AttachmentCategory.Document, MediaKind.Text, MediaContentKind.Text, SignatureFamily.Any, false, defaultExtension, extensions);
 
     private static MediaTypeDefinition Binary(
         string mimeType,
         AttachmentCategory category,
         MediaKind mediaKind,
-        bool supportsNativeSignatureValidation,
+        SignatureFamily signatureFamily,
         bool supportsModelInput,
         string defaultExtension,
         params string[] extensions) =>
-        new(mimeType, category, mediaKind, MediaContentKind.Binary, supportsNativeSignatureValidation, supportsModelInput, defaultExtension, extensions);
+        new(mimeType, category, mediaKind, MediaContentKind.Binary, signatureFamily, supportsModelInput, defaultExtension, extensions);
 
     private static Dictionary<string, MediaTypeDefinition> BuildExtensionMap()
     {
