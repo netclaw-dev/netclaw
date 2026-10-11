@@ -3,12 +3,14 @@ name: smoke
 # Native smoke harness — runs the real netclaw / netclawd binaries natively
 # (no Docker for the binary) against a loopback smoke LLM process.
 #
-# Runs on every PR to dev (Linux + macOS legs in parallel), on dev pushes,
-# and nightly. The `Native Smoke (Linux)` + `Screenshot Regression (Linux)`
-# checks gate merges. The macOS leg runs alongside them — it is the
-# regression guard for Apple-Silicon-specific bugs (e.g. #1036) — and is
-# non-required during its burn-in (see issue #1068). Scheduled-run failures
-# surface via GitHub's built-in Actions notifications.
+# Runs on every PR to dev (Linux + macOS legs in parallel) and nightly. It does
+# not run on dev pushes: the PR run already tests the tree that a squash merge
+# lands, and the native smoke is too expensive for the merge path. The
+# `Native Smoke (Linux)` + `Screenshot Regression (Linux)` checks gate merges.
+# The macOS leg runs alongside them — it is the regression guard for
+# Apple-Silicon-specific bugs (e.g. #1036) — and is non-required during its
+# burn-in (see issue #1068). Scheduled-run failures surface via GitHub's
+# built-in Actions notifications.
 
 on:
   # Merge queues test a synthetic merge group rather than the pull request ref.
@@ -22,9 +24,6 @@ on:
     # stretches (the smoke binary and Homebrew vhs version).
     # NOTE: scheduled runs only fire from the repository's default branch.
     - cron: '0 7 * * *'
-  push:
-    branches:
-      - dev
   pull_request:
     branches:
       - dev

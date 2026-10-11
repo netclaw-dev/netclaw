@@ -21,9 +21,18 @@ on:
 permissions:
   contents: read
 
+# One run per ref (or per PR). A newer run cancels the older one in the same
+# group, so overlapping dev pushes do not pile jobs onto the runner pool.
+concurrency:
+  group: pr_validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test-${{matrix.os}}
+    # The 3-OS matrix is the PR gate. A post-merge push runs Post-merge Verify
+    # instead, so the expensive cross-platform legs stay off the merge path.
+    if: github.event_name != 'push'
     runs-on: ${{matrix.os}}
     timeout-minutes: 30
 
@@ -154,6 +163,7 @@ jobs:
     # are balanced by measured gate time (about 13 to 14 minutes each) so each
     # one finishes well inside the job timeout and before the Windows test job.
     name: Mutation Gates (${{ matrix.group }})
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -268,6 +278,7 @@ jobs:
 
   install-smoke:
     name: Install Script Smoke-${{ matrix.os }}
+    if: github.event_name != 'push'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
 
@@ -383,3 +394,42 @@ jobs:
       # so the two implementations can't silently drift.
       - name: "Generator precedence key matches the shared fixture"
         run: python3 feeds/scripts/semver_key.py --check feeds/scripts/semver-order.txt
+
+  post-merge-verify:
+    # An admin can bypass review and push straight to dev. The PR gate does not
+    # run for such a commit, so confirm the merged tree with a build and the
+    # unit tests on ubuntu. The PR run remains the full cross-platform gate.
+    name: Post-merge Verify
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Restore .NET tools"
+        run: dotnet tool restore
+
+      - name: "Validate release notes parser"
+        shell: pwsh
+        run: ./scripts/smoke/release-notes-smoke.ps1
+
+      - name: "Update release notes"
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: "dotnet build"
+        run: dotnet build -c Release
+
+      - name: "dotnet test"
+        shell: bash
+        run: dotnet test -c Release --no-build --filter "Category!=NativeShell" --blame-hang-timeout 300s --blame-hang-dump-type full --results-directory ./TestResults
