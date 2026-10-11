@@ -2028,6 +2028,7 @@ internal sealed class ApprovalGateToolExecutor : IToolExecutor
             && context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available;
         _executionsByTool[toolCall.Name] = _executionsByTool.GetValueOrDefault(toolCall.Name) + 1;
         Interlocked.Increment(ref _successfulExecutions);
+        context!.Outputs.TryComplete(new Netclaw.Tools.ToolInvocationReceipt.Succeeded([], null));
         return $"[executed {toolCall.Name}]";
     }
 

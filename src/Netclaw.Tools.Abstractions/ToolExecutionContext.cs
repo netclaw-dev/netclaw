@@ -85,6 +85,12 @@ internal abstract class ToolInvocationReceipt
         public string? DeclaredProjectDirectory { get; }
     }
 
+    // Only an authorized first-party status response can supply this fact.
+    internal sealed class PendingBackgroundJob : ToolInvocationReceipt
+    {
+        public PendingBackgroundJob() : base(ToolInvocationOutcomeCategory.Success) { }
+    }
+
     internal sealed class Correction : ToolInvocationReceipt
     {
         public Correction(ToolRemediationCode remediationCode) : base(ToolInvocationOutcomeCategory.RecoverableCorrection)

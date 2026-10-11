@@ -151,8 +151,8 @@ jobs:
     # One job definition for every focused Stryker gate. Each matrix group shares
     # one checkout, SDK install, and tool restore. To add a gate, add its script
     # name (scripts/run-<name>-mutations.sh) to the lightest group. The groups
-    # are balanced by measured gate time (about 13 to 14 minutes each) so each
-    # one finishes well inside the job timeout and before the Windows test job.
+    # use measured gate time. Add new targets to the lightest group and retain
+    # the 25-minute timeout.
     name: Mutation Gates (${{ matrix.group }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -161,7 +161,7 @@ jobs:
       matrix:
         include:
           - group: shell-analysis
-            gates: shell-command-analysis tool-authorizer-order mcp-artifact-admission
+            gates: shell-command-analysis tool-authorizer-order mcp-artifact-admission tool-task-adoption
           - group: shell-assignment-and-paths
             gates: shell-assignment shell-config-read path-access
           - group: verb-chain-and-reminder
@@ -318,6 +318,7 @@ jobs:
           python3 -m unittest discover -s evals -p test_cycle_evals.py -v
           python3 -m unittest discover -s evals -p test_cli_detector_evals.py -v
           python3 -m unittest discover -s evals -p test_spill_steer_evals.py -v
+          python3 -m unittest discover -s tests/smoke -p test_mcp_permissions_save_assertion.py -v
 
   approval-outcome-direction:
     name: Approval Outcome Direction

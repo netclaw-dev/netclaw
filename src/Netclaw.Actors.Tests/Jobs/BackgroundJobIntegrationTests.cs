@@ -77,6 +77,7 @@ public class BackgroundJobIntegrationTests : TestKit, IAsyncDisposable
 
     private StartBackgroundJob MakeStartCommand(string command, ChannelType channelType = ChannelType.Slack, string? workingDirectory = null) => new()
     {
+        Origin = new BackgroundJobOrigin(new Netclaw.Actors.Protocol.TurnId("test-parent"), new Netclaw.Tools.ToolCallId("test-call")),
         Launch = BackgroundShellLaunchFixture.Create(command, _dir.Path, "C0123ABC/1712000000.000001", TestShellEnvironment.Current, workingDirectory),
         Rationale = "integration test",
         OriginChannelType = channelType,
@@ -116,7 +117,7 @@ public class BackgroundJobIntegrationTests : TestKit, IAsyncDisposable
             context, submissionCancellation.Token);
         var request = new StartBackgroundJob
         {
-            Launch = launch,
+            Launch = launch, Origin = new BackgroundJobOrigin(new Netclaw.Actors.Protocol.TurnId("detached"), new ToolCallId("detached")),
             Rationale = "Verify detached lifetime.",
             OriginChannelType = ChannelType.Tui
         };
@@ -157,8 +158,9 @@ public class BackgroundJobIntegrationTests : TestKit, IAsyncDisposable
             "auto-ack-slack-gateway-completion");
         ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
 
+        var request = MakeStartCommand("echo integration-test-output");
         var started = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand("echo integration-test-output"),
+            request,
             TimeSpan.FromSeconds(5),
             TestContext.Current.CancellationToken);
 
@@ -177,6 +179,8 @@ public class BackgroundJobIntegrationTests : TestKit, IAsyncDisposable
         Assert.Equal("background-job", delivered.Source.Provenance.SourceKind?.Value);
         Assert.NotNull(delivered.Source.BackgroundJobId);
         Assert.StartsWith("bg-job:", delivered.Source.BackgroundJobId!.Value.Value);
+        Assert.Equal(1, delivered.Source.BackgroundJobLineageVersion);
+        Assert.Equal(request.Origin, delivered.Source.BackgroundJobOrigin);
 
         await AwaitAssertAsync(() =>
         {
@@ -184,6 +188,8 @@ public class BackgroundJobIntegrationTests : TestKit, IAsyncDisposable
             Assert.NotNull(def);
             Assert.Equal(BackgroundJobStatus.Completed, def!.Status);
             Assert.NotNull(def.CompletedAtMs);
+            Assert.Equal(1, def.LineageVersion);
+            Assert.Equal(request.Origin, def.Origin);
             return Task.CompletedTask;
         }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
     }

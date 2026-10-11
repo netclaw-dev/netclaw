@@ -17,6 +17,9 @@ internal sealed class ActiveToolBatchTracker
     private readonly Dictionary<string, ToolCycleResult> _cycleResults = new(StringComparer.Ordinal);
     private PreparedToolCycleBatch? _preparedCycleBatch;
 
+    private readonly HashSet<string> _refusedCallIds = new(StringComparer.Ordinal);
+    public bool MissingReceipt { get; private set; }
+
     public int CompletedCount => _completedCallIds.Count;
 
     public bool HasAllResults => _expectedCallIds.Count > 0
@@ -33,6 +36,8 @@ internal sealed class ActiveToolBatchTracker
     {
         _preparedCycleBatch = null;
         _cycleResults.Clear();
+        _refusedCallIds.Clear();
+        MissingReceipt = false;
         ClearExpectedCallIds();
         foreach (var call in assistantMessage.ToolCalls)
             _expectedCallIds.Add(call.CallId.Value);
@@ -53,6 +58,8 @@ internal sealed class ActiveToolBatchTracker
     {
         _preparedCycleBatch = preparedCycleBatch;
         _cycleResults.Clear();
+        _refusedCallIds.Clear();
+        MissingReceipt = false;
         ClearExpectedCallIds();
         foreach (var call in toolCalls)
             _expectedCallIds.Add(call.CallId);
@@ -66,14 +73,32 @@ internal sealed class ActiveToolBatchTracker
 
     public void RecordCycleResult(
         string callId,
-        ToolInvocationOutcomeCategory category,
+        ToolInvocationReceipt? receipt,
         string modelVisibleText)
-        => _cycleResults[callId] = new ToolCycleResult(category, modelVisibleText);
+    {
+        if (receipt is null)
+        {
+            MissingReceipt = true;
+            return;
+        }
+        _cycleResults[callId] = new ToolCycleResult(receipt.Category, modelVisibleText)
+        { PendingJob = receipt is ToolInvocationReceipt.PendingBackgroundJob };
+    }
+
+    public void MarkRefused(IEnumerable<string> callIds)
+        => _refusedCallIds.UnionWith(callIds);
 
     public CompletedToolCycleIteration? GetCompletedCycle()
-        => _preparedCycleBatch is null
-            ? null
-            : ToolCycleSignatureFactory.Complete(_preparedCycleBatch, _cycleResults);
+    {
+        if (_preparedCycleBatch is null || MissingReceipt)
+            return null;
+        var actual = _preparedCycleBatch.Calls.Where(call => !_refusedCallIds.Contains(call.CallId.Value)).ToArray();
+        if (actual.Length == 0)
+            return null;
+        var results = _cycleResults.Where(pair => !_refusedCallIds.Contains(pair.Key)).ToDictionary();
+        return ToolCycleSignatureFactory.Complete(new PreparedToolCycleBatch(_preparedCycleBatch.Action, actual), results)
+            with { RecordAdjacent = _refusedCallIds.Count == 0 && !results.Values.Any(result => result.PendingJob) };
+    }
 
     public void MarkExecutionTaskCompleted()
         => ExecutionTaskCompleted = true;
@@ -104,6 +129,8 @@ internal sealed class ActiveToolBatchTracker
         ClearCompletedCallIds();
         _preparedCycleBatch = null;
         _cycleResults.Clear();
+        _refusedCallIds.Clear();
+        MissingReceipt = false;
         ExecutionTaskCompleted = false;
     }
 

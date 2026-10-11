@@ -733,9 +733,13 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         // Compaction
         await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
-        // Buffer drain processes the buffered message — auto-resend is subsumed
+        // This replay has no tool batch. The later input receives its own adoption after the terminal response.
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var laterText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("fake", laterText.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }

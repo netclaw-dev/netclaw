@@ -6,6 +6,7 @@
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Protocol;
 
@@ -52,6 +53,14 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
 
     public IReadOnlyList<SerializableChatMessage> History { get; init; } =
         Array.Empty<SerializableChatMessage>();
+
+    public ToolLoopCheckpoint? LoopCheckpoint { get; init; }
+    public ToolLoopAdmission? LoopAdmission { get; init; }
+    public IReadOnlyList<ToolLoopObservation> LoopObservations { get; init; } = [];
+    public bool LoopReceiptFailure { get; init; }
+    public IReadOnlyList<BackgroundJobId> ProcessedBackgroundJobIds { get; init; } = [];
+    public Sessions.SessionProtocol.TurnContextRecord? AdoptedTaskContext { get; init; }
+    public IReadOnlyList<InputId> AdoptedTaskInputIds { get; init; } = [];
 
     public int TurnCount { get; init; }
 

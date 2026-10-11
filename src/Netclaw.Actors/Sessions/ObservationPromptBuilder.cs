@@ -124,8 +124,11 @@ public static class ObservationPromptBuilder
 
             ## 1. Primary Request and Intent
             What the user is fundamentally trying to accomplish in this session.
-            One to three sentences. Copy direct phrasing from the user where
+            State the intent in one to three sentences. Copy direct phrasing from the user where
             possible — do not paraphrase their stated intent.
+            After the intent, list the user's current response format and required fields.
+            Copy field definitions, conditions, and exceptions verbatim.
+            Keep each definition with its field. A field name alone does not preserve its definition.
 
             ## 2. Key Technical Concepts
             Named technical entities being actively worked on: file paths, type

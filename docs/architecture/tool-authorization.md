@@ -23,6 +23,100 @@ Contents:
 9. [How we know it works](#9-how-we-know-it-works)
 10. [Why it has this shape](#10-why-it-has-this-shape)
 
+## Durable task adoption
+
+`InputAdmitted` stores the canonical `TurnContext` before the input acknowledgment.
+Admission does not change the active task or its tool approval authority.
+`LlmSessionActor` completes the old tool batch before it adopts fresh buffered input.
+After context overflow, an internal replay continues the original task before later real input.
+The actor retains the original active input IDs, authority, and recurrence evidence.
+It adopts the next real input prefix after the old tool batch or terminal response completes.
+The actor selects the next compatible prefix of admitted inputs.
+The actor retains later inputs in arrival order for a separate task.
+The actor commits `ToolTaskAdopted` before the next model request.
+The event names the admitted input IDs and their canonical context.
+Its callback sets the active context through the existing context deriver.
+The callback resets exact recurrence evidence for a fresh task.
+A validated job continuation restores its retained original checkpoint.
+Old tool attempts retain their original execution context and approval requester.
+An internal replay keeps its original task identity and recurrence evidence.
+Recovery uses the durable task identity to restore the matching checkpoint.
+The adopted context and input IDs survive input ledger consumption.
+Terminal events clear the active task context.
+A duplicate adoption event does not reset recurrence evidence twice.
+A pre-change parked approval uses the same original context for its first redrive.
+A metadata-only `ToolBatchStarted` commits the exact unanswered call set before dispatch.
+Its consumer validates the full context against the existing approval owner.
+The existing adopted task context retains that record after approval state expires.
+The event adds no input activation or duplicate user and assistant history.
+Completed sibling calls keep their results and receive no new invocation.
+A new-format admission keeps its current evidence.
+An identical active baseline retry keeps its checkpoint and observations.
+See [TA-1](../../openspec/specs/tool-authorization/spec.md#requirement-ta-1-trust-context-is-explicit-and-fails-loud).
+
+Caution: the old binary cannot read the `tta-v1` event manifest.
+Back up the session journal, snapshots, and job directory before activation.
+Rollback requires the backup or a tested reader that accepts this manifest.
+Do not use an old binary against a journal with this event.
+
+## Local foreground callback authority
+
+`LlmSessionActor` owns each local foreground dispatch through its existing tool cancellation source.
+The actor creates that source before synthetic-only corrections or actual tool work.
+The pipeline copies the batch token onto its local result, failure, and completion envelopes.
+The actor validates the token before persistence, output, state mutation, or cancellation of the current source.
+A reused provider call ID cannot establish current dispatch ownership.
+Settlement, replacement, failure, and restart drain invalidate the old local source.
+These tokens never enter a journal record, snapshot, or public output.
+`ParkedToolBatchHistory` scopes results to the exact canonical assistant occurrence before the next assistant message.
+An old result cannot satisfy or suppress a new batch that reuses its provider call ID.
+Distinct assistant occurrences remain separate even when their values equal an earlier batch.
+The normal producer creates a fresh assistant object for each durable batch event.
+An already present object cannot prove durable duplicate-event identity and fails before a new admission changes state.
+Recovery applies each journal sequence once through the framework.
+The lookup rejects missing or ambiguous canonical ownership without another result ledger.
+
+The approval bridge keeps its existing options, authority, and internal request metadata.
+The batch callback binds that request to its original token before parent mailbox admission.
+An unbound public approval output cannot create an approval record or prompt.
+Durable approval answers retain their canonical pending context and existing requester and claimed-wait checks.
+A recovered durable approval can use the existing redrive path after the old source ends.
+That redrive preserves the original authority and authorization attempt and creates a new local dispatch source.
+
+Foreground child spawn requests carry the original parent token before child creation.
+The parent receives foreground child activity through a token-bound local mailbox envelope before public emission.
+Routed foreground skills use the same existing source for their spawn, activity, result, and failure callbacks.
+These checks change no public output format or transport protocol.
+Shell background job deliveries retain their separate durable origin and input-admission contract.
+Future accepted background children need their separate run owner after parent foreground settlement.
+See [TA-1](../../openspec/specs/tool-authorization/spec.md#requirement-ta-1-trust-context-is-explicit-and-fails-loud).
+
+## Background job result authority
+
+The existing job record retains the original recurrence `TurnId` and checkpoint.
+The job definition stores its version-one origin before process launch.
+`ToolCallRecorded` commits the parent job record before continuation.
+A fresh user task preserves each existing job checkpoint.
+The manager emits a prefixed delivery key as the job result's authority `TurnId`.
+`InputAdmitted` retains the trusted origin because the transport source is ephemeral.
+The consumer validates the delivery key, canonical source, and committed parent record before adoption.
+The detector restores the original recurrence identity independently from the automation authority.
+Recovery uses the adopted authority identity for terminal job bookkeeping.
+It removes only the completed job record after the checkpoint commit.
+
+A malformed result closes only its own canonical admitted input.
+The actor records a bounded factual assistant report before normal output emission.
+The report identifies job output as result data and grants no authority.
+The closure preserves every unrelated task context, checkpoint, and pending input.
+Snapshots retain the existing job deduplication ledger and the report history.
+A genuinely pre-change job has an explicit origin evidence gap.
+A legacy claim cannot downgrade a tracked new-format job.
+
+The store rejects a malformed new-format document before process admission.
+Startup emits the existing rejected-definition alert.
+A canonical owner query receives an explicit contract failure.
+A foreign caller receives the existing opaque not-found response.
+
 ## 1. What this covers
 
 Tool authorization is every step between a model-authored

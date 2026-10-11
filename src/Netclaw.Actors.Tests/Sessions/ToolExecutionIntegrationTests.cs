@@ -486,6 +486,8 @@ internal sealed class FakeToolExecutor : IToolExecutor
         var result = Results.GetValueOrDefault(toolCall.Name, $"[fake result for {toolCall.Name}]");
         if (Receipts.TryGetValue(toolCall.Name, out var receipt))
             context.Outputs.TryComplete(receipt);
+        else
+            context.Outputs.TryComplete(new ToolInvocationReceipt.Succeeded([], null));
         // Mirror DispatchingToolExecutor's post-processing so integration tests see
         // the same redact + inline-bound + spill the real executor applies. The fake
         // has no tool instance, so it uses the session content budget (per-tool

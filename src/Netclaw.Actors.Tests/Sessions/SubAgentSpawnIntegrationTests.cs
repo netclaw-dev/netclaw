@@ -5,6 +5,8 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
+using Akka.Configuration;
+using Akka.Routing;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
@@ -1285,6 +1287,254 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             && (m.Text?.Contains(AgentsLayerMarker, StringComparison.Ordinal) ?? false));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Settled_subagent_callbacks_cannot_spawn_a_child_or_settle_a_fresh_task(bool replayCallbacks, bool toolSpawn)
+    {
+        var ceiling = TimeSpan.FromSeconds(10);
+        var session = new SessionId("test-channel/routed-callback-replay");
+        Sys.Settings.InjectTopLevelFallback(ConfigurationFactory.ParseString(
+            $"routed-reply-capture {{ mailbox-type = \"{typeof(ToolRecurrenceAdversarialTests.ReplyCaptureMailbox).AssemblyQualifiedName}\" }}"));
+        ((ExtendedActorSystem)Sys).Provider.Deployer.SetDeploy(new Deploy(
+            $"/session-manager/{Uri.EscapeDataString(session.Value)}", Config.Empty, NoRouter.Instance, LocalScope.Instance,
+            Deploy.NoDispatcherGiven, "routed-reply-capture"));
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        if (toolSpawn)
+            _clientProvider.Main.ToolCallsOnFirstCall =
+            [CreateToolCall("original-spawn", "spawn_agent", new Dictionary<string, object?>
+            {
+                ["agent"] = "summarizer", ["task"] = "Check the original daemon."
+            })];
+        await JoinSessionAsync(manager, subscriber, session, OutputFilter.Full | OutputFilter.ProcessingState);
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session,
+            Content = toolSpawn ? "Use a sub-agent to check the original daemon." : "/ops-route check the original daemon",
+            Source = BuildPersonalSource()
+        }, ceiling, TestContext.Current.CancellationToken);
+        var initial = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            initial.Add(message);
+            return message is ProcessingStateOutput { IsProcessing: false };
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Single(initial.OfType<TurnCompleted>());
+        Assert.Contains(initial, message => message is SubAgentOutput { Phase: SubAgentPhase.Started });
+        Assert.Contains(initial, message => message is SubAgentOutput { Phase: SubAgentPhase.Completed });
+        Assert.Equal(1, _clientProvider.Compaction.CallCount);
+        var originalMainCalls = toolSpawn ? 2 : 0;
+        Assert.Equal(originalMainCalls, _clientProvider.Main.CallCount);
+        var envelopes = ToolRecurrenceAdversarialTests.ReplyCaptureMailbox.Captures.GetOrCreateValue(Sys)
+            .Where(envelope => envelope.Message is SpawnChildActorRequest or ToolExecutionSubAgentActivity
+                || envelope.Message.GetType().Name is "RoutedSkillSubAgentActivity" or "RoutedSkillExecutionCompleted").ToArray();
+        var spawn = Assert.IsType<SpawnChildActorRequest>(Assert.Single(envelopes,
+            envelope => envelope.Message is SpawnChildActorRequest).Message);
+        Assert.True(spawn.ExecutionToken.IsCancellationRequested);
+        if (toolSpawn)
+        {
+            var activity = envelopes.Select(envelope => envelope.Message).OfType<ToolExecutionSubAgentActivity>().ToArray();
+            var started = Assert.Single(activity);
+            Assert.Equal(SubAgentPhase.Started, started.Output.Phase);
+            Assert.Equal(spawn.ExecutionToken, started.ExecutionToken);
+            Assert.Equal(2, envelopes.Length);
+        }
+        else
+        {
+            Assert.Equal(2, envelopes.Count(envelope => envelope.Message.GetType().Name == "RoutedSkillSubAgentActivity"));
+            Assert.Single(envelopes, envelope => envelope.Message.GetType().Name == "RoutedSkillExecutionCompleted");
+            Assert.Equal(4, envelopes.Length);
+        }
+        var owner = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(session.Value)}")
+            .ResolveOne(ceiling, TestContext.Current.CancellationToken);
+        var childPath = $"{owner.Path}/{spawn.ActorName}";
+        await AwaitAssertAsync(async () =>
+        {
+            var identity = await Sys.ActorSelection(childPath).Ask<ActorIdentity>(new Identify("original-child"),
+                ceiling, TestContext.Current.CancellationToken);
+            Assert.Null(identity.Subject);
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _clientProvider.Main.NextResponseGate = gate;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session, Content = "Complete the fresh task without a sub-agent.", Source = BuildPersonalSource()
+        }, ceiling, TestContext.Current.CancellationToken);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(originalMainCalls + 1, _clientProvider.Main.CallCount);
+            return Task.CompletedTask;
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+        var observations = new List<object>();
+        for (var index = 0; index < envelopes.Length; index++)
+        {
+            var envelope = envelopes[index];
+            if (replayCallbacks)
+                owner.Tell(envelope.Message, envelope.Sender);
+            var filter = index % 2 == 0
+                ? (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming
+                : OutputFilter.Full | OutputFilter.ProcessingState;
+            owner.Tell(new JoinSession(subscriber) { SessionId = session, Filter = filter }, subscriber.Ref);
+            var acknowledged = await subscriber.FishForMessageAsync<object>(message =>
+            {
+                observations.Add(message);
+                return message is SessionJoined;
+            }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(1, Assert.IsType<SessionJoined>(acknowledged).TurnCount);
+            var identity = await Sys.ActorSelection(childPath).Ask<ActorIdentity>(new Identify("replayed-child"),
+                ceiling, TestContext.Current.CancellationToken);
+            Assert.Null(identity.Subject);
+        }
+        Assert.DoesNotContain(observations, message => message is SubAgentOutput or TurnCompleted or TextOutput or ErrorOutput);
+        Assert.False(gate.Task.IsCompleted);
+        Assert.Equal(originalMainCalls + 1, _clientProvider.Main.CallCount);
+        Assert.Equal(1, _clientProvider.Compaction.CallCount);
+        gate.TrySetResult();
+        var final = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            final.Add(message);
+            return message is ProcessingStateOutput { IsProcessing: false };
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Single(final.OfType<TurnCompleted>());
+        Assert.Single(final.OfType<TextOutput>());
+        Assert.DoesNotContain(final, message => message is SubAgentOutput or ErrorOutput);
+        Assert.Equal(originalMainCalls + 1, _clientProvider.Main.CallCount);
+        Assert.Equal(1, _clientProvider.Compaction.CallCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_prior_routed_failure_cannot_fail_a_fresh_task(bool providerResolutionFailure)
+    {
+        var ceiling = TimeSpan.FromSeconds(10);
+        var session = new SessionId("test-channel/routed-failure-replay");
+        Sys.Settings.InjectTopLevelFallback(ConfigurationFactory.ParseString(
+            $"routed-failure-capture {{ mailbox-type = \"{typeof(ToolRecurrenceAdversarialTests.ReplyCaptureMailbox).AssemblyQualifiedName}\" }}"));
+        ((ExtendedActorSystem)Sys).Provider.Deployer.SetDeploy(new Deploy(
+            $"/session-manager/{Uri.EscapeDataString(session.Value)}", Config.Empty, NoRouter.Instance, LocalScope.Instance,
+            Deploy.NoDispatcherGiven, "routed-failure-capture"));
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await JoinSessionAsync(manager, subscriber, session, OutputFilter.Full | OutputFilter.ProcessingState);
+        _clientProvider.FailCompactionResolution = providerResolutionFailure;
+        if (!providerResolutionFailure)
+            _clientProvider.Compaction.PlannedExceptions.Enqueue(new InvalidOperationException("The routed provider failed."));
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session, Content = "/ops-route check the original daemon", Source = BuildPersonalSource()
+        }, ceiling, TestContext.Current.CancellationToken);
+        var original = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            original.Add(message);
+            return message is ProcessingStateOutput { IsProcessing: false };
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+        var failure = Assert.Single(original.OfType<ErrorOutput>());
+        Assert.Contains("The routed provider failed.", failure.Message, StringComparison.Ordinal);
+        Assert.Equal(TurnOutcome.Failed, Assert.Single(original.OfType<TurnCompleted>()).Outcome);
+        var callbackName = providerResolutionFailure ? "RoutedSkillExecutionFailed" : "RoutedSkillExecutionCompleted";
+        var captured = Assert.Single(ToolRecurrenceAdversarialTests.ReplyCaptureMailbox.Captures.GetOrCreateValue(Sys),
+            envelope => envelope.Message.GetType().Name == callbackName);
+        var tokenProperty = captured.Message.GetType().GetProperty("ExecutionToken");
+        Assert.NotNull(tokenProperty);
+        var originalToken = Assert.IsType<CancellationToken>(tokenProperty.GetValue(captured.Message));
+        Assert.True(originalToken.IsCancellationRequested);
+        Assert.Equal(providerResolutionFailure ? 1 : 0, _clientProvider.CompactionResolutionFailures);
+        Assert.Empty(_clientProvider.Compaction.PlannedExceptions);
+        Assert.Equal(0, _clientProvider.Main.CallCount);
+        if (!providerResolutionFailure)
+        {
+            var resultProperty = captured.Message.GetType().GetProperty("Result");
+            Assert.NotNull(resultProperty);
+            var result = Assert.IsType<SubAgentProtocol.SubAgentResult>(resultProperty.GetValue(captured.Message));
+            Assert.False(result.Success);
+            Assert.Equal(SubAgentRunOutcome.Failed, result.Outcome);
+            Assert.Contains(original, message => message is SubAgentOutput { Phase: SubAgentPhase.Completed, Success: false });
+        }
+
+        _clientProvider.FailCompactionResolution = false;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _clientProvider.Main.NextResponseGate = gate;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = session, Content = "Complete the fresh task without a sub-agent.", Source = BuildPersonalSource()
+        }, ceiling, TestContext.Current.CancellationToken);
+        await _clientProvider.Main.FirstCallEntered.Task.WaitAsync(ceiling, TestContext.Current.CancellationToken);
+        var owner = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(session.Value)}")
+            .ResolveOne(ceiling, TestContext.Current.CancellationToken);
+        owner.Tell(captured.Message, captured.Sender);
+        owner.Tell(new JoinSession(subscriber)
+        {
+            SessionId = session, Filter = (OutputFilter.Full | OutputFilter.ProcessingState) & ~OutputFilter.TextStreaming
+        }, subscriber.Ref);
+        var observed = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            observed.Add(message);
+            return message is SessionJoined;
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.DoesNotContain(observed, message => message is ErrorOutput or TurnCompleted or TextOutput or SubAgentOutput);
+        Assert.False(gate.Task.IsCompleted);
+        Assert.Equal(1, _clientProvider.Main.CallCount);
+        gate.TrySetResult();
+        var final = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            final.Add(message);
+            return message is ProcessingStateOutput { IsProcessing: false };
+        }, ceiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Completed, Assert.Single(final.OfType<TurnCompleted>()).Outcome);
+        Assert.Single(final.OfType<TextOutput>());
+        Assert.DoesNotContain(final, message => message is ErrorOutput or SubAgentOutput);
+        Assert.Equal(1, _clientProvider.Main.CallCount);
+    }
+
+    [Fact]
+    public async Task Join_barrier_acknowledgement_stays_with_its_declared_subscriber()
+    {
+        var ceiling = TimeSpan.FromSeconds(10);
+        var session = new SessionId("test-channel/join-barrier-owner");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("join-barrier-subscriber");
+        var originalSender = CreateTestProbe("original-callback-sender");
+        manager.Tell(new JoinSession(subscriber) { SessionId = session, Filter = OutputFilter.Full }, subscriber.Ref);
+        await subscriber.ExpectMsgAsync<SessionJoined>(ceiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var owner = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(session.Value)}")
+            .ResolveOne(ceiling, TestContext.Current.CancellationToken);
+
+        // A borrowed callback sender receives a separate, legitimate join reply.
+        owner.Tell(new JoinSession(subscriber)
+        {
+            SessionId = session, Filter = OutputFilter.Full | OutputFilter.ProcessingState
+        }, originalSender.Ref);
+        var subscriberReply = await subscriber.ExpectMsgAsync<SessionJoined>(ceiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var borrowedReply = await originalSender.ExpectMsgAsync<SessionJoined>(ceiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(session, subscriberReply.SessionId);
+        Assert.Equal(session, borrowedReply.SessionId);
+
+        owner.Tell(new JoinSession(subscriber)
+        {
+            SessionId = session, Filter = OutputFilter.Full
+        }, subscriber.Ref);
+        var ownedReply = await subscriber.ExpectMsgAsync<SessionJoined>(ceiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(session, ownedReply.SessionId);
+        owner.Tell(new Identify("join-barrier-complete"), originalSender.Ref);
+        var identity = await originalSender.ExpectMsgAsync<ActorIdentity>(ceiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("join-barrier-complete", identity.MessageId);
+        Assert.Equal(owner, identity.Subject);
+    }
+
     // NOTE: routing the spawn lifecycle to session.log is no longer per-path-wired — the
     // breadcrumbs log under a SessionId scope and the file-logger partitions them regardless of
     // which path (tool-execution or routed-skill) drove the spawn. The producer side is covered
@@ -1604,9 +1854,18 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     {
         public FakeChatClient Main { get; } = new();
         public FakeChatClient Compaction { get; } = new();
+        public bool FailCompactionResolution { get; set; }
+        public int CompactionResolutionFailures { get; private set; }
 
         public IChatClient GetClient(ModelRole role)
-            => role == ModelRole.Compaction ? Compaction : Main;
+        {
+            if (role == ModelRole.Compaction && FailCompactionResolution)
+            {
+                CompactionResolutionFailures++;
+                throw new InvalidOperationException("The routed provider failed.");
+            }
+            return role == ModelRole.Compaction ? Compaction : Main;
+        }
     }
 
     private sealed class RecordingContextTool(

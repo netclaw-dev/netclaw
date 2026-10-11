@@ -150,6 +150,27 @@ including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),
 `~/.netclaw/config/editor-state.json` (passive config-editor state for dormant
 mode-specific values).
 
+### Compaction summary failure
+
+An observer timeout or an empty response can prevent a summary.
+The session retains a nonempty extractive window when that window exists.
+If compaction would remove all task messages, the session reports an error and keeps the original history.
+It does not commit that empty task window or save a compaction snapshot.
+The model resumes with the original task and its recorded tool results.
+
+Read the observer warning and the compaction error in the session log.
+Check provider health and response latency before you change the compaction configuration.
+The observer uses the existing provider intent to suppress extra model analysis.
+Check whether the configured provider emits and honors that option. The intent does not extend the sidecar deadline.
+Do not treat that error as a successful summary or assume that an external tool effect failed.
+
+### Compaction summary constraints
+
+An accepted summary can omit a task constraint even when compaction completes.
+Compare the original response requirements with the summary and the next model request.
+Check each required field's definition, conditions, and exceptions.
+The field name alone does not prove that its definition survives.
+
 ## Feature Kill Switches
 
 

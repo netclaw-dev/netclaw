@@ -107,6 +107,57 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         Assert.False(document.RootElement.TryGetProperty("managedTemporaryStorageRoot", out _));
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Malformed_new_lineage_is_rejected_before_save_and_exposes_its_canonical_owner(int version)
+    {
+        var logger = new CapturingJobLogger<BackgroundJobDefinitionStore>();
+        var store = new BackgroundJobDefinitionStore(_paths, logger);
+        var definition = new BackgroundJobDefinition
+        {
+            Id = new BackgroundJobId("invalid-lineage"), Command = "echo forbidden", Rationale = "Read one result.",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("lineage/session"),
+            Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal, LineageVersion = version
+        };
+        Assert.Throws<InvalidDataException>(() => store.Save(definition));
+        var path = Path.Combine(_paths.JobsDirectory, "invalid-lineage.json");
+        Assert.False(File.Exists(path));
+        File.WriteAllText(path, JsonSerializer.Serialize(definition, new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        { Converters = { new JsonStringEnumConverter() } }));
+        Assert.Null(store.Get(definition.Id));
+        var rejected = Assert.Single(store.ConsumeRejectedDefinitions());
+        Assert.Equal(definition.SessionId, rejected.SessionId);
+        Assert.Equal(definition.Audience, rejected.Audience);
+        Assert.Equal(definition.Boundary, rejected.Boundary);
+        Assert.NotEmpty(logger.Errors);
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
+    public void Valid_new_origin_round_trips_and_genuine_pre_change_job_has_no_origin()
+    {
+        var store = new BackgroundJobDefinitionStore(_paths);
+        var original = new BackgroundJobDefinition
+        {
+            Id = new BackgroundJobId("current-lineage"), Command = "echo result", Rationale = "Read one result.",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("lineage/session"),
+            Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal, LineageVersion = 1,
+            Origin = new BackgroundJobOrigin(new Netclaw.Actors.Protocol.TurnId("original-task"), new Netclaw.Tools.ToolCallId("launch"))
+        };
+        store.Save(original);
+        var loaded = new BackgroundJobDefinitionStore(_paths).Get(original.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal(1, loaded.LineageVersion);
+        Assert.Equal(original.Origin, loaded.Origin);
+        var legacy = original with { Id = new BackgroundJobId("pre-change"), LineageVersion = 0, Origin = null };
+        store.Save(legacy);
+        var old = new BackgroundJobDefinitionStore(_paths).Get(legacy.Id);
+        Assert.NotNull(old);
+        Assert.Equal(0, old.LineageVersion);
+        Assert.Null(old.Origin);
+    }
+
     /// <summary>
     /// Terminal-job cleanup: <see cref="BackgroundJobDefinitionStore.DeleteJobArtifacts"/>
     /// removes BOTH the definition file and the job's output-log directory, so the

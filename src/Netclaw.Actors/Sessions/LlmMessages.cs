@@ -74,6 +74,7 @@ internal sealed record LlmCallFailed(Exception Cause) : INoSerializationVerifica
 /// </summary>
 internal sealed record ToolExecutionCompleted : INoSerializationVerificationNeeded
 {
+    public required CancellationToken ExecutionToken { get; init; }
     public required List<Protocol.SerializableChatMessage> ToolResults { get; init; }
     public List<SerializableMediaReference> ModelInputMediaReferences { get; init; } = [];
     public List<FileAttachmentInfo> FileAttachments { get; init; } = [];
@@ -87,7 +88,16 @@ internal sealed record ToolExecutionCompleted : INoSerializationVerificationNeed
     public Dictionary<string, AuthorizationAttemptId> AuthorizationAttemptIds { get; init; } = new(StringComparer.Ordinal);
 }
 
-internal sealed record ToolExecutionSingleCompleted(ToolCallResult Result) : INoSerializationVerificationNeeded;
+internal sealed record ToolExecutionSingleCompleted(ToolCallResult Result, CancellationToken ExecutionToken)
+    : INoSerializationVerificationNeeded;
+
+internal sealed record ToolExecutionApprovalRequested(
+    ToolInteractionRequestDispatch Dispatch,
+    CancellationToken ExecutionToken) : INoSerializationVerificationNeeded;
+
+internal sealed record ToolExecutionSubAgentActivity(
+    SessionProtocol.SubAgentOutput Output,
+    CancellationToken ExecutionToken) : INoSerializationVerificationNeeded;
 
 internal sealed record ToolExposureRequest(ToolName ToolName);
 
@@ -104,7 +114,8 @@ internal sealed record ToolExposureRequest(ToolName ToolName);
 internal sealed record JobReapResolved(long Epoch, int ReapedCount, Exception? Error)
     : INoSerializationVerificationNeeded;
 
-internal sealed record ToolExecutionBatchCompleted : INoSerializationVerificationNeeded;
+internal sealed record ToolExecutionBatchCompleted(CancellationToken ExecutionToken)
+    : INoSerializationVerificationNeeded;
 
 internal sealed record WorkingContextSnapshotReady(
     long Generation,
@@ -171,6 +182,7 @@ internal sealed record AcceptedSubAgentFinding : INoSerializationVerificationNee
 /// </summary>
 internal sealed record ToolExecutionFailed : INoSerializationVerificationNeeded
 {
+    public required CancellationToken ExecutionToken { get; init; }
     public required Exception Cause { get; init; }
 }
 
@@ -189,7 +201,7 @@ internal sealed record ProcessingWatchdogExpired(long OperationId, string Operat
 /// Marshal a child actor creation request back onto the session actor thread.
 /// This keeps <c>Context.ActorOf</c> usage on the actor mailbox thread.
 /// </summary>
-internal sealed record SpawnChildActorRequest(Props Props, string ActorName)
+internal sealed record SpawnChildActorRequest(Props Props, string ActorName, CancellationToken ExecutionToken)
     : INoSerializationVerificationNeeded;
 
 /// <summary>

@@ -91,6 +91,10 @@ operation. Common cases: `netclaw status`, `netclaw doctor`,
 
 ## File and Shell Selection
 
+Keep every tool call within the user's current objective and explicit action constraints.
+When the required evidence is complete, return the requested result without unrelated tool calls.
+Apply the user's response-format constraints to progress messages and the final answer.
+
 When available, use `file_read` for a known local file read.
 When available, use `file_list` for a known local directory listing.
 Use `file_search` for bounded recursive name or literal text search.
@@ -241,16 +245,16 @@ fix and re-issue once, do not retry the same shape:
 - **Ambiguous meta spelling** — supplying two keys that map to the same meta
   field (e.g. both `_timeout_seconds` and `TimeoutSeconds`) rejects; send one.
 
-A repeated action-and-outcome correction means that no requested call ran.
+An exact recurrence correction refuses the named call. Other eligible calls can proceed.
 Choose a different action or finish the task from the available evidence.
-Do not repeat the blocked batch.
-Netclaw disables tools for the turn if the same blocked batch appears again.
+Do not repeat the prohibited call.
+A repeated prohibited call ends the task with a framework partial result.
 Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
-A valid metadata repair is not the same rejected action. A new user message
-starts a fresh cycle window; compaction alone does not.
+A valid metadata repair is not the same rejected action.
+Fresh authorized task adoption starts new detector state. Compaction and internal replay preserve the current state.
 If a text-only response contains tool calls, Netclaw rejects those calls and reports a provider failure.
-This failure does not prove that the turn exhausted its tool budget.
+Netclaw uses no static parent or child tool-call budget.
 
 ## Large tool output
 
@@ -990,3 +994,21 @@ Pair remote devices and manage their access via the pairing flow. Full steps:
 
 To demo or kick the tires on Netclaw end-to-end locally:
 `skill_read_resource('netclaw-operations', 'references/demo-apphost.md')`.
+
+## Exact tool recurrence
+
+Netclaw permits useful tasks beyond the former parent and child tool iteration limits.
+Do not configure `Session.MaxToolIterationsPerTurn`. Validation rejects this removed property; doctor repair removes it.
+A repeated exact call with unchanged outcomes receives corrective feedback. A prohibited repeat after that feedback ends the task.
+The runtime settles the task without another model response. The result can be partial.
+Use a different valid approach or finish the task after corrective feedback. Do not claim that a refused call executed.
+An accessible Pending or Running job permits its exact noncancel status query. This exception grants no other authority.
+Prefer completion notices or useful independent work over repeated status queries.
+Exact protection can miss changed arguments or noisy results. Operation timeouts and cancellation remain active.
+
+A background result resumes its original exact recurrence evidence after a fresh user task or restart.
+A missing or invalid new-format job origin causes an explicit partial failure.
+The runtime records the known job result as data and preserves unrelated tasks.
+Do not treat that report as approval for another tool call.
+Before upgrade, back up the session journal, snapshots, and job directory.
+An old binary cannot read the new `tta-v1` task event; rollback requires the backup or a tested compatible reader.

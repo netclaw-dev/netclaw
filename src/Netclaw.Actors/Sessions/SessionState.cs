@@ -5,7 +5,9 @@
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Reminders;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -50,6 +52,13 @@ public sealed record SessionState
 
     public ImmutableList<string> RecentSourceMessageKeys { get; init; } = [];
 
+    public ToolLoopCheckpoint LoopCheckpoint { get; init; } = new();
+    public ToolLoopAdmission? LoopAdmission { get; init; }
+    public ImmutableList<ToolLoopObservation> LoopObservations { get; init; } = [];
+    public bool LoopReceiptFailure { get; init; }
+    public TurnContextRecord? AdoptedTaskContext { get; init; }
+    public IReadOnlyList<InputId> AdoptedTaskInputIds { get; init; } = [];
+
     public int TurnCount { get; init; }
 
     public string? Title { get; init; }
@@ -89,14 +98,222 @@ public sealed record SessionState
         [];
 
     /// <summary>
-    /// In-memory best-effort dedup ledger for background-job-originated turns.
-    /// Same pattern as <see cref="ProcessedReminderIds"/> — not persisted to
-    /// snapshot, rebuilds from event replay.
+    /// Durable deduplication for completed and rejected background-job deliveries.
+    /// Pre-change snapshots omit this evidence and can have a legacy gap.
     /// </summary>
     public IImmutableSet<BackgroundJobId> ProcessedBackgroundJobIds { get; init; } =
         ImmutableHashSet<BackgroundJobId>.Empty;
 
     // ── Event application (pure functions) ──
+
+    public SessionState Apply(ToolTaskAdopted evt)
+    {
+        if (!TurnContext.TryFromRecord(evt.TurnContext, out var context, out var reason) || context is null)
+            throw new InvalidDataException($"An adopted task has invalid authority: {reason}");
+        if (evt.SessionId != context.SessionId)
+            throw new InvalidDataException("An adopted task has a different session identity.");
+        if (evt.ContinuedJobKey is not null && (evt.ContinuedJobKey != context.TurnId.Value
+            || evt.TurnContext.SourceKind != BackgroundJobManagerActor.SourceKind))
+            throw new InvalidDataException("A continued job key differs from its canonical authority context.");
+        if (AdoptedTaskContext is { } currentRecord && currentRecord.TurnId == context.TurnId.Value)
+        {
+            if (!TurnContext.TryFromRecord(currentRecord, out var current, out reason) || current is null
+                || !SameCanonicalContext(evt.TurnContext, currentRecord) || !AdoptedTaskInputIds.SequenceEqual(evt.InputIds)
+                || (currentRecord.SourceKind == BackgroundJobManagerActor.SourceKind && evt.ContinuedJobKey != currentRecord.TurnId))
+                throw new InvalidDataException("A repeated adoption differs from its canonical task.");
+            return this;
+        }
+        if (evt.InputIds.Count == 0 || evt.InputIds.Distinct().Count() != evt.InputIds.Count
+            || !PendingInputs.Take(evt.InputIds.Count).Select(static input => input.InputId).SequenceEqual(evt.InputIds))
+            throw new InvalidDataException("An adopted task does not name the next input prefix.");
+        var prefix = PendingInputs.Take(evt.InputIds.Count).ToArray();
+        foreach (var input in prefix)
+        {
+            if (!TurnContext.TryFromRecord(input.TurnContext, out var canonical, out reason) || canonical is null
+                || !TurnContext.HasSameAuthority(canonical, context))
+                throw new InvalidDataException("An adopted task differs from admitted input authority.");
+        }
+        if (!SameCanonicalContext(evt.TurnContext, prefix[^1].TurnContext))
+            throw new InvalidDataException("An adopted task does not use the latest admitted prefix context.");
+        var checkpoint = new ToolLoopCheckpoint { TaskId = context.TurnId.Value };
+        var receiptFailure = false;
+        if (prefix[^1].SourceBackgroundJobId is { } jobId)
+        {
+            var validLineage = TryGetBackgroundContinuation(prefix[^1], out var job, out var lineageReason);
+            if (prefix.Length != 1 || evt.ContinuedJobKey != jobId.Value || !validLineage)
+                throw new InvalidDataException($"A task cannot continue its job lineage: {lineageReason}");
+            if (job is not null)
+            {
+                checkpoint = job.OriginCheckpoint!;
+                receiptFailure = job.OriginReceiptFailure;
+            }
+        }
+        else if (evt.ContinuedJobKey is not null)
+            throw new InvalidDataException("A non-job input cannot restore a job checkpoint.");
+        return this with
+        {
+            AdoptedTaskContext = evt.TurnContext, AdoptedTaskInputIds = evt.InputIds,
+            LoopCheckpoint = checkpoint,
+            LoopAdmission = null, LoopObservations = [], LoopReceiptFailure = receiptFailure
+        };
+    }
+
+    public SessionState ApplyLoopAdmission(ToolBatchStarted evt)
+    {
+        if (!evt.MetadataOnly && evt.LegacyTaskContext is not null)
+            throw new InvalidDataException("A legacy task context requires a metadata-only event.");
+        if (evt.MetadataOnly)
+        {
+            if (!TurnContext.TryFromRecord(evt.LegacyTaskContext, out var legacyContext, out var contextReason) || legacyContext is null
+                || legacyContext.SessionId != evt.SessionId || legacyContext.TurnId.Value != evt.LoopAdmission?.TaskId)
+                throw new InvalidDataException($"A legacy baseline has invalid canonical authority: {contextReason}");
+            if (evt.LoopAdmission is not { Calls.Count: > 0 } admission || evt.LoopDelta is not { Reset: true } delta
+                || admission.TaskId != delta.TaskId || admission.RefusedCallIds.Count != 0
+                || evt.ConsumedInputIds.Count != 0 || HasMessagePayload(evt.UserMessage) || HasMessagePayload(evt.AssistantMessage)
+                || delta.Upserts.Count != 0 || delta.RemovedKeys.Count != 0 || delta.ColdKeys.Count != 0
+                || delta.AdjacentHistory.Count != 0 || delta.LastBlockedAction is not null)
+                throw new InvalidDataException("A legacy tool baseline has invalid metadata-only representation.");
+            if (LoopAdmission is { } existing)
+            {
+                if (!SameAdmission(existing, admission) || AdoptedTaskContext is null
+                    || !SameCanonicalContext(AdoptedTaskContext, evt.LegacyTaskContext!))
+                    throw new InvalidDataException("A repeated legacy tool baseline differs from its committed admission.");
+                return this;
+            }
+            if (!string.IsNullOrEmpty(LoopCheckpoint.TaskId) || LoopCheckpoint.Entries.Count != 0
+                || LoopCheckpoint.ColdKeys.Count != 0 || LoopCheckpoint.AdjacentHistory.Count != 0
+                || LoopCheckpoint.LastBlockedAction is not null || LoopObservations.Count != 0 || LoopReceiptFailure)
+                throw new InvalidDataException("A legacy tool baseline cannot replace new-format evidence.");
+        }
+        return evt.LoopAdmission is null || evt.LoopDelta is null ? this : (this with
+        {
+            LoopCheckpoint = TurnStateTracker.ApplyDelta(LoopCheckpoint, evt.LoopDelta),
+            LoopAdmission = evt.LoopAdmission, LoopObservations = [], LoopReceiptFailure = false,
+            AdoptedTaskContext = evt.MetadataOnly ? evt.LegacyTaskContext : AdoptedTaskContext,
+            AdoptedTaskInputIds = evt.MetadataOnly ? [] : AdoptedTaskInputIds
+        }).RefreshJobEvidence();
+    }
+
+    private static bool HasMessagePayload(SerializableChatMessage message)
+        => !string.IsNullOrEmpty(message.Content) || message.ToolCalls.Count != 0 || message.MediaReferences.Count != 0
+           || message.ToolCallId is not null || message.Name is not null || message.Role != ChatRole.User;
+
+    internal static bool SameAdmission(ToolLoopAdmission left, ToolLoopAdmission right)
+        => left.TaskId == right.TaskId && left.ActionHash == right.ActionHash
+           && left.Calls.SequenceEqual(right.Calls) && left.RefusedCallIds.SequenceEqual(right.RefusedCallIds);
+
+    public SessionState ApplyLoopObservation(ToolCallRecorded evt)
+    {
+        if (LoopAdmission is not { } admission || evt.LoopObservation is not { } observation
+            || !admission.Calls.Any(call => call.CallId == observation.CallId)
+            || LoopObservations.Any(item => item.CallId == observation.CallId))
+            return this;
+        var owner = this;
+        if (evt.StartedBackgroundJob is { } started)
+        {
+            if (started.LineageVersion != 1 || started.Origin is null
+                || started.Origin.TurnId.Value != admission.TaskId || started.Origin.CallId.Value != observation.CallId)
+                throw new InvalidDataException("A started job differs from canonical parent admission.");
+            started.Origin.Validate();
+            owner = TrackBackgroundJob($"{BackgroundJobManagerActor.JobDeliveryKeyPrefix}{started.JobId.Value}",
+                started with { OriginCheckpoint = LoopCheckpoint, OriginReceiptFailure = LoopReceiptFailure });
+        }
+        var observations = LoopObservations.Add(observation);
+        var next = owner with { LoopObservations = observations,
+            LoopReceiptFailure = LoopReceiptFailure || observation.MissingReceipt };
+        if (observations.Count != admission.Calls.Count || next.LoopReceiptFailure)
+            return next.RefreshJobEvidence();
+        var tracker = new TurnStateTracker();
+        tracker.RestoreCheckpoint(LoopCheckpoint);
+        if (admission.Calls.Count != admission.RefusedCallIds.Count)
+            tracker.ObserveCompleted(ToolCycleSignatureFactory.CompleteEvidence(admission, observations));
+        return (next with { LoopCheckpoint = tracker.CaptureCheckpoint(admission.TaskId) }).RefreshJobEvidence();
+    }
+
+    internal bool TryGetBackgroundContinuation(InputAdmitted input, out ActiveJobInfo? job, out string? reason)
+    {
+        job = null;
+        reason = "invalid trusted job metadata";
+        if (input.SessionId != input.TurnContext.SessionId
+            || input.SourceBackgroundJobId is not { } sourceJob || input.SourceMessageId != sourceJob.Value
+            || input.TurnContext.TurnId != sourceJob.Value
+            || input.TurnContext.SourceKind != BackgroundJobManagerActor.SourceKind
+            || input.TurnContext.RequesterPrincipal != Configuration.PrincipalClassification.VerifiedAutomation
+            || input.TurnContext.TransportAuthenticity != Configuration.TransportAuthenticity.LocalProcess
+            || !sourceJob.Value.StartsWith(BackgroundJobManagerActor.JobDeliveryKeyPrefix, StringComparison.Ordinal))
+            return false;
+        if (input.BackgroundJobLineageVersion == 0 && input.BackgroundJobOrigin is null)
+        {
+            if (ActiveBackgroundJobs.TryGetValue(sourceJob.Value, out var tracked) && tracked.LineageVersion != 0)
+            {
+                reason = "a legacy claim conflicts with committed new-format lineage";
+                return false;
+            }
+            reason = null;
+            return true;
+        }
+        if (input.BackgroundJobLineageVersion != 1 || input.BackgroundJobOrigin is null)
+            return false;
+        if (!ActiveBackgroundJobs.TryGetValue(sourceJob.Value, out var owned)
+            || owned.LineageVersion != 1 || owned.Origin is not { } origin || origin != input.BackgroundJobOrigin
+            || string.IsNullOrWhiteSpace(origin.TurnId.Value) || string.IsNullOrWhiteSpace(origin.CallId.Value)
+            || sourceJob.Value != $"{BackgroundJobManagerActor.JobDeliveryKeyPrefix}{owned.JobId.Value}"
+            || owned.Audience != input.TurnContext.Audience || owned.Boundary != input.TurnContext.Boundary
+            || owned.OriginCheckpoint?.TaskId != origin.TurnId.Value)
+        {
+            reason = "missing or mismatched committed parent lineage";
+            return false;
+        }
+        job = owned;
+        reason = null;
+        return true;
+    }
+
+    private SessionState RefreshJobEvidence()
+    {
+        var jobs = ActiveBackgroundJobs;
+        foreach (var (key, job) in jobs)
+        {
+            if (job.LineageVersion == 1 && job.Origin?.TurnId.Value == LoopCheckpoint.TaskId)
+                jobs = jobs.SetItem(key, job with { OriginCheckpoint = LoopCheckpoint, OriginReceiptFailure = LoopReceiptFailure });
+        }
+        return this with { ActiveBackgroundJobs = jobs };
+    }
+
+    internal static bool SameCanonicalContext(TurnContextRecord left, TurnContextRecord right)
+        => left with { AdoptedSpeakerIds = right.AdoptedSpeakerIds } == right
+           && left.AdoptedSpeakerIds.SequenceEqual(right.AdoptedSpeakerIds, StringComparer.Ordinal);
+
+    public SessionState Apply(InputClosed evt)
+    {
+        var next = CloseInputs(evt.InputIds);
+        if (evt.SourceBackgroundJobId is { } closedJob)
+        {
+            if (ProcessedBackgroundJobIds.Contains(closedJob) && evt.InputIds.All(id => !PendingInputs.Any(input => input.InputId == id)))
+                return this;
+            var input = PendingInputs.SingleOrDefault(item => item.InputId == evt.InputIds.SingleOrDefault());
+            if (input is null || input.SourceBackgroundJobId != closedJob || input.TurnContext.TurnId != evt.TaskId)
+                throw new InvalidDataException("A closed job delivery differs from canonical admitted input.");
+            if (input.TurnContext.SourceKind != BackgroundJobManagerActor.SourceKind
+                || input.TurnContext.RequesterPrincipal != Configuration.PrincipalClassification.VerifiedAutomation
+                || input.TurnContext.TransportAuthenticity != Configuration.TransportAuthenticity.LocalProcess)
+                throw new InvalidDataException("A rejected delivery lacks canonical runtime provenance.");
+            if (evt.RejectedJobReport is { } report)
+            {
+                if (report.Role != ChatRole.Assistant || report.ToolCalls.Count > 0 || report.ToolCallId is not null)
+                    throw new InvalidDataException("A rejected job report cannot carry tool authority.");
+                next = next with { History = next.History.Add(report) };
+            }
+            next = next with { ProcessedBackgroundJobIds = next.ProcessedBackgroundJobIds.Add(closedJob) };
+        }
+        if (evt.RejectedJobReport is not null && evt.SourceBackgroundJobId is null)
+            throw new InvalidDataException("A rejected job report requires its canonical delivery identity.");
+        var closesTask = AdoptedTaskContext is not null
+            && (evt.TaskId == AdoptedTaskContext.TurnId
+                || (evt.TaskId is null && AdoptedTaskInputIds.Count > 0
+                    && AdoptedTaskInputIds.All(evt.InputIds.Contains)));
+        return closesTask ? next with { AdoptedTaskContext = null, AdoptedTaskInputIds = [] } : next;
+    }
 
     public SessionState Apply(InputAdmitted evt)
     {
@@ -167,6 +384,7 @@ public sealed record SessionState
 
         return this with
         {
+            AdoptedTaskContext = null, AdoptedTaskInputIds = [],
             ProcessedBackgroundJobIds = processedJobs,
             ActiveBackgroundJobs = activeJobs
         };
@@ -308,7 +526,7 @@ public sealed record SessionState
 
     /// <summary>
     /// Add a transient system nudge to the END of history to correct LLM
-    /// behavior mid-turn (empty-response retry, duplicate-tool, budget warning,
+    /// behavior mid-turn (empty-response retry, exact tool recurrence,
     /// delivery retry). These are course-correcting instructions: the model is
     /// meant to act on them, so they sit at the tail where the chat template
     /// treats them as the most recent input. Not persisted as a turn — just
@@ -466,6 +684,10 @@ public sealed record SessionState
         return new SessionSnapshot
         {
             History = new List<SerializableChatMessage>(History),
+            LoopCheckpoint = LoopCheckpoint, LoopAdmission = LoopAdmission,
+            LoopObservations = LoopObservations.ToArray(), LoopReceiptFailure = LoopReceiptFailure,
+            AdoptedTaskContext = AdoptedTaskContext, AdoptedTaskInputIds = AdoptedTaskInputIds,
+            ProcessedBackgroundJobIds = ProcessedBackgroundJobIds.ToArray(),
             PendingInputs = PendingInputs.ToArray(),
             RecentSourceMessageKeys = RecentSourceMessageKeys.ToArray(),
             TurnCount = TurnCount,
@@ -528,6 +750,12 @@ public sealed record SessionState
         return new SessionState
         {
             History = ImmutableList.CreateRange(snapshot.History),
+            LoopCheckpoint = snapshot.LoopCheckpoint ?? new ToolLoopCheckpoint(),
+            LoopAdmission = snapshot.LoopAdmission,
+            LoopObservations = ImmutableList.CreateRange(snapshot.LoopObservations),
+            LoopReceiptFailure = snapshot.LoopReceiptFailure,
+            AdoptedTaskContext = snapshot.AdoptedTaskContext, AdoptedTaskInputIds = snapshot.AdoptedTaskInputIds,
+            ProcessedBackgroundJobIds = ImmutableHashSet.CreateRange(snapshot.ProcessedBackgroundJobIds),
             PendingInputs = ImmutableList.CreateRange(snapshot.PendingInputs),
             RecentSourceMessageKeys = ImmutableList.CreateRange(snapshot.RecentSourceMessageKeys),
             TurnCount = snapshot.TurnCount,

@@ -160,6 +160,28 @@ Counterexamples:
 - **THEN** receipt construction fails closed
 - **AND** an undefined remediation code also fails closed
 
+
+An accessible background-job status query SHALL supply a closed typed pending-operation fact only for `Pending` or `Running` status.
+This fact SHALL use the existing internal receipt path and SHALL grant no authority.
+The actor SHALL bind it to the original prepared query identity.
+The fact SHALL NOT apply to cancellation, validation failure, denial, error, a terminal job, or another identity.
+The fact SHALL NOT add a free-form receipt field or change the public string-returning tool contract.
+
+#### Scenario: Pending state remains typed after text presentation
+
+- **GIVEN** a valid noncancel query receives an accessible `Running` job response
+- **WHEN** the tool returns its model-facing text
+- **THEN** the internal receipt retains the closed pending-operation fact
+- **AND** the dispatcher does not replace it with generic success
+
+#### Scenario: A result without a receipt remains an evidence gap
+
+- **GIVEN** the actor receives an actual tool result without a trusted receipt
+- **WHEN** it records detector evidence
+- **THEN** it reports an explicit missing-receipt contract failure
+- **AND** it preserves paired results and prior evidence without fabricated success
+- **AND** it settles partial/failure without another model request
+
 ### Requirement: MCP tool outcomes are machine-actionable
 
 An MCP tool call that ends in an exception SHALL produce a tool receipt under the same rules as the requirement "First-party tool outcomes are machine-actionable". The category SHALL follow the failure kind: an HTTP 401 or 403 is `access_denied`, an HTTP 404 is `not_found`, and every other exception is `transient_failure`. The tool result SHALL stay a factual error string that names the tool. A tool-declared error is not an exception and SHALL keep its current result path. The receipt SHALL NOT grant authority, retry the call, or replay it.

@@ -14,7 +14,7 @@ namespace Netclaw.Daemon.Tests.Services;
 /// startup wiring decides the exit code, the stderr text and whether a crash log is written, so
 /// only a child process shows all three.
 /// </summary>
-public sealed class StartupConfigurationFailureProcessTests : IDisposable
+public sealed class StartupConfigurationFailureProcessTests(ITestOutputHelper output) : IDisposable
 {
     private const string Provider = "\"p\":{\"Type\":\"ollama\",\"Endpoint\":\"http://127.0.0.1:9\",\"AuthMethod\":\"None\"}";
     private const string Definitions = "\"Definitions\":{\"d\":{\"Provider\":\"p\",\"ModelId\":\"m\"}}";
@@ -74,12 +74,27 @@ public sealed class StartupConfigurationFailureProcessTests : IDisposable
             Assert.Fail("netclawd kept running with an invalid configuration.");
         }
 
+        var standardOutput = await stdout;
+        var standardError = await stderr;
+        output.WriteLine($"Child exit code: {process.ExitCode}");
+        output.WriteLine($"Child stdout:\n{standardOutput}");
+        output.WriteLine($"Child stderr:\n{standardError}");
+        var logsDirectory = Path.Combine(home, "logs");
+        if (Directory.Exists(logsDirectory))
+        {
+            foreach (var crashFile in Directory.EnumerateFiles(logsDirectory, "crash-*").Order(StringComparer.Ordinal))
+            {
+                output.WriteLine($"Child crash evidence: {Path.GetFileName(crashFile)}\n" +
+                    await File.ReadAllTextAsync(crashFile, TestContext.Current.CancellationToken));
+            }
+        }
+
         Assert.Equal(1, process.ExitCode);
-        var errorLines = (await stderr).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var errorLines = standardError.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var line = Assert.Single(errorLines);
         Assert.StartsWith("error: ", line);
         Assert.Contains(expected, line);
-        Assert.DoesNotContain("   at ", await stdout + line);
+        Assert.DoesNotContain("   at ", standardOutput + line);
         Assert.Empty(Directory.GetFiles(Path.Combine(home, "logs"), "crash-*"));
     }
 }

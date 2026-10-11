@@ -113,6 +113,9 @@ internal static class SessionCompactionPipeline
                     observationText.Length, Math.Max(0, discardStartIndex - systemOffset));
             }
 
+            if (compactedMessages.Count == 0 && history.Count > systemOffset)
+                throw new InvalidOperationException("Compaction cannot discard the entire task without a summary or retained messages.");
+
             self.Tell(new CompactionWorkCompleted
             {
                 OperationId = operationId,
@@ -183,7 +186,15 @@ internal static class SessionCompactionPipeline
 
             // Carry the session id so the observer's chat-client diagnostics route to the
             // session's session.log and correlate in Seq/OTLP (replaces the deleted AsyncLocal).
-            var observerOptions = new SessionScopedChatOptions { SessionId = sessionId.Value };
+            var observerOptions = new SessionScopedChatOptions
+            {
+                SessionId = sessionId.Value,
+                // Reuse the provider intent so summaries spend the sidecar deadline on output.
+                AdditionalProperties = new AdditionalPropertiesDictionary
+                {
+                    [NetclawChatOptionKeys.SuppressReasoning] = true
+                }
+            };
             var result = await StreamingResponseReader.ReadAsync(
                 client, observerMessages, observerOptions, cts.Token);
             var text = result.Response.Text;

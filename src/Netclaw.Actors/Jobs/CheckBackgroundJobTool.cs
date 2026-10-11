@@ -62,6 +62,9 @@ public sealed partial class CheckBackgroundJobTool : NetclawTool<CheckBackground
         if (!response.Found)
             return $"Error: job {args.JobId} not found or not accessible from this session.";
 
+        if (response.Status is BackgroundJobStatus.Pending or BackgroundJobStatus.Running)
+            context.Outputs.TryComplete(new ToolInvocationReceipt.PendingBackgroundJob());
+
         var status = response.Status.ToString().ToLowerInvariant();
         var elapsed = response.Elapsed?.TotalSeconds ?? 0;
         var result = $"Job {args.JobId}: {status} ({elapsed:F1}s elapsed)";

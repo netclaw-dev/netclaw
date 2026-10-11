@@ -191,7 +191,6 @@ Tuning parameters for LLM session behavior.
     "CompactionThreshold": 0.75,
     "SnapshotInterval": 20,
     "KeepRecentToolResults": 3,
-    "MaxToolIterationsPerTurn": 60,
     "SidecarLlmTimeoutSeconds": 90,
     "TurnLlmTimeoutSeconds": 180,
     "ToolExecutionTimeoutSeconds": 90
@@ -204,7 +203,6 @@ Tuning parameters for LLM session behavior.
 | `CompactionThreshold` | double | `0.75` | Context usage ratio (0.0–1.0) at which compaction triggers. |
 | `SnapshotInterval` | int | `20` | Number of turns between persistence snapshots. |
 | `KeepRecentToolResults` | int | `3` | Recent tool call/result pairs kept in full during compaction. |
-| `MaxToolIterationsPerTurn` | int | `60` | Max LLM-to-tools-to-LLM iterations per turn. One LLM response with any number of parallel tool calls counts as exactly one iteration. At ~75% a budget nudge is injected; at 100% tools are stripped and the model is asked to summarize. |
 | `SidecarLlmTimeoutSeconds` | int | `90` | Timeout for sidecar LLM calls (title generation, observer summaries, memory extraction). |
 | `TurnLlmTimeoutSeconds` | int | `180` | Timeout for the primary per-turn LLM streaming call before forcing an error/recovery path. |
 | `ToolExecutionTimeoutSeconds` | int | `90` | Per-tool-call inactivity budget. A tool must produce its first result or stream item within this time, and each later item resets the budget. |
@@ -676,7 +674,7 @@ export NETCLAW_Telemetry__Enabled="true"
 export NETCLAW_Telemetry__Otlp__Endpoint="http://127.0.0.1:4317"
 
 # Override session settings
-export NETCLAW_Session__MaxToolIterationsPerTurn="60"
+export NETCLAW_Session__ToolExecutionTimeoutSeconds="90"
 ```
 
 ## Complete Example
@@ -720,7 +718,6 @@ export NETCLAW_Session__MaxToolIterationsPerTurn="60"
     "CompactionThreshold": 0.75,
     "SnapshotInterval": 20,
     "KeepRecentToolResults": 3,
-    "MaxToolIterationsPerTurn": 60,
     "TurnLlmTimeoutSeconds": 180,
     "ToolExecutionTimeoutSeconds": 90
   },
@@ -750,3 +747,11 @@ When no configuration files exist, Netclaw uses these defaults:
 - **Main model**: `qwen3:30b` with 32,768 token context window
 - **Fallback/Compaction**: Not configured (uses Main)
 - **System prompt**: Seeded to `~/.netclaw/soul/PERSONALITY.md` on first run
+
+Tool iteration counts do not stop useful tasks. Netclaw applies exact action-and-outcome recurrence protection instead.
+Remove the legacy `Session.MaxToolIterationsPerTurn` property. Configuration validation rejects it; `netclaw doctor --fix` removes it.
+The parent and child retain operation timeouts and explicit cancellation.
+The guard supplies corrective feedback before terminal settlement. Terminal settlement requires no final model response.
+Exact signatures can miss loops with different arguments or result text. The guard supplies no total cost guarantee.
+An authorized Pending or Running background-job query can repeat through its typed status exception.
+Use completion notices or other useful work instead of repeated status queries.

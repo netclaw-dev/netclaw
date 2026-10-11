@@ -51,6 +51,14 @@ Neither case creates this terminal receipt and failure result.
 
 ## Runtime and Actor Terms
 
+### Cancellation token
+
+A cancellation token is the .NET value that refers to a cancellation source.
+A local foreground dispatch uses its original source token to correlate callbacks with the current actor-owned dispatch.
+A per-tool timeout token does not replace that dispatch token.
+The token grants no authority and remains outside durable records and public outputs.
+Owner: [`LlmSessionActor`](../../src/Netclaw.Actors/Sessions/LlmSessionActor.cs).
+
 ### Actor
 
 An actor owns mutable runtime state and processes one message at a time. Netclaw

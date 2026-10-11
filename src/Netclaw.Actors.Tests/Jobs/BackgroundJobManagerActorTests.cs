@@ -116,6 +116,7 @@ public class BackgroundJobManagerActorTests : TestKit, IAsyncDisposable
 
     private StartBackgroundJob MakeStartCommand(string command = "echo hello", string sessionId = "test/thread") => new()
     {
+        Origin = new BackgroundJobOrigin(new Netclaw.Actors.Protocol.TurnId("test-parent"), new Netclaw.Tools.ToolCallId("test-call")),
         Launch = BackgroundShellLaunchFixture.Create(command, _dir.Path, sessionId, TestShellEnvironment.Current),
         Rationale = "test run",
         OriginChannelType = ChannelType.Tui,
@@ -471,6 +472,40 @@ public class BackgroundJobManagerActorTests : TestKit, IAsyncDisposable
         Assert.Contains(sink.Alerts, alert =>
             alert.Category == AlertType.BackgroundJobSchemaDropped
             && alert.Summary.Contains(jobId, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Invalid_new_definition_reports_contract_failure_only_to_its_owner()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        const string jobId = "malformed-lineage";
+        var path = Path.Combine(paths.JobsDirectory, $"{jobId}.json");
+        File.WriteAllText(path, $$"""
+            {
+              "id": "{{jobId}}", "command": "echo forbidden", "sessionId": "lineage/session",
+              "rationale": "Read one result.", "status": "Pending", "audience": "Personal",
+              "boundary": "boundary:personal", "lineageVersion": 1
+            }
+            """);
+        var sink = new RecordingNotificationSink();
+        var manager = Sys.ActorOf(Props.Create(() => new BackgroundJobManagerActor(
+            new BackgroundJobDefinitionStore(paths), TimeProvider.System, TestShellEnvironment.Current, sink)));
+        var health = await manager.Ask<BackgroundJobManagerHealthResponse>(GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.Equal(0, health.ActiveJobCount);
+        Assert.Equal(0, health.QueuedJobCount);
+        Assert.Contains(sink.Alerts, alert => alert.Category == AlertType.BackgroundJobSchemaDropped && alert.Summary.Contains(jobId));
+        var query = new QueryBackgroundJob(new BackgroundJobId(jobId), new SessionId("lineage/session"), TrustAudience.Personal, TrustBoundary.Personal);
+        await Assert.ThrowsAsync<InvalidDataException>(() => manager.Ask<BackgroundJobStatusResponse>(query,
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidDataException>(() => manager.Ask<BackgroundJobCancelResponse>(new CancelBackgroundJob(
+            query.JobId, query.SessionId, query.Audience, query.Boundary), TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+        var foreign = await manager.Ask<BackgroundJobStatusResponse>(query with { SessionId = new SessionId("foreign/session") },
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.False(foreign.Found);
+        Assert.Null(foreign.OutputTail);
+        Assert.Null(foreign.Rationale);
+        Assert.True(File.Exists(path));
     }
 
     [Fact]

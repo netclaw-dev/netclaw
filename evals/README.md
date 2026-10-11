@@ -7,10 +7,6 @@ Completely isolated from the operator's real `~/.netclaw` state.
 ## Quick Start
 
 ```bash
-# One-time: run netclaw init on the host so the eval script can borrow
-# your identity files (SOUL.md, AGENTS.md, TOOLING.md).
-netclaw init
-
 # Run the full suite against your preferred LLM endpoint.
 NETCLAW_EVAL_PROVIDER_TYPE=ollama \
 NETCLAW_EVAL_PROVIDER_ENDPOINT=http://my-gpu-server.tailnet.ts.net:11434 \
@@ -41,9 +37,9 @@ default provider.
    from that image with `docker run --rm --network host`, a throwaway
    `$EVAL_HOME` temp directory, and `NETCLAW_*` env vars that route it at
    your LLM endpoint.
-3. Identity files are **copied** from `~/.netclaw/identity/` into
-   `$EVAL_HOME/identity/` (never bind-mounted from the real location, so
-   the operator's real identity cannot be mutated).
+3. The harness copies repository identity templates into `$EVAL_HOME/identity/`.
+   `NETCLAW_EVAL_ASSET_ROOT` selects the checkout that supplies these templates and the skill assets.
+   The harness does not copy the operator's identity files.
 4. Daemon logs land in `$EVAL_HOME/logs/daemon-YYYY-MM-DD.log` via a
    writable bind-mount of `/root/.netclaw/logs`. Assertion helpers tail
    this file with per-prompt offsets, exactly like the pre-container
@@ -55,6 +51,26 @@ default provider.
 6. On exit (success, failure, or SIGINT) the container is stopped and
    `$EVAL_HOME` is deleted. A throwaway root-in-container cleanup step
    handles files the daemon wrote as UID 0.
+
+### Fresh Containers For Independent Trials
+
+The harness creates one container per invocation. Cases and repeat trials within that invocation share its daemon and data home.
+Use one invocation per independent acceptance trial. Set one exact case and `NETCLAW_EVAL_RUNS=1` for each invocation.
+Multiple conversation turns within that trial use the same container and session.
+
+For five independent trials, run this command five times:
+
+```bash
+NETCLAW_EVAL_CASE=tool_cycle_correction \
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 \
+NETCLAW_EVAL_TIMEOUT=180 \
+  ./evals/run-evals.sh
+```
+
+Set the provider variables before each command. Retain every result, including failures and trials that exceed the deadline.
+Record distinct container IDs, data homes, run IDs, and session IDs. Retain each archive before the next invocation.
+Aggregate the five strict verdicts after all five invocations. Five repeat trials inside one invocation do not establish this isolation.
+An immutable image and CLI binary can be reused with `NETCLAW_EVAL_NO_BUILD=1`, `NETCLAW_IMAGE`, and `NETCLAW_BIN`.
 
 The harness preloads `evals/fixtures/config/netclaw.json` into the ephemeral
 home before startup. It auto-approves tools and grants read/write access for the
@@ -177,15 +193,15 @@ NETCLAW_EVAL_CATEGORY='Built-in Tools' NETCLAW_EVAL_TIMEOUT=240 ./evals/run-eval
 
 The cycle cases use the existing harness and provider relay. They require an
 OpenAI-compatible endpoint with a `/v1` API base. The default suite excludes them.
-Select the category or one `tool_cycle_*` case explicitly.
+Select one `tool_cycle_*` case explicitly for an independent trial.
 The cases require Docker, Bash, Python 3, jq, and sqlite3.
 
 ```bash
 NETCLAW_EVAL_PROVIDER_TYPE=openai-compatible \
 NETCLAW_EVAL_PROVIDER_ENDPOINT=http://your-model-server:8000/v1 \
 NETCLAW_EVAL_MODEL_ID=your-model \
-NETCLAW_EVAL_CATEGORY='Tool cycles' \
-NETCLAW_EVAL_RUNS=5 \
+NETCLAW_EVAL_CASE=tool_cycle_correction \
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=1 \
 NETCLAW_EVAL_TIMEOUT=180 \
   ./evals/run-evals.sh
 ```
@@ -193,28 +209,54 @@ NETCLAW_EVAL_TIMEOUT=180 \
 | Case | Required evidence |
 |------|-------------------|
 | `tool_cycle_correction` | The third request receives a runtime correction. The model uses `file_read` to complete an alternative. |
-| `tool_cycle_terminal` | The repeated blocked request causes a text-only call. The model reports incomplete work and two completed executions. |
+| `tool_cycle_terminal` | The runtime stops the repeated blocked request. It reports partial work without another model request. Exactly two executions complete. |
 | `tool_cycle_compaction` | Normal compaction completes between executions one and two. The third request receives a correction. The model completes an alternative. |
 | `tool_cycle_changed_result` | The same command returns a different result each time. All three executions complete. |
 | `tool_cycle_metadata_repair` | Two requests lack required metadata. The corrected request executes once without a cycle correction. |
+| `tool_cycle_nonadjacent_correction` | Distinct diagnostics separate two equal primary results. Candidate three receives correction. The real model completes recovery through `file_read`. |
+| `tool_cycle_nonadjacent_terminal` | A further diagnostic follows correction. The next primary candidate receives runtime Stop. No further provider request or effect occurs. |
 
 The relay scripts only the initial tool requests. Each request has a fresh call ID.
-The real daemon executes tools and emits the intervention. The target model then
-controls the response and any alternative tool use. The fixture never supplies a
-successful final answer.
+The real daemon executes tools and emits the intervention. The target model controls
+the alternative tool use in cases that permit recovery. The terminal cases require
+a runtime report and zero model requests after the stop candidate. The fixture never
+supplies a successful final answer.
 
 Each trial uses synthetic files in the isolated workspace. A separate counter
 checks actual side effects. Strict assertions require paired runtime results,
-the expected tool exposure, a real alternative result, and an accurate JSON report.
+the expected tool exposure, a real alternative result, and an accurate JSON report
+for recovery cases. The terminal cases require the runtime partial report.
 Every trial must pass. The category fixes the pass threshold at 100 percent.
+
+Recovery permits only `file_read` calls.
+`completed_attempts` counts actual primary appends. Denied requests and diagnostics do not count.
+`last_result` names the last executed primary output, without guard feedback or diagnostic output.
+The entire visible reply must contain one final JSON object, without Markdown or text beside tool calls.
+Earlier trial results retain their original prompt revision. These clarifications do not alter those verdicts.
+
+The nonadjacent cases request `A, B, A, C, A` after the normal shell-tool load.
+`A` appends one primary attempt and returns the same result.
+Distinct diagnostics `B` and `C` append their own labels to a separate counter and return distinct results.
+Candidate three of `A` must receive a paired runtime correction without an effect.
+The terminal case then requests `D, A`. Diagnostic `D` executes before the runtime refuses the final `A` candidate.
+These sequences avoid adjacent cycles of periods one through three.
+Exact CLI call arguments, ordered diagnostic receipts, and both counters establish the interleaved sequence.
+Both terminal oracles reject any later provider request, including a sidecar request.
+This oracle check does not establish a runtime or model pass.
+
+Acceptance requires five independent trials per new case and a 100 percent pass rate.
+Select `NETCLAW_EVAL_CASE=tool_cycle_nonadjacent_correction` or `NETCLAW_EVAL_CASE=tool_cycle_nonadjacent_terminal` with `NETCLAW_EVAL_RUNS=1`.
+Invoke the harness five times per case. Follow the fresh-container procedure above.
+Trial-count overrides remain available for diagnosis. Fewer trials do not complete acceptance.
 
 The compaction case reports synthetic token usage above the normal threshold.
 The real daemon must complete compaction and reduce history before the second
 execution. The isolated config retains one recent tool result and disables title
 requests. Production config and resource limits do not change.
 
-The relay permits at most eight main model requests and eight sidecar requests
-per trial. Compaction and memory-distillation requests share the sidecar limit.
+The relay permits at most 16 main requests per trial.
+At most eight of those requests can reach the target model.
+Compaction and memory-distillation requests share a separate limit of eight sidecar requests.
 Both require evidence that identifies the current synthetic trial.
 The common prompt timeout also applies. The relay accepts a plain API
 key through the existing environment variable. It does not accept encrypted keys.
@@ -246,6 +288,8 @@ The original status instruction does not clearly separate recovery-value retriev
 The revised prompt defines this distinction and explicitly requires `file_read`.
 The strict oracle still rejects shell alternatives and extra mutations.
 The report separates the initial runtime contract, post-handoff safety, and model task checks.
+The terminal case has no target-model task score. Its `model_task` group reports `not_applicable`.
+The runtime group checks its partial report and the absence of a final model request.
 An incomplete trace receives an explicit inconclusive result, never a pass.
 The safety group requires both the expected final counter and a `file_read`-only post-handoff trace.
 A final counter alone cannot exclude a later write that resets it.
@@ -499,9 +543,6 @@ skips persistence.
 - **No native ACL/authority eval mode yet**: the current scored runner exercises
   multi-turn attribution behavior, but it does not yet simulate restricted
   channel posture with distinct authorized vs unauthorized speakers.
-- **Identity is borrowed from host**: the container does not
-  self-bootstrap identity. CI will need a committed fixture under
-  `evals/fixtures/identity/` — tracked as a follow-up.
 - **Daemon does not fail fast on empty config**: a follow-up task will
   make `netclawd` refuse to start when identity or provider config is
   missing. Today, missing config produces a running-but-broken daemon

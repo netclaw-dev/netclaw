@@ -1623,44 +1623,6 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
     }
 
     [Fact]
-    public async Task Max_iterations_forces_text_response()
-    {
-        var fakeTool = new FakeNetclawTool("looper", "loop result");
-        var fakeClient = new FakeChatClient
-        {
-            ToolCallsOnFirstCall =
-            [
-                CreateToolCall("call-loop", "looper")
-            ],
-            AlwaysReturnToolCalls = true
-        };
-
-        var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
-            definition,
-            fakeClient,
-            PermissivePolicy(),
-            maxToolIterations: 3));
-
-        var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Loop forever", Timeout = TimeSpan.FromSeconds(10) },
-            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-
-        // After the configured tool budget, force a no-tools call which returns text.
-        Assert.True(result.Success);
-        Assert.Equal(SubAgentRunOutcome.Partial, result.Outcome);
-        Assert.Equal(SubAgentOutcomeReason.ToolIterationBudgetExhausted, result.OutcomeReason);
-        Assert.Equal(4, fakeClient.CallCount);
-        Assert.NotNull(fakeClient.LastReceivedMessages);
-        Assert.Contains(fakeClient.LastReceivedMessages,
-            message => message.Role == ChatRole.User
-                       && message.Text.Contains("Start wrapping up your tool usage", StringComparison.Ordinal));
-        Assert.Contains(fakeClient.LastReceivedMessages,
-            message => message.Role == ChatRole.User
-                       && message.Text.Contains("Do NOT request any more tools", StringComparison.Ordinal));
-    }
-
-    [Fact]
     public async Task Exact_tool_cycle_gets_one_correction_then_stops()
     {
         var diagnostics = CreateTestProbe();
@@ -1691,8 +1653,7 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition([fakeTool]),
             fakeClient,
-            PermissivePolicy(),
-            maxToolIterations: 10));
+            PermissivePolicy()));
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
@@ -1707,9 +1668,9 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
         Assert.True(result.Success);
         Assert.Equal(SubAgentRunOutcome.Partial, result.Outcome);
         Assert.Equal(SubAgentOutcomeReason.ToolCycleStopped, result.OutcomeReason);
-        Assert.Equal(6, fakeClient.CallCount);
+        Assert.Equal(4, fakeClient.CallCount);
         Assert.Equal(2, executionCount);
-        Assert.Equal("Final partial report.", result.Output);
+        Assert.Contains("The result is partial", result.Output, StringComparison.Ordinal);
         Assert.NotNull(fakeClient.LastReceivedMessages);
         var toolResults = fakeClient.LastReceivedMessages
             .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())

@@ -15,6 +15,10 @@ from background_fixture import handler_for
 from cycle_evals import CASES, CORRECTION, STOP, CycleFixture, main, primary_receipts, verdict
 
 
+ORIGINAL_CASES = {"correction", "terminal", "compaction", "changed_result", "metadata_repair"}
+NONADJACENT_CASES = {"nonadjacent_correction", "nonadjacent_terminal"}
+
+
 def evidence(case="correction"):
     """Create an explicit contract example, not a fixture-generated snapshot."""
     ids = [f"script-{index}" for index in range(5 if case == "terminal" else 4)]
@@ -41,7 +45,10 @@ def evidence(case="correction"):
         calls.append({"callId": "real-recovery", "toolName": recovery["name"],
                       "argumentsJson": recovery["arguments"]})
     snapshot = {"case": case, "effects": expected, "scripted_ids": ids,
-                "main_requests": 6, "sidecar_requests": int(case == "compaction"), "model_requests": 1,
+                "main_requests": 5 if case == "terminal" else 6,
+                "sidecar_requests": int(case == "compaction"), "model_requests": 0 if case == "terminal" else 1,
+                "terminal_requests": 0,
+                "terminal_boundary": {"effects": expected, "correction_ids": list(corrections)} if case == "terminal" else None,
                 "compaction_requests": int(case == "compaction"), "distillation_requests": 0, "context_window": 65536,
                 "handoff": {"tools": [] if case == "terminal" else ["file_read"], "effects": expected,
                             "correction_ids": list(corrections), "stop_instruction": case == "terminal"},
@@ -51,6 +58,10 @@ def evidence(case="correction"):
               "blocked_attempt_executed": False, "last_result": last_result,
               "recovered_value": "" if case == "terminal" else recovery_value}
     output = {"sessionId": "unit-session", "toolCalls": calls, "response": json.dumps(answer)}
+    if case == "terminal":
+        snapshot["handoff"] = None
+        output["response"] = (STOP + " The result is partial. The last refused operation did not execute. "
+                              "Earlier tool results remain available in the session.")
     batch = "turn_tool_call_batch count=1 tools=shell_execute\n"
     actor_log = batch + ("Compaction complete (before=8, after=4)\n" if case == "compaction" else "") + batch
     return snapshot, output, actor_log
@@ -66,22 +77,22 @@ class CycleVerdictTests(unittest.TestCase):
         self.assertFalse(result["passed"], result)
 
     def test_positive_examples_cover_every_case(self):
-        self.assertEqual({"correction", "terminal", "compaction", "changed_result", "metadata_repair"}, CASES)
-        for case in CASES:
+        self.assertEqual(ORIGINAL_CASES | NONADJACENT_CASES, CASES)
+        for case in ORIGINAL_CASES:
             with self.subTest(case=case):
                 result = verdict(*evidence(case))
                 self.assertTrue(result["passed"], result)
 
     def test_effect_count_must_match_before_and_after_model_handoff(self):
-        for case in CASES:
-            for target in ("effects", "handoff"):
+        for case in ORIGINAL_CASES:
+            for target in ("effects", "terminal_boundary" if case == "terminal" else "handoff"):
                 for count in (0, 4):
                     with self.subTest(case=case, target=target, count=count):
                         snapshot, output, log = evidence(case)
                         if target == "effects":
                             snapshot["effects"] = count
                         else:
-                            snapshot["handoff"]["effects"] = count
+                            snapshot[target]["effects"] = count
                         self.assert_rejected(snapshot, output, log)
 
     def test_correction_must_match_the_third_request_exactly_once(self):
@@ -111,12 +122,26 @@ class CycleVerdictTests(unittest.TestCase):
         snapshot["handoff"] = None
         self.assert_rejected(snapshot, output, log)
 
-    def test_terminal_requires_no_tools_and_the_runtime_stop_instruction(self):
-        for field, value in (("tools", ["file_read"]), ("stop_instruction", False)):
+    def test_terminal_rejects_any_final_model_request(self):
+        for field, value in (("terminal_requests", 1), ("model_requests", 1),
+                             ("handoff", {"tools": [], "stop_instruction": True})):
             with self.subTest(field=field):
                 snapshot, output, log = evidence("terminal")
-                snapshot["handoff"][field] = value
+                snapshot[field] = value
                 self.assert_rejected(snapshot, output, log)
+
+    def test_terminal_requires_the_runtime_partial_report(self):
+        for response in ("", "The task completed.", STOP, '{"status":"incomplete"}'):
+            snapshot, output, log = evidence("terminal")
+            output["response"] = response
+            self.assert_rejected(snapshot, output, log)
+
+    def test_terminal_report_is_runtime_evidence_without_target_model_credit(self):
+        result = verdict(*evidence("terminal"))
+        self.assertTrue(result["groups"]["runtime_contract"]["checks"]["runtime_partial_report"])
+        self.assertEqual("not_applicable", result["groups"]["model_task"]["status"])
+        self.assertIsNone(result["groups"]["model_task"]["passed"])
+        self.assertEqual({}, result["groups"]["model_task"]["checks"])
 
     def test_terminal_rejects_any_post_stop_call_or_result(self):
         for defect in ("call", "result"):
@@ -211,7 +236,7 @@ class CycleVerdictTests(unittest.TestCase):
                 self.assert_rejected(snapshot, output, log)
 
     def test_false_final_report_fails(self):
-        for case in CASES:
+        for case in ORIGINAL_CASES - {"terminal"}:
             mutations = (("status", "complete" if case == "terminal" else "incomplete"),
                          ("completed_attempts", 99), ("completed_attempts", True),
                          ("blocked_attempt_executed", True), ("recovered_value", "invented"))
@@ -224,7 +249,7 @@ class CycleVerdictTests(unittest.TestCase):
                     self.assert_rejected(snapshot, output, log)
 
     def test_last_result_cannot_be_fabricated_or_absent(self):
-        for case in CASES:
+        for case in ORIGINAL_CASES - {"terminal"}:
             for absent in (False, True):
                 with self.subTest(case=case, absent=absent):
                     snapshot, output, log = evidence(case)
@@ -251,7 +276,7 @@ class CycleVerdictTests(unittest.TestCase):
         self.assert_rejected(snapshot, output, log)
 
     def test_other_cases_reject_unplanned_compaction(self):
-        for case in CASES - {"compaction"}:
+        for case in ORIGINAL_CASES - {"compaction"}:
             with self.subTest(case=case):
                 snapshot, output, log = evidence(case)
                 self.assert_rejected(snapshot, output, log + "Compaction complete (before=8, after=4)\n")
@@ -352,7 +377,7 @@ class CycleFixtureTests(unittest.TestCase):
             self.fixture.completion(request)
         self.assertEqual(0, self.fixture.model_requests)
 
-    def test_terminal_handoff_requires_no_tools_and_rejects_their_return(self):
+    def test_terminal_rejects_a_model_request_with_or_without_tools(self):
         request = self.to_correction("terminal")
         repeat = self.fixture.completion(request)
         self.assertEqual("shell_execute", repeat["tool_calls"][0]["function"]["name"])
@@ -360,11 +385,40 @@ class CycleFixtureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.fixture.completion(request)
         request["tools"] = []
-        self.assertIsNone(self.fixture.completion(request))
-        self.assertEqual([], self.fixture.handoff["tools"])
+        with self.assertRaises(ValueError):
+            self.fixture.completion(request)
+        self.assertIsNone(self.fixture.handoff)
+        self.assertEqual(0, self.fixture.model_requests)
+        self.assertEqual(2, self.fixture.terminal_requests)
         request["tools"] = [{"function": {"name": "file_read"}}]
         with self.assertRaises(ValueError):
             self.fixture.completion(request)
+
+    def test_old_terminal_rejects_both_sidecar_kinds_after_stop(self):
+        for kind in ("compaction", "distillation"):
+            with self.subTest(kind=kind):
+                request = self.to_correction("terminal")
+                self.fixture.completion(request)
+                before = copy.deepcopy(self.fixture.snapshot())
+                with self.assertRaises(ValueError):
+                    self.fixture.completion(self.sidecar(kind))
+                after = self.fixture.snapshot()
+                self.assertEqual(1, after["terminal_requests"])
+                for field in ("main_requests", "sidecar_requests", "model_requests", "scripted_ids", "tool_results"):
+                    self.assertEqual(before[field], after[field], field)
+
+    def test_foreign_sidecars_after_stop_cannot_count_as_current_task_provider_requests(self):
+        for kind in ("compaction", "distillation"):
+            with self.subTest(kind=kind):
+                request = self.to_correction("terminal")
+                self.fixture.completion(request)
+                foreign = self.sidecar(kind)
+                for message in foreign["messages"]:
+                    message["content"] = message["content"].replace(self.fixture.nonce, "0" * 32)
+                before = copy.deepcopy(self.fixture.snapshot())
+                with self.assertRaisesRegex(ValueError, "does not belong to this trial"):
+                    self.fixture.completion(foreign)
+                self.assertEqual(before, self.fixture.snapshot())
 
     def test_terminal_without_the_stop_instruction_is_not_a_sidecar(self):
         request = self.to_correction("terminal")
@@ -462,6 +516,7 @@ class CycleFixtureTests(unittest.TestCase):
     def test_compaction_does_not_replay_removed_script_ids(self):
         request = self.start("compaction")
         load = self.fixture.completion(request)
+        self.assertEqual({"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}, load["_fixture_usage"])
         self.acknowledge(request, load, "shell_execute", 0)
         first = self.fixture.completion(request)
         self.assertEqual(8000, first["_fixture_usage"]["prompt_tokens"])
@@ -544,6 +599,32 @@ class CycleFixtureTests(unittest.TestCase):
 
 
 class CycleUsageWireTests(unittest.TestCase):
+    def test_terminal_setup_emits_context_evidence_without_a_target_model_request(self):
+        for case in ("terminal", "nonadjacent_terminal"):
+            for stream in (False, True):
+                with self.subTest(case=case, stream=stream), tempfile.TemporaryDirectory() as home:
+                    fixture = CycleFixture("http://unused/v1", "unit-fixture", "", home, 10000)
+                    prompt = fixture.control("cycle", {"case": case})["prompt"]
+                    message = fixture.completion({"messages": [{"role": "user", "content": prompt}],
+                                                  "tools": [{"function": {"name": "load_tool"}}]})
+                    handler = object.__new__(handler_for(fixture))
+                    handler.wfile = io.BytesIO()
+                    handler.send_response = lambda *_: None
+                    handler.send_header = lambda *_: None
+                    handler.end_headers = lambda: None
+                    handler.reply({"stream": stream}, message)
+                    wire = handler.wfile.getvalue().decode()
+                    chunks = ([json.loads(line[6:]) for line in wire.splitlines()
+                               if line.startswith("data: ") and line != "data: [DONE]"]
+                              if stream else [json.loads(wire)])
+                    self.assertEqual([{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}],
+                                     [chunk["usage"] for chunk in chunks if chunk.get("usage") is not None])
+                    self.assertNotIn("_fixture_usage", wire)
+                    self.assertIn(fixture.scripted_ids[0], wire)
+                    self.assertEqual(0, fixture.model_requests)
+                    self.assertEqual(0, fixture.terminal_requests)
+                    self.assertIsNone(fixture.handoff)
+
     def test_usage_stays_out_of_the_message_and_has_one_accounting_record(self):
         fixture = type("FixtureIdentity", (), {"model": "unit-fixture"})()
         handler_type = handler_for(fixture)
@@ -573,8 +654,8 @@ class PrimaryReceiptTests(unittest.TestCase):
     def primary_log(self, case):
         snapshot, _, _ = evidence(case)
         success = "Exit code: 0\ncycle-stalled\n"
-        correction = ("Netclaw stopped this tool batch because it would continue a repeated action-and-outcome cycle. "
-                      "The same sequence completed twice without a changed result. No requested call executed.\n"
+        correction = ("Netclaw stopped this tool call because it would continue a repeated action-and-outcome cycle. "
+                      "The same action completed twice without a changed result. This call did not execute.\n"
                       "Next action: choose a different action, load a missing tool, or finish the task.")
         rejected = ("Error: Required meta argument '_rationale' must be a non-empty string. "
                     "Supply one sentence that states the tool call intent. The tool was NOT executed.")
@@ -585,7 +666,7 @@ class PrimaryReceiptTests(unittest.TestCase):
         return snapshot, records
 
     def test_exact_primary_receipts_pass_for_all_cases_without_provider_history(self):
-        for case in CASES:
+        for case in ORIGINAL_CASES:
             with self.subTest(case=case):
                 snapshot, records = self.primary_log(case)
                 snapshot["tool_results"] = {}
@@ -595,7 +676,7 @@ class PrimaryReceiptTests(unittest.TestCase):
                 self.assertTrue(primary_receipts(snapshot, log))
 
     def test_missing_duplicate_or_reordered_receipts_fail(self):
-        for case in CASES:
+        for case in ORIGINAL_CASES:
             snapshot, records = self.primary_log(case)
             for bad in (records[1:], [records[0], *records], list(reversed(records))):
                 with self.subTest(case=case, records=bad):
@@ -677,13 +758,19 @@ class CycleCommandTests(unittest.TestCase):
         return code, json.loads(capture.getvalue())
 
     def test_cli_composes_primary_receipts_and_context_into_the_runtime_score(self):
-        for case in CASES:
+        for case in ORIGINAL_CASES:
             with self.subTest(case=case):
                 code, report = self.invoke(self.documents(case))
                 self.assertEqual(0, code)
                 self.assertTrue(report["passed"])
                 self.assertEqual({"runtime_contract", "post_handoff_safety", "model_task"}, set(report["groups"]))
-                self.assertTrue(all(group["passed"] for group in report["groups"].values()))
+                self.assertTrue(report["groups"]["runtime_contract"]["passed"])
+                self.assertTrue(report["groups"]["post_handoff_safety"]["passed"])
+                if case == "terminal":
+                    self.assertIsNone(report["groups"]["model_task"]["passed"])
+                    self.assertEqual("not_applicable", report["groups"]["model_task"]["status"])
+                else:
+                    self.assertTrue(report["groups"]["model_task"]["passed"])
                 self.assertTrue(report["groups"]["runtime_contract"]["checks"]["primary_receipts"])
                 self.assertTrue(report["groups"]["runtime_contract"]["checks"]["context_window"])
 
@@ -701,6 +788,18 @@ class CycleCommandTests(unittest.TestCase):
                 self.assertEqual(1, code)
                 self.assertEqual("failed", report["status"])
                 self.assertFalse(report["groups"]["runtime_contract"]["passed"])
+
+    def test_terminal_requires_true_context_evidence_without_a_final_model_request(self):
+        for case in ("terminal", "nonadjacent_terminal"):
+            for replacement in ("", " context_window=32768", " context_window=131072"):
+                with self.subTest(case=case, replacement=replacement):
+                    documents = (self.documents(case) if case == "terminal"
+                                 else NonadjacentOracleTests().documents(terminal=True))
+                    documents["headless"] = documents["headless"].replace(" context_window=65536", replacement)
+                    code, report = self.invoke(documents)
+                    self.assertEqual(1, code)
+                    self.assertFalse(report["checks"]["context_window"])
+                    self.assertTrue(report["checks"]["no_terminal_model_request"])
 
     def test_missing_final_json_or_logs_produce_an_explicit_inconclusive_failure(self):
         for key, value in (("output", ""), ("output", "not-json"), ("output", "{}"),
@@ -764,6 +863,309 @@ if assert_cycle_case; then exit 0; else exit 1; fi
                 self.assertEqual("inconclusive", report["status"])
                 self.assertEqual(reason, report["reason"])
                 self.assertFalse(report["passed"])
+
+def nonadjacent_evidence(terminal=False):
+    """State the approved sequence independently from the script producer."""
+    case = "nonadjacent_terminal" if terminal else "nonadjacent_correction"
+    ids = [f"script-{index}" for index in range(8 if terminal else 6)]
+    labels = ["B", "C", "D"] if terminal else ["B", "C"]
+    primary = "python3 -c \"from pathlib import Path; p=Path('/isolated/attempts.txt'); p.open('a').write('attempt\\n'); print('cycle-stalled')\""
+    commands = {label: "python3 -c \"from pathlib import Path; p=Path('/isolated/diagnostics.txt'); "
+                f"p.open('a').write('{label}\\n'); print('diagnostic-{label}')\"" for label in labels}
+    actions = ["load", "A", "B", "A", "C", "A"] + (["D", "A"] if terminal else [])
+    scripted = {}
+    for call_id, action in zip(ids, actions):
+        arguments = ({"Name": "shell_execute", "_rationale": "Load the shell tool."} if action == "load" else
+                     {"Command": primary if action == "A" else commands[action], "_rationale": "Inspect the operation."})
+        scripted[call_id] = {"name": "load_tool" if action == "load" else "shell_execute",
+                             "arguments": json.dumps(arguments)}
+    executed_ids = ids[:-1] if terminal else ids
+    calls = [{"callId": call_id, "toolName": scripted[call_id]["name"],
+              "argumentsJson": scripted[call_id]["arguments"]} for call_id in executed_ids]
+    results = {ids[0]: "shell_execute", ids[1]: "Exit code: 0\ncycle-stalled\n",
+               ids[2]: "Exit code: 0\ndiagnostic-B\n", ids[3]: "Exit code: 0\ncycle-stalled\n",
+               ids[4]: "Exit code: 0\ndiagnostic-C\n", ids[5]: CORRECTION}
+    if terminal:
+        results[ids[6]] = "Exit code: 0\ndiagnostic-D\n"
+    observed = {call_id: copy.deepcopy(scripted[call_id]) for call_id in executed_ids}
+    recovery_path, recovery_value = "/isolated/recovery.txt", "actual-recovery-value"
+    if not terminal:
+        observed["model-recovery"] = {"name": "file_read", "arguments": json.dumps({"Path": recovery_path})}
+        calls.append({"callId": "model-recovery", "toolName": "file_read",
+                      "argumentsJson": observed["model-recovery"]["arguments"]})
+        results["model-recovery"] = recovery_value
+    boundary = {"effects": 2, "diagnostic_effects": labels.copy(), "correction_ids": [ids[5]]}
+    snapshot = {"case": case, "effects": 2, "diagnostic_effects": labels.copy(),
+                "primary_command": primary, "scripted_ids": ids, "scripted_calls": scripted,
+                "tool_results": results, "observed_calls": observed,
+                "main_requests": 8, "sidecar_requests": 0, "compaction_requests": 0,
+                "distillation_requests": 0, "context_window": 65536,
+                "model_requests": 0 if terminal else 2, "terminal_requests": 0,
+                "terminal_boundary": {**boundary, "main_requests": 8, "sidecar_requests": 0} if terminal else None,
+                "handoff": None if terminal else {**boundary, "tools": ["file_read", "shell_execute"], "stop_instruction": False},
+                "recovery_path": recovery_path, "recovery_value": recovery_value}
+    answer = {"status": "complete", "completed_attempts": 2, "blocked_attempt_executed": False,
+              "last_result": "cycle-stalled", "recovered_value": recovery_value}
+    output = {"sessionId": "isolated-nonadjacent", "toolCalls": calls,
+              "response": (STOP + " The result is partial. The last refused operation did not execute. "
+                           "Earlier tool results remain available in the session.") if terminal else json.dumps(answer)}
+    actor_log = "turn_tool_call_batch count=1 tools=shell_execute\n" * (5 if terminal else 4)
+    return snapshot, output, actor_log
+
+
+def nonadjacent_receipts(terminal=False):
+    snapshot, _, _ = nonadjacent_evidence(terminal)
+    correction = (CORRECTION + " The same action completed twice without a changed result. "
+                  "This call did not execute.\n"
+                  "Next action: choose a different action, load a missing tool, or finish the task.")
+    records = []
+    for call_id in snapshot["scripted_ids"][1:7 if terminal else 6]:
+        result = correction if call_id == "script-5" else snapshot["tool_results"][call_id]
+        records.append(PrimaryReceiptTests.record(f"TOOL_RESULT: shell_execute call_id={call_id} result={result}"))
+    return records
+
+
+class NonadjacentOracleTests(unittest.TestCase):
+    def documents(self, terminal=False):
+        snapshot, output, actor = nonadjacent_evidence(terminal)
+        return {"snapshot": json.dumps(snapshot), "output": json.dumps(output), "actor": actor,
+                "headless": "".join(nonadjacent_receipts(terminal)) + PrimaryReceiptTests.record("USAGE: context_window=65536")}
+
+    def assert_rejected(self, snapshot, output, actor, receipts=None, group="runtime_contract", malformed=False):
+        terminal = snapshot.get("case") == "nonadjacent_terminal"
+        documents = {"snapshot": json.dumps(snapshot), "output": json.dumps(output), "actor": actor,
+                     "headless": "".join(nonadjacent_receipts(terminal) if receipts is None else receipts)
+                                 + PrimaryReceiptTests.record("USAGE: context_window=65536")}
+        code, report = CycleCommandTests().invoke(documents)
+        self.assertEqual(1, code, report)
+        self.assertFalse(report["passed"], report)
+        if not malformed:
+            self.assertEqual("failed", report["status"], report)
+            self.assertFalse(report["groups"][group]["passed"], report)
+            self.assertIn(False, report["groups"][group]["checks"].values(), report)
+
+    def test_explicit_valid_sequences_pass_all_three_score_groups(self):
+        for terminal in (False, True):
+            with self.subTest(terminal=terminal):
+                code, report = CycleCommandTests().invoke(self.documents(terminal))
+                self.assertEqual(0, code, report)
+                self.assertTrue(report["passed"], report)
+                self.assertTrue(report["groups"]["runtime_contract"]["passed"])
+                self.assertTrue(report["groups"]["post_handoff_safety"]["passed"])
+                model = report["groups"]["model_task"]
+                self.assertIsNone(model["passed"]) if terminal else self.assertTrue(model["passed"])
+                if terminal:
+                    self.assertEqual("not_applicable", model["status"])
+                    self.assertEqual({}, model["checks"])
+
+    def test_each_diagnostic_requires_its_exact_actual_ordered_cli_receipt(self):
+        for terminal in (False, True):
+            for index in (1, 3, *([5] if terminal else [])):
+                for fault in ("missing", "duplicate", "wrong_id", "wrong_tool", "forged_assistant", "wrong_result", "reordered"):
+                    with self.subTest(terminal=terminal, index=index, fault=fault):
+                        s, o, log = nonadjacent_evidence(terminal)
+                        records = nonadjacent_receipts(terminal)
+                        if fault == "missing": records.pop(index)
+                        elif fault == "duplicate": records.insert(index, records[index])
+                        elif fault == "wrong_id": records[index] = records[index].replace(f"script-{index + 1}", "foreign")
+                        elif fault == "wrong_tool": records[index] = records[index].replace("TOOL_RESULT: shell_execute", "TOOL_RESULT: file_read")
+                        elif fault == "forged_assistant": records[index] = records[index].replace("TOOL_RESULT:", "ASSISTANT_FINAL: TOOL_RESULT:")
+                        elif fault == "wrong_result": records[index] = records[index].replace("diagnostic-", "invented-")
+                        else: records[index - 1], records[index] = records[index], records[index - 1]
+                        self.assert_rejected(s, o, log, records)
+
+    def test_provider_diagnostics_cannot_substitute_missing_or_false_pairs(self):
+        for terminal in (False, True):
+            for call_id in ("script-2", "script-4", *(["script-6"] if terminal else [])):
+                for fault in ("missing_result", "wrong_result", "missing_call", "wrong_arguments"):
+                    with self.subTest(terminal=terminal, call_id=call_id, fault=fault):
+                        s, o, log = nonadjacent_evidence(terminal)
+                        if fault == "missing_result": s["tool_results"].pop(call_id)
+                        elif fault == "wrong_result": s["tool_results"][call_id] = "Exit code: 0\ninvented\n"
+                        elif fault == "missing_call": s["observed_calls"].pop(call_id)
+                        else: s["observed_calls"][call_id]["arguments"] = json.dumps({"Command": "invented"})
+                        self.assert_rejected(s, o, log)
+
+    def test_diagnostic_effects_are_exact_at_the_boundary_and_after_it(self):
+        for terminal in (False, True):
+            for target in ("snapshot", "boundary"):
+                for value in ([], ["C", "B"], ["B", "C", "C"], ["B", "C", "D", "E"]):
+                    with self.subTest(terminal=terminal, target=target, value=value):
+                        s, o, log = nonadjacent_evidence(terminal)
+                        owner = s if target == "snapshot" else s["terminal_boundary" if terminal else "handoff"]
+                        owner["diagnostic_effects"] = value
+                        self.assert_rejected(s, o, log, group="post_handoff_safety" if target == "snapshot" else "runtime_contract")
+
+    def test_duplicate_ids_reordered_calls_or_changed_identities_fail(self):
+        for terminal in (False, True):
+            for fault in ("duplicate_ids", "duplicate_cli", "reordered_cli", "changed_primary", "diagnostic_equals_primary", "equal_diagnostics", "wrong_tool", "wrong_cli_arguments"):
+                with self.subTest(terminal=terminal, fault=fault):
+                    s, o, log = nonadjacent_evidence(terminal)
+                    if fault == "duplicate_ids": s["scripted_ids"][3] = s["scripted_ids"][1]
+                    elif fault == "duplicate_cli": o["toolCalls"][3]["callId"] = o["toolCalls"][1]["callId"]
+                    elif fault == "reordered_cli": o["toolCalls"][2], o["toolCalls"][3] = o["toolCalls"][3], o["toolCalls"][2]
+                    elif fault in {"changed_primary", "diagnostic_equals_primary", "equal_diagnostics"}:
+                        target = "script-3" if fault == "changed_primary" else "script-2" if fault == "diagnostic_equals_primary" else "script-4"
+                        source = "script-1" if fault == "diagnostic_equals_primary" else "script-2"
+                        replacement = copy.deepcopy(s["scripted_calls"][source])
+                        s["scripted_calls"][target] = replacement
+                        s["observed_calls"][target] = copy.deepcopy(replacement)
+                        o["toolCalls"][int(target[-1])]["argumentsJson"] = replacement["arguments"]
+                    elif fault == "wrong_tool": o["toolCalls"][2]["toolName"] = "file_read"
+                    else: o["toolCalls"][2]["argumentsJson"] = json.dumps({"Command": "forged"})
+                    self.assert_rejected(s, o, log)
+
+    def test_primary_effect_counts_and_correction_identity_remain_exact(self):
+        for terminal in (False, True):
+            for target in ("effects", "boundary"):
+                for value in (0, 1, 3, True):
+                    with self.subTest(terminal=terminal, target=target, value=value):
+                        s, o, log = nonadjacent_evidence(terminal)
+                        if target == "effects": s["effects"] = value
+                        else: s["terminal_boundary" if terminal else "handoff"]["effects"] = value
+                        self.assert_rejected(s, o, log, group="post_handoff_safety" if target == "effects" else "runtime_contract")
+            for fault in ("missing", "wrong_id", "extra", "success"):
+                with self.subTest(terminal=terminal, correction_fault=fault):
+                    s, o, log = nonadjacent_evidence(terminal)
+                    if fault != "extra": s["tool_results"].pop("script-5")
+                    if fault in {"wrong_id", "extra"}: s["tool_results"]["script-4"] = CORRECTION
+                    if fault == "success": s["tool_results"]["script-5"] = "Exit code: 0\ncycle-stalled\n"
+                    self.assert_rejected(s, o, log)
+
+    def test_correction_requires_real_recovery_and_an_accurate_strict_report(self):
+        for fault in ("model_absent", "missing_recovery", "wrong_recovery", "false_count", "false_success", "prose"):
+            with self.subTest(fault=fault):
+                s, o, log = nonadjacent_evidence()
+                answer = json.loads(o["response"])
+                if fault == "model_absent": s["model_requests"] = 0
+                elif fault == "missing_recovery": s["tool_results"].pop("model-recovery")
+                elif fault == "wrong_recovery": s["tool_results"]["model-recovery"] = "invented"
+                elif fault == "false_count": answer["completed_attempts"] = 3
+                elif fault == "false_success": answer["blocked_attempt_executed"] = True
+                else: o["response"] = "The task succeeded. " + o["response"]
+                if fault in {"false_count", "false_success"}: o["response"] = json.dumps(answer)
+                self.assert_rejected(s, o, log, group="model_task")
+
+    def test_terminal_rejects_all_work_after_stop_including_sidecars(self):
+        for fault in ("main", "sidecar", "model", "terminal_request", "handoff", "call", "result", "effect", "diagnostic", "false_report"):
+            with self.subTest(fault=fault):
+                s, o, log = nonadjacent_evidence(True)
+                if fault == "main": s["main_requests"] += 1
+                elif fault == "sidecar": s["sidecar_requests"] += 1
+                elif fault == "model": s["model_requests"] = 1
+                elif fault == "terminal_request": s["terminal_requests"] = 1
+                elif fault == "handoff": s["handoff"] = {"tools": []}
+                elif fault == "call": o["toolCalls"].append({"callId": "script-7", "toolName": "shell_execute"})
+                elif fault == "result": s["tool_results"]["script-7"] = "Exit code: 0\ncycle-stalled\n"
+                elif fault == "effect": s["effects"] = 3
+                elif fault == "diagnostic": s["diagnostic_effects"].append("E")
+                else: o["response"] = "The task completed successfully."
+                group = "post_handoff_safety" if fault in {"call", "result", "effect", "diagnostic"} else "runtime_contract"
+                self.assert_rejected(s, o, log, group=group)
+
+    def test_invalid_new_evidence_shapes_fail_loudly(self):
+        for terminal in (False, True):
+            for field, value in (("diagnostic_effects", None), ("scripted_calls", None), ("primary_command", None),
+                                 ("scripted_ids", []), ("tool_results", []), ("observed_calls", [])):
+                with self.subTest(terminal=terminal, field=field):
+                    s, o, log = nonadjacent_evidence(terminal)
+                    s[field] = value
+                    self.assert_rejected(s, o, log, malformed=True)
+
+
+class NonadjacentFixtureTests(unittest.TestCase):
+    setUp = CycleFixtureTests.setUp
+    start = CycleFixtureTests.start
+    acknowledge = CycleFixtureTests.acknowledge
+    sidecar = CycleFixtureTests.sidecar
+
+    def to_boundary(self, terminal=False, fault=None):
+        request = self.start("nonadjacent_terminal" if terminal else "nonadjacent_correction")
+        actions = ["load", "A", "B", "A", "C", "A"] + (["D"] if terminal else [])
+        effects, diagnostics = 0, []
+        identities = []
+        for index, action in enumerate(actions):
+            reply = self.fixture.completion(request)
+            identities.append(reply["tool_calls"][0])
+            if action == "load": result = "shell_execute"
+            elif action == "A":
+                effects += int(index != 5)
+                result = CORRECTION if index == 5 else "Exit code: 0\ncycle-stalled\n"
+            else:
+                diagnostics.append(action)
+                result = f"Exit code: 0\ndiagnostic-{action}\n"
+            self.acknowledge(request, reply, result, effects)
+            self.fixture.diagnostic_counter.write_text("".join(label + "\n" for label in diagnostics))
+        if fault in {"missing_diagnostic_receipt", "cached_diagnostic_receipt"}:
+            call_id = identities[2]["id"]
+            request["messages"] = [m for m in request["messages"] if m.get("tool_call_id") != call_id]
+            if fault == "missing_diagnostic_receipt":
+                self.fixture.tool_results.pop(call_id)
+        elif fault == "wrong_diagnostic_receipt":
+            next(m for m in request["messages"] if m.get("tool_call_id") == identities[2]["id"])["content"] = "invented"
+        elif fault == "wrong_diagnostic_effect": self.fixture.diagnostic_counter.write_text("C\nB\n")
+        elif fault == "third_primary_effect": self.fixture.counter.write_text("attempt\n" * 3)
+        elif fault == "missing_correction": request["messages"][-1]["content"] = "cycle-stalled"
+        return request, identities
+
+    def test_nonadjacent_script_uses_distinct_diagnostics_and_exact_primary_identity(self):
+        request, calls = self.to_boundary()
+        self.assertIsNone(self.fixture.completion(request))
+        self.assertEqual(6, len({call["id"] for call in calls}))
+        functions = [call["function"] for call in calls]
+        self.assertEqual(functions[1], functions[3])
+        self.assertEqual(functions[1], functions[5])
+        self.assertEqual(3, len({functions[index]["arguments"] for index in (1, 2, 4)}))
+        snapshot = self.fixture.snapshot()
+        self.assertEqual(2, snapshot["effects"])
+        self.assertEqual(["B", "C"], snapshot["diagnostic_effects"])
+        self.assertEqual([calls[5]["id"]], snapshot["handoff"]["correction_ids"])
+        self.assertIn("file_read", snapshot["handoff"]["tools"])
+        self.assertEqual(1, snapshot["model_requests"])
+
+    def test_cached_actual_diagnostic_receipt_survives_a_shorter_current_request(self):
+        request, calls = self.to_boundary(fault="cached_diagnostic_receipt")
+        self.assertIsNone(self.fixture.completion(request))
+        self.assertEqual("Exit code: 0\ndiagnostic-B\n", self.fixture.snapshot()["tool_results"][calls[2]["id"]])
+        self.assertEqual(1, self.fixture.model_requests)
+
+    def test_invalid_interleaved_evidence_cannot_reach_the_target_model(self):
+        for fault in ("missing_diagnostic_receipt", "wrong_diagnostic_receipt", "wrong_diagnostic_effect", "third_primary_effect", "missing_correction"):
+            with self.subTest(fault=fault):
+                request, _ = self.to_boundary(fault=fault)
+                with self.assertRaises(ValueError): self.fixture.completion(request)
+                self.assertEqual(0, self.fixture.model_requests)
+                self.assertIsNone(self.fixture.handoff)
+
+    def test_pre_stop_sidecars_preserve_both_terminal_scripts(self):
+        for case in ("terminal", "nonadjacent_terminal"):
+            for kind in ("compaction", "distillation"):
+                with self.subTest(case=case, kind=kind):
+                    self.start(case)
+                    before = copy.deepcopy(self.fixture.snapshot())
+                    self.assertIsNone(self.fixture.completion(self.sidecar(kind)))
+                    after = self.fixture.snapshot()
+                    self.assertEqual(1, after["sidecar_requests"])
+                    self.assertEqual(0, after["terminal_requests"])
+                    for field in ("main_requests", "model_requests", "scripted_ids", "tool_results", "handoff"):
+                        self.assertEqual(before[field], after[field], field)
+
+    def test_terminal_runs_D_then_proposes_A_and_rejects_every_later_provider_request(self):
+        request, calls = self.to_boundary(True)
+        last = self.fixture.completion(request)
+        self.assertEqual(calls[1]["function"], last["tool_calls"][0]["function"])
+        before = self.fixture.snapshot()
+        self.assertEqual(["B", "C", "D"], before["terminal_boundary"]["diagnostic_effects"])
+        self.assertEqual(8, len(set(before["scripted_ids"])))
+        for stale in (request, {**request, "tools": []}, self.sidecar(), self.sidecar("distillation")):
+            with self.subTest(request=stale):
+                with self.assertRaises(ValueError): self.fixture.completion(stale)
+        after = self.fixture.snapshot()
+        self.assertEqual(4, after["terminal_requests"])
+        for field in ("main_requests", "sidecar_requests", "model_requests", "effects", "diagnostic_effects", "tool_results"):
+            self.assertEqual(before[field], after[field], field)
+        self.assertIsNone(after["handoff"])
+
 
 
 class SessionActorLogCatalogTests(unittest.TestCase):

@@ -46,22 +46,25 @@ public sealed class SidecarSessionCorrelationTests : TestKit
     }
 
     [Fact]
-    public async Task CompactionObserver_carries_session_scoped_options()
+    public async Task CompactionObserver_preserves_scope_and_summary_with_the_provider_suppression_intent()
     {
         var sessionId = new SessionId("ch/compaction-thread");
-        var captor = new FakeChatClient();
+        var captor = new FakeChatClient { ObservationResponseOverride = "The task requires a source review and a complete report." };
         var history = new List<SerializableChatMessage>
         {
             new() { Role = Netclaw.Actors.Protocol.ChatRole.User, Content = "hello" },
             new() { Role = Netclaw.Actors.Protocol.ChatRole.Assistant, Content = "hi" }
         };
 
-        await SessionCompactionPipeline.GenerateObservationsAsync(
+        var summary = await SessionCompactionPipeline.GenerateObservationsAsync(
             client: captor, sessionId: sessionId, history: history, systemOffset: 0,
             keepStartIndex: 1, sidecarTimeout: TimeSpan.FromSeconds(5), log: NoLogger.Instance,
             cancellationToken: TestContext.Current.CancellationToken);
 
         AssertScopedTo(sessionId, captor);
+        Assert.Equal(captor.ObservationResponseOverride, summary);
+        var options = Assert.IsType<SessionScopedChatOptions>(captor.ReceivedOptions[^1]);
+        Assert.True(Assert.IsType<bool>(options.AdditionalProperties![NetclawChatOptionKeys.SuppressReasoning]));
     }
 
     [Fact]

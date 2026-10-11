@@ -118,6 +118,7 @@ internal sealed class SessionToolRunEnvironment
 {
     private IReadOnlyList<string> _recentFiles = [];
 
+    public required Protocol.TurnId RecurrenceTaskId { get; init; }
     public required SessionStoragePaths Storage { get; init; }
     public required InlineOutputBudget InlineOutputBudget { get; init; }
     public required Func<object, string, CancellationToken, Task<object>> SpawnChildActor { get; init; }
@@ -161,6 +162,7 @@ internal sealed class SessionToolBatch
         ArgumentNullException.ThrowIfNull(environment.SpawnChildActor);
 
         TurnContext = turnContext;
+        RecurrenceTaskId = environment.RecurrenceTaskId;
         RunScope = new ToolRunScope
         {
             Session = new ToolSessionScope.Bound(turnContext.SessionId.Value, environment.Storage),
@@ -188,6 +190,7 @@ internal sealed class SessionToolBatch
         }
     }
     public TurnContext TurnContext { get; }
+    public Protocol.TurnId RecurrenceTaskId { get; }
     public ToolRunScope RunScope { get; }
     public required ToolExecutionTimeout DefaultTimeout { get; init; }
     public required IActorRef ReplyTo { get; init; }
@@ -323,7 +326,7 @@ internal sealed class SessionToolExecutionPipeline
                         batch.SetWorkingDirectoryAvailable)
                 };
                 if (batch.StreamResults)
-                    batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result));
+                    batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result, batch.CancellationToken));
                 return result;
             });
             var results = await Task.WhenAll(tasks);
@@ -344,7 +347,7 @@ internal sealed class SessionToolExecutionPipeline
 
             if (batch.StreamResults)
             {
-                batch.ReplyTo.Tell(new ToolExecutionBatchCompleted());
+                batch.ReplyTo.Tell(new ToolExecutionBatchCompleted(batch.CancellationToken));
                 return;
             }
 
@@ -352,6 +355,7 @@ internal sealed class SessionToolExecutionPipeline
             var modelInputMediaReferences = results.SelectMany(r => r.ModelInputMediaReferences).ToList();
             batch.ReplyTo.Tell(new ToolExecutionCompleted
             {
+                ExecutionToken = batch.CancellationToken,
                 ToolResults = [.. results.Select(r => r.Message)],
                 ModelInputMediaReferences = modelInputMediaReferences,
                 FileAttachments = fileAttachments,
@@ -396,7 +400,7 @@ internal sealed class SessionToolExecutionPipeline
         }
         catch (TimeoutException ex)
         {
-            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex });
+            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, ExecutionToken = batch.CancellationToken });
         }
         catch (OperationCanceledException) when (batch.CancellationToken.IsCancellationRequested)
         {
@@ -405,7 +409,7 @@ internal sealed class SessionToolExecutionPipeline
         }
         catch (Exception ex)
         {
-            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex });
+            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, ExecutionToken = batch.CancellationToken });
         }
     }
 
@@ -824,8 +828,7 @@ internal sealed class SessionToolExecutionPipeline
                 resultText,
                 modelInputMaterialization.RequestedCount - modelInputMaterialization.MediaReferences.Count);
 
-        var receipt = context.Receipt
-            ?? new ToolInvocationReceipt.Succeeded([], null);
+        var receipt = context.Receipt;
         var message = new SerializableChatMessage
         {
             Role = Protocol.ChatRole.Tool,
@@ -993,7 +996,7 @@ internal sealed class SessionToolExecutionPipeline
 
         var startCmd = new StartBackgroundJob
         {
-            Launch = launch,
+            Launch = launch, Origin = new BackgroundJobOrigin(batch.RecurrenceTaskId, new ToolCallId(tc.CallId)),
             Rationale = meta.Rationale ?? "background shell execution",
             OriginChannelType = channelType.Value,
             TimeoutSeconds = timeoutSeconds,
@@ -1024,7 +1027,7 @@ internal sealed class SessionToolExecutionPipeline
             };
             var jobInfo = new Jobs.ActiveJobInfo
             {
-                JobId = started.JobId,
+                JobId = started.JobId, LineageVersion = 1, Origin = startCmd.Origin,
                 Command = launch.Command,
                 Rationale = startCmd.Rationale,
                 StartedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
@@ -1033,7 +1036,8 @@ internal sealed class SessionToolExecutionPipeline
                 OutputLogPath = started.OutputLogPath
             };
             return new ToolCallResult(
-                resultMessage, [], [], [], [], context.Approval.AuthorizationAttemptId, jobInfo);
+                resultMessage, [], [], [], [], context.Approval.AuthorizationAttemptId, jobInfo,
+                Receipt: new ToolInvocationReceipt.Succeeded([], null));
         }
         catch (Exception ex)
         {
@@ -1047,7 +1051,8 @@ internal sealed class SessionToolExecutionPipeline
                 Name = tc.Name
             };
             return new ToolCallResult(
-                errorMessage, [], [], [], [], context.Approval.AuthorizationAttemptId);
+                errorMessage, [], [], [], [], context.Approval.AuthorizationAttemptId,
+                Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.TransientFailure));
         }
     }
 

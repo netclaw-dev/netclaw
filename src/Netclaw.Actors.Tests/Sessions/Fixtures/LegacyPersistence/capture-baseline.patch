@@ -1,0 +1,134 @@
+diff --git a/src/Netclaw.Actors.Tests/Protocol/PreChangePersistenceCaptureTests.cs b/src/Netclaw.Actors.Tests/Protocol/PreChangePersistenceCaptureTests.cs
+new file mode 100644
+index 000000000..1ab063a2a
+--- /dev/null
++++ b/src/Netclaw.Actors.Tests/Protocol/PreChangePersistenceCaptureTests.cs
+@@ -0,0 +1,128 @@
++// -----------------------------------------------------------------------
++// <copyright file="PreChangePersistenceCaptureTests.cs" company="Petabridge, LLC">
++//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
++// </copyright>
++// -----------------------------------------------------------------------
++using System.Security.Cryptography;
++using System.Text.Json;
++using Akka.Hosting;
++using Akka.Hosting.TestKit;
++using Akka.Serialization;
++using Netclaw.Actors.Channels;
++using Netclaw.Actors.Hosting;
++using Netclaw.Actors.Protocol;
++using Netclaw.Actors.Sessions;
++using Netclaw.Configuration;
++using Netclaw.Tools;
++using Xunit;
++using static Netclaw.Actors.Sessions.SessionProtocol;
++
++namespace Netclaw.Actors.Tests.Protocol;
++
++public sealed class PreChangePersistenceCaptureTests(ITestOutputHelper output) : TestKit(output: output)
++{
++    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
++        => builder.WithNetclawSerialization();
++
++    [Fact]
++    public async Task Capture_neutral_events_and_snapshots_with_the_pre_change_serializer()
++    {
++        var outputPath = Environment.GetEnvironmentVariable("NETCLAW_LEGACY_FIXTURE_OUTPUT")
++            ?? throw new InvalidOperationException("Set NETCLAW_LEGACY_FIXTURE_OUTPUT to an owned artifact path.");
++        var session = new SessionId("signalr/pre-change-persistence-proof");
++        var input = new InputAdmitted
++        {
++            SessionId = session, InputId = new InputId("legacy-input"), SourceMessageId = "legacy-message",
++            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Read the neutral file and request a protected operation." },
++            ExecutableText = "Read the neutral file and request a protected operation.",
++            TurnContext = new TurnContextRecord
++            {
++                SessionId = session, TurnId = "legacy-turn", Audience = TrustAudience.Personal,
++                Boundary = TrustBoundary.Personal, ChannelType = "signalr", RequesterSenderId = new SenderId("operator-a"),
++                RequesterPrincipal = PrincipalClassification.Operator, TransportAuthenticity = TransportAuthenticity.Verified,
++                PayloadTaint = PayloadTaint.Trusted, SourceScope = "neutral-fixture", SourceKind = "signalr",
++                SupportsInteractiveApproval = true,
++                DefaultDeliveryTarget = new ChannelDeliveryTargetInfo("signalr", "destination", "operator-a", "operator-a")
++            },
++            AdmittedAtMs = 1_700_000_000_000
++        };
++        var turn = new TurnRecorded
++        {
++            SessionId = session, UserMessage = input.UserMessage,
++            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "The neutral task is complete." },
++            ConsumedInputIds = [input.InputId], RecordedAtMs = 1_700_000_000_001
++        };
++        var completed = SessionState.Empty.Apply(input).Apply(turn).CloseInputs([input.InputId]).ToSnapshot();
++        var parkedInput = input with
++        {
++            InputId = new InputId("legacy-parked-input"), SourceMessageId = "legacy-parked-message",
++            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Resume a neutral task that needs approval." },
++            ExecutableText = "Resume a neutral task that needs approval.",
++            TurnContext = input.TurnContext with { TurnId = "legacy-parked-turn" },
++            AdmittedAtMs = 1_700_000_000_002
++        };
++        var batch = new ToolBatchStarted
++        {
++            SessionId = session, UserMessage = parkedInput.UserMessage, ConsumedInputIds = [parkedInput.InputId],
++            AssistantMessage = new SerializableChatMessage
++            {
++                Role = ChatRole.Assistant,
++                ToolCalls =
++                [
++                    new SerializableToolCall { CallId = new ToolCallId("legacy-read"), Name = new ToolName("read_file"), ArgumentsJson = "{\"path\":\"neutral.txt\"}" },
++                    new SerializableToolCall { CallId = new ToolCallId("legacy-protected"), Name = new ToolName("shell_execute"), ArgumentsJson = "{\"command\":\"neutral-operation\"}" }
++                ]
++            },
++            StartedAtMs = 1_700_000_000_003
++        };
++        var sibling = new ToolCallRecorded
++        {
++            SessionId = session,
++            ToolResult = new SerializableChatMessage
++            {
++                Role = ChatRole.Tool, Name = "read_file", ToolCallId = new ToolCallId("legacy-read"), Content = "neutral-sibling-result"
++            },
++            RecordedAtMs = 1_700_000_000_004
++        };
++        Assert.True(AuthorizationAttemptId.TryParse("auth-00000000000040008000000000000001", out var authorizationAttempt));
++        var prompt = new ToolApprovalRequested
++        {
++            SessionId = session, CallId = "legacy-protected", AuthorizationAttemptId = authorizationAttempt.Value,
++            ToolName = "shell_execute", Patterns = ["neutral-operation"], CandidateVerbs = ["shell_execute"],
++            Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal, ChannelType = "signalr",
++            SupportsInteractiveApproval = true, RequesterSenderId = new SenderId("operator-a"),
++            RequesterPrincipal = PrincipalClassification.Operator, TurnContext = parkedInput.TurnContext,
++            OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
++            Candidates = [new Netclaw.Security.ApprovalCandidate("shell_execute", null)], RequestedAtMs = 1_700_000_000_005
++        };
++        var entries = new Dictionary<string, CapturedEntry>(StringComparer.Ordinal)
++        {
++            ["input"] = Capture(input), ["completed-turn"] = Capture(turn), ["completed-snapshot"] = Capture(completed),
++            ["parked-input"] = Capture(parkedInput), ["batch"] = Capture(batch), ["sibling-result"] = Capture(sibling),
++            ["approval-prompt"] = Capture(prompt)
++        };
++        Assert.Equal(7, entries.Count);
++        Assert.Equal(150, entries["input"].SerializerId);
++        Assert.Equal("ia-v1", entries["input"].Manifest);
++        Assert.Equal("ss-v1", entries["completed-snapshot"].Manifest);
++        var fixture = new CapturedFixture("2e6bc4f014dc96b606566709df1bd11f90ecf34a", session.Value, entries);
++        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))
++            ?? throw new InvalidOperationException("The fixture needs an output directory."));
++        await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(fixture, new JsonSerializerOptions(JsonSerializerDefaults.Web)
++        {
++            WriteIndented = true
++        }) + Environment.NewLine, TestContext.Current.CancellationToken);
++    }
++
++    private CapturedEntry Capture(object value)
++    {
++        var serializer = Assert.IsAssignableFrom<SerializerWithStringManifest>(Sys.Serialization.FindSerializerFor(value));
++        var bytes = serializer.ToBinary(value);
++        var manifest = serializer.Manifest(value);
++        Assert.IsType(value.GetType(), Sys.Serialization.Deserialize(bytes, serializer.Identifier, manifest));
++        return new CapturedEntry(serializer.Identifier, manifest, Convert.ToBase64String(bytes), Convert.ToHexString(SHA256.HashData(bytes)));
++    }
++
++    private sealed record CapturedFixture(string Baseline, string SessionId, Dictionary<string, CapturedEntry> Entries);
++    private sealed record CapturedEntry(int SerializerId, string Manifest, string Base64, string Sha256);
++}

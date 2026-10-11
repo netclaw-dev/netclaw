@@ -52,6 +52,21 @@ public sealed record TurnContext
         => RequesterPrincipal == PrincipalClassification.VerifiedAutomation
            || RequesterSenderId is not null;
 
+    internal static bool HasSameAuthority(TurnContext left, TurnContext right)
+        => left.SessionId == right.SessionId
+           && left.Audience == right.Audience
+           && left.Boundary == right.Boundary
+           && left.ChannelType == right.ChannelType
+           && left.RequesterSenderId == right.RequesterSenderId
+           && left.RequesterPrincipal == right.RequesterPrincipal
+           && left.Provenance == right.Provenance
+           && left.DefaultDeliveryTarget == right.DefaultDeliveryTarget
+           && left.RequestedDeliveryTarget == right.RequestedDeliveryTarget
+           && left.HasAdoptedContext == right.HasAdoptedContext
+           && left.HasThirdPartyAdoptedContext == right.HasThirdPartyAdoptedContext
+           && left.AdoptedSpeakerIds.SequenceEqual(right.AdoptedSpeakerIds, StringComparer.Ordinal)
+           && left.SupportsInteractiveApproval == right.SupportsInteractiveApproval;
+
     public static TurnContext FromMessageSource(SessionId sessionId, TurnId turnId, MessageSource? source)
     {
         var audience = source?.Audience ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId.Value);

@@ -27,7 +27,6 @@ public sealed class SubAgentSpawner
     private static readonly StringComparer FilePathComparer =
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
-    private const int SubAgentMaxToolIterations = 30;
 
     private readonly IChatClientProvider _chatClientProvider;
     private readonly ToolRegistry _toolRegistry;
@@ -228,7 +227,6 @@ public sealed class SubAgentSpawner
             _toolAccessPolicy,
             _promptProvider,
             _approvalService,
-            SubAgentMaxToolIterations,
             _sessionMetrics,
             exposure.CoreToolNames,
             _logger);

@@ -7,6 +7,9 @@
 
 ## Autonomy Rules
 
+- Keep every tool call within the user's current objective and explicit action constraints.
+- When the required evidence is complete, return the requested result without unrelated tool calls.
+- Apply the user's response-format constraints to progress messages and the final answer.
 - If the user asks you to do something, DO IT in the same response. Do not split
   intent ("I'll do that") from action (tool calls) across turns.
 - NEVER say "On it" or "Roger that" without making tool calls in the same response.
