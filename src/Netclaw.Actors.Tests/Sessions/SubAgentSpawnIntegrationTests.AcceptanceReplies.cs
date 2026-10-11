@@ -56,7 +56,6 @@ public partial class SubAgentSpawnIntegrationTests
                 ArgumentsDigest = request.Prepared.ArgumentsDigest, StartKey = request.StartKey,
                 SourceOperation = request.SourceOperation, OriginalContext = request.InvocationContext,
                 OriginInputIds = [activation.InputId], InitialWorkingSnapshot = request.Prepared.Execution.Scope.InitialWorkingSnapshot,
-                ParentCheckpoint = new ToolLoopCheckpoint { TaskId = "original-slash-task" },
                 StartBatchSettled = true, AcceptedAtMs = 1, StartedAtMs = 2
             };
             run = defect switch

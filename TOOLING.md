@@ -43,6 +43,10 @@ The [combined `153d9223` hosted run](https://github.com/netclaw-dev/netclaw/acti
 Its four groups pass in 16m51s, 23m14s, 15m11s, and 21m01s.
 Each group stays below the 25-minute limit. All six expected task-adoption and child-authority targets have `Killed` status.
 The `8aba7cb1` assignment group passes in 24m52s, with eight seconds of margin.
+The [`91ef75bc` verb group](https://github.com/netclaw-dev/netclaw/actions/runs/38085327431/job/114310526050) reaches the 25-minute job limit after all gate steps succeed.
+Its `literal-twin` gate takes 3m55s. The assignment group takes 17m58s for its gate steps.
+The complete `literal-twin` gate moves to that group. No target, test, or timeout changes.
+The estimated destination total is about 22 minutes. A fresh hosted run must verify the new distribution.
 See [the cancelled job](https://github.com/netclaw-dev/netclaw/actions/runs/38020934971/job/114121548608)
 and [the prior successful job](https://github.com/netclaw-dev/netclaw/actions/runs/38014833252/job/114102687127).
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.

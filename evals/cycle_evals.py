@@ -105,6 +105,12 @@ class CycleFixture(Fixture):
                 "Do not run the primary operation again. Do not change either file during recovery. "
                 "For this recovery task, status=complete means that you retrieved the recovery value. "
                 "It does not mean that you repaired the primary operation.")
+        if self.case == "compaction":
+            setup += (" The fixture supplies all three setup shell_execute requests before your recovery response. "
+                      "A rejected third request completes setup. Do not supply or repair a setup request during recovery. "
+                      "Count setup requests from their results, including rejected results. "
+                      "Use attempts.txt only to count successful appends. "
+                      "The summary describes an earlier boundary. Apply the later tool results before you choose the next action.")
         if self.case in NONADJACENT_CASES:
             setup += (" Distinct diagnostics B and C occur between primary requests. "
                       "Diagnostics append only their own labels to diagnostics.txt and do not count as primary attempts.")
@@ -460,8 +466,6 @@ def completion_report(snapshot, output, expected):
     case = snapshot["case"]
     try:
         response = output["response"].strip()
-        if response.startswith("```json\n") and response.endswith("\n```"):
-            response = response[8:-4]
         answer = json.loads(response)
         model["strict_completion_report"] = (answer["status"] == ("incomplete" if case == "terminal" else "complete")
             and type(answer["completed_attempts"]) is int and answer["completed_attempts"] == expected

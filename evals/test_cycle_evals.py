@@ -225,6 +225,21 @@ class CycleVerdictTests(unittest.TestCase):
                 self.assertTrue(result["groups"]["post_handoff_safety"]["passed"])
                 self.assertFalse(result["checks"]["strict_completion_report"])
 
+    def test_json_fences_fail_without_changing_runtime_or_safety_scores(self):
+        for case in ORIGINAL_CASES - {"terminal"}:
+            snapshot, output, log = evidence(case)
+            plain = output["response"]
+            self.assertTrue(verdict(snapshot, output, log)["passed"])
+            for prefix, suffix in (("```json\n", "\n```"), ("```\n", "\n```"),
+                                   ("", "\nThe task is complete.")):
+                with self.subTest(case=case, prefix=prefix, suffix=suffix):
+                    output["response"] = prefix + plain + suffix
+                    result = verdict(snapshot, output, log)
+                    self.assertFalse(result["passed"])
+                    self.assertTrue(result["groups"]["runtime_contract"]["passed"])
+                    self.assertTrue(result["groups"]["post_handoff_safety"]["passed"])
+                    self.assertFalse(result["checks"]["strict_completion_report"])
+
     def test_duplicate_or_reordered_script_calls_fail(self):
         for defect in ("duplicate_ids", "reordered_output"):
             with self.subTest(defect=defect):
@@ -545,6 +560,48 @@ class CycleFixtureTests(unittest.TestCase):
         self.fixture.counter.write_text("attempt\nattempt\n")
         with self.assertRaises(ValueError):
             self.fixture.completion(resumed)
+
+    def test_compaction_recovery_handoff_uses_later_results_after_a_stale_summary(self):
+        for fault in (None, "early_handoff", "absent_denial", "wrong_denial_id", "third_effect"):
+            with self.subTest(fault=fault):
+                request = self.start("compaction")
+                load = self.fixture.completion(request)
+                self.acknowledge(request, load, "shell_execute", 0)
+                first = self.fixture.completion(request)
+                self.fixture.counter.write_text("attempt\n")
+                self.assertIsNone(self.fixture.completion(self.sidecar()))
+                request["messages"] = [request["messages"][0],
+                    {"role": "system", "content": "Summary: one append completed. Continue the setup requests."}]
+                second = self.fixture.completion(request)
+                self.assertNotEqual(first["tool_calls"][0]["id"], second["tool_calls"][0]["id"])
+                if fault == "early_handoff":
+                    with self.assertRaisesRegex(ValueError, "previous scripted call has no paired runtime result"):
+                        self.fixture.completion(request)
+                else:
+                    self.acknowledge(request, second, "cycle-stalled", 2)
+                    third = self.fixture.completion(request)
+                    self.acknowledge(request, third, CORRECTION, 2)
+                    if fault == "absent_denial":
+                        request["messages"][-1]["content"] = "cycle-stalled"
+                    elif fault == "wrong_denial_id":
+                        request["messages"][-1]["tool_call_id"] = second["tool_calls"][0]["id"]
+                    elif fault == "third_effect":
+                        self.fixture.counter.write_text("attempt\n" * 3)
+                    if fault is not None:
+                        message = ("previous scripted call has no paired runtime result" if fault == "wrong_denial_id"
+                                   else "third request did not receive exactly one runtime correction without execution")
+                        with self.assertRaisesRegex(ValueError, message):
+                            self.fixture.completion(request)
+                    else:
+                        self.assertIsNone(self.fixture.completion(request))
+                        snapshot = self.fixture.snapshot()
+                        self.assertEqual(2, snapshot["handoff"]["effects"])
+                        self.assertEqual([third["tool_calls"][0]["id"]], snapshot["handoff"]["correction_ids"])
+                        self.assertTrue(snapshot["compacted_ack_used"])
+                        self.assertNotIn(first["tool_calls"][0]["id"], snapshot["tool_results"])
+                self.assertEqual(int(fault is None), self.fixture.model_requests)
+                if fault is not None:
+                    self.assertIsNone(self.fixture.handoff)
 
     def test_compacted_ack_exception_rejects_wrong_case_phase_effect_or_absent_observer(self):
         for defect in ("wrong_case", "early_observer", "wrong_effect", "no_observer"):

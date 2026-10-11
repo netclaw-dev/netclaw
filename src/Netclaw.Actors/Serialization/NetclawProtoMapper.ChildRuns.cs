@@ -37,8 +37,8 @@ internal static partial class NetclawProtoMapper
             OwnerSessionId = run.StartKey.SessionId.Value, OriginalTurnId = run.StartKey.TurnId.Value,
             AgentName = run.AgentName.Value, SourceOperation = run.SourceOperation, ArgumentsDigest = run.ArgumentsDigest,
             OriginalContext = ToProto(run.OriginalContext), InitialWorkingContext = ToProto(run.InitialWorkingSnapshot.WorkingContext),
-            InitialGit = ToProto(run.InitialWorkingSnapshot.Git), ParentCheckpoint = ToProto(run.ParentCheckpoint),
-            ParentReceiptFailure = run.ParentReceiptFailure, StartBatchSettled = run.StartBatchSettled, AcceptedAtMs = run.AcceptedAtMs
+            InitialGit = ToProto(run.InitialWorkingSnapshot.Git),
+            StartBatchSettled = run.StartBatchSettled, AcceptedAtMs = run.AcceptedAtMs
         };
         if (run.StartedAtMs is { } started) proto.StartedAtMs = started;
         if (run.CancellationRequestedAtMs is { } cancelled) proto.CancellationRequestedAtMs = cancelled;
@@ -78,7 +78,7 @@ internal static partial class NetclawProtoMapper
             Proto.BackgroundChildRunProto.ActivationOneofCase.SlashInputId => new ChildRunStartKey.Slash(new InputId(proto.SlashInputId)) { SessionId = session, TurnId = turn },
             _ => throw new InvalidDataException("A child acceptance has no activation identity.")
         };
-        if (proto.OriginalContext is null || proto.InitialWorkingContext is null || proto.InitialGit is null || proto.ParentCheckpoint is null)
+        if (proto.OriginalContext is null || proto.InitialWorkingContext is null || proto.InitialGit is null)
             throw new InvalidDataException("A child acceptance lacks mandatory canonical evidence.");
         var run = new BackgroundChildRun
         {
@@ -90,7 +90,6 @@ internal static partial class NetclawProtoMapper
             {
                 WorkingContext = FromProto(proto.InitialWorkingContext), Git = FromProto(proto.InitialGit)
             },
-            ParentCheckpoint = FromProto(proto.ParentCheckpoint), ParentReceiptFailure = proto.ParentReceiptFailure,
             StartBatchSettled = proto.StartBatchSettled, AcceptedAtMs = proto.AcceptedAtMs,
             StartedAtMs = proto.HasStartedAtMs ? proto.StartedAtMs : null,
             CancellationRequestedAtMs = proto.HasCancellationRequestedAtMs ? proto.CancellationRequestedAtMs : null,

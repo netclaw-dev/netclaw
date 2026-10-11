@@ -20,7 +20,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 public sealed partial class BackgroundChildOwnerAdversarialTests
 {
     [Fact]
-    public async Task A_trusted_restart_after_child_input_consumption_preserves_post_adoption_detector_evidence()
+    public async Task A_trusted_restart_after_child_input_consumption_preserves_child_continuation_authority()
     {
         PrepareAdmittedRecoveryRounds();
         var (owner, manager, subscriber) = await CreateOwnerAsync();
@@ -66,8 +66,7 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
             Assert.All(postAdoption, row => Assert.False(Assert.IsType<ToolCallRecorded>(row.Event).LoopObservation!.Synthetic));
             var confirmed = Assert.IsType<ChildStartReply.Accepted>(await owner.Ask<ChildStartReply>(Retry(accepted), Ceiling,
                 TestContext.Current.CancellationToken));
-            Assert.Equal(2, Assert.Single(confirmed.Run.ParentCheckpoint.Entries,
-                entry => entry.ToolName == "neutral_probe").EqualRounds);
+            Assert.True(SessionState.SameCanonicalContext(accepted.Run.OriginalContext, confirmed.Run.OriginalContext));
 
             var watcher = CreateTestProbe();
             watcher.Watch(owner);
@@ -103,7 +102,7 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
                 evt => evt.ContinuedChildRunId == accepted.Run.RunId);
             var restored = Assert.IsType<ChildStartReply.Accepted>(await recovered.Ask<ChildStartReply>(Retry(accepted), Ceiling,
                 TestContext.Current.CancellationToken));
-            Assert.True(BackgroundChildRun.SameCheckpoint(confirmed.Run.ParentCheckpoint, restored.Run.ParentCheckpoint));
+            Assert.True(SessionState.SameCanonicalContext(confirmed.Run.OriginalContext, restored.Run.OriginalContext));
             Assert.Equal(1, _child.CallCount);
             recoveredResponse.TrySetResult();
             await CompletedAsync(recoveredSubscriber);
@@ -281,8 +280,7 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
             evt => evt.AssistantMessage.ToolCalls.Any(call => call.CallId == new ToolCallId("prefix-stopped-4")));
         var refusedBatch = Assert.Single(events.OfType<ToolBatchStarted>(),
             evt => evt.AssistantMessage.ToolCalls.Any(call => call.CallId == new ToolCallId("prefix-refused-3")));
-        Assert.Equal(run.ParentCheckpoint.TaskId, refusedBatch.LoopAdmission!.TaskId);
-        Assert.Contains("prefix-refused-3", refusedBatch.LoopAdmission.RefusedCallIds);
+        Assert.Contains("prefix-refused-3", refusedBatch.LoopAdmission!.RefusedCallIds);
         Assert.Equal(new[] { delivery.Input.InputId }, events.SelectMany(evt => evt switch
         {
             ToolBatchStarted batch => batch.ConsumedInputIds,

@@ -3,13 +3,21 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Runtime.Versioning;
+using System.Text;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.AI;
 using System.Text.Json;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Services;
+using Netclaw.Security;
+using Netclaw.Security.Skills;
 using Netclaw.Tests.Utilities;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests;
@@ -165,6 +173,192 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         refresher.Refresh();
 
         Assert.Contains(registry.Search("diagnostics"), skill => skill.Name == "netclaw-operations");
+    }
+
+    [Fact]
+    public async Task Coordination_bundle_loads_inline_and_reads_all_resources_through_logical_tools()
+    {
+        var paths = CreatePaths();
+        EmbeddedSystemSkillRestorer.Restore(paths);
+        var registry = new SkillRegistry();
+        var refresher = new SkillInventoryRefresher(paths, new SkillFeedsConfig(), [], registry,
+            new SkillIndexPublisher(registry, new SkillIndexContextLayer(), static (_, _) => true));
+        refresher.Refresh();
+
+        var skill = registry.GetByName("agent-coordination");
+        Assert.NotNull(skill);
+        Assert.False(skill.HasSubagentRoutingMetadata);
+        Assert.False(skill.DisableModelInvocation);
+        Assert.Equal("1.0.10", skill.Version);
+        Assert.Contains(registry.Search("code"), entry => entry.Name == skill.Name);
+        string[] resources = [
+            "assets/findings.md", "assets/plan.md", "references/analyze-plan.md",
+            "references/diagnose-fix-verify.md", "references/implement-review.md", "references/parallel-research.md"
+        ];
+        Assert.Equal(resources.Order(StringComparer.Ordinal), skill.ResourcePaths!.Order(StringComparer.Ordinal));
+        var context = TestToolExecutionContext.CreateUnboundWithoutApproval(TrustAudience.Personal);
+        var load = new SkillLoadTool(registry, new NoOpSkillContentScanner(), new RejectUnexpectedPromptLoad());
+        var receipt = await load.ExecuteAsync(ToolInput.Create("Name", skill.Name), context,
+            TestContext.Current.CancellationToken);
+        Assert.Contains("Assign one writer", receipt);
+        Assert.Contains("A cancellation acceptance does not prove", receipt);
+        Assert.Contains("Only the parent sends user messages", receipt);
+        Assert.DoesNotContain(paths.SystemSkillsDirectory, receipt);
+        Assert.True(receipt.Length < new SessionTuning().MaxInlineToolResultChars);
+
+        var read = new SkillReadResourceTool(registry, new NoOpSkillContentScanner());
+        foreach (var resource in resources)
+        {
+            Assert.Contains(resource, receipt);
+            var result = await read.ExecuteAsync(
+                ToolInput.Create("SkillName", skill.Name, "ResourcePath", resource), context,
+                TestContext.Current.CancellationToken);
+            var resourcePath = Path.Combine(skill.SkillDirectory, resource.Replace('/', Path.DirectorySeparatorChar));
+            Assert.Equal($"path: {resourcePath}\n{File.ReadAllText(resourcePath)}", result);
+            Assert.True(result.Length < new SessionTuning().MaxInlineToolResultChars);
+        }
+
+        var deniedContext = TestToolExecutionContext.CreateUnbound();
+        Assert.Equal("Error: This tool is not available.", await load.ExecuteAsync(
+            ToolInput.Create("Name", skill.Name), deniedContext, TestContext.Current.CancellationToken));
+        Assert.Equal("Error: This tool is not available.", await read.ExecuteAsync(
+            ToolInput.Create("SkillName", skill.Name, "ResourcePath", resources[0]), deniedContext,
+            TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Coordination_bundle_dispatch_preserves_full_content_inline_and_through_session_continuations()
+    {
+        var paths = CreatePaths();
+        EmbeddedSystemSkillRestorer.Restore(paths);
+        var skills = new SkillRegistry();
+        var refresher = new SkillInventoryRefresher(paths, new SkillFeedsConfig(), [], skills,
+            new SkillIndexPublisher(skills, new SkillIndexContextLayer(), static (_, _) => true));
+        refresher.Refresh();
+        var skill = skills.GetByName("agent-coordination");
+        Assert.NotNull(skill);
+
+        var tools = new ToolRegistry();
+        tools.RegisterCore(new SkillLoadTool(skills, new NoOpSkillContentScanner(), new RejectUnexpectedPromptLoad()));
+        tools.RegisterCore(new SkillReadResourceTool(skills, new NoOpSkillContentScanner()));
+        tools.RegisterCore(new ToolOutputReadTool());
+        var config = new ToolConfig();
+        config.AudienceProfiles.Public.AllowedTools = ["skill_read_resource"];
+        var executor = new DispatchingToolExecutor(tools, new ToolAccessPolicy(paths, config,
+            new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
+            new ShellCommandPolicy(), new ToolPathPolicy([])));
+        var sessionDirectory = Path.Combine(_directory.Path, "coordination-session");
+        Directory.CreateDirectory(sessionDirectory);
+        var foreignDirectory = Path.Combine(_directory.Path, "foreign-session");
+        Directory.CreateDirectory(foreignDirectory);
+        var defaultBudget = new SessionTuning().MaxInlineToolResultChars;
+        const int smallBudget = 512;
+        const int pageLimit = 256;
+        string[] resources = [
+            "assets/findings.md", "assets/plan.md", "references/analyze-plan.md",
+            "references/diagnose-fix-verify.md", "references/implement-review.md", "references/parallel-research.md"
+        ];
+
+        for (var index = 0; index <= resources.Length; index++)
+        {
+            var toolName = index == 0 ? "skill_load" : "skill_read_resource";
+            var arguments = index == 0
+                ? ToolInput.Create("Name", skill.Name)
+                : ToolInput.Create("SkillName", skill.Name, "ResourcePath", resources[index - 1]);
+            var fullCallId = $"coordination-inline-{index}";
+            var full = await ExecuteAsync(fullCallId, toolName, arguments, defaultBudget, sessionDirectory,
+                TrustAudience.Personal);
+            Assert.Equal(ToolInvocationOutcomeCategory.Success, full.Context.Invocation.Receipt?.Category);
+            Assert.DoesNotContain("[output truncated", full.Result, StringComparison.Ordinal);
+            Assert.True(ToolOutputSpillLocation.TryResolve(sessionDirectory, fullCallId, out _, out var inlinePath));
+            Assert.False(File.Exists(inlinePath));
+
+            if (index == 0)
+            {
+                var source = File.ReadAllText(Path.Combine(skill.SkillDirectory, "SKILL.md"));
+                Assert.Contains(SkillScanner.ExtractBody(source), full.Result, StringComparison.Ordinal);
+                foreach (var resource in resources)
+                    Assert.Contains(resource, full.Result, StringComparison.Ordinal);
+            }
+            else
+            {
+                var sourcePath = Path.Combine(skill.SkillDirectory, resources[index - 1].Replace('/', Path.DirectorySeparatorChar));
+                Assert.Equal($"path: {sourcePath}\n{File.ReadAllText(sourcePath)}", full.Result);
+            }
+
+            var spillCallId = $"coordination-spill-{index}";
+            var spill = await ExecuteAsync(spillCallId, toolName, arguments, smallBudget, sessionDirectory,
+                TrustAudience.Personal);
+            Assert.Equal(ToolInvocationOutcomeCategory.Success, spill.Context.Invocation.Receipt?.Category);
+            Assert.Contains($"tool_output_read using CallId='{spillCallId}'", spill.Result, StringComparison.Ordinal);
+            Assert.DoesNotContain(full.Result, spill.Result, StringComparison.Ordinal);
+            Assert.DoesNotContain(sessionDirectory, spill.Result, StringComparison.Ordinal);
+            var reconstructed = new StringBuilder();
+            var complete = false;
+            for (var page = 0; page <= full.Result.Length && !complete; page++)
+            {
+                var start = reconstructed.Length;
+                var window = await ExecuteAsync($"{spillCallId}-page-{page}", ToolOutputReadTool.ToolName,
+                    ToolInput.Create("CallId", spillCallId, "Start", start, "Limit", pageLimit),
+                    smallBudget, sessionDirectory, TrustAudience.Personal);
+                Assert.Equal(ToolInvocationOutcomeCategory.Success, window.Context.Invocation.Receipt?.Category);
+                Assert.DoesNotContain("[output truncated", window.Result, StringComparison.Ordinal);
+                Assert.True(window.Result.Length <= smallBudget);
+                var range = Regex.Match(window.Result,
+                    @"\n\[range start=(\d+) end=(\d+); next_start=(none|\d+); complete=(true|false)\]\z",
+                    RegexOptions.CultureInvariant);
+                Assert.True(range.Success, "The continuation must expose its complete range metadata.");
+                var end = int.Parse(range.Groups[2].Value, CultureInfo.InvariantCulture);
+                Assert.Equal(start, int.Parse(range.Groups[1].Value, CultureInfo.InvariantCulture));
+                Assert.Equal(end - start, range.Index);
+                reconstructed.Append(window.Result.AsSpan(0, range.Index));
+                complete = range.Groups[4].Value == "true";
+                if (complete)
+                    Assert.Equal("none", range.Groups[3].Value);
+                else
+                {
+                    Assert.True(end > start);
+                    Assert.Equal(end, int.Parse(range.Groups[3].Value, CultureInfo.InvariantCulture));
+                }
+            }
+            Assert.True(complete);
+            Assert.Equal(full.Result, reconstructed.ToString());
+
+            var foreign = await ExecuteAsync($"{spillCallId}-foreign", ToolOutputReadTool.ToolName,
+                ToolInput.Create("CallId", spillCallId, "Start", 0, "Limit", pageLimit),
+                smallBudget, foreignDirectory, TrustAudience.Personal);
+            Assert.Equal(ToolInvocationOutcomeCategory.NotFound, foreign.Context.Invocation.Receipt?.Category);
+            await Assert.ThrowsAsync<ToolAccessDeniedException>(() => ExecuteAsync($"{spillCallId}-denied",
+                ToolOutputReadTool.ToolName, ToolInput.Create("CallId", spillCallId, "Start", 0, "Limit", pageLimit),
+                smallBudget, sessionDirectory, TrustAudience.Public));
+        }
+
+        async Task<(string Result, ToolExecutionContext Context)> ExecuteAsync(string callId, string toolName,
+            IDictionary<string, object?> arguments, int budget, string directory, TrustAudience audience)
+        {
+            var context = TestToolExecutionContext.CreateBound(
+                directory == sessionDirectory ? "signalr/coordination-session" : "signalr/foreign-session",
+                directory, new TestToolExecutionContextOptions
+                {
+                    Audience = audience,
+                    InlineOutputBudget = new InlineOutputBudget(budget)
+                });
+            var callArguments = new Dictionary<string, object?>(arguments, StringComparer.Ordinal)
+            {
+                ["_rationale"] = "Verify the complete coordination resource response and its session boundary."
+            };
+            var result = await executor.ExecuteAsync(new FunctionCallContent(callId, toolName, callArguments),
+                context, TestContext.Current.CancellationToken);
+            return (result, context);
+        }
+    }
+
+    private sealed class RejectUnexpectedPromptLoad : IMcpPromptSkillLoader
+    {
+        public ValueTask<McpPromptSkillLoadResult> LoadAsync(McpPromptSkillSource source,
+            IReadOnlyDictionary<string, string>? arguments, ToolInvocationContext context, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("The inline file skill must not request an MCP prompt.");
     }
 
     [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),

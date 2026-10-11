@@ -210,66 +210,6 @@ internal sealed class TurnStateTracker
         }
     }
 
-    internal ToolLoopCheckpoint CaptureCheckpoint(string taskId)
-        => new()
-        {
-            TaskId = taskId,
-            Entries = _episodes.Select(pair => new ToolLoopEntry
-            {
-                ToolName = pair.Key.ToolName.Value, ArgumentsHash = pair.Key.ArgumentsHash,
-                OutcomeHash = pair.Value.Outcome, EqualRounds = pair.Value.EqualRounds,
-                Corrected = pair.Value.Corrected, PendingJob = pair.Value.PendingJob
-            }).ToArray(),
-            ColdKeys = _coldKeys.Select(key => new ToolLoopKey(key.ToolName.Value, key.ArgumentsHash)).ToArray(),
-            AdjacentHistory = _completedToolCycles.Select(item => new ToolLoopAdjacent(item.Action.Value, item.OutcomeValue)).ToArray(),
-            LastBlockedAction = _lastBlockedAction?.Value
-        };
-
-    internal ToolLoopDelta CaptureDelta(string taskId, ToolLoopCheckpoint previous)
-    {
-        var current = CaptureCheckpoint(taskId);
-        var reset = previous.TaskId != taskId;
-        var old = previous.Entries.ToDictionary(entry => new ToolLoopKey(entry.ToolName, entry.ArgumentsHash));
-        var entries = current.Entries.ToDictionary(entry => new ToolLoopKey(entry.ToolName, entry.ArgumentsHash));
-        return new ToolLoopDelta
-        {
-            TaskId = taskId, Reset = reset,
-            Upserts = entries.Where(pair => reset || !old.TryGetValue(pair.Key, out var value) || pair.Value != value)
-                .Select(pair => pair.Value).ToArray(),
-            RemovedKeys = reset ? [] : old.Keys.Where(key => !entries.ContainsKey(key)).ToArray(),
-            ColdKeys = current.ColdKeys, AdjacentHistory = current.AdjacentHistory,
-            LastBlockedAction = current.LastBlockedAction
-        };
-    }
-
-    internal static ToolLoopCheckpoint ApplyDelta(ToolLoopCheckpoint previous, ToolLoopDelta delta)
-    {
-        var entries = delta.Reset ? new Dictionary<ToolLoopKey, ToolLoopEntry>()
-            : previous.Entries.ToDictionary(entry => new ToolLoopKey(entry.ToolName, entry.ArgumentsHash));
-        foreach (var key in delta.RemovedKeys)
-            entries.Remove(key);
-        foreach (var entry in delta.Upserts)
-            entries[new ToolLoopKey(entry.ToolName, entry.ArgumentsHash)] = entry;
-        return new ToolLoopCheckpoint
-        {
-            TaskId = delta.TaskId, Entries = entries.Values.ToArray(), ColdKeys = delta.ColdKeys,
-            AdjacentHistory = delta.AdjacentHistory, LastBlockedAction = delta.LastBlockedAction
-        };
-    }
-
-    internal void RestoreCheckpoint(ToolLoopCheckpoint checkpoint)
-    {
-        ResetForNewTurn();
-        foreach (var entry in checkpoint.Entries)
-            _episodes.Add(new ToolRecurrenceKey(new ToolName(entry.ToolName), entry.ArgumentsHash),
-                new ToolRecurrenceEpisode(entry.OutcomeHash, entry.EqualRounds, entry.Corrected, entry.PendingJob));
-        foreach (var key in checkpoint.ColdKeys)
-            _coldKeys.AddLast(new ToolRecurrenceKey(new ToolName(key.ToolName), key.ArgumentsHash));
-        foreach (var entry in checkpoint.AdjacentHistory)
-            _completedToolCycles.Add(new CompletedToolCycleIteration(new ToolActionSignature(entry.ActionHash), entry.OutcomeHash));
-        _lastBlockedAction = checkpoint.LastBlockedAction is { } blocked ? new ToolActionSignature(blocked) : null;
-    }
-
     public void ObserveCompleted(CompletedToolCycleIteration iteration)
     {
         foreach (var group in iteration.Groups)
@@ -525,30 +465,6 @@ internal static class ToolCycleSignatureFactory
             ResultHash = HashFields([modelVisibleText]), Synthetic = synthetic,
             MissingReceipt = receipt is null, PendingJob = receipt is ToolInvocationReceipt.PendingBackgroundJob
         };
-
-    internal static CompletedToolCycleIteration CompleteEvidence(ToolLoopAdmission admission,
-        IReadOnlyList<ToolLoopObservation> observations)
-    {
-        var paired = observations.ToDictionary(item => item.CallId, StringComparer.Ordinal);
-        var actual = admission.Calls.Where(call => !admission.RefusedCallIds.Contains(call.CallId, StringComparer.Ordinal)).ToArray();
-        var groups = actual.GroupBy(call => new ToolRecurrenceKey(new ToolName(call.ToolName), call.ArgumentsHash))
-            .Select(group => new CompletedToolRecurrenceGroup(group.Key,
-                HashFields(group.Select(call => paired[call.CallId])
-                    .Select(item => HashFields([((ToolInvocationOutcomeCategory)item.Category).ToString(), item.ResultHash]))
-                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)),
-                group.All(call => call.AllowsPendingJob && paired[call.CallId].PendingJob))).ToArray();
-        var ordered = actual.OrderBy(call => call.ToolName, StringComparer.Ordinal)
-            .ThenBy(call => call.ArgumentsHash, StringComparer.Ordinal)
-            .ThenBy(call => paired[call.CallId].Category)
-            .ThenBy(call => paired[call.CallId].ResultHash, StringComparer.Ordinal);
-        return new CompletedToolCycleIteration(new ToolActionSignature(admission.ActionHash),
-            HashFields(ordered.SelectMany(call => new[] { call.ToolName, call.ArgumentsHash,
-                ((ToolInvocationOutcomeCategory)paired[call.CallId].Category).ToString(), paired[call.CallId].ResultHash })))
-        {
-            Groups = groups,
-            RecordAdjacent = admission.RefusedCallIds.Count == 0 && !groups.Any(group => group.PendingJob)
-        };
-    }
 
     private static IOrderedEnumerable<PreparedToolCycleCall> OrderedCalls(
         IEnumerable<PreparedToolCycleCall> calls)

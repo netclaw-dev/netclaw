@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import subprocess
 import threading
 import time
@@ -18,6 +19,8 @@ from background_fixture import Fixture, handler_for, message_text
 
 CHILD_CONTRACT = "[Subagent Execution Contract]"
 CASES = {"child_run_held_parent", "child_run_partial_cancel", "child_run_cli_acceptance"}
+REQUIRED_RATIONALE_ERROR = ("Error: Required meta argument '_rationale' must be a non-empty string. "
+                          "Supply one sentence that states the tool call intent. The tool was NOT executed.")
 
 
 def require(condition, message):
@@ -40,6 +43,25 @@ def acceptance(text):
                 for key in ("run_id", "scope_id", "state", "control_tool")), "Acceptance lacks owner identifiers.")
     require(value["state"] == "Accepted" and value["control_tool"] == "check_agent_run", "Wrong acceptance contract.")
     return value
+
+
+def is_unexecuted_rationale_rejection(failure_code, result):
+    return failure_code == "invalid_rationale" and result == REQUIRED_RATIONALE_ERROR
+
+
+def accepted_start_calls(calls):
+    accepted = []
+    for call in calls:
+        if call["name"] != "spawn_agent":
+            continue
+        if call.get("success") is False and is_unexecuted_rationale_rejection(
+                call.get("failure_code"), call.get("result")):
+            continue
+        require(call.get("success") is True and call.get("failure_code") is None,
+                "A child start lacks success or the exact unexecuted rationale rejection.")
+        acceptance(call["result"])
+        accepted.append(call)
+    return accepted
 
 
 def context_paths(request):
@@ -138,12 +160,12 @@ class ChildFixture(Fixture):
             elif action == "child-consumed":
                 pending = [row for row in self.records if row["response_first_payload_ns"]
                            and not row["response_payload_written"] and not row["forward_complete"]
-                           and any(terminal_pairs([row["request"]], start["accepted"], start["call_id"], start["source_operation"])
+                           and any(terminal_pairs([row["request"]], start["accepted"], start["call_id"], start["source_operation"], data["observed_calls"])
                                    for start in data["expected"])]
                 if pending and not self.condition.wait_for(
                         lambda: all(row["response_payload_written"] or row["forward_complete"] for row in pending), timeout=30):
                     raise TimeoutError("A provider payload write lacks its local acknowledgement.")
-                return consumed_deliveries(self.records, data["expected"], data["parent_boundary_ns"])
+                return consumed_deliveries(self.records, data["expected"], data["parent_boundary_ns"], data["observed_calls"])
             elif action == "child-abort":
                 self.abort = True
                 self.condition.notify_all()
@@ -238,7 +260,24 @@ def child_handler(fixture):
     return Handler
 
 
-def terminal_pairs(requests, accepted, original_start_call_id, original_start_operation):
+def require_observed_rejections(observed_calls, dto_calls):
+    require(isinstance(observed_calls, list) and all(isinstance(row, dict) for row in observed_calls),
+            "The attributed observer calls are absent or malformed.")
+    for row in observed_calls:
+        if not is_unexecuted_rationale_rejection(row.get("failure_code"), row.get("result")):
+            continue
+        ordinal = row.get("occurrence")
+        require(type(ordinal) is int and 0 < ordinal <= len(dto_calls),
+                "The rejected model call lacks its actual DTO occurrence.")
+        actual = dto_calls[ordinal - 1]
+        require(row.get("success") is False and actual.get("failure") == row["failure_code"]
+                and pair_matches((actual["id"], actual["name"], actual["arguments"], actual["result"]), row),
+                "The rejected observer call differs from its actual DTO occurrence.")
+
+
+def terminal_pairs(requests, accepted, original_start_call_id, original_start_operation, observed_calls):
+    require(isinstance(observed_calls, list) and all(isinstance(row, dict) for row in observed_calls),
+            "The attributed observer calls are absent or malformed.")
     require(isinstance(original_start_operation, str) and original_start_operation, "The actual start operation is absent.")
     pairs = {}
     for request in requests:
@@ -246,6 +285,7 @@ def terminal_pairs(requests, accepted, original_start_call_id, original_start_op
             continue
         calls = {}
         delivered_in_request = set()
+        rejected_in_request = {}
         for message in request.get("messages", []):
             for call in message.get("tool_calls", []):
                 function = call.get("function", {})
@@ -259,13 +299,30 @@ def terminal_pairs(requests, accepted, original_start_call_id, original_start_op
                             "The terminal source differs from the actual original start operation.")
                     require(call["id"] != original_start_call_id, "The terminal call reused the original start identifier.")
                     require(call["id"] not in calls, "The terminal call repeats within an unresolved occurrence.")
-                    calls[call["id"]] = function["name"]
+                    calls[call["id"]] = (function["name"], arguments)
             if message.get("role") == "tool" and message.get("tool_call_id") in calls:
                 identifier = message["tool_call_id"]
+                source, arguments = calls.pop(identifier)
+                result = message_text(message.get("content"))
+                ordinary = [row for row in observed_calls if row.get("id") == identifier]
+                if ordinary:
+                    matched = [row for row in ordinary if pair_matches((identifier, source, arguments, result), row)]
+                    require(matched, "The terminal-shaped model call differs from its attributed observer pair.")
+                    occurrences = [row.get("occurrence") for row in matched]
+                    require(all(type(value) is int and value > 0 for value in occurrences)
+                            and len(set(occurrences)) == len(occurrences),
+                            "The rejected model call lacks distinct actual occurrence ordinals.")
+                    require(all(row.get("success") is False and is_unexecuted_rationale_rejection(
+                                row.get("failure_code"), row.get("result")) for row in matched),
+                            "An ordinary model call cannot prove a framework terminal delivery.")
+                    pair = (identifier, source, json.dumps(arguments, sort_keys=True), result)
+                    rejected_in_request[pair] = rejected_in_request.get(pair, 0) + 1
+                    require(rejected_in_request[pair] <= len(matched),
+                            "The provider history repeats a rejection without a distinct actual occurrence.")
+                    continue
                 require(identifier not in delivered_in_request, "The terminal pair repeats inside one provider history.")
                 delivered_in_request.add(identifier)
-                source = calls.pop(identifier)
-                body = json.loads(message_text(message.get("content")), object_pairs_hook=unique_object)
+                body = json.loads(result, object_pairs_hook=unique_object)
                 require(isinstance(body, dict), "The terminal body is not a JSON object.")
                 require(body.get("run_id") == accepted["run_id"] and body.get("scope_id") == accepted["scope_id"],
                         "The terminal pair has a foreign owner.")
@@ -276,13 +333,13 @@ def terminal_pairs(requests, accepted, original_start_call_id, original_start_op
     return pairs
 
 
-def canonical_pairs(requests, accepted, original_start_call_id, original_start_operation):
-    pairs = terminal_pairs(requests, accepted, original_start_call_id, original_start_operation)
+def canonical_pairs(requests, accepted, original_start_call_id, original_start_operation, observed_calls):
+    pairs = terminal_pairs(requests, accepted, original_start_call_id, original_start_operation, observed_calls)
     require(len(pairs) == 1, "The accepted run lacks exactly one attributed terminal call/result pair.")
     return next(iter(pairs.items()))
 
 
-def consumed_deliveries(records, expected, parent_boundary_ns):
+def consumed_deliveries(records, expected, parent_boundary_ns, observed_calls):
     if not expected:
         return {"complete": False, "deliveries": []}
     result = []
@@ -290,9 +347,9 @@ def consumed_deliveries(records, expected, parent_boundary_ns):
         accepted = acceptance(json.dumps(start["accepted"]))
         require(isinstance(start.get("call_id"), str) and start["call_id"], "The original start call identifier is absent.")
         observations = []
-        all_pairs = terminal_pairs([row["request"] for row in records], accepted, start["call_id"], start["source_operation"])
+        all_pairs = terminal_pairs([row["request"] for row in records], accepted, start["call_id"], start["source_operation"], observed_calls)
         for row in records:
-            pairs = terminal_pairs([row["request"]], accepted, start["call_id"], start["source_operation"])
+            pairs = terminal_pairs([row["request"]], accepted, start["call_id"], start["source_operation"], observed_calls)
             payload_ns = row.get("response_first_payload_ns", 0)
             if pairs and row.get("response_payload_written") and 0 < row["admitted_ns"] < payload_ns < parent_boundary_ns:
                 identifier, terminal = next(iter(pairs.items()))
@@ -356,6 +413,85 @@ def verify_child_actions(requests, paths, nonce, cancel):
             "The child artifact call has the wrong path or content.")
 
 
+def parent_call_pairs(request):
+    pending, pairs = {}, []
+    for position, message in enumerate(request.get("messages", [])):
+        for call in message.get("tool_calls", []) if message.get("role") == "assistant" else []:
+            identifier = call.get("id")
+            require(identifier and identifier not in pending, "An unresolved parent call identifier repeats.")
+            function = call["function"]
+            arguments = json.loads(function["arguments"], object_pairs_hook=unique_object)
+            pending[identifier] = (function["name"], arguments, position)
+        if message.get("role") == "tool" and message.get("tool_call_id") in pending:
+            identifier = message["tool_call_id"]
+            name, arguments, start = pending.pop(identifier)
+            pairs.append((identifier, name, arguments, message_text(message.get("content")), start, position))
+    return pairs
+
+
+def pair_matches(pair, row):
+    def arguments(value):
+        return {key: item for key, item in value.items() if key not in {"_timeout_seconds", "_background"}}
+    return (pair[0] == row.get("id") and pair[1] == row["name"]
+            and arguments(pair[2]) == arguments(row["arguments"]) and pair[3] == row.get("result"))
+
+
+def verify_held_probe(receipt, requests, snapshot, home, nonce, cancel):
+    accepted, binding, calls = receipt["accepted_run"], snapshot["binding"], receipt["calls"]
+    first, second, release = receipt["first_turn_ns"], receipt["second_turn_ns"], snapshot["release_ns"]
+    replies = receipt.get("all_replies", [])
+    require(len(replies) >= 2 and f"PARENT-PROBE-{nonce}" in replies[1], "The held probe lacks its actual visible reply marker.")
+    histories = [parent_call_pairs(request) for request in requests if context_paths(request) is None]
+    controls = [row for row in calls if row["name"] == "check_agent_run" and row.get("success") is True
+                and row.get("failure_code") is None
+                and row["arguments"].get("RunId", row["arguments"].get("runId")) == accepted["run_id"]
+                and row["arguments"].get("Cancel", row["arguments"].get("cancel", False)) is cancel
+                and row["turn"] in ([2] if cancel else [1, 2])
+                and binding["upstream_first_payload_ns"] < row.get("observed_ns", 0) < second
+                and (not cancel or first < row["observed_ns"])]
+    loads = [row for row in calls if row["name"] == "load_tool" and row.get("success") is True
+             and row.get("failure_code") is None and row["turn"] in {1, 2}
+             and row["arguments"].get("Name", row["arguments"].get("name")) == "check_agent_run"
+             and row.get("result") == "check_agent_run"]
+    chosen = None
+    for control in controls:
+        for history in histories:
+            for pair in history:
+                if pair_matches(pair, control) and any(pair_matches(loaded, load) and loaded[5] < pair[4]
+                        and 0 < load.get("observed_ns", 0) < control["observed_ns"] and load["turn"] <= control["turn"]
+                        for load in loads for loaded in history):
+                    chosen = control
+                    break
+            if chosen is not None:
+                break
+        if chosen is not None:
+            break
+    require(chosen is not None, "The held probe lacks an exact status after a successful explicit control load.")
+    status = json.loads(chosen["result"], object_pairs_hook=unique_object)
+    require(isinstance(status, dict) and status.get("run_id") == accepted["run_id"]
+            and status.get("scope_id") == accepted["scope_id"]
+            and status.get("log_path") == binding["paths"]["log_path"]
+            and status.get("artifact_directory") == binding["paths"]["artifact_dir"]
+            and status.get("state") in ({"Cancelling", "Cancelled"} if cancel else {"Accepted", "Running"})
+            and type(status.get("cancellation_requested")) is bool and type(status.get("dispatch_closed")) is bool
+            and "terminal" in status, "The held probe status differs from the exact child state and paths.")
+    if not cancel:
+        require(status["cancellation_requested"] is False and status["dispatch_closed"] is False
+                and status["terminal"] is None, "The held probe status does not describe an active child.")
+    read_path = binding["paths"]["log_path"]
+    log_bytes = actual_file(home, read_path).read_text()
+    require(log_bytes, "The actual live child log is empty.")
+    require(any(row["name"] == "file_read" and row.get("success") is True and row.get("failure_code") is None
+                and row["turn"] == 2 and first < row.get("observed_ns", 0) < second < release
+                and (not cancel or row["observed_ns"] < chosen["observed_ns"])
+                and row["arguments"].get("Path", row["arguments"].get("path")) == read_path
+                and any(line in row.get("result", "") for line in log_bytes.splitlines() if len(line) >= 16)
+                and any(pair_matches(pair, row) for history in histories for pair in history)
+                for row in calls), "The held probe lacks a fresh attributed read of the actual live child log.")
+    return {"status_call_id": chosen["id"], "status_turn": chosen["turn"],
+            "limit": "The status describes recorded state during this held request. It does not prove current provider health."}
+
+
 def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
     accepted = acceptance(json.dumps(receipt["accepted_run"]))
     require(receipt["status"] == "observed" and receipt["completed_turns"] >= 2, "The persistent parent flow did not complete.")
@@ -374,10 +510,10 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
             and binding["arrived_ns"] < binding["upstream_first_payload_ns"] < receipt["second_turn_ns"] < snapshot["release_ns"]
             and binding["upstream_first_payload_ns"] <= binding["bound_ns"] <= snapshot["release_ns"],
             "The parent probe did not complete under the actual child barrier.")
-    start_calls = [row for row in receipt["calls"] if row["name"] == "spawn_agent"
-                   and row.get("result") and acceptance(row["result"])["run_id"] == accepted["run_id"]]
-    require(len(start_calls) == 1, "The terminal lacks the exact original start occurrence.")
-    call_id, terminal = canonical_pairs(requests, accepted, start_calls[0]["id"], start_calls[0]["name"])
+    start_calls = accepted_start_calls(receipt["calls"])
+    require(len(start_calls) == 1 and acceptance(start_calls[0]["result"]) == accepted
+            and start_calls[0]["turn"] == 1, "The terminal lacks the one original initial-turn acceptance.")
+    call_id, terminal = canonical_pairs(requests, accepted, start_calls[0]["id"], start_calls[0]["name"], receipt["calls"])
     positions = committed_positions(log, receipt["session_id"], accepted["run_id"], call_id)
     consumed = consumption["deliveries"][0]
     require(consumed["accepted"] == accepted and consumed["call_id"] == call_id and consumed["terminal"] == terminal
@@ -389,7 +525,7 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
             and observed_request["response_first_payload_ns"] == consumed["response_first_payload_ns"],
             "The consumption receipt differs from the actual relay request record.")
     require(0 < consumed["request_id"] <= len(requests), "The consumed request is absent from raw capture.")
-    require(canonical_pairs([requests[consumed["request_id"] - 1]], accepted, start_calls[0]["id"], start_calls[0]["name"]) == (call_id, terminal),
+    require(canonical_pairs([requests[consumed["request_id"] - 1]], accepted, start_calls[0]["id"], start_calls[0]["name"], receipt["calls"]) == (call_id, terminal),
             "The consumption receipt names a request without the actual terminal pair.")
     require(terminal.get("outcome") == ("Failed" if cancel else "Completed"), "The child terminal outcome differs.")
     if cancel:
@@ -398,22 +534,12 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
     require(terminal.get("log_path") == binding["paths"]["log_path"]
             and terminal.get("artifact_directory") == binding["paths"]["artifact_dir"], "The terminal paths differ from bound child storage.")
     calls = receipt["calls"]
-    starts = [row for row in calls if row["name"] == "spawn_agent"]
-    require(len(starts) == 1 and starts[0]["arguments"].get("Agent", starts[0]["arguments"].get("agent")) == "child-run-worker",
+    starts = start_calls
+    require(all(row["turn"] == 1 and row["arguments"].get("Agent", row["arguments"].get("agent")) == "child-run-worker"
+                for row in starts),
             "The fixed flow did not start the assigned child exactly once.")
     verify_child_actions(requests, binding["paths"], nonce, cancel)
-    controls = [row for row in calls if row["name"] == "check_agent_run"]
-    require(any(row["arguments"].get("RunId", row["arguments"].get("runId")) == accepted["run_id"]
-                and row["arguments"].get("Cancel", row["arguments"].get("cancel", False)) is cancel and row.get("success") and row["turn"] == 2 for row in controls),
-            "The parent did not execute the exact deferred child control.")
-    require(any(row["name"] == "load_tool" and row["arguments"].get("Name", row["arguments"].get("name")) == "check_agent_run"
-                and row.get("success") and row["turn"] == 2 for row in calls), "The parent did not load the deferred child control.")
-    read_path = binding["paths"]["log_path"]
-    log_bytes = actual_file(home, read_path).read_text()
-    require(log_bytes, "The actual live child log is empty.")
-    require(any(row["name"] == "file_read" and row["arguments"].get("Path", row["arguments"].get("path")) == read_path
-                and row.get("success") and row["turn"] == 2 and any(line in row.get("result", "") for line in log_bytes.splitlines() if len(line) >= 16)
-                for row in calls), "The parent did not read actual live child log content.")
+    probe = verify_held_probe(receipt, requests, snapshot, home, nonce, cancel)
     artifact = binding["paths"]["artifact_dir"] + (f"/partial-{nonce}.txt" if cancel else f"/complete-{nonce}.txt")
     contents = actual_file(home, artifact).read_text()
     require(contents == ("PARTIAL-" if cancel else "COMPLETE-") + nonce, "The actual child artifact content differs.")
@@ -421,7 +547,8 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
         held = next(row for row in snapshot["requests"] if row["held"])
         actual_write = write_completed(requests[held["request_id"] - 1], f"partial-{nonce}.txt")
         require(actual_write is not None, "The held request lacks its actual partial write result.")
-        verify_partial_report(terminal, home, accepted, artifact, actual_write["result"])
+        report_path, report_bytes = verify_partial_report(terminal, home, accepted, artifact, actual_write["result"])
+        verify_cancellation_review(calls, accepted, terminal, consumed, report_path, report_bytes)
         require(not any(row["child"] and row["request_id"] > held["request_id"] for row in snapshot["requests"]),
                 "The child entered a new provider operation after the cancellation barrier.")
     require(any(row["name"] == "file_read" and row["arguments"].get("Path", row["arguments"].get("path")) == artifact
@@ -429,10 +556,29 @@ def verify_trial(receipt, requests, snapshot, log, home, nonce, cancel):
                 and contents in row.get("result", "") for row in calls),
             "The parent did not read the actual artifact during automatic continuation.")
     require(("PARTIAL-" if cancel else "COMPLETE-") + nonce in receipt["last_reply"], "The automatic parent reply lacks actual artifact evidence.")
-    return {"passed": True, "journal_positions": positions, "terminal_call_id": call_id,
+    return {"passed": True, "journal_positions": positions, "terminal_call_id": call_id, "held_probe": probe,
             "artifact_sha256": hashlib.sha256(contents.encode()).hexdigest(),
             "limit": "Local cancellation does not prove that an external provider stopped its accepted operation."}
 
+
+
+def read_cancellation_report(home, report_path, artifact_directory):
+    require(report_path == artifact_directory + "/cancelled-results.json"
+            and str(PurePosixPath(report_path)) == report_path,
+            "The report path differs from the exact confirmed artifact path.")
+    target = actual_file(home, report_path)
+    root = Path(home).resolve() / "data"
+    for path in [target, *target.parents]:
+        require(not path.is_symlink(), "The cancellation report path contains a link.")
+        if path == root:
+            break
+    require(stat.S_ISREG(target.stat().st_mode), "The cancellation report is not a regular file.")
+    result = subprocess.run(["docker", "exec", "--user", "netclaw", os.environ["EVAL_CONTAINER_NAME"],
+                             "cat", "--", report_path], capture_output=True, check=True, timeout=30)
+    capture = Path(os.environ["TMPDIR_EVAL"]) / "child-runs/actual-cancelled-results.json"
+    capture.parent.mkdir(parents=True, exist_ok=True)
+    capture.write_bytes(result.stdout)
+    return result.stdout
 
 
 def verify_partial_report(terminal, home, accepted, artifact, confirmed_write_result):
@@ -449,23 +595,86 @@ def verify_partial_report(terminal, home, accepted, artifact, confirmed_write_re
     report_path = terminal["artifact_directory"] + "/cancelled-results.json"
     require(report_path in terminal.get("output", "") and not terminal.get("warning"),
             "The fixed local-report case lacks a confirmed framework report.")
-    report = json.loads(actual_file(home, report_path).read_bytes())
+    report_bytes = read_cancellation_report(home, report_path, terminal["artifact_directory"])
+    report = json.loads(report_bytes.decode("utf-8"), object_pairs_hook=unique_object)
+    require(isinstance(report, dict), "The actual partial report is not an object.")
     require(report.get("run_id") == accepted["run_id"] and report.get("state") == "Cancelled"
             and report.get("summary") == summary and report.get("confirmed_activity") == activity,
             "The actual partial report differs from the durable terminal checkpoint.")
     require(report.get("external_effects") == "Recorded receipts describe known local results. They do not prove external effects stopped.",
             "The partial report omits the canonical external-effect limit.")
-    return report_path
+    return report_path, report_bytes
+
+
+def verify_cancellation_review(calls, accepted, terminal, consumed, report_path, report_bytes):
+    require(any(row["name"] == "skill_load" and row.get("success") and row["turn"] == 1
+                and row["arguments"].get("Name", row["arguments"].get("name")) == "agent-coordination"
+                and "A cancellation acceptance does not prove dispatch closure or terminal completion."
+                in row.get("result", "") for row in calls),
+            "The parent lacks actual coordination guidance before the cancellation turn.")
+    body = report_bytes.decode("utf-8")
+    require(any(row["name"] == "file_read" and row.get("success")
+                and row["arguments"].get("Path", row["arguments"].get("path")) == report_path
+                and row["arguments"].get("StartLine", row["arguments"].get("startLine")) in (None, 0)
+                and row["arguments"].get("Limit", row["arguments"].get("limit")) in (None, 0)
+                and row.get("result") == body
+                and consumed["response_first_payload_ns"] < row["observed_ns"] < consumed["parent_boundary_ns"]
+                for row in calls), "The parent lacks a full actual partial-report read after terminal consumption.")
+    controls = []
+    for row in calls:
+        if row["name"] != "check_agent_run" or not row.get("success"):
+            continue
+        args = row["arguments"]
+        if args.get("RunId", args.get("runId")) != accepted["run_id"]:
+            continue
+        status = json.loads(row.get("result", ""), object_pairs_hook=unique_object)
+        require(isinstance(status, dict) and status.get("run_id") == accepted["run_id"]
+                and status.get("scope_id") == accepted["scope_id"], "The cancellation status has a foreign owner.")
+        terminal_body = status.get("terminal")
+        require("terminal" in status and (terminal_body is None or isinstance(terminal_body, str)),
+                "The status terminal does not use the canonical JSON-string representation.")
+        if terminal_body is None:
+            require(status.get("state") in {"Accepted", "Running", "Cancelling"},
+                    "A terminal status lacks its canonical terminal JSON string.")
+        else:
+            status["terminal"] = json.loads(terminal_body, object_pairs_hook=unique_object)
+            require(isinstance(status["terminal"], dict) and status["terminal"] == terminal
+                    and status.get("state") == terminal.get("state"),
+                    "The status terminal differs from the actual consumed terminal.")
+        if args.get("Cancel", args.get("cancel", False)) is True:
+            require(status.get("cancellation_requested") is True and type(status.get("dispatch_closed")) is bool
+                    and status.get("state") in {"Cancelling", "Cancelled"},
+                    "The cancellation result lacks distinct admission and closure facts.")
+            if not status["dispatch_closed"]:
+                require(status.get("state") == "Cancelling" and status.get("terminal") is None,
+                        "Cancellation admission falsely claims terminal completion before dispatch closure.")
+            if status.get("state") == "Cancelled":
+                require(status["dispatch_closed"] and status.get("terminal") == terminal,
+                        "The cancellation result lacks the actual cancelled terminal.")
+        controls.append((row, status))
+    require(any(row["arguments"].get("Cancel", row["arguments"].get("cancel", False)) is False
+                and status.get("cancellation_requested") is True and status.get("dispatch_closed") is True
+                and status.get("state") == "Cancelled" and status.get("terminal") == terminal
+                and consumed["response_first_payload_ns"] < row["observed_ns"] < consumed["parent_boundary_ns"]
+                for row, status in controls),
+            "The parent lacks explicit dispatch closure and the actual cancelled terminal status.")
+
 
 def prompts(nonce, cancel):
     kind = "partial" if cancel else "complete"
     content = ("PARTIAL-" if cancel else "COMPLETE-") + nonce
     task = (f"Trial {nonce}. Write exactly {content}, without a newline, to {kind}-{nonce}.txt in your runtime artifact_dir. "
             "Use file_write. Use no shell command. Return the full artifact path and its content in your final result.")
-    initial = (f"Delegate this task once to child-run-worker: {task} "
+    initial = (("Load agent-coordination by canonical name before this task. " if cancel else "")
+               + f"Delegate this task once to child-run-worker: {task} "
                "Acknowledge the accepted child immediately with a brief visible reply. Do not wait for its result. "
                "When its later result arrives, read its artifact with file_read and report the actual content. "
-               "If the child is cancelled, inspect its report and read the confirmed partial artifact. "
+               "If the child is cancelled, fully read cancelled-results.json from its confirmed artifact directory. "
+               "Read the confirmed partial artifact. For this eval's status API coverage, follow these steps. "
+               "After both file reads, call `check_agent_run` once with the accepted `RunId` and `Cancel: false`. "
+               "Use its actual result to confirm `state: Cancelled`, `cancellation_requested: true`, `dispatch_closed: true`, and the matching terminal. "
+               "Do not substitute the background run index, the report, or a prose claim for this tool call. "
+               "Cancellation admission alone does not prove either fact. Local closure does not prove external effects stopped. "
                "Report the actual content and the local cancellation state.")
     probe = ("For accepted child {{RUN_ID}}, inspect its current state and its authorized log path. "
              "Read that log with file_read. Use the deferred child control through normal tool discovery. "
@@ -512,20 +721,32 @@ def evidence_requests(directory):
     return [json.loads(path.read_bytes()) for path in sorted(Path(directory).glob("request-*.json"))]
 
 
-def daemon_logs(home):
-    paths = sorted((Path(home) / "logs").glob("daemon*.log"))
-    require(paths, "The eval-owned daemon diagnostic log is absent.")
-    return "\n".join(path.read_text(errors="replace") for path in paths)
+def session_logs(home, session, run_ids):
+    require(run_ids, "The observed parent has no accepted run identifiers.")
+    patterns = [r"child_run_accepted owner=" + re.escape(session) + r" runId=" + re.escape(run_id)
+                + r" journalSequence=\d+" for run_id in run_ids]
+    matches = []
+    # Version-2 parent logs are direct envelope children. Child logs remain excluded.
+    for path in sorted((Path(home) / "data/sessions").glob("*/logs/session.log")):
+        text = path.read_text(errors="replace")
+        if any(re.search(pattern, text) for pattern in patterns):
+            matches.append(text)
+    require(len(matches) == 1, "The observed parent lacks exactly one canonical session diagnostic log.")
+    return matches[0]
 
 
 def legacy_observer_mode(case, prompt_ordinal):
     require(isinstance(prompt_ordinal, int) and not isinstance(prompt_ordinal, bool), "The prompt ordinal is invalid.")
+    if case in {"skill_coordination_discovery", "skill_activation_subagent_authoring"}:
+        require(prompt_ordinal == 1, "Discovery requires its one original prompt.")
+        return "turn"
     if case == "coding_context_worktree_handoff":
         require(1 <= prompt_ordinal <= 4, "The worktree handoff prompt ordinal is outside its four-prompt contract.")
         return "collect" if prompt_ordinal == 3 else "turn"
     require(case in {"subagent_headless_ambiguous_task", "subagent_specialization_precedence",
                      "subagent_project_scope_declaration", "subagent_session_scratch_disposable",
-                     "approval_natural_subagent_project_review"} and prompt_ordinal == 1,
+                     "approval_natural_subagent_project_review", "coordination_analyze_plan",
+                     "coordination_attachment_blocked", "productive_parent_child", "coordination_implement_review", "coordination_stale_incomplete", "coordination_conflicting_evidence", "coordination_two_writers"} and prompt_ordinal == 1,
             "The legacy child case or prompt ordinal is invalid.")
     return "collect"
 
@@ -542,6 +763,24 @@ def validate_prompt_receipt(receipt, data):
         require(receipt.get("session_id") == data["SessionId"], "The observer receipt has another resumed session.")
 
 
+def workflow_delivery(receipt, accepted, start, requests):
+    identifier, terminal = canonical_pairs(requests, accepted, start["id"], start["name"], receipt["calls"])
+    completed = terminal.get("state") == terminal.get("outcome") == "Completed"
+    failed = terminal.get("state") == terminal.get("outcome") == "Failed" and isinstance(terminal.get("reason"), str) and terminal["reason"].strip()
+    require(completed or failed, "The workflow terminal is neither Completed nor an explicit Failed attempt.")
+    observations = receipt["delivery_observations"]
+    require(observations.get("complete") is True, "The workflow lacks complete canonical terminal consumption.")
+    matches = [row for row in observations["deliveries"] if row["accepted"] == accepted]
+    require(len(matches) == 1, "The workflow terminal lacks one attributed consumption record.")
+    consumed = matches[0]
+    require(consumed["call_id"] == identifier and json.dumps(consumed["terminal"], sort_keys=True) == json.dumps(terminal, sort_keys=True),
+            "The workflow consumption differs from its canonical terminal pair.")
+    times = [start["observed_ns"], consumed["request_admitted_ns"], consumed["response_first_payload_ns"], consumed["parent_boundary_ns"]]
+    require(all(type(value) is int and value > 0 for value in times) and times == sorted(set(times)),
+            "The workflow terminal lacks ordered start, consumption, and parent boundary evidence.")
+    return identifier, terminal, consumed
+
+
 def collect(port, prompt, session, output_format, evidence, case, prompt_ordinal):
     mode = legacy_observer_mode(case, prompt_ordinal)
     receipt, output = invoke_observer(port, prompt, evidence, mode, uuid.uuid4().hex, session=session,
@@ -554,16 +793,20 @@ def collect(port, prompt, session, output_format, evidence, case, prompt_ordinal
         print(output, end="")
         return
     requests = evidence_requests(Path(os.environ["TMPDIR_EVAL"]) / "child-runs/relay")
-    log = daemon_logs(os.environ["EVAL_HOME"])
     require(receipt["accepted_runs"] and receipt["delivery_observations"]["complete"],
             "The legacy response lacks an accepted child and actual terminal consumption.")
+    log = session_logs(os.environ["EVAL_HOME"], receipt["session_id"],
+                       [accepted["run_id"] for accepted in receipt["accepted_runs"]])
     deliveries = []
+    accepted_starts = accepted_start_calls(receipt["calls"])
     for accepted in receipt["accepted_runs"]:
-        starts = [call for call in receipt["calls"] if call["name"] == "spawn_agent"
-                  and call.get("result") and acceptance(call["result"])["run_id"] == accepted["run_id"]]
+        starts = [call for call in accepted_starts if acceptance(call["result"]) == accepted]
         require(len(starts) == 1, "The legacy terminal lacks the exact original start occurrence.")
-        call_id, terminal = canonical_pairs(requests, accepted, starts[0]["id"], starts[0]["name"])
-        require(terminal.get("outcome") == "Completed", "A legacy child did not complete normally.")
+        if case in {"coordination_analyze_plan", "coordination_attachment_blocked"}:
+            call_id, terminal, _ = workflow_delivery(receipt, accepted, starts[0], requests)
+        else:
+            call_id, terminal = canonical_pairs(requests, accepted, starts[0]["id"], starts[0]["name"], receipt["calls"])
+            require(terminal.get("outcome") == "Completed", "A legacy child did not complete normally.")
         positions = committed_positions(log, receipt["session_id"], accepted["run_id"], call_id)
         deliveries.append({"accepted": accepted, "terminal": terminal, "journal_positions": positions})
     receipt["verified_deliveries"] = deliveries
@@ -586,8 +829,11 @@ def cli_acceptance(port, root, nonce):
     (root / "actual-cli.stdout").write_text(result.stdout)
     (root / "actual-cli.stderr").write_text(result.stderr)
     require(result.returncode == 0, "The actual headless CLI failed.")
+    bodies = re.findall(r"^\[tool:result\] spawn_agent → (.+)$", result.stdout, re.MULTILINE)
+    require(len(bodies) == 1, "The actual CLI lacks one start acceptance result.")
+    accepted = acceptance(bodies[0])
     return verify_cli_acceptance(result.stdout, evidence_requests(root / "relay"),
-                                 daemon_logs(os.environ["EVAL_HOME"]), session, nonce)
+                                 session_logs(os.environ["EVAL_HOME"], session, [accepted["run_id"]]), session, nonce)
 
 
 def verify_cli_acceptance(stdout, requests, log, session, nonce):
@@ -648,7 +894,8 @@ def run(port):
         snapshot = control(port, "snapshot")
         (root / "fixture-snapshot.json").write_text(json.dumps(snapshot, indent=2))
         report.update(verify_trial(receipt, evidence_requests(root / "relay"), snapshot,
-                                   daemon_logs(os.environ["EVAL_HOME"]), os.environ["EVAL_HOME"], nonce,
+                                   session_logs(os.environ["EVAL_HOME"], receipt["session_id"],
+                                                [receipt["accepted_run"]["run_id"]]), os.environ["EVAL_HOME"], nonce,
                                    case == "child_run_partial_cancel"))
         report["session_id"] = receipt["session_id"]
         artifact_path = snapshot["binding"]["paths"]["artifact_dir"] + (
@@ -670,6 +917,83 @@ def run(port):
 
 
 
+def verify_scratch(receipt, data, requests, log):
+    validate_prompt_receipt(receipt, data)
+    require(receipt.get("case") == "subagent_session_scratch_disposable" and data["Mode"] == "collect",
+            "The scratch receipt belongs to another case or observer mode.")
+    for request in requests:
+        has_child_contract = any(message.get("role") == "system" and CHILD_CONTRACT in message_text(message.get("content", ""))
+                                 for message in request.get("messages", []))
+        require(not has_child_contract or context_paths(request) is not None,
+                "A scratch child request lacks its canonical context.")
+    starts = accepted_start_calls(receipt["calls"])
+    require(len(starts) == 1, "The scratch case requires one accepted child.")
+    start = starts[0]
+    arguments = start["arguments"]
+    require(arguments.get("Agent", arguments.get("agent")) == "disposable-diagnostic"
+            and not any(key.casefold() == "context" for key in arguments),
+            "The scratch child profile or Context differs.")
+    task = arguments.get("Task", arguments.get("task"))
+    require(isinstance(task, str) and task.strip() and not re.search(
+        r"session_dir|/tmp|temporary|working.?directory|set_working_directory|(^|[^a-z])cwd([^a-z]|$)", task, re.I),
+        "The scratch task is absent or contains a path hint.")
+    accepted = acceptance(start["result"])
+    require(receipt["accepted_runs"] == [accepted] and receipt["accepted_run"] == accepted
+            and accepted["scope_id"] == receipt["session_id"] + "/subagent/disposable-diagnostic/" + accepted["run_id"],
+            "The scratch acceptance has another owner or run.")
+    require(any(pair_matches(pair, start) for request in requests if context_paths(request) is None
+                for pair in parent_call_pairs(request)), "The scratch start lacks its exact provider pair.")
+    call_id, terminal = canonical_pairs(requests, accepted, start["id"], start["name"], receipt["calls"])
+    require(terminal.get("state") == "Completed" and terminal.get("outcome") == "Completed",
+            "The scratch child did not complete normally.")
+    positions = committed_positions(log, receipt["session_id"], accepted["run_id"], call_id)
+    require(receipt["verified_deliveries"] == [{"accepted": accepted, "terminal": terminal, "journal_positions": positions}],
+            "The scratch verified delivery differs from the canonical terminal.")
+    consumption = receipt["delivery_observations"]
+    require(consumption.get("complete") is True and len(consumption["deliveries"]) == 1,
+            "The parent did not consume the scratch terminal.")
+    consumed = consumption["deliveries"][0]
+    require(consumed["accepted"] == accepted and consumed["terminal"] == terminal and consumed["call_id"] == call_id
+            and 0 < consumed["request_admitted_ns"] < consumed["response_first_payload_ns"] < consumed["parent_boundary_ns"],
+            "The scratch consumption has another terminal or response boundary.")
+    request_id = consumed["request_id"]
+    require(type(request_id) is int and 0 < request_id <= len(requests)
+            and canonical_pairs([requests[request_id - 1]], accepted, start["id"], start["name"], receipt["calls"])
+            == (call_id, terminal), "The scratch consumption names another provider request.")
+    child_requests = [request for request in requests if context_paths(request) is not None]
+    require(child_requests, "The scratch child context is absent.")
+    paths = context_paths(child_requests[0])
+    child_root = PurePosixPath(terminal["log_path"]).parent.parent
+    require(str(child_root / "logs/session.log") == terminal["log_path"] and child_root.is_absolute()
+            and ".." not in child_root.parts and child_root.name == accepted["run_id"]
+            and child_root.parent.name == "subagents"
+            and str(child_root.parent.parent.parent) == "/home/netclaw/.netclaw/sessions",
+            "The scratch log has another managed child root.")
+    expected = {"session_dir": str(child_root.parent.parent / "workspace"), "temp_dir": str(child_root / "tmp"),
+                "artifact_dir": str(child_root / "artifacts"), "log_path": terminal["log_path"]}
+    require(paths == expected and terminal["artifact_directory"] == paths["artifact_dir"]
+            and all(context_paths(request) == paths for request in child_requests),
+            "The scratch context differs from its terminal storage.")
+    identities = set()
+    command = "python3 -c 'import tempfile; print(tempfile.gettempdir())'"
+    for request in child_requests:
+        pairs = parent_call_pairs(request)
+        calls = [call for message in request.get("messages", []) if message.get("role") == "assistant"
+                 for call in message.get("tool_calls", [])]
+        require(len(calls) == len(pairs) and len(pairs) <= 1,
+                "The scratch child has an extra or unpaired tool call.")
+        for identifier, name, args, result, *_ in pairs:
+            require(name == "shell_execute" and args.get("Command") == command
+                    and set(args) <= {"Command", "_rationale", "_timeout_seconds", "_background"}
+                    and result == "Exit code: 0\n" + paths["temp_dir"] + "\n",
+                    "The scratch command or successful result differs.")
+            identities.add((identifier, name, json.dumps(args, sort_keys=True), result))
+    require(len(identities) == 1, "The scratch child lacks one stable diagnostic pair.")
+    require(paths["temp_dir"] in terminal.get("output", "") and paths["temp_dir"] in receipt["last_reply"],
+            "The child or parent reply lacks the exact managed temp path.")
+    return paths["temp_dir"]
+
+
 def verified_final_response(evidence):
     directory = Path(evidence)
     data = json.loads((directory / "observer-input.json").read_text())
@@ -680,7 +1004,7 @@ def verified_final_response(evidence):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["serve", "run", "collect", "assert-delivery", "log-path", "final-response"])
+    parser.add_argument("action", choices=["serve", "run", "collect", "assert-delivery", "log-path", "final-response", "assert-scratch"])
     parser.add_argument("--port", type=int)
     parser.add_argument("--prompt-file")
     parser.add_argument("--session", default="")
@@ -690,6 +1014,16 @@ def main():
     parser.add_argument("--case", default="")
     parser.add_argument("--prompt-ordinal", type=int, default=1)
     args = parser.parse_args()
+    if args.action == "assert-scratch":
+        directories = list(Path(args.evidence).glob("observer-*"))
+        require(len(directories) == 1, "The scratch case requires one observer invocation.")
+        directory = directories[0]
+        receipt = json.loads((directory / "verified-receipt.json").read_text())
+        data = json.loads((directory / "observer-input.json").read_text())
+        log = session_logs(os.environ["EVAL_HOME"], receipt["session_id"],
+                           [row["run_id"] for row in receipt["accepted_runs"]])
+        print(verify_scratch(receipt, data, evidence_requests(Path(args.evidence) / "relay"), log))
+        return 0
     if args.action == "final-response":
         print(verified_final_response(args.evidence), end="")
         return 0

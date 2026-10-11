@@ -81,28 +81,24 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
         { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123461 }));
         var restored = SessionState.FromSnapshot(RoundTrip(valid.ToSnapshot()));
         Assert.Equal(validInput.UserMessage.Content, Assert.Single(restored.PendingInputs).UserMessage.Content);
-        Assert.True(restored.ChildRuns[run.RunId].ParentReceiptFailure);
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Original_turn_continuation_restores_detector_evidence_before_the_duplicate_adoption_path(bool receiptFailure)
+    public void Original_turn_continuation_requires_the_canonical_child_identity(bool receiptFailure)
     {
         var (state, run) = PreparedSlash(receiptFailure);
         var input = Delivery(run, "framework-result");
         state = state.Apply(RoundTrip(new ChildRunEvent.DeliveryAdmitted(input)
         { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123460 }));
-        // The authority turn stays unchanged, but the current detector state differs from the retained task.
-        state = state with { LoopCheckpoint = new ToolLoopCheckpoint { TaskId = "different-current-task" }, LoopReceiptFailure = !receiptFailure };
+        state = state with { LoopReceiptFailure = !receiptFailure };
         state = SessionState.FromSnapshot(RoundTrip(state.ToSnapshot()));
         var adoption = new ToolTaskAdopted(false)
         { SessionId = Owner, TurnContext = run.OriginalContext, InputIds = [input.InputId], ContinuedChildRunId = run.RunId };
         RejectUnchanged(state, () => state.Apply(adoption with { ContinuedChildRunId = null }));
         RejectUnchanged(state, () => state.Apply(adoption with { ContinuedJobKey = "foreign-job" }));
         var restored = state.Apply(RoundTrip(adoption));
-        Assert.True(BackgroundChildRun.SameCheckpoint(run.ParentCheckpoint, restored.LoopCheckpoint));
-        Assert.Equal(receiptFailure, restored.LoopReceiptFailure);
         Assert.True(SessionState.SameCanonicalContext(run.OriginalContext, restored.AdoptedTaskContext!));
         Assert.Equal(new[] { input.InputId }, restored.AdoptedTaskInputIds);
         Assert.Null(restored.LoopAdmission);
@@ -112,10 +108,7 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
 
     [Theory]
     [InlineData("authority")]
-    [InlineData("task")]
-    [InlineData("checkpoint")]
-    [InlineData("receipt-failure")]
-    public void Child_results_coalesce_only_with_the_same_original_task_and_detector_evidence(string fault)
+    public void Child_results_coalesce_only_with_the_same_original_authority(string fault)
     {
         var (state, first) = PreparedSlash(receiptFailure: true);
         var second = first with
@@ -130,9 +123,6 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
         var incompatible = fault switch
         {
             "authority" => second with { OriginalContext = second.OriginalContext with { RequesterSenderId = new SenderId("operator-b") } },
-            "task" => second with { ParentCheckpoint = second.ParentCheckpoint with { TaskId = "other-original-task" } },
-            "checkpoint" => second with { ParentCheckpoint = second.ParentCheckpoint with { LastBlockedAction = "other-correction" } },
-            "receipt-failure" => second with { ParentReceiptFailure = false },
             _ => throw new ArgumentOutOfRangeException(nameof(fault))
         };
         SessionState AdmitPair(BackgroundChildRun sibling)
@@ -150,8 +140,6 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
         var valid = AdmitPair(second);
         var adopted = valid.Apply(RoundTrip(AdoptPair(valid)));
         Assert.Equal(2, adopted.AdoptedTaskInputIds.Count);
-        Assert.True(BackgroundChildRun.SameCheckpoint(first.ParentCheckpoint, adopted.LoopCheckpoint));
-        Assert.True(adopted.LoopReceiptFailure);
         Assert.Equal(new[] { first.RunId, second.RunId }, adopted.PendingInputs.Select(input => input.SourceChildRunId!.Value));
     }
 
@@ -203,7 +191,6 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
         Assert.Equal(input.UserMessage.ToolCallId, restoredMessage.ToolCallId);
         var adopted = valid.Apply(RoundTrip(new ToolTaskAdopted(false)
         { SessionId = Owner, TurnContext = run.OriginalContext, InputIds = [input.InputId], ContinuedChildRunId = run.RunId }));
-        Assert.True(BackgroundChildRun.SameCheckpoint(run.ParentCheckpoint, adopted.LoopCheckpoint));
         Assert.Equal(input.UserMessage.Content, Assert.Single(adopted.PendingInputs).UserMessage.Content);
         Assert.Equal("framework-result", Assert.Single(adopted.PendingInputs).UserMessage.ToolCallId!.Value.Value);
     }
@@ -212,7 +199,6 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
     {
         var (state, run) = Acceptance(Owner, slash: true);
         state = state with { LoopReceiptFailure = receiptFailure };
-        run = run with { ParentReceiptFailure = receiptFailure };
         return (state.Apply(RoundTrip(new ChildRunAccepted { SessionId = Owner, Run = run })).CloseInputs(run.OriginInputIds), run);
     }
 

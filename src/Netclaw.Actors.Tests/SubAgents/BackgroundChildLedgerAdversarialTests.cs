@@ -78,7 +78,7 @@ public sealed partial class BackgroundChildLedgerAdversarialTests(ITestOutputHel
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Registered_event_and_snapshot_keep_canonical_run_facts_and_distinct_task_identity(bool slash)
+    public void Registered_event_and_snapshot_keep_canonical_run_facts(bool slash)
     {
         var (state, run) = Acceptance(Owner, slash);
         var evt = new ChildRunAccepted { SessionId = Owner, Run = run };
@@ -99,10 +99,7 @@ public sealed partial class BackgroundChildLedgerAdversarialTests(ITestOutputHel
         Assert.True(SessionState.SameCanonicalContext(run.OriginalContext, actual.OriginalContext));
         Assert.Equal(run.OriginInputIds, actual.OriginInputIds);
         Assert.Equal("authority-turn", actual.OriginalContext.TurnId);
-        Assert.Equal("retained-detector-task", actual.ParentCheckpoint.TaskId);
-        Assert.NotEqual(actual.OriginalContext.TurnId, actual.ParentCheckpoint.TaskId);
         Assert.Equal(Codec(accepted.ToSnapshot()).ToBinary(accepted.ToSnapshot()), Codec(restored.ToSnapshot()).ToBinary(restored.ToSnapshot()));
-        Assert.Equal(run.ParentReceiptFailure, actual.ParentReceiptFailure);
         Assert.Equal(slash, actual.StartBatchSettled);
         Assert.Equal(run.InitialWorkingSnapshot.WorkingContext.ProjectDirectory, actual.InitialWorkingSnapshot.WorkingContext.ProjectDirectory);
         Assert.Equal(run.InitialWorkingSnapshot.WorkingContext.RecentFiles, actual.InitialWorkingSnapshot.WorkingContext.RecentFiles);
@@ -124,8 +121,6 @@ public sealed partial class BackgroundChildLedgerAdversarialTests(ITestOutputHel
     [InlineData("requester")]
     [InlineData("origin-order")]
     [InlineData("event-session")]
-    [InlineData("checkpoint")]
-    [InlineData("receipt-failure")]
     public void An_acceptance_cannot_replace_canonical_admitted_evidence(string fault)
     {
         var (state, run) = Acceptance(Owner, slash: false);
@@ -138,8 +133,6 @@ public sealed partial class BackgroundChildLedgerAdversarialTests(ITestOutputHel
             "requester" => evt with { Run = run with { OriginalContext = run.OriginalContext with { RequesterSenderId = new SenderId("operator-b") } } },
             "origin-order" => evt with { Run = run with { OriginInputIds = run.OriginInputIds.Reverse().ToArray() } },
             "event-session" => evt with { SessionId = new SessionId("signalr/foreign") },
-            "checkpoint" => evt with { Run = run with { ParentCheckpoint = run.ParentCheckpoint with { LastBlockedAction = "forged-correction" } } },
-            "receipt-failure" => evt with { Run = run with { ParentReceiptFailure = !run.ParentReceiptFailure } },
             _ => throw new ArgumentOutOfRangeException(nameof(fault))
         };
         var bytes = Codec(state.ToSnapshot()).ToBinary(state.ToSnapshot());
@@ -263,20 +256,11 @@ public sealed partial class BackgroundChildLedgerAdversarialTests(ITestOutputHel
         var second = first with { InputId = new InputId("origin-two") };
         var state = SessionState.Empty.Apply(first).Apply(second).Apply(new ToolTaskAdopted(false)
         { SessionId = session, TurnContext = context, InputIds = [first.InputId, second.InputId] });
-        // The ledger must retain detector identity independently from the original authority turn.
-        state = state with { LoopCheckpoint = new ToolLoopCheckpoint
-        {
-            TaskId = "retained-detector-task", LastBlockedAction = "retained-correction",
-            Entries = [new ToolLoopEntry { ToolName = "neutral_probe", ArgumentsHash = "args", OutcomeHash = "result", EqualRounds = 2, Corrected = true }],
-            ColdKeys = [new ToolLoopKey("old_probe", "cold-args")], AdjacentHistory = [new ToolLoopAdjacent("action", "outcome")]
-        } };
         if (!slash)
             state = state.ApplyLoopAdmission(new ToolBatchStarted
             {
                 SessionId = session, LoopAdmission = new ToolLoopAdmission
-                { TaskId = state.LoopCheckpoint.TaskId, ActionHash = "start-action", Calls = [new ToolLoopPreparedCall("start-call", "spawn_agent", "start-args", false)] },
-                LoopDelta = new ToolLoopDelta { TaskId = state.LoopCheckpoint.TaskId, LastBlockedAction = state.LoopCheckpoint.LastBlockedAction,
-                    ColdKeys = state.LoopCheckpoint.ColdKeys, AdjacentHistory = state.LoopCheckpoint.AdjacentHistory }
+                { TaskId = context.TurnId, ActionHash = "start-action", Calls = [new ToolLoopPreparedCall("start-call", "spawn_agent", "start-args", false)] }
             });
         return (state, new BackgroundChildRun
         {
@@ -284,8 +268,8 @@ public sealed partial class BackgroundChildLedgerAdversarialTests(ITestOutputHel
             AgentName = new AgentName("worker"), SourceOperation = slash ? "/inspect" : "spawn_agent", ArgumentsDigest = new string('A', 64),
             StartKey = slash ? new ChildRunStartKey.Slash(first.InputId) { SessionId = session, TurnId = new TurnId(context.TurnId) }
                 : new ChildRunStartKey.Tool(new ToolCallId("start-call")) { SessionId = session, TurnId = new TurnId(context.TurnId) },
-            OriginalContext = context, OriginInputIds = state.AdoptedTaskInputIds, ParentCheckpoint = state.LoopCheckpoint,
-            ParentReceiptFailure = state.LoopReceiptFailure, StartBatchSettled = slash, AcceptedAtMs = 123456,
+            OriginalContext = context, OriginInputIds = state.AdoptedTaskInputIds,
+            StartBatchSettled = slash, AcceptedAtMs = 123456,
             InitialWorkingSnapshot = new WorkingContextSnapshot
             {
                 WorkingContext = new WorkingContext { ProjectDirectory = "/neutral", RecentFiles = ["/neutral/source.txt", "/neutral/result.txt"] },

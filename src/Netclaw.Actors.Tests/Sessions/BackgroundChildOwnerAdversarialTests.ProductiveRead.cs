@@ -109,10 +109,6 @@ public sealed partial class BackgroundChildOwnerAdversarialTests
             var current = Assert.IsType<ChildStartReply.Accepted>(await owner.Ask<ChildStartReply>(Retry(accepted), Ceiling,
                 TestContext.Current.CancellationToken));
             Assert.Equal(BackgroundChildState.Running, current.State);
-            var readEvidence = Assert.Single(current.Run.ParentCheckpoint.Entries,
-                entry => entry.ToolName == FileReadTool.ToolName);
-            Assert.Equal(priorMissingReads ? 2 : 1, readEvidence.EqualRounds);
-            Assert.Equal("original", current.Run.ParentCheckpoint.TaskId);
             Assert.True(SessionState.SameCanonicalContext(accepted.Run.OriginalContext, current.Run.OriginalContext));
 
             _childRelease.TrySetResult();

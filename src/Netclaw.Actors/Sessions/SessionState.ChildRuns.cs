@@ -24,7 +24,7 @@ public sealed partial record SessionState
         var runs = ChildRuns;
         foreach (var (id, run) in runs)
         {
-            if (run.ParentCheckpoint.TaskId == admission.TaskId && run.StartKey is ChildRunStartKey.Tool tool
+            if (run.StartKey is ChildRunStartKey.Tool tool
                 && admission.Calls.Any(call => call.CallId == tool.CallId.Value))
                 runs = runs.SetItem(id, run with { StartBatchSettled = true });
         }
@@ -118,10 +118,8 @@ public sealed partial record SessionState
         foreach (var input in prefix)
         {
             var sibling = GetChildContinuation(input);
-            if (!SameCanonicalContext(sibling.OriginalContext, run.OriginalContext)
-                || !BackgroundChildRun.SameCheckpoint(sibling.ParentCheckpoint, run.ParentCheckpoint)
-                || sibling.ParentReceiptFailure != run.ParentReceiptFailure)
-                throw new InvalidDataException("A child prefix merges distinct parent tasks or detector evidence.");
+            if (!SameCanonicalContext(sibling.OriginalContext, run.OriginalContext))
+                throw new InvalidDataException("A child prefix merges distinct parent tasks.");
         }
         if (ParkedToolBatchHistory.FindRedrivableAssistantMessage(History, null) is not null)
             throw new InvalidDataException("A child continuation requires canonical closure of the prior tool batch.");
@@ -147,15 +145,9 @@ public sealed partial record SessionState
         {
             History = history,
             AdoptedTaskContext = run.OriginalContext, AdoptedTaskInputIds = evt.InputIds,
-            LoopCheckpoint = evt.StartsChildContinuationWindow
-                ? new ToolLoopCheckpoint { TaskId = run.ParentCheckpoint.TaskId }
-                : run.ParentCheckpoint,
-            LoopReceiptFailure = evt.StartsChildContinuationWindow
-                ? LoopReceiptFailure || run.ParentReceiptFailure
-                : run.ParentReceiptFailure,
             LoopAdmission = null, LoopObservations = []
         };
-        return evt.StartsChildContinuationWindow ? next.RefreshJobEvidence() : next;
+        return next;
     }
 
     private void ValidateConsumedChildPairs(ToolTaskAdopted evt)

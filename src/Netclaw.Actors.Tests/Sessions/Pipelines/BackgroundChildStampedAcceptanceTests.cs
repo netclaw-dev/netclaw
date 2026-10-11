@@ -93,7 +93,6 @@ public sealed class BackgroundChildStampedAcceptanceTests(ITestOutputHelper outp
                     SourceOperation = request.SourceOperation, OriginalContext = request.InvocationContext,
                     OriginInputIds = [new InputId("original-input")],
                     InitialWorkingSnapshot = request.Prepared.Execution.Scope.InitialWorkingSnapshot,
-                    ParentCheckpoint = new ToolLoopCheckpoint { TaskId = "original-task" },
                     AcceptedAtMs = 1, StartedAtMs = 2
                 };
                 returned = variant switch

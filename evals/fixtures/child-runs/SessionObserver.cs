@@ -26,12 +26,20 @@ internal static class SessionObserver
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args is ["--project-process-journal", var database, var session, var output])
+            return await ChildProcessJournal.RunAsync(database, session, output);
+        if (args is ["--process-projection-controls"])
+            return await ProcessJournalControls.RunAsync();
         if (args is ["--protocol-controls"])
-            return ProtocolControls.Run();
+            return ProtocolControls.Run(null);
+        if (args is ["--protocol-controls", var transcriptPath])
+            return ProtocolControls.Run(transcriptPath);
         if (args.Length != 1)
             throw new ArgumentException("Supply one observer input JSON file or --protocol-controls.");
         var input = JsonSerializer.Deserialize<ObserverInput>(await File.ReadAllTextAsync(args[0]))
             ?? throw new InvalidDataException("Observer input is null.");
+        if (ProcessCaseObserver.Supports(input.Mode))
+            return await ProcessCaseObserver.RunAsync(input);
         Validate(input);
         Directory.CreateDirectory(input.EvidenceDirectory);
         var receiptPath = Path.Combine(input.EvidenceDirectory, "observer-receipt.json");
@@ -77,8 +85,7 @@ internal static class SessionObserver
             }
             else if (input.Mode != "turn")
             {
-                Require(protocol.Acceptance is not null && !string.IsNullOrWhiteSpace(protocol.LastReply),
-                    "The initial parent turn lacks acceptance or a visible reply.");
+                protocol.RequireHeldAcceptance(acceptances.Count);
                 // This acknowledgement proves candidate arrival only. Status binds ownership below.
                 using var candidate = await ControlAsync("child-wait", new { });
                 await SendAsync(input.ProbePrompt.Replace("{{RUN_ID}}", protocol.Acceptance!.RunId, StringComparison.Ordinal));
@@ -117,8 +124,11 @@ internal static class SessionObserver
 
         async Task<JsonDocument> ControlAsync(string action, object body)
         {
-            using var response = await http.PostAsJsonAsync(
-                input.FixtureEndpoint.TrimEnd('/') + "/control/" + action, body, token);
+            using var content = JsonContent.Create(body);
+            // The bounded fixture parser requires a known Content-Length.
+            await content.LoadIntoBufferAsync(token);
+            using var response = await http.PostAsync(
+                input.FixtureEndpoint.TrimEnd('/') + "/control/" + action, content, token);
             var text = await response.Content.ReadAsStringAsync(token);
             Require(response.IsSuccessStatusCode, "The fixture rejected the control: " + text);
             return JsonDocument.Parse(text);
@@ -147,8 +157,7 @@ internal static class SessionObserver
                 {
                     Require(pendingCalls.Remove(dto.CallId!, out var matched), "The result lacks its pending call occurrence.");
                     var call = matched!;
-                    call.Result = dto.Result ?? "";
-                    call.Success = dto.ToolFailureCode is null;
+                    var status = call.CompleteResult(dto);
                     transcript.AppendLine($"[tool:result] {dto.ToolName} → {dto.Result}");
                     if (dto.ToolName == "spawn_agent" && call.Success)
                     {
@@ -156,18 +165,17 @@ internal static class SessionObserver
                         Require(acceptances.TryAdd(accepted.RunId, accepted), "The accepted run identifier repeats.");
                         starts.Add(accepted.RunId, call);
                     }
-                    if (dto.ToolName == "check_agent_run" && call.Success)
+                    if (dto.ToolName == "check_agent_run" && status is { } controlStatus)
                     {
-                        using var status = JsonDocument.Parse(call.Result);
-                        statusBodies.Add(status.RootElement.Clone());
+                        statusBodies.Add(controlStatus);
                         if (!bound && (input.Mode is "held" or "cancel")
-                            && status.RootElement.TryGetProperty("state", out var state)
+                            && controlStatus.TryGetProperty("state", out var state)
                             && state.GetString() is "Accepted" or "Running" or "Cancelling")
                         {
                             Require(currentProtocol.Acceptance is not null, "Status precedes the paired start acceptance.");
                             using var held = await ControlAsync("child-bind", new
                             {
-                                accepted = AcceptanceBody(currentProtocol.Acceptance!), status = status.RootElement
+                                accepted = AcceptanceBody(currentProtocol.Acceptance!), status = controlStatus
                             });
                             currentProtocol.ConfirmHeld(held.RootElement, input.Nonce, "child");
                             bound = true;
@@ -187,7 +195,8 @@ internal static class SessionObserver
                         expected = acceptances.Values.Select(accepted => new
                             { accepted = AcceptanceBody(accepted), call_id = starts[accepted.RunId].Id,
                                 source_operation = starts[accepted.RunId].Name }),
-                        parent_boundary_ns = output.ObservedNs
+                        parent_boundary_ns = output.ObservedNs,
+                        observed_calls = calls.Select(CallBody)
                     });
                     deliveryObservations = consumption.RootElement.Clone();
                 }
@@ -206,12 +215,22 @@ internal static class SessionObserver
                 first_turn_ns = firstTurnNs, second_turn_ns = secondTurnNs, release_ns = releaseNs,
                 last_reply = protocol?.LastReply, all_replies = replies, delivery_observations = deliveryObservations,
                 status_bodies = statusBodies, error,
-                calls = calls.Select(call => new
-                    { id = call.Id, occurrence = call.Occurrence, observed_ns = call.ObservedNs,
-                        name = call.Name, arguments = call.Arguments, turn = call.Turn, success = call.Success, result = call.Result }),
+                calls = calls.Select(CallBody),
                 limit = "Post-commit diagnostics, actual provider history, and files require the separate Python oracle."
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
+    }
+
+    internal static JsonElement? ParseControlStatus(string result)
+    {
+        // The DTO omits the internal correction category. Match only the canonical cycle message and presenter action.
+        const string cycleCorrection = "Netclaw stopped this tool call because it would continue a repeated action-and-outcome cycle. "
+            + "The same action completed twice without a changed result. This call did not execute.\n"
+            + "Next action: choose a different action, load a missing tool, or finish the task.";
+        if (result == cycleCorrection)
+            return null;
+        using var status = JsonDocument.Parse(result);
+        return status.RootElement.Clone();
     }
 
     private static object AcceptanceBody(AcceptedRun accepted) => new
@@ -237,7 +256,14 @@ internal static class SessionObserver
                 && input.ProbePrompt.Contains(input.ProbeMarker, StringComparison.Ordinal), "The probe lacks its reply marker.");
     }
 
-    private sealed class ObservedCall(string id, string name, JsonElement arguments, int turn, long observedNs, int occurrence)
+    internal static object CallBody(ObservedCall call) => new
+    {
+        id = call.Id, occurrence = call.Occurrence, observed_ns = call.ObservedNs,
+        name = call.Name, arguments = call.Arguments, turn = call.Turn, success = call.Success,
+        failure_code = call.FailureCode, result = call.Result
+    };
+
+    internal sealed class ObservedCall(string id, string name, JsonElement arguments, int turn, long observedNs, int occurrence)
     {
         public string Id { get; } = id;
         public int Turn { get; } = turn;
@@ -247,5 +273,20 @@ internal static class SessionObserver
         public JsonElement Arguments { get; } = arguments;
         public string Result { get; set; } = "";
         public bool Success { get; set; }
+        public string? FailureCode { get; private set; }
+
+        public JsonElement? CompleteResult(SessionOutputDto output)
+        {
+            Require(output.Type == SessionOutputTypes.ToolResult && output.CallId == Id && output.ToolName == Name,
+                "The result differs from its attributed call.");
+            Result = output.Result ?? "";
+            FailureCode = output.ToolFailureCode;
+            Success = FailureCode is null;
+            if (Name != "check_agent_run" || !Success)
+                return null;
+            var status = ParseControlStatus(Result);
+            Success = status is not null;
+            return status;
+        }
     }
 }

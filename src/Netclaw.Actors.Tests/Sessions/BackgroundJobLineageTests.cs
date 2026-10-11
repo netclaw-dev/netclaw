@@ -22,15 +22,14 @@ public sealed class BackgroundJobLineageTests
     private static readonly BackgroundJobOrigin Origin = new(new TurnId("original-task"), new ToolCallId("launch"));
 
     [Fact]
-    public void Job_continuation_restores_original_evidence_after_a_fresh_task_and_snapshot()
+    public void Job_continuation_preserves_original_lineage_after_a_fresh_task_and_snapshot()
     {
-        var checkpoint = new ToolLoopCheckpoint { TaskId = Origin.TurnId.Value, LastBlockedAction = "original-correction" };
-        var state = SessionState.Empty.TrackBackgroundJob("bg-job:first", Job("first", checkpoint))
-            .TrackBackgroundJob("bg-job:second", Job("second", checkpoint));
+        var state = SessionState.Empty.TrackBackgroundJob("bg-job:first", Job("first"))
+            .TrackBackgroundJob("bg-job:second", Job("second"));
         var fresh = UserInput("fresh-task");
         state = state.Apply(fresh).Apply(new ToolTaskAdopted(false)
         { SessionId = Session, TurnContext = fresh.TurnContext, InputIds = new[] { fresh.InputId } });
-        Assert.Equal("fresh-task", state.LoopCheckpoint.TaskId);
+        Assert.Equal("fresh-task", state.AdoptedTaskContext!.TurnId);
         state = state.CloseInputs(new[] { fresh.InputId });
         state = RoundTrip(state);
         var delivery = Delivery("first");
@@ -38,14 +37,12 @@ public sealed class BackgroundJobLineageTests
         Assert.True(state.TryGetBackgroundContinuation(delivery, out _, out _));
         state = state.Apply(new ToolTaskAdopted(false)
         { SessionId = Session, TurnContext = delivery.TurnContext, InputIds = new[] { delivery.InputId }, ContinuedJobKey = "bg-job:first" });
-        Assert.Equal(Origin.TurnId.Value, state.LoopCheckpoint.TaskId);
-        Assert.Equal("original-correction", state.LoopCheckpoint.LastBlockedAction);
         Assert.Equal("bg-job:first", state.AdoptedTaskContext!.TurnId);
         var restored = RoundTrip(state.CloseInputs(new[] { delivery.InputId }));
         Assert.Equal("bg-job:first", restored.AdoptedTaskContext!.TurnId);
         var final = restored.CompleteTurnBackgroundJobBookkeeping(new BackgroundJobId(restored.AdoptedTaskContext.TurnId));
         Assert.DoesNotContain("bg-job:first", final.ActiveBackgroundJobs.Keys);
-        Assert.Equal("original-correction", final.ActiveBackgroundJobs["bg-job:second"].OriginCheckpoint!.LastBlockedAction);
+        Assert.Equal(Origin, final.ActiveBackgroundJobs["bg-job:second"].Origin);
         Assert.Contains(new BackgroundJobId("bg-job:first"), RoundTrip(final).ProcessedBackgroundJobIds);
     }
 
@@ -57,7 +54,7 @@ public sealed class BackgroundJobLineageTests
     {
         var delivery = Delivery("orphan") with { BackgroundJobLineageVersion = version, BackgroundJobOrigin = hasOrigin ? Origin : null };
         Assert.Equal(version == 0, SessionState.Empty.TryGetBackgroundContinuation(delivery, out _, out _));
-        var tracked = SessionState.Empty.TrackBackgroundJob("bg-job:orphan", Job("orphan", new ToolLoopCheckpoint { TaskId = Origin.TurnId.Value }));
+        var tracked = SessionState.Empty.TrackBackgroundJob("bg-job:orphan", Job("orphan"));
         Assert.False(tracked.TryGetBackgroundContinuation(delivery with
         { BackgroundJobLineageVersion = 0, BackgroundJobOrigin = null }, out _, out _));
     }
@@ -68,9 +65,9 @@ public sealed class BackgroundJobLineageTests
     [InlineData("message")]
     [InlineData("principal")]
     [InlineData("key")]
-    public void A_foreign_or_forged_delivery_cannot_restore_evidence(string mutation)
+    public void A_foreign_or_forged_delivery_cannot_continue_lineage(string mutation)
     {
-        var state = SessionState.Empty.TrackBackgroundJob("bg-job:first", Job("first", new ToolLoopCheckpoint { TaskId = Origin.TurnId.Value }));
+        var state = SessionState.Empty.TrackBackgroundJob("bg-job:first", Job("first"));
         var delivery = Delivery("first");
         delivery = mutation switch
         {
@@ -93,7 +90,7 @@ public sealed class BackgroundJobLineageTests
         var state = SessionState.Empty.Apply(user).Apply(new ToolTaskAdopted(false)
         { SessionId = Session, TurnContext = user.TurnContext, InputIds = new[] { user.InputId } })
             .CloseInputs(new[] { user.InputId });
-        state = state with { LoopCheckpoint = state.LoopCheckpoint with { LastBlockedAction = "keep-correction" }, LoopReceiptFailure = true };
+        state = state with { LoopReceiptFailure = true };
         state = state.Apply(delivery).Apply(later);
         var closed = new InputClosed
         {
@@ -106,7 +103,6 @@ public sealed class BackgroundJobLineageTests
         state = state.Apply(replayed);
         var restored = RoundTrip(state);
         Assert.Equal("active-user", restored.AdoptedTaskContext!.TurnId);
-        Assert.Equal("keep-correction", restored.LoopCheckpoint.LastBlockedAction);
         Assert.True(restored.LoopReceiptFailure);
         Assert.Equal(later.InputId, Assert.Single(restored.PendingInputs).InputId);
         Assert.Contains(new BackgroundJobId("bg-job:orphan"), restored.ProcessedBackgroundJobIds);
@@ -119,20 +115,18 @@ public sealed class BackgroundJobLineageTests
     }
 
     [Fact]
-    public void Receipt_records_only_the_admitted_job_origin_and_updates_both_job_checkpoints()
+    public void Receipt_records_only_the_admitted_job_origin()
     {
-        var checkpoint = new ToolLoopCheckpoint { TaskId = Origin.TurnId.Value };
-        var state = SessionState.Empty.TrackBackgroundJob("bg-job:first", Job("first", checkpoint));
+        var state = SessionState.Empty.TrackBackgroundJob("bg-job:first", Job("first"));
         state = state.ApplyLoopAdmission(new ToolBatchStarted
         {
             LoopAdmission = new ToolLoopAdmission
-            { TaskId = Origin.TurnId.Value, ActionHash = "launch-action", Calls = new[] { new ToolLoopPreparedCall("launch", "shell", "args", false) } },
-            LoopDelta = new ToolLoopDelta { TaskId = Origin.TurnId.Value }
+            { TaskId = Origin.TurnId.Value, ActionHash = "launch-action", Calls = new[] { new ToolLoopPreparedCall("launch", "shell", "args", false) } }
         });
         var receipt = new ToolCallRecorded
         {
             SessionId = Session,
-            StartedBackgroundJob = Job("second", new ToolLoopCheckpoint { TaskId = "untrusted-producer-checkpoint" }),
+            StartedBackgroundJob = Job("second"),
             LoopObservation = new ToolLoopObservation { CallId = "launch", Category = (int)ToolInvocationOutcomeCategory.Success, ResultHash = "accepted-ack" }
         };
         Assert.Throws<InvalidDataException>(() => state.ApplyLoopObservation(receipt with
@@ -141,19 +135,18 @@ public sealed class BackgroundJobLineageTests
         Assert.Equal(2, state.ActiveBackgroundJobs.Count);
         foreach (var job in RoundTrip(state).ActiveBackgroundJobs.Values)
         {
-            Assert.Equal(Origin.TurnId.Value, job.OriginCheckpoint!.TaskId);
-            Assert.Equal(state.LoopCheckpoint.Entries, job.OriginCheckpoint.Entries);
+            Assert.Equal(Origin, job.Origin);
         }
     }
 
     private static SessionState RoundTrip(SessionState state)
         => SessionState.FromSnapshot(NetclawProtoMapper.FromProto(NetclawProtoMapper.ToProto(state.ToSnapshot())));
 
-    private static ActiveJobInfo Job(string id, ToolLoopCheckpoint checkpoint) => new()
+    private static ActiveJobInfo Job(string id) => new()
     {
         JobId = new BackgroundJobId(id), Command = "echo result", Rationale = "Read the result.", StartedAtMs = 0,
         Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal,
-        LineageVersion = 1, Origin = Origin, OriginCheckpoint = checkpoint
+        LineageVersion = 1, Origin = Origin
     };
 
     private static InputAdmitted UserInput(string turn) => new()

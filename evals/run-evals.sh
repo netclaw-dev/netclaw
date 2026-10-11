@@ -160,7 +160,7 @@ check_prerequisites() {
     fi
     DAEMON_LOG="$EVAL_HOME/logs/daemon-$(date +%F).log"
 
-    trap 'cleanup_eval_env' EXIT
+    trap 'eval_exit=$?; cleanup_eval_env || eval_exit=$?; exit "$eval_exit"' EXIT
 }
 
 resolve_eval_target() {
@@ -207,7 +207,8 @@ resolve_eval_target() {
 
 cleanup_eval_env() {
     # Archive logs and results to a persistent location before teardown.
-    archive_eval_run
+    local archive_exit=0
+    archive_eval_run || archive_exit=$?
 
     # Container is launched with --rm, so `docker stop` also removes it.
     if [[ -n "${EVAL_CONTAINER_NAME:-}" ]]; then
@@ -231,6 +232,7 @@ cleanup_eval_env() {
     if [[ -n "${EVAL_HOME:-}" && -d "$EVAL_HOME" ]]; then
         force_rmrf "$EVAL_HOME"
     fi
+    return "$archive_exit"
 }
 
 # Archive daemon logs, results DB, and stdout captures to evals/runs/<run-id>/
@@ -240,7 +242,19 @@ archive_eval_run() {
     if [[ -z "${RUN_ID:-}" ]]; then return 0; fi
 
     local archive_dir="$REPO_ROOT/evals/runs/$RUN_ID"
-    mkdir -p "$archive_dir"
+    mkdir -p "$archive_dir" || return $?
+    local archive_exit=0
+    if [[ -n "${COORDINATION_CASE_EVIDENCE:-}" ]]; then
+        case "${FILTER_CASE:-}" in
+            coordination_analyze_plan|coordination_attachment_blocked)
+                python3 "$REPO_ROOT/evals/coordination_workflow_evals.py" archive \
+                    --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
+                    --eval-home "$EVAL_HOME" --setup-directory "$COORDINATION_CASE_EVIDENCE" \
+                    --observers-directory "$TMPDIR_EVAL/child-runs" \
+                    2> "$COORDINATION_CASE_EVIDENCE/archive.stderr" || archive_exit=$?
+                ;;
+        esac
+    fi
 
     # Copy daemon log
     if [[ -f "${DAEMON_LOG:-}" ]]; then
@@ -282,7 +296,7 @@ archive_eval_run() {
         cp "$TMPDIR_EVAL"/stdout_*.txt "$archive_dir/stdout/" 2>/dev/null || true
         cp "$TMPDIR_EVAL"/stderr_*.txt "$archive_dir/stdout/" 2>/dev/null || true
         if [[ -d "$TMPDIR_EVAL/child-runs" ]]; then
-            cp -r "$TMPDIR_EVAL/child-runs" "$archive_dir/child-runs"
+            cp -r "$TMPDIR_EVAL/child-runs" "$archive_dir/child-runs" || archive_exit=$?
         fi
     fi
 
@@ -315,6 +329,7 @@ passed:    ${PASSED_CASES:-0}/${TOTAL_CASES:-0}
 RUNEOF
 
     echo "Archived: $archive_dir"
+    return "$archive_exit"
 }
 
 # Remove a directory even if it contains files owned by a different user
@@ -414,6 +429,46 @@ seed_disk_cleanup_reminder() {
     write_eval_reminder "disk-cleanup-weekly" "Weekly disk space cleanup" "0 3 * * 0"
 }
 
+seed_eval_agents() {
+    if [[ -d "$EVAL_ASSET_ROOT/evals/fixtures/agents" ]]; then
+        cp -r "$EVAL_ASSET_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
+    fi
+    cp "$EVAL_ASSET_ROOT/src/Netclaw.Cli/Resources/identity/task-worker.profile.md" \
+        "$EVAL_HOME/data/agents/task-worker.md"
+    case "$FILTER_CASE" in
+        coordination_implement_review|coordination_conflicting_evidence)
+            cp "$EVAL_ASSET_ROOT/evals/fixtures/coordination-agents/code-analyst.md" \
+                "$EVAL_HOME/data/agents/code-analyst.md"
+            ;;
+    esac
+}
+
+seed_eval_approvals() {
+    local source="${NETCLAW_EVAL_APPROVALS_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/tool-approvals.json}"
+    local destination="$EVAL_HOME/data/config/tool-approvals.json"
+    if [[ -n "${NETCLAW_EVAL_APPROVALS_FILE:-}" ]]; then
+        cp "$source" "$destination"
+        return
+    fi
+    case "$FILTER_CASE" in
+        coordination_implement_review|coordination_two_writers)
+            python3 - "$source" "$destination" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
+
+policy = json.loads(Path(sys.argv[1]).read_bytes())
+policy["audiences"]["personal"]["shell_execute"].extend([
+    {"verb": "git add", "directory": "/home/netclaw/.netclaw/workspaces"},
+    {"verb": "git commit", "directory": "/home/netclaw/.netclaw/workspaces"},
+])
+Path(sys.argv[2]).write_text(json.dumps(policy, indent=2) + "\n")
+PYTHON
+            ;;
+        *) cp "$source" "$destination" ;;
+    esac
+}
+
 start_eval_daemon() {
     # Use identity templates from the repo source, not the host's ~/.netclaw/identity
     # — host files can be contaminated with user-specific names (e.g., "ArdyBot")
@@ -453,9 +508,20 @@ start_eval_daemon() {
 
     # Copy eval-only subagent definitions into the mounted NETCLAW_HOME so
     # spawn_agent behavior can be exercised without touching the host install.
-    if [[ -d "$EVAL_ASSET_ROOT/evals/fixtures/agents" ]]; then
-        cp -r "$EVAL_ASSET_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
-    fi
+    seed_eval_agents
+
+    # This owned home is a fresh mktemp directory. Keep the mission fixture;
+    # append only the canonical parent route.
+    python3 - "$EVAL_ASSET_ROOT/src/Netclaw.Configuration/Resources/AGENTS.md" \
+        "$EVAL_HOME/identity/AGENTS.md" <<'PY'
+from pathlib import Path
+import sys
+
+core = Path(sys.argv[1]).read_text()
+route = core.split("## Subagent Delegation\n\n", 1)[1].split("\nUse spawn_agent", 1)[0]
+with Path(sys.argv[2]).open("a") as playbook:
+    playbook.write("\n\n## Parent Coordination\n\n" + route + "\n")
+PY
 
     if [[ -f "$EVAL_ASSET_ROOT/evals/fixtures/mcp/prompt_server.py" ]]; then
         mkdir -p "$EVAL_HOME/data/evals"
@@ -493,8 +559,7 @@ start_eval_daemon() {
     # Personal audience. Exposure, filesystem, and command-deny rules remain in force.
     cp "${NETCLAW_EVAL_CONFIG_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/netclaw.json}" \
         "$EVAL_HOME/data/config/netclaw.json"
-    cp "${NETCLAW_EVAL_APPROVALS_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/tool-approvals.json}" \
-        "$EVAL_HOME/data/config/tool-approvals.json"
+    seed_eval_approvals
 
     # If shell execution reaches this fixture, it writes a marker. The native
     # tool with the same name never invokes this executable.
@@ -953,7 +1018,8 @@ check_daemon_alive() {
 
 child_result_consumer() {
     case "${case_name:-$FILTER_CASE}" in
-        subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff) return 0 ;;
+        skill_coordination_discovery|skill_activation_subagent_authoring) [[ "$FILTER_CASE" == "${case_name:-$FILTER_CASE}" ]] ;;
+        subagent_headless_ambiguous_task|subagent_specialization_precedence|subagent_project_scope_declaration|subagent_session_scratch_disposable|approval_natural_subagent_project_review|coding_context_worktree_handoff|coordination_analyze_plan|coordination_attachment_blocked|productive_parent_child|coordination_implement_review|coordination_stale_incomplete|coordination_conflicting_evidence|coordination_two_writers) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1144,11 +1210,11 @@ run_multi_turn_case() {
         local prompt
         for prompt in "${prompts[@]}"; do
             local rendered_prompt="$prompt"
-            rendered_prompt="${rendered_prompt//\{\{FIRST_WORKTREE\}\}/${CODING_CONTEXT_FIRST_WORKTREE:-}}"
-            rendered_prompt="${rendered_prompt//\{\{SECOND_WORKTREE\}\}/${CODING_CONTEXT_SECOND_WORKTREE:-}}"
-            rendered_prompt="${rendered_prompt//\{\{TARGET_BRANCH\}\}/${CODING_CONTEXT_TARGET_BRANCH:-}}"
-            rendered_prompt="${rendered_prompt//\{\{TARGET_FILE\}\}/${CODING_CONTEXT_TARGET_FILE:-}}"
-            rendered_prompt="${rendered_prompt//\{\{DIRECT_ATTACHMENT_SOURCE\}\}/${DIRECT_ATTACHMENT_SOURCE_PATH:-}}"
+            rendered_prompt="${rendered_prompt//\{\{FIRST_WORKTREE\}\}/"${CODING_CONTEXT_FIRST_WORKTREE:-}"}"
+            rendered_prompt="${rendered_prompt//\{\{SECOND_WORKTREE\}\}/"${CODING_CONTEXT_SECOND_WORKTREE:-}"}"
+            rendered_prompt="${rendered_prompt//\{\{TARGET_BRANCH\}\}/"${CODING_CONTEXT_TARGET_BRANCH:-}"}"
+            rendered_prompt="${rendered_prompt//\{\{TARGET_FILE\}\}/"${CODING_CONTEXT_TARGET_FILE:-}"}"
+            rendered_prompt="${rendered_prompt//\{\{DIRECT_ATTACHMENT_SOURCE\}\}/"${DIRECT_ATTACHMENT_SOURCE_PATH:-}"}"
             if ! run_prompt_resume "$session_id" "$rendered_prompt" "$output_format" "$turn"; then
                 prompt_failed=true
                 break
@@ -1453,6 +1519,152 @@ assert_skill_progressive_disclosure() {
         && stdout_contains 'ReminderAutoDisabled'
 }
 
+assert_skill_coordination_discovery() {
+    if [[ "$FILTER_CASE" == skill_coordination_discovery ]]; then
+        local evidence="${CHILD_LAST_EVIDENCE:?The current discovery observer evidence path is absent.}"
+        python3 "$REPO_ROOT/evals/coordination_evals.py" --observed "$evidence" \
+            "$TMPDIR_EVAL/child-runs/relay" "$EVAL_ASSET_ROOT/feeds/skills/.system/files/agent-coordination" \
+            > "$evidence/discovery-verdict.json" 2> "$evidence/discovery-assertion.stderr"
+        return $?
+    fi
+    local headless_log
+    stdout_json_envelope_valid || return 1
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    python3 "$REPO_ROOT/evals/coordination_evals.py" "$STDOUT_FILE" "$headless_log" \
+        "$EVAL_ASSET_ROOT/feeds/skills/.system/files/agent-coordination"
+}
+
+prepare_coordination_config() {
+    if [[ "$FILTER_CASE" != coordination_attachment_blocked ]]; then return; fi
+    local denied_config="$TMPDIR_EVAL/child-runs/coordination-blocked-config.json"
+    python3 "$REPO_ROOT/evals/coordination_workflow_evals.py" blocked-config \
+        --source "${NETCLAW_EVAL_CONFIG_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/netclaw.json}" \
+        --destination "$denied_config"
+    export NETCLAW_EVAL_CONFIG_FILE="$denied_config"
+}
+
+setup_coordination_two_writers() {
+    TWO_WRITERS_EVIDENCE="$TMPDIR_EVAL/child-runs/two-writers-case"
+    TWO_WRITERS_PROMPT=$(python3 "$REPO_ROOT/evals/coordination_two_writers_evals.py" prepare \
+        --eval-home "$EVAL_HOME" --evidence "$TWO_WRITERS_EVIDENCE" --container "$EVAL_CONTAINER_NAME")
+}
+
+assert_coordination_two_writers() {
+    local evidence="${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}"
+    python3 "$REPO_ROOT/evals/coordination_two_writers_evals.py" verify \
+        --eval-home "$EVAL_HOME" --evidence "$TWO_WRITERS_EVIDENCE" --container "$EVAL_CONTAINER_NAME" \
+        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" \
+        > "$evidence/two-writers-verdict.json" 2> "$evidence/two-writers-assertion.stderr"
+}
+
+setup_coordination_conflicting_evidence() {
+    CONFLICT_REVIEW_EVIDENCE="$TMPDIR_EVAL/child-runs/conflict-review-case"
+    CONFLICT_REVIEW_PROMPT=$(python3 "$REPO_ROOT/evals/coordination_conflicting_evidence_evals.py" prepare \
+        --eval-home "$EVAL_HOME" --evidence "$CONFLICT_REVIEW_EVIDENCE")
+}
+
+assert_coordination_conflicting_evidence() {
+    local evidence="${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}"
+    python3 "$REPO_ROOT/evals/coordination_conflicting_evidence_evals.py" verify \
+        --eval-home "$EVAL_HOME" --evidence "$CONFLICT_REVIEW_EVIDENCE" \
+        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" \
+        > "$evidence/conflict-review-verdict.json" 2> "$evidence/conflict-review-assertion.stderr"
+}
+
+setup_coordination_stale_incomplete() {
+    REPORT_REVIEW_EVIDENCE="$TMPDIR_EVAL/child-runs/report-review-case"
+    REPORT_REVIEW_PROMPT=$(python3 "$REPO_ROOT/evals/coordination_stale_incomplete_evals.py" prepare \
+        --eval-home "$EVAL_HOME" --evidence "$REPORT_REVIEW_EVIDENCE")
+}
+
+assert_coordination_stale_incomplete() {
+    local evidence="${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}"
+    python3 "$REPO_ROOT/evals/coordination_stale_incomplete_evals.py" verify \
+        --eval-home "$EVAL_HOME" --evidence "$REPORT_REVIEW_EVIDENCE" \
+        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" \
+        > "$evidence/report-review-verdict.json" 2> "$evidence/report-review-assertion.stderr"
+}
+
+setup_coordination_implement_review() {
+    IMPLEMENT_REVIEW_EVIDENCE="$TMPDIR_EVAL/child-runs/implement-review-case"
+    IMPLEMENT_REVIEW_PROMPT=$(python3 "$REPO_ROOT/evals/coordination_implement_review_evals.py" prepare \
+        --eval-home "$EVAL_HOME" --evidence "$IMPLEMENT_REVIEW_EVIDENCE" --container "$EVAL_CONTAINER_NAME")
+}
+
+assert_coordination_implement_review() {
+    local evidence="${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}"
+    python3 "$REPO_ROOT/evals/coordination_implement_review_evals.py" verify \
+        --eval-home "$EVAL_HOME" --evidence "$IMPLEMENT_REVIEW_EVIDENCE" --container "$EVAL_CONTAINER_NAME" \
+        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" \
+        > "$evidence/implement-review-verdict.json" 2> "$evidence/implement-review-assertion.stderr"
+}
+
+setup_productive_parent_child() {
+    PRODUCTIVE_CASE_EVIDENCE="$TMPDIR_EVAL/child-runs/productive-case"
+    PRODUCTIVE_PROMPT=$(python3 "$REPO_ROOT/evals/productive_parent_child_evals.py" prepare \
+        --eval-home "$EVAL_HOME" --evidence "$PRODUCTIVE_CASE_EVIDENCE")
+}
+
+assert_productive_parent_child() {
+    local evidence="${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}"
+    python3 "$REPO_ROOT/evals/productive_parent_child_evals.py" verify \
+        --eval-home "$EVAL_HOME" --evidence "$PRODUCTIVE_CASE_EVIDENCE" \
+        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" \
+        > "$evidence/productive-verdict.json" 2> "$evidence/productive-assertion.stderr"
+}
+
+setup_coordination_analyze_plan() {
+    COORDINATION_CASE_EVIDENCE="$TMPDIR_EVAL/child-runs/coordination-case"
+    COORDINATION_PROMPT=$(python3 "$REPO_ROOT/evals/coordination_workflow_evals.py" prepare \
+        --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
+        --eval-home "$EVAL_HOME" --evidence "$COORDINATION_CASE_EVIDENCE")
+}
+
+setup_coordination_attachment_blocked() {
+    setup_coordination_analyze_plan "$1"
+}
+
+assert_coordination_analyze_plan() {
+    local evidence="${CHILD_LAST_EVIDENCE:?The current observer evidence path is absent.}"
+    python3 "$REPO_ROOT/evals/coordination_workflow_evals.py" contract \
+        --case "$case_name" --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
+        --eval-home "$EVAL_HOME" --setup-directory "$COORDINATION_CASE_EVIDENCE" \
+        --observer-directory "$evidence" --relay-directory "$TMPDIR_EVAL/child-runs/relay" > "$evidence/coordination-contract.json" 2> "$evidence/coordination-assertion.stderr" || return 1
+    python3 "$REPO_ROOT/evals/coordination_artifact_evals.py" \
+        --fixture-root "$EVAL_ASSET_ROOT/evals/fixtures/coordination-artifacts" \
+        --eval-home "$EVAL_HOME" --contract "$evidence/coordination-contract.json" \
+        --receipt "$evidence/verified-receipt.json" --events "$evidence/session-output.jsonl" \
+        > "$evidence/coordination-verdict.json" 2>> "$evidence/coordination-assertion.stderr"
+}
+
+assert_coordination_attachment_blocked() {
+    assert_coordination_analyze_plan
+}
+
+setup_coordination_trivial_task() {
+    COORDINATION_CASE_EVIDENCE="$TMPDIR_EVAL/child-runs/coordination-negative"
+    COORDINATION_PROMPT=$(python3 "$REPO_ROOT/evals/coordination_negative_evals.py" prepare \
+        --case "$case_name" --eval-home "$EVAL_HOME" --evidence "$COORDINATION_CASE_EVIDENCE")
+}
+
+setup_coordination_unavailable_profile() {
+    setup_coordination_trivial_task "$1"
+}
+
+assert_coordination_trivial_task() {
+    local headless_log
+    stdout_json_envelope_valid || return 1
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    python3 "$REPO_ROOT/evals/coordination_negative_evals.py" verify \
+        --case "$case_name" --eval-home "$EVAL_HOME" --evidence "$COORDINATION_CASE_EVIDENCE" \
+        --stdout "$STDOUT_FILE" --log "$headless_log" --relay "$TMPDIR_EVAL/child-runs/relay" \
+        > "$COORDINATION_CASE_EVIDENCE/verdict.json" 2> "$COORDINATION_CASE_EVIDENCE/assertion.stderr"
+}
+
+assert_coordination_unavailable_profile() {
+    assert_coordination_trivial_task
+}
+
 assert_skill_device_pairing_procedure() {
     daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
         && stdout_tool_called 'skill_read_resource' \
@@ -1527,6 +1739,13 @@ assert_skill_activation_run_reminder() {
 }
 
 assert_skill_activation_subagent_authoring() {
+    if [[ "$FILTER_CASE" == skill_activation_subagent_authoring ]]; then
+        local evidence="${CHILD_LAST_EVIDENCE:?The current author-guide evidence path is absent.}"
+        python3 "$REPO_ROOT/evals/subagent_authoring_evals.py" verify "$evidence" \
+            "$TMPDIR_EVAL/child-runs/relay" "$EVAL_ASSET_ROOT/feeds/skills/.system/files" \
+            > "$evidence/author-guide-verdict.json" 2> "$evidence/author-guide-assertion.stderr"
+        return $?
+    fi
     daemon_log_skill_loaded_via_skill_tool 'subagent-authoring' \
         && stdout_no_skill_file_read_called
 }
@@ -2080,23 +2299,10 @@ assert_subagent_session_scratch_disposable() {
     child_relative="${child_log#"$EVAL_HOME/data/"}"
     expected_temp_dir="/home/netclaw/.netclaw/${child_relative%/logs/session.log}/tmp"
 
-    local shell_count shell_result_count
-    shell_count=$(grep -ac \
-        'SubAgent \[disposable-diagnostic\] tool start .* name=shell_execute' \
-        "$child_log")
-    shell_result_count=$(grep -ac \
-        'SubAgent \[disposable-diagnostic\] tool \[shell_execute\] result: Exit code: 0' \
-        "$child_log")
-
-    [[ "$shell_count" -eq 1 ]] || return 1
-    [[ "$shell_result_count" -eq 1 ]] || return 1
-
-    local -a call_previews
-    mapfile -t call_previews < <(grep -aEo \
-        'shell_execute#[^(]+\([^)]*\)' \
-        "$child_log")
-    [[ "${#call_previews[@]}" -eq 1 ]] || return 1
-    [[ "${call_previews[0]}" == *"tempfile.gettempdir()"* ]] || return 1
+    local verified_temp_dir
+    verified_temp_dir=$(python3 "$REPO_ROOT/evals/child_run_evals.py" assert-scratch \
+        --evidence "$TMPDIR_EVAL/child-runs") || return 1
+    [[ "$verified_temp_dir" == "$expected_temp_dir" ]] || return 1
     grep -aFq "$expected_temp_dir" "$child_log" || return 1
     stdout_response_contains "$expected_temp_dir"
 
@@ -3094,7 +3300,11 @@ run_case() {
     local run
     for ((run = 1; run <= RUNS; run++)); do
         local prompt
-        prompt=$(pick_variant "${prompts[@]}")
+        if [[ "$FILTER_CASE" == skill_activation_subagent_authoring && "$case_name" == "$FILTER_CASE" ]]; then
+            prompt="${prompts[0]}"
+        else
+            prompt=$(pick_variant "${prompts[@]}")
+        fi
 
         local setup_fn="setup_${case_name}"
         if declare -f "$setup_fn" >/dev/null 2>&1; then
@@ -3102,9 +3312,15 @@ run_case() {
         fi
 
         local rendered_prompt="$prompt"
-        rendered_prompt="${rendered_prompt//\{\{MANAGED_WORKTREE_BRANCH\}\}/${MANAGED_WORKTREE_BRANCH:-}}"
-        rendered_prompt="${rendered_prompt//\{\{CYCLE_PROMPT\}\}/${CYCLE_PROMPT:-}}"
-        rendered_prompt="${rendered_prompt//\{\{EVAL_REMINDER_TARGET\}\}/${EVAL_REMINDER_TARGET:-}}"
+        rendered_prompt="${rendered_prompt//\{\{MANAGED_WORKTREE_BRANCH\}\}/"${MANAGED_WORKTREE_BRANCH:-}"}"
+        rendered_prompt="${rendered_prompt//\{\{CYCLE_PROMPT\}\}/"${CYCLE_PROMPT:-}"}"
+        rendered_prompt="${rendered_prompt//\{\{EVAL_REMINDER_TARGET\}\}/"${EVAL_REMINDER_TARGET:-}"}"
+        rendered_prompt="${rendered_prompt//\{\{COORDINATION_PROMPT\}\}/"${COORDINATION_PROMPT:-}"}"
+        rendered_prompt="${rendered_prompt//\{\{PRODUCTIVE_PROMPT\}\}/"${PRODUCTIVE_PROMPT:-}"}"
+        rendered_prompt="${rendered_prompt//\{\{IMPLEMENT_REVIEW_PROMPT\}\}/"${IMPLEMENT_REVIEW_PROMPT:-}"}"
+        rendered_prompt="${rendered_prompt//\{\{REPORT_REVIEW_PROMPT\}\}/"${REPORT_REVIEW_PROMPT:-}"}"
+        rendered_prompt="${rendered_prompt//\{\{CONFLICT_REVIEW_PROMPT\}\}/"${CONFLICT_REVIEW_PROMPT:-}"}"
+        rendered_prompt="${rendered_prompt//\{\{TWO_WRITERS_PROMPT\}\}/"${TWO_WRITERS_PROMPT:-}"}"
         local prompt_failed=false
         if ! run_prompt "$rendered_prompt" "$output_format"; then
             prompt_failed=true
@@ -3194,6 +3410,35 @@ run_all() {
     run_case skill_progressive_disclosure "reads reference via skill_read_resource (2nd hop)" \
         "Exactly how many consecutive reminder execution failures cause Netclaw to auto-disable a reminder, and what is the exact name of the alert it raises when that happens? Be precise."
 
+    run_case --json skill_coordination_discovery "loads coordination and the single implementation/review workflow" \
+        "We need a substantial code change with an independent review of the finished patch. Before we choose the concrete change, explain your implementation-then-review process, how you will protect my checkout, and how you will verify the exact candidate. Do not start a child, edit files, or execute shell commands yet."
+
+    if [[ "$FILTER_CASE" == productive_parent_child ]]; then
+        run_case --json productive_parent_child "reconstructs catalogs through 65 parent and 35 child feedback rounds" '{{PRODUCTIVE_PROMPT}}'
+    fi
+    if [[ "$FILTER_CASE" == coordination_two_writers ]]; then
+        run_case --json coordination_two_writers "checks two isolated writer candidates and preserves the dirty operator checkout" '{{TWO_WRITERS_PROMPT}}'
+    fi
+    if [[ "$FILTER_CASE" == coordination_conflicting_evidence ]]; then
+        run_case --json coordination_conflicting_evidence "reconciles distinct analyst claims and reports an actual unavailable check" '{{CONFLICT_REVIEW_PROMPT}}'
+    fi
+    if [[ "$FILTER_CASE" == coordination_stale_incomplete ]]; then
+        run_case --json coordination_stale_incomplete "rejects stale and incomplete child report claims through actual full reads" '{{REPORT_REVIEW_PROMPT}}'
+    fi
+    if [[ "$FILTER_CASE" == coordination_implement_review ]]; then
+        run_case --json coordination_implement_review "repairs an isolated candidate and reviews its exact revision while preserving operator changes" '{{IMPLEMENT_REVIEW_PROMPT}}'
+    fi
+
+    if [[ "$FILTER_CASE" == coordination_analyze_plan ]]; then
+        run_case --json coordination_analyze_plan "reviews child findings and delivers the complete plan" '{{COORDINATION_PROMPT}}'
+    elif [[ "$FILTER_CASE" == coordination_attachment_blocked ]]; then
+        run_case --json coordination_attachment_blocked "reviews the plan and retains actual attachment denial" '{{COORDINATION_PROMPT}}'
+    elif [[ "$FILTER_CASE" == coordination_trivial_task ]]; then
+        run_case --json coordination_trivial_task "corrects one typo without a child" '{{COORDINATION_PROMPT}}'
+    elif [[ "$FILTER_CASE" == coordination_unavailable_profile ]]; then
+        run_case --json coordination_unavailable_profile "reports an absent profile without a substitute" '{{COORDINATION_PROMPT}}'
+    fi
+
     run_case skill_device_pairing_procedure "reads the container pairing procedure" \
         "First call skill_load with Name=netclaw-operations and _rationale='Load the operations guide.' After that result, call skill_read_resource with SkillName=netclaw-operations, ResourcePath=references/devices.md, and _rationale='Read the device procedure.' Then tell me how to generate a pairing code inside a daemon container without changing its exposure mode."
 
@@ -3252,10 +3497,17 @@ run_all() {
         "Run the disk-cleanup-weekly reminder once here before it fires on its schedule." \
         "I want to try the weekly cleanup reminder and save approvals for it."
 
+    if [[ "$FILTER_CASE" == skill_activation_subagent_authoring ]]; then
+        local author_prompt
+        author_prompt=$(python3 "$REPO_ROOT/evals/subagent_authoring_evals.py" prompt)
+        author_prompt+=$'\n'
+        run_case --json skill_activation_subagent_authoring "uses the current author guide and background contract" "$author_prompt"
+    else
     run_case skill_activation_subagent_authoring "skill loaded" \
         "How do I create a custom subagent in Netclaw?" \
         "Walk me through authoring a new file-based subagent." \
         "What goes in a Netclaw agent definition file?"
+    fi
 
     # User skills (non-system, loaded from eval fixtures)
     run_case skill_activation_user_coding "skill loaded" \
@@ -3663,13 +3915,17 @@ main() {
         start_cycle_fixture
         cycle_cases=true
     fi
-    if child_result_consumer; then
-        [[ "$RUNS" == 1 && -f "${NETCLAW_CHILD_OBSERVER:-}" ]] || {
-            echo "ERROR: child consumers require RUNS=1 and NETCLAW_CHILD_OBSERVER." >&2
+    if child_result_consumer || [[ "$FILTER_CASE" == coordination_trivial_task || "$FILTER_CASE" == coordination_unavailable_profile ]]; then
+        [[ "$RUNS" == 1 ]] || {
+            echo "ERROR: provider evidence requires one selected case with RUNS=1." >&2
             exit 2
         }
+        if child_result_consumer && [[ ! -f "${NETCLAW_CHILD_OBSERVER:-}" ]]; then
+            echo "ERROR: child consumers require NETCLAW_CHILD_OBSERVER." >&2
+            exit 2
+        fi
         [[ "$EVAL_PROVIDER_TYPE" == openai-compatible && "$EVAL_PROVIDER_ENDPOINT" == */v1 ]] || {
-            echo "ERROR: child consumers require the approved OpenAI-compatible target." >&2
+            echo "ERROR: provider evidence requires an OpenAI-compatible target." >&2
             exit 2
         }
         [[ "$EVAL_PROVIDER_API_KEY" != ENC:* && -z "$EVAL_DATA_PROTECTION_KEYS" ]] || {
@@ -3685,6 +3941,7 @@ main() {
         EVAL_PROVIDER_API_KEY=""
         export EVAL_HOME EVAL_PORT PROMPT_TIMEOUT NETCLAW_CHILD_OBSERVER TMPDIR_EVAL
     fi
+    prepare_coordination_config
     start_eval_daemon
     init_db
     seed_eval_memories

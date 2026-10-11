@@ -64,8 +64,6 @@ public sealed partial class BackgroundChildAcceptanceTests
             SessionId = Session, TurnContext = accepted.OriginalContext, InputIds = [pending.InputId],
             ContinuedChildRunId = accepted.RunId
         }));
-        Assert.Equal("original", state.LoopCheckpoint.TaskId);
-        Assert.Equal(1, Assert.Single(state.LoopCheckpoint.Entries).EqualRounds);
         Assert.Equal("/new-parent-project", state.WorkingContext.ProjectDirectory);
         Assert.False(state.LoopReceiptFailure);
         Assert.Equal(accepted.OriginalContext, state.AdoptedTaskContext);
@@ -129,7 +127,6 @@ public sealed partial class BackgroundChildAcceptanceTests
         Assert.Empty(state.PendingInputs);
         Assert.Equal(new[] { "result-0", "result-1" }, state.History.Where(message => message.Role == ChatRole.Tool)
             .Select(message => message.ToolCallId!.Value.Value));
-        Assert.Equal("original", state.LoopCheckpoint.TaskId);
         Assert.False(state.LoopReceiptFailure);
     }
 

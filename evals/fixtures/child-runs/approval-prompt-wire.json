@@ -1,0 +1,175 @@
+{
+  "web_control": {
+    "prompt_sequence": 14,
+    "prompt": {
+      "type": "tool_interaction",
+      "sessionId": "signalr/process-wire-owner",
+      "timestampMs": 1000,
+      "text": null,
+      "callId": "owned-run/subagent-approval/1",
+      "toolName": "shell_execute",
+      "argumentsJson": null,
+      "result": null,
+      "toolFailureCode": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "cachedInputTokens": null,
+      "reasoningTokens": null,
+      "contextWindowTokens": null,
+      "usagePercent": null,
+      "promptMs": null,
+      "predictedPerSecond": null,
+      "turnNumber": null,
+      "turnOutcome": null,
+      "sourceReminderId": null,
+      "errorMessage": null,
+      "errorDetail": null,
+      "errorCorrelationId": null,
+      "errorCategory": null,
+      "isProcessing": null,
+      "processingStateRequired": null,
+      "messagesBefore": null,
+      "messagesAfter": null,
+      "summarized": null,
+      "toolResultsCleared": null,
+      "preCompactionInputTokens": null,
+      "keepCountUsed": null,
+      "title": null,
+      "turnCount": null,
+      "recentMessages": null,
+      "interactionKind": "approval",
+      "interactionDisplayText": "owned-command /owned/artifacts/effect.txt owned-nonce",
+      "requesterSenderId": "local",
+      "interactionPatterns": [
+        "owned-command"
+      ],
+      "interactionCandidateVerbs": [
+        "owned-command"
+      ],
+      "interactionCwd": "/owned/workspace",
+      "interactionIsMessy": false,
+      "interactionOptions": [
+        {
+          "key": "approve_once",
+          "label": "Once"
+        },
+        {
+          "key": "approve_session",
+          "label": "This chat"
+        },
+        {
+          "key": "approve_everywhere",
+          "label": "Always anywhere"
+        },
+        {
+          "key": "deny",
+          "label": "Deny"
+        }
+      ],
+      "interactionHasAdoptedContext": false,
+      "interactionHasThirdPartyAdoptedContext": false,
+      "interactionAdoptedSpeakerIds": [],
+      "agentName": null,
+      "phase": null,
+      "toolCountSub": null,
+      "subAgentSuccess": null,
+      "subAgentOutcome": null,
+      "subAgentOutcomeReason": null,
+      "durationMs": null,
+      "memoryDecision": null,
+      "memoryDecisionReason": null,
+      "findingsCount": null,
+      "filePath": null,
+      "fileName": null,
+      "mimeType": null
+    }
+  },
+  "raw_observer_event": {
+    "sequence": 14,
+    "observed_ns": 100,
+    "output": {
+      "Type": "tool_interaction",
+      "SessionId": "signalr/process-wire-owner",
+      "TimestampMs": 1000,
+      "Text": null,
+      "CallId": "owned-run/subagent-approval/1",
+      "ToolName": "shell_execute",
+      "ArgumentsJson": null,
+      "Result": null,
+      "ToolFailureCode": null,
+      "InputTokens": null,
+      "OutputTokens": null,
+      "TotalTokens": null,
+      "CachedInputTokens": null,
+      "ReasoningTokens": null,
+      "ContextWindowTokens": null,
+      "UsagePercent": null,
+      "PromptMs": null,
+      "PredictedPerSecond": null,
+      "TurnNumber": null,
+      "TurnOutcome": null,
+      "SourceReminderId": null,
+      "ErrorMessage": null,
+      "ErrorDetail": null,
+      "ErrorCorrelationId": null,
+      "ErrorCategory": null,
+      "IsProcessing": null,
+      "ProcessingStateRequired": null,
+      "MessagesBefore": null,
+      "MessagesAfter": null,
+      "Summarized": null,
+      "ToolResultsCleared": null,
+      "PreCompactionInputTokens": null,
+      "KeepCountUsed": null,
+      "Title": null,
+      "TurnCount": null,
+      "RecentMessages": null,
+      "InteractionKind": "approval",
+      "InteractionDisplayText": "owned-command /owned/artifacts/effect.txt owned-nonce",
+      "RequesterSenderId": "local",
+      "InteractionPatterns": [
+        "owned-command"
+      ],
+      "InteractionCandidateVerbs": [
+        "owned-command"
+      ],
+      "InteractionCwd": "/owned/workspace",
+      "InteractionIsMessy": false,
+      "InteractionOptions": [
+        {
+          "Key": "approve_once",
+          "Label": "Once"
+        },
+        {
+          "Key": "approve_session",
+          "Label": "This chat"
+        },
+        {
+          "Key": "approve_everywhere",
+          "Label": "Always anywhere"
+        },
+        {
+          "Key": "deny",
+          "Label": "Deny"
+        }
+      ],
+      "InteractionHasAdoptedContext": false,
+      "InteractionHasThirdPartyAdoptedContext": false,
+      "InteractionAdoptedSpeakerIds": [],
+      "AgentName": null,
+      "Phase": null,
+      "ToolCountSub": null,
+      "SubAgentSuccess": null,
+      "SubAgentOutcome": null,
+      "SubAgentOutcomeReason": null,
+      "DurationMs": null,
+      "MemoryDecision": null,
+      "MemoryDecisionReason": null,
+      "FindingsCount": null,
+      "FilePath": null,
+      "FileName": null,
+      "MimeType": null
+    }
+  }
+}

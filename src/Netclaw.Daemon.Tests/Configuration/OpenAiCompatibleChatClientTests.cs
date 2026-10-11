@@ -131,10 +131,16 @@ data: [DONE]
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    [InlineData(null)]
-    public async Task StreamingSuppressionIntent_ReachesActualHttpPayload_WithoutInternalContext(bool? intent)
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    [InlineData(null, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, false)]
+    [InlineData(null, true, false)]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, true)]
+    public async Task StreamingSuppressionIntent_ReachesActualHttpPayload_WithoutInternalContext(
+        bool? intent, bool existingKwargs, bool objectKwargs)
     {
         const string sessionId = "wire-control-session";
         const string sse = """
@@ -153,14 +159,33 @@ data: [DONE]
         var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
         var rawClient = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
         using var client = new ReasoningSuppressionChatClient(rawClient, ReasoningSuppressionDialect.ChatTemplateKwargs);
-        var options = new Netclaw.Actors.Sessions.SessionScopedChatOptions { SessionId = sessionId };
-        if (intent is not null)
+        var options = new Netclaw.Actors.Sessions.SessionScopedChatOptions
         {
-            options.AdditionalProperties = new AdditionalPropertiesDictionary
-            {
-                [NetclawChatOptionKeys.SuppressReasoning] = intent.Value
-            };
+            SessionId = sessionId,
+            Temperature = 0.25f,
+            MaxOutputTokens = 128,
+            AdditionalProperties = new AdditionalPropertiesDictionary { ["seed"] = 42 }
+        };
+        var originalKwargs = new Dictionary<string, object?>
+        {
+            ["thinking"] = true,
+            ["enable_thinking"] = true,
+            ["custom_template_value"] = new Dictionary<string, object?> { ["labels"] = new[] { "a", "b" } }
+        };
+        if (existingKwargs)
+        {
+            options.AdditionalProperties["chat_template_kwargs"] = objectKwargs
+                ? new
+                {
+                    Thinking = true,
+                    Enable_thinking = true,
+                    Custom_template_value = new { Labels = new[] { "a", "b" } },
+                    Omitted = (string?)null
+                }
+                : originalKwargs;
         }
+        if (intent is not null)
+            options.AdditionalProperties[NetclawChatOptionKeys.SuppressReasoning] = intent.Value;
 
         var updates = new List<ChatResponseUpdate>();
         await foreach (var update in client.GetStreamingResponseAsync(
@@ -180,14 +205,29 @@ data: [DONE]
         var payload = document.RootElement;
         Assert.True(payload.GetProperty("stream").GetBoolean());
         Assert.True(payload.GetProperty("stream_options").GetProperty("include_usage").GetBoolean());
-        if (intent is true)
+        Assert.Equal(0.25, payload.GetProperty("temperature").GetDouble());
+        Assert.Equal(128, payload.GetProperty("max_tokens").GetInt32());
+        Assert.Equal(42, payload.GetProperty("seed").GetInt32());
+        Assert.Equal("test-model", payload.GetProperty("model").GetString());
+        if (intent is true || existingKwargs)
         {
-            Assert.False(payload.GetProperty("chat_template_kwargs").GetProperty("enable_thinking").GetBoolean());
+            var kwargs = payload.GetProperty("chat_template_kwargs");
+            Assert.Equal(intent is not true, kwargs.GetProperty("enable_thinking").GetBoolean());
+            Assert.True(kwargs.TryGetProperty("thinking", out var thinking));
+            Assert.Equal(intent is not true, thinking.GetBoolean());
+            if (existingKwargs)
+            {
+                Assert.Equal(new[] { "a", "b" }, kwargs.GetProperty("custom_template_value")
+                    .GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
+                Assert.Equal(3, kwargs.EnumerateObject().Count());
+            }
+            else
+                Assert.Equal(2, kwargs.EnumerateObject().Count());
         }
         else
-        {
             Assert.False(payload.TryGetProperty("chat_template_kwargs", out _));
-        }
+        Assert.Equal(true, originalKwargs["thinking"]);
+        Assert.Equal(true, originalKwargs["enable_thinking"]);
     }
 
     [Fact]

@@ -22,6 +22,7 @@
          and the feeds/scripts/semver_key.py conformance check (bash/python), to keep the
          two precedence implementations in lockstep. -->
     <Content Include="../../feeds/scripts/semver-order.txt" Link="TestData/semver-order.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../evals/fixtures/coordination-agents/code-analyst.md" Link="TestData/code-analyst.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

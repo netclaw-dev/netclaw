@@ -81,7 +81,7 @@ Preparation evidence:
 ## 7. Integrated health, evals, and sensitive fault controls
 
 - [x] 7.1 Extend the existing background relay with explicit parent/child request IDs and barriers; verify setup/sidecar calls cannot consume child script stages.
-- [ ] 7.2 Add targeted Subagents and background cases for acceptance, routed starts, controls, cancellation, prompts, and recovery; verify actual dispatch and artifact evidence.
+- [x] 7.2 Add targeted Subagents and background cases for acceptance, routed starts, controls, cancellation, prompts, and recovery; verify actual dispatch and artifact evidence.
 - [x] 7.3 Preserve queued-grant revocation, shell lifecycle, and PR 1 long-task controls; verify the combined candidate passes those unchanged boundaries.
 - [x] 7.4 Hold several accepted child requests. Verify independent parent dispatch and locally responsive status/cancel without provider-capacity coordination.
 - [x] 7.5 Hold a child on the selected real backend that accepts concurrent requests. Verify a parent reply before child release in five critical-case trials.
@@ -89,6 +89,20 @@ Preparation evidence:
 - [x] 7.7 Demonstrate rejection of duplicate start, early terminal acknowledgement, late dispatch, stale approval prompt, and delivery-reset mutants in isolation.
 - [x] 7.8 Keep any new focused mutation target narrow and inside the documented CI budget; verify expected mutants execute and none survives.
 - [ ] 7.9 Require an independent verifier to inspect integrated results and assertions; verify no skipped cases, weakened gates, or author-only pass claims remain.
+
+Targeted process-case evidence at `7e44b2bb`:
+
+- Independent review maps each task 7.2 surface to actual dispatch and artifact evidence. Its receipt SHA is `504933f4cefdcf36eb09c6a24305ca10cfd65557acb398a43510417aa6324454`.
+- Fresh routed observation 02 proves acceptance, routed activation, owner status, live log access, and complete terminal artifact consumption.
+- Its independent receipt SHA is `1104c06da37f4ef4843fc3ee38adc9a6fe05e1d7debdf587da10e1a112e7584a`.
+- Fresh approval observation 04 proves the actual prompt, original authority, answer, and one protected effect.
+- Fresh cancellation observation 02 proves cancellation at an open prompt, retained partial bytes, and stale-answer rejection.
+- Their independent receipt SHA is `4b20094150460374f9007fb47eee43ab44b29fe6033e6673bf1bb3759acb3734`.
+- Fresh owner-recovery observation 02 proves actual process replacement, canonical `Lost`, and complete partial-artifact consumption.
+- Its independent receipt SHA is `5b2f687df79bbb4d23c0a43bfd4bcccf2d9ee60d59dafebb071f139c86f3b469`.
+- Each fresh process lane rejects four altered actual records. All earlier false observations retain their original verdicts.
+- Root verifies the five current source pins and four retained independent receipts against the review map.
+- This closes task 7.2 only. Recovery remains journal-only; broader model acceptance, task 7.9, and final quality gates remain open.
 
 Bounded relay and response-order evidence:
 
@@ -126,6 +140,18 @@ Independent contract review at `a3488e95` and combined `f48e9fbe`:
 - The inherited `per-call-tool-recurrence` delta now matches the canonical prompt clauses and three routed prompt scenarios. Its recurrence and authority clauses remain unchanged.
 - Task 7.9 remains open for independent review of the integrated result. Tasks 7.2, 8.6, and 8.7 also remain open.
 
+Live child-adoption regression at `f6685d5f`:
+
+- One fresh scripted observation passes the canonical verifier and the separate read-window predicate. Independent review repeats both checks against actual bytes.
+- The parent receives two Missing results while the child remains held. The child then writes the real artifact and completes.
+- Automatic parent continuation reads the complete artifact twice. The guard refuses the next identical read, which proves continued repeat protection.
+- The retained provider history contains exactly two task inputs and the canonical context nudges. No extra user task supplies the reset.
+- Independent receipt SHA `942d5ff06a197d03eac081da92ae818860432849df42162097ac8300f40635c9` binds all 98 indexed files and the unchanged originals.
+- The earlier V2 observation remains false. Its added predicate misclassified canonical context nudges as extra user tasks.
+- The corrected predicate retains the canonical verifier and rejects extra tasks, changed prompts, and malformed or misplaced nudges.
+- This proves the live regression only. Separate deterministic tests cover recovery and duplicates; no five-trial or days-long claim follows.
+- All remaining integrated health, model acceptance, and final audit gates remain open.
+
 ## 8. Docs, operational guidance, and handoff
 
 - [x] 8.1 Rename the glossary entry to approval prompt with a legacy-anchor alias; verify old links still resolve and exact code identifiers remain unchanged.
@@ -133,9 +159,31 @@ Independent contract review at `a3488e95` and combined `f48e9fbe`:
 - [x] 8.3 Add minimum runtime `AGENTS.md` guidance; verify it describes background acceptance, deferred control, partial result review, and cancel/recreate only.
 - [x] 8.4 Update `subagent-authoring` and `netclaw-operations` versions; verify instructions advertise no deferred messages or restored tool ceilings.
 - [x] 8.5 Run targeted identity/tool/skill evals for those changed instructions; verify selected resource and control receipts satisfy the actual task.
-- [ ] 8.6 Run applicable builds, required tests, Slopwatch, and copyright-header verification; retain exact candidate and meaningful test counts.
-- [ ] 8.7 Validate the OpenSpec change strictly and sync implemented deltas through the appropriate skill; verify the PRD and active plan trace to the final contract.
+- [x] 8.6 Run applicable builds, required tests, Slopwatch, and copyright-header verification; retain exact candidate and meaningful test counts.
+- [x] 8.7 Validate the OpenSpec change strictly and sync implemented deltas through the appropriate skill; verify the PRD and active plan trace to the final contract.
 - [x] 8.8 Prepare rollback and evidence handoff for the combined PR; verify no merge, rollout, publication, or database replacement is implied by local passes.
+
+Contract reconciliation at `94c63470`:
+
+- All three active changes pass strict validation. The ordered sync audit covers 15 delta files and 11 canonical capabilities.
+- Independent review verifies 50 final requirements and 209 scenarios. The dependency order preserves durable child acknowledgement and the canonical child-consumption window.
+- The obsolete approval iteration-limit clause is corrected. The complete delta retains the other three approval scenarios unchanged.
+- FR-017 and the active plan describe accepted runs, original authority, independent parent requests, controls, cancellation evidence, approval lifetime, and explicit restart loss.
+- The proposal links the other owner-session, output, policy, and schedule requirements to their existing PRDs.
+- Independent receipt SHA is `a842a428c3e3e92da16c97a5e487f43553befc30c196d0e014b48ddec7aee072`. Root verifies all 32 source document pins.
+- This closes task 8.7 only. Tasks 7.9 and 8.6 remain open, along with broader model, private replay, shadow, and holdout gates.
+- No archive, merge, rollout, live publication, or database operation follows from this document proof.
+
+Independent background quality audit at `4191d1b7`:
+
+- The background runtime and its applicable tests match the hosted `7e44b2bb` source. All 29 hosted checks pass.
+- The actual CI merge tree equals the published head tree. All three platform test jobs and both native smoke jobs pass.
+- The separate focused records retain 177 actor passes and six authority passes without skips. Hosted platform and category skips remain explicit.
+- Independent review verifies 32 source pins, ten retained review receipts, and the four process-case results.
+- Root verifies those source pins against the committed candidate. The independent receipt SHA is `b349330dee7011899ea009d6c412cb20f52086844e3c973e55c0c22b8af605b9`.
+- This closes task 8.6 for the background build, test, and quality scope. Task 7.9 retains the integrated model and inherited recurrence gaps.
+- A later trivial-task observation passes its task oracle but fails final file checks after the retained helper directory disappears.
+- That current evidence fault stops its cohort. It supplies no completed consumer receipt and does not alter earlier hosted results.
 
 Rollback instructions and evidence handoff at `a3488e95`:
 

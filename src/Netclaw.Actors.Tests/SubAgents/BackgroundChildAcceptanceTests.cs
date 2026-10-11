@@ -71,37 +71,16 @@ public sealed partial class BackgroundChildAcceptanceTests(ITestOutputHelper out
         Assert.All(state.ChildRuns.Values, run =>
         {
             Assert.True(run.StartBatchSettled);
-            Assert.Equal(1, Assert.Single(run.ParentCheckpoint.Entries).EqualRounds);
         });
         state = state.Apply(new TurnRecorded { SessionId = Session });
         state = AdmittedTask("fresh", state);
         state = state.Apply(new SessionCompacted { SessionId = Session, Summary = "neutral summary" });
         var recovered = SessionState.FromSnapshot(RoundTrip(state.ToSnapshot()));
-        Assert.Equal("fresh", recovered.LoopCheckpoint.TaskId);
-        Assert.Empty(recovered.LoopCheckpoint.Entries);
         Assert.Equal(2, recovered.ChildRuns.Count);
         Assert.All(recovered.ChildRuns.Values, run =>
         {
-            Assert.Equal("original", run.ParentCheckpoint.TaskId);
-            Assert.Equal(1, Assert.Single(run.ParentCheckpoint.Entries).EqualRounds);
-            Assert.False(run.ParentReceiptFailure);
             Assert.True(run.StartBatchSettled);
         });
-    }
-
-    [Fact]
-    public void A_settled_missing_receipt_survives_fresh_input_in_the_child_ledger()
-    {
-        var state = AdmitBatch(AdmittedTask("original", SessionState.Empty), "start");
-        var run = Run(state, "missing-receipt", "start");
-        state = state.Apply(new ChildRunAccepted { SessionId = Session, Run = run });
-        state = Observe(state, "start", missingReceipt: true);
-        state = AdmittedTask("fresh", state);
-        var retained = Assert.Single(SessionState.FromSnapshot(RoundTrip(state.ToSnapshot())).ChildRuns).Value;
-        Assert.True(retained.StartBatchSettled);
-        Assert.True(retained.ParentReceiptFailure);
-        Assert.Equal("original", retained.ParentCheckpoint.TaskId);
-        Assert.Empty(retained.ParentCheckpoint.Entries);
     }
 
     [Fact]
@@ -119,7 +98,6 @@ public sealed partial class BackgroundChildAcceptanceTests(ITestOutputHelper out
         Assert.IsType<ChildRunStartKey.Slash>(Assert.Single(recovered.ChildRuns).Value.StartKey);
         Assert.Null(recovered.LoopAdmission);
         Assert.Empty(recovered.LoopObservations);
-        Assert.Empty(recovered.LoopCheckpoint.Entries);
         Assert.DoesNotContain(recovered.History, message => message.Role == StoredRole.Tool);
     }
 
@@ -156,19 +134,15 @@ public sealed partial class BackgroundChildAcceptanceTests(ITestOutputHelper out
 
     private static SessionState AdmitBatch(SessionState state, params string[] ids)
     {
-        var tracker = new TurnStateTracker();
-        tracker.RestoreCheckpoint(state.LoopCheckpoint);
         var prepared = ToolCycleSignatureFactory.Prepare(ids.Select(id => new FunctionCallContent(id, "spawn_agent", new Dictionary<string, object?>())).ToArray(), new FakeToolExecutor());
-        Assert.Equal(ToolCycleDecisionKind.Execute, tracker.EvaluateBeforeDispatch(prepared).Kind);
         var evt = new ToolBatchStarted
         {
             SessionId = Session,
             LoopAdmission = new ToolLoopAdmission
             {
-                TaskId = state.LoopCheckpoint.TaskId, ActionHash = prepared.Action.Value,
+                TaskId = state.AdoptedTaskContext!.TurnId, ActionHash = prepared.Action.Value,
                 Calls = prepared.Calls.Select(call => new ToolLoopPreparedCall(call.CallId.Value, call.ToolName.Value, call.ArgumentsHash, false)).ToArray()
-            },
-            LoopDelta = tracker.CaptureDelta(state.LoopCheckpoint.TaskId, state.LoopCheckpoint)
+            }
         };
         return state.CloseInputs(state.AdoptedTaskInputIds).ApplyLoopAdmission(evt);
     }
@@ -179,7 +153,6 @@ public sealed partial class BackgroundChildAcceptanceTests(ITestOutputHelper out
         AgentName = new AgentName("worker"), SourceOperation = "spawn_agent", ArgumentsDigest = new string('A', 64),
         StartKey = new ChildRunStartKey.Tool(new ToolCallId(call)) { SessionId = Session, TurnId = new TurnId(state.AdoptedTaskContext!.TurnId) },
         OriginalContext = state.AdoptedTaskContext!, OriginInputIds = state.AdoptedTaskInputIds,
-        ParentCheckpoint = state.LoopCheckpoint, ParentReceiptFailure = state.LoopReceiptFailure,
         InitialWorkingSnapshot = new WorkingContextSnapshot
         {
             WorkingContext = new WorkingContext { ProjectDirectory = "/project", RecentFiles = ["/project/input.txt"] },

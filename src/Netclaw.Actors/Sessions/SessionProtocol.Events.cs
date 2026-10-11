@@ -130,7 +130,6 @@ public static partial class SessionProtocol
         public bool MetadataOnly { get; init; }
         public TurnContextRecord? LegacyTaskContext { get; init; }
         public ToolLoopAdmission? LoopAdmission { get; init; }
-        public ToolLoopDelta? LoopDelta { get; init; }
 
         public SessionId SessionId { get; init; }
 

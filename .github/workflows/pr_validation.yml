@@ -163,9 +163,9 @@ jobs:
           - group: shell-analysis
             gates: shell-command-analysis tool-authorizer-order mcp-artifact-admission
           - group: shell-assignment-and-paths
-            gates: shell-assignment shell-config-read path-access tool-task-adoption
+            gates: shell-assignment shell-config-read path-access tool-task-adoption literal-twin
           - group: verb-chain-and-reminder
-            gates: exact-verb-chain reminder-execution literal-twin
+            gates: exact-verb-chain reminder-execution
           - group: approval-and-authorization
             gates: tool-authorization approval-directory skill-manage-guard no-program
 
@@ -316,6 +316,28 @@ jobs:
           bash -n evals/cycle_evals.sh
           python3 -m unittest discover -s evals -p test_background_evals.py -v
           python3 -m unittest discover -s evals -p test_child_run_evals.py -v
+          python3 -m unittest discover -s evals -p test_background_process_evals.py -v
+          python3 -m unittest discover -s evals -p test_additional_process_scope.py -v
+          python3 -m unittest discover -s evals -p test_process_consent_subject.py -v
+          python3 -m unittest discover -s evals -p test_process_record_shapes.py -v
+          python3 -m unittest discover -s evals -p test_process_runtime_boundaries.py -v
+          python3 -m unittest discover -s evals -p test_process_auxiliary_titles.py -v
+          python3 -m unittest discover -s evals -p test_process_terminal_stages.py -v
+          python3 -m unittest discover -s evals -p test_process_prompt_wire.py -v
+          python3 -m unittest discover -s evals -p test_process_failure_retention.py -v
+          python3 -m unittest discover -s evals -p test_terminal_rejection_evals.py -v
+          python3 -m unittest discover -s evals -p test_coordination_evals.py -v
+          python3 -m unittest discover -s evals -p test_subagent_authoring_evals.py -v
+          python3 -m unittest discover -s evals -p test_init_agent_profiles.py -v
+          python3 -m unittest discover -s evals -p test_eval_approval_seed.py -v
+          python3 -m unittest discover -s evals -p test_coordination_artifact_evals.py -v
+          python3 -m unittest discover -s evals -p test_coordination_workflow_evals.py -v
+          python3 -m unittest discover -s evals -p test_coordination_negative_evals.py -v
+          python3 -m unittest discover -s evals -p test_productive_parent_child_evals.py -v
+          python3 -m unittest discover -s evals -p test_coordination_implement_review_evals.py -v
+          python3 -m unittest discover -s evals -p test_coordination_stale_incomplete_evals.py -v
+          python3 -m unittest discover -s evals -p test_coordination_conflicting_evidence_evals.py -v
+          python3 -m unittest discover -s evals -p test_coordination_two_writers_evals.py -v
           python3 -m unittest discover -s evals -p test_cycle_evals.py -v
           python3 -m unittest discover -s evals -p test_cli_detector_evals.py -v
           python3 -m unittest discover -s evals -p test_spill_steer_evals.py -v

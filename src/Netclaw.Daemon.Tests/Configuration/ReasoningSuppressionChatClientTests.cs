@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
@@ -77,6 +79,105 @@ public sealed class ReasoningSuppressionChatClientTests
         var kwargs = Assert.IsType<Dictionary<string, object?>>(
             forwarded!.AdditionalProperties!["chat_template_kwargs"]);
         Assert.Equal(false, kwargs["enable_thinking"]);
+        Assert.True(kwargs.ContainsKey("thinking"));
+        Assert.Equal(false, kwargs["thinking"]);
+    }
+
+    [Theory]
+    [InlineData("element")]
+    [InlineData("node")]
+    [InlineData("dictionary")]
+    public async Task Suppression_PreservesExistingJsonObjectFields(string representation)
+    {
+        const string json = """{"thinking":true,"enable_thinking":true,"nested":{"values":[1,"keep",null]}}""";
+        object original = representation switch
+        {
+            "element" => JsonSerializer.Deserialize<JsonElement>(json),
+            "node" => JsonNode.Parse(json)!,
+            _ => JsonSerializer.Deserialize<Dictionary<string, object?>>(json)!
+        };
+        ChatOptions? forwarded = null;
+        using var client = new ReasoningSuppressionChatClient(new FakeChatClient((_, opts, _) =>
+        {
+            forwarded = opts;
+            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
+        }), ReasoningSuppressionDialect.ChatTemplateKwargs);
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                [NetclawChatOptionKeys.SuppressReasoning] = true,
+                ["chat_template_kwargs"] = original
+            }
+        };
+
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], options,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var mapped = JsonSerializer.SerializeToElement(forwarded!.AdditionalProperties!["chat_template_kwargs"]);
+        Assert.True(mapped.TryGetProperty("thinking", out var thinking));
+        Assert.False(thinking.GetBoolean());
+        Assert.False(mapped.GetProperty("enable_thinking").GetBoolean());
+        Assert.Equal("[1,\"keep\",null]", mapped.GetProperty("nested").GetProperty("values").GetRawText());
+        Assert.Equal(3, mapped.EnumerateObject().Count());
+        Assert.Equal(json, JsonSerializer.Serialize(original));
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("true")]
+    [InlineData("\"invalid\"")]
+    public async Task Suppression_RejectsNonObjectKwargsBeforeProviderDispatch(string json)
+    {
+        var dispatched = false;
+        using var client = new ReasoningSuppressionChatClient(new FakeChatClient((_, _, _) =>
+        {
+            dispatched = true;
+            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
+        }), ReasoningSuppressionDialect.ChatTemplateKwargs);
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                [NetclawChatOptionKeys.SuppressReasoning] = true,
+                ["chat_template_kwargs"] = JsonSerializer.Deserialize<JsonElement>(json)
+            }
+        };
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")], options,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.False(dispatched);
+    }
+
+    [Theory]
+    [InlineData(ReasoningSuppressionDialect.None)]
+    [InlineData(ReasoningSuppressionDialect.OllamaThink)]
+    [InlineData(ReasoningSuppressionDialect.DeepSeekThinking)]
+    public async Task OtherDialects_PreserveTemplateKwargs(ReasoningSuppressionDialect dialect)
+    {
+        var kwargs = new Dictionary<string, object?> { ["thinking"] = true, ["enable_thinking"] = true };
+        ChatOptions? forwarded = null;
+        using var client = new ReasoningSuppressionChatClient(new FakeChatClient((_, opts, _) =>
+        {
+            forwarded = opts;
+            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
+        }), dialect);
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                [NetclawChatOptionKeys.SuppressReasoning] = true,
+                ["chat_template_kwargs"] = kwargs
+            }
+        };
+
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], options,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Same(kwargs, forwarded!.AdditionalProperties!["chat_template_kwargs"]);
+        Assert.Equal(true, kwargs["thinking"]);
+        Assert.Equal(true, kwargs["enable_thinking"]);
     }
 
     [Fact]

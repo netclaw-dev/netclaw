@@ -149,22 +149,6 @@ message SessionCompactedProto {
   WorkingContextProto working_context = 7;
 }
 
-message ToolLoopKeyProto { string tool_name = 1; string arguments_hash = 2; }
-message ToolLoopEntryProto {
-  string tool_name = 1; string arguments_hash = 2; string outcome_hash = 3;
-  int32 equal_rounds = 4; bool corrected = 5; bool pending_job = 6;
-}
-message ToolLoopAdjacentProto { string action_hash = 1; string outcome_hash = 2; }
-message ToolLoopCheckpointProto {
-  string task_id = 1; repeated ToolLoopEntryProto entries = 2;
-  repeated ToolLoopKeyProto cold_keys = 3; repeated ToolLoopAdjacentProto adjacent_history = 4;
-  optional string last_blocked_action = 5;
-}
-message ToolLoopDeltaProto {
-  string task_id = 1; bool reset = 2; repeated ToolLoopEntryProto upserts = 3;
-  repeated ToolLoopKeyProto removed_keys = 4; repeated ToolLoopKeyProto cold_keys = 5;
-  repeated ToolLoopAdjacentProto adjacent_history = 6; optional string last_blocked_action = 7;
-}
 message ToolLoopPreparedCallProto {
   string call_id = 1; string tool_name = 2; string arguments_hash = 3; bool allows_pending_job = 4;
 }
@@ -184,7 +168,6 @@ message ToolBatchStartedProto {
   int64 started_at_ms = 4;
   repeated string consumed_input_ids = 5;
   ToolLoopAdmissionProto loop_admission = 7;
-  ToolLoopDeltaProto loop_delta = 8;
   bool metadata_only = 9;
   ToolApprovalRequestedProto.TurnContextRecordProto legacy_task_context = 10;
 }
@@ -319,8 +302,6 @@ message ActiveJobInfoProto {
   string output_log_path = 8;
   int32 lineage_version = 9;
   BackgroundJobOriginProto origin = 10;
-  ToolLoopCheckpointProto origin_checkpoint = 11;
-  bool origin_receipt_failure = 12;
 }
 
 message SessionSnapshotProto {
@@ -355,7 +336,6 @@ message SessionSnapshotProto {
   reserved 9;
   repeated InputAdmittedProto pending_inputs = 10;
   repeated string recent_source_message_keys = 11;
-  ToolLoopCheckpointProto loop_checkpoint = 12;
   ToolLoopAdmissionProto loop_admission = 13;
   repeated ToolLoopObservationProto loop_observations = 14;
   bool loop_receipt_failure = 15;
@@ -464,8 +444,6 @@ message BackgroundChildRunProto {
   repeated string origin_input_ids = 11;
   WorkingContextProto initial_working_context = 12;
   GitWorkingContextInspectionProto initial_git = 13;
-  ToolLoopCheckpointProto parent_checkpoint = 14;
-  bool parent_receipt_failure = 15;
   bool start_batch_settled = 16;
   int64 accepted_at_ms = 17;
   optional int64 started_at_ms = 18;

@@ -15,8 +15,6 @@ public sealed record ActiveJobInfo
 {
     public int LineageVersion { get; init; }
     public BackgroundJobOrigin? Origin { get; init; }
-    public Protocol.ToolLoopCheckpoint? OriginCheckpoint { get; init; }
-    public bool OriginReceiptFailure { get; init; }
 
     public required BackgroundJobId JobId { get; init; }
 

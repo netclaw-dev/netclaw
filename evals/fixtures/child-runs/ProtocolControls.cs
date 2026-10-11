@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using System.Security.Cryptography;
 using Netclaw.Actors.Protocol;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -15,9 +16,76 @@ internal static class ProtocolControls
     private const string Session = "signalr/observer-control";
     private const string Body = "{\"run_id\":\"owner-run\",\"scope_id\":\"owner-scope\",\"state\":\"Accepted\",\"control_tool\":\"check_agent_run\"}";
 
-    public static int Run()
+    public static int Run(string? transcriptPath)
     {
         var count = 0;
+        object? replay = null;
+        if (transcriptPath is not null)
+        {
+            var bytes = File.ReadAllBytes(transcriptPath);
+            var outputs = File.ReadLines(transcriptPath).Select(line =>
+            {
+                using var row = JsonDocument.Parse(line);
+                var output = JsonSerializer.Deserialize<SessionOutputDto>(row.RootElement.GetProperty("output").GetRawText())
+                    ?? throw new InvalidDataException("The replay contains a null output.");
+                return (Output: output, ObservedNs: row.RootElement.GetProperty("observed_ns").GetInt64());
+            }).ToArray();
+            var protocol = new HeldChildProtocol(outputs.First().Output.SessionId!);
+            var statuses = new List<JsonElement>();
+            var pending = new Dictionary<string, SessionObserver.ObservedCall>(StringComparer.Ordinal);
+            var calls = new List<SessionObserver.ObservedCall>();
+            var corrections = 0;
+            var rejectedStarts = 0;
+            foreach (var row in outputs)
+            {
+                var output = row.Output;
+                protocol.Observe(output);
+                if (output.Type == SessionOutputTypes.ToolCall)
+                {
+                    using var arguments = JsonDocument.Parse(output.ArgumentsJson ?? "{}");
+                    var call = new SessionObserver.ObservedCall(output.CallId!, output.ToolName!, arguments.RootElement.Clone(),
+                        protocol.CompletedTurns + 1, row.ObservedNs, calls.Count + 1);
+                    Check(pending.TryAdd(output.CallId!, call));
+                    calls.Add(call);
+                }
+                if (output.Type != SessionOutputTypes.ToolResult)
+                    continue;
+                Check(pending.Remove(output.CallId!, out var observed));
+                var status = observed!.CompleteResult(output);
+                if (HeldChildProtocol.IsUnexecutedRationaleRejection(output))
+                {
+                    Check(!observed.Success && observed.FailureCode == "invalid_rationale"
+                        && observed.Result == HeldChildProtocol.RequiredRationaleError);
+                    rejectedStarts++;
+                }
+                if (output.ToolName != "check_agent_run")
+                    continue;
+                Check(output.ToolFailureCode is null);
+                Console.Error.WriteLine($"Replay status result {statuses.Count + corrections + 1}: {output.CallId}");
+                Check(observed.Result == output.Result && observed.Success == (status is not null));
+                if (status is { } body)
+                {
+                    statuses.Add(body);
+                    Console.Error.WriteLine($"Replay status parsed: {body.GetProperty("state").GetString()}");
+                }
+                else
+                    corrections++;
+            }
+            if (rejectedStarts > 0)
+                Check(rejectedStarts == 1 && statuses.Count == 0 && corrections == 0 && protocol.Acceptance is null);
+            else
+            {
+                Check(statuses.Count == 2 && statuses.All(status => status.GetProperty("state").GetString() == "Running"));
+                Check(corrections == 1);
+            }
+            Check(!protocol.ChildHeld && !protocol.Released && protocol.CompletedTurns == 0);
+            replay = new { source_sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+                status_results = statuses.Count, corrections, rejected_starts = rejectedStarts, completed_turns = protocol.CompletedTurns,
+                child_held = protocol.ChildHeld, released = protocol.Released,
+                calls = calls.Where(call => call.Name is "check_agent_run" or "spawn_agent").Select(call => new
+                    { id = call.Id, name = call.Name, occurrence = call.Occurrence, observed_ns = call.ObservedNs,
+                        result = call.Result, success = call.Success, failure_code = call.FailureCode }) };
+        }
         foreach (var malformed in new[]
                  {
                      "{}", "[" + Body + "]", "prose " + Body, "```json\n" + Body + "\n```",
@@ -84,7 +152,82 @@ internal static class ProtocolControls
         Check(reused.CompletedTurns == 2 && reused.LastReply == "Actual final response"
             && !reused.LastReply.Contains("REQUIRED-MARKER", StringComparison.Ordinal));
         Reject(() => reused.Observe(readResult));
-        Console.WriteLine(JsonSerializer.Serialize(new { passed = count, failed = 0, scope = "protocol/barrier controls; no model or daemon proof" }));
+        const string running = "{\"run_id\":\"owner-run\",\"scope_id\":\"owner-scope\",\"state\":\"Running\"}";
+        Check(SessionObserver.ParseControlStatus(running) is { } live && live.GetProperty("state").GetString() == "Running");
+        const string correction = "Netclaw stopped this tool call because it would continue a repeated action-and-outcome cycle. "
+            + "The same action completed twice without a changed result. This call did not execute.\n"
+            + "Next action: choose a different action, load a missing tool, or finish the task.";
+        Check(SessionObserver.ParseControlStatus(correction) is null);
+        foreach (var invalid in new[] { "Unknown prose.", "{", "```json\n" + running + "\n```", correction + " Unexpected suffix." })
+            Reject(() => SessionObserver.ParseControlStatus(invalid));
+        Check(SessionObserver.ParseControlStatus(running) is { } later && later.GetProperty("run_id").GetString() == "owner-run");
+        using var noArguments = JsonDocument.Parse("{}");
+        var refused = new SessionObserver.ObservedCall("status", "check_agent_run", noArguments.RootElement.Clone(), 1, 10, 1);
+        var refusedResult = Result() with { CallId = "status", ToolName = "check_agent_run", Result = correction };
+        Check(refused.CompleteResult(refusedResult) is null && !refused.Success && refused.Result == correction
+            && refused.Id == "status" && refused.Name == "check_agent_run" && refused.Occurrence == 1 && refused.ObservedNs == 10);
+        var next = new SessionObserver.ObservedCall("status", "check_agent_run", noArguments.RootElement.Clone(), 2, 20, 2);
+        Check(next.CompleteResult(refusedResult with { Result = running }) is { } nextStatus
+            && next.Success && nextStatus.GetProperty("state").GetString() == "Running" && !refused.Success
+            && refused.Result == correction);
+        Reject(() => next.CompleteResult(refusedResult with { CallId = "foreign" }));
+        Reject(() => next.CompleteResult(refusedResult with { ToolName = "spawn_agent" }));
+        var ordinary = new SessionObserver.ObservedCall("status", "file_read", noArguments.RootElement.Clone(), 1, 10, 1);
+        Check(ordinary.CompleteResult(refusedResult with { ToolName = "file_read" }) is null && ordinary.Success);
+        var rejectedResult = Result() with { ToolFailureCode = "invalid_rationale", Result = HeldChildProtocol.RequiredRationaleError };
+        var repaired = New();
+        repaired.Observe(Call());
+        repaired.Observe(rejectedResult);
+        Check(repaired.Acceptance is null && repaired.CompletedTurns == 0 && !repaired.ChildHeld && !repaired.Released);
+        var failedCall = new SessionObserver.ObservedCall("start", "spawn_agent", noArguments.RootElement.Clone(), 1, 10, 1);
+        Check(failedCall.CompleteResult(rejectedResult) is null && !failedCall.Success
+            && failedCall.FailureCode == "invalid_rationale" && failedCall.Result == HeldChildProtocol.RequiredRationaleError);
+        repaired.Observe(Call() with { CallId = "repaired-start" });
+        repaired.Observe(Result() with { CallId = "repaired-start" });
+        AddTurn(repaired, 1, "The child was accepted after correction.");
+        repaired.RequireHeldAcceptance(1);
+        repaired.ConfirmHeld(barrier.RootElement, "trial", "child");
+        AddTurn(repaired, 2, "probe-answer");
+        repaired.ConfirmRelease("probe-answer");
+        Check(repaired.Released && repaired.Acceptance == accepted && !failedCall.Success);
+        foreach (var invalid in new[] { rejectedResult with { ToolFailureCode = null },
+                     rejectedResult with { ToolFailureCode = "unknown_agent" },
+                     rejectedResult with { Result = HeldChildProtocol.RequiredRationaleError + " suffix" } })
+        {
+            var invalidStart = New(); invalidStart.Observe(Call());
+            Reject(() => invalidStart.Observe(invalid));
+        }
+        Reject(() => New().Observe(rejectedResult));
+        var foreignRejection = New(); foreignRejection.Observe(Call());
+        Reject(() => foreignRejection.Observe(rejectedResult with { SessionId = "foreign" }));
+        var wrongRejection = New(); wrongRejection.Observe(Call());
+        Reject(() => wrongRejection.Observe(rejectedResult with { CallId = "foreign" }));
+        var mismatchedRejection = New(); mismatchedRejection.Observe(Call());
+        Reject(() => mismatchedRejection.Observe(rejectedResult with { ToolName = "file_read" }));
+        var repeatedRejection = New(); repeatedRejection.Observe(Call()); repeatedRejection.Observe(rejectedResult);
+        Reject(() => repeatedRejection.Observe(rejectedResult));
+        var noAcceptance = New(); noAcceptance.Observe(Call()); noAcceptance.Observe(rejectedResult);
+        AddTurn(noAcceptance, 1, "No child was accepted.");
+        Reject(() => noAcceptance.RequireHeldAcceptance(0));
+        var multiple = New(); AddAcceptance(multiple);
+        multiple.Observe(Call() with { CallId = "second-start" });
+        multiple.Observe(Result() with { CallId = "second-start", Result = Body.Replace("owner-run", "second-run", StringComparison.Ordinal) });
+        AddTurn(multiple, 1, "Two children were accepted.");
+        Check(multiple.CompletedTurns == 1 && multiple.Acceptance == accepted);
+        Reject(() => multiple.RequireHeldAcceptance(2));
+        using var terminalArguments = JsonDocument.Parse("{\"run_id\":\"owner-run\",\"source_operation\":\"spawn_agent\"}");
+        var rejectedTerminal = new SessionObserver.ObservedCall("rejected-terminal", "spawn_agent",
+            terminalArguments.RootElement.Clone(), 2, 20, 2);
+        var terminalRejection = rejectedResult with { CallId = "rejected-terminal" };
+        var terminalProtocol = New();
+        AddAcceptance(terminalProtocol);
+        terminalProtocol.Observe(Call() with { CallId = "rejected-terminal", ArgumentsJson = terminalArguments.RootElement.GetRawText() });
+        terminalProtocol.Observe(terminalRejection);
+        Check(rejectedTerminal.CompleteResult(terminalRejection) is null && !rejectedTerminal.Success
+            && terminalProtocol.Acceptance == accepted);
+        Console.WriteLine(JsonSerializer.Serialize(new { passed = count, failed = 0, replay,
+            terminal_rejection_call = SessionObserver.CallBody(rejectedTerminal),
+            scope = "protocol/barrier controls; no model or daemon proof" }));
         return 0;
 
         void Check(bool condition)

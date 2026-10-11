@@ -71,7 +71,7 @@ session.RecordCompletionAndQueueParentContinuation(run_id, typed_result)</pre>
 <li><strong>Deferred:</strong> Budget renewal and model-supervisor assessment. Keep existing operation health checks and explicit cancellation.</li>
 </ul>
 <p>The exact-cycle guard compares an action and its outcome with earlier completed iterations. It does not measure useful progress.</p>
-<p>An operation timeout controls one request. Admission limits control simultaneous work. Neither establishes a maximum task lifetime.</p>
+<p>An operation timeout controls one request. Explicit cancellation closes local dispatch. Neither establishes a maximum task lifetime.</p>
 <p>A renewable allowance creates a review boundary. It is a candidate, not an accepted replacement for the old count ceiling.</p>
 <p>No current detector guarantees finite total cost without a lifetime ceiling. State that limitation instead of claiming general loop safety.</p>
 <p>The selected first PR changes detector behavior and removes hard tool budgets. It does not depend on background execution.</p>
@@ -697,7 +697,7 @@ After:
 <ul>
 <li>Reconcile the uncommitted <code>subagent-messaging</code> OpenSpec draft through OpenSpec skills. Do not copy its unreviewed decisions as requirements.</li>
 <li>Trace the product scope to PRD-001 FR-002, FR-003, FR-005, FR-006, FR-011, and FR-013, plus PRD-002.</li>
-<li>Add an explicit delegated-agent product requirement. Assign its final PRD ID during proposal work.</li>
+<li>Use <a href="../../../docs/prd/PRD-001-netclaw-mvp.md#fr-017-background-child-delegation">PRD-001 FR-017</a> for the background child delegation product requirement.</li>
 <li>Update <code>netclaw-subagents</code>, <code>session-state-machine</code>, <code>skill-execution-routing</code>, <code>turn-loop-governance</code>, and authorization rules.</li>
 <li>Replace the child completion wait in <code>SpawnAgentTool</code> and all routed-skill consumers with accepted-run and attributed-continuation handling.</li>
 <li>Make cancellation lifetime independent of the start tool and later parent turns. Keep explicit parent-stop cancellation.</li>
@@ -1479,6 +1479,194 @@ NETCLAW_EVAL_CATEGORY='Tool Cycles' NETCLAW_EVAL_RUNS=5 NETCLAW_EVAL_THRESHOLD=1
 <p>A fresh private audit finds 15,466 batch records, 20,418 result records, and 3,422 undeleted turns.</p>
 <p>The records still lack canonical admission, typed loop observations, and adopted-task facts. The audit certifies zero faithful replay cases and zero independent productive holdout turns.</p>
 <p>False-block counts remain unmeasured. These findings do not establish an absence of loops. The replay, shadow, and 3,000-turn holdout gates remain open.</p>
+<h3 id="proof-child-adoption-window">Child-result adoption and current workflow proof</h3>
+<p>The original code-workflow log records two missing report reads before child completion. The guard then refuses the report read after completion.</p>
+<p>The child checkpoint retains earlier recurrence evidence. The prior adoption path restores that evidence after the child result arrives.</p>
+<p>The repair starts a fresh detector window at the first durable canonical child-result adoption. Task identity, authority, receipt failures, and durable duplicate checks remain intact.</p>
+<p>The repaired candidate passes 177 actor cases and six authority harness cases. Independent fault controls cover recovery, duplicate adoption, and sticky receipt failures.</p>
+<p>The six authority cases do not execute Stryker mutants. The real-file regression proves the missing-read counterexample; broad model workflow cases have separate claims.</p>
+<p>At <code>f6685d5f</code>, all three PR heads pass all 29 hosted checks. Linux and macOS each pass 29 native tapes and 10 scenarios.</p>
+<p>One fresh scripted child-adoption regression passes independent review. The parent receives two Missing results before the child writes the real artifact.</p>
+<p>The parent consumes the canonical child result, reads the artifact twice, and receives a guard correction on the next identical read.</p>
+<p>The earlier regression remains false because its added predicate misclassifies canonical context nudges. The corrected predicate retains the canonical assertions and extra-task controls.</p>
+<p>The first fresh code, plan, conflict, and blocked-attachment model trials remain false. Each cohort stops at its first failure.</p>
+<p>Actual requests and artifacts show task-rule violations, incorrect artifact schemas, repeated wait queries, and a child inactivity timeout. They show no repeated post-adoption false block.</p>
+<p>Both negative cases pass two fresh trials. A later unavailable-profile trial fails before its prompt; the disk fault then erases its receipt.</p>
+<p>That trial supplies no model verdict or verified cleanup. All original false results remain unchanged.</p>
+<p>Guide 1.0.7 states when the parent must end its turn and await the automatic child continuation. Interim status remains distinct from final results.</p>
+<p>The code eval prompt specifies report path strings and the post-review check order. Existing assertions, authority, deadlines, and thresholds remain intact.</p>
+<p>The existing 82 Python controls pass. The earlier embedded-test build fails because the disk is full and supplies zero test credit.</p>
+<p>A separate clean checkout at <code>8f4d151f</code> passes both embedded skill tests. Independent review confirms the executed assembly contains guide 1.0.7.</p>
+<p>The current native CI bundle, image, and exact model recipes pass independent review. Their compilation and source identities remain separate.</p>
+<p>Fresh guide 1.0.7 code and plan observations both remain false. Each cohort stops after its first trial; later ordinals remain absent.</p>
+<p>The code parent awaits both automatic child results and reads both reports. The oracle rejects its unlisted <code>sha256sum</code> attempt, which policy denies.</p>
+<p>Independent review also finds reviewer command violations, a missing revision check, and prose before the required JSON. The guard issues no refusal.</p>
+<p>The plan children complete and the parent sends the actual Markdown attachment. Its artifact verifier rejects the required <code>Source revision</code> field.</p>
+<p>The exact source identity remains visible. Independent review confirms renamed required fields, absent receipt fields, changed step identifiers, and an absent required excerpt.</p>
+<p>The source analysis is correct. These template failures do not establish a stale source, a detector defect, or a failed attachment.</p>
+<p>The reviewed guide 1.0.8 change requires each child to load its canonical artifact template. The parent supplies task facts separately.</p>
+<p>This change addresses the observed loss of template structure during the parent handoff. The existing artifact assertions remain intact.</p>
+<p>The code-workflow assignment also replaces the original closed command restrictions with optional examples and an unauthorized hash method.</p>
+<p>Guide 1.0.8 requires the parent to copy the complete restriction block unchanged into each child assignment. A separate section defines the child's role.</p>
+<p>Independent review accepts this narrow transfer rule. It does not resolve the separate parent revision omission or final JSON failure.</p>
+<p>These two changed handoff mechanisms justify affected model trials. The published head <code>2484b238</code> contains guide 1.0.8.</p>
+<p>The native CI producer has the same source tree. Its retained artifact and image pass independent identity review; no local native build occurs.</p>
+<p>The full Linux assembly passes 1,397 cases and skips 39 platform cases. Source review supports inclusion of both embedded-guide tests.</p>
+<p>This aggregate result is not a separate two-case execution or an actual native resource read. Fresh model records must supply the latter evidence.</p>
+<p>Ten fixed recipes retain the existing prompts, oracles, 900-second deadlines, and thresholds. Each cohort stops at its first false result or evidence fault.</p>
+<p>The first guide 1.0.8 code observation remains false. Its source freeze, archive, cleanup, and actual harness verdict agree.</p>
+<p>The reviewer attempts an unlisted hash command. Policy denies it. Independent review confirms a missing parent revision check and an invalid final JSON response.</p>
+<p>The first guide 1.0.8 analyze-plan observation remains false. Both children complete, and the parent delivers the actual Markdown attachment.</p>
+<p>The parent attempts a prohibited shell command. Policy denies it. Independent review confirms altered source fields, absent literal excerpts, wrong table references, and an absent rollout field.</p>
+<p>The source analysis and actual attachment are correct. No loop-guard refusal or deadline failure occurs.</p>
+<p>The reviewed parser repair accepts a valid wider source range. Exact source paths, line bounds, required line coverage, and literal excerpts remain mandatory.</p>
+<p>The repair also rejects an empty field that borrows sibling text. Real indented check lists remain valid.</p>
+<p>All 417 affected Python controls and four independent controls pass. The old parser fails 13 behavioral subcases without errors.</p>
+<p>All 214 indexed original artifacts remain exact. The actual analyze-plan verdict remains false.</p>
+<p>Guide 1.0.9 passes independent source review. It requires draft constraint comparison, permitted fact sources, actual parent checks, and results before dependent actions.</p>
+<p>The final JSON rule remains unchanged. Embedded tests and fresh model acceptance remain open for this guide.</p>
+<p>Both current observations finish before their external deadline. Original records, cleanup, and source freezes pass; these facts do not supply model acceptance.</p>
+<p>The published combined head <code>8f4d151f</code> now passes all 29 hosted checks. Its first Windows attempt remains a recorded two-second actor-query timeout.</p>
+<p>One scoped retained Windows rerun passes on the same checkout. All 442 mutation-assembly tests pass without skips. The original expiry remains unexplained.</p>
+<p>Neither specialist establishes a concrete race. No production behavior or deadline changes, and no further rerun occurs.</p>
+<p>The installed CLI rejects the literal <code>gh pr stack</code> command. GitHub records the three open draft PRs in native stack #2423.</p>
+<p>Four process cases remain under implementation with separate adverse tests: routed start, approval answer, cancellation at an open prompt, and abrupt owner recovery.</p>
+<p>The frozen V3 pure verifier passes 37 independent controls across four valid variants. The same final suite rejects 20 faults in V2.</p>
+<p>These controls bind child records to the original admitted input. They reject substitute tasks, early answers, escaped artifact paths, and incomplete process identities.</p>
+<p>Source review finds mismatched message and metadata shapes, a wrong recovery release rule, and absent cancellation review assertions.</p>
+<p>The reviewed V5 source repairs those faults and binds approval prompts to actual pending commands. Full durable candidates remain captured facts.</p>
+<p>A separate adverse control exposes incomplete relay cleanup after an archive error. The corrected source passes all 62 independent controls and quality checks.</p>
+<p>The helper compiles and passes 55 protocol controls. Three real serializer, SQLite, and decoder controls pass after the terminal-authority fixture correction.</p>
+<p>Root finds a routed skill below a path hidden by the skills mount, plus a required variable absent from the preparation environment.</p>
+<p>The corrected source passes all 63 independent controls. Both added controls reject the retained faulty setup.</p>
+<p>The first fresh routed process observation remains false. The child completes and the parent reads its artifact, but the fixture expects a noncanonical boundary value.</p>
+<p>The actual journal records <code>boundary:trusted-instance</code>, which matches the source contract. The failed archive and verdict remain intact; owned cleanup passes.</p>
+<p>The second verifier mismatch treats raw terminal paths as enriched paths. The correction permits absent paths only for this completed, non-project terminal stage.</p>
+<p>Six independent controls reject foreign paths and altered terminal facts. Cancelled, Lost, and prepared results retain their exact requirements.</p>
+<p>The fresh routed observation passes independent review. Its SQLite backup, canonical journal, exact child overlay, full parent read, and owned cleanup pass.</p>
+<p>This result closes only the routed process subcase. Approval, cancellation, and abrupt owner recovery remain open.</p>
+<p>The first approval observation remains false. The actual prompt uses camelCase, but the answer control expects <code>CallId</code>.</p>
+<p>A separate review finds scalar raw option keys where the oracle expects nested values. Two exact representation repairs reject foreign identities and altered options.</p>
+<p>The process candidate passes 162 affected tests without failures or skips. The five new controls cover the installed config and complete journal prefix.</p>
+<p>Slopwatch and the diff check pass. The header script passes through PowerShell; direct execution lacks permission.</p>
+<p>The original approval failure remains intact and proves no completed approval workflow.</p>
+<p>The fresh approval observation passes the repaired answer barrier, then fails the fixture's exact shell-result assertion. Its original archive remains intact.</p>
+<p>The protected command fails because the fixture invokes it before the required artifact write creates its directory.</p>
+<p>The repair performs the assigned artifact write first. The protected effect must still remain absent until the actual approval answer.</p>
+<p>Four independent controls reject the old order. Separate failure-retention controls preserve actual journal evidence and expose corrupt SQLite backups.</p>
+<p>The latest approval and cancellation observations remain false. Both fail when the host verifier reads a private file that the container owns.</p>
+<p>The marker and framework report producers specify mode <code>0600</code>. The host and container use different user IDs.</p>
+<p>Their retained observer records and SQLite backups support further diagnosis. Both owned containers and homes are absent after cleanup.</p>
+<p>The original archives cannot prove removed files' actual mode bits. A narrow harness repair must retain private bytes without changing production permissions.</p>
+<p>The reviewed repair uses the Netclaw user in the pinned owned container. Exact path, image, mount, owner, and file-kind checks precede capture.</p>
+<p>Eight independent controls cover actual private files, links, special files, changed ancestors, corrupt receipts, and failures. Two controls reject the old host-read path.</p>
+<p>Fresh approval and cancellation observations pass their complete process oracles and independent review. Each rejects four altered actual records.</p>
+<p>The private captures confirm user ID 1654 and mode <code>0600</code>. Approval creates one exact effect; cancellation preserves its report and no protected effect.</p>
+<p>Both owned containers and homes are absent after cleanup. All earlier false observations retain their original verdicts and files.</p>
+<p>The first abrupt recovery observation reaches its observer completion boundary. The strict journal decoder then rejects a deleted row.</p>
+<p>The actual backup contains snapshot 20, a deleted boundary row, and live rows 21–27. Earlier rows 1–19 are physically absent.</p>
+<p>The default snapshot policy deletes that prefix. The retained state cannot supply its original event sequence.</p>
+<p>The recovery-only fixture uses the existing snapshot interval setting to retain a full journal. Independent adverse checks reject missing, deleted, and duplicate prefix rows.</p>
+<p>The fresh recovery observation passes its full process oracle and independent review. Four altered actual records each fail the oracle.</p>
+<p>The actual backup retains parent sequences 1–27 without deleted rows or a parent snapshot. The installed config matches the prepared bytes.</p>
+<p>The owner process changes from PID 34 to PID 207. The parent reads the full partial artifact and reports <code>Lost</code>.</p>
+<p>All four process subcases now pass independent review. The journal-only recovery pass does not establish daemon snapshot recovery.</p>
+<p>An independent map verifies acceptance, routed starts, owner controls, cancellation, approval prompts, and recovery against actual dispatch and artifacts.</p>
+<p>This closes background task 7.2. The later contract audit closes task 8.7.</p>
+<p>Independent review closes task 8.6 for background build, test, and quality proof at <code>4191d1b7</code>. The package records 62 of 63 tasks complete.</p>
+<p>Task 7.9 retains integrated model and inherited recurrence gaps. The audit verifies exact source equality and retains known platform skips.</p>
+<p>Broader model acceptance, final integrated review, and required quality checks remain open.</p>
+<p>This case tests journal replay after abrupt process loss. Existing actor snapshot and serialized suffix tests supply separate evidence; they do not prove daemon snapshot recovery.</p>
+<p>The recovery and guide repairs are published at <code>86c8dd3a</code>. The parser repair is published at <code>7e44b2bb</code>.</p>
+<p>The three draft PRs remain open. The development branch is unchanged at <code>ba37133e</code>.</p>
+<p>The new native CI artifact uses the guide 1.0.9 source tree. Its actual producer and source tree pass identity checks.</p>
+<p>The canonical image stage stops when free disk space falls below the reserve. It produces no final image ID and starts no eval container.</p>
+<p>The failed stage retains its logs and receipt. Root verifies and removes a second exact duplicate runtime subtree; all retained test files remain intact.</p>
+<p>Free space rises from 118 MB to 928 MB. One cached retry completes image export but stops at the disk reserve.</p>
+<p>Both build commands retain failed verdicts. The exported image has an actual tag ID; a separate postcondition audit must verify its contents before eval use.</p>
+<p>The first audit creates an unstarted container but stops before any file copy. It removes its owned container and volume.</p>
+<p>A later disk measurement reports 2.25 GB free. That changed prerequisite permits one fresh image inspection; it supplies no image-payload proof by itself.</p>
+<p>The fresh audit verifies both native binaries and both entry scripts against actual image bytes and modes. Its unstarted container and volume are absent.</p>
+<p>The image postconditions pass independent review. Both failed package commands and the failed first inspection retain their original verdicts.</p>
+<p>The approved image ID is <code>sha256:e722917322c845f18460783781a295f3b7ff6ea2144beaaef26b271ee3b50fbc</code>.</p>
+<p>Native source <code>86c8dd3a</code> retains its actual CI producer. Eval source <code>7e44b2bb</code> adds only the two reviewed Python parser files.</p>
+<p>The ten code and plan recipes pass independent review. Each retains one run, threshold one, the unchanged prompt, and the 900-second observation window.</p>
+<p>Root verifies the actual image, frozen inputs, prior cleanup, free ports, and disk headroom before each first trial.</p>
+<p>Fresh code trial 01 starts with run ID <code>4c446b25-6f64-45b2-9f0c-ece2f77175b2</code>.</p>
+<p>Fresh plan trial 01 starts with run ID <code>29494ccb-bdf6-49d4-ab7e-a9ffd54f63f5</code>. Each trial owns a separate container and data home.</p>
+<p>Code trial 01 returns a canonical false verdict. Its final freeze and cleanup pass; all 206 indexed artifacts remain exact.</p>
+<p>The first assertion reads only <code>Agent</code>, but accepted calls use lowercase <code>agent</code>. Runtime scopes identify the correct child profiles.</p>
+<p>Independent review confirms separate reviewer command violations, premature final checks, and prose around fenced JSON. Both children complete and reach parent consumption.</p>
+<p>The source, guide, and selected resource reach the actual provider. No detector refusal or deadline causes the code result.</p>
+<p>The scoped checker repair preserves runtime precedence for supported ASCII <code>Agent</code>, <code>Task</code>, and <code>Context</code> keys. All other assertions remain intact.</p>
+<p>Independent review finds two Unicode false accepts in its first candidate. The revised accessor excludes those unsupported aliases and preserves exact canonical-key precedence.</p>
+<p>All 38 targeted tests and seven independent controls pass. Root's broader selection passes 293 tests without skips; all original 206 files remain exact.</p>
+<p>Commit <code>4191d1b7</code> records this checker repair. The original task violations keep code trial 01 false.</p>
+<p>Plan trial 01 also returns a canonical false verdict. All 217 indexed artifacts, final freeze, and actual owned cleanup pass.</p>
+<p>The first assertion rejects commentary appended to the correct source identity. The task requires that scalar to retain its exact value.</p>
+<p>Independent review confirms separate excerpt, component-owner, action, finding-reference, and acceptance-check defects. The complete source analysis and actual attachment remain distinct successes.</p>
+<p>The parent and both children read the full current guide and selected resources. Both children complete; the parent consumes both canonical results.</p>
+<p>No parent shell attempt, detector refusal, or timeout causes the plan result. The independent receipt binds the original verdict and actual cleanup.</p>
+<p>A separate causal review finds two instruction ambiguities. The code prompt requests a check report without a permitted final JSON field for it.</p>
+<p>The generic plan template uses numeric steps, while the case expects action IDs in that column. The actual parent assignment also weakens column placement.</p>
+<p>Proposed corrections locate code check evidence in existing child reports and align the plan example with its action, finding, check, and risk IDs.</p>
+<p>These corrections retain the exact final JSON and artifact assertions. They supply no new pass or retry authority by themselves.</p>
+<p>Guide 1.0.10 implements the narrow template and task clarifications. Its 147 Python controls and two embedded bundle tests pass.</p>
+<p>Independent review approves the exact six-file patch. It verifies 343 closure hashes, seven embedded resources, and unchanged oracle predicates.</p>
+<p>Commit <code>d0d55a53</code> records this patch. Fresh native and model evidence remains required.</p>
+<p>Both cohorts stop. Their trials 02–05 remain absent; no changed verdict or automatic retry follows.</p>
+<p>The prior head passes 28 hosted checks; the next push cancels its macOS native smoke. Published head <code>7e44b2bb</code> now passes all 29 checks.</p>
+<p>Linux and macOS native smoke both pass. The published head has no reported CI failure.</p>
+<p>Ten fresh negative recipes pass independent preparation review. The first trivial task passes its canonical oracle in run <code>55870096-e3a4-4d44-bb4c-43f84e1cf464</code>.</p>
+<p>The final freeze then fails because the retained helper directory disappears. The container and data home are absent; all 39 indexed files remain exact.</p>
+<p>The cohort stops at that evidence fault. Independent review confirms the task result and the separate consumer fault; no later trial starts.</p>
+<p>A separate helper recovery build passes 55 protocol controls and three projection controls. Independent review verifies its 202-file closure and 824 source inputs.</p>
+<p>The old output path remains absent. The new producer cannot repair the original trial verdict or its absent dependency evidence.</p>
+<p>The unavailable-profile checker accepts a sole JSON fence despite its JSON-only task. A narrow repair removes that false acceptance and passes 29 controls.</p>
+<p>Independent review approves this repair. Commit <code>736dd4f0</code> records it; all original verdicts remain unchanged.</p>
+<p>The first historical fenced response receives no corrected pass credit. The unavailable cohort needs recipes with the corrected checker.</p>
+<p>The unavailable cohort remains held. Its current recipes contain the earlier checker and cannot prove the corrected final-output contract.</p>
+<p>All three active OpenSpec changes pass strict validation. That result does not complete their remaining evidence or contract-verification tasks.</p>
+<p>An ordered sync audit verifies 15 delta files, 11 capabilities, 50 final requirements, and 209 scenarios against the canonical specifications.</p>
+<p>The audit finds one obsolete iteration-limit clause after approval denial. The narrow correction names recurrence and operation health rules; all other approval scenarios remain unchanged.</p>
+<p>The complete delta block and canonical block agree. Strict validation rejects an earlier partial block; the complete block passes and retains that failed check separately.</p>
+<p>An independent PRD and plan trace audit verifies all 32 source document pins. This closes background task 8.7 for contract reconciliation only.</p>
+<p>Local commits retain the closure records, checker repairs, and guide clarification. The next push must receive separate hosted CI proof.</p>
+<p>The completed model observations retain frozen source <code>7e44b2bb</code>. Commit <code>d0d55a53</code> carries guide 1.0.10 without new model pass credit.</p>
+<p>Published head <code>91ef75bc</code> finishes with 28 successful checks and one cancelled mutation job. All three platform tests and both native smoke jobs pass.</p>
+<p>One mutation job exceeds its 25-minute limit after all gate steps succeed. A local matrix change moves one complete gate to the lightest group.</p>
+<p>Independent review verifies all 14 gates and the same timeout. Local commit <code>69744f6c</code> records the change; fresh hosted proof remains required.</p>
+<p>The guide 1.0.10 image passes independent review. Actual native producer <code>3d995fbe</code> has the same source tree as <code>91ef75bc</code>.</p>
+<p>The image ID starts <code>b8056a0a</code>. Its two native binaries, two scripts, and owned cleanup pass actual byte checks.</p>
+<p>The first stage receipt has one stale stdout hash. The separate terminal audit corrects that pin and preserves the original receipt.</p>
+<p>A separate compaction audit retains strict results <code>F,F,T,T,T</code>. One trial adds a real third append; another returns fenced JSON.</p>
+<p>The first trial's summary also confuses request count with effect count. A compaction-only initial prompt clarification names the existing phase boundary.</p>
+<p>Local commit <code>d34000c6</code> records that clarification and one handoff control. Independent review passes all 75 cycle controls and preserves every oracle predicate.</p>
+<p>The new control also passes the old fixture. It proves the preserved handoff boundary; fresh model compliance remains unproven.</p>
+<p>Five fresh containers use the reviewed guide, image, helper, and targeted recipes. The missing-profile and trivial-task trials pass their strict consumer checks.</p>
+<p>The code trial fails on report content, an unlisted command attempt, and its final format. Independent review verifies all 230 indexed artifact hashes.</p>
+<p>The plan trial first fails because its checker requires method names in the wrong column. Independent review verifies all 193 indexed hashes.</p>
+<p>Its actual stage replay passes with complete reads and matching attachment bytes. That result does not establish a corrected complete trial pass.</p>
+<p>Both cohorts stop at trial 01. The original false verdicts and all later absent outputs remain exact.</p>
+<p>The compaction trial remains inconclusive. Its first summary reaches the 90-second sidecar limit, and its second summary reaches the CLI boundary.</p>
+<p>No recovery-model handoff occurs. Independent review confirms all 26 artifact hashes; later trials remain absent.</p>
+<p>The recorded summary requests disable model reasoning, but their response streams contain reasoning text. Three deployed tokenizer checks establish the effective template contract.</p>
+<p>The single suppression flag retains <code>&lt;think&gt;</code>. Both supported false flags select <code>&lt;/think&gt;</code>; these checks generate no model output.</p>
+<p>Commit <code>cd9a3df1</code> records the reviewed adapter correction. All 77 targeted tests pass; nine controls fail against the old adapter.</p>
+<p>The correction retains unrelated template values and other dialect behavior. Fresh native and model proof remain unrun; the render proof establishes no latency cause.</p>
+<p>Three remaining case oracles require uppercase spawn fields, while the runtime accepts lowercase aliases. Their prepared recipes remain held for a narrow oracle correction.</p>
+<p>Commit <code>f7cfc742</code> records the reviewed alias correction. Root passes all 111 affected-case tests; the frozen recipes remain unchanged and held.</p>
+<p>Commit <code>4398ee41</code> corrects the plan column matcher. Root passes 65 artifact tests, and independent actual-copy faults reject wrong owners and misplaced checks.</p>
+<p>The archived plan artifacts pass the corrected check offline. The original complete-trial false verdict remains unchanged.</p>
+<p>The second missing-profile trial returns the correct JSON object followed by prose. It remains false; the second trivial-task trial passes.</p>
+<p>Both second trials pass independent evidence and cleanup review. No later model trial starts during this handoff.</p>
+<p>The current fixes pass Slopwatch, copyright headers, and whitespace checks. The next push needs one fresh CI cycle.</p>
+<p>A bounded source audit identifies the canonical parent events required for private replay. Logs and provider text cannot replace these typed records.</p>
+<p>Snapshot retention can delete earlier parent events. Child checkpoints omit the child's prepared calls and typed receipt sequence.</p>
+<p>A complete immutable export needs its source identity, session scope, and independent labels. Absent prefixes and uncertain labels receive no productive holdout credit.</p>
+<p>Independent review closes the aggregate paired-fixture criterion. The coordination package records 45 of 54 tasks complete.</p>
+<p>Private replay, shadow review, the 3,000-turn independent holdout, broader model acceptance, and final verification remain open.</p>
+<p>The draft stack remains open. No merge, release, live skill publication, deployment, or operational rollback occurs.</p>
 <h3>Instructions for a future implementation session</h3>
 <ul>
 <li>Compare its checkout with the pinned baseline and current PR heads. Preserve user changes and use isolated worktrees.</li>

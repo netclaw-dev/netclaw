@@ -1970,7 +1970,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                     call.CallId.Value, call.ToolName.Value, call.ArgumentsHash, call.AllowsPendingJob)).ToArray(),
                 RefusedCallIds = cycleDecision.RefusedCallIds.ToArray()
             },
-            LoopDelta = _turnState.CaptureDelta(GetRecurrenceTaskId().Value, _state.LoopCheckpoint),
             StartedAtMs = NowMs(),
             ConsumedInputIds = _activeInputIds.ToArray()
         }, evt =>
@@ -2618,13 +2617,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     }
 
     private Protocol.TurnId GetRecurrenceTaskId()
-    {
-        if (!string.IsNullOrEmpty(_state.LoopCheckpoint.TaskId))
-            return new Protocol.TurnId(_state.LoopCheckpoint.TaskId);
-        _log.Warning("Tool cycle evidence gap kind={Kind}", "legacy_admission_baseline");
-        return _currentTurnContext?.TurnId
+        => _currentTurnContext?.TurnId
             ?? throw new InvalidOperationException("A recurrence task requires canonical turn authority.");
-    }
 
     private void CloseInvalidJobDelivery(InputAdmitted input, Action continuation)
     {
@@ -2687,7 +2681,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             BindTurnTelemetry(context);
             _toolApprovals.StartTurn(context);
             _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(context);
-            _turnState.RestoreCheckpoint(_state.LoopCheckpoint);
             if (admitted.SourceBackgroundJobId is not null && admitted.BackgroundJobLineageVersion == 0)
                 _log.Warning("Tool cycle evidence gap kind={Kind}", "legacy_job_origin");
             continuation();
@@ -2823,14 +2816,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(firstContext);
         _inFlightDedup.ReserveReminder(cmd.Source!.ReminderId);
         SetSystemPrompt();
-        if (_state.AdoptedTaskContext is not null && !string.IsNullOrEmpty(_state.LoopCheckpoint.TaskId))
-            _turnState.RestoreCheckpoint(_state.LoopCheckpoint);
-        else
-        {
-            _turnState.ResetForNewTurn();
-            Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
-                "Tool cycle evidence gap kind={Kind}", "legacy_recovery_baseline");
-        }
+        _turnState.ResetForNewTurn();
         _discoveredToolCache.PrepareForNewTurn(
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount,
@@ -4145,7 +4131,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (!SessionState.SameAdmission(expected, evt.LoopAdmission))
             throw new InvalidDataException("A legacy tool baseline differs from its canonical unanswered calls.");
         _state = _state.ApplyLoopAdmission(evt);
-        _turnState.RestoreCheckpoint(_state.LoopCheckpoint);
         _log.Warning("Tool cycle evidence gap kind={Kind}", "legacy_approval_baseline");
     }
 
@@ -5080,7 +5065,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             {
                 SessionId = _sessionId, MetadataOnly = true, LoopAdmission = admission,
                 LegacyTaskContext = turnContext.ToRecord() with { AdoptedSpeakerIds = turnContext.AdoptedSpeakerIds.ToArray() },
-                LoopDelta = new ToolLoopDelta { TaskId = turnContext.TurnId.Value, Reset = true }, StartedAtMs = NowMs()
+                StartedAtMs = NowMs()
             }, evt =>
             {
                 ApplyToolBatchStarted(evt);
@@ -5422,10 +5407,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         if (_activeToolBatch.GetCompletedCycle() is { } completedCycle)
             _turnState.ObserveCompleted(completedCycle);
-        else if (_state.LoopAdmission is { } admission && !_state.LoopReceiptFailure
-                 && _state.LoopObservations.Count == admission.Calls.Count
-                 && admission.Calls.Count != admission.RefusedCallIds.Count)
-            _turnState.ObserveCompleted(ToolCycleSignatureFactory.CompleteEvidence(admission, _state.LoopObservations));
 
         _turnState.RecordToolCompletion(resultCount);
 

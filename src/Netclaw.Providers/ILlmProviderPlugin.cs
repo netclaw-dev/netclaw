@@ -62,7 +62,7 @@ public enum ReasoningSuppressionDialect
 
     /// <summary>
     /// vLLM/llama.cpp/SGLang-style OpenAI-compatible servers: emits top-level
-    /// <c>chat_template_kwargs: { enable_thinking: false }</c>, which the pass-through
+    /// <c>chat_template_kwargs: { enable_thinking: false, thinking: false }</c>, which the pass-through
     /// self-hosted client forwards verbatim as a request body field.
     /// </summary>
     ChatTemplateKwargs,

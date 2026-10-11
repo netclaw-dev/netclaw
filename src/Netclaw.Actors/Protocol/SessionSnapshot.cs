@@ -55,7 +55,6 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     public IReadOnlyList<SerializableChatMessage> History { get; init; } =
         Array.Empty<SerializableChatMessage>();
 
-    public ToolLoopCheckpoint? LoopCheckpoint { get; init; }
     public ToolLoopAdmission? LoopAdmission { get; init; }
     public IReadOnlyList<ToolLoopObservation> LoopObservations { get; init; } = [];
     public bool LoopReceiptFailure { get; init; }

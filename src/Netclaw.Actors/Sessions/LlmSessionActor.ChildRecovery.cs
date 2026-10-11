@@ -118,7 +118,6 @@ public sealed partial class LlmSessionActor
             BindTurnTelemetry(context);
             _toolApprovals.StartTurn(context);
             _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(context);
-            _turnState.RestoreCheckpoint(_state.LoopCheckpoint);
             _recallManager.ResetForNewTurn();
             SetSystemPrompt();
         }

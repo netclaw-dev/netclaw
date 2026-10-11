@@ -64,7 +64,7 @@ public sealed class ToolTaskAdoptionMutationTests
         var evt = Adoption(second, [first.InputId, second.InputId]);
         var state = SessionState.Empty.Apply(first).Apply(second).Apply(evt);
         Assert.Equal(second.TurnContext, state.AdoptedTaskContext);
-        Assert.Equal(second.TurnContext.TurnId, state.LoopCheckpoint.TaskId);
+        Assert.Equal([first.InputId, second.InputId], state.AdoptedTaskInputIds);
         Assert.Same(state, state.Apply(evt));
     }
 
