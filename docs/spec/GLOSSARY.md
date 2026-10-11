@@ -533,11 +533,13 @@ nothing. The retry passes every check again.
 
 **Code anchors:** `OneTimeApprovalKeys`, `ToolApprovalAttempt`
 
-### Consent request
+<a id="consent-request"></a>
 
-A consent request asks the operator to answer for the uncovered candidates of
-one call. It carries the options that the operator can choose and a display
-text with secrets removed.
+### Approval prompt
+
+An approval prompt asks the operator to answer for the uncovered candidates of one tool call.
+It shows the available options and text with secrets removed.
+Parent and child calls use this term for the displayed request and its lifecycle.
 
 **Code anchors:** `ToolApprovalContext`, `ToolInteractionRequest`
 

@@ -11,11 +11,11 @@ durable-memory writes, or participate in session pub/sub by default.
 For subagent execution launched from skill metadata routing, the subagent SHALL
 remain an isolated worker by default:
 
-- It SHALL NOT inherit the main session identity prompt stack unless explicitly
-  enabled by a future opt-in setting.
-- It SHALL NOT auto-load repo-local `AGENTS.md` unless explicitly enabled by a
-  future opt-in setting.
-- It SHALL inherit audience/boundary context from the launching invocation.
+- It SHALL receive the embedded operating core for its audience, followed by the operator's deployment `AGENTS.md`.
+- It SHALL NOT inherit `SOUL.md` or `TOOLING.md`.
+- A child with a non-Public audience SHALL receive available project instructions from the inherited project directory.
+- A Public child SHALL NOT receive project-local instructions.
+- It SHALL inherit audience/boundary context from the launch invocation. Prompt content SHALL NOT widen that authority.
 
 
 The child SHALL use the shared exact recurrence, repeat exception, and feedback-round contracts in `turn-loop-governance`.
@@ -68,17 +68,26 @@ It SHALL NOT substitute success for an absent receipt or create a durable child-
 - **THEN** the durable write path is unavailable or denied to that subagent
 - **AND** the subagent must return findings to the parent session instead
 
-#### Scenario: Routed subagent does not inherit main identity prompt stack
+#### Scenario: Routed subagent receives scoped operating guidance
 
-- **GIVEN** a slash-invoked skill routes execution via `metadata.subagent`
-- **WHEN** the routed subagent prompt is assembled
-- **THEN** the main session identity prompt stack is not included by default
+- **GIVEN** a slash skill routes through `metadata.subagent` and a deployment playbook exists
+- **WHEN** its isolated child prompt is assembled
+- **THEN** the embedded operating core for its audience appears before the deployment `AGENTS.md`
+- **AND** neither `SOUL.md` nor `TOOLING.md` is included
 
-#### Scenario: Routed subagent does not auto-load repo AGENTS
+#### Scenario: Routed subagent receives inherited project instructions
 
-- **GIVEN** a slash-invoked skill routes execution via `metadata.subagent`
-- **WHEN** the routed subagent prompt is assembled
-- **THEN** repo-local `AGENTS.md` is not auto-loaded by default
+- **GIVEN** a Personal or Team slash activation inherits a project directory with an `AGENTS.md` file
+- **WHEN** its isolated child prompt is assembled
+- **THEN** available project instructions appear after the operating guidance and before the child role prompt
+- **AND** the project instructions come from the inherited project directory
+
+#### Scenario: Public routed subagent excludes project instructions
+
+- **GIVEN** a Public slash activation inherits a project directory with an `AGENTS.md` file
+- **WHEN** its isolated child prompt is assembled
+- **THEN** the stripped Public operating core and available deployment playbook remain present
+- **AND** project-local instructions remain absent
 
 #### Scenario: Routed subagent inherits launch audience
 

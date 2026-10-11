@@ -9,6 +9,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.SubAgents;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
@@ -22,7 +23,7 @@ namespace Netclaw.Actors.Sessions;
 /// event via the <c>Apply</c> methods. Transient concerns (subscribers, message
 /// buffer, behavior) remain on the actor.
 /// </summary>
-public sealed record SessionState
+public sealed partial record SessionState
 {
     public sealed record AdoptedContextAuditRecord(
         string AuthorizedMessageId,
@@ -58,6 +59,8 @@ public sealed record SessionState
     public bool LoopReceiptFailure { get; init; }
     public TurnContextRecord? AdoptedTaskContext { get; init; }
     public IReadOnlyList<InputId> AdoptedTaskInputIds { get; init; } = [];
+
+    public ImmutableDictionary<Netclaw.Tools.SubAgentRunId, BackgroundChildRun> ChildRuns { get; init; } = [];
 
     public int TurnCount { get; init; }
 
@@ -106,12 +109,39 @@ public sealed record SessionState
 
     // ── Event application (pure functions) ──
 
+    public SessionState Apply(ChildRunAccepted evt)
+    {
+        var run = evt.Run;
+        run.Validate();
+        if (run.State != BackgroundChildState.Accepted || run.ChildCheckpoint is not null || run.DeliveryInputId is not null)
+            throw new InvalidDataException("A child acceptance contains facts from a later lifecycle stage.");
+        if (evt.SessionId != run.StartKey.SessionId || AdoptedTaskContext is null
+            || !SameCanonicalContext(AdoptedTaskContext, run.OriginalContext)
+            || !AdoptedTaskInputIds.SequenceEqual(run.OriginInputIds)
+            || !BackgroundChildRun.SameCheckpoint(run.ParentCheckpoint, LoopCheckpoint)
+            || run.ParentReceiptFailure != LoopReceiptFailure)
+            throw new InvalidDataException("A child acceptance differs from the canonical parent task.");
+        if (ChildRuns.ContainsKey(run.RunId) || ChildRuns.Values.Any(existing => existing.StartKey == run.StartKey))
+            throw new InvalidDataException("A child acceptance repeats an already committed start identity.");
+        if (run.StartKey is ChildRunStartKey.Tool tool
+            && (run.StartBatchSettled || LoopAdmission is null
+                || !LoopAdmission.Calls.Any(call => call.CallId == tool.CallId.Value && call.ToolName == run.SourceOperation)))
+            throw new InvalidDataException("A child acceptance does not belong to its admitted parent tool call.");
+        return this with { ChildRuns = ChildRuns.Add(run.RunId, run) };
+    }
+
     public SessionState Apply(ToolTaskAdopted evt)
     {
         if (!TurnContext.TryFromRecord(evt.TurnContext, out var context, out var reason) || context is null)
             throw new InvalidDataException($"An adopted task has invalid authority: {reason}");
         if (evt.SessionId != context.SessionId)
             throw new InvalidDataException("An adopted task has a different session identity.");
+        if (evt.StartsChildContinuationWindow && evt.ContinuedChildRunId is null)
+            throw new InvalidDataException("Only a canonical child continuation can start a new recurrence window.");
+        if (evt.ContinuedChildRunId is not null)
+            return AdoptChildContinuation(evt);
+        if (PendingInputs.Take(evt.InputIds.Count).Any(static input => input.SourceChildRunId is not null))
+            throw new InvalidDataException("A child delivery requires its explicit continuation identity.");
         if (evt.ContinuedJobKey is not null && (evt.ContinuedJobKey != context.TurnId.Value
             || evt.TurnContext.SourceKind != BackgroundJobManagerActor.SourceKind))
             throw new InvalidDataException("A continued job key differs from its canonical authority context.");
@@ -277,7 +307,24 @@ public sealed record SessionState
             if (job.LineageVersion == 1 && job.Origin?.TurnId.Value == LoopCheckpoint.TaskId)
                 jobs = jobs.SetItem(key, job with { OriginCheckpoint = LoopCheckpoint, OriginReceiptFailure = LoopReceiptFailure });
         }
-        return this with { ActiveBackgroundJobs = jobs };
+        var runs = ChildRuns;
+        foreach (var (id, run) in runs)
+        {
+            if (run.ParentCheckpoint.TaskId != LoopCheckpoint.TaskId)
+                continue;
+            var settled = run.StartBatchSettled
+                          || run.StartKey is ChildRunStartKey.Tool tool
+                          && LoopAdmission is { } admission
+                          && admission.Calls.Any(call => call.CallId == tool.CallId.Value)
+                          && admission.Calls.All(call => LoopObservations.Any(observation => observation.CallId == call.CallId));
+            runs = runs.SetItem(id, run with
+            {
+                ParentCheckpoint = LoopCheckpoint,
+                ParentReceiptFailure = LoopReceiptFailure,
+                StartBatchSettled = settled
+            });
+        }
+        return this with { ActiveBackgroundJobs = jobs, ChildRuns = runs };
     }
 
     internal static bool SameCanonicalContext(TurnContextRecord left, TurnContextRecord right)
@@ -316,6 +363,13 @@ public sealed record SessionState
     }
 
     public SessionState Apply(InputAdmitted evt)
+    {
+        if (evt.SourceChildRunId is not null)
+            throw new InvalidDataException("A child input requires atomic delivery admission.");
+        return AdmitInputCore(evt);
+    }
+
+    private SessionState AdmitInputCore(InputAdmitted evt)
     {
         var sourceKey = SourceMessageKey(evt);
         var keys = sourceKey is null || RecentSourceMessageKeys.Contains(sourceKey)
@@ -687,6 +741,7 @@ public sealed record SessionState
             LoopCheckpoint = LoopCheckpoint, LoopAdmission = LoopAdmission,
             LoopObservations = LoopObservations.ToArray(), LoopReceiptFailure = LoopReceiptFailure,
             AdoptedTaskContext = AdoptedTaskContext, AdoptedTaskInputIds = AdoptedTaskInputIds,
+            ChildRuns = ChildRuns.Values.OrderBy(static run => run.AcceptedAtMs).ThenBy(static run => run.RunId.Value, StringComparer.Ordinal).ToArray(),
             ProcessedBackgroundJobIds = ProcessedBackgroundJobIds.ToArray(),
             PendingInputs = PendingInputs.ToArray(),
             RecentSourceMessageKeys = RecentSourceMessageKeys.ToArray(),
@@ -721,6 +776,10 @@ public sealed record SessionState
 
     public static SessionState FromSnapshot(SessionSnapshot snapshot)
     {
+        foreach (var run in snapshot.ChildRuns)
+            run.Validate();
+        if (snapshot.ChildRuns.Select(static run => run.StartKey).Distinct().Count() != snapshot.ChildRuns.Count)
+            throw new InvalidDataException("A child snapshot repeats an accepted start identity.");
         var activeJobs = snapshot.ActiveBackgroundJobs.Count > 0
             ? snapshot.ActiveBackgroundJobs.ToImmutableDictionary(
                 j => $"{Jobs.BackgroundJobManagerActor.JobDeliveryKeyPrefix}{j.JobId}", j => j)
@@ -747,7 +806,11 @@ public sealed record SessionState
                             message.AuthorityAtInclusion))]))
             : [];
 
-        return new SessionState
+        var terminalSequences = snapshot.ChildRuns.Where(static run => run.TerminalSequenceNr is not null)
+            .Select(static run => run.TerminalSequenceNr!.Value).ToArray();
+        if (terminalSequences.Distinct().Count() != terminalSequences.Length)
+            throw new InvalidDataException("A child snapshot repeats a terminal journal sequence.");
+        var state = new SessionState
         {
             History = ImmutableList.CreateRange(snapshot.History),
             LoopCheckpoint = snapshot.LoopCheckpoint ?? new ToolLoopCheckpoint(),
@@ -755,6 +818,7 @@ public sealed record SessionState
             LoopObservations = ImmutableList.CreateRange(snapshot.LoopObservations),
             LoopReceiptFailure = snapshot.LoopReceiptFailure,
             AdoptedTaskContext = snapshot.AdoptedTaskContext, AdoptedTaskInputIds = snapshot.AdoptedTaskInputIds,
+            ChildRuns = snapshot.ChildRuns.ToImmutableDictionary(static run => run.RunId),
             ProcessedBackgroundJobIds = ImmutableHashSet.CreateRange(snapshot.ProcessedBackgroundJobIds),
             PendingInputs = ImmutableList.CreateRange(snapshot.PendingInputs),
             RecentSourceMessageKeys = ImmutableList.CreateRange(snapshot.RecentSourceMessageKeys),
@@ -764,5 +828,12 @@ public sealed record SessionState
             ActiveBackgroundJobs = activeJobs,
             AdoptedContextRecords = adoptedContextRecords
         };
+        foreach (var input in state.PendingInputs.Where(static input => input.SourceChildRunId is not null))
+            _ = state.GetChildContinuation(input);
+        if (state.PendingInputs.Where(static input => input.SourceChildRunId is not null)
+            .Select(static input => input.InputId).Distinct().Count()
+            != state.PendingInputs.Count(static input => input.SourceChildRunId is not null))
+            throw new InvalidDataException("A child snapshot repeats a pending delivery input.");
+        return state;
     }
 }

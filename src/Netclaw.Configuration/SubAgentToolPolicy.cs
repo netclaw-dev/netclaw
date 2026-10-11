@@ -16,6 +16,7 @@ public static class SubAgentToolPolicy
     private static readonly HashSet<string> DeniedSubAgentToolNames = new(StringComparer.Ordinal)
     {
         "spawn_agent",
+        "check_agent_run",
         ToolAudienceProfileToolCatalog.AttachFile
     };
 

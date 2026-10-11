@@ -161,9 +161,9 @@ jobs:
       matrix:
         include:
           - group: shell-analysis
-            gates: shell-command-analysis tool-authorizer-order mcp-artifact-admission tool-task-adoption
+            gates: shell-command-analysis tool-authorizer-order mcp-artifact-admission
           - group: shell-assignment-and-paths
-            gates: shell-assignment shell-config-read path-access
+            gates: shell-assignment shell-config-read path-access tool-task-adoption
           - group: verb-chain-and-reminder
             gates: exact-verb-chain reminder-execution literal-twin
           - group: approval-and-authorization
@@ -315,6 +315,7 @@ jobs:
           bash -n evals/run-background-evals.sh
           bash -n evals/cycle_evals.sh
           python3 -m unittest discover -s evals -p test_background_evals.py -v
+          python3 -m unittest discover -s evals -p test_child_run_evals.py -v
           python3 -m unittest discover -s evals -p test_cycle_evals.py -v
           python3 -m unittest discover -s evals -p test_cli_detector_evals.py -v
           python3 -m unittest discover -s evals -p test_spill_steer_evals.py -v

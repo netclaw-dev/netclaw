@@ -44,6 +44,8 @@ public sealed class ToolIndexUpdaterTests
 
         await updater.StartAsync(TestContext.Current.CancellationToken);
 
+        Assert.Contains(registry.GetAllTools(), tool => tool.Name == CheckAgentRunTool.ToolName);
+        Assert.False(registry.IsCoreTool(CheckAgentRunTool.ToolName));
         var discovery = subAgentLayer.GetContextLayer(TrustAudience.Personal);
         Assert.False(string.IsNullOrWhiteSpace(discovery));
         Assert.Contains("available-subagents", discovery, StringComparison.OrdinalIgnoreCase);
@@ -104,5 +106,6 @@ public sealed class ToolIndexUpdaterTests
         Assert.Contains("file_read:", publicIndex);
         Assert.DoesNotContain("set_reminder", publicIndex);
         Assert.DoesNotContain("memorizer", publicIndex);
+        Assert.DoesNotContain(CheckAgentRunTool.ToolName, publicIndex);
     }
 }

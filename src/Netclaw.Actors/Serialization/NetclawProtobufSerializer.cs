@@ -28,6 +28,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string SerializableToolCallManifest = "stc-v1";
     private const string TurnRecordedManifest = "tr-v1";
     private const string InputAdmittedManifest = "ia-v1";
+    private const string ChildRunAcceptedManifest = "cra-v1";
+    private const string ChildRunEventManifest = "cre-v1";
     private const string InputClosedManifest = "ic-v1";
     private const string ToolTaskAdoptedManifest = "tta-v1";
     private const string SessionTitleSetManifest = "sts-v1";
@@ -59,6 +61,14 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(SerializableToolCall)] = SerializableToolCallManifest,
         [typeof(TurnRecorded)] = TurnRecordedManifest,
         [typeof(InputAdmitted)] = InputAdmittedManifest,
+        [typeof(ChildRunAccepted)] = ChildRunAcceptedManifest,
+        [typeof(ChildRunEvent.Started)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.Checkpointed)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.CancellationRequested)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.DispatchClosed)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.TerminalRecorded)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.ResultPrepared)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.DeliveryAdmitted)] = ChildRunEventManifest,
         [typeof(InputClosed)] = InputClosedManifest,
         [typeof(ToolTaskAdopted)] = ToolTaskAdoptedManifest,
         [typeof(SessionTitleSet)] = SessionTitleSetManifest,
@@ -120,6 +130,10 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.TurnRecordedProto.Parser.ParseFrom(bytes)),
             InputAdmittedManifest => NetclawProtoMapper.FromProto(
                 Proto.InputAdmittedProto.Parser.ParseFrom(bytes)),
+            ChildRunEventManifest => NetclawProtoMapper.FromProto(
+                Proto.ChildRunEventProto.Parser.ParseFrom(bytes)),
+            ChildRunAcceptedManifest => NetclawProtoMapper.FromProto(
+                Proto.ChildRunAcceptedProto.Parser.ParseFrom(bytes)),
             ToolTaskAdoptedManifest => NetclawProtoMapper.FromProto(
                 Proto.ToolTaskAdoptedProto.Parser.ParseFrom(bytes)),
             InputClosedManifest => NetclawProtoMapper.FromProto(

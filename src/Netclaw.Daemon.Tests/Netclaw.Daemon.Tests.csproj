@@ -41,6 +41,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="Gateway/Fixtures/LegacyPersistence/legacy-storage-binding-v0.json" Link="LegacyPersistence/legacy-storage-binding-v0.json" CopyToOutputDirectory="PreserveNewest" />
     <!-- Shared tiny fixture ONNX model (no network downloads in tests) — same physical files
          Netclaw.Embeddings.Tests uses, linked here for EmbeddingWarmupHostedServiceTests. -->
     <None Include="../Netclaw.Embeddings.Tests/Fixtures/*.onnx" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />

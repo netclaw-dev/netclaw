@@ -32,7 +32,19 @@
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request, merge group, and `dev` push.
 The job has four Linux matrix groups that run in parallel with the normal test matrix.
 The baseline run at `2e6bc4f01` took 12m24s, 12m29s, 18m56s, and 20m14s across the four groups.
-The new task-adoption gate uses the lightest group, `shell-analysis`. The job timeout remains 25 minutes.
+The task-adoption gate uses `shell-assignment-and-paths`. The job timeout remains 25 minutes.
+The prior `shell-analysis` job reached its deadline at `fa6aad73` after 342 reported mutants were killed.
+The final child-control target produced no report.
+The same mutation inputs passed the earlier `832ebff8` job in 20m25s.
+
+The destination group took 13m13s to 16m49s across four retained hosted runs.
+It took 14m53s in the `fa6aad73` run. The complete gate moves without target or test changes.
+The [combined `153d9223` hosted run](https://github.com/netclaw-dev/netclaw/actions/runs/38045919693) verifies the new distribution.
+Its four groups pass in 16m51s, 23m14s, 15m11s, and 21m01s.
+Each group stays below the 25-minute limit. All six expected task-adoption and child-authority targets have `Killed` status.
+The `8aba7cb1` assignment group passes in 24m52s, with eight seconds of margin.
+See [the cancelled job](https://github.com/netclaw-dev/netclaw/actions/runs/38020934971/job/114121548608)
+and [the prior successful job](https://github.com/netclaw-dev/netclaw/actions/runs/38014833252/job/114102687127).
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
 To add a gate, add its script name (`scripts/run-<name>-mutations.sh`) to the lightest group. Do not add a new job.
 
@@ -43,21 +55,31 @@ coverage. They do not replace positive and negative behavior tests.
 ### Task Adoption Gate
 
 Run `./scripts/run-tool-task-adoption-mutations.sh` from the repository root.
-The gate uses the existing xUnit 2 harness and selects 13 tests through a temporary Stryker JSON configuration.
+The gate uses the existing xUnit 2 harness and selects 14 tests through a temporary Stryker JSON configuration.
+It runs the five prior targets with their 13 existing controls.
+It runs the child-authority target separately with its one owner test.
+An unrelated broken parent-input guard can prevent that owner test from starting a child.
+Separate filters keep each mutation with the tests that reject it.
 The script deletes that configuration on exit.
 
-The gate targets five exact mutations:
+The gate targets six exact mutations:
 
 - Replace full task-authority equality.
 - Remove the ordered-prefix rejection.
 - Replace `Take` with `Skip` in the ordered prefix.
 - Replace actual-outcome equality in the recurrence tracker.
 - Change stale-callback rejection to acceptance.
+- Remove the original-requester rejection for a child control call.
 
 The callback target changes the final `false` result in `OwnsToolExecution` to `true`.
 Its exact mutator name is `Boolean mutation`.
 The mailbox test replays a captured prior result during a new dispatch with the same provider call ID.
 The test verifies the current authority attempt, result pair, cancellation token, and confirmed disk effects.
+
+The child control target removes the `!` from `TurnContext.HasSameAuthority(original, current)`.
+Its exact mutator name is `LogicalNotExpression to un-LogicalNotExpression mutation`.
+The test uses a real owner with a held child and the actual status tool.
+It checks original-owner access, opaque foreign denial, canonical log paths, and normal file-policy rejection.
 
 Every expected mutant must exist and have the `Killed` status.
 The gate rejects expected compile errors, timeouts, survivors, and absent mutants.
@@ -65,9 +87,16 @@ It also rejects extra executable mutants.
 Stryker can emit a non-target `Count`-to-`Sum` mutation that cannot compile for the typed input list.
 The exact-name check excludes that invalid mutation; it does not exclude an expected target error.
 
-The current independent run killed all five targets in 187.564 seconds.
+The earlier independent run killed all five prior targets in 187.564 seconds.
 The prior four-target run took 3m05s.
-CI runs this gate in `shell-analysis` and uploads `artifacts/stryker/tool-task-adoption` with the group reports.
+The first combined six-target run took 232.52 seconds and failed.
+Four targets were killed. The two ordered-prefix targets timed out.
+The gate correctly rejected those timeouts.
+The separate-filter run killed all six targets in 339.85 seconds.
+Its reports contain no tested timeout or survivor.
+The separate build adds 152.286 seconds over the earlier five-target run.
+CI runs this gate in `shell-assignment-and-paths` and uploads `artifacts/stryker/tool-task-adoption` with the group reports.
+The `adoption` and `child-control` directories each retain their own mutation report.
 The local duration does not establish the combined CI duration.
 
 ### Current Targets
@@ -76,6 +105,7 @@ The local duration does not establish the combined CI duration.
 |--------|-----------------|------------------|---------|
 | `SessionState` task adoption and `TurnStateTracker` actual outcomes | Full authority context and the ordered input prefix control adoption; changed actual outcomes do not trigger exact recurrence | 4 killed | `./scripts/run-tool-task-adoption-mutations.sh` |
 | `LlmSessionActor.OwnsToolExecution` | A captured prior reply cannot affect the current dispatch, even when the provider call ID repeats | 1 killed | `./scripts/run-tool-task-adoption-mutations.sh` |
+| `LlmSessionActor.ChildRuns` original-requester check | Child controls retain the original authority; foreign callers receive no state or paths | 1 killed | `./scripts/run-tool-task-adoption-mutations.sh` |
 | `PathAccessPolicy.AddSessionRoots` and `PathAccessPolicy.IsReadableByAudience` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected | 4 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |

@@ -107,6 +107,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly ManagedTemporaryCorrectionState _managedTemporaryCorrections = new();
     private long _llmCallId;
     private IActorRef _replyTo = ActorRefs.Nobody;
+    private SubAgentRunId? _backgroundRunId;
     private CancellationTokenSource? _executionCts;
 
     // Threaded into approval-bridge waits so a slow human approver does not
@@ -325,11 +326,17 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     /// </summary>
     protected override void PostStop()
     {
-        _executionCts?.Cancel();
-        _externalCts?.Cancel();
+        _backgroundDispatch?.Close();
+        if (_executionCts is { } execution)
+            _ = ChildRunDispatch.CancelAndDisposeAsync(execution, _log);
+        if (_externalCts is { } external)
+            _ = ChildRunDispatch.CancelAndDisposeAsync(external, _log);
+        _executionCts = null;
+        _externalCts = null;
         if (!_completed)
         {
             _completed = true;
+            _pendingCheckpoint = null;
             _replyTo.Tell(new SubAgentResult
             {
                 Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.ActorStopped),
@@ -339,8 +346,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 FindingsCount = 0
             });
         }
-        _executionCts?.Dispose();
-        _externalCts?.Dispose();
         _externalCancellationRegistration.Dispose();
         _toolExposure.EvictAll();
         _loadedDeferredToolNames.Clear();
@@ -349,87 +354,101 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void Idle()
     {
-        Receive<RunSubAgent>(msg =>
+        Receive<RunSubAgent>(msg => BeginRun(msg, Sender));
+        Receive<RunBackgroundSubAgent>(msg =>
         {
-            _replyTo = Sender;
-
-            _approvalBridge = msg.Scope.Authority.InteractiveApproval is InteractiveApprovalCapability.Available available
-                ? available.Bridge
-                : null;
-            var scopeId = msg.Scope.ScopeId.Value;
-            var subAgentAudience = msg.Scope.Authority.Audience;
-            _toolExecutionContext = new ToolExecutionContext(
-                msg.Scope.Authority,
-                ToolExecutionTimeout.Default);
-            _fileActivity = new ChildFileActivityTracker(msg.Scope.InitialWorkingSnapshot.WorkingContext);
-            var coreTools = ResolveCoreAiTools();
-            _toolExposure.SeedBaseTools(coreTools);
-            _aiTools = _toolExposure.AvailableTools;
-            _coreToolCount = coreTools.Count;
-            _executionCts = new CancellationTokenSource();
-            _externalCts = new CancellationTokenSource();
-            var self = Self; // Capture before callback — Self requires active actor context
-            _externalCancellationRegistration = msg.Cancellation.Register(() => self.Tell(SubAgentCancelled.Instance));
-
-            // Enrich the logger so every sub-agent log line correlates back to the
-            // parent session (SessionId) and to this specific sub-agent run
-            // (SubSessionId), and is plainly attributable to the sub-agent. scopeId is
-            // "{parentSessionId}/subagent/{name}/{runId}"; NormalizeSessionId strips the
-            // "/subagent/..." suffix to recover the parent. SessionId matches the key the
-            // session/channel actors already tag their loggers with, so sub-agent and
-            // parent logs share one filterable attribute (so OTEL groups them under the parent);
-            // SubSessionId isolates a single run and is what the file-logger partitions on, so the
-            // sub-agent's lines land in its OWN session.log rather than the parent's.
-            var parentSessionId = SubAgentSessionScope.NormalizeSessionId(scopeId);
-            _parentSessionId = parentSessionId;
-            _subSessionId = scopeId;
-            var enrichedLog = Context.GetLogger();
-            if (!string.IsNullOrWhiteSpace(parentSessionId))
-                enrichedLog = enrichedLog.WithContext(NetclawLogProperties.SessionId, parentSessionId);
-            if (!string.IsNullOrWhiteSpace(scopeId))
-                enrichedLog = enrichedLog.WithContext(NetclawLogProperties.SubSessionId, scopeId);
-            _log = enrichedLog;
-
-            // The run is bounded by a two-phase inactivity watchdog re-armed on
-            // every progress event (LLM response, tool batch, streaming delta,
-            // keepalive) plus a keepalive-immune no-progress deadline. A sub-agent
-            // making real progress is never killed; a stalled one (no bytes) or a
-            // wedged one (keepalives but no tokens) is. FireLlmCall arms both. An
-            // unset prefill defaults to the session budget rather than collapsing
-            // to the inter-delta budget; an unset no-progress deadline is
-            // unbounded (only direct/test callers leave it unset).
-            _activitySink = msg.ActivitySink;
-            _interDeltaBudget = msg.Timeout;
-            _prefillBudget = msg.PrefillTimeout > TimeSpan.Zero ? msg.PrefillTimeout : DefaultPrefillBudget;
-            _noProgressBudget = msg.NoProgressTimeout > TimeSpan.Zero ? msg.NoProgressTimeout : null;
-
-            // Build initial conversation: system prompt (from file, verbatim) + task as user message.
-            // If the caller supplied runtime context, prefix it onto the user message so the
-            // system prompt stays reproducible across invocations.
-            _history.Add(new AiChatMessage(
-                Microsoft.Extensions.AI.ChatRole.System,
-                BuildSystemPrompt(
-                    _definition,
-                    _projectInstructions,
-                    CanDeclareProjectScope())));
-            _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User,
-                BuildUserMessage(
-                    msg.RuntimeContext,
-                    BuildModelContext(
-                        msg.Scope.InitialWorkingSnapshot,
-                        subAgentAudience,
-                        ToolExecutionContext.SessionStorage),
-                    msg.Task)));
-
-            _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, prefill={Prefill}, interDelta={InterDelta}, noProgress={NoProgress})",
-                _definition.Name, _aiTools.Count, _prefillBudget, _interDeltaBudget,
-                _noProgressBudget?.ToString() ?? "unbounded");
-            LogToolExposure();
-
-            FireLlmCall();
-            Become(Processing);
+            if (!Sender.Equals(Context.Parent))
+            {
+                Sender.Tell(new Status.Failure(new InvalidOperationException("Only the session owner can start its background child.")));
+                return;
+            }
+            _backgroundRunId = msg.RunId;
+            _backgroundDispatch = msg.Dispatch;
+            BeginRun(msg.Execution, Sender);
         });
     }
+
+    private void BeginRun(RunSubAgent msg, IActorRef replyTo)
+    {
+        _replyTo = replyTo;
+
+        _approvalBridge = msg.Scope.Authority.InteractiveApproval is InteractiveApprovalCapability.Available available
+            ? available.Bridge
+            : null;
+        var scopeId = msg.Scope.ScopeId.Value;
+        var subAgentAudience = msg.Scope.Authority.Audience;
+        _toolExecutionContext = new ToolExecutionContext(
+            msg.Scope.Authority,
+            ToolExecutionTimeout.Default);
+        _fileActivity = new ChildFileActivityTracker(msg.Scope.InitialWorkingSnapshot.WorkingContext);
+        var coreTools = ResolveCoreAiTools();
+        _toolExposure.SeedBaseTools(coreTools);
+        _aiTools = _toolExposure.AvailableTools;
+        _coreToolCount = coreTools.Count;
+        _executionCts = new CancellationTokenSource();
+        _externalCts = new CancellationTokenSource();
+        var self = Self; // Capture before callback — Self requires active actor context
+        _externalCancellationRegistration = msg.Cancellation.Register(() => self.Tell(SubAgentCancelled.Instance));
+
+        // Enrich the logger so every sub-agent log line correlates back to the
+        // parent session (SessionId) and to this specific sub-agent run
+        // (SubSessionId), and is plainly attributable to the sub-agent. scopeId is
+        // "{parentSessionId}/subagent/{name}/{runId}"; NormalizeSessionId strips the
+        // "/subagent/..." suffix to recover the parent. SessionId matches the key the
+        // session/channel actors already tag their loggers with, so sub-agent and
+        // parent logs share one filterable attribute (so OTEL groups them under the parent);
+        // SubSessionId isolates a single run and is what the file-logger partitions on, so the
+        // sub-agent's lines land in its OWN session.log rather than the parent's.
+        var parentSessionId = SubAgentSessionScope.NormalizeSessionId(scopeId);
+        _parentSessionId = parentSessionId;
+        _subSessionId = scopeId;
+        var enrichedLog = Context.GetLogger();
+        if (!string.IsNullOrWhiteSpace(parentSessionId))
+            enrichedLog = enrichedLog.WithContext(NetclawLogProperties.SessionId, parentSessionId);
+        if (!string.IsNullOrWhiteSpace(scopeId))
+            enrichedLog = enrichedLog.WithContext(NetclawLogProperties.SubSessionId, scopeId);
+        _log = enrichedLog;
+
+        // The run is bounded by a two-phase inactivity watchdog re-armed on
+        // every progress event (LLM response, tool batch, streaming delta,
+        // keepalive) plus a keepalive-immune no-progress deadline. A sub-agent
+        // making real progress is never killed; a stalled one (no bytes) or a
+        // wedged one (keepalives but no tokens) is. FireLlmCall arms both. An
+        // unset prefill defaults to the session budget rather than collapsing
+        // to the inter-delta budget; an unset no-progress deadline is
+        // unbounded (only direct/test callers leave it unset).
+        _activitySink = msg.ActivitySink;
+        _interDeltaBudget = msg.Timeout;
+        _prefillBudget = msg.PrefillTimeout > TimeSpan.Zero ? msg.PrefillTimeout : DefaultPrefillBudget;
+        _noProgressBudget = msg.NoProgressTimeout > TimeSpan.Zero ? msg.NoProgressTimeout : null;
+
+        // Build initial conversation: system prompt (from file, verbatim) + task as user message.
+        // If the caller supplied runtime context, prefix it onto the user message so the
+        // system prompt stays reproducible across invocations.
+        _history.Add(new AiChatMessage(
+            Microsoft.Extensions.AI.ChatRole.System,
+            BuildSystemPrompt(
+                _definition,
+                _projectInstructions,
+                CanDeclareProjectScope())));
+        _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User,
+            BuildUserMessage(
+                msg.RuntimeContext,
+                BuildModelContext(
+                    msg.Scope.InitialWorkingSnapshot,
+                    subAgentAudience,
+                    ToolExecutionContext.SessionStorage),
+                msg.Task)));
+
+        _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, prefill={Prefill}, interDelta={InterDelta}, noProgress={NoProgress})",
+            _definition.Name, _aiTools.Count, _prefillBudget, _interDeltaBudget,
+            _noProgressBudget?.ToString() ?? "unbounded");
+        LogToolExposure();
+
+        FireLlmCall();
+        Become(Processing);
+    }
+
 
     private void Processing()
     {
@@ -541,6 +560,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 null);
         });
 
+        Receive<BackgroundChildCheckpointAck>(ack =>
+        {
+            if (ack.RunId != _backgroundRunId || !Sender.Equals(_replyTo)
+                || _pendingCheckpoint is not { } pending || pending.Round != ack.CompletedRound)
+                return;
+            _pendingCheckpoint = null;
+            pending.Continue();
+        });
+
         Receive<ToolExecutionCompleted>(msg =>
         {
             _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
@@ -601,17 +629,29 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
             AddModelInputMediaNudge(msg.ModelInputMediaReferences);
 
-            if (missingReceipt)
-            {
-                Complete(true, ToolCycleMessages.MissingReceipt, SubAgentRunOutcome.Partial,
-                    new SubAgentOutcomeReason("tool_receipt_missing"));
-                return;
-            }
-
             _turnState.RecordToolCompletion(msg.ToolResults.Count);
-            _log.Debug("SubAgent [{AgentName}] tool iteration {Count}, continuing",
-                _definition.Name, _turnState.ToolIterationCount);
-            FireLlmCall();
+            void ContinueRound()
+            {
+                if (missingReceipt)
+                    Complete(true, ToolCycleMessages.MissingReceipt, SubAgentRunOutcome.Partial,
+                        new SubAgentOutcomeReason("tool_receipt_missing"));
+                else
+                    FireLlmCall();
+            }
+            if (_backgroundRunId is { } runId)
+            {
+                var summary = string.Join("\n\n", _history.Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.Tool)
+                    .SelectMany(message => message.Contents.OfType<FunctionResultContent>())
+                    .Select(result => result.Result?.ToString() ?? string.Empty));
+                var bound = ToolExecutionContext.MaxInlineToolResultChars;
+                if (summary.Length > bound)
+                    summary = summary[^bound..];
+                var checkpoint = new ChildRunCheckpoint(_turnState.ToolIterationCount, summary, _fileActivity.BuildResult());
+                _pendingCheckpoint = (checkpoint.CompletedRound, ContinueRound);
+                _replyTo.Tell(new BackgroundChildCheckpoint(runId, checkpoint), Self);
+            }
+            else
+                ContinueRound();
         });
 
         Receive<ToolExecutionFailed>(msg =>
@@ -632,8 +672,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         Receive<SubAgentCancelled>(_ =>
         {
-            _executionCts?.Cancel();
-            _externalCts?.Cancel();
             _log.Warning("SubAgent [{AgentName}] cancelled by parent", _definition.Name);
             Complete(false, "Subagent cancelled by parent", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.CancelledByParent);
         });
@@ -655,7 +693,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 // LLM stream and is never refreshed by keepalives, so reaching it
                 // means a genuine wedge.
                 var noProgress = _noProgressBudget?.TotalSeconds ?? 0;
-                _executionCts?.Cancel();
                 _watchdog.Stop(Timers);
                 _log.Warning(
                     "SubAgent [{AgentName}] timed out: no substantive output for {Budget:F0}s after {Iterations} tool iterations",
@@ -686,7 +723,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // Report the budget that was actually in force: the prefill budget
             // while still waiting for the first token, else the inter-delta budget.
             var activeBudget = _anyContentStreamed ? _interDeltaBudget : _prefillBudget;
-            _executionCts?.Cancel();
             _watchdog.Stop(Timers);
             _log.Warning(
                 "SubAgent [{AgentName}] timed out: no activity for {Budget}s ({Phase}) after {Iterations} tool iterations",
@@ -859,7 +895,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _definition.Name,
             _parentSessionId,
             _subSessionId,
-            refusedCalls);
+            refusedCalls,
+            _backgroundDispatch);
     }
 
     private void EmitToolCycleCorrection(IReadOnlyList<FunctionCallContent> toolCalls)
@@ -930,7 +967,21 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             messages.Count,
             options?.Tools?.Count > 0,
             forceNoTools);
-        _ = InvokeLlmAsync(client, messages, options, self, callId, _executionCts?.Token ?? CancellationToken.None);
+        if (_backgroundDispatch is null)
+            _ = InvokeLlmAsync(client, messages, options, self, callId, _executionCts?.Token ?? CancellationToken.None);
+        else
+        {
+            try
+            {
+                _ = _backgroundDispatch.Enter(() => InvokeLlmAsync(client, messages, options, self, callId,
+                    _executionCts?.Token ?? CancellationToken.None));
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation finalization owns the terminal result after admission closes.
+                _log.Debug("Child provider dispatch refused after local closure.");
+            }
+        }
     }
 
     private IReadOnlyList<AITool> ResolveCoreAiTools()
@@ -985,6 +1036,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             SetWorkingDirectoryTool.ToolName,
             StringComparison.Ordinal));
 
+    private ChildRunDispatch? _backgroundDispatch;
+    private (int Round, Action Continue)? _pendingCheckpoint;
+
     private bool _completed;
 
     private void Complete(
@@ -1000,16 +1054,18 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         // caller wins; subsequent calls are no-ops.
         if (_completed) return;
         _completed = true;
+        _backgroundDispatch?.Close();
+        _pendingCheckpoint = null;
         _managedTemporaryCorrections.Clear();
 
         _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
         _pendingApprovalWaits = 0;
-        _executionCts?.Cancel();
-        _externalCts?.Cancel();
+        if (_executionCts is { } execution)
+            _ = ChildRunDispatch.CancelAndDisposeAsync(execution, _log);
+        if (_externalCts is { } external)
+            _ = ChildRunDispatch.CancelAndDisposeAsync(external, _log);
         _watchdog.Stop(Timers);
         _externalCancellationRegistration.Dispose();
-        _executionCts?.Dispose();
-        _externalCts?.Dispose();
         _executionCts = null;
         _externalCts = null;
         _pendingApprovalWaits = 0;
@@ -1037,15 +1093,26 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             : [];
 
         var workingContextResult = BuildWorkingContextResult(success);
-        _replyTo.Tell(new SubAgentResult
+        var result = new SubAgentResult
         {
             Completion = ChildRunCompletion.FromReportedOutcome(resolvedOutcome, outcomeReason, workingContextResult),
             Output = output,
             AgentName = _definition.Name,
             Findings = findings,
             FindingsCount = findings.Count,
-        });
-
+        };
+        if (_backgroundRunId is { } runId)
+        {
+            result = result with { RunId = runId, ScopeId = new SubAgentScopeId(_subSessionId ?? throw new InvalidOperationException("A background child has no assigned scope.")) };
+            _replyTo.Tell(new BackgroundChildTerminal(runId, result), Self);
+            Become(() => Receive<BackgroundChildTerminalAck>(ack =>
+            {
+                if (ack.RunId == runId && Sender.Equals(_replyTo))
+                    Context.Stop(Self);
+            }));
+            return;
+        }
+        _replyTo.Tell(result);
         Context.Stop(Self);
     }
 
@@ -1431,7 +1498,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         AgentName agentName,
         string? parentSessionId,
         string? subSessionId,
-        IReadOnlyList<FunctionCallContent> refusedCalls)
+        IReadOnlyList<FunctionCallContent> refusedCalls,
+        ChildRunDispatch? dispatch)
     {
         try
         {
@@ -1481,7 +1549,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
                 try
                 {
-                    var result = await executor.ExecuteAsync(tc, toolContext, ct);
+                    var result = await (dispatch is null
+                        ? executor.ExecuteAsync(tc, toolContext, ct)
+                        : dispatch.Enter(() => executor.ExecuteAsync(tc, toolContext, ct)));
                     return BuildToolResult(
                         cleanedTc,
                         result,
@@ -1567,7 +1637,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         retryContext.Approval.RestoreAuthorizationAttemptId(
                             toolContext.Approval.AuthorizationAttemptId);
                         retryContext.Approval.SeedOneTimeConsent(retryConsent);
-                        var result = await executor.ExecuteAsync(tc, retryContext, ct);
+                        var result = await (dispatch is null
+                            ? executor.ExecuteAsync(tc, retryContext, ct)
+                            : dispatch.Enter(() => executor.ExecuteAsync(tc, retryContext, ct)));
                         return BuildToolResult(
                             cleanedTc,
                             ConsentAnswerCodec.AppendResultNote(result, step.Answer),

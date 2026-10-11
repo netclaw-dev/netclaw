@@ -192,10 +192,16 @@ A final actual result without its mandatory receipt SHALL cause an explicit runt
 The system SHALL preserve known results and prior evidence, complete required call-result pairs, and settle partial/failure without another model request.
 In-flight calls, approval waits, and external cancellation SHALL retain their separate lifecycle contracts.
 Fresh authorized user input or a fresh scheduled task SHALL reset prior task evidence.
-Overflow replay, automatic restart continuation, result delivery, and approval retries SHALL NOT perform that reset.
+Overflow replay, automatic restart continuation, result admission, and approval retries SHALL NOT perform that reset.
+The first durable consumption of a canonical child result SHALL start a fresh recurrence window within its original detector task.
+The owner SHALL retain task identity, original authority, and sticky receipt failure.
+It SHALL clear exact entries, adjacent history, cold keys, and the last blocked action, then refresh same-task ledger copies.
+Acceptance, status, terminal preparation, admission, recovery, and duplicate adoption SHALL NOT grant this exception.
+Shell-job result continuation and legacy child adoption events SHALL retain their prior checkpoint restoration semantics.
 
 The recent cold-key horizon SHALL contain at most 256 keys with one observation.
-The system SHALL pin established suspicion until an actual changed outcome or a fresh authorized task invalidates it.
+The system SHALL retain pinned suspicion outside the canonical child-window exception.
+A changed actual outcome or a fresh authorized task SHALL invalidate that suspicion.
 It SHALL NOT evict pinned evidence through age, cold-key pressure, compaction, or a status query.
 It SHALL surface resource and persistence failures without silently discarding evidence.
 Usage count alone SHALL NOT terminate a useful task.

@@ -7,6 +7,7 @@ using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -15,6 +16,13 @@ namespace Netclaw.Actors.Sessions;
 
 public static partial class SessionProtocol
 {
+    public sealed record ChildRunAccepted : ISessionEvent
+    {
+        public SessionId SessionId { get; init; }
+        public required BackgroundChildRun Run { get; init; }
+        public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(Run.AcceptedAtMs);
+    }
+
     // ===== Events (persisted to the session journal) =====
 
     /// <summary>
@@ -62,6 +70,7 @@ public static partial class SessionProtocol
     /// </summary>
     public sealed record InputAdmitted : ISessionEvent
     {
+        public Netclaw.Tools.SubAgentRunId? SourceChildRunId { get; init; }
         public BackgroundJobId? SourceBackgroundJobId { get; init; }
         public int BackgroundJobLineageVersion { get; init; }
         public BackgroundJobOrigin? BackgroundJobOrigin { get; init; }
@@ -84,8 +93,9 @@ public static partial class SessionProtocol
     }
 
     /// <summary>Commits canonical task authority before the next model request.</summary>
-    public sealed record ToolTaskAdopted : ISessionEvent
+    public sealed record ToolTaskAdopted(bool StartsChildContinuationWindow) : ISessionEvent
     {
+        public Netclaw.Tools.SubAgentRunId? ContinuedChildRunId { get; init; }
         public string? ContinuedJobKey { get; init; }
         public SessionId SessionId { get; init; }
         public required TurnContextRecord TurnContext { get; init; }
@@ -193,6 +203,10 @@ public static partial class SessionProtocol
 
     public sealed record ToolApprovalRequested : ISessionEvent
     {
+        public SubAgentRunId? SourceChildRunId { get; init; }
+
+        public ToolCallId? OriginalChildCallId { get; init; }
+
         public SessionId SessionId { get; init; }
 
         public string CallId { get; init; } = string.Empty;
@@ -243,6 +257,8 @@ public static partial class SessionProtocol
 
     public sealed record ToolApprovalResolved : ISessionEvent
     {
+        public SubAgentRunId? SourceChildRunId { get; init; }
+
         public SessionId SessionId { get; init; }
 
         public string CallId { get; init; } = string.Empty;

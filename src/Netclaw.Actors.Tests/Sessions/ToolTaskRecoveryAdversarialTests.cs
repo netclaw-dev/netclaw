@@ -596,7 +596,7 @@ public sealed class ToolTaskRecoveryAdversarialTests(ITestOutputHelper output) :
         Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
         DefaultDeliveryTarget = new ChannelDeliveryTargetInfo("signalr", "destination", requester, requester)
     };
-    private static ToolTaskAdopted Adoption(InputAdmitted input, IReadOnlyList<InputId> ids) => new()
+    private static ToolTaskAdopted Adoption(InputAdmitted input, IReadOnlyList<InputId> ids) => new(false)
     { SessionId = input.SessionId, TurnContext = input.TurnContext, InputIds = ids };
     private static SendUserMessage Restart(SessionId session) => new()
     {

@@ -153,17 +153,8 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
             _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SkillLoadTool);
             _logger?.LogInformation("turn_skill_loaded skill={SkillName} method=skill_load", skill.Name);
 
-            var routedResult = await _subAgentSpawner.SpawnAsync(
-                profile,
-                args.Task,
-                args.Context,
-                context!,
-                ct,
-                systemPromptOverlay: routedBody);
-
-            return routedResult.Success
-                ? routedResult.Output
-                : $"Subagent '{profile.Name}' failed: {routedResult.Output}";
+            return await _subAgentSpawner.StartRunAsync(
+                profile, args.Task, args.Context, context, ct, systemPromptOverlay: routedBody);
         }
 
         string body;

@@ -83,12 +83,15 @@ Durable approval answers retain their canonical pending context and existing req
 A recovered durable approval can use the existing redrive path after the old source ends.
 That redrive preserves the original authority and authorization attempt and creates a new local dispatch source.
 
-Foreground child spawn requests carry the original parent token before child creation.
-The parent receives foreground child activity through a token-bound local mailbox envelope before public emission.
-Routed foreground skills use the same existing source for their spawn, activity, result, and failure callbacks.
-These checks change no public output format or transport protocol.
+Child start requests carry the original parent token until the owner commits acceptance.
+The accepted run then owns its lifetime and immutable original authority.
+The pipeline validates the returned start key, authority, and source operation against the stamped request.
+The slash adapter applies the same checks to its original activation.
+The spawner rejects malformed identifiers, digests, profiles, and state before it emits success.
+A duplicate returns the recorded run identity and its current state.
+The owner binds child results to the accepted run, actor identity, and live dispatch gate.
+The parent start call does not own later child approval prompts or terminal delivery.
 Shell background job deliveries retain their separate durable origin and input-admission contract.
-Future accepted background children need their separate run owner after parent foreground settlement.
 See [TA-1](../../openspec/specs/tool-authorization/spec.md#requirement-ta-1-trust-context-is-explicit-and-fails-loud).
 
 ## Background job result authority
@@ -721,7 +724,7 @@ Leaks today:
   `false`) need no consent.
 - Grant match for one shell candidate can run up to 5 times in one gate run.
 
-### 3.6 Consent delivery
+### 3.6 Approval prompt delivery
 
 | Item | Current state |
 | --- | --- |
@@ -729,8 +732,8 @@ Leaks today:
 | Classes | Approval part of [`LlmSessionActor`](../../src/Netclaw.Actors/Sessions/LlmSessionActor.cs), [`ToolApprovalState`](../../src/Netclaw.Actors/Sessions/ToolApprovalState.cs), [`IApprovalChannel`](../../src/Netclaw.Actors/Sessions/IApprovalChannel.cs), [`ParentSessionApprovalBridge`](../../src/Netclaw.Actors/Sessions/ParentSessionApprovalBridge.cs), [`IParentApprovalBridge`](../../src/Netclaw.Tools.Abstractions/IParentApprovalBridge.cs), the approval loop in [`SubAgentActor`](../../src/Netclaw.Actors/SubAgents/SubAgentActor.cs), [`ApprovalResponseFlow`](../../src/Netclaw.Channels/ApprovalResponseFlow.cs), [`PendingApprovalLookup`](../../src/Netclaw.Channels/PendingApprovalLookup.cs), [`ApprovalButtonValueCodec`](../../src/Netclaw.Actors/Protocol/ApprovalButtonValueCodec.cs), [`ApprovalOptionKeys`](../../src/Netclaw.Actors/Protocol/ApprovalOptionKeys.cs), the Slack, Discord, and Mattermost prompt builders |
 | Published contract | Output `ToolInteractionRequest` and input `ToolInteractionResponse` ([`SessionProtocol.Outputs.cs`](../../src/Netclaw.Actors/Sessions/SessionProtocol.Outputs.cs)). Journal events `ToolApprovalRequested` and `ToolApprovalResolved`. Option key strings such as `approve_once`. |
 | Must not know | Policy rules. It renders the options that Consent offers. |
-| Data | Durable session journal. Actor-local state for an unanswered request. A subagent request is live-only. |
-| Rules | [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-consent-prompts-offer-only-safe-options), [TA-11](../../openspec/specs/tool-authorization/spec.md#requirement-ta-11-an-unanswered-consent-request-survives-restart), [TA-12](../../openspec/specs/tool-authorization/spec.md#requirement-ta-12-subagent-consent-goes-through-the-parent-session) |
+| Data | Durable session journal for prompt lifecycle and original requester facts. A child execution waiter remains run-local. |
+| Rules | [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-consent-prompts-offer-only-safe-options), [TA-11](../../openspec/specs/tool-authorization/spec.md#requirement-ta-11-an-unanswered-consent-request-survives-restart), [TA-12](../../openspec/specs/tool-authorization/spec.md#requirement-ta-12-subagent-approval-prompts-go-through-the-parent-session) |
 
 Leaks today:
 
@@ -839,14 +842,46 @@ Facts behind the diagram (current code):
   through one prompt, `ParentSessionApprovalBridge`, which waits with the
   session's approval timeout. The daemon sets that timeout to infinite. The
   request waits until the operator answers, the run is cancelled, or a new user
-  message abandons the parked batch.
+  message abandons the parked parent batch. An ordinary parent message does not abandon a live child prompt.
 - A subagent request goes to the parent through `ParentSessionApprovalBridge`.
-  It is live-only. After a restart, Netclaw rejects the old prompt as expired.
+  Its lifecycle facts retain the original requester, exact call, authorization attempt, and accepted run.
+  `LlmSessionActor` stores its request and resolution in the durable `BackgroundChildRun.Approvals` ledger.
+  The ordinary parent-turn approval map does not own that child prompt.
+  Its execution waiter remains run-local. After restart, Netclaw rejects the old child prompt as expired.
   A subagent without a parent bridge cannot ask. Its whole run fails with
   `ToolExecutionFailed`; it does not return a per-tool denial.
+- Child cancellation or loss closes that run's prompt. A late answer creates no grant or retry.
+- The owner checks run liveness across any await before a broad grant or prompted retry can commit.
+- The owner claims the exact live approval wait before it persists a reusable grant.
+- A completed start call does not own the accepted child's prompt lifetime.
 - A channel that cannot post a prompt sends `Deny` for that call
   (`ChannelOutputEngine`, `SlackThreadBindingActor`). This is the only
   automatic denial of a consent request.
+
+The parent loads `check_agent_run` explicitly through `load_tool` for child status or cancellation.
+Normal tool policy, the owner session, and the original eligible requester define access.
+Children cannot discover, load, or dispatch that control. A foreign caller receives no target details.
+The owner uses the original authority record. It does not copy requester or path authority into a second policy structure.
+Cancellation creates no authorization grant. A report path still requires ordinary file access policy.
+
+The owner commits cancellation admission before it reports `Cancelling`.
+It closes the live dispatch gate, requests token cancellation, and waits for any synchronous dispatch prefix to exit.
+It commits `DispatchClosed` before framework-only report finalization.
+It commits any unresolved child prompt disposition before the terminal receipt.
+
+Token cancellation can resolve a prompt earlier. Durable closure does not require prompt resolution to commit first.
+See [the operation-health specification](../spec/SPEC-016-tool-liveness-and-stall-detection.md#cancellation-and-partial-evidence) for the full cancellation sequence.
+
+After authorization, the control adapter obtains `log_path` and `artifact_directory` from the existing canonical child storage binding.
+These call-local output paths are data. They create no grant or separate durable authority.
+The parent uses normal file tools for log access. A denied control reveals neither path.
+
+Positive example: the original parent requester answers its live child's exact approval prompt after the start call completes.
+Negative example: a later speaker cannot answer that prompt with replacement requester authority.
+Positive control example: the eligible parent cancels its accepted run and receives separate closure evidence.
+Negative control example: a child that knows a sibling run ID cannot inspect or cancel it.
+Positive log example: the original requester uses the returned live log path with `file_read` under normal file policy.
+Negative log example: a returned path does not bypass a denied file read.
 
 A non-shell call follows the same path, with two differences. `ToolAuthorizer`
 applies the rules for other tools and one `StoredGrantCheck` in place of the

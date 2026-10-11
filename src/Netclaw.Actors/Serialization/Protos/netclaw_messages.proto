@@ -108,6 +108,7 @@ message InputAdmittedProto {
   optional string source_background_job_id = 10;
   int32 background_job_lineage_version = 11;
   BackgroundJobOriginProto background_job_origin = 12;
+  optional string source_child_run_id = 13;
   reserved 7, 8;
 }
 
@@ -119,6 +120,8 @@ message ToolTaskAdoptedProto {
   repeated string input_ids = 3;
   int64 adopted_at_ms = 4;
   optional string continued_job_key = 5;
+  optional string continued_child_run_id = 6;
+  bool starts_child_continuation_window = 7;
 }
 
 message InputClosedProto {
@@ -254,6 +257,8 @@ message ToolApprovalRequestedProto {
   optional string authorization_attempt_id = 20;
   optional string managed_temporary_directory = 21;
   optional string repository_common_directory = 22;
+  optional string source_child_run_id = 23;
+  optional string original_child_call_id = 24;
 }
 
 message ToolApprovalResolvedProto {
@@ -262,6 +267,7 @@ message ToolApprovalResolvedProto {
   string decision = 3;
   int64 resolved_at_ms = 4;
   optional string authorization_attempt_id = 5;
+  optional string source_child_run_id = 6;
 }
 
 message ToolBatchAbandonedProto {
@@ -356,6 +362,7 @@ message SessionSnapshotProto {
   ToolApprovalRequestedProto.TurnContextRecordProto adopted_task_context = 16;
   repeated string adopted_task_input_ids = 17;
   repeated string processed_background_job_ids = 18;
+  repeated BackgroundChildRunProto child_runs = 19;
 }
 
 // ── Session state ──
@@ -433,4 +440,130 @@ message MemoriesDistilledV2Proto {
   repeated string anchors = 1;
   repeated ProposedMemoryContextProto proposals = 2;
   int64 timestamp_ms = 3;
+}
+
+// Durable child acceptance. Live authority objects remain in the owner adapter.
+message ChildRunAcceptedProto {
+  string session_id = 1;
+  BackgroundChildRunProto run = 2;
+}
+
+message BackgroundChildRunProto {
+  string run_id = 1;
+  string scope_id = 2;
+  string owner_session_id = 3;
+  string original_turn_id = 4;
+  oneof activation {
+    string tool_call_id = 5;
+    string slash_input_id = 6;
+  }
+  string agent_name = 7;
+  string source_operation = 8;
+  string arguments_digest = 9;
+  ToolApprovalRequestedProto.TurnContextRecordProto original_context = 10;
+  repeated string origin_input_ids = 11;
+  WorkingContextProto initial_working_context = 12;
+  GitWorkingContextInspectionProto initial_git = 13;
+  ToolLoopCheckpointProto parent_checkpoint = 14;
+  bool parent_receipt_failure = 15;
+  bool start_batch_settled = 16;
+  int64 accepted_at_ms = 17;
+  optional int64 started_at_ms = 18;
+  optional int64 cancellation_requested_at_ms = 19;
+  optional int64 dispatch_closed_at_ms = 20;
+  ChildRunCheckpointProto child_checkpoint = 21;
+  ChildRunTerminalProto terminal = 22;
+  ChildRunTerminalProto prepared_terminal = 23;
+  optional string delivery_input_id = 24;
+  optional int64 terminal_sequence_nr = 25;
+  repeated ChildRunApprovalProto approvals = 26;
+}
+
+message GitWorkingContextInspectionProto {
+  enum Kind {
+    UNSET = 0;
+    SKIPPED = 1;
+    AVAILABLE = 2;
+    NOT_REPOSITORY = 3;
+    EXECUTABLE_NOT_FOUND = 4;
+    UNAVAILABLE = 5;
+  }
+  Kind kind = 1;
+  optional string reason = 2;
+  string worktree = 3;
+  string common_directory = 4;
+  optional string branch = 5;
+  bool detached = 6;
+  optional string head = 7;
+  optional string upstream = 8;
+  int32 ahead = 9;
+  int32 behind = 10;
+  int32 staged = 11;
+  int32 modified = 12;
+  int32 untracked = 13;
+  repeated string changed_files = 14;
+}
+
+message ChildRunCheckpointProto {
+  int32 completed_round = 1;
+  string summary = 2;
+  ChildWorkingContextProto confirmed_activity = 3;
+}
+message ChildWorkingContextProto {
+  optional string project_directory = 1;
+  optional string worktree = 2;
+  optional string branch = 3;
+  optional string head = 4;
+  repeated string read_files = 5;
+  repeated string confirmed_changed_files = 6;
+  repeated string observed_changed_files = 7;
+}
+message ChildFindingProto {
+  int32 shape = 1;
+  string title = 2;
+  string content = 3;
+  string kind = 4;
+  int32 sensitivity = 5;
+  int32 recall_mode = 6;
+  string update_semantics = 7;
+  double confidence = 8;
+  int32 durability = 9;
+  int32 reusability = 10;
+  repeated string evidence = 11;
+  optional int64 freshness_at_ms = 12;
+}
+message ChildRunTerminalProto {
+  bool lost = 1;
+  optional string evidence_warning = 2;
+  string output = 3;
+  int32 outcome = 4;
+  optional string outcome_reason = 5;
+  string run_id = 6;
+  string scope_id = 7;
+  string agent_name = 8;
+  ChildWorkingContextProto working_context = 9;
+  repeated ChildFindingProto findings = 10;
+  int32 findings_count = 11;
+  optional string log_path = 12;
+  optional string artifact_directory = 13;
+}
+message ChildRunEventProto {
+  string session_id = 1;
+  string run_id = 2;
+  int64 recorded_at_ms = 3;
+  oneof fact {
+    bool started = 4;
+    ChildRunCheckpointProto checkpoint = 5;
+    bool cancellation_requested = 6;
+    bool dispatch_closed = 7;
+    ChildRunTerminalProto terminal = 8;
+    ChildRunTerminalProto prepared = 9;
+    InputAdmittedProto delivery = 10;
+  }
+  int64 terminal_sequence_nr = 11;
+}
+
+message ChildRunApprovalProto {
+  ToolApprovalRequestedProto request = 1;
+  ToolApprovalResolvedProto resolution = 2;
 }

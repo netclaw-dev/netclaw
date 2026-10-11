@@ -117,7 +117,7 @@ public sealed class ToolRecurrenceCheckpointTests
             SessionId = session, InputId = InputId.New(), TurnContext = canonical,
             UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Read one file." }
         };
-        var state = SessionState.Empty.Apply(input).Apply(new ToolTaskAdopted
+        var state = SessionState.Empty.Apply(input).Apply(new ToolTaskAdopted(false)
         {
             SessionId = session, TurnContext = canonical, InputIds = [input.InputId]
         });
@@ -153,14 +153,14 @@ public sealed class ToolRecurrenceCheckpointTests
             UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Read the old file." }
         };
         var freshInput = oldInput with { InputId = InputId.New(), TurnContext = next };
-        var state = SessionState.Empty.Apply(oldInput).Apply(new ToolTaskAdopted
+        var state = SessionState.Empty.Apply(oldInput).Apply(new ToolTaskAdopted(false)
         { SessionId = session, TurnContext = first, InputIds = [oldInput.InputId] });
         state = state with { LoopReceiptFailure = true };
         state = state.Apply(freshInput);
         Assert.Equal("first-task", state.LoopCheckpoint.TaskId);
         Assert.True(state.LoopReceiptFailure);
         Assert.Equal("first-task", state.AdoptedTaskContext!.TurnId);
-        var adopted = NetclawProtoMapper.FromProto(NetclawProtoMapper.ToProto(new ToolTaskAdopted
+        var adopted = NetclawProtoMapper.FromProto(NetclawProtoMapper.ToProto(new ToolTaskAdopted(false)
         { SessionId = session, TurnContext = next, InputIds = [freshInput.InputId] }));
         state = state.CloseInputs([oldInput.InputId]).Apply(adopted);
         Assert.Equal("next-task", state.LoopCheckpoint.TaskId);

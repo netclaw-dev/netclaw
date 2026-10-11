@@ -51,6 +51,7 @@ internal sealed record ToolInteractionRequestDispatch(
     bool PersistApprovalState) : INoSerializationVerificationNeeded
 {
     internal string? ManagedTemporaryDirectory { get; init; }
+    internal ToolCallId? OriginalChildCallId { get; init; }
 }
 
 internal enum ApprovalTurnPhase
