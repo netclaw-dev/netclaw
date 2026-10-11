@@ -208,8 +208,10 @@ last-mile confidence check, not a substitute for these gates.
 
 ## Focused Mutation Test Rule
 
-Use focused Stryker tests for critical security and authority boundaries.
-Review the mutation scope after each security fix or authority policy change.
+Use focused Stryker tests for critical security and authority boundaries, and
+for load-bearing reliability boundaries.
+Review the mutation scope after each security fix, authority policy change, or
+reliability change.
 Also review the mutation scope at each minor release.
 Add one small target when deterministic tests reject a specific unsafe mutation.
 Keep each target narrow. Keep the total CI cost within the documented budget.

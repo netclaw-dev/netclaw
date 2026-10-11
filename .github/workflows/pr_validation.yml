@@ -165,7 +165,7 @@ jobs:
           - group: shell-assignment-and-paths
             gates: shell-assignment shell-config-read path-access
           - group: verb-chain-and-reminder
-            gates: exact-verb-chain reminder-execution literal-twin
+            gates: exact-verb-chain reminder-execution literal-twin stream-commit-gate
           - group: approval-and-authorization
             gates: tool-authorization approval-directory skill-manage-guard no-program
 
