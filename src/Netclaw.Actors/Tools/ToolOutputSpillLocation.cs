@@ -10,7 +10,9 @@ using Netclaw.Security.Authorization.Filesystem;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Resolves one opaque tool call id inside one immutable session directory.
+/// Resolves one opaque tool call id inside one immutable session directory. It
+/// also owns the one creator of the session workspace folder, shared by the spill
+/// writer and the shell launcher.
 /// </summary>
 internal static class ToolOutputSpillLocation
 {
@@ -45,33 +47,44 @@ internal static class ToolOutputSpillLocation
     }
 
     /// <summary>
-    /// Creates the session workspace folder when it does not exist. Returns false
-    /// when the path is not a usable session folder or when the path itself is a link.
+    /// Creates the session workspace folder when it does not exist. Returns null on
+    /// success, or a stable error message for a link at the workspace path or at
+    /// its parent. It does not catch a creation failure (for example a file at the
+    /// path); that exception goes to the caller, which keeps its own failure reason.
     /// </summary>
     /// <remarks>
-    /// Only the spill writer calls this. <c>tool_output_read</c> never creates a
-    /// folder: a missing folder has no retained output. This method checks the
-    /// last path segment only, before the creation. The caller checks the folder
-    /// and the spill file again with <see cref="IsSafeForIo"/>. No check covers a
-    /// link above the session folder; the shell launcher has the same limit.
+    /// The spill writer and the shell launcher both call this, so one creator
+    /// builds the folder. <c>tool_output_read</c> never creates a folder: a missing
+    /// folder has no retained output. The spill writer checks the folder and the
+    /// spill file again with <see cref="IsSafeForIo"/>.
     /// </remarks>
-    public static bool TryEnsureSessionDirectory(string? sessionDirectory)
+    public static string? EnsureSessionWorkspaceDirectory(string? sessionDirectory)
     {
         if (!IsWellFormedSessionDirectory(sessionDirectory))
-            return false;
+            return "Error: The session workspace directory path is not valid.";
 
         // A link reports a target also when the target is missing, so this refuses
         // a dangling link before CreateDirectory can fail on it. Windows keeps file
         // links and directory links apart, so both forms are read.
-        if (new DirectoryInfo(sessionDirectory!).LinkTarget is not null
-            || new FileInfo(sessionDirectory!).LinkTarget is not null)
-        {
-            return false;
-        }
+        if (IsLink(sessionDirectory!))
+            return "Error: The session workspace directory is a link.";
+
+        // A link at the parent of the workspace redirects the creation behind
+        // the link, outside the sessions root. The parent is the session folder
+        // in the version-2 layout and the sessions root in the legacy layout.
+        var parent = Path.GetDirectoryName(sessionDirectory!);
+        if (parent is not null && IsLink(parent))
+            return "Error: The session folder above the workspace directory is a link.";
 
         Directory.CreateDirectory(sessionDirectory!);
-        return IsValidSessionDirectory(sessionDirectory);
+        return IsValidSessionDirectory(sessionDirectory)
+            ? null
+            : "Error: The session workspace directory was not created.";
     }
+
+    private static bool IsLink(string path)
+        => new DirectoryInfo(path).LinkTarget is not null
+           || new FileInfo(path).LinkTarget is not null;
 
     internal static bool IsValidCallId(string? callId)
     {
