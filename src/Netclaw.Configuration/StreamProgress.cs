@@ -12,7 +12,7 @@ namespace Netclaw.Configuration;
 /// session watchdog and the transport's retry/failover clients so both agree on when a
 /// stream has actually started.
 /// </summary>
-public static class StreamProgress
+internal static class StreamProgress
 {
     /// <summary>
     /// True when an update represents real model progress. A finish reason, non-empty
@@ -22,7 +22,7 @@ public static class StreamProgress
     /// non-text content before the first token is still recognized as progress, not
     /// silently treated as a hang.
     /// </summary>
-    public static bool IsSubstantive(ChatResponseUpdate update)
+    internal static bool IsSubstantive(ChatResponseUpdate update)
     {
         if (update.FinishReason is not null)
             return true;

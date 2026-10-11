@@ -12,7 +12,7 @@ fi
 read -r span_start span_end first_line last_line < <(
   perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
     $start_marker = "if (StreamProgress.IsSubstantive(update))";
-    $end_marker = "    /// <summary>\n    /// A content-free update that carries nothing a consumer would fold into the response.";
+    $end_marker = "private static bool IsPureKeepalive";
     $start = index($_, $start_marker);
     die "The stream-commit start marker is missing or duplicated.\n"
       if $start < 0 || index($_, $start_marker, $start + 1) >= 0;
@@ -44,7 +44,7 @@ killed_count="$(jq '[.files[].mutants[] | select(.status == "Killed")] | length'
 span_mutants="$(
   jq --arg source "$repo_root/src/Netclaw.Daemon/Configuration/StreamCommitGate.cs" \
     --argjson first "$first_line" --argjson last "$last_line" \
-    '[.files[$source].mutants[] | select(.status != "Ignored" and .status != "CompileError")
+    '[(.files[$source].mutants // [])[] | select(.status != "Ignored" and .status != "CompileError")
       | select(.location.start.line >= $first and .location.start.line < $last)] | length' \
     "$report"
 )"

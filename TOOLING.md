@@ -60,7 +60,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ToolApprovalEntryComparer.CoversCommandWords`, `ShellPolicyCoordinator.SelectCommandWordsCorrection`, `ShellApprovalMatcher.TryResolveProgramPath`, `ShellProgramPath.MatchesLegacyRelative`, `ShellApprovalMatcher.ProjectCommandWords`, `ShellGrantFileWords.TryFindEntry`, and `ToolPathPolicy.PlainWordLinkReachesDeniedPath` | A verb grant (two or more words) covers its command words and any later words, and a program-only grant covers its word alone, so a `gh` grant does not cover `gh auth logout`; an empty grant covers nothing; the matcher and the store hygiene use this one rule; Unknown command words get a rewrite correction; a program path names its file (R1), so a `./tool` grant does not cover another file named `tool` or `mytool`; a word after the verb slot that names an existing file or directory leaves the command words and becomes a path scope, while the program word, the verb slot, a link, a word without a file, and a word that is not one entry of the directory stay; a plain word that names a link to a protected path is denied, command word or argument; the store and the doctor use the same rule | 53 detected | `./scripts/run-exact-verb-chain-mutations.sh` |
 | `ShellCommandAnalysis.IsPlainFileTarget` and `ToolAccessPolicy.ScreenNoProgramRedirects` | Owner decision (October 2026): a command that runs no program gets no prompt only when each redirect target is one plain file (`/dev/null` is the only path below `/dev/`, so `/dev/tcp` keeps a prompt); a redirect target that is not proved, an input redirect that the `file_read` rules refuse, and a `Deny` mode of the file tool deny the call | 20 killed | `./scripts/run-no-program-mutations.sh` |
 | `BashLiteralTwinSlices.Apply` and the denial check of `ToolAccessPolicy.ScreenScopedSlices` | Decision F1: the strictest literal twin result decides a call. The candidates of every twin replace the candidates of their source command, an unresolved source keeps its exact answer, twins without their source command fail loudly, and one denied twin denies the call | 9 killed | `./scripts/run-literal-twin-mutations.sh` |
-| `StreamCommitGate` | An attempt commits only at its first update with real output; id-bearing lifecycle updates are held (and their ids discarded on failover), role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
+| `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -137,12 +137,17 @@ Run the streaming commit gate:
 The script selects the commit and hold logic in
 `Netclaw.Daemon.Configuration.StreamCommitGate`. The OpenAI Responses adapter
 yields content-free updates (`response.created`, `response.in_progress`,
-`output_item.added`) before any output, so an attempt must commit only at its
-first update with real output. The gate requires eight killed mutants covering:
-an update that counts as substantive (commits on real output), an id-bearing
-lifecycle update that is held and replaced with a liveness placeholder (no
-failed-attempt ids leak), a role-only keepalive that passes through, and the
-held-update release on commit and clean completion.
+`output_item.added`) before any output. An attempt must commit only at its
+first update with real output. The gate requires eight killed mutants. They
+cover these cases:
+
+- an update that counts as substantive commits on real output
+- an id-bearing lifecycle update is held, so no failed-attempt ids leak
+- a role-only keepalive passes through without committing
+- held updates are released on commit and on clean completion
+
+The gate guards the keepalive branch. The ordinary unit test guards the
+keepalive predicate body, which sits outside the mutation span.
 
 This is the first reliability-boundary gate in the matrix. It guards a
 load-bearing invariant in the retry and failover clients, not a security or
