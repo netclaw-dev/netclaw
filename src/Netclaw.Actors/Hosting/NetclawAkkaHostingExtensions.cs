@@ -26,6 +26,14 @@ public static class NetclawAkkaHostingExtensions
 {
     internal static readonly TimeSpan ReminderAckTimeout = TimeSpan.FromMinutes(70);
 
+    /// <summary>
+    /// Delivery deadline for reminder occurrences that do not set a per-call
+    /// window. Bounds how long an unacknowledged occurrence may replay after
+    /// its due time; without it, one-shot occurrences are immortal and replay
+    /// after a binary swap.
+    /// </summary>
+    internal static readonly TimeSpan ReminderDefaultMaxDeliveryWindow = TimeSpan.FromHours(24);
+
     public sealed record ReminderStorageOptions
     {
         public string? SqliteConnectionString { get; init; }
@@ -73,7 +81,9 @@ public static class NetclawAkkaHostingExtensions
     /// Registers the reminder manager as a singleton actor and wires
     /// the local Akka.Reminders scheduler to deliver payloads to it.
     /// Uses a 70-minute acknowledgement lease for one-hour LLM attempts.
-    /// Pruning matches Netclaw's terminal-reminder retention; other Akka.Reminders settings use their library defaults.
+    /// Pruning matches Netclaw's terminal-reminder retention; a 24-hour default
+    /// delivery window bounds unacknowledged replay. Other Akka.Reminders
+    /// settings use their library defaults.
     /// </summary>
     public static AkkaConfigurationBuilder WithReminderManager(
         this AkkaConfigurationBuilder builder,
@@ -90,7 +100,8 @@ public static class NetclawAkkaHostingExtensions
                 reminders.WithSettings(new ReminderSettings
                 {
                     AckTimeout = ReminderAckTimeout,
-                    PruneOlderThan = ReminderManagerActor.TerminalRetention
+                    PruneOlderThan = ReminderManagerActor.TerminalRetention,
+                    DefaultMaxDeliveryWindow = ReminderDefaultMaxDeliveryWindow
                 });
 
                 if (!string.IsNullOrWhiteSpace(storageOptions?.SqliteConnectionString))
