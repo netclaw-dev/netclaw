@@ -414,4 +414,6 @@ A first combined run exposed an Akka serializer error for a compiler-generated s
 The repaired journal boundary stores a concrete array. The repaired focused suite passed 104 cases.
 The full Actors suite passed 5,774 cases, skipped 41 platform cases, and failed zero.
 These tests observe admission after acknowledgment; they do not prove every callback race.
+The focused session reliability gate killed all eight selected mutants in 125.78 seconds.
+Slopwatch found zero issues. The copyright header and whitespace checks passed.
 Raw results are under `planning/netclaw/session-refactor/review/evidence/input-flow-proof/` outside this repository.
