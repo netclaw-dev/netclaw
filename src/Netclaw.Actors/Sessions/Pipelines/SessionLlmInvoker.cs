@@ -150,7 +150,6 @@ internal static class SessionLlmInvoker
             Response = result.Response,
             StreamedText = result.Diagnostics.TextDeltaCount > 1,
             StreamedThinking = result.Diagnostics.ThinkingDeltaCount > 1,
-            RecallResult = null,
             CallId = callId
         };
     }

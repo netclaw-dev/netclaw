@@ -56,15 +56,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IChatClient _compactionClient;
     private readonly ModelCapabilities _model;
     private readonly SessionConfig _config;
-    private readonly ISystemPromptProvider _promptProvider;
-    private readonly IReadOnlyList<IContextLayerProvider> _contextLayers;
-    private readonly IWorkingContextSnapshotProvider _workingContextSnapshots;
     private readonly IToolExecutor? _toolExecutor;
     private readonly SessionToolExecutionPipeline? _toolExecutionPipeline;
     private readonly Tools.ToolRegistry? _toolRegistry;
     private readonly IToolApprovalService? _approvalService;
     private readonly IMemoryExtractor _memoryExtractor;
-    private readonly IMemoryRecallCoordinator _memoryRecallCoordinator;
     private readonly IMemoryCheckpointSink _memoryCheckpointSink;
     private readonly MemoryProposalGate _memoryProposalGate = new();
     private readonly MemoryConfig _memoryConfig;
@@ -84,15 +80,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly InFlightTurnDedup _inFlightDedup = new();
     private readonly SessionSubscriberManager _subscribers = new();
     private readonly SessionToolWorkflow _toolWorkflow = new();
+    private readonly SessionModelContext _modelContext;
     private MessageSource? _currentTurnSource;
     private TurnContext? _currentTurnContext;
     private bool _processingStateActive;
-    private readonly ToolRegistry? _fullRegistry;
     private readonly ToolAccessPolicy? _toolAccessPolicy;
     private readonly TrustContextDeriver? _trustContextDeriver;
     // Owns the exposed tool list (base + discovered) and lease-based eviction.
     private readonly DiscoveredToolCache _discoveredToolCache = new();
-    private (int Core, int DeferredVisible, int Loaded)? _lastToolExposure;
 
     // Last observed input token count from LLM response (for compaction trigger)
     private long _lastInputTokenCount;
@@ -152,11 +147,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // from cancelled calls are ignored when their CallId doesn't match.
     private long _activeCallId;
 
-    // Correlates asynchronous working-context inspection with the call that
-    // requested it. Every call advances the generation so a late snapshot can
-    // never enter a newer turn or tool-loop continuation.
-    private long _workingContextGeneration;
-
     // Tracks whether any content was streamed this call — selects the watchdog timeout
     // (the generous prefill budget before the first token vs the tighter inter-delta
     // budget after).
@@ -167,11 +157,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private Protocol.TurnId? _activeTurnId;
     private string? _activeMessageId;
     private Channels.ChannelType? _activeChannelType;
-    private AutomaticRecallResult? _activeRecall;
     private EffectiveTrustContext? _currentTrustContext;
-
-    // Startup context layers: injected on first LLM call, re-injected after compaction
-    private bool _startupContextInjected;
 
     // Guards against infinite compaction loops: if a post-compaction buffer drain
     // overflows again, fail the turn. Reset at the start of each new user turn.
@@ -182,9 +168,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly SubAgentDefinitionRegistry? _subAgentRegistry;
     private readonly SubAgentSpawner? _subAgentSpawner;
     private readonly FileSubAgentDefinitionLoader? _subAgentLoader;
-
-    // Memory recall state (transient — reset at turn boundaries and compaction)
-    private readonly SessionRecallManager _recallManager = new();
 
     private readonly Telemetry.ISessionMetrics? _sessionMetrics;
 
@@ -243,9 +226,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _compactionClient = services.ClientProvider.GetClient(ModelRole.Compaction);
         _model = modelCapabilities;
         _config = config;
-        _promptProvider = services.PromptProvider;
-        _contextLayers = services.ContextLayers;
-        _workingContextSnapshots = services.WorkingContextSnapshots;
         _skillRegistry = tools?.SkillRegistry;
         _subAgentRegistry = tools?.SubAgentRegistry;
         _subAgentSpawner = tools?.SubAgentSpawner;
@@ -255,7 +235,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _toolAccessPolicy = tools?.AccessPolicy;
         _approvalService = tools?.ApprovalService;
         _memoryExtractor = memory?.MemoryExtractor ?? NullMemoryExtractor.Instance;
-        _memoryRecallCoordinator = memory?.RecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
         _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
         _memoryStore = memory?.MemoryStore;
         _memoryEmbedderHolder = memory?.EmbedderHolder;
@@ -268,6 +247,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         // Enrich logger with session context — all log messages automatically include SessionId
         _log = Context.GetLogger().WithContext(NetclawLogProperties.SessionId, _sessionId.Value);
+        _modelContext = new SessionModelContext(
+            _sessionId, _sessionStorage, services, memory, tools,
+            _discoveredToolCache, _model.InputModalities, _log);
         _toolExecutionPipeline = tools is null
             ? null
             : new SessionToolExecutionPipeline(
@@ -278,10 +260,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Load only the explicit core for initial LLM calls. Deferred first-party and
         // MCP tools are discovered through search_tools, activated through load_tool,
         // and share the configured loaded-tool lease.
-        _fullRegistry = tools?.ToolRegistry;
-        if (_fullRegistry is not null)
+        if (_toolRegistry is not null)
         {
-            _discoveredToolCache.SeedBaseTools(_fullRegistry.GetCoreTools());
+            _discoveredToolCache.SeedBaseTools(_toolRegistry.GetCoreTools());
         }
 
         // ── Recovery handlers ──
@@ -824,7 +805,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
         }
 
-        HandleTextResponse(lastMessage, response.Usage, msg.StreamedText, msg.StreamedThinking, msg.RecallResult);
+        HandleTextResponse(lastMessage, response.Usage, msg.StreamedText, msg.StreamedThinking);
     }
 
     private void HandleLlmResponseDeltaReceived(LlmResponseDeltaReceived msg)
@@ -1102,8 +1083,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _state = _state.Apply(evt);
             _lastInputTokenCount = 0;
-            _startupContextInjected = false;
-            _recallManager.ResetForCompaction();
+            _modelContext.ResetAfterCompaction();
 
             if (TryResolveMemoryCheckpointAudience(
                     Memory.CheckpointTriggerType.CompactionBoundary,
@@ -1579,9 +1559,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         Command<SetSessionPromptOverlay>(msg =>
         {
-            _sessionPromptOverlay = string.IsNullOrWhiteSpace(msg.PromptOverlay)
-                ? null
-                : msg.PromptOverlay.Trim();
+            _modelContext.SetOverlay(msg.PromptOverlay);
         });
     }
 
@@ -1904,8 +1882,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         AiChatMessage lastMessage,
         UsageDetails? usage,
         bool streamedText,
-        bool streamedThinking,
-        AutomaticRecallResult? recallResult)
+        bool streamedThinking)
     {
         // Reset tool counters for potential buffer drain (new logical turn)
         _turnState.ResetToolCounters();
@@ -1958,7 +1935,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
             MaybeSnapshot();
             MaybeGenerateTitle();
-            _activeRecall = recallResult;
 
             _deliveryRetry.MarkEligible(new TurnNumber(_state.TurnCount));
 
@@ -2008,7 +1984,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // A replay resumes the same turn. New input starts a fresh guard
             // window only after the prior batch or response completes.
             _turnState.ResetForNewTurn();
-            _recallManager.ResetForNewTurn();
+            _modelContext.ResetForNewTurn();
             _turnEmittedText = false;
         }
 
@@ -2068,7 +2044,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _deliveryRetry.RetryCount);
 
         _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
-        _recallManager.ResetForNewTurn(); // Delivery feedback changed context — resolve recall fresh
+        _modelContext.ResetForNewTurn(); // Delivery feedback changed context — resolve recall fresh
         FireLlmCall();
         TransitionTo(SessionPhase.Processing);
     }
@@ -2241,14 +2217,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _discoveredToolCache.PrepareForNewTurn(
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount,
-            _fullRegistry);
+            _toolRegistry);
 
         if (TryHandleSlashCommand(executableUserContent, mediaRefs))
             return;
 
         _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
         TryReplyAck();
-        _recallManager.ResetForNewTurn();
+        _modelContext.ResetForNewTurn();
         _compactionOverflowRetryCount = 0;
         FireInitialTurnLlmCall(executableUserContent);
         TransitionTo(SessionPhase.Processing);
@@ -2298,7 +2274,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _discoveredToolCache.PrepareForNewTurn(
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount,
-            _fullRegistry);
+            _toolRegistry);
 
         if (TryResumeSlashCommand(pending))
             return true;
@@ -2307,7 +2283,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         foreach (var item in pending)
             _state = _state with { History = _state.History.Add(item.UserMessage) };
 
-        _recallManager.ResetForNewTurn();
+        _modelContext.ResetForNewTurn();
         _compactionOverflowRetryCount = 0;
 
         TryReplyAck();
@@ -2402,7 +2378,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<WorkingContextSnapshotReady>(HandleWorkingContextSnapshotReady);
         Command<WorkingContextSnapshotCancelled>(msg =>
         {
-            if (msg.Generation == _workingContextGeneration)
+            if (_modelContext.IsCurrentInspection(msg.Generation))
                 TurnLog().Debug("working_context_inspection_cancelled generation={Generation}", msg.Generation);
         });
         Command<WorkingContextSnapshotFailed>(HandleWorkingContextSnapshotFailed);
@@ -2631,64 +2607,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private long NowMs() => _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
     private void SetSystemPrompt()
-    {
-        var audience = CurrentTurnAudience();
-        var content = _promptProvider.GetSystemPrompt(audience, _state.WorkingContext.ProjectDirectory);
-        if (string.IsNullOrWhiteSpace(content))
-        {
-            // Retain the last-known prompt from recovery — deleting it strips the agent
-            // of all identity and project context, which is worse than a stale prompt.
-            if (_state.History.Count > 0 && _state.History[0].Role == Protocol.ChatRole.System)
-            {
-                _log.Warning("Identity files missing — retaining last-known system prompt from recovery");
-            }
-            else
-            {
-                _log.Info("No system prompt layers available");
-            }
-            return;
-        }
-
-        // Idempotent on content: if the freshly-rebuilt prompt is
-        // byte-identical to history[0], skip the replacement. The
-        // immutable-list SetItem allocates a new spine even when the value
-        // is unchanged, and the rebuild itself drops the persisted prompt
-        // from llama.cpp's KV cache from token 0 because the underlying
-        // prompt bytes change identity. PR #1171 fixed the volatile-tail
-        // merge; this fix closes the residual cache-bust path where
-        // SetSystemPrompt fires unconditionally on every channel-driven
-        // turn even when on-disk identity files are unchanged.
-        if (_state.History.Count > 0
-            && _state.History[0].Role == Protocol.ChatRole.System
-            && string.Equals(_state.History[0].Content, content, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        var systemMsg = new SerializableChatMessage
-        {
-            Role = Protocol.ChatRole.System,
-            Content = content
-        };
-
-        // Replace or insert at position 0 — never persisted, always read fresh from disk
-        _state = _state.History.Count > 0 && _state.History[0].Role == Protocol.ChatRole.System
-            ? _state with { History = _state.History.SetItem(0, systemMsg) }
-            : _state with { History = _state.History.Insert(0, systemMsg) };
-
-        // Hash is included so a future cache-drift investigation can confirm
-        // at a glance whether two "System prompt set" lines carry the same
-        // content or genuinely different content.
-        _log.Info("System prompt set ({PromptLength} chars, hash={ContentHash})",
-            content.Length,
-            ShortContentHash(content));
-    }
-
-    private static string ShortContentHash(string content)
-    {
-        var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content));
-        return Convert.ToHexString(bytes.AsSpan(0, 8)).ToLowerInvariant();
-    }
+        => _state = _modelContext.RefreshPrompt(_state, CurrentTurnAudience());
 
     private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false, string? slashCommandSkillContent = null)
     {
@@ -2702,89 +2621,60 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 compatibility.UnsupportedModalities,
                 compatibility.UnknownModalityValues.Count,
                 _model.ModelId);
-            // Do not fail the turn — ChatMessageConverter.ToAiMessages strips
-            // incompatible DataContent at assembly time, and the assembler
-            // injects a volatile system notice. The session stays usable.
+            // The assembler removes incompatible history media and adds a notice.
         }
 
         _anyContentStreamed = false;
         CancelAndDisposeLlmCts();
         _activeLlmCts = new CancellationTokenSource();
         _activeCallId++;
-        var workingContextGeneration = ++_workingContextGeneration;
 
         _turnState.ForceNoToolsActive |= forceNoTools;
         forceNoTools = _turnState.ForceNoToolsActive;
 
-        // Recall: only resolve on turn-start calls, reuse cache for tool-loop follow-ups
-        if (_recallManager.TurnRecallCache is null)
+        var call = _modelContext.StartCall(
+            _activeCallId,
+            _state,
+            _currentTurnContext,
+            _currentTurnSource,
+            _currentTrustContext,
+            recallQuery,
+            forceNoTools,
+            slashCommandSkillContent,
+            _turnRestartNotice,
+            _activeLlmCts.Token);
+        if (call is ContextCall.Inspect { Audit: var audit })
         {
-            var recallSw = Stopwatch.StartNew();
-            var resolved = _recallManager.ResolveForTurn(
-                recallQuery,
-                _state,
-                _sessionId,
-                _currentTurnSource,
-                _memoryRecallCoordinator,
-                _memoryConfig,
-                turnContext: _currentTurnContext);
-            recallSw.Stop();
-
-            resolved = _recallManager.ApplyProgressiveRecall(resolved, _log);
-
-            // Observer audit: track which memories were recalled this turn
-            // independently of how they end up on the wire. Downstream
-            // distillation prompts grep for "[recalled-memory]" entries.
-            if (resolved.Items.Count > 0)
+            // The observer audit is independent of model-visible recall content.
+            if (audit.Result.Items.Count > 0)
             {
-                var recallContent = SessionRecallManager.FormatForHistory(resolved);
-                _observerActor?.Tell(new ObserverSystemContext("recalled-memory", recallContent));
+                var content = SessionRecallManager.FormatForHistory(audit.Result);
+                _observerActor?.Tell(new ObserverSystemContext("recalled-memory", content));
             }
 
-            var recallIds = resolved.Items.Count == 0
+            var recallIds = audit.Result.Items.Count == 0
                 ? "-"
-                : string.Join(",", resolved.Items.Select(i => i.Id.Value));
+                : string.Join(",", audit.Result.Items.Select(item => item.Id.Value));
             TurnLog().Info(
                 "turn_memory_recall degraded={Degraded} stage={Stage} durationMs={DurationMs} itemCount={ItemCount} itemIds={ItemIds}",
-                resolved.Degraded,
-                resolved.DegradeStage ?? "-",
-                recallSw.ElapsedMilliseconds,
-                resolved.Items.Count,
+                audit.Result.Degraded,
+                audit.Result.DegradeStage ?? "-",
+                audit.DurationMs,
+                audit.Result.Items.Count,
                 recallIds);
-
-            if (resolved.Items.Count > 0)
-                _sessionMetrics?.RecordMemoriesRecalled(resolved.Items.Count);
-
-            // Insert the FULL volatile context block (recall + current
-            // time + working context + skill hint + slash command body +
-            // session prompt overlay + turn restart notice + active
-            // background jobs) into History via AddVolatileContextNudge.
-            // Gated on the same first-call-of-turn sentinel as recall
-            // resolution, so tool-loop iterations don't re-nudge. The block
-            // is placed BEFORE the real user message (not after) so the user
-            // message stays at the tail of the user-portion — a trailing
-            // volatile User-role message is read by strict ChatML templates
-            // (Qwen3) as a fresh user turn and causes the tool-loop
-            // acknowledgement spin (see AddVolatileContextNudge). By living
-            // in History (rather than being wrapped at assemble-time), the
-            // volatile bytes let every byte-prefix caching provider
-            // (llama.cpp, vLLM, OpenAI, Ollama, ...) extend the cache prefix
-            // through this content on every subsequent turn instead of
-            // re-tokenizing it from scratch.
-            _activeRecall = _recallManager.TurnRecallCache;
-            _ = CreateWorkingContextContinuationAsync(
-                    workingContextGeneration,
-                    forceNoTools,
-                    _turnRestartNotice,
-                    slashCommandSkillContent,
-                    _state.WorkingContext,
-                    CurrentTurnAudience(),
-                    _activeLlmCts.Token)
-                .PipeTo(Self);
-            return;
+            if (audit.Result.Items.Count > 0)
+                _sessionMetrics?.RecordMemoriesRecalled(audit.Result.Items.Count);
         }
 
-        ContinueFireLlmCall(forceNoTools);
+        switch (call)
+        {
+            case ContextCall.Inspect inspect:
+                _ = inspect.Work.PipeTo(Self);
+                break;
+            case ContextCall.Ready ready:
+                ApplyPreparedModelRequest(ready.Request);
+                break;
+        }
     }
 
     private bool TryRejectIncompatibleInput(
@@ -2846,132 +2736,45 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return true;
     }
 
-    private void ContinueFireLlmCall(bool forceNoTools)
+    private void ApplyPreparedModelRequest(PreparedModelRequest request)
     {
-        _activeRecall = _recallManager.TurnRecallCache;
-
-        // Build the full message list via the cache-stable assembler.
-        // Static content (persisted prompt, OnceAtStart layers, [session],
-        // [attachments]) sits at the head so the prompt prefix stays
-        // byte-stable across turns. Volatile per-turn content (memory
-        // recall, current time, working context, etc.) was already
-        // persisted into History above via AddSystemNudge — the assembler
-        // just emits the static head + history verbatim. See
-        // SessionMessageAssembler for the full assembly contract. Mark
-        // startup injection complete after the first call to preserve the
-        // existing OnceAtStart semantics.
-        var skillHint = BuildSkillHint();
-        var messages = SessionMessageAssembler.Assemble(new ContextAssemblyInput(
-            State: _state,
-            ContextLayers: _contextLayers,
-            StartupContextInjected: _startupContextInjected,
-            // The body is in the volatile block persisted before this call; Assemble does not emit it.
-            SlashCommandSkillContent: null,
-            SessionPromptOverlay: _sessionPromptOverlay,
-            TurnRestartNotice: _turnRestartNotice,
-            SessionId: _sessionId,
-            Storage: _sessionStorage,
-            FileReadGranted: HasFileReadGranted(),
-            ActiveRecall: _activeRecall,
-            WorkingContextBlock: string.Empty,
-            Audience: CurrentTurnAudience(),
-            SkillHint: skillHint,
-            // Canonical names live in history (post-PR follow-up); the
-            // LLM provider wants the sanitized alias back on the wire.
-            ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName,
-            SupportedInputModalities: _model.InputModalities));
-        _startupContextInjected = true;
-
-        var self = Self;
-        var client = _chatClient;
-
-        var exposedTools = ResolveExposedToolsForCurrentTurn();
-        LogToolExposure(exposedTools.Count);
-        // Always carry the session id so the session-agnostic chat-client decorators
-        // (logging/retry/routing) can correlate LLM diagnostics — including provider
-        // failover/outage — back to this session in Seq. Tools are attached only when
-        // the turn exposes them; an empty Tools list is wire-equivalent to no options.
-        var options = new SessionScopedChatOptions { SessionId = _sessionId.Value };
-        if (!forceNoTools && exposedTools.Count > 0)
-            options.Tools = [.. exposedTools];
+        _state = request.State;
+        if (request.Exposure is { } exposure)
+            TurnLog().Info(
+                "Session tool exposure core={CoreCount} deferredVisible={DeferredVisibleCount} loaded={LoadedCount}",
+                exposure.Core,
+                exposure.DeferredVisible,
+                exposure.Loaded);
 
         _watchdog.Start(ProcessingWatchdog.LlmCall, _config.PrefillTimeout, Timers, _config.NoProgressTimeout);
-
         TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools} callId={CallId}",
-            messages.Count,
-            options.Tools?.Count > 0,
-            forceNoTools,
+            request.Messages.Count,
+            request.Options.Tools?.Count > 0,
+            request.ForceNoTools,
             _activeCallId);
-
         _activeLlmWorkTask = SessionLlmInvoker.InvokeAsync(
-            client,
-            messages,
-            options,
-            self,
+            _chatClient,
+            request.Messages,
+            request.Options,
+            Self,
             _activeCallId,
             _sessionId,
             _activeLlmCts!.Token);
     }
 
-    private async Task<INoSerializationVerificationNeeded> CreateWorkingContextContinuationAsync(
-        long generation,
-        bool forceNoTools,
-        string? turnRestartNotice,
-        string? slashCommandSkillContent,
-        WorkingContext workingContext,
-        TrustAudience audience,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var snapshot = await _workingContextSnapshots.CreateAsync(
-                workingContext,
-                audience,
-                cancellationToken).ConfigureAwait(false);
-            return new WorkingContextSnapshotReady(generation, forceNoTools, turnRestartNotice, slashCommandSkillContent, snapshot);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            return new WorkingContextSnapshotCancelled(generation);
-        }
-        catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
-        {
-            return new WorkingContextSnapshotFailed(
-                generation,
-                forceNoTools,
-                turnRestartNotice,
-                slashCommandSkillContent,
-                workingContext,
-                ex);
-        }
-        catch (Exception ex) when (FatalExceptionPolicy.IsFatal(ex))
-        {
-            return new WorkingContextSnapshotFatal(ex);
-        }
-    }
-
     private void HandleWorkingContextSnapshotFailed(WorkingContextSnapshotFailed message)
     {
-        if (!ShouldApplyWorkingContextSnapshot(
-                message.Generation,
-                _workingContextGeneration,
-                _activeLlmCts is not null))
+        if (_llmRestartStopRequested || _activeLlmCts is null || !_modelContext.IsCurrentInspection(message.Generation))
             return;
 
         TurnLog().Warning(
             message.Cause,
             "working_context_inspection_failed generation={Generation}",
             message.Generation);
-        HandleWorkingContextSnapshotReady(new WorkingContextSnapshotReady(
-            message.Generation,
-            message.ForceNoTools,
-            message.TurnRestartNotice,
-            message.SlashCommandSkillContent,
-            new WorkingContextSnapshot
-            {
-                WorkingContext = message.WorkingContext,
-                Git = new GitWorkingContextInspection.Unavailable("working context inspection failed")
-            }));
+        var request = _modelContext.CompleteInspection(
+            message, _state, CurrentTurnAudience(), _currentTrustContext);
+        if (request is not null)
+            ApplyPreparedModelRequest(request);
     }
 
     private void HandleWorkingContextSnapshotReady(WorkingContextSnapshotReady message)
@@ -2979,43 +2782,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_llmRestartStopRequested)
             return;
 
-        if (!ShouldApplyWorkingContextSnapshot(
-                message.Generation,
-                _workingContextGeneration,
-                _activeLlmCts is not null))
+        if (_activeLlmCts is null || !_modelContext.IsCurrentInspection(message.Generation))
         {
             TurnLog().Debug(
-                "working_context_inspection_stale generation={Generation} activeGeneration={ActiveGeneration}",
-                message.Generation,
-                _workingContextGeneration);
+                "working_context_inspection_stale generation={Generation}",
+                message.Generation);
             return;
         }
 
-        var volatileBlock = SessionMessageAssembler.BuildVolatileContextBlock(new ContextAssemblyInput(
-            State: _state,
-            ContextLayers: _contextLayers,
-            StartupContextInjected: _startupContextInjected,
-            SlashCommandSkillContent: message.SlashCommandSkillContent,
-            SessionPromptOverlay: _sessionPromptOverlay,
-            TurnRestartNotice: message.TurnRestartNotice,
-            SessionId: _sessionId,
-            Storage: _sessionStorage,
-            FileReadGranted: HasFileReadGranted(),
-            ActiveRecall: _activeRecall,
-            WorkingContextBlock: message.Snapshot.ToContextBlock(),
-            Audience: CurrentTurnAudience(),
-            SkillHint: BuildSkillHint()));
-        if (!string.IsNullOrEmpty(volatileBlock))
-            _state = _state.AddVolatileContextNudge(volatileBlock);
-
-        ContinueFireLlmCall(message.ForceNoTools);
+        var request = _modelContext.CompleteInspection(
+            message, _state, CurrentTurnAudience(), _currentTrustContext);
+        if (request is not null)
+            ApplyPreparedModelRequest(request);
     }
-
-    internal static bool ShouldApplyWorkingContextSnapshot(
-        long snapshotGeneration,
-        long activeGeneration,
-        bool hasActiveLlmCall) => hasActiveLlmCall && snapshotGeneration == activeGeneration;
-
 
     private TrustAudience CurrentTurnAudience()
         => _currentTurnContext?.Audience
@@ -3054,18 +2833,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
            ?? _currentTurnSource?.Boundary.Value
            ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(_sessionId.Value, CurrentTurnAudience()).Value;
 
-    private IReadOnlyList<AITool> ResolveExposedToolsForCurrentTurn()
-    {
-        var availableTools = _discoveredToolCache.AvailableTools;
-        if (_toolAccessPolicy is null || _fullRegistry is null || availableTools.Count == 0)
-            return availableTools;
-
-        if (!TryGetToolExposureTrustContext("expose_tools", availableTools.Count, out var trustContext))
-            return [];
-
-        return _toolAccessPolicy.FilterExposedTools(availableTools, _fullRegistry, trustContext);
-    }
-
     /// <summary>
     /// Returns the trust context that tool exposure needs. A session with a
     /// tool access policy and no trust context has no resolved audience. That
@@ -3089,32 +2856,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return false;
     }
 
-    private void LogToolExposure(int exposedCount)
-    {
-        // A missing trust context was already refused and logged at Error
-        // level by ResolveExposedToolsForCurrentTurn.
-        if (_toolAccessPolicy is null || _fullRegistry is null || _currentTrustContext is not { } trustContext)
-            return;
-
-        var coreCount = _fullRegistry.GetCoreRegistrations().Count(registration =>
-            _toolAccessPolicy.IsToolExposed(registration, trustContext));
-        var visibleCount = _fullRegistry.GetAllRegistrations().Count(registration =>
-            _toolAccessPolicy.IsToolExposed(registration, trustContext));
-        var exposure = (
-            Core: coreCount,
-            DeferredVisible: Math.Max(0, visibleCount - coreCount),
-            Loaded: Math.Max(0, exposedCount - coreCount));
-        if (_lastToolExposure == exposure)
-            return;
-
-        _lastToolExposure = exposure;
-        TurnLog().Info(
-            "Session tool exposure core={CoreCount} deferredVisible={DeferredVisibleCount} loaded={LoadedCount}",
-            exposure.Core,
-            exposure.DeferredVisible,
-            exposure.Loaded);
-    }
-
     /// <summary>
     /// Returns true when <c>set_working_directory</c> is exposed to the
     /// current turn's audience profile. Used by the deny-path hint logic in
@@ -3125,33 +2866,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private SetWorkingDirectoryTool? GetExposedSetWorkingDirectoryTool()
     {
         // No trust context means no exposed tools, so no hint either.
-        if (_toolAccessPolicy is null || _fullRegistry is null || _currentTrustContext is not { } trustContext)
+        if (_toolAccessPolicy is null || _toolRegistry is null || _currentTrustContext is not { } trustContext)
             return null;
 
-        var registration = _fullRegistry.GetRegistrationByToolName(SetWorkingDirectoryTool.ToolName);
+        var registration = _toolRegistry.GetRegistrationByToolName(SetWorkingDirectoryTool.ToolName);
         return registration?.Tool is SetWorkingDirectoryTool tool
                && _toolAccessPolicy.IsToolExposed(registration, trustContext)
             ? tool
             : null;
     }
 
-
-    private static readonly string SkillHintText =
-        "[skill-hint] Before answering any technical or knowledge question, scan [available-skills] for a relevant skill and call skill_load(name=\"...\"). " +
-        "Skills contain user-specific preferences and project conventions that override your general knowledge — even if you already know a topic, the user may have standards defined in a skill. " +
-        "When in doubt, load — a redundant load is cheap, a missed skill is not.";
-
-    /// <summary>
-    /// Returns a generic per-turn skill reminder when skills are available,
-    /// or null when the skill subsystem is inactive.
-    /// </summary>
-    private string? BuildSkillHint()
-    {
-        if (_skillRegistry is null || _skillRegistry.GetAll().Count == 0)
-            return null;
-
-        return SkillHintText;
-    }
 
     /// <summary>
     /// Handles slash-command dispatch. If the user message starts with / and matches
@@ -3231,7 +2955,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _state = _state.AddUserMessage(effectiveUserContent, mediaRefs.Count > 0 ? mediaRefs : null);
         TryReplyAck();
-        _recallManager.ResetForNewTurn();
+        _modelContext.ResetForNewTurn();
 
         FireInitialTurnLlmCall(effectiveUserContent, skillBody);
 
@@ -3287,7 +3011,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _state = _state.AddUserMessage(effectiveTask, mediaRefs.Count > 0 ? mediaRefs : null);
         TryReplyAck();
-        _recallManager.ResetForNewTurn();
+        _modelContext.ResetForNewTurn();
 
         _ = ExecuteRoutedSkillAsync(Self, skill, profile, effectiveTask, skillBody, routedAudience);
         TransitionTo(SessionPhase.Processing);
@@ -3431,18 +3155,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _state = _state with { WorkingContext = updated };
     }
 
-    private string? _sessionPromptOverlay;
-
-    private bool HasFileReadGranted()
-    {
-        foreach (var tool in _discoveredToolCache.AvailableTools)
-        {
-            if (tool is AIFunction fn && string.Equals(fn.Name, FileReadTool.ToolName, StringComparison.Ordinal))
-                return true;
-        }
-        return false;
-    }
-
     private void EnqueueCheckpointFireAndForget(MemoryCheckpointRequest request)
     {
         var sink = _memoryCheckpointSink;
@@ -3473,9 +3185,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </summary>
     private bool TryActivateDiscoveredTool(string toolName)
     {
-        if (_fullRegistry is null) return false;
+        if (_toolRegistry is null) return false;
 
-        var registration = _fullRegistry.GetRegistrationByToolName(toolName);
+        var registration = _toolRegistry.GetRegistrationByToolName(toolName);
         if (registration is null) return false;
 
         if (_toolAccessPolicy is null
@@ -3484,7 +3196,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return false;
 
         var tool = registration.Tool;
-        if (_fullRegistry.IsCoreTool(tool.Name))
+        if (_toolRegistry.IsCoreTool(tool.Name))
             return true;
 
         // Cache and log under the canonical name regardless of which form
@@ -4407,7 +4119,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _llmRestartStopRequested = true;
         _watchdog.Stop(Timers);
-        _workingContextGeneration++;
+        _modelContext.InvalidateInspection();
         _activeLlmCts.Cancel();
 
         if (_activeLlmWorkTask is { IsCompleted: false } task)

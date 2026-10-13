@@ -405,6 +405,13 @@ know" rule. The leaks are the work list of the consolidation program.
 | Data | Configuration. The result is call-local. |
 | Rules | [TA-1](../../openspec/specs/tool-authorization/spec.md#requirement-ta-1-trust-context-is-explicit-and-fails-loud), [TA-2](../../openspec/specs/tool-authorization/spec.md#requirement-ta-2-schema-exposure-grants-no-authority), [TA-3](../../openspec/specs/tool-authorization/spec.md#requirement-ta-3-audience-profiles-admit-tools), [TA-4](../../openspec/specs/tool-authorization/spec.md#requirement-ta-4-consent-mode-and-shell-mode-resolve-per-audience-and-tool) |
 
+`LlmSessionActor` supplies its current `EffectiveTrustContext` to
+[`SessionModelContext`](../../src/Netclaw.Actors/Sessions/SessionModelContext.cs) when it prepares a model request.
+The context component calls `ToolAccessPolicy.FilterExposedTools` with that authority.
+It exposes no tools when a configured policy has no resolved trust context.
+The actor still owns the current authority. The context component owns request preparation and its transient inspection intent.
+Schema exposure grants no execution authority. The tool execution path still applies its authorization checks.
+
 Leaks today:
 
 - `ToolAccessPolicy` also parses shell text, runs hard deny, and builds the

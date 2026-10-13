@@ -24,8 +24,6 @@ internal sealed record LlmResponseReceived : INoSerializationVerificationNeeded
 
     public bool StreamedThinking { get; init; }
 
-    public AutomaticRecallResult? RecallResult { get; init; }
-
     /// <summary>
     /// Correlation ID matching <see cref="LlmSessionActor._activeCallId"/>.
     /// Stale responses from cancelled calls are ignored.
@@ -108,9 +106,6 @@ internal sealed record ToolExecutionBatchCompleted : INoSerializationVerificatio
 
 internal sealed record WorkingContextSnapshotReady(
     long Generation,
-    bool ForceNoTools,
-    string? TurnRestartNotice,
-    string? SlashCommandSkillContent,
     WorkingContextSnapshot Snapshot) : INoSerializationVerificationNeeded;
 
 internal sealed record WorkingContextSnapshotCancelled(long Generation)
@@ -118,10 +113,6 @@ internal sealed record WorkingContextSnapshotCancelled(long Generation)
 
 internal sealed record WorkingContextSnapshotFailed(
     long Generation,
-    bool ForceNoTools,
-    string? TurnRestartNotice,
-    string? SlashCommandSkillContent,
-    WorkingContext WorkingContext,
     Exception Cause) : INoSerializationVerificationNeeded;
 
 internal sealed record WorkingContextSnapshotFatal(Exception Cause)

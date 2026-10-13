@@ -55,7 +55,7 @@ public sealed record ContextAssemblyInput(
 /// [1]      System  static dynamic context (OnceAtStart layers + [session] + [attachments])
 /// [2..N]   User/Assistant/Tool  conversation history (from SessionState.History,
 ///                               minus the persisted prompt which was already at index 0).
-///                               The actor injects the turn's volatile context as a
+///                               The context owner injects the turn's volatile context as a
 ///                               User-role <c>[system: ...]</c> nudge entry in
 ///                               History at turn-start (see remarks).
 /// </code>
@@ -70,7 +70,7 @@ public sealed record ContextAssemblyInput(
 /// skill hint, slash command, overlay, turn restart, background jobs) is
 /// composed by <see cref="BuildVolatileContextBlock"/> and persisted into
 /// History via <c>SessionState.AddSystemNudge</c> at turn-start by the
-/// actor — NOT here. That placement satisfies the constraints that the
+/// context owner — NOT here. That placement satisfies the constraints that the
 /// previous design discovered the hard way:
 ///
 /// <list type="bullet">
@@ -152,7 +152,7 @@ public static class SessionMessageAssembler
 
         // The volatile per-turn context (memory recall, current time,
         // working context, slash command body, etc.) is NOT injected
-        // here. It is composed by LlmSessionActor at turn-start and
+        // here. SessionModelContext composes it at turn-start and
         // persisted into History via SessionState.AddSystemNudge so the
         // wire bytes for that content are byte-stable across consecutive
         // turns (the cache prefix can extend through history naturally
@@ -202,7 +202,7 @@ public static class SessionMessageAssembler
     /// Composes the per-turn volatile context block — memory recall, current
     /// time, working context, skill hint, slash command body, session prompt
     /// overlay, turn restart notice, active background jobs. Exposed
-    /// <c>internal</c> so <c>LlmSessionActor</c> can call this at turn-start
+    /// <c>internal</c> so <c>SessionModelContext</c> can call this at turn-start
     /// and persist the result into history via <c>AddSystemNudge</c>; that
     /// makes the wire bytes for the volatile content byte-stable across turns
     /// (the cache prefix can extend through history naturally). The assembler

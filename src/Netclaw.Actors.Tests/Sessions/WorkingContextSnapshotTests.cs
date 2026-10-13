@@ -446,29 +446,6 @@ public class WorkingContextSnapshotTests
         Assert.DoesNotContain("credential-bearing", unavailable.Reason);
     }
 
-    [Theory]
-    [InlineData(41, 42, true)]
-    [InlineData(42, 42, false)]
-    public void Stale_or_cancelled_working_context_continuation_is_rejected(
-        long snapshotGeneration,
-        long activeGeneration,
-        bool hasActiveLlmCall)
-    {
-        Assert.False(LlmSessionActor.ShouldApplyWorkingContextSnapshot(
-            snapshotGeneration,
-            activeGeneration,
-            hasActiveLlmCall));
-    }
-
-    [Fact]
-    public void Current_working_context_continuation_is_accepted()
-    {
-        Assert.True(LlmSessionActor.ShouldApplyWorkingContextSnapshot(
-            snapshotGeneration: 42,
-            activeGeneration: 42,
-            hasActiveLlmCall: true));
-    }
-
     private sealed class RecordingGitInspector : IGitWorkingContextInspector
     {
         public int InvocationCount { get; private set; }
