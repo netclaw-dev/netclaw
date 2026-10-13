@@ -1235,6 +1235,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     [Fact]
     public async Task Routed_slash_command_executes_with_overlay_and_isolated_prompt_stack()
     {
+        // Arrange
         var sessionId = new SessionId("test-channel/routed-slash-success");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("routed-slash-success-events");
@@ -1246,6 +1247,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
+        // Act
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
@@ -1253,9 +1255,24 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             Source = BuildPersonalSource()
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        var text = await ExpectTextOutputAsync(subscriber, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var outputs = await CollectTurnOutputsAsync(subscriber, TestContext.Current.CancellationToken);
+
+        // Assert
+        var text = Assert.Single(outputs.OfType<TextOutput>());
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
-        await ExpectTurnCompletedAsync(subscriber, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.Single(outputs.OfType<TurnCompleted>());
+        Assert.Collection(outputs.OfType<SubAgentOutput>(),
+            started =>
+            {
+                Assert.Equal(SubAgentPhase.Started, started.Phase);
+                Assert.Equal("summarizer", started.AgentName.Value);
+            },
+            completed =>
+            {
+                Assert.Equal(SubAgentPhase.Completed, completed.Phase);
+                Assert.Equal("summarizer", completed.AgentName.Value);
+                Assert.True(completed.Success);
+            });
 
         Assert.Equal(0, _clientProvider.Main.CallCount);
         Assert.Equal(1, _clientProvider.Compaction.CallCount);
@@ -1283,6 +1300,40 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.DoesNotContain(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.System
             && (m.Text?.Contains(AgentsLayerMarker, StringComparison.Ordinal) ?? false));
+    }
+
+    [Fact]
+    public async Task Routed_slash_command_reports_child_model_failure_and_completes_the_turn()
+    {
+        // Arrange
+        const string failure = "synthetic routed model failure";
+        _clientProvider.Compaction.PlannedExceptions.Enqueue(new InvalidOperationException(failure));
+        var sessionId = new SessionId("test-channel/routed-slash-child-failure");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("routed-slash-child-failure-events");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // Act
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "/ops-route check daemon health",
+            Source = BuildPersonalSource()
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        var outputs = await CollectTurnOutputsAsync(subscriber, TestContext.Current.CancellationToken);
+
+        // Assert
+        var error = Assert.Single(outputs.OfType<ErrorOutput>());
+        Assert.Equal(ErrorCategory.ToolFailure, error.Category);
+        Assert.Contains(failure, error.Message, StringComparison.Ordinal);
+        Assert.Equal(TurnOutcome.Failed, Assert.Single(outputs.OfType<TurnCompleted>()).Outcome);
+        Assert.Empty(outputs.OfType<TextOutput>());
+        Assert.Equal(0, _clientProvider.Main.CallCount);
     }
 
     // NOTE: routing the spawn lifecycle to session.log is no longer per-path-wired — the
@@ -1501,6 +1552,21 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             ReceivedAt = DateTimeOffset.UtcNow,
             ReminderId = reminderId is null ? null : new ReminderId(reminderId)
         };
+    }
+
+    private static async Task<IReadOnlyList<SessionOutput>> CollectTurnOutputsAsync(
+        Akka.TestKit.TestProbe probe, CancellationToken ct)
+    {
+        var outputs = new List<SessionOutput>();
+        for (var i = 0; i < 12; i++)
+        {
+            var output = await probe.ExpectMsgAsync<SessionOutput>(TimeSpan.FromSeconds(5), cancellationToken: ct);
+            outputs.Add(output);
+            if (output is TurnCompleted)
+                return outputs;
+        }
+
+        throw new Xunit.Sdk.XunitException("Expected TurnCompleted within 12 session outputs.");
     }
 
     private static async Task<TextOutput> ExpectTextOutputAsync(Akka.TestKit.TestProbe probe, TimeSpan timeout, CancellationToken ct)
