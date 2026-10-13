@@ -53,6 +53,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
     [InlineData(true)]
     public async Task Tool_completion_resets_cycle_state_only_for_new_user_input(bool newUserInput)
     {
+        // Arrange
         var ct = TestContext.Current.CancellationToken;
         ConfigureRepeatedCalls();
         foreach (var decision in new[] { true, true, true, false })
@@ -61,14 +62,37 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         var sessionId = new SessionId("cycle-user-input/tool-completion");
         var subscriber = await StartRequestAsync(sessionId);
 
-        await _executor.CallPaused.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        if (newUserInput)
-            await SendNewRequestAsync(sessionId);
-        _executor.ResumeCall.TrySetResult();
-        await ExpectTurnCompletedAsync(subscriber);
+        // Act
+        try
+        {
+            await _executor.CallPaused.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            if (newUserInput)
+            {
+                await SendRequestAsync(sessionId, "Queued first request");
+                await SendRequestAsync(sessionId, "Queued second request");
+            }
+            _executor.ResumeCall.TrySetResult();
+            await ExpectTurnCompletedAsync(subscriber);
 
-        Assert.Equal(newUserInput ? 3 : 2, _executor.Count);
-        Assert.Equal(4, _client.Inner.CallCount);
+            // Assert
+            Assert.Equal(newUserInput ? 3 : 2, _executor.Count);
+            Assert.Equal(4, _client.Inner.CallCount);
+            if (newUserInput)
+            {
+                var firstQueuedCall = _client.Inner.ReceivedMessages.First(messages =>
+                    messages.Any(message => message.Text == "Queued first request"));
+                var queuedInputs = firstQueuedCall
+                    .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                        && message.Text is ("Queued first request" or "Queued second request"))
+                    .Select(message => message.Text)
+                    .ToArray();
+                Assert.Equal(["Queued first request", "Queued second request"], queuedInputs);
+            }
+        }
+        finally
+        {
+            _executor.ResumeCall.TrySetResult();
+        }
     }
 
     [Fact]
@@ -227,9 +251,12 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
     }
 
     private Task<CommandAck> SendNewRequestAsync(SessionId sessionId)
+        => SendRequestAsync(sessionId, "Run the same tool once more. This is an explicit user request.");
+
+    private Task<CommandAck> SendRequestAsync(SessionId sessionId, string content)
         => ActorRegistry.Get<SessionManagerActorKey>().Ask<CommandAck>(new SendUserMessage
         {
-            SessionId = sessionId, Content = "Run the same tool once more. This is an explicit user request."
+            SessionId = sessionId, Content = content
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
     private static ValueTask<object> ExpectTurnCompletedAsync(TestProbe subscriber)

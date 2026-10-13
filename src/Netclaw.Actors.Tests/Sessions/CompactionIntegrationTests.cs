@@ -13,6 +13,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
+using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -204,14 +205,15 @@ public class CompactionIntegrationTests : LlmSessionTestBase
     [Fact]
     public async Task Buffer_drains_after_compaction()
     {
+        // Arrange
+        var firstResponseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = firstResponseGate;
         _fakeChatClient.UsageOverride = new UsageDetails
         {
             InputTokenCount = 800,
             OutputTokenCount = 50,
             TotalTokenCount = 850
         };
-        _fakeChatClient.Delay = TimeSpan.FromMilliseconds(100);
-
         var sessionId = new SessionId("test-channel/buffer-drain-compact");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("buffer-sub");
@@ -223,40 +225,116 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
-        // First message — triggers turn then compaction
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        // Act
+        try
+        {
+            await sessionManager.Ask<CommandAck>(new SendUserMessage
+            {
+                SessionId = sessionId,
+                Content = "First message"
+            }, TestContext.Current.CancellationToken);
+            await _fakeChatClient.FirstCallEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+            // Buffer a second message during processing/compaction
+            await sessionManager.Ask<CommandAck>(new SendUserMessage
+            {
+                SessionId = sessionId,
+                Content = "Second message (buffered)"
+            }, TestContext.Current.CancellationToken);
+            await sessionManager.Ask<CommandAck>(new SendUserMessage
+            {
+                SessionId = sessionId,
+                Content = "Third message (buffered)"
+            }, TestContext.Current.CancellationToken);
+            firstResponseGate.TrySetResult();
+
+            // Wait for turn 1 output
+            await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+
+            // Wait for compaction
+            await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
+
+            // After compaction, lower the usage so the buffered message doesn't trigger again
+            _fakeChatClient.UsageOverride = new UsageDetails
+            {
+                InputTokenCount = 100,
+                OutputTokenCount = 20,
+                TotalTokenCount = 120
+            };
+
+            // Buffered message should be drained and produce output
+            await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+
+            // Assert
+            var firstBufferedCall = _fakeChatClient.ReceivedMessages.First(messages =>
+                messages.Any(message => message.Text == "Second message (buffered)"));
+            var bufferedInputs = firstBufferedCall
+                .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                    && message.Text is ("Second message (buffered)" or "Third message (buffered)"))
+                .Select(message => message.Text)
+                .ToArray();
+            Assert.Equal(["Second message (buffered)", "Third message (buffered)"], bufferedInputs);
+        }
+        finally
+        {
+            firstResponseGate.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task Unknown_approval_response_during_compaction_is_replayed_after_phase_entry()
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        var observationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.ObservationResponseGate = observationGate;
+        _fakeChatClient.UsageOverride = new UsageDetails { InputTokenCount = 800 };
+        var sessionId = new SessionId("test-channel/compaction-deferred-unknown-approval");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("compaction-deferred-approval-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Content = "First message"
-        }, TestContext.Current.CancellationToken);
+            Filter = OutputFilter.Full
+        }, ct);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: ct);
 
-        // Buffer a second message during processing/compaction
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        // Act
+        try
         {
-            SessionId = sessionId,
-            Content = "Second message (buffered)"
-        }, TestContext.Current.CancellationToken);
+            await manager.Ask<CommandAck>(new SendUserMessage
+            {
+                SessionId = sessionId,
+                Content = "Start compaction"
+            }, ct);
+            await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: ct);
+            await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: ct);
+            await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: ct);
 
-        // Wait for turn 1 output
-        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+            var ack = await manager.Ask<CommandAck>(new ToolInteractionResponse
+            {
+                SessionId = sessionId,
+                CallId = new ToolCallId("missing-approval"),
+                SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+                SenderId = new SenderId("requester")
+            }, TimeSpan.FromSeconds(5), ct);
+            Assert.Equal(sessionId, ack.SessionId);
 
-        // Wait for compaction
-        await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
+            observationGate.TrySetResult();
+            await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: ct);
 
-        // After compaction, lower the usage so the buffered message doesn't trigger again
-        _fakeChatClient.UsageOverride = new UsageDetails
+            // Assert
+            var expired = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: ct);
+            Assert.Contains("approval prompt has expired", expired.Text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
         {
-            InputTokenCount = 100,
-            OutputTokenCount = 20,
-            TotalTokenCount = 120
-        };
-
-        // Buffered message should be drained and produce output
-        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+            observationGate.TrySetResult();
+        }
     }
 
     [Fact]
