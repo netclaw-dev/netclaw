@@ -13,6 +13,7 @@ using Netclaw.Tools;
 using Xunit;
 using AccordantSpec = Microsoft.Accordant.Spec<Netclaw.Actors.Tests.Sessions.ToolBatchModelState>;
 using ChatRole = Netclaw.Actors.Protocol.ChatRole;
+using HistoryResult = (string CallId, string Content);
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -21,230 +22,233 @@ public partial class ToolBatchModelState
 {
     public string FirstCallId { get; set; } = string.Empty;
     public string SecondCallId { get; set; } = string.Empty;
-    public List<string> CurrentResults { get; set; } = [];
-    public List<string> HistoryResults { get; set; } = [];
+    public List<HistoryResult> History { get; set; } = [];
     public bool ExecutionTaskCompleted { get; set; }
+
+    public bool HasResult(string callId) => History.Any(result => result.CallId == callId);
 }
 
 public sealed class ActiveToolBatchAccordantTests(ITestOutputHelper output)
 {
-    private const string ReplaySeed = "0N0XIzNsQ0O2";
+    // CsCheck replays this first case, then explores new random sequences. Failures report their own replay seed.
+    private const string InitialSampleSeed = "0N0XIzNsQ0O2";
 
     private enum ActionKind { FirstResult, SecondResult, TaskDone, ProbeCompletion }
+    private enum Explored { Ready, Pending, DuplicateResult, NewBatch, ResultBeforeTask, TaskBeforeResult }
 
     private sealed record Command(ActionKind Kind, string Payload);
     private sealed record BatchIds(string First, string Second);
     private sealed record ResultInput(string CallId, string Payload);
-    private sealed record BatchView(bool Ready, int ResultCount, string History);
+    private sealed record BatchObservation(bool Ready, int ResultCount, HistoryResult[] History);
+    private sealed record GeneratedSequence(Command[] Commands, int[] IdSuffixes)
+    {
+        public BatchIds Batch(int number)
+            => new($"batch-{number}-A-{IdSuffixes[number]}", $"batch-{number}-B-{IdSuffixes[number]}");
+
+        public override string ToString()
+            => $"IDs=[{string.Join(',', IdSuffixes)}]; "
+                + string.Join(" -> ", Commands.Select(command => $"{command.Kind}({command.Payload})"));
+    }
 
     [Fact]
-    public void Generated_batches_match_the_accordant_result_and_completion_model()
+    public void Generated_batches_retain_first_results_and_wait_for_results_and_task()
     {
         // Arrange
         var spec = CreateSpec();
-        var resultOperation = spec.GetOperation<ResultInput, string>("RecordResult");
-        var taskOperation = spec.GetOperation<Unit, Unit>("MarkTaskDone");
-        var probeOperation = spec.GetOperation<BatchIds, BatchView>("ProbeCompletion");
+        var sequences = GenerateSequences();
+        var explored = new HashSet<Explored>();
         var cases = 0;
         var operations = 0;
-        var readyCases = 0;
-        var pendingCases = 0;
-        var duplicateCases = 0;
-        var secondBatchCases = 0;
-        var resultBeforeTaskCases = 0;
-        var taskBeforeResultCases = 0;
+
+        // Act: CsCheck chooses operation order and inputs. Accordant checks each observed response.
+        sequences.Sample(sequence =>
+        {
+            explored.UnionWith(new BatchScenario(spec, sequence).Run());
+            cases++;
+            operations += sequence.Commands.Length;
+        }, iter: 1_000, seed: InitialSampleSeed, threads: 1, print: sequence => sequence.ToString());
+
+        // Assert: These counts check exploration. The model rules below check behavior.
+        output.WriteLine($"first-case-seed={InitialSampleSeed}; cases={cases}; operations={operations}; explored={string.Join(',', explored)}");
+        Assert.True(cases >= 1_000, $"CsCheck ran only {cases} cases.");
+        Assert.True(operations > cases, $"Only {operations} operations ran in {cases} cases.");
+        foreach (var required in Enum.GetValues<Explored>())
+            Assert.Contains(required, explored);
+    }
+
+    private static Gen<GeneratedSequence> GenerateSequences()
+    {
         var command = Gen.Select(
             Gen.OneOfConst(ActionKind.FirstResult, ActionKind.SecondResult,
                 ActionKind.TaskDone, ActionKind.ProbeCompletion),
             Gen.Int[0, 999],
             (kind, value) => new Command(kind, $"payload-{value}"));
-        var generated = Gen.Select(command.Array[1, 10], Gen.Int[0, 999].Array[11],
-            (commands, idSuffixes) => (commands, idSuffixes));
-
-        // Act
-        generated.Sample(sample =>
-        {
-            var (commands, idSuffixes) = sample;
-            var batchNumber = 0;
-            var batch = Ids(batchNumber, idSuffixes[batchNumber]);
-            var tracker = new ActiveToolBatchTracker();
-            tracker.Start(Calls(batch), preparedCycleBatch: null);
-            var session = SessionState.Empty;
-            var turn = new TurnStateTracker();
-            var profile = new StateProfile(new ToolBatchModelState
-            {
-                FirstCallId = batch.First,
-                SecondCallId = batch.Second
-            });
-            var trace = new List<string>();
-            var seenFirst = false;
-            var seenSecond = false;
-            var seenTask = false;
-            var duplicate = false;
-            var resultBeforeTask = false;
-            var taskBeforeResult = false;
-            var hadReady = false;
-            var hadPending = false;
-
-            foreach (var commandInput in commands)
-            {
-                switch (commandInput.Kind)
-                {
-                    case ActionKind.FirstResult:
-                    case ActionKind.SecondResult:
-                    {
-                        var first = commandInput.Kind == ActionKind.FirstResult;
-                        var callId = first ? batch.First : batch.Second;
-                        duplicate |= first ? seenFirst : seenSecond;
-                        if (first) seenFirst = true;
-                        else seenSecond = true;
-                        taskBeforeResult |= seenTask;
-                        var request = new ResultInput(callId, commandInput.Payload);
-                        trace.Add($"Result({request.CallId}, {request.Payload})");
-                        session = tracker.ApplyRecordedResult(session, Result(request));
-                        Verify(spec, resultOperation, request, History(session), ref profile, trace);
-                        break;
-                    }
-                    case ActionKind.TaskDone:
-                        trace.Add("TaskDone");
-                        tracker.MarkExecutionTaskCompleted();
-                        resultBeforeTask |= !seenTask && (seenFirst || seenSecond);
-                        seenTask = true;
-                        Verify(spec, taskOperation, Unit.Value, Unit.Value, ref profile, trace);
-                        break;
-                    case ActionKind.ProbeCompletion:
-                    {
-                        var nextBatch = Ids(batchNumber + 1, idSuffixes[batchNumber + 1]);
-                        trace.Add($"ProbeCompletion(next={nextBatch.First},{nextBatch.Second})");
-                        var completion = tracker.CompleteIfReady(session, turn, 10);
-                        var view = completion is BatchCompletion.Ready ready
-                            ? new BatchView(true, ready.ResultCount, History(ready.State))
-                            : new BatchView(false, 0, History(session));
-                        Verify(spec, probeOperation, nextBatch, view, ref profile, trace);
-                        if (view.Ready)
-                        {
-                            hadReady = true;
-                            tracker.Clear();
-                            batchNumber++;
-                            batch = nextBatch;
-                            tracker.Start(Calls(batch), preparedCycleBatch: null);
-                            seenFirst = false;
-                            seenSecond = false;
-                            seenTask = false;
-                        }
-                        else hadPending = true;
-                        break;
-                    }
-                }
-            }
-
-            Interlocked.Increment(ref cases);
-            Interlocked.Add(ref operations, commands.Length);
-            if (hadReady) Interlocked.Increment(ref readyCases);
-            if (hadPending) Interlocked.Increment(ref pendingCases);
-            if (duplicate) Interlocked.Increment(ref duplicateCases);
-            if (batchNumber > 0) Interlocked.Increment(ref secondBatchCases);
-            if (resultBeforeTask) Interlocked.Increment(ref resultBeforeTaskCases);
-            if (taskBeforeResult) Interlocked.Increment(ref taskBeforeResultCases);
-        }, iter: 1_000, seed: ReplaySeed, threads: 1,
-            print: sample => string.Join(" -> ", sample.commands.Select(commandInput =>
-                $"{commandInput.Kind}({commandInput.Payload})")));
-
-        // Assert
-        output.WriteLine($"seed={ReplaySeed}; cases={cases}; operations={operations}; "
-            + $"ready={readyCases}; pending={pendingCases}; duplicate={duplicateCases}; "
-            + $"second-batch={secondBatchCases}; result-before-task={resultBeforeTaskCases}; "
-            + $"task-before-result={taskBeforeResultCases}");
-        Assert.True(cases >= 1_000, $"CsCheck ran only {cases} cases.");
-        Assert.True(operations > cases, $"Only {operations} operations ran in {cases} cases.");
-        Assert.True(readyCases > 0, "No generated case completed a batch.");
-        Assert.True(pendingCases > 0, "No generated case observed a pending batch.");
-        Assert.True(duplicateCases > 0, "No generated case repeated a result in one batch.");
-        Assert.True(secondBatchCases > 0, "No generated case cleared and started a second batch.");
-        Assert.True(resultBeforeTaskCases > 0, "No result preceded task completion.");
-        Assert.True(taskBeforeResultCases > 0, "No task completion preceded a result.");
+        return Gen.Select(command.Array[1, 10], Gen.Int[0, 999].Array[11],
+            (commands, idSuffixes) => new GeneratedSequence(commands, idSuffixes));
     }
 
     private static AccordantSpec CreateSpec()
     {
         var spec = new AccordantSpec();
-        spec.Operation<ResultInput, string>("RecordResult", (request, state) =>
-        {
-            var recorded = $"{request.CallId}:result {request.Payload}";
-            List<string> expected = state.HistoryResults.Any(value =>
-                    value.StartsWith($"{request.CallId}:", StringComparison.Ordinal))
-                ? state.HistoryResults
-                : [.. state.HistoryResults, recorded];
-            return Expect.That<string>(value => value == string.Join('|', expected),
-                    $"History must retain one payload per call: {string.Join('|', expected)}")
-                .ThenState<ToolBatchModelState>(updated =>
-                {
-                    if (!updated.CurrentResults.Contains(request.CallId, StringComparer.Ordinal))
-                        updated.CurrentResults.Add(request.CallId);
-                    if (!updated.HistoryResults.Any(value =>
-                            value.StartsWith($"{request.CallId}:", StringComparison.Ordinal)))
-                        updated.HistoryResults.Add(recorded);
-                });
-        });
+        spec.Operation<ResultInput, HistoryResult[]>("RecordResult", RetainFirstResultInArrivalOrder);
         spec.Operation<Unit, Unit>("MarkTaskDone", (_, _) =>
             Expect.That<Unit>(_ => true)
-                .ThenState<ToolBatchModelState>(updated => updated.ExecutionTaskCompleted = true));
-        spec.Operation<BatchIds, BatchView>("ProbeCompletion", (nextBatch, state) =>
-        {
-            var expectedReady = state.ExecutionTaskCompleted
-                && state.CurrentResults.Contains(state.FirstCallId, StringComparer.Ordinal)
-                && state.CurrentResults.Contains(state.SecondCallId, StringComparer.Ordinal);
-            var expectedHistory = string.Join('|', state.HistoryResults);
-            var expectation = Expect.That<BatchView>(
-                value => value.Ready == expectedReady
-                    && value.ResultCount == (expectedReady ? 2 : 0)
-                    && value.History == expectedHistory,
-                $"Ready={expectedReady}, count={(expectedReady ? 2 : 0)}, history={expectedHistory}");
-            if (!expectedReady)
-                return expectation.SameState();
-            return expectation.ThenState<ToolBatchModelState>(updated =>
-            {
-                updated.FirstCallId = nextBatch.First;
-                updated.SecondCallId = nextBatch.Second;
-                updated.CurrentResults.Clear();
-                updated.ExecutionTaskCompleted = false;
-            });
-        });
+                .ThenState<ToolBatchModelState>(nextState => nextState.ExecutionTaskCompleted = true));
+        spec.Operation<BatchIds, BatchObservation>("ProbeCompletion", CompleteOnlyAfterBothResultsAndTask);
         return spec;
     }
 
-    private static void Verify<TRequest, TResponse>(
-        AccordantSpec spec,
-        Operation<TRequest, TResponse, ToolBatchModelState> operation,
-        TRequest request,
-        TResponse response,
-        ref StateProfile profile,
-        IReadOnlyList<string> trace)
+    private static ExpectedOutcomes RetainFirstResultInArrivalOrder(ResultInput request, ToolBatchModelState state)
     {
-        var (valid, message, updated) = spec.Allows(operation, request, response, profile);
-        Assert.True(valid, $"Accordant rejected {string.Join(" -> ", trace)}: {message}");
-        profile = updated;
+        HistoryResult[] expected = state.HasResult(request.CallId)
+            ? [.. state.History]
+            : [.. state.History, (request.CallId, $"result {request.Payload}")];
+        return Expect.That<HistoryResult[]>(actual => ValidateHistory(expected, actual))
+            .ThenState<ToolBatchModelState>(nextState => nextState.History = [.. expected]);
     }
 
-    private static string History(SessionState session)
-        => string.Join('|', session.History
-            .Where(message => message.Role == ChatRole.Tool && message.ToolCallId is not null)
-            .Select(message => $"{message.ToolCallId!.Value.Value}:{message.Content}"));
-
-    private static BatchIds Ids(int batchNumber, int suffix)
-        => new($"batch-{batchNumber}-A-{suffix}", $"batch-{batchNumber}-B-{suffix}");
-
-    private static FunctionCallContent[] Calls(BatchIds ids) =>
-    [
-        new FunctionCallContent(ids.First, "file_read"),
-        new FunctionCallContent(ids.Second, "file_read")
-    ];
-
-    private static SerializableChatMessage Result(ResultInput input) => new()
+    private static ExpectedOutcomes CompleteOnlyAfterBothResultsAndTask(BatchIds nextBatch, ToolBatchModelState state)
     {
-        Role = ChatRole.Tool,
-        Name = "file_read",
-        ToolCallId = new ToolCallId(input.CallId),
-        Content = $"result {input.Payload}"
-    };
+        var bothResultsArrived = state.HasResult(state.FirstCallId) && state.HasResult(state.SecondCallId);
+        var expectedReady = bothResultsArrived && state.ExecutionTaskCompleted;
+        var expectation = Expect.That<BatchObservation>(actual =>
+        {
+            if (actual.Ready != expectedReady)
+                return ValidationResult.Invalid($"Completion requires both results and the task. Expected ready={expectedReady}, actual={actual.Ready}.");
+            var expectedCount = expectedReady ? 2 : 0;
+            if (actual.ResultCount != expectedCount)
+                return ValidationResult.Invalid($"Expected result count={expectedCount}, actual={actual.ResultCount}.");
+            return ValidateHistory(state.History, actual.History);
+        });
+        if (!expectedReady)
+            return expectation.SameState();
+        return expectation.ThenState<ToolBatchModelState>(nextState =>
+        {
+            nextState.FirstCallId = nextBatch.First;
+            nextState.SecondCallId = nextBatch.Second;
+            nextState.ExecutionTaskCompleted = false;
+        });
+    }
+
+    private static ValidationResult ValidateHistory(IEnumerable<HistoryResult> expected, IEnumerable<HistoryResult> actual)
+        => expected.SequenceEqual(actual)
+            ? ValidationResult.Valid()
+            : ValidationResult.Invalid($"History must retain the first result per call in arrival order. "
+                + $"Expected [{string.Join(", ", expected)}], actual [{string.Join(", ", actual)}].");
+
+    // This adapter invokes the real tracker. Only the Accordant model predicts its responses.
+    private sealed class BatchScenario
+    {
+        private readonly AccordantSpec _spec;
+        private readonly GeneratedSequence _sequence;
+        private readonly ActiveToolBatchTracker _tracker = new();
+        private readonly TurnStateTracker _turnState = new();
+        private readonly List<string> _trace = [];
+        private readonly HashSet<Explored> _explored = [];
+        private SessionState _session = SessionState.Empty;
+        private StateProfile _profile;
+        private int _batchNumber;
+
+        public BatchScenario(AccordantSpec spec, GeneratedSequence sequence)
+        {
+            _spec = spec;
+            _sequence = sequence;
+            var batch = sequence.Batch(0);
+            _profile = new StateProfile(new ToolBatchModelState
+            {
+                FirstCallId = batch.First,
+                SecondCallId = batch.Second
+            });
+            Start(batch);
+        }
+
+        public IReadOnlySet<Explored> Run()
+        {
+            foreach (var command in _sequence.Commands)
+            {
+                switch (command.Kind)
+                {
+                    case ActionKind.FirstResult:
+                        RecordResult(_sequence.Batch(_batchNumber).First, command.Payload);
+                        break;
+                    case ActionKind.SecondResult:
+                        RecordResult(_sequence.Batch(_batchNumber).Second, command.Payload);
+                        break;
+                    case ActionKind.TaskDone:
+                        MarkTaskDone();
+                        break;
+                    case ActionKind.ProbeCompletion:
+                        ProbeCompletion();
+                        break;
+                }
+            }
+            return _explored;
+        }
+
+        private void RecordResult(string callId, string payload)
+        {
+            var model = (ToolBatchModelState)_profile.SingleState();
+            if (model.HasResult(callId))
+                _explored.Add(Explored.DuplicateResult);
+            if (model.ExecutionTaskCompleted)
+                _explored.Add(Explored.TaskBeforeResult);
+            var request = new ResultInput(callId, payload);
+            _trace.Add($"Result({callId}, {payload})");
+            _session = _tracker.ApplyRecordedResult(_session, new SerializableChatMessage
+            {
+                Role = ChatRole.Tool,
+                Name = "file_read",
+                ToolCallId = new ToolCallId(callId),
+                Content = $"result {payload}"
+            });
+            Verify("RecordResult", request, History(_session));
+        }
+
+        private void MarkTaskDone()
+        {
+            var model = (ToolBatchModelState)_profile.SingleState();
+            var anyResultArrived = model.HasResult(model.FirstCallId) || model.HasResult(model.SecondCallId);
+            if (!model.ExecutionTaskCompleted && anyResultArrived)
+                _explored.Add(Explored.ResultBeforeTask);
+            _trace.Add("TaskDone");
+            _tracker.MarkExecutionTaskCompleted();
+            Verify("MarkTaskDone", Unit.Value, Unit.Value);
+        }
+
+        private void ProbeCompletion()
+        {
+            var nextBatch = _sequence.Batch(_batchNumber + 1);
+            _trace.Add($"ProbeCompletion(next={nextBatch.First},{nextBatch.Second})");
+            var completion = _tracker.CompleteIfReady(_session, _turnState, 10);
+            var observation = completion is BatchCompletion.Ready ready
+                ? new BatchObservation(true, ready.ResultCount, History(ready.State))
+                : new BatchObservation(false, 0, History(_session));
+            Verify("ProbeCompletion", nextBatch, observation);
+            _explored.Add(observation.Ready ? Explored.Ready : Explored.Pending);
+            if (!observation.Ready)
+                return;
+            _tracker.Clear();
+            _batchNumber++;
+            Start(nextBatch);
+            _explored.Add(Explored.NewBatch);
+        }
+
+        private void Start(BatchIds ids) => _tracker.Start(
+            [new FunctionCallContent(ids.First, "file_read"), new FunctionCallContent(ids.Second, "file_read")],
+            preparedCycleBatch: null);
+
+        private void Verify<TRequest, TResponse>(string name, TRequest request, TResponse response)
+        {
+            var operation = _spec.GetOperation<TRequest, TResponse>(name);
+            var (valid, message, updated) = _spec.Allows(operation, request, response, _profile);
+            Assert.True(valid, $"Accordant rejected {string.Join(" -> ", _trace)}: {message}");
+            _profile = updated;
+        }
+
+        private static HistoryResult[] History(SessionState session)
+            => session.History
+                .Where(message => message.Role == ChatRole.Tool && message.ToolCallId is not null)
+                .Select(message => (message.ToolCallId!.Value.Value, message.Content!))
+                .ToArray();
+    }
 }
