@@ -573,18 +573,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
             if (_activeCycleBatch is { } cycleBatch)
             {
-                var cycleResults = msg.ToolResults.ToDictionary(
-                    result => result.ToolCallId is { } callId
+                var cycleResults = msg.Results.ToDictionary(
+                    result => result.Message.ToolCallId is { } callId
                         ? callId.Value
                         : throw new InvalidOperationException("A tool cycle result requires a call identity."),
                     result =>
                     {
-                        var callId = result.ToolCallId
-                            ?? throw new InvalidOperationException("A tool cycle result requires a call identity.");
-                        msg.ToolReceipts.TryGetValue(callId.Value, out var receipt);
                         return new ToolCycleResult(
-                            receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
-                            result.Content ?? string.Empty);
+                            result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
+                            result.Message.Content ?? string.Empty);
                     },
                     StringComparer.Ordinal);
                 _turnState.ObserveCompleted(ToolCycleSignatureFactory.Complete(cycleBatch, cycleResults));
@@ -592,40 +589,43 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             }
 
             // Append tool results as MEAI messages and log each result.
-            foreach (var result in msg.ToolResults)
+            foreach (var result in msg.Results)
             {
-                _history.Add(ChatMessageConverter.ToAiMessage(result));
-                if (result.ToolCallId is { } callId)
+                var message = result.Message;
+                _history.Add(ChatMessageConverter.ToAiMessage(message));
+                if (message.ToolCallId is { } callId)
                 {
-                    msg.ToolReceipts.TryGetValue(callId.Value, out var receipt);
+                    var receipt = result.Receipt;
                     _fileActivity.Apply(receipt);
-                    TryApplyProjectDirectory(result.Name, receipt);
-                    if (msg.AuthorizationAttemptIds.TryGetValue(callId.Value, out var authorizationAttemptId))
-                    {
-                        _log.Info(
-                            "SubAgent authorization attempt result authorizationAttemptId={AuthorizationAttemptId} " +
-                            "sessionId={SessionId} subSessionId={SubSessionId} callId={CallId} " +
-                            "outcomeCategory={OutcomeCategory} remediationCode={RemediationCode}",
-                            authorizationAttemptId.Value,
-                            _parentSessionId,
-                            _subSessionId,
-                            callId.Value,
-                            receipt?.Category.ToString(),
-                            (receipt as ToolInvocationReceipt.Correction)?.RemediationCode.ToString());
-                    }
-                    if (msg.ToolExposureRequests.TryGetValue(callId.Value, out var exposureRequest))
+                    TryApplyProjectDirectory(message.Name, receipt);
+                    _log.Info(
+                        "SubAgent authorization attempt result authorizationAttemptId={AuthorizationAttemptId} " +
+                        "sessionId={SessionId} subSessionId={SubSessionId} callId={CallId} " +
+                        "outcomeCategory={OutcomeCategory} remediationCode={RemediationCode}",
+                        result.AuthorizationAttemptId.Value,
+                        _parentSessionId,
+                        _subSessionId,
+                        callId.Value,
+                        receipt?.Category.ToString(),
+                        (receipt as ToolInvocationReceipt.Correction)?.RemediationCode.ToString());
+                    if (result.ExposureRequest is { } exposureRequest)
                         TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
                 }
-                if (result.Name is "load_tool" && result.Content is not null)
-                    TryActivateDiscoveredTool(result.Content.Trim());
+                if (message.Name is "load_tool" && message.Content is not null)
+                    TryActivateDiscoveredTool(message.Content.Trim());
             }
 
-            foreach (var change in msg.ManagedTemporaryCorrectionChanges)
-                _managedTemporaryCorrections.Apply(change);
+            foreach (var result in msg.Results)
+            {
+                if (result.ManagedTemporaryCorrectionUpdate is { } change)
+                    _managedTemporaryCorrections.Apply(change);
+            }
 
-            AddModelInputMediaNudge(msg.ModelInputMediaReferences);
+            AddModelInputMediaNudge(msg.Results
+                .SelectMany(result => result.ModelInputMediaReferences)
+                .ToArray());
 
-            var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _maxToolIterations);
+            var budgetStatus = _turnState.RecordToolCompletion(msg.Results.Length, _maxToolIterations);
             switch (budgetStatus)
             {
                 case ToolBudgetStatus.Exhausted exhausted:
@@ -899,32 +899,30 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void EmitToolCycleCorrection(IReadOnlyList<FunctionCallContent> toolCalls)
     {
-        var receipts = new Dictionary<string, ToolInvocationReceipt>(StringComparer.Ordinal);
-        var authorizationAttemptIds = new Dictionary<string, AuthorizationAttemptId>(StringComparer.Ordinal);
-        var results = new List<SerializableChatMessage>(toolCalls.Count);
-        foreach (var call in toolCalls)
+        var results = new SubAgentToolCallResult[toolCalls.Count];
+        for (var i = 0; i < toolCalls.Count; i++)
         {
+            var call = toolCalls[i];
             var receipt = new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle);
-            receipts.Add(call.CallId, receipt);
-            authorizationAttemptIds.Add(call.CallId, AuthorizationAttemptId.New());
-            results.Add(ToolRemediationPresenter.Present(
-                new SerializableChatMessage
-                {
-                    Role = Protocol.ChatRole.Tool,
-                    Content = ToolCycleMessages.Correction,
-                    ToolCallId = new ToolCallId(call.CallId),
-                    Name = call.Name
-                },
+            results[i] = new SubAgentToolCallResult(
+                ToolRemediationPresenter.Present(
+                    new SerializableChatMessage
+                    {
+                        Role = Protocol.ChatRole.Tool,
+                        Content = ToolCycleMessages.Correction,
+                        ToolCallId = new ToolCallId(call.CallId),
+                        Name = call.Name
+                    },
+                    receipt,
+                    setWorkingDirectoryAvailable: false),
+                Array.Empty<SerializableMediaReference>(),
+                null,
                 receipt,
-                setWorkingDirectoryAvailable: false));
+                null,
+                AuthorizationAttemptId.New());
         }
 
-        Self.Tell(new ToolExecutionCompleted
-        {
-            ToolResults = results,
-            ToolReceipts = receipts,
-            AuthorizationAttemptIds = authorizationAttemptIds
-        });
+        Self.Tell(new ToolExecutionCompleted(results));
     }
 
     private void FireLlmCall(bool forceNoTools = false)
@@ -1683,36 +1681,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         setWorkingDirectoryAvailable)
                 };
             }
-            self.Tell(new ToolExecutionCompleted
-            {
-                ToolResults = [.. results.Select(r => r.Message)],
-                ModelInputMediaReferences = [.. results.SelectMany(r => r.ModelInputMediaReferences)],
-                ManagedTemporaryCorrectionChanges = [.. results.Where(r => r.ManagedTemporaryCorrectionUpdate is not null).Select(r => r.ManagedTemporaryCorrectionUpdate!)],
-                ToolReceipts = results
-                    .Where(result => result.Receipt is not null)
-                    .ToDictionary<SubAgentToolCallResult, string, ToolInvocationReceipt>(
-                        result => result.Message.ToolCallId is { } callId
-                            ? callId.Value
-                            : throw new InvalidOperationException("A child tool receipt requires a call identity."),
-                        result => result.Receipt
-                            ?? throw new InvalidOperationException("A selected child tool result requires a receipt."),
-                        StringComparer.Ordinal),
-                ToolExposureRequests = results
-                    .Where(result => result.ExposureRequest is not null)
-                    .ToDictionary<SubAgentToolCallResult, string, ToolExposureRequest>(
-                        result => result.Message.ToolCallId is { } callId
-                            ? callId.Value
-                            : throw new InvalidOperationException("A child tool exposure request requires a call identity."),
-                        result => result.ExposureRequest
-                            ?? throw new InvalidOperationException("A selected child tool result requires an exposure request."),
-                        StringComparer.Ordinal),
-                AuthorizationAttemptIds = results.ToDictionary<SubAgentToolCallResult, string, AuthorizationAttemptId>(
-                    result => result.Message.ToolCallId is { } callId
-                        ? callId.Value
-                        : throw new InvalidOperationException("A child authorization attempt requires a call identity."),
-                    result => result.AuthorizationAttemptId,
-                    StringComparer.Ordinal)
-            });
+            self.Tell(new ToolExecutionCompleted(results));
         }
         catch (Exception ex)
         {
@@ -1787,6 +1756,25 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ToolInvocationReceipt? Receipt,
         ToolExposureRequest? ExposureRequest,
         AuthorizationAttemptId AuthorizationAttemptId);
+
+    private sealed record ToolExecutionCompleted : INoSerializationVerificationNeeded
+    {
+        public ToolExecutionCompleted(SubAgentToolCallResult[] results)
+        {
+            var callIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var result in results)
+            {
+                var callId = result.Message.ToolCallId
+                    ?? throw new InvalidOperationException("A child tool result requires a call identity.");
+                if (!callIds.Add(callId.Value))
+                    throw new ArgumentException("A child tool result has a duplicate call identity.", nameof(results));
+            }
+
+            Results = results;
+        }
+
+        public SubAgentToolCallResult[] Results { get; }
+    }
 
     private string BuildSystemPrompt(
         SubAgentDefinition definition,
