@@ -112,6 +112,7 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
         var definition = CreateDefinition();
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, PermissivePolicy()));
 
+        // Act
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Say hello", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -361,22 +362,36 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
     }
 
     [Fact]
-    public async Task Tool_model_input_image_is_attached_to_subagent_followup_call()
+    public async Task Tool_results_attach_two_ordered_media_files_in_one_follow_up_nudge()
     {
+        // Arrange
         using var dir = new DisposableTempDir();
-        var imagePath = Path.Combine(dir.Path, "diagram.png");
-        await File.WriteAllBytesAsync(imagePath, FakePngBytes, TestContext.Current.CancellationToken);
-        var fakeTool = new FakeNetclawTool(
-            "load_image",
-            "image loaded",
-            onExecute: context => context.AddModelInputFile(imagePath, "diagram.png", "image/png"));
+        var firstImagePath = Path.Combine(dir.Path, "first.png");
+        var secondImagePath = Path.Combine(dir.Path, "second.png");
+        var firstImage = TestImages.SmallPng();
+        var secondImage = TestImages.SmallPng(17);
+        await File.WriteAllBytesAsync(firstImagePath, firstImage, TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(secondImagePath, secondImage, TestContext.Current.CancellationToken);
+        var firstTool = new FakeNetclawTool(
+            "load_first_image",
+            "first image loaded",
+            onExecute: context => context.AddModelInputFile(firstImagePath, "first.png", "image/png"));
+        var secondTool = new FakeNetclawTool(
+            "load_second_image",
+            "second image loaded",
+            onExecute: context => context.AddModelInputFile(secondImagePath, "second.png", "image/png"));
         var fakeClient = new FakeChatClient
         {
-            ToolCallsOnFirstCall = [CreateToolCall("call-image", "load_image")]
+            ToolCallsOnFirstCall =
+            [
+                CreateToolCall("call-first-image", "load_first_image"),
+                CreateToolCall("call-second-image", "load_second_image")
+            ]
         };
-        var definition = CreateDefinition([fakeTool]);
+        var definition = CreateDefinition([firstTool, secondTool]);
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, PermissivePolicy()));
 
+        // Act
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
@@ -388,15 +403,33 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        Assert.True(result.Success);
-        Assert.NotNull(fakeTool.LastContext);
-        Assert.True(fakeTool.LastContext!.ModelInputModalities.HasFlag(ModelModality.Image));
-        Assert.NotNull(fakeClient.LastReceivedMessages);
-        var nudge = Assert.Single(fakeClient.LastReceivedMessages!, message =>
+        var followUpMessages = fakeClient.ReceivedMessagesByCall[1];
+        var toolResults = followUpMessages
+            .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
+            .ToArray();
+        var nudges = followUpMessages.Where(message =>
             message.Role == ChatRole.User
-            && message.Text.Contains("media", StringComparison.OrdinalIgnoreCase));
-        var data = Assert.Single(nudge.Contents.OfType<DataContent>());
-        Assert.Equal("image/png", data.MediaType);
+            && message.Text.Contains("2 media files", StringComparison.Ordinal)).ToArray();
+        var nudge = nudges.FirstOrDefault();
+        var nudgeIndex = nudge is null ? -1 : followUpMessages.Select((message, index) => (message, index))
+            .First(item => ReferenceEquals(item.message, nudge)).index;
+        var toolResultIndexes = followUpMessages.Select((message, index) => (message, index))
+            .Where(item => item.message.Contents.OfType<FunctionResultContent>().Any())
+            .Select(item => item.index)
+            .ToArray();
+        var media = nudge?.Contents.OfType<DataContent>().ToArray() ?? [];
+
+        // Assert
+        Assert.True(result.Success);
+        Assert.NotNull(firstTool.LastContext);
+        Assert.True(firstTool.LastContext!.ModelInputModalities.HasFlag(ModelModality.Image));
+        Assert.Equal(["call-first-image", "call-second-image"], toolResults.Select(static item => item.CallId));
+        Assert.Single(nudges);
+        Assert.True(nudgeIndex > toolResultIndexes.DefaultIfEmpty(-1).Max());
+        Assert.Equal(2, media.Length);
+        Assert.All(media, data => Assert.Equal("image/png", data.MediaType));
+        Assert.Equal(firstImage, media[0].Data.ToArray());
+        Assert.Equal(secondImage, media[1].Data.ToArray());
     }
 
     [Fact]
@@ -1102,6 +1135,7 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
         var definition = CreateDefinition([fakeTool]);
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy));
 
+        // Act
         var runTask = agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
@@ -2229,6 +2263,148 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
     }
 
     [Fact]
+    public async Task Parallel_tool_results_keep_input_order_after_reverse_completion()
+    {
+        // Arrange
+        var changedPath = Path.GetFullPath(Path.Join(MissingProjectDirectory, "src", "Parallel.cs"));
+        var fakeTool = new ReverseCompletionTool(changedPath);
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                CreateToolCall("call-first", "controlled_tool", new Dictionary<string, object?> { ["label"] = "first" }),
+                CreateToolCall("call-second", "controlled_tool", new Dictionary<string, object?> { ["label"] = "second" })
+            ]
+        };
+        var diagnostics = CreateTestProbe();
+        Sys.EventStream.Subscribe(diagnostics, typeof(Info));
+        var agent = Sys.ActorOf(SubAgentActor.CreatePropsWithProjectInstructionProvider(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            PermissivePolicy(),
+            NullSystemPromptProvider.Instance));
+
+        // Act
+        var runTask = agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(projectDirectory: MissingProjectDirectory),
+                Task = "Run two related operations.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await fakeTool.BothCallsStarted.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        fakeTool.FailSecondCall();
+        var secondFailure = await Record.ExceptionAsync(async () => await fakeTool.SecondExecution);
+        fakeTool.CompleteFirstCall();
+
+        var result = await runTask;
+        var confirmedFiles = result.WorkingContext?.ConfirmedChangedFiles;
+
+        var followUpMessages = fakeClient.ReceivedMessagesByCall[1];
+        var toolResults = followUpMessages
+            .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
+            .ToArray();
+
+        var authorizationStartLogs = new List<object>();
+        for (var i = 0; i < 2; i++)
+        {
+            var log = await diagnostics.FishForMessageAsync<Info>(
+                message => message.Message.ToString()!.StartsWith(
+                    "SubAgent [test-agent] authorization attempt started",
+                    StringComparison.Ordinal),
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+            authorizationStartLogs.Add(log.Message);
+        }
+
+        var authorizationResultLogs = new List<object>();
+        for (var i = 0; i < 2; i++)
+        {
+            var log = await diagnostics.FishForMessageAsync<Info>(
+                message => message.Message.ToString()!.StartsWith(
+                    "SubAgent authorization attempt result",
+                    StringComparison.Ordinal),
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+            authorizationResultLogs.Add(log.Message);
+        }
+
+        var authorizationStarts = authorizationStartLogs
+            .OfType<LogMessage>()
+            .Select(static message => message.GetProperties())
+            .ToArray();
+        var authorizationResults = authorizationResultLogs
+            .OfType<LogMessage>()
+            .Select(static message => message.GetProperties())
+            .ToArray();
+
+        // Assert
+        Assert.IsType<UnauthorizedAccessException>(secondFailure);
+        Assert.True(result.Success, result.Output);
+        Assert.Equal([changedPath], confirmedFiles);
+        Assert.Equal(["call-first", "call-second"], toolResults.Select(static item => item.CallId));
+        Assert.Equal("first result", toolResults[0].Result?.ToString());
+        Assert.Contains("controlled denial", toolResults[1].Result?.ToString(), StringComparison.Ordinal);
+        var startAttemptIdsByCallId = authorizationStarts.ToDictionary(
+            static properties => properties["CallId"].ToString()!,
+            static properties => properties["AuthorizationAttemptId"].ToString()!,
+            StringComparer.Ordinal);
+        Assert.Equal(2, startAttemptIdsByCallId.Count);
+        Assert.Equal(["call-first", "call-second"], authorizationResults.Select(static properties => properties["CallId"].ToString()));
+        Assert.Equal(["Success", "AccessDenied"], authorizationResults.Select(static properties => properties["OutcomeCategory"]?.ToString()));
+        Assert.All(authorizationResults, properties =>
+            Assert.Equal(
+                startAttemptIdsByCallId[properties["CallId"].ToString()!],
+                properties["AuthorizationAttemptId"].ToString()));
+    }
+
+    [Fact]
+    public async Task Duplicate_normal_tool_call_ids_fail_after_execution_without_follow_up()
+    {
+        // Arrange
+        var executionCount = 0;
+        var fakeTool = new FakeNetclawTool(
+            "duplicate_tool",
+            "ran",
+            onExecute: _ => Interlocked.Increment(ref executionCount));
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                CreateToolCall("duplicate-id", "duplicate_tool"),
+                CreateToolCall("duplicate-id", "duplicate_tool")
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            PermissivePolicy()));
+
+        // Act
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(),
+                Task = "Return two tool results.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var acceptedResults = fakeClient.ReceivedMessagesByCall[0]
+            .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
+            .ToArray();
+
+        // Assert
+        Assert.False(result.Success);
+        Assert.Equal(SubAgentOutcomeReason.ToolExecutionFailed, result.OutcomeReason);
+        Assert.Equal(2, executionCount);
+        Assert.Equal(1, fakeClient.CallCount);
+        Assert.Empty(acceptedResults);
+    }
+
+    [Fact]
     public async Task Dispatcher_policy_denial_has_access_denied_child_receipt()
     {
         var shell = new FakeNetclawTool(ShellTool.ToolName, "should not run");
@@ -2300,9 +2476,6 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
     private static readonly string MissingProjectDirectory =
         Path.Join(Path.GetTempPath(), "netclaw-missing-project");
 
-    // Real PNG: the egress normalizer decodes every model-input image, so a
-    // fake magic-byte stub would now be dropped. Small enough to pass through.
-    private static readonly byte[] FakePngBytes = TestImages.SmallPng();
 }
 
 /// <summary>
@@ -2403,6 +2576,65 @@ internal sealed class DelayingParentApprovalBridge : IParentConsentBridge
 }
 
 internal sealed record RecordedApprovalOption(string Key, string Label);
+
+internal sealed class ReverseCompletionTool(string changedPath) : INetclawTool
+{
+    private readonly TaskCompletionSource<string> _firstResult =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<string> _secondResult =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _bothCallsStarted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Task<string>? _secondExecution;
+    private int _startedCalls;
+
+    public string Name => "controlled_tool";
+    public LlmFacingToolName LlmFacingName => LlmFacingToolName.FromCanonical(Name);
+    public string Description => "Controlled tool for child result order tests.";
+    public string GrantCategory => "builtin";
+    public System.Text.Json.JsonElement ParameterSchema => default;
+    public Task BothCallsStarted => _bothCallsStarted.Task;
+    public Task<string> SecondExecution => _secondExecution
+        ?? throw new InvalidOperationException("The second tool call has not started.");
+
+    public AITool ToAITool() => AIFunctionFactory.Create(
+        () => "controlled",
+        name: Name,
+        description: Description);
+
+    public Task<string> ExecuteAsync(
+        IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
+        CancellationToken ct = default)
+    {
+        var label = arguments?["label"] as string
+            ?? throw new InvalidOperationException("The controlled tool needs a label.");
+        var execution = label switch
+        {
+            "first" => StartFirst(context).WaitAsync(ct),
+            "second" => _secondExecution = _secondResult.Task.WaitAsync(ct),
+            _ => throw new InvalidOperationException($"Unknown controlled label: {label}")
+        };
+        if (Interlocked.Increment(ref _startedCalls) == 2)
+            _bothCallsStarted.TrySetResult();
+
+        return execution;
+    }
+
+    public void CompleteFirstCall()
+        => _firstResult.TrySetResult("first result");
+
+    public void FailSecondCall()
+        => _secondResult.TrySetException(new UnauthorizedAccessException("controlled denial"));
+
+    private Task<string> StartFirst(ToolInvocationContext context)
+    {
+        context.TryComplete(new ToolInvocationReceipt.Succeeded(
+            [new ToolFileActivity(changedPath, ToolFileActivityKind.Changed)],
+            null));
+        return _firstResult.Task;
+    }
+}
 
 internal sealed class RecordingParentApprovalBridge(ConsentAnswer decisionToReturn) : IParentConsentBridge
 {
