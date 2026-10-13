@@ -1415,6 +1415,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Timers.Cancel(PassivationTimerKey);
         Timers.Cancel(PassivationFinalStopTimerKey);
         _passivationFinalStopScheduled = false;
+        // The reap still commits after abort, but it must not resume this stop attempt.
+        _passivationDeferredForReap = false;
     }
 
     // Outer hang-detector for the whole compaction pipeline. The inner observer
