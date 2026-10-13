@@ -185,6 +185,9 @@ The shared `SessionExecutionLifetimeStopIdentityTests` source kills this mutant 
 The script also selects the `true` literal in `SessionExecutionLifetime.ObserveReapReply`.
 Stryker changes `reap.AwaitingCommit = true` to `reap.AwaitingCommit = false`.
 The linked `SessionExecutionLifetimeStopPolicyTests` source kills this mutant when a duplicate reply arrives before journal commit.
+The script also selects the replay check in `SessionInputFlow.DrainBufferedBatch`.
+Stryker changes `!item.IsReplay` to `item.IsReplay`.
+The linked `SessionInputFlowTests` source kills this mutant when fresh buffered input must start a turn after replay.
 The linked `ProcessingWatchdogTests` source supplies the existing timer fake without an actor test host.
 The selectors reject missing or repeated source markers before Stryker starts.
 The gate requires one killed mutant in each single-expression span and two killed history mutants.
@@ -196,9 +199,10 @@ The three-target local run took 1 minute 46 seconds with a warm build cache.
 The five-mutant local run took 1 minute 47 seconds with a warm build cache.
 The six-mutant local run took 1 minute 58 seconds on the lifecycle draft with a warm build cache.
 The seven-mutant local run took 1 minute 48 seconds with a warm build cache.
+The eight-mutant combined local run took 2 minutes 6 seconds with a warm build cache.
 Hosted run `38448179312` took 15 to 21 minutes for the four existing matrix groups.
 Its Windows test took 16 minutes 6 seconds. A target in any of those four groups would extend that critical path.
-All six targets run in one Stryker invocation in the existing `session-reliability` group.
+All seven targets run in one Stryker invocation in the existing `session-reliability` group.
 Hosted CI must measure the combined gate on a cold runner.
 Its report directory is `artifacts/stryker/tool-batch-readiness`.
 
