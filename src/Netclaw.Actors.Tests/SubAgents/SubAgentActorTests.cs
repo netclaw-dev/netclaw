@@ -897,7 +897,7 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
         {
             Assert.Equal(worktree, result.WorkingContext!.ProjectDirectory);
             var parent = new WorkingContext { ProjectDirectory = "/parent/project" };
-            var merged = LlmSessionActor.MergeSuccessfulSubAgentWorkingContext(parent, result.Completion);
+            var merged = WorkingContextUpdater.MergeSuccessfulSubAgentWorkingContext(parent, result.Completion);
             Assert.Equal("/parent/project", merged.ProjectDirectory);
         }
     }

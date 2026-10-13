@@ -146,18 +146,20 @@ After merge, update the extraction branch from the actual `dev`; rerun the basel
 ### PR 2: transfer outcome acceptance and batch continuation
 
 Start in a separate branch after the baseline passes and root review accepts the concrete owner API.
-Wait for PR 1 to merge before publication. Rebase on its actual merge result and rerun affected checks.
+Publish PR 2 against the PR 1 branch after root review and local checks. Verify the combined stack.
+After PR 1 merges, rebase onto its actual merge result and rerun affected checks.
 A different product author removes duplicated outcome processing and moves batch completion decisions with their state.
-Reuse `ActiveToolBatchTracker`, `ModelInputMediaBuffer`, `TurnStateTracker`, and receipt/context helpers where their contracts fit.
+Reuse `ActiveToolBatchTracker`, `TurnStateTracker`, and `WorkingContextUpdater`.
+Absorb the media list into the batch tracker and delete `ModelInputMediaBuffer`.
 Do not create one wrapper per field or a generic effect interpreter.
 
-Move `_activeToolBatch` and `_mediaBuffer` ownership together with their start, result, completion, and reset rules.
+Keep `_activeToolBatch` as the actor's batch reference. Move `_mediaBuffer` state and its result, completion, and reset rules into that tracker.
 Keep `_turnState` as the existing rule owner; expose its current budget outcome through one continuation decision path.
 Keep durable `_state`, admitted `TurnContext`, persistence callbacks, mailbox/timer APIs, and task cancellation in the actor.
 Do not transfer approval authority, memory policy, or loop/cycle policy as incidental cleanup.
 The domain owner selects the next batch action. The actor executes journal, output, model, and phase operations at the existing boundaries.
 
-Schematic API direction; names are provisional and omit ingress-specific journal steps:
+The current component API follows this sequence. This schematic omits logs and external effects:
 
 ```text
 Before:
@@ -166,10 +168,13 @@ Before:
   actor repeats budget, buffer, and compaction branches
 
 After:
-  accepted = toolOutcomes.Accept(result, currentContext)
-  actor applies accepted context and typed output values at the existing commit boundary
-  next = toolBatch.Complete(currentBudget, admittedInputChange, compactionNeed)
-  actor executes Wait | ContinueModel | ContinueWithoutTools | RequestCompaction
+  state = batch.ApplyRecordedResult(state, committedResult)
+  context = WorkingContextUpdater.AcceptToolResult(context, message, receipt)
+  completion = batch.CompleteIfReady(state, turnState, limit)
+  if completion is Pending: return
+  actor adopts state and drains admitted input
+  next = completion.ChooseNext(newInput, compactionDue)
+  actor executes ContinueModel | ContinueWithoutTools | RequestCompaction
 ```
 
 The owner must decide the action. Passing mutable collections back for actor policy branches fails the ownership objective.
@@ -202,9 +207,11 @@ Use this order after the first two PRs. Keep exact APIs provisional until each b
 7. Consolidate and measure. Remove obsolete paths, duplicate state, temporary adapters, and unjustified contracts. Compare the whole production footprint.
 
 Each step needs a narrow baseline, an independent test author, product changes, verification, root approval, PR publication, and auto-merge.
-Merge one PR, then rebase the next branch on the actual result. Reassess conflicts and rerun affected checks.
+Label each PR with `sessions` and `refactoring`. Add `tests`, `.NET`, and other existing labels that match its scope.
+Stack ready PRs on `feature/*` branches. Name the base PR in each description and verify the combined stack.
+Merge from the bottom up, then rebase the next branch on the actual result. Reassess conflicts and rerun affected checks.
 Retain public behavioral assertions; add direct owner tests after each boundary becomes concrete.
-Do not build one model of all actor state. Do not introduce a stack merely to reserve future changes.
+Do not build one model of all actor state. Create each stack branch when its implementation starts.
 The large actor-reduction ranges remain targets. Actor relocation does not establish total-source reduction.
 Report repository production net after replacement code and adapters before any claim of substantial simplification.
 
@@ -217,7 +224,20 @@ The full actor project passes: 5,717 passed and 41 skipped. None of those skips 
 Slopwatch reports zero issues. The copyright check and whitespace check pass.
 A result-corruption fault fails both completion-order cases at the expected result assertion. Both cases pass after source restoration.
 A separate completion-gate fault causes a timeout. That attempt does not establish assertion sensitivity to premature continuation.
-PR delivery remains pending.
+[PR #2439](https://github.com/netclaw-dev/netclaw/pull/2439) contains the baseline. Root and independent review approve it.
+Auto-merge is enabled. Hosted checks and the merge remain pending.
+The tool-result extraction has separate product and test authors in `feature/session-tool-result-ownership`.
+Its production diff removes 273 actor lines and 185 total production lines.
+The actor field count falls from 87 to 86. Media state moves into the tracker; that state still exists.
+The full actor suite passes: 5,740 passed and 41 skipped.
+A deliberate early-completion defect fails the two applicable readiness theory cases.
+Independent review found no product regression. It requested a stronger duplicate-media assertion.
+The final affected run passes all 143 tests after that assertion and a media-discard case.
+The full-suite result precedes those final test amendments. Production code stayed unchanged.
+Slopwatch, copyright headers, and whitespace checks pass. The focused Stryker gate kills the one calibrated early-completion mutant. Its local run takes 5 minutes 44 seconds.
+It uses the existing mutation harness and a separate parallel matrix group to protect CI time.
+Root review approves the combined extraction, tests, and gate.
+The user authorizes stacked PRs. PR 2 will target `feature/session-accordant-contracts` if PR 1 remains open.
 
 The independent test author owns baseline evidence. The product author owns extraction. The root owns review and each delivery decision.
 Accordant fit and exact owner API remain engineering checks. Persistence or authority changes remain explicit product decisions.

@@ -4,16 +4,49 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.SubAgents;
+using Netclaw.Actors.Tools;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
 
 /// <summary>
-/// Applies successful, canonical file activity produced by first-party tools.
-/// Presentation strings and authored arguments never establish file activity.
+/// Applies confirmed file activity from successful receipts and child runs.
+/// Accepts project declarations only from successful directory-tool receipts.
 /// </summary>
 internal static class WorkingContextUpdater
 {
+    public static WorkingContext AcceptToolResult(
+        WorkingContext current,
+        SerializableChatMessage message,
+        ToolInvocationReceipt? receipt)
+    {
+        var updated = UpdateFromToolReceipt(current, receipt);
+        return message.Name is SetWorkingDirectoryTool.ToolName
+            && receipt is ToolInvocationReceipt.Succeeded { DeclaredProjectDirectory: { } projectDir }
+            ? updated.WithProjectDirectory(projectDir)
+            : updated;
+    }
+
+    public static WorkingContext MergeSuccessfulSubAgentWorkingContext(
+        WorkingContext current,
+        ChildRunCompletion completion) => completion switch
+        {
+            ChildRunCompletion.Completed completed => MergeConfirmedChanges(current, completed.WorkingContext),
+            ChildRunCompletion.Partial partial => MergeConfirmedChanges(current, partial.WorkingContext),
+            ChildRunCompletion.Failed or ChildRunCompletion.Cancelled => current,
+            _ => throw new ArgumentOutOfRangeException(nameof(completion))
+        };
+
+    private static WorkingContext MergeConfirmedChanges(WorkingContext current, WorkingContextDelta child)
+    {
+        var updated = current;
+        foreach (var path in child.ConfirmedChangedFiles)
+            updated = updated.AddRecentFile(path);
+
+        return updated;
+    }
+
     public static WorkingContext UpdateFromToolReceipts(
         WorkingContext current,
         IReadOnlyList<SerializableChatMessage> orderedResults,

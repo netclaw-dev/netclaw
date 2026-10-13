@@ -158,10 +158,8 @@ jobs:
 
   mutation-gates:
     # One job definition for every focused Stryker gate. Each matrix group shares
-    # one checkout, SDK install, and tool restore. To add a gate, add its script
-    # name (scripts/run-<name>-mutations.sh) to the lightest group. The groups
-    # are balanced by measured gate time (about 13 to 14 minutes each) so each
-    # one finishes well inside the job timeout and before the Windows test job.
+    # one checkout, SDK install, and tool restore. The session readiness gate
+    # has its own group because the existing groups run near the Windows test.
     name: Mutation Gates (${{ matrix.group }})
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
@@ -178,6 +176,8 @@ jobs:
             gates: exact-verb-chain reminder-execution literal-twin stream-commit-gate
           - group: approval-and-authorization
             gates: tool-authorization approval-directory skill-manage-guard no-program
+          - group: session-reliability
+            gates: tool-batch-readiness
 
     steps:
       - name: "Checkout"
