@@ -76,7 +76,6 @@ public sealed class InputFlowJournalIntegrationTests(ITestOutputHelper output) :
                 Content = "First tool request"
             }, TimeSpan.FromSeconds(5), ct);
             var committedBeforeResponse = await ReadCommittedAdmissionsAsync(sessionId);
-            Assert.Equal("First tool request", Assert.Single(committedBeforeResponse).UserMessage.Content);
             await _client.FirstCallEntered.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
             await manager.Ask<CommandAck>(new SendUserMessage
             {
@@ -93,6 +92,7 @@ public sealed class InputFlowJournalIntegrationTests(ITestOutputHelper output) :
             var turn = Assert.Single(events.OfType<TurnRecorded>());
 
             // Assert
+            Assert.Equal("First tool request", Assert.Single(committedBeforeResponse).UserMessage.Content);
             Assert.Equal(["First tool request", "Later buffered request"],
                 admitted.Select(evt => evt.UserMessage.Content));
             Assert.Equal([admitted[0].InputId], batch.ConsumedInputIds);
