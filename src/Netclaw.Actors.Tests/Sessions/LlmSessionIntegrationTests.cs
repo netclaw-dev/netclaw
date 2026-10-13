@@ -876,7 +876,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 Source = mixedAuthority ? SourceFor("first", TrustAudience.Personal) : null
             }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(sessionId, ack1.SessionId);
-            await _fakeChatClient.FirstCallEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+                TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
             foreach (var (content, audience) in queued)
             {

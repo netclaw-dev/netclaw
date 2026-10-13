@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Event;
 using Akka.Hosting;
 using Akka.Persistence;
+using Akka.Persistence.Journal;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Hosting;
@@ -17,6 +18,7 @@ using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Xunit;
+using AkkaPersistence = Akka.Persistence.Persistence;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -73,6 +75,8 @@ public sealed class InputFlowJournalIntegrationTests(ITestOutputHelper output) :
                 SessionId = sessionId,
                 Content = "First tool request"
             }, TimeSpan.FromSeconds(5), ct);
+            var committedBeforeResponse = await ReadCommittedAdmissionsAsync(sessionId);
+            Assert.Equal("First tool request", Assert.Single(committedBeforeResponse).UserMessage.Content);
             await _client.FirstCallEntered.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
             await manager.Ask<CommandAck>(new SendUserMessage
             {
@@ -180,6 +184,30 @@ public sealed class InputFlowJournalIntegrationTests(ITestOutputHelper output) :
         Sys.Stop(reader);
         await stopProbe.ExpectTerminatedAsync(reader, cancellationToken: ct);
         return events;
+    }
+
+    private async Task<IReadOnlyList<InputAdmitted>> ReadCommittedAdmissionsAsync(SessionId sessionId)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var probe = CreateTestProbe("input-flow-committed-admissions");
+        AkkaPersistence.Instance.Apply(Sys).JournalFor(null).Tell(
+            new MemoryJournal.ReplayAllEvents(0, int.MaxValue, int.MaxValue, probe.Ref));
+        var admitted = new List<InputAdmitted>();
+        while (true)
+        {
+            var reply = await probe.ExpectMsgAsync<object>(TimeSpan.FromSeconds(5), cancellationToken: ct);
+            switch (reply)
+            {
+                case MemoryJournal.ReplayedEvent replayed
+                    when replayed.Persistent.Payload is InputAdmitted evt && evt.SessionId == sessionId:
+                    admitted.Add(evt);
+                    break;
+                case MemoryJournal.EventReplaySuccess:
+                    return admitted;
+                case MemoryJournal.EventReplayFailure failure:
+                    throw new InvalidOperationException("The admission journal replay failed.", failure.Cause);
+            }
+        }
     }
 
     private sealed class InputEventReader : ReceivePersistentActor

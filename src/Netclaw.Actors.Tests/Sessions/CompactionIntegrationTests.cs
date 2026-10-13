@@ -233,7 +233,8 @@ public class CompactionIntegrationTests : LlmSessionTestBase
                 SessionId = sessionId,
                 Content = "First message"
             }, TestContext.Current.CancellationToken);
-            await _fakeChatClient.FirstCallEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+                TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
             // Buffer a second message during processing/compaction
             await sessionManager.Ask<CommandAck>(new SendUserMessage
