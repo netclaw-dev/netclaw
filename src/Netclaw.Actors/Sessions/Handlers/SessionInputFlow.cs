@@ -128,6 +128,7 @@ internal sealed class SessionInputFlow
                 MediaReferences = command.MediaReferences.ToArray()
             },
             ExecutableText = command.Source?.ExecutableText,
+            // Akka's serializer cannot restore ToRecord's interface-backed collection. Persist a concrete array.
             TurnContext = context.ToRecord() with
             {
                 AdoptedSpeakerIds = context.AdoptedSpeakerIds.ToArray()
