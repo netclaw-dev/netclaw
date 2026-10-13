@@ -935,6 +935,8 @@ static IReadOnlyList<string> ConfigureDaemonServices(
         paths,
         sp.GetRequiredService<TimeProvider>(),
         sp.GetRequiredService<ISkillContentScanner>()));
+    services.AddSingleton<GitSkillPluginConfigStore>();
+    services.AddSingleton<GitSkillPluginManagementService>();
     services.AddSingleton(sp => new ManagedPluginSyncParticipant(
         skillFeedsConfig,
         paths,
