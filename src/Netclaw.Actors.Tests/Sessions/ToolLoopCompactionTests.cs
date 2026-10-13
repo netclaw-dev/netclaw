@@ -115,6 +115,14 @@ public class ToolLoopCompactionTests : LlmSessionTestBase
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
+        var busy = CreateTestProbe("tool-loop-compaction-busy");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(busy)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.ProcessingState
+        }, TestContext.Current.CancellationToken);
+        await busy.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
@@ -137,6 +145,21 @@ public class ToolLoopCompactionTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var child = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        child.Tell(new JoinSession(busy)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.ProcessingState
+        }, busy);
+        Assert.True((await busy.ExpectMsgAsync<ProcessingStateOutput>(
+            cancellationToken: TestContext.Current.CancellationToken)).IsProcessing);
+        await busy.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await busy.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False((await busy.ExpectMsgAsync<ProcessingStateOutput>(
+            cancellationToken: TestContext.Current.CancellationToken)).IsProcessing);
+        await busy.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]

@@ -152,7 +152,7 @@ public sealed class ProcessingWatchdogTests
     /// (distinguished by <see cref="ProcessingWatchdogExpired.NoProgress"/>). All
     /// other members are no-ops.
     /// </summary>
-    private sealed class RecordingTimerScheduler : ITimerScheduler
+    internal sealed class RecordingTimerScheduler : ITimerScheduler
     {
         public TimeSpan? LastSingleTimerTimeout { get; private set; }
         public TimeSpan? LastLivenessTimeout { get; private set; }

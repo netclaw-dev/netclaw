@@ -83,7 +83,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly SessionModelContext _modelContext;
     private MessageSource? _currentTurnSource;
     private TurnContext? _currentTurnContext;
-    private bool _processingStateActive;
     private readonly ToolAccessPolicy? _toolAccessPolicy;
     private readonly TrustContextDeriver? _trustContextDeriver;
     // Owns the exposed tool list (base + discovered) and lease-based eviction.
@@ -126,31 +125,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Child actor for session-level memory observation (distills transcript on idle)
     private IActorRef? _observerActor;
 
-    // Processing watchdog (timer management for stuck operations)
-    private readonly ProcessingWatchdog _watchdog = new();
-
-    // Actor-owned CTS for the active LLM call. Cancelled by the watchdog on timeout
-    // or when a response/failure arrives. The session-level watchdog (FirstTokenTimeout)
-    // is the authoritative timeout — this CTS just propagates cancellation to the
-    // HTTP layer so timed-out connections are released.
-    private CancellationTokenSource? _activeLlmCts;
-    private Task? _activeLlmWorkTask;
-
-    // Actor-owned CTS for active tool execution. Cancels direct approval waits
-    // and tool calls when the session stops, restarts, or fails the turn.
-    private CancellationTokenSource? _activeToolExecutionCts;
-    private Task? _activeToolWorkTask;
-    private bool _toolRestartStopRequested;
-
-    // Correlation ID for the active LLM call. Incremented in FireLlmCall.
-    // Stale LlmResponseReceived/LlmCallFailed/LlmResponseDeltaReceived messages
-    // from cancelled calls are ignored when their CallId doesn't match.
-    private long _activeCallId;
-
-    // Tracks whether any content was streamed this call — selects the watchdog timeout
-    // (the generous prefill budget before the first token vs the tighter inter-delta
-    // budget after).
-    private bool _anyContentStreamed;
+    private SessionExecutionLifetime _execution = null!;
     private bool _turnEmittedText;
 
     // Per-turn diagnostic correlation (ephemeral)
@@ -171,19 +146,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private readonly Telemetry.ISessionMetrics? _sessionMetrics;
 
-    private bool _restartDrainRequested;
-    private bool _llmRestartStopRequested;
     private DateTimeOffset? _restartInterruptionAt;
     private bool _passivationCompleted;
     private bool _passivationFinalStopScheduled;
 
-    private sealed record ToolPipelineStoppedForRestart(Task WorkTask, Exception? Failure)
-        : INoSerializationVerificationNeeded;
-
     private sealed record RestartModelGraceExpired(long CallId) : INoSerializationVerificationNeeded;
-
-    private sealed record ModelStoppedForRestart(long CallId, Exception? Failure)
-        : INoSerializationVerificationNeeded;
 
     // Reap-on-passivation handshake: while a KillJobsForSession ask is in
     // flight, the final snapshot is deferred so it captures the reaped marks.
@@ -194,6 +161,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private bool _passivationDeferredForReap;
     private long _jobReapEpoch;
     private IActorRef? _restartDrainReplyTo;
+    private bool RestartDrainRequested => _restartDrainReplyTo is not null;
     private string? _pendingRestartNotice;
     private string? _turnRestartNotice;
 
@@ -205,6 +173,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     public override string PersistenceId { get; }
     public ITimerScheduler Timers { get; set; } = null!;
+
+    protected override void PreStart()
+    {
+        // Akka injects Timers after construction and before PreStart.
+        _execution = new SessionExecutionLifetime(Timers, Self);
+        base.PreStart();
+    }
 
     public LlmSessionActor(
         string entityId,
@@ -275,8 +250,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _state = _state.Apply(evt, userAlreadyInHistory);
             _toolWorkflow.CompleteTurn();
             _currentTurnContext = null;
-            _activeToolWorkTask = null;
-            _toolRestartStopRequested = false;
         });
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
         Recover<SessionBackgroundJobsReaped>(evt => _state = _state.Apply(evt));
@@ -285,8 +258,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _state = _state.Apply(evt);
             _toolWorkflow.CompleteTurn();
             _currentTurnContext = null;
-            _activeToolWorkTask = null;
-            _toolRestartStopRequested = false;
         });
         Recover<ToolBatchStarted>(evt =>
         {
@@ -366,7 +337,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _log.Info("session_phase_transition from={From} to={To}", from, target);
 
-        EmitProcessingStateForPhase(target);
+        EmitProcessingStateForPhase(from, target);
 
         _observerActor?.Tell(new SessionPhaseChanged(target));
 
@@ -389,13 +360,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
     }
 
-    private void EmitProcessingStateForPhase(SessionPhase phase)
+    private void EmitProcessingStateForPhase(SessionPhase from, SessionPhase target)
     {
-        var isProcessing = phase is SessionPhase.Processing or SessionPhase.Compacting;
-        if (_processingStateActive == isProcessing)
+        var wasProcessing = from is SessionPhase.Processing or SessionPhase.Compacting;
+        var isProcessing = target is SessionPhase.Processing or SessionPhase.Compacting;
+        if (wasProcessing == isProcessing)
             return;
 
-        _processingStateActive = isProcessing;
         EmitOutput(new ProcessingStateOutput(isProcessing)
         {
             SessionId = _sessionId
@@ -486,7 +457,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<SendUserMessage>(cmd =>
         {
-            if (_restartDrainRequested)
+            if (RestartDrainRequested)
             {
                 _log.Info("Rejecting new user message while restart drain is pending");
                 TryReplyNack(SessionIngressGate.RestartInProgressMessage);
@@ -514,7 +485,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<DeliveryFailed>(msg =>
         {
-            if (_restartDrainRequested)
+            if (RestartDrainRequested)
             {
                 _log.Info("Ignoring delivery feedback while restart drain is pending");
                 return;
@@ -563,17 +534,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolExecutionBatchCompleted>(_ =>
         {
-            _watchdog.Stop(Timers);
-            CancelAndDisposeToolExecutionCts();
-            _activeToolWorkTask = null;
+            _execution.OnToolBatchMessage();
             _toolWorkflow.MarkExecutionTaskCompleted();
             TryCompleteStreamedToolBatch();
         });
 
         Command<ToolExecutionFailed>(msg =>
         {
-            _watchdog.Stop(Timers);
-            CancelAndDisposeToolExecutionCts();
+            _execution.OnToolFailure();
             _toolWorkflow.DiscardPendingMedia();
             TurnLog().Error(msg.Cause, "turn_tool_execution_failed");
 
@@ -608,7 +576,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         CommandAsync<ToolInteractionTextResponse>(async msg =>
         {
-            if (_restartDrainRequested)
+            if (RestartDrainRequested)
             {
                 _log.Info("Rejecting text tool interaction response while restart drain is in progress");
                 TryReplyNack(SessionIngressGate.RestartInProgressMessage);
@@ -627,11 +595,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmCallFailed>(msg =>
         {
-            if (msg.CallId != _activeCallId) return; // stale failure from cancelled call
-            if (_llmRestartStopRequested) return;
-            _activeLlmWorkTask = null;
-            _watchdog.Stop(Timers);
-            CancelAndDisposeLlmCts();
+            if (!_execution.AcceptModelResult(msg.CallId)) return;
 
             // A failed LLM call invalidates the actor-local exposure set. The
             // context-overflow path must do this before recovery compaction starts.
@@ -687,7 +651,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ProcessingWatchdogExpired>(msg =>
         {
-            if (!_watchdog.IsCurrent(msg))
+            if (!_execution.IsCurrentWatchdog(msg))
                 return;
 
             TimeoutException timeoutCause;
@@ -707,15 +671,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 // would under-state the wait by ~3x.)
                 var timeout = msg.OperationName switch
                 {
-                    ProcessingWatchdog.LlmCall => _anyContentStreamed ? _config.FirstTokenTimeout : _config.PrefillTimeout,
+                    ProcessingWatchdog.LlmCall => _execution.HasContentStreamed ? _config.FirstTokenTimeout : _config.PrefillTimeout,
                     _ => _config.TurnLlmTimeout
                 };
                 timeoutCause = new TimeoutException(
                     $"Session processing operation '{msg.OperationName}' exceeded watchdog timeout of {timeout.TotalSeconds:F0}s");
             }
 
-            _watchdog.Stop(Timers);
-            CancelAndDisposeLlmCts();
+            _execution.StopModelForTimeout();
 
             _log.Error("Processing watchdog expired for operation {OperationName} (opId={OperationId}, noProgress={NoProgress})",
                 msg.OperationName, msg.OperationId, msg.NoProgress);
@@ -750,14 +713,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleLlmResponseReceived(LlmResponseReceived msg)
     {
-        if (msg.CallId != _activeCallId)
+        if (!_execution.AcceptModelResult(msg.CallId))
             return;
-        if (_llmRestartStopRequested)
-            return;
-
-        _activeLlmWorkTask = null;
-        _watchdog.Stop(Timers);
-        CancelAndDisposeLlmCts();
 
         var response = msg.Response;
         var lastMessage = response.Messages[^1];
@@ -813,20 +770,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleLlmResponseDeltaReceived(LlmResponseDeltaReceived msg)
     {
-        if (msg.CallId != _activeCallId || _llmRestartStopRequested)
+        if (!_execution.AcceptModelProgress(
+                msg.CallId, msg.Substantive, _config.PrefillTimeout, _config.FirstTokenTimeout))
             return;
-
-        // Two-phase watchdog (shared with the sub-agent path): keep the generous
-        // prefill budget until the first substantive delta, then promote to the
-        // tighter inter-delta budget. Content-free keepalives refresh but never
-        // promote, so a slow cold prefill emitting prompt_progress heartbeats is
-        // not killed early.
-        _anyContentStreamed = _watchdog.OnStreamProgress(
-            msg.Substantive,
-            _anyContentStreamed,
-            _config.PrefillTimeout,
-            _config.FirstTokenTimeout,
-            Timers);
 
         switch (msg.Content)
         {
@@ -948,7 +894,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Buffer user messages during compaction (same as Processing)
         Command<SendUserMessage>(cmd =>
         {
-            if (_restartDrainRequested)
+            if (RestartDrainRequested)
             {
                 _log.Info("Rejecting new user message while restart drain is pending during compaction");
                 TryReplyNack(SessionIngressGate.RestartInProgressMessage);
@@ -1016,13 +962,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleCompactionWatchdogExpired(ProcessingWatchdogExpired msg)
     {
-        if (!_watchdog.IsCurrent(msg))
+        if (!_execution.IsCurrentWatchdog(msg))
             return;
 
         _log.Error("Compaction watchdog expired for operation {OperationName} (opId={OperationId})",
             msg.OperationName, msg.OperationId);
 
-        _watchdog.Stop(Timers);
+        _execution.StopWatchdog();
 
         EmitOutput(new ErrorOutput
         {
@@ -1040,9 +986,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void HandleCompactionTriggered(CompactionTriggered msg)
     {
         var timeout = GetCompactionTimeout();
-        _watchdog.Start(ProcessingWatchdog.Compaction, timeout, Timers);
-
-        var operationId = _watchdog.CurrentOperationId;
+        var operationId = _execution.StartCompactionWatchdog(timeout);
         var stateSnapshot = _state;
         var self = Self;
         var log = _log;
@@ -1071,7 +1015,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!IsCurrentCompactionOperation(msg.OperationId))
             return;
 
-        _watchdog.Stop(Timers);
+        _execution.StopWatchdog();
 
         var compactedEvent = new SessionCompacted
         {
@@ -1133,7 +1077,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!IsCurrentCompactionOperation(msg.OperationId))
             return;
 
-        _watchdog.Stop(Timers);
+        _execution.StopWatchdog();
         _log.Warning(msg.Cause, "Compaction failed");
 
         EmitOutput(new ErrorOutput
@@ -1197,7 +1141,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void DrainBufferOrReady()
     {
-        if (_restartDrainRequested)
+        if (RestartDrainRequested)
         {
             _deferredApprovalResponse = null;
             MarkRestartReminderEligible();
@@ -1323,7 +1267,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<SendUserMessage>(cmd =>
         {
-            if (_restartDrainRequested)
+            if (RestartDrainRequested)
             {
                 _log.Info("Rejecting new user message while restart passivation is in progress");
                 TryReplyNack(SessionIngressGate.RestartInProgressMessage);
@@ -1343,7 +1287,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // batch from history, exactly as it would after a cold respawn.
         CommandAsync<ToolInteractionResponse>(async msg =>
         {
-            if (_restartDrainRequested)
+            if (RestartDrainRequested)
             {
                 _log.Info("Rejecting tool interaction response while restart passivation is in progress");
                 TryReplyNack(SessionIngressGate.RestartInProgressMessage);
@@ -1358,7 +1302,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         CommandAsync<ToolInteractionTextResponse>(async msg =>
         {
-            if (_restartDrainRequested)
+            if (RestartDrainRequested)
             {
                 _log.Info("Rejecting text tool interaction response while restart passivation is in progress");
                 TryReplyNack(SessionIngressGate.RestartInProgressMessage);
@@ -1393,7 +1337,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<DeliveryFailed>(msg =>
         {
-            if (_restartDrainRequested)
+            if (RestartDrainRequested)
             {
                 _log.Info("Ignoring delivery feedback while restart passivation is in progress");
                 return;
@@ -1407,7 +1351,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         // Restart drain already preserves accepted input in the journal.
         // Skip the optional memory pass because ingress is closed.
-        if (_restartDrainRequested)
+        if (RestartDrainRequested)
         {
             CompletePassivation();
         }
@@ -1445,7 +1389,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _passivationFinalStopScheduled = true;
         SaveSnapshotIfSafe();
 
-        if (_restartDrainRequested)
+        if (RestartDrainRequested)
         {
             FinalizePassivation();
             return;
@@ -1492,7 +1436,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _restartDrainReplyTo?.Tell(new DaemonRestartPrepared(
             _sessionId,
             BuildRestartReminder()));
-        _restartDrainReplyTo = null;
         Context.Stop(Self);
     }
 
@@ -1567,7 +1510,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     private bool IsCurrentCompactionOperation(long operationId)
-        => _watchdog.IsCurrentOperation(ProcessingWatchdog.Compaction, operationId);
+        => _execution.IsCurrentCompaction(operationId);
 
 
     /// <summary>
@@ -1848,9 +1791,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var setWorkingDirectoryTool = GetExposedSetWorkingDirectoryTool();
         var setWorkingDirectoryAvailable = setWorkingDirectoryTool is not null;
 
-        CancelAndDisposeToolExecutionCts();
-        _activeToolExecutionCts = new CancellationTokenSource();
-        var toolExecutionCt = _activeToolExecutionCts.Token;
+        var toolExecutionCt = _execution.BeginTool();
         var turnContext = _currentTurnContext
             ?? throw new InvalidOperationException("Tool batch dispatch requires admitted turn authority.");
         var runEnvironment = new SessionToolRunEnvironment
@@ -1878,7 +1819,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             approvalPlan,
             toolExecutionCt);
 
-        _activeToolWorkTask = pipeline.ExecuteAsync(batch);
+        _execution.AttachTool(pipeline.ExecuteAsync(batch));
     }
 
     private void HandleTextResponse(
@@ -1944,7 +1885,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void DrainBufferedMessagesOrBecomeReady()
     {
-        if (_restartDrainRequested)
+        if (RestartDrainRequested)
         {
             MarkRestartReminderEligible();
             ClearBufferedMessagesForRestartDrain();
@@ -2525,16 +2466,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             Self.Tell(buffered.Message);
         }
         _buffer.Clear();
-        CancelAndDisposeLlmCts();
-        CancelAndDisposeToolExecutionCts();
+        _execution?.ReleaseAll();
 
         base.PreRestart(reason, message);
     }
 
     protected override void PostStop()
     {
-        CancelAndDisposeLlmCts();
-        CancelAndDisposeToolExecutionCts();
+        _execution?.ReleaseAll();
 
         // Safety net for non-graceful stop paths (shutdown timeout, OOM, etc.).
         if (!_passivationCompleted)
@@ -2557,20 +2496,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TryReplyNack("The input journal rejected the message. The session did not start a model call.");
 
         base.OnPersistRejected(cause, @event, sequenceNr);
-    }
-
-    private void CancelAndDisposeLlmCts()
-    {
-        _activeLlmCts?.Cancel();
-        _activeLlmCts?.Dispose();
-        _activeLlmCts = null;
-    }
-
-    private void CancelAndDisposeToolExecutionCts()
-    {
-        _activeToolExecutionCts?.Cancel();
-        _activeToolExecutionCts?.Dispose();
-        _activeToolExecutionCts = null;
     }
 
     // ── Helpers ──
@@ -2614,16 +2539,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // The assembler removes incompatible history media and adds a notice.
         }
 
-        _anyContentStreamed = false;
-        CancelAndDisposeLlmCts();
-        _activeLlmCts = new CancellationTokenSource();
-        _activeCallId++;
+        var (callId, modelToken) = _execution.BeginModel();
 
         _turnState.ForceNoToolsActive |= forceNoTools;
         forceNoTools = _turnState.ForceNoToolsActive;
 
         var call = _modelContext.StartCall(
-            _activeCallId,
+            callId,
             _state,
             _currentTurnContext,
             _currentTurnSource,
@@ -2632,7 +2554,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             forceNoTools,
             slashCommandSkillContent,
             _turnRestartNotice,
-            _activeLlmCts.Token);
+            modelToken);
         if (call is ContextCall.Inspect { Audit: var audit })
         {
             // The observer audit is independent of model-visible recall content.
@@ -2736,25 +2658,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 exposure.DeferredVisible,
                 exposure.Loaded);
 
-        _watchdog.Start(ProcessingWatchdog.LlmCall, _config.PrefillTimeout, Timers, _config.NoProgressTimeout);
+        var (callId, modelToken) = _execution.ModelDispatch();
+        _execution.StartModelWatchdog(_config.PrefillTimeout, _config.NoProgressTimeout);
         TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools} callId={CallId}",
             request.Messages.Count,
             request.Options.Tools?.Count > 0,
             request.ForceNoTools,
-            _activeCallId);
-        _activeLlmWorkTask = SessionLlmInvoker.InvokeAsync(
+            callId);
+        _execution.AttachModel(callId, SessionLlmInvoker.InvokeAsync(
             _chatClient,
             request.Messages,
             request.Options,
             Self,
-            _activeCallId,
+            callId,
             _sessionId,
-            _activeLlmCts!.Token);
+            modelToken));
     }
 
     private void HandleWorkingContextSnapshotFailed(WorkingContextSnapshotFailed message)
     {
-        if (_llmRestartStopRequested || _activeLlmCts is null || !_modelContext.IsCurrentInspection(message.Generation))
+        if (!_execution.CanDispatchPreparedModel(message.Generation)
+            || !_modelContext.IsCurrentInspection(message.Generation))
             return;
 
         TurnLog().Warning(
@@ -2769,10 +2693,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleWorkingContextSnapshotReady(WorkingContextSnapshotReady message)
     {
-        if (_llmRestartStopRequested)
-            return;
-
-        if (_activeLlmCts is null || !_modelContext.IsCurrentInspection(message.Generation))
+        if (!_execution.CanDispatchPreparedModel(message.Generation)
+            || !_modelContext.IsCurrentInspection(message.Generation))
         {
             TurnLog().Debug(
                 "working_context_inspection_stale generation={Generation}",
@@ -3270,14 +3192,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         _state = _toolWorkflow.ApplyAbandonment(_state, evt);
         _currentTurnContext = null;
-        _activeToolWorkTask = null;
-        _toolRestartStopRequested = false;
+        _execution.ClearToolTracking();
     }
 
     private void ClearActiveToolBatchTracking()
     {
-        _activeToolWorkTask = null;
-        _toolRestartStopRequested = false;
+        _execution.ClearToolTracking();
         _toolWorkflow.ClearCompletedBatch();
     }
 
@@ -3671,8 +3591,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         _inFlightDedup.CompleteReminder(_currentTurnSource?.ReminderId);
         _inFlightDedup.CompleteBackgroundJob(_currentTurnSource?.BackgroundJobId);
-        CancelAndDisposeLlmCts();
-        CancelAndDisposeToolExecutionCts();
+        _execution.ReleaseAll();
         _deliveryRetry.Clear();
         _toolWorkflow.ClearFailedTurn();
         _currentTurnContext = null;
@@ -3904,8 +3823,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
 
         _toolWorkflow.ClearNormalBatch();
-        _activeToolWorkTask = null;
-        _toolRestartStopRequested = false;
+        _execution.ClearToolTracking();
         TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
             _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, completion.ResultCount);
         FireLlmCall();
@@ -4022,7 +3940,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void RequestRestartDrain()
     {
-        _restartDrainRequested = true;
         _restartDrainReplyTo = Sender;
 
         if (_phase.Current == SessionPhase.Ready)
@@ -4032,11 +3949,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (TryStopDurableApprovalWaits())
                 return;
 
-            if (_activeLlmCts is not null && _activeInputIds.Count > 0)
+            if (_execution.HasLiveModel && _activeInputIds.Count > 0)
             {
                 Timers.StartSingleTimer(
                     RestartModelGraceTimerKey,
-                    new RestartModelGraceExpired(_activeCallId),
+                    new RestartModelGraceExpired(_execution.CurrentModelCallId),
                     RestartModelGracePeriod);
             }
         }
@@ -4047,25 +3964,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!CanStopToolsForRestart())
             return false;
 
-        var task = _activeToolWorkTask!;
-        _toolRestartStopRequested = true;
         _log.Info("Stopping a tool batch that waits only for durable approvals before restart drain");
-        _activeToolExecutionCts!.Cancel();
-        _ = ReportToolPipelineStopAsync(task, Self);
-        return true;
+        return _execution.RequestToolStop();
     }
 
     private bool CanStopToolsForRestart()
     {
-        if (!_restartDrainRequested || _phase.Current != SessionPhase.Processing)
+        if (!RestartDrainRequested || _phase.Current != SessionPhase.Processing)
             return false;
 
         // A buffered continuation can depend on the current tool results.
         if (_buffer.Count > 0 || _deferredApprovalResponse is not null)
             return false;
 
-        if (_toolRestartStopRequested || _activeToolExecutionCts is null
-            || _activeToolWorkTask is not { IsCompleted: false })
+        if (!_execution.CanRequestToolStop())
             return false;
 
         return _toolWorkflow.CanParkForRestart();
@@ -4073,47 +3985,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleRestartModelGraceExpired(RestartModelGraceExpired expired)
     {
-        if (!_restartDrainRequested || _phase.Current != SessionPhase.Processing
-            || expired.CallId != _activeCallId || _activeLlmCts is null
+        if (!RestartDrainRequested || _phase.Current != SessionPhase.Processing
+            || !_execution.CanDispatchPreparedModel(expired.CallId)
             || _activeInputIds.Count == 0)
             return;
 
-        _llmRestartStopRequested = true;
-        _watchdog.Stop(Timers);
         _modelContext.InvalidateInspection();
-        _activeLlmCts.Cancel();
-
-        if (_activeLlmWorkTask is { IsCompleted: false } task)
-        {
-            _ = ReportModelStopAsync(task, Self, expired.CallId);
-            return;
-        }
-
-        Self.Tell(new ModelStoppedForRestart(expired.CallId, null));
-    }
-
-    private static async Task ReportModelStopAsync(Task task, IActorRef actor, long callId)
-    {
-        try
-        {
-            await task.ConfigureAwait(false);
-            actor.Tell(new ModelStoppedForRestart(callId, null));
-        }
-        catch (Exception ex)
-        {
-            actor.Tell(new ModelStoppedForRestart(callId, ex));
-        }
+        _execution.RequestModelStop(expired.CallId);
     }
 
     private void HandleModelStoppedForRestart(ModelStoppedForRestart stopped)
     {
-        if (!_llmRestartStopRequested || stopped.CallId != _activeCallId)
+        if (!_execution.AcceptModelStop(stopped))
             return;
-
-        _activeCallId++;
-        _activeLlmWorkTask = null;
-        CancelAndDisposeLlmCts();
-        _llmRestartStopRequested = false;
 
         if (stopped.Failure is { } failure)
         {
@@ -4136,26 +4020,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TransitionTo(SessionPhase.Passivating);
     }
 
-    private static async Task ReportToolPipelineStopAsync(Task task, IActorRef actor)
-    {
-        try
-        {
-            await task.ConfigureAwait(false);
-            actor.Tell(new ToolPipelineStoppedForRestart(task, null));
-        }
-        catch (OperationCanceledException)
-        {
-            actor.Tell(new ToolPipelineStoppedForRestart(task, null));
-        }
-        catch (Exception ex)
-        {
-            actor.Tell(new ToolPipelineStoppedForRestart(task, ex));
-        }
-    }
-
     private void HandleToolPipelineStoppedForRestart(ToolPipelineStoppedForRestart stopped)
     {
-        if (!_toolRestartStopRequested || !ReferenceEquals(stopped.WorkTask, _activeToolWorkTask))
+        if (!_execution.AcceptToolStop(stopped))
             return;
 
         if (stopped.Failure is { } failure)
@@ -4165,7 +4032,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        CancelAndDisposeToolExecutionCts();
+        _execution.ReleaseTool();
         ClearActiveToolBatchTracking();
         TransitionTo(SessionPhase.Passivating);
     }

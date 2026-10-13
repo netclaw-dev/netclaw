@@ -1667,6 +1667,13 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionId = new SessionId("test-channel/deactivate-on-passivate");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("deactivate-passivate-sub");
+        var busy = CreateTestProbe("processing-busy-state");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(busy)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.ProcessingState
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await busy.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
         var responseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _fakeChatClient.NextResponseGate = responseGate;
 
@@ -1687,6 +1694,9 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             TimeSpan.FromSeconds(3),
             TestContext.Current.CancellationToken);
 
+        Assert.True((await busy.ExpectMsgAsync<ProcessingStateOutput>(
+            cancellationToken: TestContext.Current.CancellationToken)).IsProcessing);
+
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var childPath = $"/user/session-manager/{escapedId}";
         var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
@@ -1702,13 +1712,25 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
         Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
 
+        child.Tell(new JoinSession(busy)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.ProcessingState
+        }, busy);
+        await busy.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
         responseGate.TrySetResult();
         await subscriber.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(
             TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
+        await busy.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False((await busy.ExpectMsgAsync<ProcessingStateOutput>(
+            cancellationToken: TestContext.Current.CancellationToken)).IsProcessing);
+
         child.Tell(ReceiveTimeout.Instance);
+        await busy.ExpectMsgAsync<SessionDeactivated>(cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.FishForMessageAsync(
             m => m is SessionDeactivated,
             TimeSpan.FromSeconds(5),
@@ -1728,7 +1750,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
+            Filter = OutputFilter.TextOnly | OutputFilter.ProcessingState
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
@@ -1739,6 +1761,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var ack = await sessionManager.Ask<CommandAck>(new PrepareForDaemonRestart(sessionId, "config-reload"), TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(sessionId, ack.SessionId);
+        await subscriber.ExpectMsgAsync<SessionDeactivated>(cancellationToken: TestContext.Current.CancellationToken);
         await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
@@ -1943,6 +1966,14 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
+        var busy = CreateTestProbe("compaction-busy-state");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(busy)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.ProcessingState
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await busy.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
         for (var turn = 1; turn <= 3; turn++)
         {
             await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -1953,6 +1984,11 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
             await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
             await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.True((await busy.ExpectMsgAsync<ProcessingStateOutput>(
+                cancellationToken: TestContext.Current.CancellationToken)).IsProcessing);
+            await busy.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+            Assert.False((await busy.ExpectMsgAsync<ProcessingStateOutput>(
+                cancellationToken: TestContext.Current.CancellationToken)).IsProcessing);
         }
 
         _fakeChatClient.UsageOverride = new UsageDetails
@@ -1984,6 +2020,15 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}").ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
+        Assert.True((await busy.ExpectMsgAsync<ProcessingStateOutput>(
+            cancellationToken: TestContext.Current.CancellationToken)).IsProcessing);
+        await busy.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        child.Tell(new JoinSession(busy)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.ProcessingState
+        }, busy);
+        await busy.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         sessionManager.Tell(new PrepareForDaemonRestart(sessionId, "config-reload"), TestActor);
         sessionManager.Tell(new SendUserMessage
@@ -2007,6 +2052,10 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, drainAck.SessionId);
+        await busy.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False((await busy.ExpectMsgAsync<ProcessingStateOutput>(
+            cancellationToken: TestContext.Current.CancellationToken)).IsProcessing);
+        await busy.ExpectMsgAsync<SessionDeactivated>(cancellationToken: TestContext.Current.CancellationToken);
         await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }

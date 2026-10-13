@@ -6,6 +6,7 @@ source_file="$repo_root/src/Netclaw.Actors/Sessions/ActiveToolBatchTracker.cs"
 approval_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionToolWorkflow.Approvals.cs"
 inspection_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionModelContext.cs"
 history_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionState.cs"
+stop_source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionExecutionLifetime.cs"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
 output_path="${1:-$repo_root/artifacts/stryker/tool-batch-readiness}"
 if [[ "$output_path" != /* ]]; then
@@ -63,6 +64,18 @@ read -r history_span_start history_span_end history_line history_column history_
   ' "$history_source_file"
 )
 
+read -r stop_span_start stop_span_end stop_line stop_column stop_end_column < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $marker = "message.CallId != _modelCallId";
+    $start = index($_, $marker);
+    die "The model stop identity marker is missing or duplicated.\n"
+      if $start < 0 || index($_, $marker, $start + 1) >= 0;
+    $line = 1 + (substr($_, 0, $start) =~ tr/\n//);
+    $column = $start - rindex(substr($_, 0, $start), "\n");
+    print "$start ", $start + length($marker), " $line $column ", $column + length($marker), "\n";
+  ' "$stop_source_file"
+)
+
 (
   cd "$test_project"
   dotnet stryker \
@@ -72,6 +85,7 @@ read -r history_span_start history_span_end history_line history_column history_
     --mutate "Sessions/SessionToolWorkflow.Approvals.cs{$approval_span_start..$approval_span_end}" \
     --mutate "Sessions/SessionModelContext.cs{$inspection_span_start..$inspection_span_end}" \
     --mutate "Sessions/SessionState.cs{$history_span_start..$history_span_end}" \
+    --mutate "Sessions/Handlers/SessionExecutionLifetime.cs{$stop_span_start..$stop_span_end}" \
     --output "$output_path" \
     --skip-version-check
 )
@@ -134,10 +148,26 @@ jq -e --arg source "$history_source_file" \
   exit 1
 }
 
-jq -e --argjson count "$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count))" '
+expected_stop_count=1
+jq -e --arg source "$stop_source_file" \
+  --argjson line "$stop_line" \
+  --argjson first "$stop_column" --argjson last "$stop_end_column" \
+  --argjson count "$expected_stop_count" '
+  [(.files[$source].mutants // [])[]
+    | select(.status != "Ignored")
+    | select(.location.start.line == $line)
+    | select(.location.end.line == $line)
+    | select(.location.start.column >= $first and .location.end.column <= $last)] as $mutants
+  | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
+' "$report" > /dev/null || {
+  echo "Expected $expected_stop_count killed model stop identity mutant on the selected expression." >&2
+  exit 1
+}
+
+jq -e --argjson count "$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count))" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count
 ' "$report" > /dev/null || {
-  echo "Expected exactly $((expected_count + expected_requester_count + expected_inspection_count + expected_history_count)) tested session reliability mutants." >&2
+  echo "Expected exactly $((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count)) tested session reliability mutants." >&2
   exit 1
 }

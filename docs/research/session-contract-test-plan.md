@@ -233,7 +233,9 @@ Use this order after the first two PRs. Keep exact APIs provisional until each b
 Each step needs a narrow baseline, an independent test author, product changes, verification, root approval, PR publication, and auto-merge.
 Label each PR with `sessions` and `refactoring`. Add `tests`, `.NET`, and other existing labels that match its scope.
 Stack ready PRs on `feature/*` branches. Name the base PR in each description and verify the combined stack.
-Merge from the bottom up, then rebase the next branch on the actual result. Reassess conflicts and rerun affected checks.
+Wait until every PR in the stack passes its checks on the exact head.
+Then coordinate the bottom-up merges in one pass. Rebase each dependent branch on the actual result as needed.
+Reassess conflicts and rerun affected checks before its merge.
 Retain public behavioral assertions; add direct owner tests after each boundary becomes concrete.
 Do not build one model of all actor state. Create each stack branch when its implementation starts.
 The large actor-reduction ranges remain targets. Actor relocation does not establish total-source reduction.
@@ -307,8 +309,32 @@ The actor retains phase decisions and restart policy. The draft deletes the dupl
 The two drain methods remain separate until their phase-specific effects have direct proof.
 The source trace suggests a possible batch-completion and restart-stop interaction, but no reachable failure was reproduced.
 This structural slice preserves that behavior. Any repair requires a failing baseline and separate review.
-The current lifecycle draft removes 133 actor lines and adds 110 total production lines.
-Those draft counts do not satisfy the total-source reduction goal. Independent tests and source review remain necessary.
+The lifecycle draft removes 133 actor lines and adds 110 total production lines.
+The existing member collector counted 73 actor instance fields before the transfer and 63 afterward.
+Each source version also has eight static fields and three constants, for 84 and 74 total declarations.
+Nine resource fields moved into the owner. Two duplicate facts disappeared. The actor gained one owner field.
+The total production source still grows in this slice, so this slice does not satisfy the total-source reduction goal.
+The root reviewed the production draft and direct tests. Final proof review and PR publication remain root decisions.
+
+[PR #2443](https://github.com/netclaw-dev/netclaw/pull/2443) is the Stage 5 parent.
+The lifecycle worktree used `86452744` for the full actor check.
+After PR #2442 merged, GitHub rebased PR #2443 to `ecac1c7e`.
+The root verified that both Stage 5 heads have the same tree, `471f8be3`.
+The lifecycle worktree then moved to `ecac1c7e` without a source change.
+Keep PR #2443 and later stack PRs open until every stack head passes its checks.
+The independent tests passed 68 focused cases after a test probe fix.
+The ToolLoop compaction class passed three cases on the Stage 5 parent.
+The full Actors suite passed 5,764 cases and retained 41 platform skips.
+The final owner-focused run passed 12 cases on `ecac1c7e`.
+It includes one shared xUnit2/xUnit3 model stop identity case and 11 existing owner cases.
+The full-suite run preceded the shared-source test and mutation gate edits.
+An isolated negative control removed the model stop call-ID check; the unchanged stale-stop test failed at its expected assertion.
+The six-target session reliability gate killed all six selected mutants in 1 minute 58 seconds.
+Its selected model stop guard mutant died. The control source returned to its exact hash.
+Slopwatch, copyright headers, and whitespace checks passed after the final test and gate edits.
+No runtime path in this slice enters Compacting directly from Ready.
+The actor proof covers Processing to Compacting to Processing, plus exit to Ready and passivation.
+The possible batch-completion and restart-stop race remains outside this structural transfer.
 
 The independent test author owns baseline evidence. The product author owns extraction. The root owns review and each delivery decision.
 Accordant fit and exact owner API remain engineering checks. Persistence or authority changes remain explicit product decisions.

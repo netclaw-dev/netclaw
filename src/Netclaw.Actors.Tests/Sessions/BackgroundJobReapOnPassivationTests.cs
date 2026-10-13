@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -139,6 +140,16 @@ public sealed class BackgroundJobReapOnPassivationTests : LlmSessionTestBase
         var kill = await jobManagerProbe.ExpectMsgAsync<KillJobsForSession>(
             TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, kill.SessionId);
+
+        var callsBeforeReap = _fakeChatClient.CallCount;
+        var rejected = await child.Ask<CommandNack>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Do not reopen the session before the job reap completes"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(SessionIngressGate.RestartInProgressMessage, rejected.Reason);
+        Assert.False(restartTask.IsCompleted);
+        Assert.Equal(callsBeforeReap, _fakeChatClient.CallCount);
         jobManagerProbe.Reply(new SessionJobsReaped(sessionId, 1));
 
         var restartAck = await restartTask;
