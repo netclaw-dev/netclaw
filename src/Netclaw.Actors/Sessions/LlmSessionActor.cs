@@ -41,13 +41,14 @@ namespace Netclaw.Actors.Sessions;
 /// persists <see cref="TurnRecorded"/> events, and sends strongly-typed
 /// <see cref="SessionOutput"/> events to subscribers filtered by <see cref="OutputFilter"/>.
 ///
-/// Conversation state is held in an immutable <see cref="SessionState"/> record.
-/// The actor owns only transient concerns: subscribers, message buffer, and behavior.
+/// An immutable <see cref="SessionState"/> record holds conversation state.
+/// The input and lifetime owners hold their transient facts. The actor keeps subscribers and effects.
 ///
-/// Uses three command behaviors:
-/// - Ready: accepts user messages and fires async LLM call
-/// - Processing: buffers incoming messages while LLM call is in flight
-/// - Compacting: runs tiered context compaction when usage exceeds threshold
+/// Uses four command behaviors:
+/// - Ready: accepts user messages and starts an LLM call
+/// - Processing: buffers new messages during the LLM call
+/// - Compacting: compacts the context when usage exceeds the threshold
+/// - Passivating: completes the stop policy after an idle period
 /// </summary>
 public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 {
@@ -3206,7 +3207,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 case RecoveredContinuation.Dispatch dispatch:
                     _log.Info("Re-driving parked tool batch ({Count} call(s)) after approval response for {CallId}",
                         dispatch.Calls.Count, msg.CallId);
-                    _input.RestoreApprovalTurn(dispatch.TurnContext, _trustContextDeriver);
+                    _input.RestoreTurnAuthority(dispatch.TurnContext, _trustContextDeriver);
                     UpdateCrashContext();
                     TransitionTo(SessionPhase.Processing);
                     DispatchToolBatch(dispatch.Calls, approvalPlan: dispatch.ApprovalPlan,

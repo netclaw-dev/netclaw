@@ -409,7 +409,11 @@ know" rule. The leaks are the work list of the consolidation program.
 [`SessionModelContext`](../../src/Netclaw.Actors/Sessions/SessionModelContext.cs) when it prepares a model request.
 The context component calls `ToolAccessPolicy.FilterExposedTools` with that authority.
 It exposes no tools when a configured policy has no resolved trust context.
-The actor still owns the current authority. The context component owns request preparation and its transient inspection intent.
+`SessionInputFlow` owns the current actor-local authority and supplies an immutable snapshot to the actor.
+The actor supplies that authority to the context component. The context component owns request preparation and its transient inspection intent.
+The input owner builds and validates `InputAdmitted.TurnContext` before the actor persists the event.
+After the journal callback, the owner restores that stored context for the live turn.
+The actor sends the acknowledgment after the callback. The journal retains the original authority.
 Schema exposure grants no execution authority. The tool execution path still applies its authorization checks.
 
 Leaks today:
@@ -658,11 +662,11 @@ Leaks today:
 
 `SessionToolWorkflow` owns the session-local approval records, live wait channel, active batch tracker, and temporary correction state.
 It validates the original requester and offered answer. It selects which unanswered calls can resume after recovery.
-The actor retains the current turn context. The workflow retains the original authority for each unresolved prompt.
+`SessionInputFlow` retains the current turn context. The workflow retains the original authority for each unresolved prompt.
 [`SessionExecutionLifetime`](../../src/Netclaw.Actors/Sessions/Handlers/SessionExecutionLifetime.cs) decides whether a restart can stop the exact tool task.
 The workflow decides whether every unfinished tool call waits on a durable approval.
 The lifetime owner also validates the complete stored turn authority before a restart reminder or resumed turn.
-The actor passes the durable input records to that check. It does not store another authority copy.
+The actor passes the durable input records to that check. The input owner does not store another durable copy.
 The actor writes grants, persists events, and emits outputs. The lifetime owner owns task cancellation and stop completion.
 
 The workflow releases a claimed live wait only after the actor completes the required grant and journal steps.

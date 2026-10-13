@@ -182,7 +182,8 @@ The design reuses these owners:
 | Data or decision | Owner | Lifetime |
 |---|---|---|
 | Accepted input and original authority | Session journal | Durable |
-| Active model and tool cancellation | `LlmSessionActor` | Actor-local |
+| Selected input and current turn authority | `SessionInputFlow` | Actor-local |
+| Active model and tool cancellation | `SessionExecutionLifetime` | Actor-local |
 | Wakeup schedule and delivery | Reminder manager | Durable |
 | Cross-process handoff | Restart manifest | Durable until startup reads it |
 
@@ -191,10 +192,10 @@ The record contains its ID, content, media, source ID, and `TurnContextRecord`.
 Journal order supplies input order.
 Terminal turn events close the consumed input IDs.
 
-The actor gives an active model call a two-second completion grace.
+The session lifetime owner gives an active model call a two-second completion grace.
 It then cancels the call and waits for that exact task to stop.
 A durable approval wait uses the existing tool pipeline cancellation token.
-The actor does not cancel a tool with an uncertain effect.
+The lifetime owner does not cancel a tool with an uncertain effect.
 
 The actor returns one standard `ReminderDefinition` after a safe interruption.
 The reminder uses `DeliveryKind.CurrentSession` and expires after ten minutes.

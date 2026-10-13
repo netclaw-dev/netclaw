@@ -67,20 +67,17 @@ internal sealed class SessionInputFlow
     private MessageSource? _source;
     private TurnContext? _context;
     private EffectiveTrustContext? _trust;
-    private TurnId? _turnId;
-    private string? _messageId;
-    private ChannelType? _channelType;
+    private TurnTelemetryFacts _telemetry;
     private bool _emittedText;
     private bool _resumeToolLoopAfterCompaction;
     private IWithSessionId? _deferredApproval;
     private int _compactionOverflowRetryCount;
 
-    public int BufferedCount => _buffer.Count;
     public int SelectedCount => _selectedIds.Count;
     public bool EmittedText => _emittedText;
     public bool HasBufferedContinuation => _buffer.Count > 0 || _deferredApproval is not null;
     public TurnAuthorityFacts Authority => new(_context, _source, _trust);
-    public TurnTelemetryFacts Telemetry => new(_turnId, _messageId, _channelType);
+    public TurnTelemetryFacts Telemetry => _telemetry;
     public SelectedInputFacts SelectedInputs =>
         new(_selectedIds.ToArray(), _source?.ReminderId, _source?.BackgroundJobId);
 
@@ -131,10 +128,7 @@ internal sealed class SessionInputFlow
                 MediaReferences = command.MediaReferences.ToArray()
             },
             ExecutableText = command.Source?.ExecutableText,
-            TurnContext = context.ToRecord() with
-            {
-                AdoptedSpeakerIds = context.AdoptedSpeakerIds.ToArray()
-            },
+            TurnContext = context.ToRecord(),
             AdmittedAtMs = admittedAtMs
         };
 
@@ -188,7 +182,10 @@ internal sealed class SessionInputFlow
         _source = command.Source;
         _context = context;
         _trust = deriver?.DeriveFromTurnContext(context);
-        BindTelemetry(command.Source, context.TurnId);
+        _telemetry = new TurnTelemetryFacts(
+            context.TurnId,
+            command.Source?.MessageId,
+            command.Source?.ChannelType);
     }
 
     public void ActivateRecoveredInput(
@@ -199,9 +196,7 @@ internal sealed class SessionInputFlow
         _emittedText = false;
         _selectedIds.Clear();
         _source = source;
-        _context = context;
-        _trust = deriver?.DeriveFromTurnContext(context);
-        BindTelemetry(context);
+        RestoreTurnAuthority(context, deriver);
         _inFlightDedup.ReserveReminder(source?.ReminderId);
     }
 
@@ -253,7 +248,7 @@ internal sealed class SessionInputFlow
 
     public void BufferReplay(SendUserMessage command) => _buffer.Insert(0, (command, true));
 
-    public BufferedInputBatch? DrainBufferedBatch()
+    private BufferedInputBatch? DrainBufferedBatch()
     {
         if (_buffer.Count == 0)
             return null;
@@ -320,14 +315,14 @@ internal sealed class SessionInputFlow
         _context = null;
     }
 
-    public void SetTurnContext(TurnContext? context) => _context = context;
+    public void SetTurnContext(TurnContext context) => _context = context;
     public void ClearTurnContext() => _context = null;
 
-    public void RestoreApprovalTurn(TurnContext context, TrustContextDeriver? deriver)
+    public void RestoreTurnAuthority(TurnContext context, TrustContextDeriver? deriver)
     {
         _context = context;
         _trust = deriver?.DeriveFromTurnContext(context);
-        BindTelemetry(context);
+        _telemetry = new TurnTelemetryFacts(context.TurnId, null, context.ChannelType);
     }
 
     public bool TryStartOverflowRecovery()
@@ -351,7 +346,8 @@ internal sealed class SessionInputFlow
     {
         if (restartDrainRequested)
         {
-            DiscardCompactionContinuationForRestart();
+            _deferredApproval = null;
+            _resumeToolLoopAfterCompaction = false;
             return new CompactionContinuation(InputProgressAction.Restart, false, null, null);
         }
 
@@ -373,30 +369,10 @@ internal sealed class SessionInputFlow
         return count;
     }
 
-    public void DiscardCompactionContinuationForRestart()
-    {
-        _deferredApproval = null;
-        _resumeToolLoopAfterCompaction = false;
-    }
-
     public IReadOnlyList<SendUserMessage> PrepareActorRestartReplay()
     {
         var messages = _buffer.Select(static item => item.Message).ToArray();
         _buffer.Clear();
         return messages;
-    }
-
-    private void BindTelemetry(MessageSource? source, TurnId turnId)
-    {
-        _messageId = source?.MessageId;
-        _turnId = turnId;
-        _channelType = source?.ChannelType;
-    }
-
-    private void BindTelemetry(TurnContext context)
-    {
-        _messageId = null;
-        _turnId = context.TurnId;
-        _channelType = context.ChannelType;
     }
 }

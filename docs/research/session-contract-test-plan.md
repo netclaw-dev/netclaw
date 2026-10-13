@@ -307,7 +307,7 @@ The two history-choice mutants and three prior session-reliability mutants were 
 The unchanged reducer theory failed both rows after a detached negative control removed the reminder ledger update.
 It passed both rows after source restoration, and the restored source and test hashes matched this worktree.
 Final Slopwatch found zero issues. Copyright headers and whitespace checks passed.
-These results are local Stage 5 evidence. Stage 5 has no hosted CI result yet.
+These results describe the local Stage 5 checkpoint before the later group merge.
 Reminder records remain absent from snapshots under the existing contract. This repair does not promise deduplication across every snapshot boundary.
 
 Stage 6 starts in a separate worktree from the Stage 5 production commit.
@@ -323,15 +323,8 @@ Nine resource fields moved into the owner. Two duplicate facts disappeared. The 
 The total production source still grows in this slice, so this slice does not satisfy the total-source reduction goal.
 The root reviewed the production draft and direct tests, then published PR #2445.
 
-[PR #2443](https://github.com/netclaw-dev/netclaw/pull/2443) is the Stage 5 parent.
-The lifecycle worktree used `86452744` for the full actor check.
-After PR #2442 merged, GitHub rebased PR #2443 to `ecac1c7e`.
-The root verified that both Stage 5 heads have the same tree, `471f8be3`.
-The lifecycle worktree then moved to `ecac1c7e` without a source change.
-Keep PR #2443 and later stack PRs open until every stack head passes its checks.
-[PR #2445](https://github.com/netclaw-dev/netclaw/pull/2445) is open at `8fd1171bd605cd07edeb79d9b9249d3336d52b49`.
-Its base is PR #2443. GitHub native stack `2444` contains both open PRs.
-Hosted checks still ran at this review. Merge the complete stack with one atomic native group request after every PR passes.
+[PR #2443](https://github.com/netclaw-dev/netclaw/pull/2443), [PR #2445](https://github.com/netclaw-dev/netclaw/pull/2445), [PR #2446](https://github.com/netclaw-dev/netclaw/pull/2446), and [PR #2447](https://github.com/netclaw-dev/netclaw/pull/2447) merged as one native group.
+The later stop policy work uses that combined source.
 The independent tests passed 68 focused cases after a test probe fix.
 The ToolLoop compaction class passed three cases on the Stage 5 parent.
 The full Actors suite passed 5,764 cases and retained 41 platform skips.
@@ -360,10 +353,10 @@ Persistence or authority changes remain explicit product decisions.
 Use the Systematize plan/verify guidance and Code With Aaron test/refactor/review guidance during execution.
 If those skills are unavailable, report the gap and preserve this plan's proof and separate-authorship requirements.
 
-### Next group: complete session stop policy
+### Session stop policy group
 
-The next group starts from combined local commit `bc27ea24` in a separate worktree.
-It does not extend the open four-PR group. That group remains held for one atomic merge.
+The group started from combined local commit `bc27ea24` in a separate worktree.
+It did not extend the four-PR group before that group merged.
 An independent baseline on `8fd1171b` proved a late-reap defect.
 After an input aborted idle passivation, the reap event committed, but the retired stop attempt armed a final timer.
 The timer reached `Processing` as a dead letter. A later idle passivation then failed to terminate.
@@ -371,7 +364,7 @@ The repair lets idle sessions release actor resources after the valid late reap 
 
 Commit `322b9575` is the separate behavior correction. It clears the retired attempt's reap prerequisite on abort.
 The reap operation still commits its journal event after abort. The unchanged independent regression passed on that commit.
-The correction test has SHA-256 `6ca00f1caa97fd03c37f5e9ebe508f6ef06f469ffefefda46cd51505655fe99e`.
+The evidence receipt records the correction test source hash.
 
 The subsequent transfer gives `SessionExecutionLifetime` the complete restart and passivation policy.
 The actor retains journal writes, job-manager lookup, output, lifecycle notification, and `Context.Stop`.
@@ -399,4 +392,4 @@ The full Actors suite passed 5,766 cases, with 41 platform skips and no failures
 The full run used the current combined source after the focused run and mutation config update.
 Its TRX and raw log are under `planning/netclaw/session-refactor/review/evidence/session-stop-transfer/` outside this repository.
 Slopwatch found zero issues. The copyright header and whitespace checks passed.
-No next-group PR is published or merged.
+[PR #2449](https://github.com/netclaw-dev/netclaw/pull/2449) is open for the stop policy group.

@@ -14,8 +14,8 @@ namespace Netclaw.Actors.Sessions.Handlers;
 /// not yet recorded ("in flight"), so an Akka.Reminders redelivery (or a
 /// duplicate job result) is deduplicated before the persisted ledgers
 /// (<c>SessionState.ProcessedReminderIds</c> / <c>ProcessedBackgroundJobIds</c>)
-/// catch it. Transient and actor-owned: never persisted, rebuilt from journal
-/// replay on recovery. Mirrors <see cref="Netclaw.Actors.Reminders.ActiveExecutionTracker"/>.
+/// catch it. The input owner keeps this transient set. Journal replay rebuilds
+/// the processed ledgers after recovery. This type mirrors <see cref="Netclaw.Actors.Reminders.ActiveExecutionTracker"/>.
 /// </summary>
 internal sealed class InFlightTurnDedup
 {
