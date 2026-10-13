@@ -577,12 +577,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     result => result.Message.ToolCallId is { } callId
                         ? callId.Value
                         : throw new InvalidOperationException("A tool cycle result requires a call identity."),
-                    result =>
-                    {
-                        return new ToolCycleResult(
-                            result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
-                            result.Message.Content ?? string.Empty);
-                    },
+                    result => new ToolCycleResult(
+                        result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
+                        result.Message.Content ?? string.Empty),
                     StringComparer.Ordinal);
                 _turnState.ObserveCompleted(ToolCycleSignatureFactory.Complete(cycleBatch, cycleResults));
                 _activeCycleBatch = null;
@@ -1766,6 +1763,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             {
                 var callId = result.Message.ToolCallId
                     ?? throw new InvalidOperationException("A child tool result requires a call identity.");
+                ArgumentNullException.ThrowIfNull(callId.Value);
                 if (!callIds.Add(callId.Value))
                     throw new ArgumentException("A child tool result has a duplicate call identity.", nameof(results));
             }
