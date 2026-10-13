@@ -29,6 +29,8 @@
              Link="Sessions/SessionToolWorkflowRequesterTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/SessionModelContextStaleInspectionTests.cs"
              Link="Sessions/SessionModelContextStaleInspectionTests.cs" />
+    <Compile Include="../Netclaw.Actors.Tests/Sessions/SessionStateTests.cs"
+             Link="Sessions/SessionStateTests.cs" />
     <Compile Include="../Netclaw.Tests.Utilities/TestSessionStorageResolver.cs"
              Link="Utilities/TestSessionStorageResolver.cs" />
   </ItemGroup>

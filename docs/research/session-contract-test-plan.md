@@ -226,7 +226,8 @@ Use this order after the first two PRs. Keep exact APIs provisional until each b
 3. Complete coherent tool state and safe continuation. Transfer remaining dispatch/resumption rules with their state. Recheck recurrence overlap against the current `dev`.
 4. Extract context and request preparation. Preserve stale-generation rejection, authority, prompt inputs, and model request equivalence.
 5. Consolidate terminal state changes in `SessionState`. Remove duplicate live and recovery reducers. Prove the recovered reminder ledger contract.
-6. Simplify activity and restart decisions. First prove committed turn identity and actor restart replay. Then transfer coherent lifecycle responsibilities.
+6. Encapsulate model and tool task lifetime. Remove duplicate busy and restart facts. Preserve phase effects and exact task-stop checks.
+   Before a later turn-admission transfer, prove committed turn identity and actor restart replay. Those checks remain separate work.
 7. Consolidate and measure. Remove obsolete paths, duplicate state, temporary adapters, and unjustified contracts. Compare the whole production footprint.
 
 Each step needs a narrow baseline, an independent test author, product changes, verification, root approval, PR publication, and auto-merge.
@@ -266,68 +267,48 @@ The broader lifecycle transfer remains required; these corrections do not comple
 
 ## Status and handoff
 
-The first branch installs nine pinned Accordant skills and strengthens two existing actor test classes.
-It adds no Accordant package and changes no product code.
-The focused tests pass: 10 executed, 10 passed.
-The full actor project passes: 5,717 passed and 41 skipped. None of those skips belongs to the changed session tests.
-Slopwatch reports zero issues. The copyright check and whitespace check pass.
-A result-corruption fault fails both completion-order cases at the expected result assertion. Both cases pass after source restoration.
-A separate completion-gate fault causes a timeout. That attempt does not establish assertion sensitivity to premature continuation.
-[PR #2439](https://github.com/netclaw-dev/netclaw/pull/2439) contains the baseline. Root and independent review approve it.
-Automatic merge is disabled. Hosted checks for the combined change remain pending.
-The tool-result extraction has separate product and test authors in `feature/session-tool-result-ownership`.
-Its production diff removes 273 actor lines and 185 total production lines.
-The actor field count falls from 87 to 86. Media state moves into the tracker; that state still exists.
-The full actor suite passes: 5,740 passed and 41 skipped.
-A deliberate early-completion defect fails the two applicable readiness theory cases.
-Independent review found no product regression. It requested a stronger duplicate-media assertion.
-The final affected run passes all 143 tests after that assertion and a media-discard case.
-The full-suite result precedes those final test amendments. Production code stayed unchanged.
-Slopwatch, copyright headers, and whitespace checks pass. The focused Stryker gate kills the one calibrated early-completion mutant. Its local run takes 5 minutes 44 seconds.
-It uses the existing mutation harness and a separate parallel matrix group to protect CI time.
-Root review approves the combined extraction, tests, and gate.
-The user authorizes stacked PRs and requires labels.
-[PR #2440](https://github.com/netclaw-dev/netclaw/pull/2440) merged into the baseline feature branch before hosted checks completed.
-The combined tree at `6881cf1c` matches the locally reviewed extraction tree at `f4103fb5`.
-Nothing from this effort merged into `dev` at this checkpoint.
-PR #2439 now contains both steps. The root will wait for its combined checks before a merge.
-Do not enable automatic merge on an unprotected feature base. That command can merge immediately despite active checks.
-Future stack merges require completed checks on the exact head and a bottom-up merge order.
-Stage 3 starts on `feature/session-tool-workflow` with separate production and test authors.
-Its accepted design replaces the approval-state owner with one tool-workflow component.
-The actor retains journal operations, grant writes, task lifetime, and current turn authority.
-The workflow now owns its approval channel, call records, batch tracker, and temporary correction state.
-The actor loses 570 lines and three fields. Total production source grows by 90 lines in this step.
-Across both extractions, the actor loses 843 lines and production source loses 95 lines.
-The unused approval-level turn context is eliminated. Other state moves into private ownership.
-The focused suite passes 118 cases. The full actor suite passes 5,744 cases and skips 41.
-A later assertion strengthens completed-sibling exclusion. The final workflow class rerun passes all 18 tests.
-The requester theory shares its fixture across two partial files so the mutation harness can reuse it without broader type access.
-A requester-check fault fails the direct wrong-requester case and the live actor case.
-The same three tests pass after byte-for-byte source restoration.
-The combined persistent mutation gate kills the readiness and requester mutants. Its warm local run takes 1 minute 56 seconds.
-The OpenSpec correction names workflow ownership and aligns one-time approval with the existing exact-call policy.
-The parent actor still journals durable answers before wait release. Child waits remain live-only.
-Independent and root review approve the integrated change. Slopwatch, headers, and whitespace checks pass.
-[PR #2439](https://github.com/netclaw-dev/netclaw/pull/2439) merged into `dev` as `32348bfb`.
-[PR #2441](https://github.com/netclaw-dev/netclaw/pull/2441) merged into `dev` as `123daad6959df84460508fd89826c4404b0956e8`.
-All 30 hosted checks passed before merge. One post-merge check skipped.
-The merged tree equals the Stage 4 base tree at `83a86ef1`.
-Stage 4 starts on `feature/session-model-context` from that head.
-Separate authors own production and tests. They first establish the focused context baseline.
-The focused baseline passes all 125 tests.
-The new context owner reuses the actor's call ID for inspection replies and removes the separate inspection counter.
-It also removes the unused recall result field from the model completion message.
-The same recall cache supplies request preparation. A second actor recall field is no longer necessary.
-Root committed the Stage 4 source and tests at `527a7e00`.
-The final focused run passes 13 cases. The full actor suite passes 5,749 cases and retains 41 existing skips.
-Slopwatch, copyright headers, and whitespace checks pass.
-The actor loses 288 lines and ten fields. This slice adds 39 total production lines, including the new owner.
-Three duplicate actor facts disappear; eight fields move into the owner, and one owner reference replaces them.
-The cumulative actor reduction is 1,131 lines. Total production source falls by 56 lines across the three extractions.
-The stale-reply negative control failed at the expected assertion. The unchanged test passed after exact source restoration.
-The combined Stage 4 mutation gate killed all three selected mutants in 1 minute 46 seconds.
-Stage 4 delivery remains separate from the merged base PR.
+[PR #2440](https://github.com/netclaw-dev/netclaw/pull/2440) merged into the Stage 1 feature branch before its hosted checks completed.
+That historical merge did not establish hosted acceptance at the time.
+Do not enable automatic merge on an unprotected feature base. It can merge immediately despite active checks.
+Wait for checks on the exact head, then merge the stack from the bottom up.
+[PR #2439](https://github.com/netclaw-dev/netclaw/pull/2439) later merged the combined first two steps into `dev` as `32348bfb`.
+The Stage 2 tool-result extraction removed 273 actor lines and 185 total production lines.
+[PR #2441](https://github.com/netclaw-dev/netclaw/pull/2441) merged Stage 3 into `dev` as `123daad6959df84460508fd89826c4404b0956e8`.
+All 30 hosted checks passed before that merge. One post-merge check skipped.
+The Stage 3 workflow change removed 570 actor lines and three fields. It added 90 total production lines.
+The merged Stage 3 tree is the Stage 4 base at `83a86ef1`.
+
+Stage 4 moved prompt, recall, snapshot, and model request preparation into `SessionModelContext`.
+It removed 288 actor lines and ten actor fields. This slice added 39 total production lines.
+The full actor suite passed 5,749 cases and retained 41 skips.
+The stale-reply negative control failed at its expected assertion, then passed after source restoration.
+The focused mutation gate killed all three selected mutants.
+[PR #2442](https://github.com/netclaw-dev/netclaw/pull/2442) holds Stage 4 at `b9b14036` and targets `dev`.
+At the 2026-10-13 21:02 UTC check, all completed non-skipped PR checks passed.
+The Linux and macOS native smoke checks still ran. PR #2442 remained open.
+Stage 5 must use PR #2442 as its base while that PR remains open.
+
+Stage 5 extends the existing `SessionState` reducer at local source commit `8e1925d6`.
+Both live terminal callbacks and recovery now use its shared history, input-closure, and source-record rules.
+The actor loses 39 lines. Total production source loses 36 lines. No actor field moves or disappears in this slice.
+The cumulative actor reduction reaches 1,170 lines. Total production source falls by 92 lines before the lifecycle draft.
+The unchanged reminder regression passes after the repair. Its baseline failed at the expected assertion.
+The focused suite passes 53 cases. The full Actors suite passes 5,754 cases and retains 41 existing skips.
+The two history-choice mutants and three prior session-reliability mutants were killed in the final focused gate.
+The unchanged reducer theory failed both rows after a detached negative control removed the reminder ledger update.
+It passed both rows after source restoration, and the restored source and test hashes matched this worktree.
+Final Slopwatch found zero issues. Copyright headers and whitespace checks passed.
+These results are local Stage 5 evidence. Stage 5 has no hosted CI result yet.
+Reminder records remain absent from snapshots under the existing contract. This repair does not promise deduplication across every snapshot boundary.
+
+Stage 6 starts in a separate worktree from the Stage 5 production commit.
+One private owner receives the existing task, cancellation, stop, and watchdog state.
+The actor retains phase decisions and restart policy. The draft deletes the duplicate busy and restart-request facts.
+The two drain methods remain separate until their phase-specific effects have direct proof.
+The source trace suggests a possible batch-completion and restart-stop interaction, but no reachable failure was reproduced.
+This structural slice preserves that behavior. Any repair requires a failing baseline and separate review.
+The current lifecycle draft removes 133 actor lines and adds 110 total production lines.
+Those draft counts do not satisfy the total-source reduction goal. Independent tests and source review remain necessary.
 
 The independent test author owns baseline evidence. The product author owns extraction. The root owns review and each delivery decision.
 Accordant fit and exact owner API remain engineering checks. Persistence or authority changes remain explicit product decisions.

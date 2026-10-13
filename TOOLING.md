@@ -62,7 +62,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellCommandAnalysis.IsPlainFileTarget` and `ToolAccessPolicy.ScreenNoProgramRedirects` | Owner decision (October 2026): a command that runs no program gets no prompt only when each redirect target is one plain file (`/dev/null` is the only path below `/dev/`, so `/dev/tcp` keeps a prompt); a redirect target that is not proved, an input redirect that the `file_read` rules refuse, and a `Deny` mode of the file tool deny the call | 20 killed | `./scripts/run-no-program-mutations.sh` |
 | `BashLiteralTwinSlices.Apply` and the denial check of `ToolAccessPolicy.ScreenScopedSlices` | Decision F1: the strictest literal twin result decides a call. The candidates of every twin replace the candidates of their source command, an unresolved source keeps its exact answer, twins without their source command fail loudly, and one denied twin denies the call | 9 killed | `./scripts/run-literal-twin-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
-| `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, and `SessionModelContext.IsCurrentInspection` | The batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call | 3 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
+| `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, and `SessionState.Apply(TurnRecorded, bool)` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once | 5 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -159,9 +159,9 @@ The local run took about 2 minutes after package restore. CI runs it in the
 `verb-chain-and-reminder` group of the `mutation-gates` job. Its report
 directory is `artifacts/stryker/stream-commit-gate`.
 
-### Session Reliability, Requester, and Inspection Gate
+### Session Reliability Gate
 
-Run the session reliability, requester, and inspection gate:
+Run the session reliability gate:
 
 ```bash
 ./scripts/run-tool-batch-readiness-mutations.sh
@@ -176,16 +176,20 @@ The linked `SessionToolWorkflowRequesterTests` source kills this mutant when ano
 The script also selects the generation equality in `SessionModelContext.IsCurrentInspection`.
 Stryker changes `generation == active` to `generation != active`.
 The linked `SessionModelContextStaleInspectionTests` source kills this mutant when an old reply cannot alter a later call.
+The script also selects the history choice in `SessionState.Apply(TurnRecorded, bool)`.
+Stryker forces each branch of `userAlreadyInHistory ? closed.History : closed.History.Add(evt.UserMessage)`.
+The linked `SessionStateTests` source kills both mutants when one branch duplicates a user or the other branch omits one.
 The selectors reject missing or repeated source markers before Stryker starts.
-The gate requires exactly one killed mutant in each of the three spans.
+The gate requires one killed mutant in each prior span and two killed history mutants.
 It fails for no mutant, a survivor, or a compile error in a selected span.
 
 The combined local calibration took 1 minute 56 seconds with a warm build cache.
 The earlier readiness-only run took 5 minutes 44 seconds after tool restore.
 The three-target local run took 1 minute 46 seconds with a warm build cache.
+The five-mutant local run took 1 minute 47 seconds with a warm build cache.
 Hosted run `38448179312` took 15 to 21 minutes for the four existing matrix groups.
 Its Windows test took 16 minutes 6 seconds. A target in any of those four groups would extend that critical path.
-All three targets run in one Stryker invocation in the existing `session-reliability` group.
+All four targets run in one Stryker invocation in the existing `session-reliability` group.
 Hosted CI must measure the combined gate on a cold runner.
 Its report directory is `artifacts/stryker/tool-batch-readiness`.
 

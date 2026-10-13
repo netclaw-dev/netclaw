@@ -10,9 +10,12 @@ using Akka.Persistence;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -94,6 +97,187 @@ public sealed class SessionInputCompatibilityIntegrationTests : LlmSessionTestBa
     }
 
     [Fact]
+    public async Task Recovered_reminder_without_source_key_closes_its_ledger_before_redelivery()
+    {
+        // Arrange
+        var sessionId = new SessionId("test-channel/reminder-without-source-key");
+        var reminderId = new ReminderId("check-pr:1712000000000");
+        var user = new SerializableChatMessage
+        {
+            Role = Netclaw.Actors.Protocol.ChatRole.User,
+            Content = "Check the release"
+        };
+        var inputId = new InputId("reminder-without-source-key-input");
+        var seeder = Sys.ActorOf(Props.Create(() => new SessionEventSeeder($"session-{sessionId.Value}")));
+        await seeder.Ask<Done>(new InputAdmitted
+        {
+            SessionId = sessionId,
+            InputId = inputId,
+            SourceMessageId = null,
+            UserMessage = user,
+            TurnContext = new TurnContextRecord
+            {
+                SessionId = sessionId,
+                ChannelType = "slack",
+                RequesterSenderId = new SenderId("reminder-system")
+            },
+            AdmittedAtMs = 1
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await seeder.Ask<Done>(new TurnRecorded
+        {
+            SessionId = sessionId,
+            UserMessage = user,
+            AssistantReply = new SerializableChatMessage
+            {
+                Role = Netclaw.Actors.Protocol.ChatRole.Assistant,
+                Content = "The first reminder result"
+            },
+            SourceReminderId = reminderId,
+            ConsumedInputIds = [inputId],
+            RecordedAtMs = 2
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(seeder);
+        Sys.Stop(seeder);
+        await ExpectTerminatedAsync(seeder, cancellationToken: TestContext.Current.CancellationToken);
+
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("reminder-without-source-key-sub");
+        var joined = await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        var reminderSource = new MessageSource
+        {
+            ChannelType = ChannelType.Slack,
+            SenderId = new SenderId("reminder-system"),
+            MessageId = reminderId.Value,
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.Personal,
+            Principal = PrincipalClassification.VerifiedAutomation,
+            Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted),
+            ReminderId = reminderId
+        };
+
+        // Act
+        var duplicateAck = await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = user.Content,
+            Source = reminderSource
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "A distinct user follow-up"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var nextTurn = await subscriber.FishForMessageAsync<TurnCompleted>(
+            _ => true, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Equal(1, joined.TurnCount);
+        Assert.Equal(sessionId, duplicateAck.SessionId);
+        Assert.Equal(TurnOutcome.Completed, nextTurn.Outcome);
+        Assert.Null(nextTurn.SourceReminderId);
+        Assert.Equal(2, nextTurn.TurnNumber.Value);
+        Assert.Equal(1, _chatClient.CallCount);
+    }
+
+    [Fact]
+    public async Task Recovery_restores_each_consumed_input_once_in_event_order()
+    {
+        // Arrange
+        var sessionId = new SessionId("test-channel/multi-input-replay");
+        var firstId = new InputId("replay-first-id");
+        var secondId = new InputId("replay-second-id");
+        var firstUser = new SerializableChatMessage
+        {
+            Role = Netclaw.Actors.Protocol.ChatRole.User,
+            Content = "replay-first-731"
+        };
+        var secondUser = new SerializableChatMessage
+        {
+            Role = Netclaw.Actors.Protocol.ChatRole.User,
+            Content = "replay-second-842"
+        };
+        var context = new TurnContextRecord
+        {
+            SessionId = sessionId,
+            ChannelType = "slack",
+            RequesterSenderId = new SenderId("user-1")
+        };
+        var seeder = Sys.ActorOf(Props.Create(() => new SessionEventSeeder($"session-{sessionId.Value}")));
+        await seeder.Ask<Done>(new InputAdmitted
+        {
+            SessionId = sessionId,
+            InputId = firstId,
+            SourceMessageId = firstId.Value,
+            UserMessage = firstUser,
+            TurnContext = context,
+            AdmittedAtMs = 1
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await seeder.Ask<Done>(new InputAdmitted
+        {
+            SessionId = sessionId,
+            InputId = secondId,
+            SourceMessageId = secondId.Value,
+            UserMessage = secondUser,
+            TurnContext = context,
+            AdmittedAtMs = 2
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await seeder.Ask<Done>(new TurnRecorded
+        {
+            SessionId = sessionId,
+            UserMessage = secondUser,
+            AssistantReply = new SerializableChatMessage
+            {
+                Role = Netclaw.Actors.Protocol.ChatRole.Assistant,
+                Content = "replay-answer-953"
+            },
+            ConsumedInputIds = [firstId, secondId],
+            RecordedAtMs = 3
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(seeder);
+        Sys.Stop(seeder);
+        await ExpectTerminatedAsync(seeder, cancellationToken: TestContext.Current.CancellationToken);
+
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("multi-input-replay-sub");
+        var joined = await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // Act
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "replay-followup-064"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var completed = await subscriber.FishForMessageAsync<TurnCompleted>(
+            _ => true, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        var relevant = _chatClient.ReceivedMessages.Single()
+            .Where(message => message.Text is "replay-first-731" or "replay-second-842"
+                or "replay-answer-953" or "replay-followup-064")
+            .Select(message => (message.Role, message.Text));
+
+        // Assert
+        Assert.Equal(1, joined.TurnCount);
+        Assert.Equal(TurnOutcome.Completed, completed.Outcome);
+        Assert.Equal(2, completed.TurnNumber.Value);
+        Assert.Equal(new[]
+        {
+            (Microsoft.Extensions.AI.ChatRole.User, "replay-first-731"),
+            (Microsoft.Extensions.AI.ChatRole.User, "replay-second-842"),
+            (Microsoft.Extensions.AI.ChatRole.Assistant, "replay-answer-953"),
+            (Microsoft.Extensions.AI.ChatRole.User, "replay-followup-064")
+        }, relevant);
+    }
+
+    [Fact]
     public async Task Buffered_image_is_degraded_not_rejected()
     {
         // Gate the first model response so the buffered second message
@@ -160,6 +344,11 @@ public sealed class SessionInputCompatibilityIntegrationTests : LlmSessionTestBa
             {
                 var replyTo = Sender;
                 Persist(turn, _ => replyTo.Tell(Done.Instance));
+            });
+            Command<InputAdmitted>(input =>
+            {
+                var replyTo = Sender;
+                Persist(input, _ => replyTo.Tell(Done.Instance));
             });
         }
     }

@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_file="$repo_root/src/Netclaw.Actors/Sessions/ActiveToolBatchTracker.cs"
 approval_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionToolWorkflow.Approvals.cs"
 inspection_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionModelContext.cs"
+history_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionState.cs"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
 output_path="${1:-$repo_root/artifacts/stryker/tool-batch-readiness}"
 if [[ "$output_path" != /* ]]; then
@@ -50,6 +51,18 @@ read -r inspection_span_start inspection_span_end inspection_line inspection_col
   ' "$inspection_source_file"
 )
 
+read -r history_span_start history_span_end history_line history_column history_end_column < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $marker = "userAlreadyInHistory ? closed.History : closed.History.Add(evt.UserMessage)";
+    $start = index($_, $marker);
+    die "The terminal history choice marker is missing or duplicated.\n"
+      if $start < 0 || index($_, $marker, $start + 1) >= 0;
+    $line = 1 + (substr($_, 0, $start) =~ tr/\n//);
+    $column = $start - rindex(substr($_, 0, $start), "\n");
+    print "$start ", $start + length($marker), " $line $column ", $column + length($marker), "\n";
+  ' "$history_source_file"
+)
+
 (
   cd "$test_project"
   dotnet stryker \
@@ -58,6 +71,7 @@ read -r inspection_span_start inspection_span_end inspection_line inspection_col
     --mutate "Sessions/ActiveToolBatchTracker.cs{$span_start..$span_end}" \
     --mutate "Sessions/SessionToolWorkflow.Approvals.cs{$approval_span_start..$approval_span_end}" \
     --mutate "Sessions/SessionModelContext.cs{$inspection_span_start..$inspection_span_end}" \
+    --mutate "Sessions/SessionState.cs{$history_span_start..$history_span_end}" \
     --output "$output_path" \
     --skip-version-check
 )
@@ -104,10 +118,26 @@ jq -e --arg source "$inspection_source_file" \
   exit 1
 }
 
-jq -e --argjson count "$((expected_count + expected_requester_count + expected_inspection_count))" '
+expected_history_count=2
+jq -e --arg source "$history_source_file" \
+  --argjson line "$history_line" \
+  --argjson first "$history_column" --argjson last "$history_end_column" \
+  --argjson count "$expected_history_count" '
+  [(.files[$source].mutants // [])[]
+    | select(.status != "Ignored")
+    | select(.location.start.line == $line)
+    | select(.location.end.line == $line)
+    | select(.location.start.column >= $first and .location.end.column <= $last)] as $mutants
+  | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
+' "$report" > /dev/null || {
+  echo "Expected $expected_history_count killed terminal history mutants on the selected expression." >&2
+  exit 1
+}
+
+jq -e --argjson count "$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count))" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count
 ' "$report" > /dev/null || {
-  echo "Expected exactly $((expected_count + expected_requester_count + expected_inspection_count)) tested session reliability mutants." >&2
+  echo "Expected exactly $((expected_count + expected_requester_count + expected_inspection_count + expected_history_count)) tested session reliability mutants." >&2
   exit 1
 }

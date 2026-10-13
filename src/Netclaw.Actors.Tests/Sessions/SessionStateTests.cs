@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
@@ -106,6 +107,87 @@ public class SessionStateTests
 
         Assert.Equal(4, state.History.Count);
         Assert.Equal(2, state.TurnCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Terminal_reducer_sets_history_and_source_ledgers_for_both_history_modes(bool userAlreadyInHistory)
+    {
+        // Arrange
+        var user = new SerializableChatMessage { Role = ChatRole.User, Content = "same question" };
+        var tool = new SerializableChatMessage { Role = ChatRole.Tool, Content = "tool result" };
+        var assistant = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "answer" };
+        var state = userAlreadyInHistory
+            ? SessionState.Empty with { History = [user, tool] }
+            : SessionState.Empty;
+        var reminderId = new ReminderId("check-pr:1712000000000");
+        var jobId = new BackgroundJobId("bg-job:unit-1");
+        var evt = new TurnRecorded
+        {
+            SessionId = TestSessionId,
+            UserMessage = user,
+            AssistantReply = assistant,
+            SourceReminderId = reminderId,
+            SourceBackgroundJobId = jobId
+        };
+
+        // Act
+        var next = state.Apply(evt, userAlreadyInHistory);
+
+        // Assert
+        var expected = userAlreadyInHistory
+            ? new[] { user, tool, assistant }
+            : new[] { user, assistant };
+        Assert.Equal(expected, next.History);
+        Assert.Equal(1, next.TurnCount);
+        Assert.Contains(reminderId, next.ProcessedReminderIds);
+        Assert.Contains(jobId, next.ProcessedBackgroundJobIds);
+    }
+
+    [Fact]
+    public void Terminal_reducer_closes_each_equal_text_input_by_id_and_preserves_unrelated_input()
+    {
+        // Arrange
+        var user = new SerializableChatMessage { Role = ChatRole.User, Content = "same text" };
+        var firstId = new InputId("same-1");
+        var secondId = new InputId("same-2");
+        var otherId = new InputId("other");
+        InputAdmitted Admit(InputId id, string content) => new()
+        {
+            SessionId = TestSessionId,
+            InputId = id,
+            SourceMessageId = id.Value,
+            TurnContext = new TurnContextRecord
+            {
+                SessionId = TestSessionId,
+                ChannelType = "slack",
+                RequesterSenderId = new SenderId("user-1")
+            },
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = content }
+        };
+        var tool = new SerializableChatMessage { Role = ChatRole.Tool, Content = "tool result" };
+        var state = SessionState.Empty
+            .Apply(Admit(firstId, user.Content))
+            .Apply(Admit(secondId, user.Content))
+            .Apply(Admit(otherId, "later")) with { History = [user, user, tool] };
+        var evt = new TurnRecorded
+        {
+            SessionId = TestSessionId,
+            UserMessage = user,
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "answer" },
+            ConsumedInputIds = [firstId, secondId]
+        };
+
+        // Act
+        var next = state.Apply(evt, userAlreadyInHistory: true);
+
+        // Assert
+        Assert.Equal(otherId, Assert.Single(next.PendingInputs).InputId);
+        Assert.Equal(["same text", "same text", "tool result", "answer"],
+            next.History.Select(message => message.Content));
+        Assert.Equal(1, next.TurnCount);
+        Assert.Equal(3, next.RecentSourceMessageKeys.Count);
     }
 
     [Fact]
