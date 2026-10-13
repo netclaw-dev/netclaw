@@ -17,8 +17,10 @@ internal enum InputPlacement { Activate, BufferDuringModel, BufferDuringCompacti
 
 internal abstract record AdmissionDecision
 {
+    // This command already has an admission ID and can continue without another journal write.
     internal sealed record Existing : AdmissionDecision;
     internal sealed record Reject(string Reason) : AdmissionDecision;
+    // The durable source key already exists, so the actor acknowledges without execution.
     internal sealed record Duplicate : AdmissionDecision;
     internal sealed record Persist(InputAdmitted Event) : AdmissionDecision;
 }
@@ -56,7 +58,7 @@ internal readonly record struct ToolBatchInputAdvance(
     ToolBatchNextAction Next);
 
 /// <summary>
-/// Owns transient input order, selected IDs, source reservations, and turn authority.
+/// Only the session actor uses this transient input order, selection, and authority state.
 /// The session journal remains the only durable input owner.
 /// </summary>
 internal sealed class SessionInputFlow
@@ -64,6 +66,7 @@ internal sealed class SessionInputFlow
     private readonly List<(SendUserMessage Message, bool IsReplay)> _buffer = [];
     private readonly List<InputId> _selectedIds = [];
     private readonly InFlightTurnDedup _inFlightDedup = new();
+    // The executable context can clear while source attribution and telemetry remain for late diagnostics.
     private MessageSource? _source;
     private TurnContext? _context;
     private EffectiveTrustContext? _trust;
@@ -78,6 +81,7 @@ internal sealed class SessionInputFlow
     public bool HasBufferedContinuation => _buffer.Count > 0 || _deferredApproval is not null;
     public TurnAuthorityFacts Authority => new(_context, _source, _trust);
     public TurnTelemetryFacts Telemetry => _telemetry;
+    // Input closure events copy IDs before journal callbacks clear or remove the selection.
     public SelectedInputFacts SelectedInputs =>
         new(_selectedIds.ToArray(), _source?.ReminderId, _source?.BackgroundJobId);
 
@@ -151,6 +155,7 @@ internal sealed class SessionInputFlow
         SendUserMessage command,
         InputPlacement placement)
     {
+        // The journal callback applies the event before this owner reserves or places the input.
         _inFlightDedup.ReserveReminder(command.Source?.ReminderId);
         _inFlightDedup.ReserveBackgroundJob(command.Source?.BackgroundJobId);
         var accepted = command with { AdmittedInputId = admitted.InputId };
@@ -158,6 +163,7 @@ internal sealed class SessionInputFlow
         return accepted;
     }
 
+    // Actor restart can requeue an admitted command. Keep its ID without another journal write.
     public void AdmissionAlreadyCommitted(SendUserMessage command, InputPlacement placement)
         => PlaceAccepted(command, placement);
 
@@ -180,6 +186,7 @@ internal sealed class SessionInputFlow
             || context is null)
             throw new InvalidOperationException($"Journal input {id} has invalid authority: {reason}");
 
+        // Use recorded identity and authority so live execution matches journal recovery.
         _emittedText = false;
         _selectedIds.Clear();
         _selectedIds.Add(id);
@@ -257,10 +264,12 @@ internal sealed class SessionInputFlow
         if (_buffer.Count == 0)
             return null;
 
+        // Fresh input resets the turn limits; overflow replay keeps the current limits.
         var startsNewTurn = _buffer.Any(static item => !item.IsReplay);
         if (startsNewTurn)
             _emittedText = false;
 
+        // The actor sends this whole ordered batch in one call, regardless of source authority.
         var messages = _buffer.Select(static item => item.Message).ToArray();
         foreach (var message in messages)
         {
@@ -324,6 +333,7 @@ internal sealed class SessionInputFlow
 
     public void RestoreTurnAuthority(TurnContext context, TrustContextDeriver? deriver)
     {
+        // Recovery restores journal authority and telemetry without inventing a transport message ID.
         _context = context;
         _trust = deriver?.DeriveFromTurnContext(context);
         _telemetry = new TurnTelemetryFacts(context.TurnId, null, context.ChannelType);
@@ -331,6 +341,7 @@ internal sealed class SessionInputFlow
 
     public bool TryStartOverflowRecovery()
     {
+        // One overflow can compact and replay this turn; a second overflow fails the turn.
         if (_compactionOverflowRetryCount > 0)
         {
             _compactionOverflowRetryCount = 0;
@@ -348,6 +359,7 @@ internal sealed class SessionInputFlow
 
     public CompactionContinuation AdvanceAfterCompaction(bool restartDrainRequested)
     {
+        // Restart takes priority over a deferred approval or tool-loop continuation.
         if (restartDrainRequested)
         {
             _deferredApproval = null;
@@ -358,6 +370,7 @@ internal sealed class SessionInputFlow
         var resume = _resumeToolLoopAfterCompaction;
         _resumeToolLoopAfterCompaction = false;
         var batch = DrainBufferedBatch();
+        // The actor replays this response only after it applies the phase transition.
         var deferred = _deferredApproval;
         _deferredApproval = null;
         var action = resume || batch is not null
