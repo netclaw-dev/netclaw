@@ -2,12 +2,13 @@
 
 **Recommendation:** strengthen the narrow tool-result baseline, then extract tool-result acceptance and batch continuation under the same tests.
 This protects user-visible behavior while the actor transfers real state and decisions.
-Do not wait for a complete actor model or an Accordant framework project.
-Installed agent skills do not commit the repository to Accordant adoption.
+Keep a bounded Accordant pilot as the final support PR for this actor refactor.
+Keep the existing actor tests as the integration proof.
 
 Baseline: `4753b7682c353dc3b7e3932f458124052dbd6adb` on `dev`.
 The status section separates completed proof from proposed work.
-The user authorizes implementation and verification. The root approves each result before PR publication. The stack needs exact-head checks before one group merge.
+The user authorizes implementation and verification. The root reviews each result before PR publication.
+Hold the whole open stack until every PR head has green required checks. Then request one native stack group merge.
 Each PR must preserve accepted behavior. A behavior change needs a separate decision.
 
 ## Scope and evidence
@@ -87,11 +88,11 @@ Positive example: B finishes before A; one continuation receives both correctly 
 Negative example: an old prompt ID or another requester cannot release a pending authorized call.
 These examples validate the oracle. They are not the complete generated suite.
 
-If Accordant fits, let its generator choose sequences, repetitions, completion orders, and valid/invalid answers.
-Use finite domains: two call IDs, one unknown ID, two requester IDs, success/failure, and allow/deny.
-Choose explicit depth and operation bounds that reach a complete two-call turn and repeated invalid answers.
-Inspect generated coverage; do not rely on the default depth or state coverage to exercise every transition.
-Keep exact operation arguments, traces, bounds, and observations for replay.
+For the current component pilot, CsCheck chooses bounded sequences, call IDs, payloads, repetitions, and completion probes.
+Accordant checks each observed result and readiness response through `Spec.Allows`.
+The pilot uses two issued call IDs per batch and no invented unknown-result contract.
+Inspect executed case and transition counts. Keep the seed and exact operation trace for replay.
+The later actor contract retains the invalid approval-answer inputs in the table above.
 An operation trace needs task gates and acknowledgements to reproduce actor timing.
 
 Use Arrange/Act/Assert with xUnit. Share assertions through theories when the tested behavior is the same.
@@ -104,14 +105,15 @@ The test adapter may change internally after extraction; accepted oracle rules a
 | Safe continuation prevents incomplete provider history and duplicate work. | Existing tests prove selected paths; source repeats outcome/continuation work. Does the split still serve a necessary delivery distinction? | Keep ingress-specific commit order. Consolidate domain rules. Prove both completion orders and partial failure. |
 | Durable approval resumption lets the UI safely resume interrupted work. | The test base uses in-memory journal/snapshots. Does this prove process durability? No. | Retain actor-recovery proof and existing persistence formats. Do not call it disk/process proof or an archive feature. |
 | Persisted results precede live session effects. | The session pipeline has one active streamed consumer. `SubAgentActor` has a separate aggregate result path. | Retain streamed commit order and the shared child aggregate message. Remove the unused session pipeline aggregate mode. |
-| Generated histories expose omissions without a framework detour. | The actor harness already exists; Accordant permits partial specifications. Does its adapter add useful cases cheaply? | Adopt only with compact state, nonempty cases, real observations, understandable failures, replay, and relevant negative controls. Otherwise use xUnit and defer it. |
+| Generated histories expose omissions across different result orders. | `ActiveToolBatchTracker` has a small state and a direct test seam. | Run the Accordant/CsCheck component pilot in the current refactor. Keep actor tests for journal and provider behavior. Require generated transitions, replay, and a production negative control. |
 
 Classify a mismatch as a product defect, test/adapter defect, or unresolved specification rule.
 Do not freeze a suspected bug merely because the old actor exhibits it.
 Stop only the affected change when intended behavior remains unresolved.
 The user decides changed authority, accepted result order, recovery guarantees, or loop policy.
 The root resolves ordinary fixture design, test selection, and source organization within the accepted contract.
-Delivery retry remains an optional small framework experiment. Its small state does not justify delaying this extraction.
+The pilot tests result order, task completion, duplicate results, and batch reset.
+Delivery retry remains outside this pilot.
 
 ## Child completion: explicit product decision
 
@@ -161,13 +163,13 @@ dotnet test src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj --filter 'Fully
 Then run the full actor project, required Slopwatch/header checks, and required PR checks.
 Record revision, exact commands, discovery/execution counts, results, and cleanup. Zero tests or skipped prerequisites do not pass.
 A test-only rollback removes the added tests without changing product state.
-After merge, update the extraction branch from the actual `dev`; rerun the baseline if upstream changed affected behavior.
+After the native stack group merge, update later branches from the actual `dev`; rerun the baseline if upstream changed affected behavior.
 
 ### PR 2: transfer outcome acceptance and batch continuation
 
 Start in a separate branch after the baseline passes and root review accepts the concrete owner API.
 Publish PR 2 against the PR 1 branch after root review and local checks. Verify the combined stack.
-After PR 1 merges, rebase onto its actual merge result and rerun affected checks.
+Verify the combined stack and hold its merge until every member passes the required checks.
 A different product author removes duplicated outcome processing and moves batch completion decisions with their state.
 Reuse `ActiveToolBatchTracker`, `TurnStateTracker`, and `WorkingContextUpdater`.
 Absorb the media list into the batch tracker and delete `ModelInputMediaBuffer`.
@@ -230,6 +232,8 @@ Use this order after the first two PRs. Keep exact APIs provisional until each b
 6. Encapsulate model and tool task lifetime. Remove duplicate busy and restart facts. Preserve phase effects and exact task-stop checks.
    Before a later turn-admission transfer, prove committed turn identity and actor restart replay. Those checks remain separate work.
 7. Consolidate and measure. Remove obsolete paths, duplicate state, temporary adapters, and unjustified contracts. Compare the whole production footprint.
+8. Add the bounded Accordant/CsCheck tool-batch pilot as the final support PR after the lifecycle and obsolete-path PRs.
+   Keep one generated component test. Verify it on the combined stack before publication.
 
 The current Step 7 deletion scope removes the old memory extractor and its compaction reply path.
 Checkpoint curation remains the active memory path. The session pipeline retains streamed tool replies only.
@@ -341,9 +345,17 @@ Slopwatch, copyright headers, and whitespace checks passed after the final test 
 No runtime path in this slice enters Compacting directly from Ready.
 The actor proof covers Processing to Compacting to Processing, plus exit to Ready and passivation.
 The possible batch-completion and restart-stop race remains outside this structural transfer.
-The obsolete-path product and independent test authors now prepare combined tests. The bounded Accordant pilot follows.
+The obsolete-path parent is committed at `abc1e295`. The bounded Accordant pilot ran on that combined tree.
 
 The independent test author owns baseline evidence. The product author owns extraction. The root owns review and each delivery decision.
-Accordant fit and exact owner API remain engineering checks. Persistence or authority changes remain explicit product decisions.
+The Accordant/CsCheck pilot now covers `ActiveToolBatchTracker` in a separate test worktree.
+The combined branch starts at obsolete-path commit `abc1e295`.
+The focused local run passed 1,000 generated cases and 5,563 operations after the diagnostic correction.
+An unsafe production readiness mutation failed on a replayable two-step trace.
+The original production source passed after restoration. The full Actors suite passed 5,760 cases.
+Actor integration proof remains separate from the component model.
+The order-count diagnostic now requires both a result and later task completion in one batch.
+The combined local run passed. Hosted checks remain required on the published stack head.
+Persistence or authority changes remain explicit product decisions.
 Use the Systematize plan/verify guidance and Code With Aaron test/refactor/review guidance during execution.
 If those skills are unavailable, report the gap and preserve this plan's proof and separate-authorship requirements.

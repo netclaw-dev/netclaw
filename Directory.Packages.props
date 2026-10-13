@@ -37,6 +37,7 @@
     <PackageVersion Include="Aaron.Akka.Reminders.Sqlite" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Anthropic" Version="12.50.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.13.0" />
+    <PackageVersion Include="Microsoft.Accordant" Version="0.1.6" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(MicrosoftAspNetCoreVersion)" />
     <!-- Transitive security pin: Microsoft.AspNetCore.OpenApi 10.0.9 pulls
