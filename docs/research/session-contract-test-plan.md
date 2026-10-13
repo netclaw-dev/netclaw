@@ -393,3 +393,25 @@ The full run used the current combined source after the focused run and mutation
 Its TRX and raw log are under `planning/netclaw/session-refactor/review/evidence/session-stop-transfer/` outside this repository.
 Slopwatch found zero issues. The copyright header and whitespace checks passed.
 [PR #2449](https://github.com/netclaw-dev/netclaw/pull/2449) is open for the stop policy group.
+
+### Session input owner group
+
+`SessionInputFlow` now owns the live input queue, selected IDs, source reservations, current authority, telemetry, and continuation facts.
+The actor retains journal writes, phase changes, history effects, model calls, and output.
+The live turn uses the `TurnId` and authority from its committed `InputAdmitted` record.
+The owner drains all buffered messages in one ordered follow-up batch, including mixed Personal and Public sources.
+The change preserves current authority policy. It does not repair mixed-authority tool exposure or child-result wakeup.
+
+The transfer removes thirteen direct actor fields and adds one owner reference.
+Against stop head `73b4ba2f`, the actor falls from 3,928 to 3,768 lines, a reduction of 160.
+The new owner has 382 lines. Total Actors production C# grows by 222 lines.
+The separate next slice deletes duplicate phase registrations and the parent's duplicate media result field.
+
+An independent identity baseline failed when the live `TurnId` differed from the admitted event.
+The correction and one ordered mixed-authority batch passed focused actor tests.
+The independent owner tests passed two cases; a fresh-turn mutation failed at the intended assertion.
+A first combined run exposed an Akka serializer error for a compiler-generated speaker-ID collection.
+The repaired journal boundary stores a concrete array. The repaired focused suite passed 104 cases.
+The full Actors suite passed 5,774 cases, skipped 41 platform cases, and failed zero.
+These tests observe admission after acknowledgment; they do not prove every callback race.
+Raw results are under `planning/netclaw/session-refactor/review/evidence/input-flow-proof/` outside this repository.
