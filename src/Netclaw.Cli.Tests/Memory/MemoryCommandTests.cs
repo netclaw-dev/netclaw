@@ -25,7 +25,11 @@ public sealed class MemoryCommandTests : IDisposable
 {
     private readonly DisposableTempDir _temp = new();
 
-    public void Dispose() => _temp.Dispose();
+    public void Dispose()
+    {
+        SqliteMemoryStoreTestPools.ClearOwnedDirectory(_temp.Path);
+        _temp.Dispose();
+    }
 
     private const string ModelId = "tiny-fixture";
     private static string FixturesDir => Path.Combine(AppContext.BaseDirectory, "Fixtures");

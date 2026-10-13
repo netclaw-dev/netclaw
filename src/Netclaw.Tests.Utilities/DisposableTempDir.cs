@@ -38,8 +38,9 @@ internal sealed class DisposableTempDir : IDisposable
             return;
 
         // Windows refuses to delete a file or a working directory that a process
-        // still holds. A killed process tree and a pooled SQLite connection can hold
-        // one for a short time after the test ends. Retry for a few seconds.
+        // still holds. A killed process tree can hold one for a short time
+        // after the test ends. SQLite owners must clear their own pools.
+        // Retry for a few seconds.
         // The delete succeeds on the first try on Linux and macOS.
         for (var i = 0; i < MaxAttempts; i++)
         {
@@ -50,16 +51,6 @@ internal sealed class DisposableTempDir : IDisposable
             }
             catch (IOException) when (i < MaxAttempts - 1) // slopwatch-ignore: SW003 test cleanup retry
             {
-                // Clear the pools only after a failure. The call closes the idle
-                // connections of every database in the process, which other tests
-                // can observe. The first call in a process also loads the SQLite
-                // native library, which a test without SQLite does not need.
-                // This stays global because the helper does not know the database
-                // path it is cleaning up. Any test that asserts pool or handle
-                // identity must tolerate this; do not add more global clears elsewhere.
-                if (i == 0)
-                    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-
                 Thread.Sleep(100 * (i + 1));
             }
             catch (UnauthorizedAccessException) when (i < MaxAttempts - 1) // slopwatch-ignore: SW003 test cleanup retry

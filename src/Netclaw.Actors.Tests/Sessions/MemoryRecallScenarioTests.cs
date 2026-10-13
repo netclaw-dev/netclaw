@@ -3,11 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tests.Memory;
 using Netclaw.Configuration;
 using Xunit;
 
@@ -91,7 +91,7 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
 
     public async ValueTask DisposeAsync()
     {
-        await TryDeleteDirectoryAsync(_baseDir);
+        await SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_baseDir);
     }
 
     /// <summary>
@@ -618,31 +618,6 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
             ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now), ct);
-    }
-
-    private static async Task TryDeleteDirectoryAsync(string path)
-    {
-        if (!Directory.Exists(path))
-            return;
-
-        SqliteConnection.ClearAllPools();
-
-        for (var i = 0; i < 8; i++)
-        {
-            try
-            {
-                Directory.Delete(path, recursive: true);
-                return;
-            }
-            catch (IOException) when (i < 7)
-            {
-                await Task.Delay(25 * (i + 1));
-            }
-            catch (UnauthorizedAccessException) when (i < 7)
-            {
-                await Task.Delay(25 * (i + 1));
-            }
-        }
     }
 
     /// <summary>

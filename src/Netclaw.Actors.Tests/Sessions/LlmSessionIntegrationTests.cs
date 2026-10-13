@@ -21,6 +21,7 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Tests.Tools;
 using Netclaw.Actors.Tools;
+using Netclaw.Tests.Utilities;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -46,6 +47,12 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
     public LlmSessionIntegrationTests(ITestOutputHelper output) : base(output)
     {
+    }
+
+    protected override void DeleteOwnedDirectories()
+    {
+        // The base class deletes TestPaths after this hook.
+        SqliteMemoryStoreTestPools.ClearOwnedDirectory(TestPaths.BasePath);
     }
 
     [Fact]

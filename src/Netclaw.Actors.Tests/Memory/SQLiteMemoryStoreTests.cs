@@ -326,35 +326,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
 
     public async ValueTask DisposeAsync()
     {
-        await TryDeleteDirectoryAsync(_baseDir);
-    }
-
-    private static async Task TryDeleteDirectoryAsync(string path)
-    {
-        if (!Directory.Exists(path))
-            return;
-
-        SqliteConnection.ClearAllPools();
-
-        for (var i = 0; i < 8; i++)
-        {
-            try
-            {
-                Directory.Delete(path, recursive: true);
-                return;
-            }
-            catch (IOException) when (i < 7)
-            {
-                await Task.Delay(25 * (i + 1));
-            }
-            catch (UnauthorizedAccessException) when (i < 7)
-            {
-                await Task.Delay(25 * (i + 1));
-            }
-        }
-
-        // Best effort cleanup: file handles can remain briefly open on Windows CI.
-        // Leaving temp dirs behind is preferable to failing the test run.
+        await SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_baseDir);
     }
 
     private static SQLiteMemoryDocument CreateDocument(string id, SQLiteMemoryAnchor anchor, string title, long now)

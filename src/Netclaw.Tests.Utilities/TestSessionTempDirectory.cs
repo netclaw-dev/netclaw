@@ -70,8 +70,8 @@ public sealed class TestSessionTempDirectory : IAsyncDisposable
 
     /// <summary>
     /// Deletes the owned temp directory tree. <see cref="DisposableTempDir.Delete"/>
-    /// retries when a file is still locked, and clears the SQLite connection
-    /// pools only after a delete attempt fails.
+    /// retries when a file is still locked. A SQLite-owning test must clear
+    /// the pools for its own database before disposal.
     /// </summary>
     public ValueTask DisposeAsync()
     {

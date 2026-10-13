@@ -17,7 +17,11 @@ public sealed class MemoryCheckpointHealthDoctorCheckTests : IDisposable
 {
     private readonly DisposableTempDir _temp = new();
 
-    public void Dispose() => _temp.Dispose();
+    public void Dispose()
+    {
+        SqliteMemoryStoreTestPools.ClearOwnedDirectory(_temp.Path);
+        _temp.Dispose();
+    }
 
     [Fact]
     public async Task Passes_WhenSqliteMemoryQueueIsSmall()
