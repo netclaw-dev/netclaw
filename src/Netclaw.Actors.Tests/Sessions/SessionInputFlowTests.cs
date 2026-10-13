@@ -26,8 +26,9 @@ public sealed class SessionInputFlowTests
         var admissions = new List<InputAdmitted>();
         foreach (var command in commands)
         {
-            var decision = Assert.IsType<AdmissionDecision.Persist>(
-                flow.PrepareAdmission(command, state, sessionId, 1));
+            var decision = flow.PrepareAdmission(command, state, sessionId, 1)
+                as AdmissionDecision.Persist
+                ?? throw new InvalidOperationException("The test input was not admitted.");
             admissions.Add(decision.Event);
             state = state.Apply(decision.Event);
         }
@@ -37,23 +38,27 @@ public sealed class SessionInputFlowTests
         flow.ActivateInput(first, state.PendingInputs, null);
         flow.AdmissionCommitted(admissions[1], commands[1], InputPlacement.BufferDuringModel);
         flow.AdmissionCommitted(admissions[2], commands[2], InputPlacement.BufferDuringModel);
-
-        // Assert
-        Assert.Equal([admissions[0].InputId], flow.SelectedInputs.Ids);
+        var firstSelected = flow.SelectedInputs.Ids;
         flow.TurnCommitted(new TurnRecorded { SessionId = sessionId, ConsumedInputIds = [admissions[0].InputId] });
         var continuation = flow.AdvanceAfterTurn(false);
-        Assert.Equal(InputProgressAction.FollowUp, continuation.Action);
-        var batch = Assert.IsType<BufferedInputBatch>(continuation.Batch);
-        Assert.True(batch.StartsNewTurn);
-        Assert.Equal(["Second", "Third"], batch.Messages.Select(message => message.Content));
-        Assert.Equal([admissions[1].InputId, admissions[2].InputId], flow.SelectedInputs.Ids);
+        var nextSelected = flow.SelectedInputs.Ids;
         flow.TurnCommitted(new TurnRecorded
         {
             SessionId = sessionId,
             ConsumedInputIds = [admissions[1].InputId, admissions[2].InputId]
         });
-        Assert.Empty(flow.SelectedInputs.Ids);
-        Assert.Equal(InputProgressAction.Ready, flow.AdvanceAfterTurn(false).Action);
+        var finalSelected = flow.SelectedInputs.Ids;
+        var ready = flow.AdvanceAfterTurn(false);
+
+        // Assert
+        Assert.Equal([admissions[0].InputId], firstSelected);
+        Assert.Equal(InputProgressAction.FollowUp, continuation.Action);
+        var batch = Assert.IsType<BufferedInputBatch>(continuation.Batch);
+        Assert.True(batch.StartsNewTurn);
+        Assert.Equal(["Second", "Third"], batch.Messages.Select(message => message.Content));
+        Assert.Equal([admissions[1].InputId, admissions[2].InputId], nextSelected);
+        Assert.Empty(finalSelected);
+        Assert.Equal(InputProgressAction.Ready, ready.Action);
     }
 
     [Fact]
@@ -80,12 +85,13 @@ public sealed class SessionInputFlowTests
 
         // Act
         var copied = flow.PrepareActorRestartReplay();
+        var copiedAgain = flow.PrepareActorRestartReplay();
 
         // Assert
         Assert.Equal([replay.AdmittedInputId, first.AdmittedInputId, second.AdmittedInputId],
             copied.Select(message => message.AdmittedInputId));
         Assert.Equal(["Replay", "Buffered first", "Buffered second"],
             copied.Select(message => message.Content));
-        Assert.Empty(flow.PrepareActorRestartReplay());
+        Assert.Empty(copiedAgain);
     }
 }
