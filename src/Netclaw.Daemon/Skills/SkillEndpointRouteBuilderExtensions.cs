@@ -36,15 +36,28 @@ public static class SkillEndpointRouteBuilderExtensions
 
         app.MapPost("/api/skills/sync", async Task<IResult> (
                 bool? retryRejected,
+                bool? pluginsOnly,
+                string? pluginId,
                 IRequiredActor<ServerFeedSkillSyncActorKey> syncActor,
                 CancellationToken cancellationToken) =>
             {
+                if (pluginsOnly == true && pluginId is not null)
+                    return TypedResults.BadRequest("Select one plugin sync scope.");
+                if (pluginId is not null
+                    && !ManagedPluginSourceValidator.TryValidateId(pluginId, out var validationError))
+                    return TypedResults.BadRequest(validationError);
+
+                var request = pluginId is not null
+                    ? ServerFeedSkillSyncActor.Run.ForPlugin(pluginId, retryRejected == true)
+                    : pluginsOnly == true
+                        ? ServerFeedSkillSyncActor.Run.ForPlugins(retryRejected == true)
+                        : retryRejected == true
+                            ? ServerFeedSkillSyncActor.Run.RetryRejectedCommits
+                            : ServerFeedSkillSyncActor.Run.Instance;
                 try
                 {
                     var response = await syncActor.ActorRef.Ask<SkillSyncResult.Response>(
-                        retryRejected == true
-                            ? ServerFeedSkillSyncActor.Run.RetryRejectedCommits
-                            : ServerFeedSkillSyncActor.Run.Instance,
+                        request,
                         cancellationToken);
                     return TypedResults.Ok(response);
                 }
@@ -54,6 +67,13 @@ public static class SkillEndpointRouteBuilderExtensions
                         statusCode: StatusCodes.Status503ServiceUnavailable,
                         title: "Skill sync stopped",
                         detail: "The daemon stopped the active skill sync pass.");
+                }
+                catch (ServerFeedSkillSyncActor.SyncQueueFullException ex)
+                {
+                    return TypedResults.Problem(
+                        statusCode: StatusCodes.Status503ServiceUnavailable,
+                        title: "Skill sync queue is full",
+                        detail: ex.Message);
                 }
             })
             .WithName("SyncSkills")

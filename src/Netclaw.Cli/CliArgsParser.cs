@@ -32,7 +32,7 @@ public static class CliArgsParser
     {
         "chat", "sessions", "init", "doctor", "status", "stats",
         "daemon", "mcp", "provider", "model", "reminder", "memory",
-        "secrets", "config", "update", "pair", "skill", "webhooks",
+        "secrets", "config", "update", "pair", "skill", "plugin", "webhooks",
         "approvals",
     };
 

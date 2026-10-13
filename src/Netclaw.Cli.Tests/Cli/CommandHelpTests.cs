@@ -241,7 +241,7 @@ public sealed class CommandHelpTests : IDisposable
             "model" => ModelCommand.RunAsync(args, _paths, output: output),
             "approvals" => ApprovalsCommand.RunAsync(
                 new CliContext(_paths, TimeProvider.System, TextReader.Null, output, error), args),
-            "skill" => SkillCommand.RunAsync(args, _paths, output: output),
+            "skill" => SkillCommand.RunAsync(args, _paths, TimeProvider.System, TextReader.Null, output: output),
             "memory" => MemoryCommand.RunAsync(args, _paths, configuration, output, error),
             "webhooks" => WebhooksCommand.RunAsync(args, _paths, output, error: error),
             "reminder" => ReminderCommand.RunAsync(args, daemonApi: null, output, error),

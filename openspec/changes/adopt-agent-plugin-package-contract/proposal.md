@@ -15,6 +15,7 @@ Host-specific manifests must remain explicit compatibility formats.
 - Separate Git archive acquisition from package format interpretation.
 - Publish supported skills through the existing skill inventory and logical skill tools.
 - Keep one external sync actor and add a focused managed plugin sync participant.
+- Scope plugin lifecycle passes to one source or all plugins without a skill-server fetch.
 - Add JSON output for plugin list operations.
 - Preserve safe daemon problem details in CLI failures.
 - Align issues #2134, #2135, and website issue #119 with the portable contract.

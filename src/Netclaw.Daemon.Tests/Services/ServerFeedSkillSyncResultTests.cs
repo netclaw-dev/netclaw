@@ -194,7 +194,7 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
         feed => new SkillServerClient(new HttpClient(handler) { BaseAddress = new Uri(feed.Url) }),
         new ManagedPluginStateStore(_paths, TimeProvider.System),
         new GitSkillPluginAcquirer(
-            new HttpClient(new HttpClientHandler()), _paths, TimeProvider.System, new NoOpSkillContentScanner()),
+             _paths, TimeProvider.System, new NoOpSkillContentScanner()),
         NullNotificationSink.Instance);
 
     private static Task<SkillSyncResult.Response> RunAsync(ServerFeedSkillSyncService service)

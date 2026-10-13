@@ -124,6 +124,19 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
     }
 
     [Theory]
+    [InlineData("/api/skills/sync?pluginId=INVALID")]
+    [InlineData("/api/skills/sync?pluginId=fixture&pluginsOnly=true")]
+    public async Task Sync_rejects_invalid_or_conflicting_plugin_scope(string path)
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        await using var app = await CreateAppAsync(spoofLoopback: true, new SkillRegistry(), paths);
+
+        var response = await app.GetTestClient().PostAsync(path, null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Theory]
     [InlineData("GET", "/api/plugins")]
     [InlineData("POST", "/api/plugins")]
     [InlineData("PATCH", "/api/plugins/fixture")]
@@ -467,7 +480,6 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
 
     private static IGitSkillPluginAcquirer CreatePluginAcquirer(NetclawPaths paths)
         => new GitSkillPluginAcquirer(
-            new HttpClient(new HttpClientHandler()),
             paths,
             TimeProvider.System,
             new NoOpSkillContentScanner());

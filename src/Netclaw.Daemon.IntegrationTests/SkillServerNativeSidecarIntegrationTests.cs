@@ -123,7 +123,7 @@ public sealed class SkillServerNativeSidecarIntegrationTests : IAsyncLifetime
             }),
             CreatePluginStateStore(paths),
             new GitSkillPluginAcquirer(
-                new HttpClient(new HttpClientHandler()), paths, TimeProvider.System, new NoOpSkillContentScanner()),
+                 paths, TimeProvider.System, new NoOpSkillContentScanner()),
             NullNotificationSink.Instance);
 
         await service.SyncAsync(CancellationToken.None);
