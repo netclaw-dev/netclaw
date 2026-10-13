@@ -177,6 +177,9 @@ tags; `MemorizerMemoryExtractor` saves via `memorizer/store` MCP (graceful no-op
 when disconnected). The agent also saves proactively during conversation, guided
 by the behavioral triggers in `MemoryIndexContextLayer`.
 
+Current code supersedes this flush design. The session sends memory checkpoints
+at compaction boundaries, and background curation consumes those checkpoints.
+
 ## Rationale
 
 ### Why Observer instead of RAG or summarization?

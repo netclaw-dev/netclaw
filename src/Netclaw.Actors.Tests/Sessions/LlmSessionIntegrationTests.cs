@@ -1997,7 +1997,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             OutputTokenCount = 1,
             TotalTokenCount = 200_001
         };
-        _fakeChatClient.HangingObservationCallsRemaining = 1;
+        var observationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.ObservationResponseGate = observationGate;
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -2037,22 +2038,24 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             Content = "Should be rejected during compaction"
         }, TestActor);
 
-        var nack = await ExpectMsgAsync<CommandNack>(
-            TimeSpan.FromSeconds(3),
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(SessionIngressGate.RestartInProgressMessage, nack.Reason);
-
-        child.Tell(new CompactionFailed
+        try
         {
-            Cause = new InvalidOperationException("test compaction completion")
-        });
+            var nack = await ExpectMsgAsync<CommandNack>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.Equal(SessionIngressGate.RestartInProgressMessage, nack.Reason);
+        }
+        finally
+        {
+            observationGate.TrySetResult();
+        }
 
         var drainAck = await ExpectMsgAsync<DaemonRestartPrepared>(
             TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, drainAck.SessionId);
-        await busy.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await busy.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.False((await busy.ExpectMsgAsync<ProcessingStateOutput>(
             cancellationToken: TestContext.Current.CancellationToken)).IsProcessing);
         await busy.ExpectMsgAsync<SessionDeactivated>(cancellationToken: TestContext.Current.CancellationToken);
@@ -2696,10 +2699,9 @@ internal sealed class FakeChatClient : IChatClient
     public Queue<UsageDetails?> PlannedUsageOverrides { get; } = new();
 
     /// <summary>
-    /// Number of compaction observation sidecar calls that should hang until cancellation.
-    /// Used to simulate providers that never return during compaction.
+    /// Holds a compaction observation call until the test releases its response.
     /// </summary>
-    public int HangingObservationCallsRemaining { get; set; }
+    public TaskCompletionSource? ObservationResponseGate { get; set; }
 
     /// <summary>
     /// When set, the observer sidecar call returns this text instead of the
@@ -2820,13 +2822,8 @@ internal sealed class FakeChatClient : IChatClient
                 await gate.Task;
             }
 
-            if (HangingObservationCallsRemaining > 0)
-            {
-                HangingObservationCallsRemaining--;
-                var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                using var registration = cancellationToken.Register(() => gate.TrySetCanceled(cancellationToken));
-                await gate.Task;
-            }
+            if (ObservationResponseGate is { } observationGate)
+                await observationGate.Task.WaitAsync(cancellationToken);
 
             return new ChatResponse(new ChatMessage(
                 Microsoft.Extensions.AI.ChatRole.Assistant,

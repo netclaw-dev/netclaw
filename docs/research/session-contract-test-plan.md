@@ -7,7 +7,7 @@ Installed agent skills do not commit the repository to Accordant adoption.
 
 Baseline: `4753b7682c353dc3b7e3932f458124052dbd6adb` on `dev`.
 The status section separates completed proof from proposed work.
-The user authorizes implementation and verification. The root approves each result before PR publication and waits for checks before each merge.
+The user authorizes implementation and verification. The root approves each result before PR publication. The stack needs exact-head checks before one group merge.
 Each PR must preserve accepted behavior. A behavior change needs a separate decision.
 
 ## Scope and evidence
@@ -103,7 +103,7 @@ The test adapter may change internally after extraction; accepted oracle rules a
 | --- | --- | --- |
 | Safe continuation prevents incomplete provider history and duplicate work. | Existing tests prove selected paths; source repeats outcome/continuation work. Does the split still serve a necessary delivery distinction? | Keep ingress-specific commit order. Consolidate domain rules. Prove both completion orders and partial failure. |
 | Durable approval resumption lets the UI safely resume interrupted work. | The test base uses in-memory journal/snapshots. Does this prove process durability? No. | Retain actor-recovery proof and existing persistence formats. Do not call it disk/process proof or an archive feature. |
-| Persisted results precede live session effects. | The sole production session batch sets `StreamResults = true` at actor:2150. The aggregate session handler has no supported producer. Does it need preservation? No. | Remove the dead session handler. Retain streamed commit order, the shared aggregate message, the child-actor consumer, and direct pipeline-test mode. |
+| Persisted results precede live session effects. | The session pipeline has one active streamed consumer. `SubAgentActor` has a separate aggregate result path. | Retain streamed commit order and the shared child aggregate message. Remove the unused session pipeline aggregate mode. |
 | Generated histories expose omissions without a framework detour. | The actor harness already exists; Accordant permits partial specifications. Does its adapter add useful cases cheaply? | Adopt only with compact state, nonempty cases, real observations, understandable failures, replay, and relevant negative controls. Otherwise use xUnit and defer it. |
 
 Classify a mismatch as a product defect, test/adapter defect, or unresolved specification rule.
@@ -140,7 +140,7 @@ Do not merge the unrelated draft stack solely to make this refactor easier.
 A separate test author extends existing fixtures. The product author does not author these tests.
 Run existing affected tests first. Add only the completion-order and result-association assertions that inspection finds missing.
 Reuse task gates, subscribers, `ReceivedMessages`, and per-call execution counts. No broad harness rewrite or mandatory new package.
-Keep the actor unchanged. Root review must accept the tests and evidence before PR publication and auto-merge.
+Keep the actor unchanged. Root review must accept the tests and evidence before PR publication.
 
 Repeatable procedure:
 
@@ -204,9 +204,10 @@ Do not claim that narrower result completes the session refactor.
 
 Retain the same actor assertions and add direct owner tests through the independent test author.
 Remove the aggregate main-session handler: the sole production batch constructor selects streamed results, and synthetic cycle correction uses streamed messages.
-Retain the shared `ToolExecutionCompleted` type: `SubAgentActor` sends it to itself, and direct pipeline tests use aggregate mode.
+Retain the shared `ToolExecutionCompleted` type: `SubAgentActor` sends it to itself.
+Replace direct pipeline-test aggregate mode with assertions on streamed replies.
 Verify those retained callers. Preserve the live session commit boundary; do not normalize journal semantics.
-Root review checks source ownership, preserved effects, separate test authorship, and required checks before PR delivery and auto-merge.
+Root review checks source ownership, preserved effects, separate test authorship, and required checks before PR delivery.
 No schema migration is planned; rollback is a source revert. Do not execute both production paths to compare real effects.
 Delete the replaced branches in the same PR. Keep one active path per ingress.
 
@@ -230,12 +231,17 @@ Use this order after the first two PRs. Keep exact APIs provisional until each b
    Before a later turn-admission transfer, prove committed turn identity and actor restart replay. Those checks remain separate work.
 7. Consolidate and measure. Remove obsolete paths, duplicate state, temporary adapters, and unjustified contracts. Compare the whole production footprint.
 
-Each step needs a narrow baseline, an independent test author, product changes, verification, root approval, PR publication, and auto-merge.
+The current Step 7 deletion scope removes the old memory extractor and its compaction reply path.
+Checkpoint curation remains the active memory path. The session pipeline retains streamed tool replies only.
+`SubAgentActor` retains its shared `ToolExecutionCompleted` message and its own aggregate child path.
+Direct pipeline tests must assert streamed result content, metadata, and batch completion.
+
+Each step needs a narrow baseline, an independent test author, product changes, verification, root approval, and PR publication.
 Label each PR with `sessions` and `refactoring`. Add `tests`, `.NET`, and other existing labels that match its scope.
 Stack ready PRs on `feature/*` branches. Name the base PR in each description and verify the combined stack.
 Wait until every PR in the stack passes its checks on the exact head.
 Then use a verified group merge operation for the complete stack. Do not merge individual PRs.
-Reassess conflicts and rerun affected checks before its merge.
+Reassess conflicts and rerun affected checks before the group merge.
 Retain public behavioral assertions; add direct owner tests after each boundary becomes concrete.
 Do not build one model of all actor state. Create each stack branch when its implementation starts.
 The large actor-reduction ranges remain targets. Actor relocation does not establish total-source reduction.
@@ -285,10 +291,7 @@ It removed 288 actor lines and ten actor fields. This slice added 39 total produ
 The full actor suite passed 5,749 cases and retained 41 skips.
 The stale-reply negative control failed at its expected assertion, then passed after source restoration.
 The focused mutation gate killed all three selected mutants.
-[PR #2442](https://github.com/netclaw-dev/netclaw/pull/2442) holds Stage 4 at `b9b14036` and targets `dev`.
-At the 2026-10-13 21:02 UTC check, all completed non-skipped PR checks passed.
-The Linux and macOS native smoke checks still ran. PR #2442 remained open.
-Stage 5 must use PR #2442 as its base while that PR remains open.
+[PR #2442](https://github.com/netclaw-dev/netclaw/pull/2442) merged Stage 4 into `dev` as `45a3d05a`.
 
 Stage 5 extends the existing `SessionState` reducer at local source commit `8e1925d6`.
 Both live terminal callbacks and recovery now use its shared history, input-closure, and source-record rules.
@@ -314,7 +317,7 @@ The existing member collector counted 73 actor instance fields before the transf
 Each source version also has eight static fields and three constants, for 84 and 74 total declarations.
 Nine resource fields moved into the owner. Two duplicate facts disappeared. The actor gained one owner field.
 The total production source still grows in this slice, so this slice does not satisfy the total-source reduction goal.
-The root reviewed the production draft and direct tests. Final proof review and PR publication remain root decisions.
+The root reviewed the production draft and direct tests, then published PR #2445.
 
 [PR #2443](https://github.com/netclaw-dev/netclaw/pull/2443) is the Stage 5 parent.
 The lifecycle worktree used `86452744` for the full actor check.
@@ -322,6 +325,9 @@ After PR #2442 merged, GitHub rebased PR #2443 to `ecac1c7e`.
 The root verified that both Stage 5 heads have the same tree, `471f8be3`.
 The lifecycle worktree then moved to `ecac1c7e` without a source change.
 Keep PR #2443 and later stack PRs open until every stack head passes its checks.
+[PR #2445](https://github.com/netclaw-dev/netclaw/pull/2445) is open at `8fd1171bd605cd07edeb79d9b9249d3336d52b49`.
+Its base is PR #2443. GitHub native stack `2444` contains both open PRs.
+Hosted checks still ran at this review. Merge the complete stack with one atomic native group request after every PR passes.
 The independent tests passed 68 focused cases after a test probe fix.
 The ToolLoop compaction class passed three cases on the Stage 5 parent.
 The full Actors suite passed 5,764 cases and retained 41 platform skips.
@@ -335,6 +341,7 @@ Slopwatch, copyright headers, and whitespace checks passed after the final test 
 No runtime path in this slice enters Compacting directly from Ready.
 The actor proof covers Processing to Compacting to Processing, plus exit to Ready and passivation.
 The possible batch-completion and restart-stop race remains outside this structural transfer.
+The obsolete-path product and independent test authors now prepare combined tests. The bounded Accordant pilot follows.
 
 The independent test author owns baseline evidence. The product author owns extraction. The root owns review and each delivery decision.
 Accordant fit and exact owner API remain engineering checks. Persistence or authority changes remain explicit product decisions.

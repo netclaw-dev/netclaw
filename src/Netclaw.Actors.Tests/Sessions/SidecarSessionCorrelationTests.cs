@@ -18,7 +18,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <summary>
 /// Regression guard (replaces the deleted SidecarDiagnosticsContextTests, netclaw-dev/netclaw#920)
 /// for the session-owned sidecar LLM paths — title generation, compaction observation, memory
-/// extraction/distillation, and memory curation. After the SessionDiagnosticsContext AsyncLocal
+/// distillation, and memory curation. After the SessionDiagnosticsContext AsyncLocal
 /// was removed, each must carry its owning session id explicitly via
 /// <see cref="SessionScopedChatOptions"/> on the chat-call's <see cref="ChatOptions"/>, so the
 /// file-logger routes the call's chat-client diagnostics into that session's session.log (and
@@ -60,18 +60,6 @@ public sealed class SidecarSessionCorrelationTests : TestKit
             client: captor, sessionId: sessionId, history: history, systemOffset: 0,
             keepStartIndex: 1, sidecarTimeout: TimeSpan.FromSeconds(5), log: NoLogger.Instance,
             cancellationToken: TestContext.Current.CancellationToken);
-
-        AssertScopedTo(sessionId, captor);
-    }
-
-    [Fact]
-    public async Task MemoryExtraction_carries_session_scoped_options()
-    {
-        var sessionId = new SessionId("ch/memory-extraction-thread");
-        var captor = new FakeChatClient();
-
-        await LlmSessionActor.InvokeMemoryExtractionCoreAsync(
-            captor, sessionId, history: [], self: CreateTestProbe().Ref, timeout: TimeSpan.FromSeconds(5));
 
         AssertScopedTo(sessionId, captor);
     }

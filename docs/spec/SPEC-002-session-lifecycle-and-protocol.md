@@ -140,22 +140,17 @@ Checked after each `TurnRecorded` persist callback.
 - Preserves reasoning/action history
 - Re-check threshold — may be sufficient without summarization
 
-**Phase 2: Pre-compaction memory flush** (LLM call)
-- Structured extraction prompt: key facts, decisions, action items
-- Persist extracted memories to external storage (MCP memorizer)
-- Ensures durable context survives the lossy summarization step
+**Phase 2: Extractive reduction and observation**
+- Keep recent messages and preserve tool call/result pairs.
+- Use the compaction model to observe discarded history.
+- Keep a prior summary when a later compaction runs.
+- Persist the `SessionCompacted` event.
+- Request a high-priority memory checkpoint when the actor resolves an audience.
+- Take a persistence snapshot.
+- Emit a compaction notification to subscribers.
 
-**Phase 3: Structured summarization** (LLM call)
-- Domain-specific section headings (not generic "summarize this"):
-  - Task overview and goals
-  - Current state and progress
-  - Key decisions and their rationale
-  - Pending actions and blockers
-  - User preferences and context to preserve
-- Anchored iterative merging when prior summary exists
-- Persist `SessionCompacted` event
-- Take persistence snapshot
-- Emit compaction notification to subscribers
+Background curation uses the checkpoint. The session does not wait for curation.
+See [the current memory contract](../../openspec/specs/netclaw-agent-memory/spec.md).
 
 ### Compaction Model
 

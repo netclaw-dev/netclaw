@@ -60,7 +60,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly SessionToolExecutionPipeline? _toolExecutionPipeline;
     private readonly Tools.ToolRegistry? _toolRegistry;
     private readonly IToolApprovalService? _approvalService;
-    private readonly IMemoryExtractor _memoryExtractor;
     private readonly IMemoryCheckpointSink _memoryCheckpointSink;
     private readonly MemoryProposalGate _memoryProposalGate = new();
     private readonly MemoryConfig _memoryConfig;
@@ -209,7 +208,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _toolRegistry = tools?.ToolRegistry;
         _toolAccessPolicy = tools?.AccessPolicy;
         _approvalService = tools?.ApprovalService;
-        _memoryExtractor = memory?.MemoryExtractor ?? NullMemoryExtractor.Instance;
         _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
         _memoryStore = memory?.MemoryStore;
         _memoryEmbedderHolder = memory?.EmbedderHolder;
@@ -945,17 +943,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<CompactionWorkFailed>(HandleCompactionWorkFailed);
 
-        Command<MemoryExtractionCompleted>(msg =>
-        {
-            // Persist extracted memories externally (fire-and-forget)
-            var self = Self;
-            _ = PersistMemoriesAsync(_memoryExtractor, _sessionId, msg.ExtractedMemories, self);
-
-            DrainBufferOrReady();
-        });
-
-        Command<CompactionFailed>(HandleLegacyCompactionFailed);
-
         CommandDistillationAckNoOp();
         CommandJobReapResolved();
     }
@@ -1065,10 +1052,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _log.Info("Compaction complete (before={MessagesBefore}, after={MessagesAfter})",
                 msg.MessagesBefore, _state.History.Count);
 
-            if (_memoryExtractor is NullMemoryExtractor)
-                DrainBufferOrReady();
-            else
-                InvokeMemoryExtractionAsync();
+            DrainBufferOrReady();
         });
     }
 
@@ -1085,22 +1069,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId = _sessionId,
             Message = "Context compaction encountered an error. The session will continue.",
             Category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.Unknown,
-            CorrelationId = Guid.NewGuid(),
-            Cause = msg.Cause
-        });
-
-        DrainBufferOrReady();
-    }
-
-    private void HandleLegacyCompactionFailed(CompactionFailed msg)
-    {
-        _log.Warning(msg.Cause, "Compaction failed");
-
-        EmitOutput(new ErrorOutput
-        {
-            SessionId = _sessionId,
-            Message = "Context compaction encountered an error. The session will continue.",
-            Category = ErrorCategory.Unknown,
             CorrelationId = Guid.NewGuid(),
             Cause = msg.Cause
         });
@@ -1523,67 +1491,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _ = SessionTitleGenerator.GenerateAsync(_compactionClient, _sessionId, _state.History, Self, _log, _config.SidecarLlmTimeout);
     }
 
-
-    /// <summary>
-    /// Fire an async memory extraction LLM call with a 30-second timeout.
-    /// Results come back as <see cref="MemoryExtractionCompleted"/> or
-    /// <see cref="CompactionFailed"/> if the call fails or times out.
-    /// </summary>
-    private void InvokeMemoryExtractionAsync()
-    {
-        var history = _state.History;
-        var self = Self;
-        var client = _compactionClient;
-        var timeout = _config.SidecarLlmTimeout;
-        var sessionId = _sessionId;
-
-        _ = InvokeMemoryExtractionCoreAsync(client, sessionId, history, self, timeout);
-    }
-
-    internal static async Task InvokeMemoryExtractionCoreAsync(
-        IChatClient client,
-        SessionId sessionId,
-        IReadOnlyList<SerializableChatMessage> history,
-        IActorRef self,
-        TimeSpan timeout)
-    {
-        try
-        {
-            using var cts = new CancellationTokenSource(timeout);
-            var extractionMessages = new List<AiChatMessage>
-            {
-                new(Microsoft.Extensions.AI.ChatRole.System,
-                    CompactionPromptBuilder.BuildMemoryExtractionSystemPrompt()),
-                new(Microsoft.Extensions.AI.ChatRole.User,
-                    CompactionPromptBuilder.BuildMemoryExtractionUserPrompt(history))
-            };
-            // Carry the session id so memory-extraction chat-client diagnostics route to the
-            // session's session.log and correlate in Seq/OTLP (replaces the deleted AsyncLocal).
-            var options = new SessionScopedChatOptions { SessionId = sessionId.Value };
-            var extractionResult = await StreamingResponseReader.ReadAsync(
-                client, extractionMessages, options, cts.Token);
-            var extractedText = extractionResult.Response.Text ?? string.Empty;
-            self.Tell(new MemoryExtractionCompleted { ExtractedMemories = extractedText });
-        }
-        catch (Exception ex)
-        {
-            self.Tell(new CompactionFailed { Cause = ex });
-        }
-    }
-
-    private static async Task PersistMemoriesAsync(
-        IMemoryExtractor extractor, SessionId sessionId, string memories, IActorRef self)
-    {
-        try
-        {
-            await extractor.PersistAsync(sessionId, memories);
-        }
-        catch (Exception ex)
-        {
-            // Memory persistence is best-effort — log and continue compaction
-            Trace.TraceWarning("Memory persistence failed for session {0}: {1}", sessionId.Value, ex.Message);
-        }
-    }
 
     private void HandleToolCallResponse(
         AiChatMessage lastMessage,

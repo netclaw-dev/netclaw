@@ -205,7 +205,7 @@ Tuning parameters for LLM session behavior.
 | `SnapshotInterval` | int | `20` | Number of turns between persistence snapshots. |
 | `KeepRecentToolResults` | int | `3` | Recent tool call/result pairs kept in full during compaction. |
 | `MaxToolIterationsPerTurn` | int | `60` | Max LLM-to-tools-to-LLM iterations per turn. One LLM response with any number of parallel tool calls counts as exactly one iteration. At ~75% a budget nudge is injected; at 100% tools are stripped and the model is asked to summarize. |
-| `SidecarLlmTimeoutSeconds` | int | `90` | Timeout for sidecar LLM calls (title generation, observer summaries, memory extraction). |
+| `SidecarLlmTimeoutSeconds` | int | `90` | Timeout for sidecar LLM calls (title generation and compaction observations). |
 | `TurnLlmTimeoutSeconds` | int | `180` | Timeout for the primary per-turn LLM streaming call before forcing an error/recovery path. |
 | `ToolExecutionTimeoutSeconds` | int | `90` | Per-tool-call inactivity budget. A tool must produce its first result or stream item within this time, and each later item resets the budget. |
 

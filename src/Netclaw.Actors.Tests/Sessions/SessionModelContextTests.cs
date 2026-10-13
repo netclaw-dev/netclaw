@@ -251,7 +251,6 @@ public sealed partial class SessionModelContextTests
 
     private static SessionMemoryServices CreateMemory(IMemoryRecallCoordinator recall)
         => new(
-            NullMemoryExtractor.Instance,
             recall,
             NullMemoryCheckpointSink.Instance,
             MemoryStore: null,

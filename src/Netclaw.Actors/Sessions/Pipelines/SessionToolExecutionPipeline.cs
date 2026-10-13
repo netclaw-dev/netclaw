@@ -196,7 +196,6 @@ internal sealed class SessionToolBatch
     public required BackgroundJobDispatch BackgroundJobs { get; init; }
     public bool SetWorkingDirectoryAvailable { get; init; }
     public Func<string, ToolInvocationContext, bool>? CanDeclareWorkingDirectory { get; init; }
-    public bool StreamResults { get; init; }
     public ManagedTemporaryCorrectionDispatch ManagedTemporaryCorrections { get; init; }
         = ManagedTemporaryCorrectionDispatch.Empty;
     public IReadOnlyDictionary<string, IReadOnlyList<string>> OneTimeApprovalPreSeed
@@ -322,8 +321,7 @@ internal sealed class SessionToolExecutionPipeline
                         result.Receipt,
                         batch.SetWorkingDirectoryAvailable)
                 };
-                if (batch.StreamResults)
-                    batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result));
+                batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result));
                 return result;
             });
             var results = await Task.WhenAll(tasks);
@@ -342,57 +340,7 @@ internal sealed class SessionToolExecutionPipeline
                         (receipt as ToolInvocationReceipt.Correction)?.RemediationCode.ToString());
             }
 
-            if (batch.StreamResults)
-            {
-                batch.ReplyTo.Tell(new ToolExecutionBatchCompleted());
-                return;
-            }
-
-            var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
-            var modelInputMediaReferences = results.SelectMany(r => r.ModelInputMediaReferences).ToList();
-            batch.ReplyTo.Tell(new ToolExecutionCompleted
-            {
-                ToolResults = [.. results.Select(r => r.Message)],
-                ModelInputMediaReferences = modelInputMediaReferences,
-                FileAttachments = fileAttachments,
-                CompletedSubAgentRuns = [.. results.SelectMany(r => r.CompletedSubAgentRuns)],
-                AcceptedSubAgentFindings = [.. results.SelectMany(r => r.AcceptedSubAgentFindings)],
-                StartedBackgroundJobs = [.. results.Where(r => r.StartedBackgroundJob is not null).Select(r => r.StartedBackgroundJob!)],
-                ManagedTemporaryCorrectionChanges = [.. results.Where(r => r.ManagedTemporaryCorrectionUpdate is not null).Select(r => r.ManagedTemporaryCorrectionUpdate!)],
-                ToolFailureCodes = results
-                    .Where(result => result.FailureCode is not null)
-                    .ToDictionary<ToolCallResult, string, string>(
-                        result => result.Message.ToolCallId is { } callId
-                            ? callId.Value
-                            : throw new InvalidOperationException("A failed tool result requires a call identity."),
-                        result => result.FailureCode
-                            ?? throw new InvalidOperationException("A failed tool result requires a failure code."),
-                        StringComparer.Ordinal),
-                ToolReceipts = results
-                    .Where(result => result.Receipt is not null)
-                    .ToDictionary<ToolCallResult, string, ToolInvocationReceipt>(
-                        result => result.Message.ToolCallId is { } callId
-                            ? callId.Value
-                            : throw new InvalidOperationException("A tool receipt requires a call identity."),
-                        result => result.Receipt
-                            ?? throw new InvalidOperationException("A selected tool result requires a receipt."),
-                        StringComparer.Ordinal),
-                ToolExposureRequests = results
-                    .Where(result => result.ExposureRequest is not null)
-                    .ToDictionary<ToolCallResult, string, ToolExposureRequest>(
-                        result => result.Message.ToolCallId is { } callId
-                            ? callId.Value
-                            : throw new InvalidOperationException("A tool exposure request requires a call identity."),
-                        result => result.ExposureRequest
-                            ?? throw new InvalidOperationException("A selected tool result requires an exposure request."),
-                        StringComparer.Ordinal),
-                AuthorizationAttemptIds = results.ToDictionary<ToolCallResult, string, AuthorizationAttemptId>(
-                    result => result.Message.ToolCallId is { } callId
-                        ? callId.Value
-                        : throw new InvalidOperationException("An authorization attempt requires a call identity."),
-                    result => result.AuthorizationAttemptId,
-                    StringComparer.Ordinal)
-            });
+            batch.ReplyTo.Tell(new ToolExecutionBatchCompleted());
         }
         catch (TimeoutException ex)
         {

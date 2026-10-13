@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.Sessions.Pipelines;
 using Netclaw.Actors.Tests.SubAgents;
@@ -94,11 +95,12 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
                 current,
                 call,
                 $"{caseId.ToLowerInvariant()}-{index}");
-            var receipt = Assert.Single(completed.ToolReceipts).Value;
+            var result = Assert.Single(completed);
+            var receipt = Assert.IsAssignableFrom<ToolInvocationReceipt>(result.Receipt);
             Assert.Equal(ParseOutcome(policyCase.ExpectedOutcome), receipt.Category);
             if (caseId == "TF08")
             {
-                var attachment = Assert.Single(completed.FileAttachments);
+                var attachment = Assert.Single(result.FileAttachments);
                 Assert.StartsWith(
                     Path.Join(setup.SessionDirectory, "attachments"),
                     attachment.FilePath,
@@ -107,10 +109,7 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
                     attachment.FilePath,
                     TestContext.Current.CancellationToken));
             }
-            current = WorkingContextUpdater.UpdateFromToolReceipts(
-                current,
-                completed.ToolResults,
-                completed.ToolReceipts);
+            current = WorkingContextUpdater.UpdateFromToolReceipt(current, result.Receipt);
         }
 
         if (setup.Fallback is { } fallback)
@@ -147,7 +146,7 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
         }, cancellationToken: TestContext.Current.CancellationToken);
     }
 
-    private async Task<ToolExecutionCompleted> ExecuteAsync(
+    private async Task<IReadOnlyList<ToolCallResult>> ExecuteAsync(
         DispatchingToolExecutor executor,
         ScenarioSetup setup,
         WorkingContext current,
@@ -163,8 +162,8 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
             .WithLogger(Logging.GetLogger(Sys, typeof(ToolFrictionReplayTests)))
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        var completed = await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
         await pipeline.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         return completed;

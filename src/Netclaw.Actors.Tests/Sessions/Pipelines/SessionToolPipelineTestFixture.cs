@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Event;
+using Akka.TestKit;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
@@ -41,7 +42,6 @@ internal sealed class SessionToolPipelineTestFixture(
     private IReadOnlyList<string> _recentFiles = [];
     private bool _setWorkingDirectoryAvailable;
     private Func<string, ToolInvocationContext, bool>? _canDeclareWorkingDirectory;
-    private bool _streamResults;
     private ModelModality _modelInputModalities = ModelModality.Text;
     private IReadOnlyDictionary<string, IReadOnlyList<string>> _oneTimeApprovalPreSeed
         = new Dictionary<string, IReadOnlyList<string>>();
@@ -144,12 +144,6 @@ internal sealed class SessionToolPipelineTestFixture(
         return this;
     }
 
-    public SessionToolPipelineTestFixture StreamingResults()
-    {
-        _streamResults = true;
-        return this;
-    }
-
     public SessionToolPipelineTestFixture AcceptingModelInput(ModelModality modalities)
     {
         _modelInputModalities = modalities;
@@ -207,7 +201,6 @@ internal sealed class SessionToolPipelineTestFixture(
             BackgroundJobs = _backgroundJobs,
             SetWorkingDirectoryAvailable = _setWorkingDirectoryAvailable,
             CanDeclareWorkingDirectory = _canDeclareWorkingDirectory,
-            StreamResults = _streamResults,
             OneTimeApprovalPreSeed = _oneTimeApprovalPreSeed,
             DecisionOverrides = _decisionOverrides,
             ManagedTemporaryCorrections = new ManagedTemporaryCorrectionDispatch(_managedTemporaryCorrectionKeys),
@@ -215,5 +208,28 @@ internal sealed class SessionToolPipelineTestFixture(
         };
 
         return pipeline.ExecuteAsync(batch);
+    }
+}
+
+internal static class StreamedToolReplyProbe
+{
+    public static async Task<IReadOnlyList<ToolCallResult>> ExpectAsync(
+        TestProbe probe,
+        int resultCount,
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        var wait = timeout ?? TimeSpan.FromSeconds(5);
+        var results = new List<ToolCallResult>(resultCount);
+        for (var index = 0; index < resultCount; index++)
+        {
+            var reply = await probe.ExpectMsgAsync<ToolExecutionSingleCompleted>(
+                wait, cancellationToken: cancellationToken);
+            results.Add(reply.Result);
+        }
+
+        await probe.ExpectMsgAsync<ToolExecutionBatchCompleted>(
+            wait, cancellationToken: cancellationToken);
+        return results;
     }
 }

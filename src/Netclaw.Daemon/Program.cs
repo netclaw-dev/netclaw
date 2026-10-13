@@ -794,8 +794,6 @@ static IReadOnlyList<string> ConfigureDaemonServices(
         services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<EmbeddingWarmupHostedService>());
     }
 
-    services.AddSingleton<IMemoryExtractor>(NullMemoryExtractor.Instance);
-
     services.AddDaemonToolExecutor(toolRegistry, toolAccessPolicy);
     // Operational notification webhooks
     var notificationsConfig = configuration.GetSection("Notifications")
@@ -1026,7 +1024,6 @@ static IReadOnlyList<string> ConfigureDaemonServices(
         sp.GetService<FileSubAgentDefinitionLoader>()));
 
     services.AddSingleton(sp => new SessionMemoryServices(
-        sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
         sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
         sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
         sp.GetService<SQLiteMemoryStore>(),

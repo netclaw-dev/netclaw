@@ -26,7 +26,6 @@ namespace Netclaw.Actors.Tests.Sessions;
 public class CompactionIntegrationTests : LlmSessionTestBase
 {
     private readonly FakeChatClient _fakeChatClient = new();
-    private readonly FakeMemoryExtractor _fakeMemoryExtractor = new();
     private readonly FakeToolExecutor _fakeToolExecutor = new();
 
     public CompactionIntegrationTests(ITestOutputHelper output) : base(output)
@@ -58,7 +57,6 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
-        services.AddSingleton<IMemoryExtractor>(_fakeMemoryExtractor);
 
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
         var registry = new ToolRegistry();
@@ -957,27 +955,5 @@ public class CompactionIntegrationTests : LlmSessionTestBase
                 Assert.DoesNotContain("current_utc", text);
             }
         }
-    }
-}
-
-/// <summary>
-/// Fake memory extractor that captures extracted memories for verification.
-/// </summary>
-internal sealed class FakeMemoryExtractor : IMemoryExtractor
-{
-    private int _callCount;
-
-    public int CallCount => _callCount;
-
-    public List<(SessionId SessionId, string Memories)> Entries { get; } = [];
-
-    public Task PersistAsync(SessionId sessionId, string extractedMemories, CancellationToken ct = default)
-    {
-        Interlocked.Increment(ref _callCount);
-        lock (Entries)
-        {
-            Entries.Add((sessionId, extractedMemories));
-        }
-        return Task.CompletedTask;
     }
 }

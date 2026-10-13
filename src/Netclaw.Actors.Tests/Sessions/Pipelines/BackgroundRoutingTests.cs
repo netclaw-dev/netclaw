@@ -46,12 +46,11 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .WithBackgroundJobs(jobManagerProbe.Ref)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        var completed = await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Single(completed.ToolResults);
-        Assert.Equal("echo:echo test", completed.ToolResults[0].Content);
+        Assert.Equal("echo:echo test", Assert.Single(completed).Message.Content);
 
         await jobManagerProbe.ExpectNoMsgAsync(
             TimeSpan.FromMilliseconds(200),
@@ -84,13 +83,12 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .WithBackgroundJobs(fakeJobManager)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        var completed = await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Single(completed.ToolResults);
-        Assert.Contains("Background job", completed.ToolResults[0].Content);
-        Assert.Contains("check_background_job", completed.ToolResults[0].Content);
+        Assert.Contains("Background job", Assert.Single(completed).Message.Content);
+        Assert.Contains("check_background_job", Assert.Single(completed).Message.Content);
 
         var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
             TimeSpan.FromSeconds(3),
@@ -126,8 +124,8 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .WithBackgroundJobs(fakeJobManager)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
 
         var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
@@ -163,8 +161,8 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .WithBackgroundJobs(fakeJobManager)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
 
         var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
@@ -197,14 +195,13 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .WithBackgroundJobs(fakeJobManager)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        var completed = await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Single(completed.ToolResults);
         // The ACK steers the agent at the streaming log so it can monitor a
         // long-running job without an extra status round-trip.
-        Assert.Contains("output.log", completed.ToolResults[0].Content);
+        Assert.Contains("output.log", Assert.Single(completed).Message.Content);
     }
 
     [Fact]
@@ -233,8 +230,8 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .WithBackgroundJobs(fakeJobManager)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
 
         var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
@@ -269,8 +266,8 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .WithBackgroundJobs(fakeJobManager)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
 
         var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
@@ -301,11 +298,11 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .WithBackgroundJobs(jobManagerProbe.Ref)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        var completed = await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Contains("Tool access denied", completed.ToolResults[0].Content);
+        Assert.Contains("Tool access denied", Assert.Single(completed).Message.Content);
 
         await jobManagerProbe.ExpectNoMsgAsync(
             TimeSpan.FromMilliseconds(200),
@@ -334,12 +331,11 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .WithBackgroundJobs(jobManagerProbe.Ref)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        var completed = await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Single(completed.ToolResults);
-        Assert.Equal("echo:test query", completed.ToolResults[0].Content);
+        Assert.Equal("echo:test query", Assert.Single(completed).Message.Content);
 
         await jobManagerProbe.ExpectNoMsgAsync(
             TimeSpan.FromMilliseconds(200),
@@ -365,10 +361,10 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .From(TestMessageSource())
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        var completed = await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("echo:echo fallback", Assert.Single(completed.ToolResults).Content);
+        Assert.Equal("echo:echo fallback", Assert.Single(completed).Message.Content);
     }
 
     [Fact]
@@ -392,10 +388,10 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             .WithBackgroundJobs(manager)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(5),
+        var completed = await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: 1, timeout: TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains("Error submitting background job", Assert.Single(completed.ToolResults).Content);
+        Assert.Contains("Error submitting background job", Assert.Single(completed).Message.Content);
     }
 
     // Background-job submission now requires a trust context — source cannot be null.

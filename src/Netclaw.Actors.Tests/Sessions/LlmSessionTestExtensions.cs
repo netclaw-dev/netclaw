@@ -39,7 +39,6 @@ internal static class LlmSessionTestExtensions
             sp.GetRequiredService<ISessionStorageResolver>()));
 
         services.TryAddSingleton(sp => new SessionMemoryServices(
-            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
             sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
             sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
             sp.GetService<SQLiteMemoryStore>()));

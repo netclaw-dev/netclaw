@@ -179,7 +179,6 @@ internal sealed partial class SessionToolWorkflow
             BackgroundJobs = backgroundJobs,
             SetWorkingDirectoryAvailable = setWorkingDirectoryAvailable,
             CanDeclareWorkingDirectory = canDeclareWorkingDirectory,
-            StreamResults = true,
             OneTimeApprovalPreSeed = approvalPlan?.OneTimeApprovalPreSeed
                 ?? new Dictionary<string, IReadOnlyList<string>>(),
             DecisionOverrides = approvalPlan?.DecisionOverride

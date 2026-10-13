@@ -207,23 +207,6 @@ internal sealed record CompactionWorkFailed : INoSerializationVerificationNeeded
 }
 
 /// <summary>
-/// Internal message completing a memory extraction LLM call.
-/// Contains extracted memories that should be persisted externally.
-/// </summary>
-internal sealed record MemoryExtractionCompleted : INoSerializationVerificationNeeded
-{
-    public required string ExtractedMemories { get; init; }
-}
-
-/// <summary>
-/// Internal message when a compaction step (extraction or summarization) fails.
-/// </summary>
-internal sealed record CompactionFailed : INoSerializationVerificationNeeded
-{
-    public required Exception Cause { get; init; }
-}
-
-/// <summary>
 /// Internal message completing a sidecar title generation LLM call.
 /// </summary>
 internal sealed record TitleGenerationCompleted : INoSerializationVerificationNeeded
