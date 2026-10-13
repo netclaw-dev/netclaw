@@ -128,7 +128,10 @@ internal sealed class SessionInputFlow
                 MediaReferences = command.MediaReferences.ToArray()
             },
             ExecutableText = command.Source?.ExecutableText,
-            TurnContext = context.ToRecord(),
+            TurnContext = context.ToRecord() with
+            {
+                AdoptedSpeakerIds = context.AdoptedSpeakerIds.ToArray()
+            },
             AdmittedAtMs = admittedAtMs
         };
 
