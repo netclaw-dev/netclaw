@@ -29,7 +29,10 @@ public enum ScanVerdict
     Warning,
 
     /// <summary>Content was rejected due to a high-severity match.</summary>
-    Rejected
+    Rejected,
+
+    /// <summary>The scanner could not establish a verdict.</summary>
+    Failed
 }
 
 /// <summary>
@@ -39,10 +42,11 @@ public enum ScanVerdict
 /// <param name="Reason">Explanation when content triggers a warning or rejection; null when allowed.</param>
 public sealed record SkillScanResult(ScanVerdict Verdict, string? Reason)
 {
-    /// <summary>Backward-compatible: true when <see cref="Verdict"/> is not <see cref="ScanVerdict.Rejected"/>.</summary>
-    public bool IsAllowed => Verdict != ScanVerdict.Rejected;
+    /// <summary>True only when the scanner established an allowed verdict.</summary>
+    public bool IsAllowed => Verdict is ScanVerdict.Allowed or ScanVerdict.Warning;
 
     public static SkillScanResult Allow() => new(ScanVerdict.Allowed, null);
     public static SkillScanResult Warn(string reason) => new(ScanVerdict.Warning, reason);
     public static SkillScanResult Reject(string reason) => new(ScanVerdict.Rejected, reason);
+    public static SkillScanResult Fail(string reason) => new(ScanVerdict.Failed, reason);
 }

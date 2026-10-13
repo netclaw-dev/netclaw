@@ -42,6 +42,7 @@ public enum AlertType
     // New values stay at the end so prior ordinal values remain stable.
     ReminderScheduleFailed,
     ChannelReconnected,
+    SkillPluginSecurityRejected,
 }
 
 /// <summary>
