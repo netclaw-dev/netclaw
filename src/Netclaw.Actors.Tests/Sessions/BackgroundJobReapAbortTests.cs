@@ -14,6 +14,7 @@ using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -147,6 +148,9 @@ public sealed class BackgroundJobReapAbortTests : LlmSessionTestBase
             var pendingReap = await jobManagerProbe.ExpectMsgAsync<KillJobsForSession>(
                 TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(sessionId, pendingReap.SessionId);
+            var passivatingChild = await child.Ask<IActorRef>(
+                new SpawnChildActorRequest(Props.Create(() => new ForwardActor(TestActor)), "passivating-phase-child"),
+                TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
             var accepted = await child.Ask<CommandAck>(new SendUserMessage
             {
@@ -156,6 +160,7 @@ public sealed class BackgroundJobReapAbortTests : LlmSessionTestBase
             }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
             // Assert: the actor accepts the input and starts the held model call.
+            Assert.Equal(child.Path, passivatingChild.Path.Parent);
             Assert.Equal(sessionId, accepted.SessionId);
             await AwaitAssertAsync(() =>
                 Assert.Contains("Continue while the reap reply is pending",

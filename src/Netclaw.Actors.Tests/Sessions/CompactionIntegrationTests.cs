@@ -9,6 +9,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
@@ -303,10 +304,15 @@ public class CompactionIntegrationTests : LlmSessionTestBase
             Filter = OutputFilter.Full
         }, ct);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: ct);
+        var sessionActor = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(TimeSpan.FromSeconds(5), ct);
 
         // Act
         try
         {
+            var readyChild = await sessionActor.Ask<IActorRef>(
+                new SpawnChildActorRequest(Props.Create(() => new ForwardActor(TestActor)), "ready-phase-child"),
+                TimeSpan.FromSeconds(5), ct);
             await manager.Ask<CommandAck>(new SendUserMessage
             {
                 SessionId = sessionId,
@@ -315,6 +321,13 @@ public class CompactionIntegrationTests : LlmSessionTestBase
             await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: ct);
             await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: ct);
             await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: ct);
+            await AwaitAssertAsync(() => Assert.Contains(_fakeChatClient.ReceivedMessages,
+                    messages => messages.Any(message => message.Role == Microsoft.Extensions.AI.ChatRole.System
+                        && message.Text?.Contains("You are a session summarizer", StringComparison.Ordinal) == true)),
+                TimeSpan.FromSeconds(5), cancellationToken: ct);
+            var compactingChild = await sessionActor.Ask<IActorRef>(
+                new SpawnChildActorRequest(Props.Create(() => new ForwardActor(TestActor)), "compacting-phase-child"),
+                TimeSpan.FromSeconds(5), ct);
 
             var ack = await manager.Ask<CommandAck>(new ToolInteractionResponse
             {
@@ -330,6 +343,8 @@ public class CompactionIntegrationTests : LlmSessionTestBase
 
             // Assert
             var expired = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: ct);
+            Assert.Equal(sessionActor.Path, readyChild.Path.Parent);
+            Assert.Equal(sessionActor.Path, compactingChild.Path.Parent);
             Assert.Contains("approval prompt has expired", expired.Text, StringComparison.OrdinalIgnoreCase);
         }
         finally
