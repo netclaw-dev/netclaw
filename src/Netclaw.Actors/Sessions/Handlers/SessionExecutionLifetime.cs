@@ -4,7 +4,10 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions.Handlers;
 
@@ -14,12 +17,48 @@ internal sealed record ModelStoppedForRestart(long CallId, Exception? Failure)
 internal sealed record ToolPipelineStoppedForRestart(Task WorkTask, Exception? Failure)
     : INoSerializationVerificationNeeded;
 
+internal sealed record RestartModelGraceExpired(long CallId) : INoSerializationVerificationNeeded;
+
+internal enum RestartAction { Wait, EnterPassivation, StopToolTask, StartModelGrace }
+internal enum ModelStopAction { Ignore, CloseInputs, EnterPassivation }
+internal enum ToolStopAction { Ignore, FailTurn, EnterPassivation }
+internal enum ReminderEligibility { None, Eligible, EmittedText }
+internal enum PassivationWork { NoAction, WaitForReap, AttemptSnapshot }
+internal readonly record struct PassivationStart(long? ReapEpoch, bool RequestDistillation);
+internal sealed record FinalStopResult(IActorRef? ReplyTo, ReminderDefinition? Reminder, string? OmissionReason);
+internal sealed record RestartContextResult(TurnContext? Context, string? Reason);
+
 /// <summary>
-/// Owns the resources for one model call and one tool batch on the session actor thread.
+/// Owns model and tool resources, restart drain, and passivation policy on the session actor thread.
 /// Task stop acknowledgements require the exact call ID or task reference.
 /// </summary>
 internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef actor)
 {
+    internal const string RestartReminderInstruction =
+        "Resume the work that was interrupted by the daemon restart.";
+
+    private static readonly TimeSpan RestartModelGracePeriod = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan RestartReminderLifetime = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan PassivationGracePeriod = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PassivationFinalStopDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly object RestartModelGraceTimerKey = new();
+    private static readonly object PassivationTimerKey = new();
+    private static readonly object PassivationFinalStopTimerKey = new();
+
+    private enum AttemptMilestone { Distillation, Prerequisite, SnapshotReady, Grace, FinalEffectsClaimed }
+
+    private sealed class PassivationAttempt(long? reapEpoch)
+    {
+        public long? ReapEpoch { get; } = reapEpoch;
+        public AttemptMilestone Milestone { get; set; } = AttemptMilestone.Distillation;
+    }
+
+    private sealed class ReapOperation(long epoch)
+    {
+        public long Epoch { get; } = epoch;
+        public bool AwaitingCommit { get; set; }
+    }
+
     private readonly ProcessingWatchdog _watchdog = new();
     private CancellationTokenSource? _modelCts;
     private Task? _modelTask;
@@ -29,6 +68,270 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     private CancellationTokenSource? _toolCts;
     private Task? _toolTask;
     private bool _toolStopRequested;
+    private IActorRef? _restartDrainReplyTo;
+    private DateTimeOffset? _restartInterruptionAt;
+    private long _jobReapEpoch;
+    private ReapOperation? _reap;
+    private PassivationAttempt? _attempt;
+
+    public bool RestartDrainRequested => _restartDrainReplyTo is not null;
+    public bool NeedsAbruptStopNotification => _attempt?.Milestone != AttemptMilestone.FinalEffectsClaimed;
+
+    public RestartAction RequestRestart(
+        IActorRef replyTo,
+        SessionPhase phase,
+        int selectedInputCount,
+        bool hasBufferedContinuation,
+        bool canParkDurableApprovals)
+    {
+        _restartDrainReplyTo = replyTo;
+        if (phase == SessionPhase.Ready)
+            return RestartAction.EnterPassivation;
+
+        if (TryStopDurableApprovalWaits(phase, hasBufferedContinuation, canParkDurableApprovals))
+            return RestartAction.StopToolTask;
+
+        if (phase == SessionPhase.Processing && HasLiveModel && selectedInputCount > 0)
+        {
+            timers.StartSingleTimer(
+                RestartModelGraceTimerKey,
+                new RestartModelGraceExpired(_modelCallId),
+                RestartModelGracePeriod);
+            return RestartAction.StartModelGrace;
+        }
+
+        return RestartAction.Wait;
+    }
+
+    public bool TryStopDurableApprovalWaits(
+        SessionPhase phase,
+        bool hasBufferedContinuation,
+        bool canParkDurableApprovals)
+        => RestartDrainRequested
+           && phase == SessionPhase.Processing
+           && !hasBufferedContinuation
+           && canParkDurableApprovals
+           && RequestToolStop();
+
+    public long? PlanRestartModelStop(RestartModelGraceExpired message, SessionPhase phase, int selectedInputCount)
+        => RestartDrainRequested
+           && phase == SessionPhase.Processing
+           && selectedInputCount > 0
+           && CanDispatchPreparedModel(message.CallId)
+            ? message.CallId
+            : null;
+
+    public ModelStopAction ObserveModelStop(ModelStoppedForRestart message, bool emittedText)
+    {
+        if (!AcceptModelStop(message))
+            return ModelStopAction.Ignore;
+
+        return message.Failure is not null || emittedText
+            ? ModelStopAction.CloseInputs
+            : ModelStopAction.EnterPassivation;
+    }
+
+    public ToolStopAction ObserveToolStop(ToolPipelineStoppedForRestart message)
+    {
+        if (!AcceptToolStop(message))
+            return ToolStopAction.Ignore;
+
+        return message.Failure is not null
+            ? ToolStopAction.FailTurn
+            : ToolStopAction.EnterPassivation;
+    }
+
+    public ReminderEligibility MarkRestartReminderEligible(
+        int pendingInputCount,
+        bool emittedText,
+        int selectedInputCount,
+        DateTimeOffset now)
+    {
+        if (pendingInputCount == 0)
+            return ReminderEligibility.None;
+
+        if (emittedText && selectedInputCount > 0)
+            return ReminderEligibility.EmittedText;
+
+        _restartInterruptionAt = now;
+        return ReminderEligibility.Eligible;
+    }
+
+    public void ClearRestartReminderEligibility() => _restartInterruptionAt = null;
+
+    public PassivationStart BeginPassivation(bool hasTrackedJobs, bool managerAvailable, bool observerAvailable)
+    {
+        long? reapEpoch = null;
+        if (hasTrackedJobs && managerAvailable)
+        {
+            reapEpoch = ++_jobReapEpoch;
+            _reap = new ReapOperation(reapEpoch.Value);
+        }
+
+        _attempt = new PassivationAttempt(reapEpoch);
+        var requestDistillation = !RestartDrainRequested && observerAvailable;
+        if (requestDistillation)
+            timers.StartSingleTimer(PassivationTimerKey, new PassivationTimeout(), PassivationGracePeriod);
+
+        return new PassivationStart(reapEpoch, requestDistillation);
+    }
+
+    public void CompleteDistillation() => timers.Cancel(PassivationTimerKey);
+
+    public PassivationWork CompletePassivationWork(SessionPhase phase)
+    {
+        if (phase != SessionPhase.Passivating || _attempt is null
+            || _attempt.Milestone is AttemptMilestone.SnapshotReady
+                or AttemptMilestone.Grace or AttemptMilestone.FinalEffectsClaimed)
+            return PassivationWork.NoAction;
+
+        if (_attempt.ReapEpoch is { } epoch && _reap?.Epoch == epoch)
+        {
+            _attempt.Milestone = AttemptMilestone.Prerequisite;
+            return PassivationWork.WaitForReap;
+        }
+
+        _attempt.Milestone = AttemptMilestone.SnapshotReady;
+        return PassivationWork.AttemptSnapshot;
+    }
+
+    public bool ObserveReapReply(long epoch)
+    {
+        if (_reap is not { } reap || reap.Epoch != epoch || reap.AwaitingCommit)
+            return false;
+
+        // One manager reply can cause one journal write. The callback owns the completion.
+        reap.AwaitingCommit = true;
+        return true;
+    }
+
+    public PassivationWork ReapCommitted(long epoch, SessionPhase phase)
+    {
+        if (_reap is not { } reap || reap.Epoch != epoch || !reap.AwaitingCommit)
+            return PassivationWork.NoAction;
+
+        _reap = null;
+        if (phase != SessionPhase.Passivating || _attempt is null
+            || _attempt.ReapEpoch != epoch || _attempt.Milestone != AttemptMilestone.Prerequisite)
+            return PassivationWork.NoAction;
+
+        _attempt.Milestone = AttemptMilestone.SnapshotReady;
+        return PassivationWork.AttemptSnapshot;
+    }
+
+    public bool AfterFinalSnapshotAttempt(SessionPhase phase)
+    {
+        if (phase != SessionPhase.Passivating || _attempt?.Milestone != AttemptMilestone.SnapshotReady)
+            throw new InvalidOperationException("The passivation attempt is not ready for a final snapshot.");
+
+        if (RestartDrainRequested)
+            return true;
+
+        _attempt.Milestone = AttemptMilestone.Grace;
+        timers.StartSingleTimer(
+            PassivationFinalStopTimerKey,
+            new PassivationFinalStop(),
+            PassivationFinalStopDelay);
+        return false;
+    }
+
+    public bool IsCurrentFinalStop(SessionPhase phase)
+        => phase == SessionPhase.Passivating && _attempt?.Milestone == AttemptMilestone.Grace;
+
+    public void AbortPassivation()
+    {
+        if (_attempt?.Milestone == AttemptMilestone.FinalEffectsClaimed)
+            return;
+
+        timers.Cancel(PassivationTimerKey);
+        timers.Cancel(PassivationFinalStopTimerKey);
+        _attempt = null;
+    }
+
+    public FinalStopResult? ClaimFinalStop(SessionPhase phase, SessionId sessionId, IReadOnlyList<InputAdmitted> pending)
+    {
+        if (phase != SessionPhase.Passivating || _attempt is null
+            || _attempt.Milestone is not (AttemptMilestone.Grace or AttemptMilestone.SnapshotReady))
+            return null;
+
+        var (reminder, reason) = BuildRestartReminder(sessionId, pending);
+        _attempt.Milestone = AttemptMilestone.FinalEffectsClaimed;
+        return new FinalStopResult(_restartDrainReplyTo, reminder, reason);
+    }
+
+    public RestartContextResult ValidateRestartResume(IReadOnlyList<InputAdmitted> pending)
+    {
+        TurnContext? first = null;
+        var reason = "no pending input";
+        foreach (var input in pending)
+        {
+            if (!TurnContext.TryFromRecord(input.TurnContext, out var candidate, out reason)
+                || candidate is null)
+                return new RestartContextResult(null, reason);
+
+            if (first is null)
+            {
+                first = candidate;
+                continue;
+            }
+
+            if (!HasSameRestartAuthority(first, candidate))
+                return new RestartContextResult(null, "pending inputs have different authority");
+        }
+
+        return new RestartContextResult(first, first is null ? reason : null);
+    }
+
+    private (ReminderDefinition? Reminder, string? Reason) BuildRestartReminder(
+        SessionId sessionId,
+        IReadOnlyList<InputAdmitted> pending)
+    {
+        if (_restartInterruptionAt is not { } interruptedAt || pending.Count == 0)
+            return (null, null);
+
+        var contextResult = ValidateRestartResume(pending);
+        if (contextResult.Context is not { } context)
+            return (null, contextResult.Reason ?? "invalid stored authority");
+
+        if (context.ChannelType is not { } channelType)
+            return (null, "the turn has no channel type");
+
+        return (new ReminderDefinition
+        {
+            Id = ReminderIdGenerator.Generate("restart resume"),
+            Title = "Resume after daemon restart",
+            Instructions = RestartReminderInstruction,
+            Schedule = new ReminderSchedule { Type = ReminderScheduleType.OneShot, FireAt = interruptedAt },
+            Delivery = new ReminderDelivery
+            {
+                Kind = DeliveryKind.CurrentSession,
+                SessionId = sessionId.Value,
+                OriginChannelType = channelType
+            },
+            DeliveryRequired = true,
+            Audience = context.Audience,
+            Boundary = context.Boundary,
+            CreatedBy = "system",
+            CreatedAt = interruptedAt,
+            UpdatedAt = interruptedAt,
+            ExpiresAt = interruptedAt + RestartReminderLifetime
+        }, null);
+    }
+
+    private static bool HasSameRestartAuthority(TurnContext left, TurnContext right)
+        => left.SessionId == right.SessionId
+           && left.Audience == right.Audience
+           && left.Boundary == right.Boundary
+           && left.ChannelType == right.ChannelType
+           && left.RequesterSenderId == right.RequesterSenderId
+           && left.RequesterPrincipal == right.RequesterPrincipal
+           && left.Provenance == right.Provenance
+           && left.DefaultDeliveryTarget == right.DefaultDeliveryTarget
+           && left.RequestedDeliveryTarget == right.RequestedDeliveryTarget
+           && left.HasAdoptedContext == right.HasAdoptedContext
+           && left.HasThirdPartyAdoptedContext == right.HasThirdPartyAdoptedContext
+           && left.AdoptedSpeakerIds.SequenceEqual(right.AdoptedSpeakerIds, StringComparer.Ordinal)
+           && left.SupportsInteractiveApproval == right.SupportsInteractiveApproval;
 
     public long CurrentModelCallId => _modelCallId;
     public bool HasLiveModel => _modelCts is not null;

@@ -62,7 +62,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellCommandAnalysis.IsPlainFileTarget` and `ToolAccessPolicy.ScreenNoProgramRedirects` | Owner decision (October 2026): a command that runs no program gets no prompt only when each redirect target is one plain file (`/dev/null` is the only path below `/dev/`, so `/dev/tcp` keeps a prompt); a redirect target that is not proved, an input redirect that the `file_read` rules refuse, and a `Deny` mode of the file tool deny the call | 20 killed | `./scripts/run-no-program-mutations.sh` |
 | `BashLiteralTwinSlices.Apply` and the denial check of `ToolAccessPolicy.ScreenScopedSlices` | Decision F1: the strictest literal twin result decides a call. The candidates of every twin replace the candidates of their source command, an unresolved source keeps its exact answer, twins without their source command fail loudly, and one denied twin denies the call | 9 killed | `./scripts/run-literal-twin-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
-| `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, and `SessionExecutionLifetime.AcceptModelStop` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call | 6 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
+| `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, and `SessionExecutionLifetime.ObserveReapReply` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit | 7 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -182,6 +182,9 @@ The linked `SessionStateTests` source kills both mutants when one branch duplica
 The script also selects the call-ID inequality in `SessionExecutionLifetime.AcceptModelStop`.
 Stryker changes `message.CallId != _modelCallId` to equality.
 The shared `SessionExecutionLifetimeStopIdentityTests` source kills this mutant when a stop reply has the wrong call ID.
+The script also selects the `true` literal in `SessionExecutionLifetime.ObserveReapReply`.
+Stryker changes `reap.AwaitingCommit = true` to `reap.AwaitingCommit = false`.
+The linked `SessionExecutionLifetimeStopPolicyTests` source kills this mutant when a duplicate reply arrives before journal commit.
 The linked `ProcessingWatchdogTests` source supplies the existing timer fake without an actor test host.
 The selectors reject missing or repeated source markers before Stryker starts.
 The gate requires one killed mutant in each single-expression span and two killed history mutants.
@@ -192,9 +195,10 @@ The earlier readiness-only run took 5 minutes 44 seconds after tool restore.
 The three-target local run took 1 minute 46 seconds with a warm build cache.
 The five-mutant local run took 1 minute 47 seconds with a warm build cache.
 The six-mutant local run took 1 minute 58 seconds on the lifecycle draft with a warm build cache.
+The seven-mutant local run took 1 minute 48 seconds with a warm build cache.
 Hosted run `38448179312` took 15 to 21 minutes for the four existing matrix groups.
 Its Windows test took 16 minutes 6 seconds. A target in any of those four groups would extend that critical path.
-All five targets run in one Stryker invocation in the existing `session-reliability` group.
+All six targets run in one Stryker invocation in the existing `session-reliability` group.
 Hosted CI must measure the combined gate on a cold runner.
 Its report directory is `artifacts/stryker/tool-batch-readiness`.
 

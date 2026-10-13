@@ -35,6 +35,8 @@
              Link="Sessions/ProcessingWatchdogTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/SessionExecutionLifetimeStopIdentityTests.cs"
              Link="Sessions/SessionExecutionLifetimeStopIdentityTests.cs" />
+    <Compile Include="../Netclaw.Actors.Tests/Sessions/SessionExecutionLifetimeStopPolicyTests.cs"
+             Link="Sessions/SessionExecutionLifetimeStopPolicyTests.cs" />
     <Compile Include="../Netclaw.Tests.Utilities/TestSessionStorageResolver.cs"
              Link="Utilities/TestSessionStorageResolver.cs" />
   </ItemGroup>

@@ -359,3 +359,44 @@ The combined local run passed. Hosted checks remain required on the published st
 Persistence or authority changes remain explicit product decisions.
 Use the Systematize plan/verify guidance and Code With Aaron test/refactor/review guidance during execution.
 If those skills are unavailable, report the gap and preserve this plan's proof and separate-authorship requirements.
+
+### Next group: complete session stop policy
+
+The next group starts from combined local commit `bc27ea24` in a separate worktree.
+It does not extend the open four-PR group. That group remains held for one atomic merge.
+An independent baseline on `8fd1171b` proved a late-reap defect.
+After an input aborted idle passivation, the reap event committed, but the retired stop attempt armed a final timer.
+The timer reached `Processing` as a dead letter. A later idle passivation then failed to terminate.
+The repair lets idle sessions release actor resources after the valid late reap commit.
+
+Commit `322b9575` is the separate behavior correction. It clears the retired attempt's reap prerequisite on abort.
+The reap operation still commits its journal event after abort. The unchanged independent regression passed on that commit.
+The correction test has SHA-256 `6ca00f1caa97fd03c37f5e9ebe508f6ef06f469ffefefda46cd51505655fe99e`.
+
+The subsequent transfer gives `SessionExecutionLifetime` the complete restart and passivation policy.
+The actor retains journal writes, job-manager lookup, output, lifecycle notification, and `Context.Stop`.
+`SessionPhaseMachine` remains the sole phase owner. The owner receives the current phase for each decision.
+The owner retains the exact model call and tool task identities. It keeps a reap operation separate from the passivation attempt.
+The attempt milestone replaces the deferred-reap, final-grace, and completion flags.
+The owner also validates the complete stored authority for restart reminders and resumed inputs.
+
+The transfer removes seven direct actor fields and adds no actor field.
+It removes one underlying terminal boolean because the final milestone already records that fact.
+Against correction commit `322b9575`, the actor changes from 4,119 to 3,928 lines: 191 fewer lines.
+The owner changes from 243 to 546 lines: 303 more lines.
+The total production source grows by 112 lines across those two changed production files.
+The actor diff has 96 added and 287 removed lines. The owner diff has 304 added and one removed line.
+These counts exclude tests, mutation configuration, and documentation.
+
+An initial transfer-focused run passed 40 cases before the new independent tests entered the worktree.
+The final focused run passed 64 cases with no failures or skips.
+It includes the independent late-reap, superseded-reap, owner-policy, approval-recovery, restart, and passivation tests.
+The raw log and TRX are under `planning/netclaw/session-refactor/review/evidence/session-stop-transfer/` outside this repository.
+The focused mutation gate killed all seven selected mutants in 108.47 seconds.
+The new target changed the reap commit marker; the unchanged owner test killed mutant `7949`.
+The raw report is under `planning/netclaw/session-refactor/review/evidence/session-stop-mutation/` outside this repository.
+The full Actors suite passed 5,766 cases, with 41 platform skips and no failures.
+The full run used the current combined source after the focused run and mutation config update.
+Its TRX and raw log are under `planning/netclaw/session-refactor/review/evidence/session-stop-transfer/` outside this repository.
+Slopwatch found zero issues. The copyright header and whitespace checks passed.
+No next-group PR is published or merged.

@@ -659,7 +659,11 @@ Leaks today:
 `SessionToolWorkflow` owns the session-local approval records, live wait channel, active batch tracker, and temporary correction state.
 It validates the original requester and offered answer. It selects which unanswered calls can resume after recovery.
 The actor retains the current turn context. The workflow retains the original authority for each unresolved prompt.
-The actor writes grants, persists events, owns tasks, and emits outputs.
+[`SessionExecutionLifetime`](../../src/Netclaw.Actors/Sessions/Handlers/SessionExecutionLifetime.cs) decides whether a restart can stop the exact tool task.
+The workflow decides whether every unfinished tool call waits on a durable approval.
+The lifetime owner also validates the complete stored turn authority before a restart reminder or resumed turn.
+The actor passes the durable input records to that check. It does not store another authority copy.
+The actor writes grants, persists events, and emits outputs. The lifetime owner owns task cancellation and stop completion.
 
 The workflow releases a claimed live wait only after the actor completes the required grant and journal steps.
 The journal retains durable parent-session approval requests so a UI answer can safely resume interrupted work.

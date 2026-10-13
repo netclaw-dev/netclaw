@@ -145,22 +145,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private readonly Telemetry.ISessionMetrics? _sessionMetrics;
 
-    private DateTimeOffset? _restartInterruptionAt;
-    private bool _passivationCompleted;
-    private bool _passivationFinalStopScheduled;
-
-    private sealed record RestartModelGraceExpired(long CallId) : INoSerializationVerificationNeeded;
-
-    // Reap-on-passivation handshake: while a KillJobsForSession ask is in
-    // flight, the final snapshot is deferred so it captures the reaped marks.
-    // _jobReapEpoch is bumped per reap request so a late reply from a
-    // superseded passivation (aborted, then re-entered) cannot resolve a newer
-    // handshake — see JobReapResolved.
-    private bool _jobReapPending;
-    private bool _passivationDeferredForReap;
-    private long _jobReapEpoch;
-    private IActorRef? _restartDrainReplyTo;
-    private bool RestartDrainRequested => _restartDrainReplyTo is not null;
+    private bool RestartDrainRequested => _execution.RestartDrainRequested;
     private string? _pendingRestartNotice;
     private string? _turnRestartNotice;
 
@@ -1112,7 +1097,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (RestartDrainRequested)
         {
             _deferredApprovalResponse = null;
-            MarkRestartReminderEligible();
+            RecordRestartReminderEligibility();
             ClearBufferedMessagesForRestartDrain();
             _resumeToolLoopAfterCompaction = false;
             TransitionTo(SessionPhase.Ready);
@@ -1157,27 +1142,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
     }
 
-    private const string RestartReminderInstruction =
-        "Resume the work that was interrupted by the daemon restart.";
     private const string RestartReminderIdPrefix = "restart-resume-";
-    private static readonly TimeSpan RestartModelGracePeriod = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan RestartReminderLifetime = TimeSpan.FromMinutes(10);
-    private static readonly object RestartModelGraceTimerKey = new();
-    private static readonly TimeSpan PassivationGracePeriod = TimeSpan.FromSeconds(5);
 
     // Bounds the reap-on-passivation handshake; the Ask always resolves within
     // this window (ack or piped failure), so passivation can never wedge on it.
     private static readonly TimeSpan JobReapAckTimeout = TimeSpan.FromSeconds(5);
-    private static readonly object PassivationTimerKey = new();
-
-    // After distillation + snapshot complete we wait this long for a racing
-    // user-initiated message to abort the stop. Closes the race where a
-    // SendUserMessage forwarded by the parent arrives in the child's mailbox
-    // microseconds after Context.Stop(Self) would have been dispatched.
-    // 100 ms is geological time for an in-proc Akka hop, and idle-driven
-    // passivation does not care about an extra 100 ms.
-    private static readonly TimeSpan PassivationFinalStopDelay = TimeSpan.FromMilliseconds(100);
-    private static readonly object PassivationFinalStopTimerKey = new();
 
     private void Passivating()
     {
@@ -1186,21 +1155,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         // Explicit shutdown or restart reaps session-scoped jobs.
         // Reaped-only records still use the manager's idempotent reap ack.
-        _jobReapPending = false;
-        _passivationDeferredForReap = false;
+        IActorRef? jobManager = null;
         if (!_state.ActiveBackgroundJobs.IsEmpty)
         {
             var jobRegistry = ActorRegistry.For(Context.System);
-            if (jobRegistry.TryGet<BackgroundJobManagerActorKey>(out var jobManager))
-            {
-                _jobReapPending = true;
-                var reapEpoch = ++_jobReapEpoch;
-                jobManager.Ask<SessionJobsReaped>(
-                        new KillJobsForSession(_sessionId), JobReapAckTimeout)
-                    .PipeTo(Self,
-                        success: ack => new JobReapResolved(reapEpoch, ack.ReapedCount, null),
-                        failure: ex => new JobReapResolved(reapEpoch, 0, ex));
-            }
+            if (jobRegistry.TryGet<BackgroundJobManagerActorKey>(out var registeredManager))
+                jobManager = registeredManager;
             else
             {
                 _log.Error(
@@ -1209,11 +1169,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
         }
 
-        // The reap reply is handled by the same epoch-correlated handler used in
-        // every other phase (CommandJobReapResolved) — registered for ALL phases
-        // so a reply can never dead-letter no matter where the session is when it
-        // lands. Here in Passivating the handler also releases the deferred
-        // CompletePassivation via FinishJobReap.
+        var start = _execution.BeginPassivation(
+            !_state.ActiveBackgroundJobs.IsEmpty,
+            jobManager is not null,
+            _observerActor is not null);
+        if (start.ReapEpoch is { } reapEpoch)
+        {
+            jobManager!.Ask<SessionJobsReaped>(
+                    new KillJobsForSession(_sessionId), JobReapAckTimeout)
+                .PipeTo(Self,
+                    success: ack => new JobReapResolved(reapEpoch, ack.ReapedCount, null),
+                    failure: ex => new JobReapResolved(reapEpoch, 0, ex));
+        }
+
+        // Every phase accepts the reap reply. The journal commit can advance only the current stop attempt.
         CommandJobReapResolved();
 
         Command<SessionDistillationCompleted>(msg =>
@@ -1225,7 +1194,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<AcceptedDistillationProposalsRecorded>(_ =>
         {
             _log.Info("Passivation distillation dedup persistence complete, stopping");
-            Timers.Cancel(PassivationTimerKey);
+            _execution.CompleteDistillation();
             CompletePassivation();
         });
 
@@ -1243,7 +1212,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _log.Info("Aborting passivation due to new user message");
-            AbortPassivationTimers();
+            _execution.AbortPassivation();
             TransitionTo(SessionPhase.Ready);
             HandleIncomingUserMessage(cmd);
         });
@@ -1263,7 +1232,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _log.Info("Aborting passivation due to tool interaction response");
-            AbortPassivationTimers();
+            _execution.AbortPassivation();
             TransitionTo(SessionPhase.Ready);
             await HandleToolInteractionResponseWhenIdle(msg);
         });
@@ -1278,7 +1247,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _log.Info("Aborting passivation due to text tool interaction response");
-            AbortPassivationTimers();
+            _execution.AbortPassivation();
             TransitionTo(SessionPhase.Ready);
             await HandleToolInteractionTextResponseWhenIdle(msg);
         });
@@ -1299,6 +1268,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // No racing message arrived during the post-snapshot grace window — commit the stop.
         Command<PassivationFinalStop>(_ =>
         {
+            if (!_execution.IsCurrentFinalStop(_phase.Current))
+                return;
             _log.Info("Passivation grace window elapsed, finalizing stop");
             FinalizePassivation();
         });
@@ -1312,21 +1283,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _log.Info("Aborting passivation due to delivery feedback");
-            AbortPassivationTimers();
+            _execution.AbortPassivation();
             TransitionTo(SessionPhase.Ready);
             HandleDeliveryFailedWhenReady(msg);
         });
 
         // Restart drain already preserves accepted input in the journal.
         // Skip the optional memory pass because ingress is closed.
-        if (RestartDrainRequested)
+        if (start.RequestDistillation)
         {
-            CompletePassivation();
-        }
-        else if (_observerActor is not null)
-        {
-            _observerActor.Tell(new DistillMemories(), Self);
-            Timers.StartSingleTimer(PassivationTimerKey, new PassivationTimeout(), PassivationGracePeriod);
+            _observerActor!.Tell(new DistillMemories(), Self);
         }
         else
         {
@@ -1334,60 +1300,31 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
     }
 
-    // Enters the post-distillation grace window: persist the final snapshot
-    // and arm a short timer. Any user-initiated message arriving in the
-    // mailbox during this window cancels the timer (via AbortPassivationTimers)
-    // and resurrects the actor in Ready — avoiding a full stop + respawn +
-    // recovery cycle. If nothing arrives, the timer fires PassivationFinalStop
-    // and we proceed to FinalizePassivation.
+    // The reap journal callback must finish before the owner grants the final snapshot attempt.
     private void CompletePassivation()
     {
-        if (_passivationFinalStopScheduled)
+        if (_execution.CompletePassivationWork(_phase.Current) != PassivationWork.AttemptSnapshot)
             return;
 
-        // The final snapshot must capture the reaped job marks — defer until
-        // the reap ask resolves (it always does: success or piped failure
-        // within JobReapAckTimeout).
-        if (_jobReapPending)
-        {
-            _passivationDeferredForReap = true;
-            return;
-        }
-
-        _passivationFinalStopScheduled = true;
-        SaveSnapshotIfSafe();
-
-        if (RestartDrainRequested)
-        {
-            FinalizePassivation();
-            return;
-        }
-
-        Timers.StartSingleTimer(
-            PassivationFinalStopTimerKey,
-            new PassivationFinalStop(),
-            PassivationFinalStopDelay);
+        CompleteFinalSnapshotAttempt();
     }
 
-    // Marks tracked jobs reaped and releases a passivation that was waiting on
-    // the reap handshake. Runs for both the ack and the loud-failure path —
-    // the manager's definitions are the authoritative status either way.
-    // The reap is journaled (not just folded into the passivation snapshot) so
-    // the marks survive recovery even when that snapshot is skipped because an
-    // approval batch is parked (SaveSnapshotIfSafe). Otherwise a crash in that
-    // window would rehydrate the killed jobs as "running" in the context block.
-    private void FinishJobReap()
+    // The journal event keeps reap status after a crash, even when an unresolved approval blocks the snapshot.
+    private void FinishJobReap(long epoch)
     {
         Persist(new SessionBackgroundJobsReaped { SessionId = _sessionId, ReapedAtMs = NowMs() }, evt =>
         {
             _state = _state.Apply(evt);
-            _jobReapPending = false;
-            if (_passivationDeferredForReap)
-            {
-                _passivationDeferredForReap = false;
-                CompletePassivation();
-            }
+            if (_execution.ReapCommitted(epoch, _phase.Current) == PassivationWork.AttemptSnapshot)
+                CompleteFinalSnapshotAttempt();
         });
+    }
+
+    private void CompleteFinalSnapshotAttempt()
+    {
+        SaveSnapshotIfSafe();
+        if (_execution.AfterFinalSnapshotAttempt(_phase.Current))
+            FinalizePassivation();
     }
 
     // Actual termination after the grace window expires. The observer
@@ -1395,29 +1332,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // aborted passivation.
     private void FinalizePassivation()
     {
-        if (_passivationCompleted)
+        var final = _execution.ClaimFinalStop(_phase.Current, _sessionId, _state.PendingInputs);
+        if (final is null)
             return;
 
-        _passivationCompleted = true;
+        if (final.OmissionReason is { } reason)
+            _log.Warning("Restart drain cannot resume session {SessionId}: {Reason}.", _sessionId.Value, reason);
         EmitOutput(new SessionDeactivated { SessionId = _sessionId, TimestampMs = NowMs() });
         _lifecycleObserver?.OnSessionDeactivated(_sessionId);
-        _restartDrainReplyTo?.Tell(new DaemonRestartPrepared(
-            _sessionId,
-            BuildRestartReminder()));
+        final.ReplyTo?.Tell(new DaemonRestartPrepared(_sessionId, final.Reminder));
         Context.Stop(Self);
     }
 
     private bool HasLiveBackgroundJobs
         => _state.ActiveBackgroundJobs.Values.Any(job => job.ReapedAtMs is null);
-
-    private void AbortPassivationTimers()
-    {
-        Timers.Cancel(PassivationTimerKey);
-        Timers.Cancel(PassivationFinalStopTimerKey);
-        _passivationFinalStopScheduled = false;
-        // The reap still commits after abort, but it must not resume this stop attempt.
-        _passivationDeferredForReap = false;
-    }
 
     // Outer hang-detector for the whole compaction pipeline. The inner observer
     // call already enforces its own SidecarLlmTimeout via a linked CTS, so the
@@ -1451,11 +1379,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleJobReapResolved(JobReapResolved msg)
     {
-        if (msg.Epoch != _jobReapEpoch)
+        if (!_execution.ObserveReapReply(msg.Epoch))
         {
-            _log.Debug(
-                "Ignoring superseded background-job reap reply (epoch {Stale}, current {Current})",
-                msg.Epoch, _jobReapEpoch);
+            _log.Debug("Ignoring superseded background-job reap reply (epoch {Stale})", msg.Epoch);
             return;
         }
 
@@ -1468,7 +1394,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         else
             _log.Info("Background job reap acknowledged: {ReapedCount} job(s) reaped", msg.ReapedCount);
 
-        FinishJobReap();
+        FinishJobReap(msg.Epoch);
     }
 
     private void CommandSessionContextMessages()
@@ -1796,7 +1722,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         if (RestartDrainRequested)
         {
-            MarkRestartReminderEligible();
+            RecordRestartReminderEligibility();
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Ready);
             TransitionTo(SessionPhase.Passivating);
@@ -2075,7 +2001,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var reminderId = cmd.Source?.ReminderId?.Value;
         if (reminderId is null
             || !reminderId.StartsWith(RestartReminderIdPrefix, StringComparison.Ordinal)
-            || !string.Equals(cmd.Content, RestartReminderInstruction, StringComparison.Ordinal))
+            || !string.Equals(cmd.Content, SessionExecutionLifetime.RestartReminderInstruction, StringComparison.Ordinal))
             return false;
 
         if (_state.PendingInputs.Count == 0)
@@ -2088,19 +2014,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return true;
         }
 
-        if (!TryGetRestartContext(out var firstContext, out var reason))
+        var restartContext = _execution.ValidateRestartResume(_state.PendingInputs);
+        if (restartContext.Context is not { } firstContext)
         {
             _log.Warning(
                 "Restart reminder {ReminderId} cannot restore session {SessionId}: {Reason}.",
                 reminderId,
                 _sessionId.Value,
-                reason ?? "invalid stored authority");
+                restartContext.Reason ?? "invalid stored authority");
             TryReplyNack("The interrupted input authority is invalid.");
             return true;
         }
 
         var pending = _state.PendingInputs.ToArray();
-        _restartInterruptionAt = null;
+        _execution.ClearRestartReminderEligibility();
         _turnEmittedText = false;
         _activeInputIds.Clear();
         _currentTurnSource = cmd.Source;
@@ -2385,7 +2312,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _execution?.ReleaseAll();
 
         // Safety net for non-graceful stop paths (shutdown timeout, OOM, etc.).
-        if (!_passivationCompleted)
+        if (_execution is null || _execution.NeedsAbruptStopNotification)
             _lifecycleObserver?.OnSessionDeactivated(_sessionId);
 
         base.PostStop();
@@ -3849,95 +3776,85 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void RequestRestartDrain()
     {
-        _restartDrainReplyTo = Sender;
-
-        if (_phase.Current == SessionPhase.Ready)
+        var action = _execution.RequestRestart(
+            Sender,
+            _phase.Current,
+            _activeInputIds.Count,
+            _buffer.Count > 0 || _deferredApprovalResponse is not null,
+            _toolWorkflow.CanParkForRestart());
+        if (action == RestartAction.EnterPassivation)
             TransitionTo(SessionPhase.Passivating);
-        else if (_phase.Current == SessionPhase.Processing)
-        {
-            if (TryStopDurableApprovalWaits())
-                return;
-
-            if (_execution.HasLiveModel && _activeInputIds.Count > 0)
-            {
-                Timers.StartSingleTimer(
-                    RestartModelGraceTimerKey,
-                    new RestartModelGraceExpired(_execution.CurrentModelCallId),
-                    RestartModelGracePeriod);
-            }
-        }
+        else if (action == RestartAction.StopToolTask)
+            _log.Info("Stopping a tool batch that waits only for durable approvals before restart drain");
     }
 
     private bool TryStopDurableApprovalWaits()
     {
-        if (!CanStopToolsForRestart())
+        if (!_execution.TryStopDurableApprovalWaits(
+                _phase.Current,
+                _buffer.Count > 0 || _deferredApprovalResponse is not null,
+                _toolWorkflow.CanParkForRestart()))
             return false;
 
         _log.Info("Stopping a tool batch that waits only for durable approvals before restart drain");
-        return _execution.RequestToolStop();
-    }
-
-    private bool CanStopToolsForRestart()
-    {
-        if (!RestartDrainRequested || _phase.Current != SessionPhase.Processing)
-            return false;
-
-        // A buffered continuation can depend on the current tool results.
-        if (_buffer.Count > 0 || _deferredApprovalResponse is not null)
-            return false;
-
-        if (!_execution.CanRequestToolStop())
-            return false;
-
-        return _toolWorkflow.CanParkForRestart();
+        return true;
     }
 
     private void HandleRestartModelGraceExpired(RestartModelGraceExpired expired)
     {
-        if (!RestartDrainRequested || _phase.Current != SessionPhase.Processing
-            || !_execution.CanDispatchPreparedModel(expired.CallId)
-            || _activeInputIds.Count == 0)
+        if (_execution.PlanRestartModelStop(expired, _phase.Current, _activeInputIds.Count) is not { } callId)
             return;
 
         _modelContext.InvalidateInspection();
-        _execution.RequestModelStop(expired.CallId);
+        _execution.RequestModelStop(callId);
     }
 
     private void HandleModelStoppedForRestart(ModelStoppedForRestart stopped)
     {
-        if (!_execution.AcceptModelStop(stopped))
+        var action = _execution.ObserveModelStop(stopped, _turnEmittedText);
+        if (action == ModelStopAction.Ignore)
             return;
 
         if (stopped.Failure is { } failure)
-        {
             _log.Error(failure, "The model task failed during restart drain");
-        }
 
-        if (stopped.Failure is null && !_turnEmittedText)
-        {
+        if (action == ModelStopAction.CloseInputs)
+            CloseActiveInputs(CompleteModelStopForRestart);
+        else
             CompleteModelStopForRestart();
-            return;
-        }
-
-        CloseActiveInputs(CompleteModelStopForRestart);
     }
 
     private void CompleteModelStopForRestart()
     {
-        MarkRestartReminderEligible();
+        RecordRestartReminderEligibility();
         ClearBufferedMessagesForRestartDrain();
         TransitionTo(SessionPhase.Passivating);
     }
 
+    private void RecordRestartReminderEligibility()
+    {
+        if (_execution.MarkRestartReminderEligible(
+                _state.PendingInputs.Count,
+                _turnEmittedText,
+                _activeInputIds.Count,
+                _timeProvider.GetUtcNow()) == ReminderEligibility.EmittedText)
+        {
+            _log.Warning(
+                "Restart drain cannot resume session {SessionId} because the interrupted turn emitted text.",
+                _sessionId.Value);
+        }
+    }
+
     private void HandleToolPipelineStoppedForRestart(ToolPipelineStoppedForRestart stopped)
     {
-        if (!_execution.AcceptToolStop(stopped))
+        var action = _execution.ObserveToolStop(stopped);
+        if (action == ToolStopAction.Ignore)
             return;
 
-        if (stopped.Failure is { } failure)
+        if (action == ToolStopAction.FailTurn)
         {
-            _log.Error(failure, "The tool task failed during approval-only restart drain");
-            FailCurrentTurn("The tool task failed during restart drain.", failure, ErrorCategory.ToolFailure);
+            _log.Error(stopped.Failure, "The tool task failed during approval-only restart drain");
+            FailCurrentTurn("The tool task failed during restart drain.", stopped.Failure!, ErrorCategory.ToolFailure);
             return;
         }
 
@@ -3945,114 +3862,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         ClearActiveToolBatchTracking();
         TransitionTo(SessionPhase.Passivating);
     }
-
-    private void MarkRestartReminderEligible()
-    {
-        if (_state.PendingInputs.Count == 0)
-            return;
-
-        if (_turnEmittedText && _activeInputIds.Count > 0)
-        {
-            _log.Warning(
-                "Restart drain cannot resume session {SessionId} because the interrupted turn emitted text.",
-                _sessionId.Value);
-            return;
-        }
-
-        _restartInterruptionAt = _timeProvider.GetUtcNow();
-    }
-
-    private ReminderDefinition? BuildRestartReminder()
-    {
-        if (_restartInterruptionAt is not { } interruptedAt || _state.PendingInputs.Count == 0)
-            return null;
-
-        if (!TryGetRestartContext(out var context, out var reason))
-        {
-            _log.Warning(
-                "Restart drain cannot resume session {SessionId}: {Reason}.",
-                _sessionId.Value,
-                reason ?? "invalid stored authority");
-            return null;
-        }
-
-        if (context.ChannelType is not { } channelType)
-        {
-            _log.Warning(
-                "Restart drain cannot resume session {SessionId}: the turn has no channel type.",
-                _sessionId.Value);
-            return null;
-        }
-
-        return new ReminderDefinition
-        {
-            Id = ReminderIdGenerator.Generate("restart resume"),
-            Title = "Resume after daemon restart",
-            Instructions = RestartReminderInstruction,
-            Schedule = new ReminderSchedule
-            {
-                Type = ReminderScheduleType.OneShot,
-                FireAt = interruptedAt
-            },
-            Delivery = new ReminderDelivery
-            {
-                Kind = DeliveryKind.CurrentSession,
-                SessionId = _sessionId.Value,
-                OriginChannelType = channelType
-            },
-            DeliveryRequired = true,
-            Audience = context.Audience,
-            Boundary = context.Boundary,
-            CreatedBy = "system",
-            CreatedAt = interruptedAt,
-            UpdatedAt = interruptedAt,
-            ExpiresAt = interruptedAt + RestartReminderLifetime
-        };
-    }
-
-    private bool TryGetRestartContext(out TurnContext context, out string? reason)
-    {
-        context = null!;
-        TurnContext? first = null;
-        reason = "no pending input";
-        foreach (var pending in _state.PendingInputs)
-        {
-            if (!TurnContext.TryFromRecord(pending.TurnContext, out var candidate, out reason)
-                || candidate is null)
-                return false;
-
-            if (first is null)
-            {
-                first = candidate;
-                continue;
-            }
-
-            if (!HasSameRestartAuthority(first, candidate))
-            {
-                reason = "pending inputs have different authority";
-                context = first;
-                return false;
-            }
-        }
-
-        context = first!;
-        return first is not null;
-    }
-
-    private static bool HasSameRestartAuthority(TurnContext left, TurnContext right)
-        => left.SessionId == right.SessionId
-           && left.Audience == right.Audience
-           && left.Boundary == right.Boundary
-           && left.ChannelType == right.ChannelType
-           && left.RequesterSenderId == right.RequesterSenderId
-           && left.RequesterPrincipal == right.RequesterPrincipal
-           && left.Provenance == right.Provenance
-           && left.DefaultDeliveryTarget == right.DefaultDeliveryTarget
-           && left.RequestedDeliveryTarget == right.RequestedDeliveryTarget
-           && left.HasAdoptedContext == right.HasAdoptedContext
-           && left.HasThirdPartyAdoptedContext == right.HasThirdPartyAdoptedContext
-           && left.AdoptedSpeakerIds.SequenceEqual(right.AdoptedSpeakerIds, StringComparer.Ordinal)
-           && left.SupportsInteractiveApproval == right.SupportsInteractiveApproval;
 
     private void ClearBufferedMessagesForRestartDrain()
     {

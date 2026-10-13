@@ -76,6 +76,29 @@ read -r stop_span_start stop_span_end stop_line stop_column stop_end_column < <(
   ' "$stop_source_file"
 )
 
+read -r reap_span_start reap_span_end reap_line reap_column reap_end_column < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $method = "public bool ObserveReapReply(long epoch)";
+    $next_method = "public PassivationWork ReapCommitted";
+    $marker = "reap.AwaitingCommit = true";
+    $method_start = index($_, $method);
+    die "The reap reply method marker is missing or duplicated.\n"
+      if $method_start < 0 || index($_, $method, $method_start + 1) >= 0;
+    $method_end = index($_, $next_method, $method_start);
+    die "The reap commit method marker is missing or duplicated.\n"
+      if $method_end < 0 || index($_, $next_method, $method_end + 1) >= 0;
+    $start = index($_, $marker, $method_start);
+    $duplicate = $start < 0 ? -1 : index($_, $marker, $start + 1);
+    die "The reap commit guard marker is missing or duplicated.\n"
+      if $start < 0 || $start >= $method_end
+        || ($duplicate >= 0 && $duplicate < $method_end);
+    $start += length("reap.AwaitingCommit = ");
+    $line = 1 + (substr($_, 0, $start) =~ tr/\n//);
+    $column = $start - rindex(substr($_, 0, $start), "\n");
+    print "$start ", $start + length("true"), " $line $column ", $column + length("true"), "\n";
+  ' "$stop_source_file"
+)
+
 (
   cd "$test_project"
   dotnet stryker \
@@ -86,6 +109,7 @@ read -r stop_span_start stop_span_end stop_line stop_column stop_end_column < <(
     --mutate "Sessions/SessionModelContext.cs{$inspection_span_start..$inspection_span_end}" \
     --mutate "Sessions/SessionState.cs{$history_span_start..$history_span_end}" \
     --mutate "Sessions/Handlers/SessionExecutionLifetime.cs{$stop_span_start..$stop_span_end}" \
+    --mutate "Sessions/Handlers/SessionExecutionLifetime.cs{$reap_span_start..$reap_span_end}" \
     --output "$output_path" \
     --skip-version-check
 )
@@ -164,10 +188,26 @@ jq -e --arg source "$stop_source_file" \
   exit 1
 }
 
-jq -e --argjson count "$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count))" '
+expected_reap_count=1
+jq -e --arg source "$stop_source_file" \
+  --argjson line "$reap_line" \
+  --argjson first "$reap_column" --argjson last "$reap_end_column" \
+  --argjson count "$expected_reap_count" '
+  [(.files[$source].mutants // [])[]
+    | select(.status != "Ignored")
+    | select(.location.start.line == $line)
+    | select(.location.end.line == $line)
+    | select(.location.start.column >= $first and .location.end.column <= $last)] as $mutants
+  | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
+' "$report" > /dev/null || {
+  echo "Expected $expected_reap_count killed reap commit mutant on the selected expression." >&2
+  exit 1
+}
+
+jq -e --argjson count "$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count))" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count
 ' "$report" > /dev/null || {
-  echo "Expected exactly $((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count)) tested session reliability mutants." >&2
+  echo "Expected exactly $((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count)) tested session reliability mutants." >&2
   exit 1
 }
