@@ -1014,7 +1014,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             cancellationToken: TestContext.Current.CancellationToken);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        var mediaRef = Assert.Single(Assert.Single(completed).ModelInputMediaReferences);
+        var mediaRef = Assert.Single(Assert.Single(completed).Message.MediaReferences);
         Assert.Equal("image/png", mediaRef.MimeType.Value);
         Assert.Equal((int)MediaModality.Image, mediaRef.Modality);
         Assert.True(File.Exists(Path.Combine(dir.Path, SessionDirectoryHelper.MediaSubdirectory, mediaRef.RelativePath)));
@@ -1047,10 +1047,8 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             cancellationToken: TestContext.Current.CancellationToken);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        var mediaRef = Assert.Single(single.Result.ModelInputMediaReferences);
-        var persistedMediaRef = Assert.Single(single.Result.Message.MediaReferences);
-        Assert.Equal(mediaRef.RelativePath, persistedMediaRef.RelativePath);
-        Assert.Equal("image/png", persistedMediaRef.MimeType.Value);
+        var mediaRef = Assert.Single(single.Result.Message.MediaReferences);
+        Assert.Equal("image/png", mediaRef.MimeType.Value);
     }
 
     [Fact]
@@ -1103,7 +1101,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             cancellationToken: TestContext.Current.CancellationToken);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        Assert.Empty(Assert.Single(completed).ModelInputMediaReferences);
+        Assert.Empty(Assert.Single(completed).Message.MediaReferences);
     }
 
     [Fact]
@@ -1130,7 +1128,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             cancellationToken: TestContext.Current.CancellationToken);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        Assert.Empty(Assert.Single(completed).ModelInputMediaReferences);
+        Assert.Empty(Assert.Single(completed).Message.MediaReferences);
     }
 
     [Fact]
@@ -1160,7 +1158,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             cancellationToken: TestContext.Current.CancellationToken);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        Assert.Empty(Assert.Single(completed).ModelInputMediaReferences);
+        Assert.Empty(Assert.Single(completed).Message.MediaReferences);
     }
 
     /// <summary>
