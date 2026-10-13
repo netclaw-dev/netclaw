@@ -129,26 +129,29 @@ public sealed record SessionState
             : $"{evt.TurnContext.ChannelType ?? string.Empty}:{evt.TurnContext.RequesterSenderId?.Value ?? string.Empty}:{evt.SourceMessageId}";
 
     public SessionState Apply(TurnRecorded evt)
+        => Apply(evt, userAlreadyInHistory: false);
+
+    internal SessionState Apply(TurnRecorded evt, bool userAlreadyInHistory)
     {
-        var processedReminders = ProcessedReminderIds;
+        var closed = CloseInputs(evt.ConsumedInputIds);
+        var processedReminders = closed.ProcessedReminderIds;
         if (evt.SourceReminderId is { } reminderId && !string.IsNullOrEmpty(reminderId.Value))
             processedReminders = processedReminders.Add(reminderId);
 
-        // Background-job dedup/remove/prune is delegated to the single shared
-        // helper so the replay path here and the live turn-completion path in
-        // LlmSessionActor cannot drift.
-        return (this with
+        // Live history already has the user message. Replay can restore it by input ID.
+        var history = userAlreadyInHistory ? closed.History : closed.History.Add(evt.UserMessage);
+        return (closed with
         {
-            History = History.Add(evt.UserMessage).Add(evt.AssistantReply),
-            TurnCount = TurnCount + 1,
+            History = history.Add(evt.AssistantReply),
+            TurnCount = closed.TurnCount + 1,
             ProcessedReminderIds = processedReminders
         }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
     }
 
     /// <summary>
-    /// Single source of truth for per-turn background-job bookkeeping, shared by
-    /// the replay path (<see cref="Apply(TurnRecorded)"/>) and the live
-    /// turn-completion path (LlmSessionActor): dedup-records a delivery turn's
+    /// Single source of truth for per-turn background-job bookkeeping.
+    /// <see cref="Apply(TurnRecorded)"/> uses it for live and replay paths.
+    /// It dedup-records a delivery turn's
     /// job ID, removes the delivered entry, and prunes reaped entries that were
     /// surfaced in this turn's context block (so the agent learns of a reap
     /// exactly once instead of on every turn forever).

@@ -269,7 +269,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Recover<TurnRecorded>(evt =>
         {
             RestoreConsumedInputs(evt.ConsumedInputIds, evt.UserMessage);
-            ApplyTurnRecorded(evt);
+            // Consumed IDs identify restored history. Equal text is a legacy-only rule.
+            var userAlreadyInHistory = evt.ConsumedInputIds.Count > 0
+                                       || _state.FindLastUserMessage() == evt.UserMessage;
+            _state = _state.Apply(evt, userAlreadyInHistory);
             _toolWorkflow.CompleteTurn();
             _currentTurnContext = null;
             _activeToolWorkTask = null;
@@ -1915,22 +1918,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _inFlightDedup.CompleteReminder(evt.SourceReminderId);
             _inFlightDedup.CompleteBackgroundJob(evt.SourceBackgroundJobId);
-            _state = _state.CloseInputs(evt.ConsumedInputIds);
+            _state = _state.Apply(evt, userAlreadyInHistory: true);
             _activeInputIds.Clear();
             _turnEmittedText = false;
-
-            var processed = _state.ProcessedReminderIds;
-            if (evt.SourceReminderId is { } reminderId && !string.IsNullOrEmpty(reminderId.Value))
-            {
-                processed = processed.Add(reminderId);
-            }
-
-            _state = (_state with
-            {
-                History = _state.History.Add(evt.AssistantReply),
-                TurnCount = _state.TurnCount + 1,
-                ProcessedReminderIds = processed
-            }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
 
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
             MaybeSnapshot();
@@ -3113,21 +3103,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _inFlightDedup.CompleteReminder(evt.SourceReminderId);
             _inFlightDedup.CompleteBackgroundJob(evt.SourceBackgroundJobId);
-            _state = _state.CloseInputs(evt.ConsumedInputIds);
+            _state = _state.Apply(evt, userAlreadyInHistory: true);
             _activeInputIds.Clear();
-
-            var processed = _state.ProcessedReminderIds;
-            if (evt.SourceReminderId is { } reminderId && !string.IsNullOrEmpty(reminderId.Value))
-            {
-                processed = processed.Add(reminderId);
-            }
-
-            _state = (_state with
-            {
-                History = _state.History.Add(evt.AssistantReply),
-                TurnCount = _state.TurnCount + 1,
-                ProcessedReminderIds = processed
-            }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
 
             EmitOutput(new TextOutput(msg.Result.Output)
             {
@@ -3220,22 +3197,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             EligibleDeliveryTurnNumber = _deliveryRetry.EligibleTurnNumber
         };
-    }
-
-    private void ApplyTurnRecorded(TurnRecorded evt)
-    {
-        var lastUser = _state.FindLastUserMessage();
-        if (lastUser == evt.UserMessage)
-        {
-            _state = (_state with
-            {
-                History = _state.History.Add(evt.AssistantReply),
-                TurnCount = _state.TurnCount + 1
-            }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
-            return;
-        }
-
-        _state = _state.Apply(evt);
     }
 
     private void ApplyToolBatchStarted(ToolBatchStarted evt)
