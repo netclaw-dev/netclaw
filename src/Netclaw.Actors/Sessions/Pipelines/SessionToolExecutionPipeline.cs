@@ -34,7 +34,6 @@ namespace Netclaw.Actors.Sessions.Pipelines;
 /// </summary>
 internal sealed record ToolCallResult(
     SerializableChatMessage Message,
-    IReadOnlyList<SerializableMediaReference> ModelInputMediaReferences,
     IReadOnlyList<FileAttachmentInfo> FileAttachments,
     IReadOnlyList<CompletedSubAgentRun> CompletedSubAgentRuns,
     IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings,
@@ -391,7 +390,7 @@ internal sealed class SessionToolExecutionPipeline
                 Content = rejection.Message,
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
-            }, [], [], [], [], authorizationAttemptId, FailureCode: rejection.DenyReason,
+            }, [], [], [], authorizationAttemptId, FailureCode: rejection.DenyReason,
                 Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
         }
 
@@ -554,7 +553,6 @@ internal sealed class SessionToolExecutionPipeline
                     [],
                     [],
                     [],
-                    [],
                     authorizationAttemptId,
                     FailureCode: SessionProtocol.ToolResultOutput.AccessDeniedFailureCode,
                     Receipt: new ToolInvocationReceipt.AuthorizationDenied(),
@@ -617,7 +615,7 @@ internal sealed class SessionToolExecutionPipeline
                 Content = delivery.Content,
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
-            }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
+            }, context.Outputs.FileAttachments, completedRuns, acceptedFindings,
                 authorizationAttemptId,
                 Receipt: delivery.Receipt,
                 ExposureRequest: delivery.NativeTool is { } nativeTool
@@ -641,7 +639,7 @@ internal sealed class SessionToolExecutionPipeline
                 Content = ToolAuthorizer.ConsentWithoutBridgeResult(tc.Name),
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
-            }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
+            }, context.Outputs.FileAttachments, completedRuns, acceptedFindings,
                 authorizationAttemptId,
                 FailureCode: SessionProtocol.ToolResultOutput.AccessDeniedFailureCode,
                 Receipt: new ToolInvocationReceipt.AuthorizationDenied());
@@ -785,7 +783,6 @@ internal sealed class SessionToolExecutionPipeline
 
         return new ToolCallResult(
             message,
-            modelInputMaterialization.MediaReferences,
             context.Outputs.FileAttachments,
             completedRuns,
             acceptedFindings,
@@ -981,7 +978,7 @@ internal sealed class SessionToolExecutionPipeline
                 OutputLogPath = started.OutputLogPath
             };
             return new ToolCallResult(
-                resultMessage, [], [], [], [], context.Approval.AuthorizationAttemptId, jobInfo);
+                resultMessage, [], [], [], context.Approval.AuthorizationAttemptId, jobInfo);
         }
         catch (Exception ex)
         {
@@ -995,7 +992,7 @@ internal sealed class SessionToolExecutionPipeline
                 Name = tc.Name
             };
             return new ToolCallResult(
-                errorMessage, [], [], [], [], context.Approval.AuthorizationAttemptId);
+                errorMessage, [], [], [], context.Approval.AuthorizationAttemptId);
         }
     }
 

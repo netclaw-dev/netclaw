@@ -389,8 +389,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
         CommandDistillationAckNoOp();
-        CommandJobReapResolved();
-        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<DeliveryFailed>(HandleDeliveryFailedWhenReady);
 
         // Approval click for a tool batch that parked while the session was
@@ -634,29 +632,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FailCurrentTurn(errorMessage, timeoutCause, ErrorCategory.Timeout);
         });
 
-        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
-        Command<RoutedSkillExecutionCompleted>(HandleRoutedSkillExecutionCompleted);
-        Command<RoutedSkillExecutionFailed>(msg =>
-            FailCurrentTurn(
-                $"Skill '/{msg.SkillName}' routed to subagent '{msg.SubagentName}' failed: {msg.ErrorMessage}",
-                new InvalidOperationException(msg.ErrorMessage),
-                ErrorCategory.ToolFailure));
-        Command<RoutedSkillSubAgentActivity>(msg =>
-        {
-            EmitOutput(new SubAgentOutput
-            {
-                SessionId = _sessionId,
-                TimestampMs = msg.TimestampMs,
-                AgentName = msg.AgentName,
-                Phase = msg.Phase,
-                ToolCount = msg.ToolCount,
-                Success = msg.Success ?? false,
-                Duration = msg.Duration ?? TimeSpan.Zero,
-                FindingsCount = msg.FindingsCount
-            }, OutputFilter.ToolCalls);
-        });
         CommandDistillationAckNoOp();
-        CommandJobReapResolved();
     }
 
     private void HandleLlmResponseReceived(LlmResponseReceived msg)
@@ -880,7 +856,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<ProcessingWatchdogExpired>(HandleCompactionWatchdogExpired);
-        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
 
         Command<CompactionTriggered>(HandleCompactionTriggered);
 
@@ -889,7 +864,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionWorkFailed>(HandleCompactionWorkFailed);
 
         CommandDistillationAckNoOp();
-        CommandJobReapResolved();
     }
 
     private void HandleCompactionWatchdogExpired(ProcessingWatchdogExpired msg)
@@ -1134,9 +1108,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     failure: ex => new JobReapResolved(reapEpoch, 0, ex));
         }
 
-        // Every phase accepts the reap reply. The journal commit can advance only the current stop attempt.
-        CommandJobReapResolved();
-
         Command<SessionDistillationCompleted>(msg =>
         {
             _log.Info("Passivation distillation complete, finalizing");
@@ -1208,7 +1179,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<ProcessingWatchdogExpired>(_ => { });
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
-        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
 
         // Timeout — stop even if distillation didn't finish
         Command<PassivationTimeout>(_ =>
@@ -1314,19 +1284,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void CommandDistillationAckNoOp()
     {
         Command<AcceptedDistillationProposalsRecorded>(_ => { });
-    }
-
-    // Single handler for the reap Ask reply, registered in EVERY non-terminal
-    // phase (Ready/Processing/Compacting/Passivating) so the reply can never
-    // dead-letter regardless of which phase the session is in when it lands —
-    // passivation may have been aborted back to Ready, moved on to
-    // Processing/Compacting, or still be in Passivating. Centralizing here means
-    // a future phase cannot silently drop the reply by forgetting a bespoke
-    // registration. Epoch-correlated so a late reply from a superseded reap
-    // request cannot resolve a newer handshake.
-    private void CommandJobReapResolved()
-    {
-        Command<JobReapResolved>(HandleJobReapResolved);
     }
 
     private void HandleJobReapResolved(JobReapResolved msg)
@@ -1510,7 +1467,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 setWorkingDirectoryAvailable: false);
             Self.Tell(new ToolExecutionSingleCompleted(new ToolCallResult(
                 message,
-                [],
                 [],
                 [],
                 [],
@@ -2003,6 +1959,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void CommandCommonMessages()
     {
+        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
+        // Every phase accepts a late reap reply. The epoch gate protects a newer stop attempt.
+        Command<JobReapResolved>(HandleJobReapResolved);
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
         Command<ToolPipelineStoppedForRestart>(HandleToolPipelineStoppedForRestart);
         Command<RestartModelGraceExpired>(HandleRestartModelGraceExpired);
