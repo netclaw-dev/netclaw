@@ -53,6 +53,7 @@ using Netclaw.Embeddings;
 using Netclaw.Search;
 using Netclaw.Tools;
 using Netclaw.Security;
+using Netclaw.Security.Skills;
 
 // Handled first, before any directory creation, lock-file acquisition, or host startup:
 // `netclawd --version`/`-v` must print the version and exit rather than booting a real
@@ -929,6 +930,19 @@ static IReadOnlyList<string> ConfigureDaemonServices(
     services.AddHostedService<ToolIndexUpdater>();
 
     // The runner owns one pass. The actor owns startup, timers, and shared requests.
+    services.AddSingleton<ManagedPluginStateStore>();
+    services.AddSingleton<IGitSkillPluginAcquirer>(sp => new GitSkillPluginAcquirer(
+        paths,
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ISkillContentScanner>()));
+    services.AddSingleton(sp => new ManagedPluginSyncParticipant(
+        skillFeedsConfig,
+        paths,
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ManagedPluginStateStore>(),
+        sp.GetRequiredService<IGitSkillPluginAcquirer>(),
+        sp.GetRequiredService<IOperationalNotificationSink>(),
+        sp.GetRequiredService<ILogger<ManagedPluginSyncParticipant>>()));
     services.AddSingleton<ServerFeedSkillSyncService>();
     services.AddSingleton<IServerFeedSkillSyncRunner>(
         sp => sp.GetRequiredService<ServerFeedSkillSyncService>());

@@ -76,6 +76,7 @@ internal static class DaemonToolPathPolicyFactory
             sqlitePath,
             ..sqliteSidecars,
             ..processControlPaths,
+            paths.ManagedGitSkillsDirectory,
             paths.ToolingShadowDirectory,
             ..feedSyncStatePaths,
             ..credentialLocations,
@@ -95,6 +96,7 @@ internal static class DaemonToolPathPolicyFactory
             ..processControlPaths,
             paths.ToolingShadowDirectory,
             ..credentialLocations,
+            paths.ManagedGitSkillsDirectory,
         ];
         // Shell text that names a read-denied path is denied, whatever the
         // program. A shell write to a config file meets the write list.
