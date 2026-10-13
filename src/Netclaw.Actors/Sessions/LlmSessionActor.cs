@@ -1941,18 +1941,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ContinueIncomingUserMessage(SendUserMessage cmd)
     {
+        var admittedId = cmd.AdmittedInputId
+            ?? throw new InvalidOperationException("The accepted input has no admission ID.");
+        var admitted = _state.PendingInputs.FirstOrDefault(input => input.InputId == admittedId)
+            ?? throw new InvalidOperationException($"Journal input {admittedId} is missing before turn activation.");
+        if (!TurnContext.TryFromRecord(admitted.TurnContext, out var turnContext, out var reason)
+            || turnContext is null)
+            throw new InvalidOperationException($"Journal input {admittedId} has invalid authority: {reason}");
+
         _turnEmittedText = false;
         _activeInputIds.Clear();
-        if (cmd.AdmittedInputId is { } admittedId)
-            _activeInputIds.Add(admittedId);
+        _activeInputIds.Add(admittedId);
         _toolWorkflow.StartNewTurn();
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
-        BindTurnTelemetry(cmd.Source);
-        _currentTurnContext = TurnContext.FromMessageSource(
-            _sessionId,
-            _activeTurnId ?? new Protocol.TurnId(IdGen.ShortId()),
-            cmd.Source);
+        BindTurnTelemetry(cmd.Source, turnContext.TurnId);
+        _currentTurnContext = turnContext;
         _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(_currentTurnContext);
         PersistAdoptedContextIfNeeded(cmd.Source);
 
@@ -3728,12 +3732,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TimeSpan? Duration,
         int FindingsCount) : INoSerializationVerificationNeeded;
 
-    private void BindTurnTelemetry(MessageSource? source)
+    private void BindTurnTelemetry(MessageSource? source, Protocol.TurnId turnId)
     {
         var sourceMessageId = source?.MessageId;
         _activeMessageId = sourceMessageId;
-        _activeTurnId = source?.TurnId
-            ?? new Protocol.TurnId(sourceMessageId ?? IdGen.ShortId());
+        _activeTurnId = turnId;
         _activeChannelType = source?.ChannelType;
 
         CrashContextSnapshot.Update(
