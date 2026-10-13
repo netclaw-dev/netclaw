@@ -187,7 +187,7 @@ Stryker changes `reap.AwaitingCommit = true` to `reap.AwaitingCommit = false`.
 The linked `SessionExecutionLifetimeStopPolicyTests` source kills this mutant when a duplicate reply arrives before journal commit.
 The script also selects the replay check in `SessionInputFlow.DrainBufferedBatch`.
 Stryker changes `!item.IsReplay` to `item.IsReplay`.
-The linked `SessionInputFlowTests` source kills this mutant when fresh buffered input must start a turn after replay.
+The linked `SessionInputFlowTests` source kills this mutant when fresh buffered input must start a new turn.
 The linked `ProcessingWatchdogTests` source supplies the existing timer fake without an actor test host.
 The selectors reject missing or repeated source markers before Stryker starts.
 The gate requires one killed mutant in each single-expression span and two killed history mutants.
