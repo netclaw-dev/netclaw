@@ -63,7 +63,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly SessionToolExecutionPipeline? _toolExecutionPipeline;
     private readonly Tools.ToolRegistry? _toolRegistry;
     private readonly IToolApprovalService? _approvalService;
-    private readonly ApprovalChannel _approvalChannel = new();
     private readonly IMemoryExtractor _memoryExtractor;
     private readonly IMemoryRecallCoordinator _memoryRecallCoordinator;
     private readonly IMemoryCheckpointSink _memoryCheckpointSink;
@@ -84,13 +83,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // In-flight reminder/background-job dedup (transient; rebuilt from journal on recovery).
     private readonly InFlightTurnDedup _inFlightDedup = new();
     private readonly SessionSubscriberManager _subscribers = new();
-    private readonly ToolApprovalState _toolApprovals = new();
-    // Live-only coordination for the currently executing streamed tool batch.
-    // Durable recovery derives unanswered calls from _state.History.
-    private readonly ActiveToolBatchTracker _activeToolBatch = new();
+    private readonly SessionToolWorkflow _toolWorkflow = new();
     private MessageSource? _currentTurnSource;
     private TurnContext? _currentTurnContext;
-    private readonly ManagedTemporaryCorrectionState _sessionManagedTemporaryCorrections = new();
     private bool _processingStateActive;
     private readonly ToolRegistry? _fullRegistry;
     private readonly ToolAccessPolicy? _toolAccessPolicy;
@@ -294,18 +289,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             RestoreConsumedInputs(evt.ConsumedInputIds, evt.UserMessage);
             ApplyTurnRecorded(evt);
-            _toolApprovals.ClearCalls();
-            ClearApprovalTurnState();
-            ClearActiveToolBatchTracking();
+            _toolWorkflow.CompleteTurn();
+            _currentTurnContext = null;
+            _activeToolWorkTask = null;
+            _toolRestartStopRequested = false;
         });
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
         Recover<SessionBackgroundJobsReaped>(evt => _state = _state.Apply(evt));
         Recover<SessionCompacted>(evt =>
         {
             _state = _state.Apply(evt);
-            _toolApprovals.ClearCalls();
-            ClearApprovalTurnState();
-            ClearActiveToolBatchTracking();
+            _toolWorkflow.CompleteTurn();
+            _currentTurnContext = null;
+            _activeToolWorkTask = null;
+            _toolRestartStopRequested = false;
         });
         Recover<ToolBatchStarted>(evt =>
         {
@@ -449,18 +446,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // rehydrates the session and re-drives the parked batch, the same
             // path that already covers daemon restarts. Keeping the actor in
             // memory while a human decides buys nothing but resident memory.
-            if (_toolApprovals.PendingCount > 0)
+            if (_toolWorkflow.HasPendingApprovals())
             {
                 _log.Info(
                     "Session idle with {PendingApprovalCount} journaled approval(s) outstanding; passivating — an approval response will rehydrate and resume",
-                    _toolApprovals.PendingCount);
+                    _toolWorkflow.PendingDiagnosticCount);
             }
 
-            if (_toolApprovals.ResolvedCount > 0)
+            if (_toolWorkflow.ShouldAbandonResolvedForIdle())
             {
                 _log.Info(
                     "Session idle with {ResolvedApprovalCount} resolved approval(s) but no completed tool result; abandoning parked tool batch before passivation",
-                    _toolApprovals.ResolvedCount);
+                    _toolWorkflow.ResolvedDiagnosticCount);
                 var abandoned = BuildToolBatchAbandonedEvent(
                     "Tool call was not completed — the session became idle before the approved action completed.");
                 Persist(abandoned, evt =>
@@ -585,7 +582,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _watchdog.Stop(Timers);
             CancelAndDisposeToolExecutionCts();
             _activeToolWorkTask = null;
-            _activeToolBatch.MarkExecutionTaskCompleted();
+            _toolWorkflow.MarkExecutionTaskCompleted();
             TryCompleteStreamedToolBatch();
         });
 
@@ -593,7 +590,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _watchdog.Stop(Timers);
             CancelAndDisposeToolExecutionCts();
-            _activeToolBatch.DiscardPendingMedia();
+            _toolWorkflow.DiscardPendingMedia();
             TurnLog().Error(msg.Cause, "turn_tool_execution_failed");
 
             const string errorMessage = "I encountered an error executing a tool. Please try again.";
@@ -606,10 +603,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // between the tool_calls message and the rest of its results, which strict
             // OpenAI-compatible providers (DeepSeek/Qwen/vLLM) reject on every later
             // turn with 400 "insufficient tool messages following tool_calls".
-            if (ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null)
+            if (_toolWorkflow.PlanFailedRunAbandonment(_state, _sessionId, NowMs()) is { } abandoned)
             {
-                var abandoned = BuildToolBatchAbandonedEvent(
-                    "Tool call was not completed — the tool run failed.");
                 Persist(abandoned, evt =>
                 {
                     ApplyToolBatchAbandoned(evt);
@@ -1671,38 +1666,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         List<FunctionCallContent> toolCalls,
         UsageDetails? usage)
     {
-        // Model produced tool calls — reset empty-response guards so they can
-        // fire again if the model stalls later in the chain.
-        _turnState.ResetEmptyResponseGuards();
-
-        // Normalize the LLM-facing alias back to the canonical name BEFORE
-        // anything reads tc.Name. The LLM sees and emits sanitized names
-        // for MCP tools (e.g. `notion__notion-search`); every internal
-        // consumer downstream — audit log, ToolCallOutput rendered to the
-        // user, duplicate-call fingerprint, persisted assistant message,
-        // approval gate — keys on canonical (e.g. `notion/notion-search`).
-        // Doing the conversion here keeps each consumer free of name-form
-        // awareness; the outbound boundary (SessionMessageAssembler) does
-        // the reverse mapping when re-serializing history to the wire.
-        if (_toolRegistry is not null)
-        {
-            _toolRegistry.CanonicalizeToolCalls(lastMessage, toolCalls);
-        }
-
         var toolExecutor = _toolExecutor
             ?? throw new InvalidOperationException("A tool-call response requires a tool executor.");
-        var preparedCycleBatch = ToolCycleSignatureFactory.Prepare(toolCalls, toolExecutor);
-        var cycleDecision = _turnState.EvaluateBeforeDispatch(preparedCycleBatch.Action);
-        if (cycleDecision.Kind != ToolCycleDecisionKind.Execute)
+        var prepared = _toolWorkflow.PrepareFreshBatch(
+            lastMessage, toolCalls, _toolRegistry, toolExecutor, _turnState);
+        if (prepared.Decision.Kind != ToolCycleDecisionKind.Execute)
         {
             Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
                 "Tool cycle decision kind={DecisionKind} period={Period} repetitions={Repetitions}",
-                cycleDecision.Kind,
-                cycleDecision.Period,
-                cycleDecision.Repetitions);
+                prepared.Decision.Kind,
+                prepared.Decision.Period,
+                prepared.Decision.Repetitions);
         }
 
-        if (cycleDecision.Kind == ToolCycleDecisionKind.Stop)
+        if (prepared is PreparedFreshBatch.Stop)
         {
             RecordIntermediateUsage(usage);
             _state = _state.AddSystemNudge(ToolCycleMessages.Final);
@@ -1710,18 +1687,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        // Persist tool calls exactly as the executor will interpret them (schema-aware
-        // meta extraction), so recorded history matches what actually runs — a near-miss
-        // meta key is stripped + captured in MetaJson, not left raw with an empty meta.
-        var assistantMsg = ChatMessageConverter.FromAiMessage(
-            lastMessage,
-            interpretToolCall: _toolExecutor is { } toolExec
-                ? tc =>
-                {
-                    var (meta, cleaned) = toolExec.PrepareToolCall(tc);
-                    return (meta, cleaned.Arguments);
-                }
-        : null);
+        var ready = (PreparedFreshBatch.Ready)prepared;
         var userMsg = _state.FindLastUserMessage() ?? new SerializableChatMessage
         {
             Role = Protocol.ChatRole.User,
@@ -1732,7 +1698,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             SessionId = _sessionId,
             UserMessage = userMsg,
-            AssistantMessage = assistantMsg,
+            AssistantMessage = ready.AssistantMessage,
             StartedAtMs = NowMs(),
             ConsumedInputIds = _activeInputIds.ToArray()
         }, evt =>
@@ -1743,10 +1709,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ApplyToolBatchStarted(evt);
             EmitAndDispatchToolBatch(
                 lastMessage,
-                toolCalls,
+                ready.Calls,
                 usage,
-                preparedCycleBatch,
-                cycleDecision);
+                ready.Cycle,
+                ready.Decision);
         });
     }
 
@@ -1818,7 +1784,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void EmitToolCycleCorrection(IReadOnlyList<FunctionCallContent> toolCalls)
     {
-        _activeToolBatch.Start(toolCalls, preparedCycleBatch: null);
+        _toolWorkflow.StartDispatch(toolCalls, cycle: null, executor: null, recordCompletedCycle: false);
         foreach (var call in toolCalls)
         {
             var receipt = new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle);
@@ -1847,29 +1813,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     /// <summary>
     /// Dispatches a tool batch to <see cref="SessionToolExecutionPipeline"/>.
-    /// Factored out of <see cref="HandleToolCallResponse"/> so the post-approval
-    /// re-drive path (<see cref="RedriveToolBatchForApproval"/>) runs the exact
-    /// same dispatch logic — there is no divergent second copy.
+    /// Both the fresh batch and <see cref="HandleToolInteractionResponseWhenIdle"/>
+    /// use this task boundary.
+    /// The workflow supplies exact-call consent from the original prompt.
     /// </summary>
-    /// <param name="oneTimeApprovalPreSeed">
-    /// Optional map of <c>callId → one-time authorization keys</c>. Each value
-    /// binds the approved patterns and exact approval-candidate snapshot. The
-    /// pipeline pre-seeds the bypass before the first attempt, so an
-    /// <c>ApprovedOnce</c> re-drive cannot emit a duplicate prompt or authorize
-    /// a newly unsafe candidate. The keys apply only to that call id.
-    /// </param>
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
-        IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
-        IReadOnlyDictionary<string, RefusalKind>? decisionOverride = null,
-        IReadOnlyDictionary<string, string>? managedTemporaryDenialDirectories = null,
-        IReadOnlyDictionary<string, AuthorizationAttemptId>? authorizationAttemptIds = null,
+        ApprovalRedrivePlan? approvalPlan = null,
         PreparedToolCycleBatch? preparedCycleBatch = null,
         bool recordCompletedCycle = true)
     {
-        if (recordCompletedCycle && preparedCycleBatch is null && _toolExecutor is not null)
-            preparedCycleBatch = ToolCycleSignatureFactory.Prepare(toolCalls, _toolExecutor);
-        _activeToolBatch.Start(toolCalls, preparedCycleBatch);
+        _toolWorkflow.StartDispatch(toolCalls, preparedCycleBatch, _toolExecutor, recordCompletedCycle);
 
         // The pipeline sends each result before it signals batch completion.
         TurnLog().Info("turn_tool_call_batch count={Count} tools={Tools}",
@@ -1929,33 +1883,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         };
         var pipeline = _toolExecutionPipeline
             ?? throw new InvalidOperationException("Tool batch dispatch requires tool execution infrastructure.");
-        var batch = new SessionToolBatch(turnContext, runEnvironment)
-        {
-            ToolCalls = toolCalls,
-            DefaultTimeout = new ToolExecutionTimeout(toolExecutionTimeout),
-            ReplyTo = self,
-            EmitSubAgentOutput = emitSubAgentOutput,
-            ApprovalRequests = new ToolApprovalRequests(
-                _approvalChannel,
-                request => self.Tell(request),
-                new ToolExecutionTimeout(Timeout.InfiniteTimeSpan)),
-            BackgroundJobs = backgroundJobs,
-            SetWorkingDirectoryAvailable = setWorkingDirectoryAvailable,
-            CanDeclareWorkingDirectory = setWorkingDirectoryTool is null
-                ? null
-                : setWorkingDirectoryTool.CanDeclare,
-            StreamResults = true,
-            OneTimeApprovalPreSeed = oneTimeApprovalPreSeed
-                ?? new Dictionary<string, IReadOnlyList<string>>(),
-            DecisionOverrides = decisionOverride
-                ?? new Dictionary<string, RefusalKind>(),
-            ManagedTemporaryDenialDirectories = managedTemporaryDenialDirectories
-                ?? new Dictionary<string, string>(),
-            AuthorizationAttemptIds = authorizationAttemptIds
-                ?? new Dictionary<string, AuthorizationAttemptId>(),
-            ManagedTemporaryCorrections = _sessionManagedTemporaryCorrections.Snapshot(),
-            CancellationToken = toolExecutionCt
-        };
+        var batch = _toolWorkflow.CreateBatch(
+            turnContext,
+            runEnvironment,
+            toolCalls,
+            new ToolExecutionTimeout(toolExecutionTimeout),
+            self,
+            emitSubAgentOutput,
+            request => self.Tell(request),
+            backgroundJobs,
+            setWorkingDirectoryAvailable,
+            setWorkingDirectoryTool is null ? null : setWorkingDirectoryTool.CanDeclare,
+            approvalPlan,
+            toolExecutionCt);
 
         _activeToolWorkTask = pipeline.ExecuteAsync(batch);
     }
@@ -2169,32 +2109,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // orphaned tool_use blocks before the new turn's LLM call: an assistant
         // tool_use with no matching tool_result is rejected by the provider
         // API, which would otherwise wedge every subsequent turn.
-        if (_toolApprovals.PendingCount > 0)
+        if (_toolWorkflow.PlanNewInputAbandonment(_state, _sessionId, NowMs()) is { } abandoned)
         {
-            _toolApprovals.MarkAbandoning();
-            var abandoned = BuildToolBatchAbandonedEvent();
-            Persist(abandoned, evt =>
-            {
-                ApplyToolBatchAbandoned(evt);
-                AdmitInput(cmd, ContinueIncomingUserMessage);
-            });
-            return;
-        }
-
-        if (_toolApprovals.ResolvedCount > 0)
-        {
-            var abandoned = BuildResolvedToolBatchInterruptedByRestartEvent();
-            Persist(abandoned, evt =>
-            {
-                ApplyToolBatchAbandoned(evt);
-                AdmitInput(cmd, ContinueIncomingUserMessage);
-            });
-            return;
-        }
-
-        if (HasInterruptedToolBatchAfterRecovery())
-        {
-            var abandoned = BuildInterruptedToolBatchAfterRecoveryEvent();
             Persist(abandoned, evt =>
             {
                 ApplyToolBatchAbandoned(evt);
@@ -2287,7 +2203,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _activeInputIds.Clear();
         if (cmd.AdmittedInputId is { } admittedId)
             _activeInputIds.Add(admittedId);
-        _sessionManagedTemporaryCorrections.Clear();
+        _toolWorkflow.StartNewTurn();
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
         BindTurnTelemetry(cmd.Source);
@@ -2295,7 +2211,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _sessionId,
             _activeTurnId ?? new Protocol.TurnId(IdGen.ShortId()),
             cmd.Source);
-        _toolApprovals.StartTurn(_currentTurnContext);
         _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(_currentTurnContext);
         PersistAdoptedContextIfNeeded(cmd.Source);
 
@@ -2375,7 +2290,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _currentTurnSource = cmd.Source;
         _currentTurnContext = firstContext;
         BindTurnTelemetry(firstContext);
-        _toolApprovals.StartTurn(firstContext);
+        _toolWorkflow.StartTurn();
         _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(firstContext);
         _inFlightDedup.ReserveReminder(cmd.Source!.ReminderId);
         SetSystemPrompt();
@@ -3612,58 +3527,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     private void ApplyToolBatchStarted(ToolBatchStarted evt)
-    {
-        ApplyToolBatchHistory(evt);
-        RestoreActiveToolBatchFrom(evt);
-    }
-
-    private void ApplyToolBatchHistory(ToolBatchStarted evt)
-    {
-        if (_state.FindLastUserMessage() != evt.UserMessage)
-            _state = _state with { History = _state.History.Add(evt.UserMessage) };
-
-        if (!_state.History.Contains(evt.AssistantMessage))
-            _state = _state with { History = _state.History.Add(evt.AssistantMessage) };
-    }
-
-    private void RestoreActiveToolBatchFrom(ToolBatchStarted evt)
-    {
-        _activeToolBatch.Start(
-            evt.AssistantMessage,
-            ParkedToolBatchHistory.FindToolResultsFor(_state.History, evt.AssistantMessage));
-    }
+        => _state = _toolWorkflow.ApplyBatchStarted(_state, evt);
 
     private void ApplyToolCallRecorded(ToolCallRecorded evt)
-        => _state = _activeToolBatch.ApplyRecordedResult(_state, evt.ToolResult);
+        => _state = _toolWorkflow.ApplyRecordedResult(_state, evt.ToolResult);
 
     private void HandleToolInteractionRequestDispatch(ToolInteractionRequestDispatch dispatch)
     {
         var msg = dispatch.Request;
-        var evt = new ToolApprovalRequested
-        {
-            SessionId = _sessionId,
-            CallId = msg.CallId.Value,
-            AuthorizationAttemptId = msg.AuthorizationAttemptId,
-            ToolName = msg.ToolName.Value,
-            Patterns = msg.Patterns,
-            CandidateVerbs = msg.CandidateVerbs,
-            Audience = _currentTurnContext?.Audience ?? CurrentTurnAudience(),
-            Boundary = _currentTurnContext?.Boundary ?? _currentTurnSource?.Boundary,
-            ChannelType = _currentTurnContext?.ChannelType?.ToWireValue() ?? _currentTurnSource?.ChannelType.ToWireValue(),
-            SupportsInteractiveApproval = _currentTurnContext?.SupportsInteractiveApproval
-                                          ?? _currentTurnSource?.ChannelType.SupportsInteractiveApproval(),
-            RequesterSenderId = msg.RequesterSenderId,
-            RequesterPrincipal = msg.RequesterPrincipal,
-            HasThirdPartyAdoptedContext = msg.HasThirdPartyAdoptedContext,
-            AdoptedSpeakerIds = msg.AdoptedSpeakerIds,
-            Cwd = msg.Cwd,
-            RepositoryCommonDirectory = msg.RepositoryCommonDirectory,
-            OptionKeys = msg.Options.Select(o => o.Key.Value).ToArray(),
-            Candidates = msg.Candidates,
-            TurnContext = _currentTurnContext?.ToRecord(),
-            ManagedTemporaryDirectory = dispatch.ManagedTemporaryDirectory,
-            RequestedAtMs = NowMs()
-        };
+        var evt = _toolWorkflow.CreateApprovalRequest(
+            dispatch, _sessionId, _currentTurnContext, _currentTurnSource,
+            CurrentTurnAudience(), NowMs());
 
         if (!dispatch.PersistApprovalState)
         {
@@ -3688,7 +3562,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ApplyToolApprovalRequested(ToolApprovalRequested evt, bool persistApprovalState)
     {
-        var pending = _toolApprovals.Request(
+        var pending = _toolWorkflow.ApplyApprovalRequested(
             evt,
             persistApprovalState,
             recovered: _phase.Current == SessionPhase.Recovering);
@@ -3710,48 +3584,28 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 restoreFailure);
     }
 
-    private bool MarkApprovalRedrive(PendingToolInteraction pending)
-    {
-        if (!_toolApprovals.MarkRedriving(pending))
-            return false;
-
-        _currentTurnContext = pending.TurnContext;
-        return true;
-    }
-
-    private void MarkApprovalRunningAfterRedrive() => _toolApprovals.MarkRunningAfterRedrive();
-
     private void ClearApprovalTurnState()
     {
-        _sessionManagedTemporaryCorrections.Clear();
-        _toolApprovals.ClearTurn();
+        _toolWorkflow.ClearApprovalTurn();
         _currentTurnContext = null;
     }
 
     private void ApplyToolApprovalResolved(ToolApprovalResolved evt)
-    {
-        _toolApprovals.Resolve(evt.CallId, ConsentAnswerCodec.FromJournalText(evt.Decision), out _);
-    }
+        => _toolWorkflow.ApplyResolvedResponse(evt);
 
     private void ApplyToolBatchAbandoned(ToolBatchAbandoned evt)
     {
-        foreach (var result in evt.ToolResults)
-            ApplyToolCallRecorded(new ToolCallRecorded
-            {
-                SessionId = evt.SessionId,
-                ToolResult = result,
-                RecordedAtMs = evt.AbandonedAtMs
-            });
-        _toolApprovals.ClearCalls();
-        ClearApprovalTurnState();
-        ClearActiveToolBatchTracking();
+        _state = _toolWorkflow.ApplyAbandonment(_state, evt);
+        _currentTurnContext = null;
+        _activeToolWorkTask = null;
+        _toolRestartStopRequested = false;
     }
 
     private void ClearActiveToolBatchTracking()
     {
         _activeToolWorkTask = null;
         _toolRestartStopRequested = false;
-        _activeToolBatch.Clear();
+        _toolWorkflow.ClearCompletedBatch();
     }
 
     private void MaybeSnapshot()
@@ -3765,10 +3619,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // SessionSnapshot intentionally excludes parked approval state. Writing a
         // snapshot while an assistant tool_use is unanswered would let recovery
         // skip the journal event that rehydrates pending approval context.
-        if (_toolApprovals.PendingCount > 0
-            || _toolApprovals.ResolvedCount > 0
-            || _state.PendingInputs.Count > 0
-            || ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null)
+        if (_state.PendingInputs.Count > 0 || !_toolWorkflow.AllowsSnapshot(_state))
         {
             _log.Info("Skipping snapshot while a durable input or approval batch is unresolved");
             return;
@@ -3874,15 +3725,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }, OutputFilter.Usage);
     }
 
-    private bool HasApprovalHistory
-        => _toolApprovals.ResolvedCount > 0
-        || ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null;
-
-    /// <summary>
-    /// Emits the channel-visible "approval prompt expired" notice. Used when a
-    /// tool interaction response cannot be honored — fail loud instead of
-    /// silently dropping the click (constitution: no silent fallbacks).
-    /// </summary>
     private void EmitExpiredPromptNotice()
         => EmitOutput(new TextOutput(
             "That approval prompt has expired — the session moved on or restarted. "
@@ -3890,104 +3732,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             SessionId = _sessionId
         }, OutputFilter.Text);
-
-    /// <summary>
-    /// Classifies why a tool-interaction response could not be matched to a
-    /// pending interaction. Intent is operational triage: the same expired
-    /// notice ships to the channel either way, but the log line tells the
-    /// operator whether the click was redundant (already resolved or completed)
-    /// or genuinely unknown (silent-drop suspect).
-    /// </summary>
-    private string ClassifyUnknownApprovalCall(string callId)
-    {
-        if (_toolApprovals.HasResolved(callId))
-            return "already_resolved";
-
-        if (ParkedToolBatchHistory.HasToolResult(_state.History, callId))
-            return "already_completed";
-
-        if (ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, callId) is not null)
-            return "orphaned_assistant_tool_use";
-
-        return "unknown";
-    }
-
-    /// <summary>
-    /// Shared authorization and grant-persistence for a tool-approval response.
-    /// Used by both the live-<c>Processing</c> handler and the idle re-drive
-    /// handler so the requester check and grant-scope rules stay in lockstep.
-    /// Returns the decision, or null when the responder is not the requesting
-    /// user — a rejection notice has already been emitted in that case. On a
-    /// non-null return means authorization succeeded; the caller is
-    /// responsible for journaling <see cref="ToolApprovalResolved"/>.
-    /// </summary>
-    private async Task<(ConsentAnswer? Answer, string? NackReason)> AuthorizeApprovalResponseAsync(
-        PendingToolInteraction pending,
-        ToolInteractionResponse msg,
-        bool persistApprovalGrant)
-    {
-        if (!TryGetApprovalAuthority(pending, out var requesterPrincipal, out var requesterSenderId, out var authorityFailure))
-        {
-            _log.Warning(
-                "Ignoring tool interaction response for call {CallId}: approval authority context is not recoverable ({Reason})",
-                msg.CallId,
-                authorityFailure);
-            EmitExpiredPromptNotice();
-            return (null, ApprovalNackReasons.PromptExpired);
-        }
-
-        // Only the user who triggered the request may approve it — verified
-        // automation requests can be approved by any channel member.
-        if (!ApprovalButtonValueCodec.CanApprove(
-                requesterPrincipal, requesterSenderId, msg.SenderId.Value))
-        {
-            _log.Warning(
-                "Ignoring tool interaction response for call {CallId} from sender {SenderId}; expected {ExpectedSenderId}",
-                msg.CallId, msg.SenderId, requesterSenderId);
-            EmitWrongRequesterApprovalNotice();
-            return (null, ApprovalNackReasons.WrongRequester);
-        }
-
-        if (!ConsentAnswerCodec.TryParseOption(
-                msg.SelectedKey.Value,
-                pending.Request.OptionKeys,
-                pending.Request.RepositoryCommonDirectory,
-                out var answer))
-        {
-            _log.Warning(
-                "Ignoring unavailable approval option {SelectedKey} for call {CallId}; offered options were [{OptionKeys}]",
-                msg.SelectedKey,
-                msg.CallId,
-                string.Join(", ", pending.Request.OptionKeys));
-            EmitUnavailableApprovalOptionNotice();
-            return (null, ApprovalNackReasons.OptionUnavailable);
-        }
-
-        _log.Info(
-            "Tool approval decision authorizationAttemptId={AuthorizationAttemptId} " +
-            "sessionId={SessionId} callId={CallId} decision={Decision}",
-            pending.AuthorizationAttemptId.Value,
-            _sessionId.Value,
-            msg.CallId.Value,
-            ConsentAnswerCodec.ToJournalText(answer));
-
-        if (persistApprovalGrant)
-            await PersistApprovalGrantIfNeededAsync(pending, answer, CancellationToken.None);
-
-        return (answer, null);
-    }
-
-    private async Task PersistApprovalGrantIfNeededAsync(
-        PendingToolInteraction pending,
-        ConsentAnswer answer,
-        CancellationToken ct)
-    {
-        // A grant answer writes a session or durable grant so future
-        // invocations — and the re-driven call itself — pass the gate without
-        // another prompt.
-        if (answer is ConsentAnswer.Grant grant && _approvalService is not null)
-            await PersistApprovalCandidatesAsync(pending, grant.Scope, ct);
-    }
 
     private void EmitWrongRequesterApprovalNotice()
         => EmitOutput(new TextOutput(
@@ -4003,265 +3747,135 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId = _sessionId
         }, OutputFilter.Text);
 
+    private void EmitApprovalRejection(ApprovalResponseResult.Rejected rejection, ToolCallId callId)
+    {
+        _log.Warning(
+            "Ignoring tool interaction response for call {CallId}: {Reason}",
+            callId, rejection.Diagnostic);
+        switch (rejection.Notice)
+        {
+            case ApprovalNoticeKind.Expired:
+                EmitExpiredPromptNotice();
+                break;
+            case ApprovalNoticeKind.WrongRequester:
+                EmitWrongRequesterApprovalNotice();
+                break;
+            case ApprovalNoticeKind.OptionUnavailable:
+                EmitUnavailableApprovalOptionNotice();
+                break;
+        }
+        TryReplyNack(rejection.NackReason);
+    }
+
     private bool TryResolveTextApprovalResponse(
         ToolInteractionTextResponse msg,
         out ToolInteractionResponse? structured,
         out string? nackReason)
     {
-        structured = null;
-        nackReason = null;
+        if (_toolWorkflow.TryResolveTextResponse(msg, _state, out structured, out nackReason))
+            return true;
 
-        var pending = ResolveLatestPendingApprovalForSender(msg.SenderId);
-        if (pending is null)
+        switch (nackReason)
         {
-            if (_toolApprovals.PendingCount == 0)
-            {
-                if (HasApprovalHistory)
-                {
-                    _log.Warning("Ignoring text tool interaction response with no pending approvals for sender {SenderId}", msg.SenderId);
-                    EmitExpiredPromptNotice();
-                    nackReason = ApprovalNackReasons.PromptExpired;
-                }
-                else
-                {
-                    // Session has never had an approval request. The channel cold path
-                    // matched the text as approval-like, but this is almost certainly
-                    // ordinary conversation (e.g., "yes", "a", "1"). Don't emit a
-                    // user-visible notice and don't consume — the channel should
-                    // fall through to normal LLM ingress. See #1164.
-                    nackReason = ApprovalNackReasons.NoHistory;
-                }
-            }
-            else
-            {
+            case ApprovalNackReasons.PromptExpired:
+                _log.Warning("Ignoring text tool interaction response with no pending approvals for sender {SenderId}", msg.SenderId);
+                EmitExpiredPromptNotice();
+                break;
+            case ApprovalNackReasons.WrongRequester:
                 _log.Warning("Ignoring text tool interaction response from unauthorized sender {SenderId}", msg.SenderId);
                 EmitWrongRequesterApprovalNotice();
-                nackReason = ApprovalNackReasons.WrongRequester;
-            }
-
-            return false;
+                break;
+            case ApprovalNackReasons.OptionUnavailable:
+                _log.Warning("Ignoring unparseable text tool interaction response '{Text}'", msg.Text);
+                EmitUnavailableApprovalOptionNotice();
+                break;
         }
-
-        var optionKeys = pending.Request.OptionKeys.Count > 0
-            ? pending.Request.OptionKeys
-            :
-            [
-                ApprovalOptionKeys.ApproveOnce,
-                ApprovalOptionKeys.ApproveSession,
-                ApprovalOptionKeys.ApproveAlways,
-                ApprovalOptionKeys.Deny
-            ];
-
-        var options = optionKeys
-            .Select(key => new ToolInteractionOption(
-                new ApprovalOptionKey(key),
-                ApprovalOptionKeys.LabelFor(key, new ToolName(pending.Request.ToolName).IsMcp)))
-            .ToArray();
-
-        if (!ToolInteractionResponseParser.TryParseApprovalResponse(msg.Text, options, out var selectedKey)
-            || selectedKey is null)
-        {
-            _log.Warning(
-                "Ignoring unparseable text tool interaction response '{Text}' for call {CallId}; offered options were [{OptionKeys}]",
-                msg.Text,
-                pending.Request.CallId,
-                string.Join(", ", pending.Request.OptionKeys));
-            EmitUnavailableApprovalOptionNotice();
-            nackReason = ApprovalNackReasons.OptionUnavailable;
-            return false;
-        }
-
-        structured = new ToolInteractionResponse
-        {
-            SessionId = msg.SessionId,
-            CallId = new ToolCallId(pending.Request.CallId),
-            SelectedKey = new ApprovalOptionKey(selectedKey),
-            SenderId = msg.SenderId
-        };
-        return true;
+        return false;
     }
 
-    private PendingToolInteraction? ResolveLatestPendingApprovalForSender(SenderId senderId)
-        => _toolApprovals.FindLatestPending(pending => CanApprovePending(pending, senderId));
-
-    private static bool CanApprovePending(PendingToolInteraction pending, SenderId senderId)
-        => TryGetApprovalAuthority(pending, out var principal, out var requesterSenderId, out _)
-           && ApprovalButtonValueCodec.CanApprove(principal, requesterSenderId, senderId.Value);
-
-    private static bool TryGetApprovalAuthority(
-        PendingToolInteraction pending,
-        out PrincipalClassification? requesterPrincipal,
-        out string? requesterSenderId,
-        out string? failure)
+    private async Task PersistApprovalGrantIfNeededAsync(
+        ApprovalResponseResult.Accepted accepted,
+        CancellationToken ct)
     {
-        if (pending.TurnContext is { } context)
-        {
-            requesterPrincipal = context.RequesterPrincipal;
-            if (!context.HasApprovalRequester)
-            {
-                requesterSenderId = null;
-                failure = "turn context has no requester sender for a non-automation principal";
-                return false;
-            }
-
-            requesterSenderId = context.RequesterSenderId is { } senderId ? senderId.Value : null;
-            failure = null;
-            return true;
-        }
-
-        requesterPrincipal = pending.Request.RequesterPrincipal;
-        requesterSenderId = pending.Request.RequesterSenderId?.Value;
-        if (pending.TurnContextRestoreFailure is not null)
-        {
-            failure = pending.TurnContextRestoreFailure;
-            return false;
-        }
-
-        if (requesterPrincipal is not PrincipalClassification.VerifiedAutomation
-            && string.IsNullOrWhiteSpace(requesterSenderId))
-        {
-            failure = "legacy approval state has no requester sender for a non-automation principal";
-            return false;
-        }
-
-        failure = null;
-        return true;
+        if (_approvalService is null)
+            return;
+        var grants = _toolWorkflow.CreateApprovalGrants(accepted, GetSessionDirectory());
+        if (grants.Count == 0)
+            return;
+        await _approvalService.RecordApprovalCandidatesAsync(
+            (ToolApprovalSessionId)_sessionId.Value,
+            accepted.Audience,
+            accepted.ToolName,
+            grants,
+            ct);
     }
 
     private async Task HandleProcessingApprovalResponseAsync(ToolInteractionResponse msg)
     {
-        if (!_toolApprovals.TryGetPending(msg.CallId.Value, out var pending))
+        var response = _toolWorkflow.PrepareLiveResponse(msg);
+        if (response is ApprovalResponseResult.Rejected rejection)
         {
-            _log.Warning("Ignoring tool interaction response for unknown call {CallId}", msg.CallId);
-            TryReplyNack(ApprovalNackReasons.PromptExpired);
+            EmitApprovalRejection(rejection, msg.CallId);
             return;
         }
 
-        ClaimedApprovalWait? claimedWait = null;
+        var accepted = (ApprovalResponseResult.Accepted)response;
         try
         {
-            var authorization = await AuthorizeApprovalResponseAsync(
-                pending,
-                msg,
-                persistApprovalGrant: false);
-            if (authorization.Answer is not { } answer)
+            _log.Info(
+                "Tool approval decision authorizationAttemptId={AuthorizationAttemptId} " +
+                "sessionId={SessionId} callId={CallId} decision={Decision}",
+                accepted.Pending.AuthorizationAttemptId.Value,
+                _sessionId.Value,
+                accepted.CallId.Value,
+                ConsentAnswerCodec.ToJournalText(accepted.Answer));
+            await PersistApprovalGrantIfNeededAsync(accepted, CancellationToken.None);
+            switch (accepted)
             {
-                TryReplyNack(authorization.NackReason ?? ApprovalNackReasons.WrongRequester);
-                return;
+                case ApprovalResponseResult.LiveOnlyAccepted liveOnly:
+                    _toolWorkflow.CompleteLiveResponse(liveOnly);
+                    TryReplyAck();
+                    return;
+                case ApprovalResponseResult.DurableAccepted durable:
+                    var resolution = _toolWorkflow.CreateResolution(durable, _sessionId, NowMs());
+                    Persist(resolution, evt =>
+                    {
+                        _toolWorkflow.ApplyResolvedResponse(evt, durable);
+                        TryReplyAck();
+                    });
+                    return;
+                default:
+                    throw new InvalidOperationException("The accepted approval result has no completion route.");
             }
-
-            // Claim the live wait before writing any broader grant. A response
-            // can be authorized and still be stale; only a claimed wait proves
-            // the prompt still corresponds to a blocked tool call.
-            if (!_approvalChannel.TryClaim(msg.CallId, out var approvalWait))
-            {
-                _log.Warning(
-                    "Ignoring tool interaction response for call {CallId}: prompt no longer has a live approval wait",
-                    msg.CallId);
-                EmitExpiredPromptNotice();
-                TryReplyNack(ApprovalNackReasons.PromptExpired);
-                return;
-            }
-            claimedWait = approvalWait;
-
-            if (!pending.PersistApprovalState)
-                _toolApprovals.RemovePending(msg.CallId.Value);
-
-            await PersistApprovalGrantIfNeededAsync(pending, answer, CancellationToken.None);
-
-            if (!pending.PersistApprovalState)
-            {
-                // Live-only prompts should release the blocked child task, not
-                // journal ToolApprovalResolved. After restart the child actor is
-                // gone, so a durable redrive would be misleading.
-                approvalWait.Complete(answer);
-                TryReplyAck();
-                return;
-            }
-
-            PersistApprovalResolved(pending, msg, answer, () =>
-            {
-                approvalWait.Complete(answer);
-                TryReplyAck();
-            });
         }
         catch (Exception ex)
         {
-            claimedWait?.Complete(ConsentAnswer.Denied);
+            _toolWorkflow.FailLiveResponse(accepted);
             FailCurrentTurn("I couldn't persist that approval decision. Please try again.", ex, ErrorCategory.ToolFailure);
             TryReplyNack(ApprovalNackReasons.PersistFailed);
         }
     }
 
-    private void PersistApprovalResolved(
-        PendingToolInteraction pending,
-        ToolInteractionResponse msg,
-        ConsentAnswer answer,
-        Action afterPersist)
-    {
-        Persist(new ToolApprovalResolved
-        {
-            SessionId = _sessionId,
-            CallId = msg.CallId.Value,
-            AuthorizationAttemptId = pending.AuthorizationAttemptId.Value,
-            Decision = ConsentAnswerCodec.ToJournalText(answer),
-            ResolvedAtMs = NowMs()
-        }, evt =>
-        {
-            ApplyToolApprovalResolved(evt);
-            afterPersist();
-        });
-    }
-
-    /// <summary>
-    /// Handles a <see cref="ToolInteractionResponse"/> that arrives when the
-    /// session is NOT actively processing the parked tool batch — i.e. after
-    /// idle passivation, cold recovery, or an aborted passivation. There is no
-    /// live tool-loop task or <see cref="ApprovalChannel"/> TCS to complete, so
-    /// the parked batch must be re-driven from the persisted assistant message.
-    /// </summary>
     private async Task HandleToolInteractionResponseWhenIdle(ToolInteractionResponse msg)
     {
-        var callId = msg.CallId.Value;
-
-        if (!_toolApprovals.TryGetPending(callId, out var pending))
+        var response = _toolWorkflow.PrepareRecoveredResponse(msg, _state);
+        if (response is ApprovalResponseResult.Rejected rejection)
         {
-            // No persisted pending record — there is no turn context and no Patterns to
-            // pre-seed an ApprovedOnce re-drive. Whether or not the history
-            // tail still carries the tool_use block, treat the prompt as
-            // expired and fail loud with a channel-visible message rather
-            // than silently dropping the click.
-            //
-            // The classification helps triage "where did my click go" reports:
-            // already_resolved means the approval landed but the click is a
-            // duplicate (e.g., user double-clicked, or text + button both
-            // arrived); no_history means the CallId was never observed by this
-            // session — the most common silent-drop scenario when a binding
-            // misroutes; orphaned_history means a tool_use exists with no
-            // pending or resolved record, suggesting the batch was abandoned
-            // (e.g., user sent a new message instead of approving).
-            var classification = ClassifyUnknownApprovalCall(callId);
-            _log.Warning(
-                "Tool interaction response for unknown/expired call {CallId} ({Classification}); pending={PendingCount} resolved={ResolvedCount}",
-                msg.CallId, classification, _toolApprovals.PendingCount, _toolApprovals.ResolvedCount);
-            EmitExpiredPromptNotice();
-            TryReplyNack(ApprovalNackReasons.PromptExpired);
+            EmitApprovalRejection(rejection, msg.CallId);
             return;
         }
 
-        ConsentAnswer answer;
+        var accepted = (ApprovalResponseResult.DurableAccepted)response;
         try
         {
-            var authorization = await AuthorizeApprovalResponseAsync(
-                pending,
-                msg,
-                persistApprovalGrant: true);
-            if (authorization.Answer is not { } authorizedAnswer)
-            {
-                TryReplyNack(authorization.NackReason ?? ApprovalNackReasons.WrongRequester);
-                return;
-            }
-            answer = authorizedAnswer;
+            _log.Info(
+                "Tool approval decision authorizationAttemptId={AuthorizationAttemptId} " +
+                "sessionId={SessionId} callId={CallId} decision={Decision}",
+                accepted.Pending.AuthorizationAttemptId.Value,
+                _sessionId.Value,
+                accepted.CallId.Value,
+                ConsentAnswerCodec.ToJournalText(accepted.Answer));
+            await PersistApprovalGrantIfNeededAsync(accepted, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -4277,16 +3891,40 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        PersistApprovalResolved(pending, msg, answer, () =>
+        var resolution = _toolWorkflow.CreateResolution(accepted, _sessionId, NowMs());
+        Persist(resolution, evt =>
         {
-            var outcome = TryRedriveToolBatchAfterApproval(callId);
-            if (outcome == ApprovalRedriveOutcome.Failed)
+            _toolWorkflow.ApplyResolvedResponse(evt);
+            var next = _toolWorkflow.PlanRecoveredContinuation(_state, msg.CallId.Value, _sessionId, NowMs());
+            switch (next)
             {
-                TryReplyNack(ApprovalNackReasons.PromptExpired);
-                return;
+                case RecoveredContinuation.WaitForSiblings:
+                    _log.Info("Deferring parked tool batch re-drive for call {CallId}: sibling approval(s) still pending", msg.CallId);
+                    TryReplyAck();
+                    return;
+                case RecoveredContinuation.Expired expired:
+                    _log.Warning("Cannot re-drive tool batch for call {CallId}: {Reason}", msg.CallId, expired.Diagnostic);
+                    EmitExpiredPromptNotice();
+                    TryReplyNack(ApprovalNackReasons.PromptExpired);
+                    return;
+                case RecoveredContinuation.Abandon abandon:
+                    _log.Warning("Cannot re-drive tool batch for call {CallId}: {Reason}", msg.CallId, abandon.Diagnostic);
+                    EmitExpiredPromptNotice();
+                    Persist(abandon.Event, ApplyToolBatchAbandoned);
+                    TryReplyNack(ApprovalNackReasons.PromptExpired);
+                    return;
+                case RecoveredContinuation.Dispatch dispatch:
+                    _log.Info("Re-driving parked tool batch ({Count} call(s)) after approval response for {CallId}",
+                        dispatch.Calls.Count, msg.CallId);
+                    _currentTurnContext = dispatch.TurnContext;
+                    _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(dispatch.TurnContext);
+                    BindTurnTelemetry(dispatch.TurnContext);
+                    TransitionTo(SessionPhase.Processing);
+                    DispatchToolBatch(dispatch.Calls, approvalPlan: dispatch.ApprovalPlan,
+                        recordCompletedCycle: false);
+                    TryReplyAck();
+                    return;
             }
-
-            TryReplyAck();
         });
     }
 
@@ -4298,82 +3936,26 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TryReplyNack(nackReason ?? ApprovalNackReasons.PromptExpired);
             return;
         }
-
         await HandleToolInteractionResponseWhenIdle(structured);
-    }
-
-    private ApprovalRedriveOutcome TryRedriveToolBatchAfterApproval(string callId)
-    {
-        var assistantMsg = ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, callId);
-        if (assistantMsg is null)
-        {
-            _log.Warning(
-                "Cannot re-drive tool batch for call {CallId}: no unanswered assistant tool batch in history",
-                callId);
-            EmitExpiredPromptNotice();
-            return ApprovalRedriveOutcome.Failed;
-        }
-
-        if (assistantMsg.ToolCalls.Any(tc => _toolApprovals.HasPending(tc.CallId.Value)))
-        {
-            _log.Info(
-                "Deferring parked tool batch re-drive for call {CallId}: sibling approval(s) still pending",
-                callId);
-            return ApprovalRedriveOutcome.Deferred;
-        }
-
-        if (!_toolApprovals.TryGetResolved(callId, out var resolved))
-        {
-            _log.Warning(
-                "Cannot re-drive tool batch for call {CallId}: approval decision was not recoverable",
-                callId);
-            EmitExpiredPromptNotice();
-            return ApprovalRedriveOutcome.Failed;
-        }
-
-        var redrivePlan = _toolApprovals.BuildRedrivePlan(
-            assistantMsg.ToolCalls.Select(static call => call.CallId.Value));
-        if (RedriveToolBatchForApproval(callId, resolved.Pending, redrivePlan))
-            return ApprovalRedriveOutcome.Started;
-
-        var abandoned = BuildToolBatchAbandonedEvent(
-            "Tool call was not completed — approval state could not be recovered safely.");
-        Persist(abandoned, ApplyToolBatchAbandoned);
-        return ApprovalRedriveOutcome.Failed;
     }
 
     private bool AbandonResolvedToolBatchAfterRecovery()
     {
-        if (_toolApprovals.ResolvedCount == 0)
+        if (!_toolWorkflow.ShouldAbandonResolvedAfterRecovery())
             return false;
-
-        if (_toolApprovals.PendingCount > 0)
-            return false;
-
-        _log.Info(
-            "Abandoning recovered parked tool batch with {ResolvedApprovalCount} resolved approval(s) after restart",
-            _toolApprovals.ResolvedCount);
-        var abandoned = BuildResolvedToolBatchInterruptedByRestartEvent();
-        Persist(abandoned, ApplyToolBatchAbandoned);
-
+        _log.Info("Abandoning recovered parked tool batch after restart");
+        Persist(BuildResolvedToolBatchInterruptedByRestartEvent(), ApplyToolBatchAbandoned);
         return true;
     }
 
     private bool AbandonInterruptedToolBatchAfterRecovery()
     {
-        if (!HasInterruptedToolBatchAfterRecovery())
+        if (!_toolWorkflow.ShouldAbandonInterruptedAfterRecovery(_state))
             return false;
-
         _log.Info("Abandoning recovered interrupted tool batch with no recoverable approval state");
         Persist(BuildInterruptedToolBatchAfterRecoveryEvent(), ApplyToolBatchAbandoned);
-
         return true;
     }
-
-    private bool HasInterruptedToolBatchAfterRecovery()
-        => _toolApprovals.PendingCount == 0
-        && _toolApprovals.ResolvedCount == 0
-        && ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null;
 
     private ToolBatchAbandoned BuildResolvedToolBatchInterruptedByRestartEvent()
         => BuildToolBatchAbandonedEvent(
@@ -4383,121 +3965,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         => BuildToolBatchAbandonedEvent(
             "Tool call was not completed — the session restarted before the action completed.");
 
-    /// <summary>
-    /// Re-drives the parked tool batch after an approval decision was applied
-    /// while the session was idle. Reconstructs the batch from the last
-    /// assistant message in history whose tool calls have no later tool result,
-    /// transitions to <see cref="SessionPhase.Processing"/>, and dispatches it
-    /// under the parked turn's persisted trust context. After cold recovery
-    /// <see cref="_currentTurnSource"/> is null, so the persisted trust fields
-    /// are what keep the re-driven call faithful to the original turn.
-    /// </summary>
-    private bool RedriveToolBatchForApproval(
-        string callId,
-        PendingToolInteraction pending,
-        ApprovalRedrivePlan redrivePlan)
-    {
-        var assistantMsg = ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, callId);
-        if (assistantMsg is null)
-        {
-            _log.Warning(
-                "Cannot re-drive tool batch for call {CallId}: no unanswered assistant tool batch in history",
-                callId);
-            EmitExpiredPromptNotice();
-            return false;
-        }
-
-        // Rebuild the FunctionCallContent batch from the persisted assistant
-        // message — tool arguments are durably stored in SerializableToolCall.
-        // reinjectMeta re-applies the persisted per-call hints (timeout/background/
-        // rationale) that were stripped into MetaJson at persistence, so a re-driven
-        // call honors them instead of falling back to defaults.
-        var aiMessage = ChatMessageConverter.ToAiMessage(assistantMsg, reinjectMeta: true);
-        var toolCalls = aiMessage.Contents
-            .OfType<FunctionCallContent>()
-            .Where(tc => !ParkedToolBatchHistory.HasToolResult(_state.History, tc.CallId)
-                && (tc.CallId == callId || !_toolApprovals.HasPending(tc.CallId)))
-            .ToList();
-        if (toolCalls.Count == 0)
-        {
-            _log.Warning(
-                "Cannot re-drive tool batch for call {CallId}: assistant message has no tool calls",
-                callId);
-            EmitExpiredPromptNotice();
-            return false;
-        }
-
-        _log.Info(
-            "Re-driving parked tool batch ({Count} call(s)) after approval response for {CallId}",
-            toolCalls.Count, callId);
-
-        if (pending.TurnContext is not { } turnContext)
-        {
-            _log.Warning(
-                "Cannot re-drive tool batch for call {CallId}: turn context is not recoverable ({Reason})",
-                callId,
-                pending.TurnContextRestoreFailure ?? "missing turn context");
-            EmitExpiredPromptNotice();
-            return false;
-        }
-
-        if (!MarkApprovalRedrive(pending))
-        {
-            _log.Warning(
-                "Cannot re-drive tool batch for call {CallId}: approval turn phase is {ApprovalTurnPhase}",
-                callId,
-                _toolApprovals.TurnPhase);
-            EmitExpiredPromptNotice();
-            return false;
-        }
-
-        _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(turnContext);
-        BindTurnTelemetry(turnContext);
-
-        TransitionTo(SessionPhase.Processing);
-        DispatchToolBatch(
-            toolCalls,
-            oneTimeApprovalPreSeed: redrivePlan.OneTimeApprovalPreSeed,
-            decisionOverride: redrivePlan.DecisionOverride,
-            managedTemporaryDenialDirectories: redrivePlan.ManagedTemporaryDenialDirectories,
-            authorizationAttemptIds: redrivePlan.AuthorizationAttemptIds,
-            recordCompletedCycle: false);
-        return true;
-    }
-
-    /// <summary>
-    /// Builds the durable event for a parked tool batch the user abandoned by
-    /// sending a new message instead of answering its approval prompt. Carries a synthetic
-    /// <see cref="Protocol.ChatRole.Tool"/> result for every unanswered tool
-    /// call in the tail assistant message so history stays well-formed — an
-    /// assistant tool_use with no matching tool_result is rejected by the
-    /// provider API — then clears the actor-local approval state.
-    /// </summary>
-    private ToolBatchAbandoned BuildToolBatchAbandonedEvent()
-        => BuildToolBatchAbandonedEvent(
-            "Tool call was not completed — the request was "
-            + "superseded by a new message before approval was given.");
-
     private ToolBatchAbandoned BuildToolBatchAbandonedEvent(string resultContent)
-    {
-        var assistantMsg = ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, callId: null);
-        IReadOnlyList<SerializableChatMessage> results = assistantMsg is null
-            ? []
-            : ParkedToolBatchHistory.BuildSyntheticAbandonResults(_state.History, assistantMsg, resultContent);
-        if (assistantMsg is not null)
-        {
-            _log.Info(
-                "Abandoned parked tool batch ({Count} call(s)) superseded by a new user message",
-                assistantMsg.ToolCalls.Count);
-        }
-
-        return new ToolBatchAbandoned
-        {
-            SessionId = _sessionId,
-            ToolResults = results,
-            AbandonedAtMs = NowMs()
-        };
-    }
+        => _toolWorkflow.CreateAbandonment(_state, _sessionId, resultContent, NowMs());
 
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
@@ -4532,8 +4001,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         CancelAndDisposeLlmCts();
         CancelAndDisposeToolExecutionCts();
         _deliveryRetry.Clear();
-        _toolApprovals.ClearCalls();
-        ClearApprovalTurnState();
+        _toolWorkflow.ClearFailedTurn();
+        _currentTurnContext = null;
         _state = _state.AddErrorReply(errorMessage);
 
         var correlationId = Guid.NewGuid();
@@ -4570,37 +4039,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _observerActor?.Tell(output);
     }
 
-    private async Task PersistApprovalCandidatesAsync(
-        PendingToolInteraction pending,
-        GrantScopeKind scope,
-        CancellationToken ct)
-    {
-        if (_approvalService is null)
-            return;
-
-        var request = pending.Request;
-        var audience = pending.TurnContext?.Audience ?? request.Audience;
-
-        // Each production prompt carries its candidates. Approval-exempt side
-        // effects are dropped, and a folder grant for the session directory is
-        // dead on arrival, so a batch can hold no grant at all.
-        var grants = GrantBuilder.Build(
-            request.Candidates,
-            scope,
-            request.Cwd,
-            GetSessionDirectory(),
-            request.RepositoryCommonDirectory);
-        if (grants.Count == 0)
-            return;
-
-        await _approvalService.RecordApprovalCandidatesAsync(
-            (ToolApprovalSessionId)_sessionId.Value,
-            audience,
-            new ToolName(request.ToolName),
-            grants,
-            ct);
-    }
-
     /// <summary>
     /// Records a background job the pipeline just submitted into
     /// <c>SessionState.ActiveBackgroundJobs</c> (snapshot-persisted) so the
@@ -4620,7 +4058,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ProcessToolCallResult(Pipelines.ToolCallResult result)
     {
-        _sessionManagedTemporaryCorrections.Apply(result.ManagedTemporaryCorrectionUpdate);
+        _toolWorkflow.ApplyCorrection(result.ManagedTemporaryCorrectionUpdate);
         TrackStartedBackgroundJob(result.StartedBackgroundJob);
 
         var emittedRunIds = new HashSet<SubAgentRunId>();
@@ -4690,7 +4128,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
 
         var toolMessage = result.Message;
-        var toolCallId = _activeToolBatch.RecordOutcome(result);
+        var toolCallId = _toolWorkflow.RecordOutcome(result);
 
         _log.Info(
             "Tool authorization attempt result authorizationAttemptId={AuthorizationAttemptId} " +
@@ -4750,7 +4188,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void TryCompleteStreamedToolBatch()
     {
-        if (_activeToolBatch.CompleteIfReady(
+        if (_toolWorkflow.CompleteIfReady(
                 _state,
                 _turnState,
                 _config.MaxToolIterationsPerTurn) is not BatchCompletion.Ready completion)
@@ -4792,11 +4230,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        _toolApprovals.ClearCalls();
-        ClearActiveToolBatchTracking();
+        _toolWorkflow.ClearNormalBatch();
+        _activeToolWorkTask = null;
+        _toolRestartStopRequested = false;
         TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
             _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, completion.ResultCount);
-        MarkApprovalRunningAfterRedrive();
         FireLlmCall();
     }
 
@@ -4862,13 +4300,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         bool? Success,
         TimeSpan? Duration,
         int FindingsCount) : INoSerializationVerificationNeeded;
-
-    private enum ApprovalRedriveOutcome
-    {
-        Started,
-        Deferred,
-        Failed
-    }
 
     private void BindTurnTelemetry(MessageSource? source)
     {
@@ -4964,8 +4395,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             || _activeToolWorkTask is not { IsCompleted: false })
             return false;
 
-        return _activeToolBatch.HasOnlyPendingDurableApprovals(
-            _toolApprovals.HasRecoverablePending);
+        return _toolWorkflow.CanParkForRestart();
     }
 
     private void HandleRestartModelGraceExpired(RestartModelGraceExpired expired)

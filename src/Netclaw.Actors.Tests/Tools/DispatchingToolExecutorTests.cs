@@ -2917,10 +2917,9 @@ public partial class DispatchingToolExecutorTests : IDisposable
             // carry the canonical name, not the sanitized alias.
             Assert.Equal(canonicalName, firstAttempt.ApprovalContext.ToolName);
 
-            // Simulate LlmSessionActor.PersistApprovalCandidatesAsync on an
-            // ApprovedSession click: the grant is recorded under the
-            // canonical name (pending.ToolName), with the canonical
-            // candidate verb extracted by DefaultApprovalMatcher.
+            // SessionToolWorkflow.CreateApprovalGrants selects canonical
+            // candidates. The actor writes those grants under the canonical
+            // tool name after an ApprovedSession response.
             await approvalService.RecordApprovalCandidatesAsync(
                 (ToolApprovalSessionId)"slack/D0/1779",
                 TrustAudience.Personal,

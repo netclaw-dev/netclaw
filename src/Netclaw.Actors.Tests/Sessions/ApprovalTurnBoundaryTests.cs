@@ -25,7 +25,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <summary>
 /// Drives the approval turn state through the session actor with the
 /// production tool authorization registration and native shell processes.
-/// Old coverage: ToolApprovalStateTests (per-call resolution and the
+/// Old coverage: SessionToolWorkflowTests (per-call resolution and the
 /// mapping from an option key to a decision) in a live session.
 /// </summary>
 [Collection(BackgroundJobProcessCollection.Name)]
@@ -299,7 +299,7 @@ public sealed class ApprovalTurnBoundaryTests : LlmSessionTestBase
 /// <summary>
 /// Drives recovered approval batches through a session restart with the
 /// production tool authorization registration and native shell processes.
-/// Old coverage: ToolApprovalStateTests (BuildRedrivePlan: the "Once"
+/// Old coverage: SessionToolWorkflowTests (BuildRedrivePlan: the "Once"
 /// pre-seed, the "Deny" override, and the exact redrive of an assignment grant).
 /// </summary>
 [Collection(BackgroundJobProcessCollection.Name)]

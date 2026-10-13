@@ -63,7 +63,7 @@ GROUPS: tuple[Group, ...] = (
         f"{A}/ToolAuthorizationDecision.cs", f"{A}/ShellPolicyEvaluation.cs",
         f"{SE}/ToolApprovalState.cs", f"{SE}/IApprovalChannel.cs",
         f"{SE}/ParentSessionApprovalBridge.cs", "src/Netclaw.Tools.Abstractions/IParentApprovalBridge.cs",
-    ), (f"{AUTH}/*.cs", f"{AUTH}/Orchestration/**/*.cs")),
+    ), (f"{SE}/SessionToolWorkflow*.cs", f"{AUTH}/*.cs", f"{AUTH}/Orchestration/**/*.cs")),
     Group("2. Tool-level access policy (audience/mode/options)", (
         f"{A}/ToolAccessPolicy.cs", f"{A}/ToolAudienceProfileResolver.cs",
         f"{A}/FilePathApprovalMatcher.cs", f"{C}/ToolAudienceProfiles.cs",

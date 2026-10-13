@@ -7,7 +7,7 @@ Installed agent skills do not commit the repository to Accordant adoption.
 
 Baseline: `4753b7682c353dc3b7e3932f458124052dbd6adb` on `dev`.
 The status section separates completed proof from proposed work.
-The user authorizes implementation and verification. The root approves each result before PR publication and enables auto-merge only after review and required checks.
+The user authorizes implementation and verification. The root approves each result before PR publication and waits for checks before each merge.
 Each PR must preserve accepted behavior. A behavior change needs a separate decision.
 
 ## Scope and evidence
@@ -112,6 +112,26 @@ Stop only the affected change when intended behavior remains unresolved.
 The user decides changed authority, accepted result order, recovery guarantees, or loop policy.
 The root resolves ordinary fixture design, test selection, and source organization within the accepted contract.
 Delivery retry remains an optional small framework experiment. Its small state does not justify delaying this extraction.
+
+## Child completion: explicit product decision
+
+The user requires each child result to wake its parent, as an ordinary tool result does.
+A status event alone does not satisfy this requirement.
+The refactor must prefer one completion mechanism over a separate child-result path through generic user input.
+It must preserve each result, its original authority, and its durable identity.
+It must prevent duplicate effects and duplicate model calls.
+
+PR #2421 at `2494a01eac5eb9310dee0c53577b695ca386de93` currently requires a terminal result to wait behind the active parent turn.
+That rule conflicts with the new decision.
+Its source records completion and emits status before it admits the result into a later parent turn.
+A held-parent test expects the model call count to stay unchanged until the active work finishes.
+These are source and test-assertion findings; this review did not execute that branch.
+
+Astra will design the completion contract and identify mechanisms that can disappear.
+The root will review that design before implementation.
+Use the OpenSpec skills to amend the conflicting child-run requirement in the branch that owns it.
+Keep this behavior change separate from the current tool-workflow transfer.
+Do not merge the unrelated draft stack solely to make this refactor easier.
 
 ## Delivery
 
@@ -225,7 +245,7 @@ Slopwatch reports zero issues. The copyright check and whitespace check pass.
 A result-corruption fault fails both completion-order cases at the expected result assertion. Both cases pass after source restoration.
 A separate completion-gate fault causes a timeout. That attempt does not establish assertion sensitivity to premature continuation.
 [PR #2439](https://github.com/netclaw-dev/netclaw/pull/2439) contains the baseline. Root and independent review approve it.
-Auto-merge is enabled. Hosted checks and the merge remain pending.
+Automatic merge is disabled. Hosted checks for the combined change remain pending.
 The tool-result extraction has separate product and test authors in `feature/session-tool-result-ownership`.
 Its production diff removes 273 actor lines and 185 total production lines.
 The actor field count falls from 87 to 86. Media state moves into the tracker; that state still exists.
@@ -237,7 +257,30 @@ The full-suite result precedes those final test amendments. Production code stay
 Slopwatch, copyright headers, and whitespace checks pass. The focused Stryker gate kills the one calibrated early-completion mutant. Its local run takes 5 minutes 44 seconds.
 It uses the existing mutation harness and a separate parallel matrix group to protect CI time.
 Root review approves the combined extraction, tests, and gate.
-The user authorizes stacked PRs. PR 2 will target `feature/session-accordant-contracts` if PR 1 remains open.
+The user authorizes stacked PRs and requires labels.
+[PR #2440](https://github.com/netclaw-dev/netclaw/pull/2440) merged into the baseline feature branch before hosted checks completed.
+The combined tree at `6881cf1c` matches the locally reviewed extraction tree at `f4103fb5`.
+Nothing from this effort merged into `dev` at this checkpoint.
+PR #2439 now contains both steps. The root will wait for its combined checks before a merge.
+Do not enable automatic merge on an unprotected feature base. That command can merge immediately despite active checks.
+Future stack merges require completed checks on the exact head and a bottom-up merge order.
+Stage 3 starts on `feature/session-tool-workflow` with separate production and test authors.
+Its accepted design replaces the approval-state owner with one tool-workflow component.
+The actor retains journal operations, grant writes, task lifetime, and current turn authority.
+The workflow now owns its approval channel, call records, batch tracker, and temporary correction state.
+The actor loses 570 lines and three fields. Total production source grows by 90 lines in this step.
+Across both extractions, the actor loses 843 lines and production source loses 95 lines.
+The unused approval-level turn context is eliminated. Other state moves into private ownership.
+The focused suite passes 118 cases. The full actor suite passes 5,744 cases and skips 41.
+A later assertion strengthens completed-sibling exclusion. The final workflow class rerun passes all 18 tests.
+The requester theory shares its fixture across two partial files so the mutation harness can reuse it without broader type access.
+A requester-check fault fails the direct wrong-requester case and the live actor case.
+The same three tests pass after byte-for-byte source restoration.
+The combined persistent mutation gate kills the readiness and requester mutants. Its warm local run takes 1 minute 56 seconds.
+The OpenSpec correction names workflow ownership and aligns one-time approval with the existing exact-call policy.
+The parent actor still journals durable answers before wait release. Child waits remain live-only.
+Independent and root review approve the integrated change. Slopwatch, headers, and whitespace checks pass.
+PR publication and hosted checks remain pending at this checkpoint.
 
 The independent test author owns baseline evidence. The product author owns extraction. The root owns review and each delivery decision.
 Accordant fit and exact owner API remain engineering checks. Persistence or authority changes remain explicit product decisions.

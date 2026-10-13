@@ -1143,8 +1143,9 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Non_requester_response_is_rejected_after_recovery()
+    public async Task Non_requester_response_does_not_claim_the_live_wait()
     {
+        // Arrange
         const string callId = "call-shell-auth";
         _toolExecutor.GatedTools.Add("shell_execute");
 
@@ -1179,19 +1180,42 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
-        // A different user clicks approve — must be rejected.
-        sessionManager.Tell(new ToolInteractionResponse
+        // Act
+        var invalidReply = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
         {
             SessionId = sessionId,
             CallId = new Netclaw.Tools.ToolCallId(callId),
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("U-imposter")
-        }, ActorRefs.Nobody);
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
+        // Assert
+        var nack = Assert.IsType<CommandNack>(invalidReply);
+        Assert.Equal(ApprovalNackReasons.WrongRequester, nack.Reason);
         var rejection = await subscriber.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("only the requesting user", rejection.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+
+        // Act
+        var validReply = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(callId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = new SenderId("U-requester")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.IsType<CommandAck>(validReply);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var completion = await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Completed, completion.Outcome);
+        Assert.Equal(1, _toolExecutor.SuccessfulExecutions);
     }
 
     [Fact]

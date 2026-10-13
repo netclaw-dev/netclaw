@@ -33,13 +33,17 @@ coexist on the same session actor. Each subscriber receives its own filtered
 copy of output independently. Adding or removing a subscriber SHALL NOT affect
 other active subscribers.
 
-The session actor SHALL create an `IApprovalChannel` instance at session start
-and pass it to the tool execution pipeline. During the Processing behavior
-phase, the session actor SHALL handle `ToolInteractionResponse` messages by
-completing the corresponding `TaskCompletionSource` in the approval channel.
-The session actor SHALL also record approvals through `IToolApprovalService`
-based on the approval decision (session-scoped for ApproveOnce, persistent for
-ApproveAlways).
+The `SessionToolWorkflow` SHALL own the session-local `IApprovalChannel` and
+pass it to the tool execution pipeline. During Processing, the session actor
+SHALL route `ToolInteractionResponse` messages to the workflow. The workflow
+SHALL validate each response and return a typed outcome. For an accepted
+parent-session answer, the actor SHALL journal the resolution before the
+workflow releases the blocked call. A subagent approval wait SHALL remain
+live-only and SHALL not create a parent approval journal event. The session
+actor SHALL record a grant answer through `IToolApprovalService` with the
+selected grant scope.
+An `ApproveOnce` answer SHALL let only the exact blocked call retry once. It
+SHALL create no session or persistent grant.
 
 The persisted `TurnRecorded` event SHALL carry an optional
 `SourceReminderId` field (protobuf tag 5, additive). When a
@@ -87,19 +91,39 @@ dedup set can be rebuilt via event replay).
 - **AND** either subscriber disconnecting does NOT affect the other
 - **AND** the session continues processing input from any attached channel
 
-#### Scenario: Approval response handled during Processing
+#### Scenario: Parent approval response handled during Processing
 
-- **GIVEN** the session is in Processing phase with a pending approval
-- **WHEN** a `ToolInteractionResponse` message arrives
-- **THEN** the session actor completes the corresponding TCS in the approval
-  channel
-- **AND** the blocked tool task unblocks and proceeds based on the decision
+- **GIVEN** the parent session is in Processing phase with a pending approval
+- **WHEN** a valid `ToolInteractionResponse` message arrives
+- **THEN** the workflow returns an accepted response outcome
+- **AND** the actor journals the resolution before the workflow completes the live wait
+- **AND** the blocked tool call proceeds from the accepted decision
+
+#### Scenario: Subagent approval response stays live-only
+
+- **GIVEN** a subagent has a live approval wait through its parent session
+- **WHEN** a valid `ToolInteractionResponse` message arrives
+- **THEN** the workflow completes that live wait
+- **AND** the actor does not journal a parent approval resolution
 
 #### Scenario: ToolInteractionRequest delivered as lifecycle event
 
 - **GIVEN** a tool requires approval
 - **WHEN** the pipeline emits a `ToolInteractionRequest`
 - **THEN** all subscribers receive it regardless of their `OutputFilter`
+
+#### Scenario: ApproveOnce permits the exact blocked call
+
+- **GIVEN** a parent session has a blocked tool call with an approval prompt
+- **WHEN** the requester chooses `ApproveOnce`
+- **THEN** the exact blocked call can retry once with that consent
+- **AND** the session creates no session or persistent grant
+
+#### Scenario: ApproveOnce does not approve a later call
+
+- **GIVEN** the requester used `ApproveOnce` for a blocked tool call
+- **WHEN** a later call needs approval for the same candidate
+- **THEN** that later call requires a new approval
 
 ### Requirement: Persisted adopted-context metadata separates truthful provenance from third-party policy
 

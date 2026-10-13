@@ -1,16 +1,20 @@
 // -----------------------------------------------------------------------
-// <copyright file="ToolApprovalState.cs" company="Petabridge, LLC">
+// <copyright file="SessionToolWorkflow.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Microsoft.Extensions.AI;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
+using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
@@ -69,6 +73,17 @@ internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, string>? ManagedTemporaryDenialDirectories,
     IReadOnlyDictionary<string, AuthorizationAttemptId>? AuthorizationAttemptIds);
 
+internal abstract record PreparedFreshBatch(ToolCycleDecision Decision)
+{
+    internal sealed record Stop(ToolCycleDecision Decision) : PreparedFreshBatch(Decision);
+
+    internal sealed record Ready(
+        List<FunctionCallContent> Calls,
+        PreparedToolCycleBatch Cycle,
+        ToolCycleDecision Decision,
+        SerializableChatMessage AssistantMessage) : PreparedFreshBatch(Decision);
+}
+
 internal abstract record ToolApprovalCallState(PendingToolInteraction Pending);
 
 internal sealed record PendingToolApproval(PendingToolInteraction Pending)
@@ -82,19 +97,171 @@ internal sealed record ResolvedToolApproval(
 /// Owns all actor-local approval state for one session.
 /// Durable events remain the source of truth after recovery.
 /// </summary>
-internal sealed class ToolApprovalState
+internal sealed partial class SessionToolWorkflow
 {
     private readonly Dictionary<string, ToolApprovalCallState> _calls = new(StringComparer.Ordinal);
+    private readonly ActiveToolBatchTracker _activeBatch = new();
+    private readonly ApprovalChannel _approvalChannel = new();
+    private readonly ManagedTemporaryCorrectionState _corrections = new();
 
-    public int PendingCount => _calls.Values.Count(static call => call is PendingToolApproval);
+    public PreparedFreshBatch PrepareFreshBatch(
+        AiChatMessage response,
+        List<FunctionCallContent> calls,
+        ToolRegistry? registry,
+        IToolExecutor executor,
+        TurnStateTracker turn)
+    {
+        turn.ResetEmptyResponseGuards();
+        // Canonical names must reach the journal, cycle policy, outputs, and executor.
+        registry?.CanonicalizeToolCalls(response, calls);
+        var cycle = ToolCycleSignatureFactory.Prepare(calls, executor);
+        var decision = turn.EvaluateBeforeDispatch(cycle.Action);
+        if (decision.Kind == ToolCycleDecisionKind.Stop)
+            return new PreparedFreshBatch.Stop(decision);
 
-    public int ResolvedCount => _calls.Values.Count(static call => call is ResolvedToolApproval);
+        // Persist the exact arguments that the executor will interpret.
+        var assistant = ChatMessageConverter.FromAiMessage(
+            response,
+            interpretToolCall: call =>
+            {
+                var (meta, cleaned) = executor.PrepareToolCall(call);
+                return (meta, cleaned.Arguments);
+            });
+        return new PreparedFreshBatch.Ready(calls, cycle, decision, assistant);
+    }
 
-    public ApprovalTurnPhase TurnPhase { get; private set; }
+    public SessionState ApplyBatchStarted(SessionState state, ToolBatchStarted started)
+    {
+        if (state.FindLastUserMessage() != started.UserMessage)
+            state = state with { History = state.History.Add(started.UserMessage) };
+        if (!state.History.Contains(started.AssistantMessage))
+            state = state with { History = state.History.Add(started.AssistantMessage) };
 
-    public TurnContext? TurnContext { get; private set; }
+        _activeBatch.Start(
+            started.AssistantMessage,
+            ParkedToolBatchHistory.FindToolResultsFor(state.History, started.AssistantMessage));
+        return state;
+    }
 
-    public PendingToolInteraction Request(
+    public void StartDispatch(
+        IReadOnlyList<FunctionCallContent> calls,
+        PreparedToolCycleBatch? cycle,
+        IToolExecutor? executor,
+        bool recordCompletedCycle)
+    {
+        if (recordCompletedCycle && cycle is null && executor is not null)
+            cycle = ToolCycleSignatureFactory.Prepare(calls, executor);
+        _activeBatch.Start(calls, cycle);
+    }
+
+    public SessionToolBatch CreateBatch(
+        TurnContext turnContext,
+        SessionToolRunEnvironment environment,
+        IReadOnlyList<FunctionCallContent> calls,
+        ToolExecutionTimeout timeout,
+        IActorRef replyTo,
+        Action<SubAgentOutput> emitSubAgentOutput,
+        Action<ToolInteractionRequestDispatch> emitApprovalRequest,
+        BackgroundJobDispatch backgroundJobs,
+        bool setWorkingDirectoryAvailable,
+        Func<string, ToolInvocationContext, bool>? canDeclareWorkingDirectory,
+        ApprovalRedrivePlan? approvalPlan,
+        CancellationToken cancellationToken)
+        => new(turnContext, environment)
+        {
+            ToolCalls = calls,
+            DefaultTimeout = timeout,
+            ReplyTo = replyTo,
+            EmitSubAgentOutput = emitSubAgentOutput,
+            ApprovalRequests = CreateApprovalRequests(
+                emitApprovalRequest,
+                new ToolExecutionTimeout(Timeout.InfiniteTimeSpan)),
+            BackgroundJobs = backgroundJobs,
+            SetWorkingDirectoryAvailable = setWorkingDirectoryAvailable,
+            CanDeclareWorkingDirectory = canDeclareWorkingDirectory,
+            StreamResults = true,
+            OneTimeApprovalPreSeed = approvalPlan?.OneTimeApprovalPreSeed
+                ?? new Dictionary<string, IReadOnlyList<string>>(),
+            DecisionOverrides = approvalPlan?.DecisionOverride
+                ?? new Dictionary<string, RefusalKind>(),
+            ManagedTemporaryDenialDirectories = approvalPlan?.ManagedTemporaryDenialDirectories
+                ?? new Dictionary<string, string>(),
+            AuthorizationAttemptIds = approvalPlan?.AuthorizationAttemptIds
+                ?? new Dictionary<string, AuthorizationAttemptId>(),
+            ManagedTemporaryCorrections = CorrectionSnapshot(),
+            CancellationToken = cancellationToken
+        };
+
+    private ToolApprovalRequests CreateApprovalRequests(
+        Action<ToolInteractionRequestDispatch> emit,
+        ToolExecutionTimeout timeout)
+        => new(_approvalChannel, emit, timeout);
+
+    private ManagedTemporaryCorrectionDispatch CorrectionSnapshot() => _corrections.Snapshot();
+
+    public void ApplyCorrection(ManagedTemporaryCorrectionChange? change) => _corrections.Apply(change);
+
+    public void MarkExecutionTaskCompleted() => _activeBatch.MarkExecutionTaskCompleted();
+
+    public void DiscardPendingMedia() => _activeBatch.DiscardPendingMedia();
+
+    public SessionState ApplyRecordedResult(SessionState state, SerializableChatMessage result)
+        => _activeBatch.ApplyRecordedResult(state, result);
+
+    public ToolCallId RecordOutcome(ToolCallResult result) => _activeBatch.RecordOutcome(result);
+
+    public BatchCompletion CompleteIfReady(SessionState state, TurnStateTracker turn, int limit)
+        => _activeBatch.CompleteIfReady(state, turn, limit);
+
+    public void ClearCompletedBatch() => _activeBatch.Clear();
+
+    public bool CanParkForRestart()
+        => _activeBatch.HasOnlyPendingDurableApprovals(HasRecoverablePending);
+
+    public bool AllowsSnapshot(SessionState state)
+        => PendingCount == 0
+           && ResolvedCount == 0
+           && ParkedToolBatchHistory.FindRedrivableAssistantMessage(state.History, null) is null;
+
+    public void ClearApprovalTurn()
+    {
+        _corrections.Clear();
+        ClearTurn();
+    }
+
+    public void StartNewTurn()
+    {
+        _corrections.Clear();
+        StartTurn();
+    }
+
+    public void ClearFailedTurn()
+    {
+        ClearCalls();
+        ClearApprovalTurn();
+    }
+
+    public void CompleteTurn()
+    {
+        ClearCalls();
+        ClearApprovalTurn();
+        ClearCompletedBatch();
+    }
+
+    public void ClearNormalBatch()
+    {
+        ClearCalls();
+        ClearCompletedBatch();
+        MarkRunningAfterRedrive();
+    }
+
+    private int PendingCount => _calls.Values.Count(static call => call is PendingToolApproval);
+
+    private int ResolvedCount => _calls.Values.Count(static call => call is ResolvedToolApproval);
+
+    private ApprovalTurnPhase TurnPhase { get; set; }
+
+    private PendingToolInteraction Request(
         ToolApprovalRequested evt,
         bool persistApprovalState,
         bool recovered)
@@ -102,9 +269,8 @@ internal sealed class ToolApprovalState
         var pending = PendingToolInteraction.From(evt, persistApprovalState);
         _calls[evt.CallId] = new PendingToolApproval(pending);
 
-        if (persistApprovalState && pending.TurnContext is { } context)
+        if (persistApprovalState && pending.TurnContext is not null)
         {
-            TurnContext = context;
             TurnPhase = recovered
                 ? ApprovalTurnPhase.RecoveredWaiting
                 : ApprovalTurnPhase.Waiting;
@@ -113,7 +279,7 @@ internal sealed class ToolApprovalState
         return pending;
     }
 
-    public bool TryGetPending(string callId, out PendingToolInteraction pending)
+    private bool TryGetPending(string callId, out PendingToolInteraction pending)
     {
         if (_calls.TryGetValue(callId, out var call)
             && call is PendingToolApproval pendingCall)
@@ -126,7 +292,7 @@ internal sealed class ToolApprovalState
         return false;
     }
 
-    public bool TryGetResolved(string callId, out ResolvedToolApproval resolved)
+    private bool TryGetResolved(string callId, out ResolvedToolApproval resolved)
     {
         if (_calls.TryGetValue(callId, out var call)
             && call is ResolvedToolApproval resolvedCall)
@@ -139,22 +305,22 @@ internal sealed class ToolApprovalState
         return false;
     }
 
-    public bool HasPending(string callId)
+    private bool HasPending(string callId)
         => _calls.TryGetValue(callId, out var call) && call is PendingToolApproval;
 
-    public bool HasRecoverablePending(string callId)
+    private bool HasRecoverablePending(string callId)
         => TryGetPending(callId, out var pending)
            && pending.CanRecoverAfterRestart;
 
-    public bool HasResolved(string callId)
+    private bool HasResolved(string callId)
         => _calls.TryGetValue(callId, out var call) && call is ResolvedToolApproval;
 
-    public bool RemovePending(string callId)
+    private bool RemovePending(string callId)
         => _calls.TryGetValue(callId, out var call)
            && call is PendingToolApproval
            && _calls.Remove(callId);
 
-    public bool Resolve(
+    private bool Resolve(
         string callId,
         ConsentAnswer answer,
         out PendingToolInteraction pending)
@@ -163,16 +329,15 @@ internal sealed class ToolApprovalState
             return false;
 
         _calls[callId] = new ResolvedToolApproval(pending, answer);
-        if (PendingCount == 0 && pending.TurnContext is { } context)
+        if (PendingCount == 0 && pending.TurnContext is not null)
         {
-            TurnContext = context;
             TurnPhase = ApprovalTurnPhase.Running;
         }
 
         return true;
     }
 
-    public PendingToolInteraction? FindLatestPending(
+    private PendingToolInteraction? FindLatestPending(
         Func<PendingToolInteraction, bool> predicate)
         => _calls.Values
             .OfType<PendingToolApproval>()
@@ -181,13 +346,9 @@ internal sealed class ToolApprovalState
             .OrderBy(static pending => pending.Request.RequestedAtMs)
             .LastOrDefault();
 
-    public void StartTurn(TurnContext context)
-    {
-        TurnContext = context;
-        TurnPhase = ApprovalTurnPhase.Running;
-    }
+    public void StartTurn() => TurnPhase = ApprovalTurnPhase.Running;
 
-    public bool MarkAbandoning()
+    private bool MarkAbandoning()
     {
         if (TurnPhase is not ApprovalTurnPhase.Waiting
             and not ApprovalTurnPhase.RecoveredWaiting)
@@ -199,20 +360,19 @@ internal sealed class ToolApprovalState
         return true;
     }
 
-    public bool MarkRedriving(PendingToolInteraction pending)
+    private bool MarkRedriving(PendingToolInteraction pending)
     {
         if (TurnPhase is not ApprovalTurnPhase.Running
-            || pending.TurnContext is not { } context)
+            || pending.TurnContext is null)
         {
             return false;
         }
 
-        TurnContext = context;
         TurnPhase = ApprovalTurnPhase.Redriving;
         return true;
     }
 
-    public void MarkRunningAfterRedrive()
+    private void MarkRunningAfterRedrive()
     {
         if (TurnPhase is not ApprovalTurnPhase.Redriving)
             return;
@@ -220,7 +380,7 @@ internal sealed class ToolApprovalState
         TurnPhase = ApprovalTurnPhase.Running;
     }
 
-    public ApprovalRedrivePlan BuildRedrivePlan(IEnumerable<string> callIds)
+    private ApprovalRedrivePlan BuildRedrivePlan(IEnumerable<string> callIds)
     {
         var builder = new ApprovalRedrivePlanBuilder();
 
@@ -233,13 +393,9 @@ internal sealed class ToolApprovalState
         return builder.Build();
     }
 
-    public void ClearCalls() => _calls.Clear();
+    private void ClearCalls() => _calls.Clear();
 
-    public void ClearTurn()
-    {
-        TurnContext = null;
-        TurnPhase = ApprovalTurnPhase.None;
-    }
+    private void ClearTurn() => TurnPhase = ApprovalTurnPhase.None;
 
     private sealed class ApprovalRedrivePlanBuilder
     {
