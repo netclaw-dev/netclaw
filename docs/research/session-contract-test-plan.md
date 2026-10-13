@@ -234,7 +234,7 @@ Each step needs a narrow baseline, an independent test author, product changes, 
 Label each PR with `sessions` and `refactoring`. Add `tests`, `.NET`, and other existing labels that match its scope.
 Stack ready PRs on `feature/*` branches. Name the base PR in each description and verify the combined stack.
 Wait until every PR in the stack passes its checks on the exact head.
-Then coordinate the bottom-up merges in one pass. Rebase each dependent branch on the actual result as needed.
+Then use a verified group merge operation for the complete stack. Do not merge individual PRs.
 Reassess conflicts and rerun affected checks before its merge.
 Retain public behavioral assertions; add direct owner tests after each boundary becomes concrete.
 Do not build one model of all actor state. Create each stack branch when its implementation starts.
@@ -272,7 +272,7 @@ The broader lifecycle transfer remains required; these corrections do not comple
 [PR #2440](https://github.com/netclaw-dev/netclaw/pull/2440) merged into the Stage 1 feature branch before its hosted checks completed.
 That historical merge did not establish hosted acceptance at the time.
 Do not enable automatic merge on an unprotected feature base. It can merge immediately despite active checks.
-Wait for checks on the exact head, then merge the stack from the bottom up.
+Wait for every stack head to pass its checks, then merge the stack as a group.
 [PR #2439](https://github.com/netclaw-dev/netclaw/pull/2439) later merged the combined first two steps into `dev` as `32348bfb`.
 The Stage 2 tool-result extraction removed 273 actor lines and 185 total production lines.
 [PR #2441](https://github.com/netclaw-dev/netclaw/pull/2441) merged Stage 3 into `dev` as `123daad6959df84460508fd89826c4404b0956e8`.
