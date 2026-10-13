@@ -79,6 +79,7 @@ public class ToolBatchHistoryWedgeTests : LlmSessionTestBase
     [Fact]
     public async Task Partial_failure_of_parallel_tool_batch_leaves_history_well_formed_for_strict_providers()
     {
+        // Arrange
         var ct = TestContext.Current.CancellationToken;
 
         // Turn 1: two parallel tool calls. call-A executes normally; call-B
@@ -112,7 +113,7 @@ public class ToolBatchHistoryWedgeTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(10), ct);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: ct);
 
-        // Drive the failing batch and wait for the turn to fail.
+        // Act: drive the failed batch and a later user request.
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
@@ -133,10 +134,11 @@ public class ToolBatchHistoryWedgeTests : LlmSessionTestBase
             Content = "are you there?"
         }, TimeSpan.FromSeconds(3), ct);
 
-        await subscriber.FishForMessageAsync<object>(
+        var followUp = await subscriber.FishForMessageAsync<object>(
             m => m is TextOutput, TimeSpan.FromSeconds(10), cancellationToken: ct);
+        Assert.Contains("fake", Assert.IsType<TextOutput>(followUp).Text, StringComparison.OrdinalIgnoreCase);
 
-        // The last provider request is turn 2's; its messages are the assembled
+        // Assert: the last provider request is turn 2's; its messages are the assembled
         // history including turn 1's tool_calls message, tool results, and the
         // error reply.
         var assembled = _fakeChatClient.ReceivedMessages[^1];
@@ -155,27 +157,31 @@ public class ToolBatchHistoryWedgeTests : LlmSessionTestBase
 
         var expectedIds = assembled[toolCallIdx].Contents.OfType<FunctionCallContent>()
             .Select(f => f.CallId)
-            .ToHashSet(StringComparer.Ordinal);
+            .ToArray();
+        Assert.Equal(new[] { "call-A", "call-B" }, expectedIds);
 
         // Walk forward from the tool_calls message, collecting the contiguous run
         // of tool-result messages. A non-tool-result message (e.g. the error
         // reply) ends the run — exactly what the provider treats as the boundary.
-        var answeredIds = new HashSet<string>(StringComparer.Ordinal);
-        for (var i = toolCallIdx + 1; i < assembled.Count; i++)
+        var contiguousResults = new List<FunctionResultContent>();
+        var nextMessageIndex = toolCallIdx + 1;
+        for (; nextMessageIndex < assembled.Count; nextMessageIndex++)
         {
-            var results = assembled[i].Contents.OfType<FunctionResultContent>().ToList();
+            var results = assembled[nextMessageIndex].Contents.OfType<FunctionResultContent>().ToList();
             if (results.Count == 0)
                 break;
-            foreach (var r in results)
-                answeredIds.Add(r.CallId);
+            contiguousResults.AddRange(results);
         }
 
-        Assert.True(
-            expectedIds.SetEquals(answeredIds),
-            "An assistant tool_calls message must be immediately followed by a contiguous run of "
-            + $"tool-result messages answering every call id. Expected [{string.Join(",", expectedIds)}] "
-            + $"but the contiguous run covered [{string.Join(",", answeredIds)}]. "
-            + $"Assembled roles: {string.Join(" -> ", assembled.Select(m => m.Role.Value))}");
+        Assert.Equal(expectedIds, contiguousResults.Select(result => result.CallId).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal("web_search-ok", Assert.Single(contiguousResults, result => result.CallId == "call-A").Result?.ToString());
+        Assert.Contains("not completed", Assert.Single(contiguousResults, result => result.CallId == "call-B").Result?.ToString(),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            assembled.Skip(nextMessageIndex),
+            message => message.Contents.OfType<FunctionResultContent>().Any());
+        Assert.Contains(assembled.Skip(nextMessageIndex),
+            message => message.Role == Microsoft.Extensions.AI.ChatRole.User && message.Text == "are you there?");
     }
 }
 

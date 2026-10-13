@@ -117,18 +117,37 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         // Audit logger recorded the invocation
     }
 
-    [Fact]
-    public async Task Multiple_tool_calls_in_single_response_all_executed()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Multiple_tool_calls_keep_their_results_and_wait_for_the_batch(bool reverseCompletion)
     {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
         _fakeChatClient.ToolCallsOnFirstCall =
         [
-            new FunctionCallContent("call-1", "web_search",
-                new Dictionary<string, object?> { ["query"] = "query 1" }),
-            new FunctionCallContent("call-2", "web_search",
-                new Dictionary<string, object?> { ["query"] = "query 2" })
+            new FunctionCallContent("call-A", "web_search",
+                new Dictionary<string, object?> { ["query"] = "query A" }),
+            new FunctionCallContent("call-B", "web_search",
+                new Dictionary<string, object?> { ["query"] = "query B" })
         ];
-
-        _fakeToolExecutor.Results["web_search"] = "search result";
+        var started = new Dictionary<string, TaskCompletionSource>(StringComparer.Ordinal)
+        {
+            ["call-A"] = new(TaskCreationOptions.RunContinuationsAsynchronously),
+            ["call-B"] = new(TaskCreationOptions.RunContinuationsAsynchronously)
+        };
+        var release = new Dictionary<string, TaskCompletionSource<string>>(StringComparer.Ordinal)
+        {
+            ["call-A"] = new(TaskCreationOptions.RunContinuationsAsynchronously),
+            ["call-B"] = new(TaskCreationOptions.RunContinuationsAsynchronously)
+        };
+        var calls = new System.Collections.Concurrent.ConcurrentBag<(string Id, string? Query)>();
+        _fakeToolExecutor.ExecuteOverride = async (call, cancellationToken) =>
+        {
+            calls.Add((call.CallId, call.Arguments?["query"]?.ToString()));
+            started[call.CallId].TrySetResult();
+            return await release[call.CallId].Task.WaitAsync(cancellationToken);
+        };
 
         var sessionId = new SessionId("test-channel/multi-tool-test");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -138,28 +157,57 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         {
             SessionId = sessionId,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(10), ct);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: ct);
 
+        // Act
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Search for two things"
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }, TimeSpan.FromSeconds(3), ct);
 
-        // Two tool call outputs
-        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        // Drain two tool result outputs emitted after tool execution
-        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        // Final text response
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
+        // Assert both calls start before either call completes.
+        var announced = new[]
+        {
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: ct),
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: ct)
+        };
+        Assert.Equal(new[] { "call-A", "call-B" }, announced.Select(output => output.CallId.Value));
+        await Task.WhenAll(started.Values.Select(signal => signal.Task.WaitAsync(TimeSpan.FromSeconds(10), ct)));
+        Assert.Equal(1, _fakeChatClient.CallCount);
         Assert.Equal(2, _fakeToolExecutor.CallCount);
+
+        var first = reverseCompletion ? "call-B" : "call-A";
+        var second = reverseCompletion ? "call-A" : "call-B";
+        // Act and assert the first result does not start a continuation.
+        release[first].SetResult($"result {first}");
+        var firstResult = await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(10), cancellationToken: ct);
+        Assert.Equal(first, firstResult.CallId.Value);
+        Assert.Equal($"result {first}", firstResult.Result);
+        Assert.Equal(1, _fakeChatClient.CallCount);
+
+        // Act and assert the completed batch starts one continuation.
+        release[second].SetResult($"result {second}");
+        var secondResult = await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(10), cancellationToken: ct);
+        Assert.Equal(second, secondResult.CallId.Value);
+        Assert.Equal($"result {second}", secondResult.Result);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: ct);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: ct);
+        Assert.Equal(TurnOutcome.Completed, completed.Outcome);
+        Assert.Equal(1, completed.TurnNumber.Value);
+
+        Assert.Equal(2, _fakeChatClient.CallCount);
+        Assert.Equal(2, _fakeToolExecutor.CallCount);
+        Assert.Equal(
+            new (string Id, string? Query)[] { ("call-A", "query A"), ("call-B", "query B") },
+            calls.OrderBy(call => call.Id).Select(call => (call.Id, call.Query)));
+        var nextRequest = _fakeChatClient.ReceivedMessages[1];
+        var results = nextRequest.SelectMany(message => message.Contents.OfType<FunctionResultContent>()).ToArray();
+        Assert.Equal(2, results.Length);
+        Assert.Equal("result call-A", Assert.Single(results, result => result.CallId == "call-A").Result?.ToString());
+        Assert.Equal("result call-B", Assert.Single(results, result => result.CallId == "call-B").Result?.ToString());
     }
 
     [Fact]
@@ -451,6 +499,8 @@ internal sealed class FakeToolExecutor : IToolExecutor
 
     public Action? BeforeCorrection { get; set; }
 
+    public Func<FunctionCallContent, CancellationToken, Task<string>>? ExecuteOverride { get; set; }
+
     /// <summary>Tool names that should throw on execution.</summary>
     public HashSet<string> FailForTools { get; } = [];
 
@@ -471,6 +521,9 @@ internal sealed class FakeToolExecutor : IToolExecutor
     public async Task<string> ExecuteAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext context, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _callCount);
+
+        if (ExecuteOverride is { } executeOverride)
+            return await executeOverride(toolCall, ct);
 
         if (Corrections.TryGetValue(toolCall.Name, out var correction))
         {
