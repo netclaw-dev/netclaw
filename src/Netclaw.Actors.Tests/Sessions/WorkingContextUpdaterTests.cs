@@ -80,6 +80,73 @@ public class WorkingContextUpdaterTests
     }
 
     [Fact]
+    public void Accepted_result_uses_canonical_file_activity_from_a_successful_receipt()
+    {
+        // Arrange
+        var canonicalPath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "canonical.txt"));
+        var message = Result("call-1", "file_read", "Read /misleading.txt");
+        var receipt = Success(canonicalPath, ToolFileActivityKind.Read);
+
+        // Act
+        var updated = WorkingContextUpdater.AcceptToolResult(WorkingContext.Empty, message, receipt);
+
+        // Assert
+        Assert.Equal([canonicalPath], updated.RecentFiles);
+        Assert.Null(updated.ProjectDirectory);
+    }
+
+    [Theory]
+    [MemberData(nameof(NonSuccessCategories))]
+    public void Unsuccessful_result_cannot_change_project_or_file_context(string categoryName)
+    {
+        // Arrange
+        var current = new WorkingContext { ProjectDirectory = "/existing/project" };
+        var message = Result("call-1", "set_working_directory", "/misleading/project");
+        var category = Enum.Parse<ToolInvocationOutcomeCategory>(categoryName);
+        ToolInvocationReceipt receipt = category == ToolInvocationOutcomeCategory.RecoverableCorrection
+            ? new ToolInvocationReceipt.Correction(ToolRemediationCode.SetWorkingDirectory)
+            : new ToolInvocationReceipt.OtherOutcome(category);
+
+        // Act
+        var updated = WorkingContextUpdater.AcceptToolResult(current, message, receipt);
+
+        // Assert
+        Assert.Same(current, updated);
+    }
+
+    [Fact]
+    public void Only_successful_working_directory_tool_can_declare_project_scope()
+    {
+        // Arrange
+        var declaredPath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "declared-project"));
+        var receipt = new ToolInvocationReceipt.Succeeded([], declaredPath);
+        var wrongTool = Result("call-1", "file_read", declaredPath);
+        var rightTool = Result("call-2", "set_working_directory", "/misleading/project");
+
+        // Act
+        var rejected = WorkingContextUpdater.AcceptToolResult(WorkingContext.Empty, wrongTool, receipt);
+        var accepted = WorkingContextUpdater.AcceptToolResult(WorkingContext.Empty, rightTool, receipt);
+
+        // Assert
+        Assert.Null(rejected.ProjectDirectory);
+        Assert.Equal(declaredPath, accepted.ProjectDirectory);
+    }
+
+    [Fact]
+    public void Missing_receipt_cannot_change_project_scope_from_presentation_text()
+    {
+        // Arrange
+        var current = new WorkingContext { ProjectDirectory = "/existing/project" };
+        var message = Result("call-1", "set_working_directory", "/misleading/project");
+
+        // Act
+        var updated = WorkingContextUpdater.AcceptToolResult(current, message, null);
+
+        // Assert
+        Assert.Same(current, updated);
+    }
+
+    [Fact]
     public void Receipt_is_terminal_and_cannot_be_replaced()
     {
         var outputs = new ToolExecutionOutputs();

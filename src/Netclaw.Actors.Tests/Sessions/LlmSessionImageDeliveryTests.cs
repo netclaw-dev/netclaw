@@ -27,9 +27,9 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <see cref="DataContent"/>.
 ///
 /// Regression: the streaming completion path
-/// (<c>LlmSessionActor.ApplyToolCallRecorded</c>) drains the
-/// <c>ModelInputMediaBuffer</c> accumulator into the media nudge and then reuses
-/// that buffer for the next batch. If the nudge aliased the list instead of
+/// (<c>ActiveToolBatchTracker.ApplyRecordedResult</c>) drains the
+/// tracker's media list into the media nudge. The tracker reuses its media state
+/// for the next batch. If the nudge aliased the list instead of
 /// copying it (see <c>SessionState.BuildNudgeMessage</c>), the image reference
 /// would be wiped before the follow-up LLM call hydrated it — the model would be
 /// told "Image loaded" but never receive the bytes and hallucinate. This test

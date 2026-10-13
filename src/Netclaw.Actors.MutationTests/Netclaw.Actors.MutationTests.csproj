@@ -22,4 +22,9 @@
     <ProjectReference Include="../Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="../Netclaw.Actors.Tests/Sessions/ActiveToolBatchTrackerTests.cs"
+             Link="Sessions/ActiveToolBatchTrackerTests.cs" />
+  </ItemGroup>
+
 </Project>

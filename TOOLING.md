@@ -30,13 +30,14 @@
 ## Focused Mutation Tests
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
-The job has four Linux matrix groups that run in parallel with the normal test matrix.
-The groups hold about 13 to 14 minutes of gates each. The sum of all gates is about 59 minutes of runner time. The job timeout is 25 minutes.
+The job has five Linux matrix groups that run in parallel with the normal test matrix.
+The job timeout is 25 minutes.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
-To add a gate, add its script name (`scripts/run-<name>-mutations.sh`) to the lightest group. Do not add a new job.
+Add a gate to the lightest group when its measured cost fits the timeout and the Windows test duration.
+Use another group under the same job definition when no existing group has that capacity.
 
 Focused mutation tests prove that deterministic tests reject a specific unsafe
-change at a security or authority boundary. They do not measure general code
+change at a security, authority, or load-bearing reliability boundary. They do not measure general code
 coverage. They do not replace positive and negative behavior tests.
 
 ### Current Targets
@@ -61,6 +62,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellCommandAnalysis.IsPlainFileTarget` and `ToolAccessPolicy.ScreenNoProgramRedirects` | Owner decision (October 2026): a command that runs no program gets no prompt only when each redirect target is one plain file (`/dev/null` is the only path below `/dev/`, so `/dev/tcp` keeps a prompt); a redirect target that is not proved, an input redirect that the `file_read` rules refuse, and a `Deny` mode of the file tool deny the call | 20 killed | `./scripts/run-no-program-mutations.sh` |
 | `BashLiteralTwinSlices.Apply` and the denial check of `ToolAccessPolicy.ScreenScopedSlices` | Decision F1: the strictest literal twin result decides a call. The candidates of every twin replace the candidates of their source command, an unresolved source keeps its exact answer, twins without their source command fail loudly, and one denied twin denies the call | 9 killed | `./scripts/run-literal-twin-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
+| `ActiveToolBatchTracker.CanComplete` | The batch cannot continue until every expected result and the execution task complete | 1 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -156,6 +158,26 @@ authority check.
 The local run took about 2 minutes after package restore. CI runs it in the
 `verb-chain-and-reminder` group of the `mutation-gates` job. Its report
 directory is `artifacts/stryker/stream-commit-gate`.
+
+### Tool Batch Readiness Gate
+
+Run the tool batch readiness gate:
+
+```bash
+./scripts/run-tool-batch-readiness-mutations.sh
+```
+
+The script selects only the `CanComplete` expression in `ActiveToolBatchTracker`.
+Stryker changes `ExecutionTaskCompleted && HasAllResults` to `ExecutionTaskCompleted || HasAllResults`.
+The linked `ActiveToolBatchTrackerTests` source kills this one mutant when the task completes before all results arrive.
+The selector rejects missing or repeated source markers before Stryker starts.
+The gate requires exactly one killed mutant. It fails for no mutant, a survivor, or a compile error in the selected span.
+
+The local calibration took 5 minutes 44 seconds after tool restore.
+Hosted run `38448179312` took 15 to 21 minutes for the four existing matrix groups.
+Its Windows test took 16 minutes 6 seconds. Another gate in an existing group would extend that critical path.
+The gate runs in the separate `session-reliability` group under the same `mutation-gates` job definition.
+Its report directory is `artifacts/stryker/tool-batch-readiness`.
 
 ### Tool Authorization Gate
 
@@ -614,7 +636,7 @@ Use this procedure:
 4. Configure Stryker for the smallest source span that contains the decision.
 5. Pin the expected mutant count and require each mutant to die.
 6. Record the target, claim, count, command, and measured cost in this section.
-7. Split the target into a parallel job if the total job approaches its timeout.
+7. Use another parallel matrix group if the total group approaches its timeout or exceeds the Windows test duration.
 
 Do not add a broad project scan. Broad scans can produce equivalent mutants,
 long runs, and invalid results from the current xUnit 3 adapter path.

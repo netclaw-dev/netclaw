@@ -371,7 +371,7 @@ public sealed record SessionState
                 Role = ChatRole.User,
                 Content = $"{SystemNudgePrefix} {nudge}]",
                 // Snapshot, never alias. The model-input media nudge is built from
-                // the caller's media accumulator (ModelInputMediaBuffer.DrainSnapshot),
+                // the batch tracker's media accumulator,
                 // which reuses/empties its backing list across batches.
                 // SerializableChatMessage is an immutable persistence type that must
                 // own its media list — without this copy the caller's reuse could

@@ -259,8 +259,8 @@ public class SessionStateTests
     [Fact]
     public void AddSystemNudge_snapshots_media_so_caller_clear_cannot_empty_it()
     {
-        // Regression: LlmSessionActor hands a caller-owned media accumulator
-        // (ModelInputMediaBuffer) to AddSystemNudge and then reuses/empties it.
+        // Regression: ActiveToolBatchTracker hands its media list to AddSystemNudge
+        // and then reuses its media state.
         // Without a defensive snapshot the nudge would alias that list, so the
         // caller's reuse wiped the tool-loaded image before the next LLM call
         // hydrated it — the model was told "Image loaded" but never saw the bytes
@@ -665,8 +665,10 @@ public class SessionStateTests
         Assert.Empty(restored.ProcessedReminderIds);
     }
 
-    [Fact]
-    public void Successful_subagent_merge_adds_only_confirmed_changed_files()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Completed_or_partial_subagent_merge_adds_only_confirmed_changed_files(bool partial)
     {
         var child = new WorkingContextDelta
         {
@@ -675,9 +677,11 @@ public class SessionStateTests
             ObservedChangedFiles = ["src/ObservedOnly.cs"]
         };
 
-        var merged = LlmSessionActor.MergeSuccessfulSubAgentWorkingContext(
-            WorkingContext.Empty,
-            new ChildRunCompletion.Completed(child));
+        ChildRunCompletion completion = partial
+            ? new ChildRunCompletion.Partial(SubAgentOutcomeReason.ToolIterationBudgetExhausted, child)
+            : new ChildRunCompletion.Completed(child);
+
+        var merged = WorkingContextUpdater.MergeSuccessfulSubAgentWorkingContext(WorkingContext.Empty, completion);
 
         Assert.Equal(["src/Changed.cs"], merged.RecentFiles);
     }
@@ -691,7 +695,7 @@ public class SessionStateTests
             ConfirmedChangedFiles = ["src/Denied.cs"]
         };
 
-        var merged = LlmSessionActor.MergeSuccessfulSubAgentWorkingContext(
+        var merged = WorkingContextUpdater.MergeSuccessfulSubAgentWorkingContext(
             current,
             new ChildRunCompletion.Failed(SubAgentOutcomeReason.ToolExecutionFailed));
 
@@ -703,7 +707,7 @@ public class SessionStateTests
     {
         var current = WorkingContext.Empty.AddRecentFile("src/Existing.cs");
 
-        var merged = LlmSessionActor.MergeSuccessfulSubAgentWorkingContext(
+        var merged = WorkingContextUpdater.MergeSuccessfulSubAgentWorkingContext(
             current,
             new ChildRunCompletion.Cancelled(SubAgentOutcomeReason.CancelledByParent));
 

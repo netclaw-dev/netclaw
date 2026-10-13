@@ -88,9 +88,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Live-only coordination for the currently executing streamed tool batch.
     // Durable recovery derives unanswered calls from _state.History.
     private readonly ActiveToolBatchTracker _activeToolBatch = new();
-    // Media loaded by tools for model-visible inspection during a streamed tool
-    // batch; drained into a system nudge when the batch completes.
-    private readonly ModelInputMediaBuffer _mediaBuffer = new();
     private MessageSource? _currentTurnSource;
     private TurnContext? _currentTurnContext;
     private readonly ManagedTemporaryCorrectionState _sessionManagedTemporaryCorrections = new();
@@ -592,13 +589,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TryCompleteStreamedToolBatch();
         });
 
-        Command<ToolExecutionCompleted>(HandleToolExecutionCompleted);
-
         Command<ToolExecutionFailed>(msg =>
         {
             _watchdog.Stop(Timers);
             CancelAndDisposeToolExecutionCts();
-            _mediaBuffer.Clear();
+            _activeToolBatch.DiscardPendingMedia();
             TurnLog().Error(msg.Cause, "turn_tool_execution_failed");
 
             const string errorMessage = "I encountered an error executing a tool. Please try again.";
@@ -871,204 +866,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 }, OutputFilter.Thinking);
                 break;
         }
-    }
-
-    private void HandleToolExecutionCompleted(ToolExecutionCompleted msg)
-    {
-        _watchdog.Stop(Timers);
-        CancelAndDisposeToolExecutionCts();
-
-        foreach (var startedJob in msg.StartedBackgroundJobs)
-            TrackStartedBackgroundJob(startedJob);
-
-        var emittedRunIds = new HashSet<SubAgentRunId>();
-        foreach (var finding in msg.AcceptedSubAgentFindings)
-        {
-            if (emittedRunIds.Add(finding.RunId))
-            {
-                var runSummary = msg.CompletedSubAgentRuns
-                    .FirstOrDefault(x => x.RunId == finding.RunId);
-
-                EmitOutput(new SubAgentOutput
-                {
-                    SessionId = _sessionId,
-                    TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                    AgentName = finding.AgentName,
-                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
-                    Success = true,
-                    Outcome = runSummary?.Outcome ?? SubAgentRunOutcome.Completed,
-                    OutcomeReason = runSummary?.OutcomeReason,
-                    Duration = finding.Duration,
-                    MemoryDecision = finding.Decision.ToWireValue(),
-                    MemoryDecisionReason = finding.DecisionReason,
-                    FindingsCount = runSummary?.FindingsCount ?? 1
-                }, OutputFilter.ToolCalls);
-            }
-
-            if (finding.Decision != SubAgentFindingReviewDecision.Accepted)
-                continue;
-
-            if (!TryResolveMemoryCheckpointAudience(
-                    Memory.CheckpointTriggerType.SubagentFindings,
-                    out var findingAudience))
-                continue;
-
-            EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                SessionId: _sessionId,
-                TurnId: _activeTurnId,
-                TriggerType: Memory.CheckpointTriggerType.SubagentFindings,
-                Priority: 80,
-                Payload: SessionMemoryCheckpointFactory.ForSubAgentFinding(
-                    _sessionId,
-                    CurrentMemoryBoundary(),
-                    findingAudience,
-                    finding)));
-        }
-
-        foreach (var run in msg.CompletedSubAgentRuns)
-        {
-            MergeSuccessfulSubAgentWorkingContext(run.Completion);
-            if (!emittedRunIds.Add(run.RunId))
-                continue;
-
-            EmitOutput(new SubAgentOutput
-            {
-                SessionId = _sessionId,
-                TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                AgentName = run.AgentName,
-                Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
-                Success = run.Success,
-                Outcome = run.Outcome,
-                OutcomeReason = run.OutcomeReason,
-                Duration = run.Duration,
-                MemoryDecision = run.MemoryDecision,
-                MemoryDecisionReason = run.MemoryDecisionReason,
-                FindingsCount = run.FindingsCount
-            }, OutputFilter.ToolCalls);
-        }
-
-        foreach (var result in msg.ToolResults)
-        {
-            _state = _state with { History = _state.History.Add(result) };
-
-            if (result.ToolCallId is not { } toolCallId)
-                throw new InvalidOperationException(
-                    $"Tool-result message for tool '{result.Name ?? "unknown"}' has no ToolCallId.");
-
-            msg.ToolReceipts.TryGetValue(toolCallId.Value, out var cycleReceipt);
-            _activeToolBatch.RecordCycleResult(
-                toolCallId.Value,
-                cycleReceipt?.Category ?? ToolInvocationOutcomeCategory.Success,
-                result.Content ?? string.Empty);
-
-            var preview = result.Content is { Length: > 200 }
-                ? result.Content[..200] + "..."
-                : result.Content ?? "(null)";
-            _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
-                result.Name ?? "unknown", toolCallId.Value, preview);
-
-            EmitOutput(new ToolResultOutput
-            {
-                SessionId = _sessionId,
-                CallId = toolCallId,
-                ToolName = new ToolName(result.Name ?? "unknown"),
-                Result = result.Content ?? string.Empty,
-                FailureCode = msg.ToolFailureCodes.GetValueOrDefault(toolCallId.Value)
-            }, OutputFilter.ToolCalls);
-
-            if (msg.ToolExposureRequests.TryGetValue(toolCallId.Value, out var exposureRequest))
-                TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
-        }
-
-        foreach (var change in msg.ManagedTemporaryCorrectionChanges)
-            _sessionManagedTemporaryCorrections.Apply(change);
-
-        var updatedContext = WorkingContextUpdater.UpdateFromToolReceipts(
-            _state.WorkingContext,
-            msg.ToolResults,
-            msg.ToolReceipts);
-        if (!ReferenceEquals(updatedContext, _state.WorkingContext))
-            _state = _state with { WorkingContext = updatedContext };
-
-        if (_fullRegistry is not null)
-        {
-            foreach (var result in msg.ToolResults)
-            {
-                if (result.Name is "load_tool" && result.Content is not null)
-                    TryActivateDiscoveredTool(result.Content.Trim());
-            }
-        }
-
-        foreach (var result in msg.ToolResults)
-        {
-            if (result.Name is not SetWorkingDirectoryTool.ToolName
-                || result.ToolCallId is not { } callId
-                || !msg.ToolReceipts.TryGetValue(callId.Value, out var receipt)
-                || receipt is not ToolInvocationReceipt.Succeeded { DeclaredProjectDirectory: { } projectDir })
-            {
-                continue;
-            }
-
-            var next = _state.WorkingContext.WithProjectDirectory(projectDir);
-            if (ReferenceEquals(next, _state.WorkingContext))
-                continue;
-
-            _state = _state with { WorkingContext = next };
-            SetSystemPrompt();
-            _log.Info("Project directory set to {ProjectDir}", projectDir);
-        }
-
-        foreach (var file in msg.FileAttachments)
-        {
-            EmitOutput(new FileOutput
-            {
-                SessionId = _sessionId,
-                TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                FilePath = file.FilePath,
-                FileName = file.FileName,
-                MimeType = file.MimeType
-            }, OutputFilter.Files);
-        }
-
-        AddModelInputMediaNudge(msg.ModelInputMediaReferences);
-
-        var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _config.MaxToolIterationsPerTurn);
-        if (_buffer.Count > 0)
-        {
-            TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
-                _buffer.Count, _turnState.ToolIterationCount);
-            if (DrainBufferedUserMessages())
-                budgetStatus = ToolBudgetStatus.Ok.Instance;
-        }
-
-        switch (budgetStatus)
-        {
-            case ToolBudgetStatus.Exhausted exhausted:
-                TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
-                    _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, _turnState.ToolIterationCount);
-                _state = _state.AddSystemNudge(exhausted.NudgeText);
-                FireLlmCall(forceNoTools: true);
-                return;
-            case ToolBudgetStatus.NudgeNeeded nudge:
-                _state = _state.AddSystemNudge(nudge.NudgeText);
-                break;
-        }
-
-        if (ShouldCompact())
-        {
-            _log.Info("Compaction threshold reached during tool loop ({InputTokens} tokens >= {Threshold} limit), starting compaction",
-                _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
-            _resumeToolLoopAfterCompaction = true;
-            Self.Tell(new CompactionTriggered(_lastInputTokenCount));
-            TransitionTo(SessionPhase.Compacting);
-            return;
-        }
-
-        _toolApprovals.ClearCalls();
-        TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
-            _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, msg.ToolResults.Count);
-        MarkApprovalRunningAfterRedrive();
-        FireLlmCall();
     }
 
     private void HandleDistillationResult(SessionDistillationCompleted msg)
@@ -2074,7 +1871,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             preparedCycleBatch = ToolCycleSignatureFactory.Prepare(toolCalls, _toolExecutor);
         _activeToolBatch.Start(toolCalls, preparedCycleBatch);
 
-        // Execute tools async — results come back as ToolExecutionCompleted
+        // The pipeline sends each result before it signals batch completion.
         TurnLog().Info("turn_tool_call_batch count={Count} tools={Tools}",
             toolCalls.Count,
             string.Join(",", toolCalls.Select(tc => tc.Name)));
@@ -3714,28 +3511,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void MergeSuccessfulSubAgentWorkingContext(ChildRunCompletion completion)
     {
-        var updated = MergeSuccessfulSubAgentWorkingContext(_state.WorkingContext, completion);
+        var updated = WorkingContextUpdater.MergeSuccessfulSubAgentWorkingContext(_state.WorkingContext, completion);
         if (!ReferenceEquals(updated, _state.WorkingContext))
             _state = _state with { WorkingContext = updated };
-    }
-
-    internal static WorkingContext MergeSuccessfulSubAgentWorkingContext(
-        WorkingContext current,
-        ChildRunCompletion completion) => completion switch
-        {
-            ChildRunCompletion.Completed completed => MergeConfirmedChanges(current, completed.WorkingContext),
-            ChildRunCompletion.Partial partial => MergeConfirmedChanges(current, partial.WorkingContext),
-            ChildRunCompletion.Failed or ChildRunCompletion.Cancelled => current,
-            _ => throw new ArgumentOutOfRangeException(nameof(completion))
-        };
-
-    private static WorkingContext MergeConfirmedChanges(WorkingContext current, WorkingContextDelta child)
-    {
-        var updated = current;
-        foreach (var path in child.ConfirmedChangedFiles)
-            updated = updated.AddRecentFile(path);
-
-        return updated;
     }
 
     private string? _sessionPromptOverlay;
@@ -3856,27 +3634,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     private void ApplyToolCallRecorded(ToolCallRecorded evt)
-    {
-        var alreadyRecorded = false;
-        if (evt.ToolResult.ToolCallId is { } toolCallId)
-        {
-            _activeToolBatch.RecordCompleted(toolCallId.Value);
-
-            if (ParkedToolBatchHistory.HasToolResult(_state.History, toolCallId.Value))
-                alreadyRecorded = true;
-        }
-
-        if (!alreadyRecorded)
-        {
-            _state = _state with { History = _state.History.Add(evt.ToolResult) };
-            _mediaBuffer.Add(evt.ToolResult.MediaReferences);
-
-            if (_activeToolBatch.HasAllResults)
-            {
-                AddModelInputMediaNudge(_mediaBuffer.DrainSnapshot());
-            }
-        }
-    }
+        => _state = _activeToolBatch.ApplyRecordedResult(_state, evt.ToolResult);
 
     private void HandleToolInteractionRequestDispatch(ToolInteractionRequestDispatch dispatch)
     {
@@ -3994,7 +3752,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _activeToolWorkTask = null;
         _toolRestartStopRequested = false;
         _activeToolBatch.Clear();
-        _mediaBuffer.Clear();
     }
 
     private void MaybeSnapshot()
@@ -4933,14 +4690,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
 
         var toolMessage = result.Message;
-        if (toolMessage.ToolCallId is not { } toolCallId)
-            throw new InvalidOperationException(
-                $"Tool-result message for tool '{toolMessage.Name ?? "unknown"}' has no ToolCallId.");
-
-        _activeToolBatch.RecordCycleResult(
-            toolCallId.Value,
-            result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
-            toolMessage.Content ?? string.Empty);
+        var toolCallId = _activeToolBatch.RecordOutcome(result);
 
         _log.Info(
             "Tool authorization attempt result authorizationAttemptId={AuthorizationAttemptId} " +
@@ -4965,8 +4715,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (result.ExposureRequest is { } exposureRequest)
             TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
 
-        var updatedContext = WorkingContextUpdater.UpdateFromToolReceipt(
+        var priorProjectDirectory = _state.WorkingContext.ProjectDirectory;
+        var updatedContext = WorkingContextUpdater.AcceptToolResult(
             _state.WorkingContext,
+            toolMessage,
             result.Receipt);
         if (!ReferenceEquals(updatedContext, _state.WorkingContext))
             _state = _state with { WorkingContext = updatedContext };
@@ -4974,19 +4726,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (toolMessage.Name is "load_tool" && toolMessage.Content is not null)
             TryActivateDiscoveredTool(toolMessage.Content.Trim());
 
-        if (toolMessage.Name is SetWorkingDirectoryTool.ToolName
-            && result.Receipt is ToolInvocationReceipt.Succeeded
-            {
-                DeclaredProjectDirectory: { } projectDir
-            })
+        if (!string.Equals(priorProjectDirectory, updatedContext.ProjectDirectory, StringComparison.Ordinal))
         {
-            var next = _state.WorkingContext.WithProjectDirectory(projectDir);
-            if (!ReferenceEquals(next, _state.WorkingContext))
-            {
-                _state = _state with { WorkingContext = next };
-                SetSystemPrompt();
-                _log.Info("Project directory set to {ProjectDir}", projectDir);
-            }
+            SetSystemPrompt();
+            _log.Info("Project directory set to {ProjectDir}", updatedContext.ProjectDirectory);
         }
 
         foreach (var file in result.FileAttachments)
@@ -5005,57 +4748,41 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // ApplyToolCallRecorded recreates the nudge during journal replay.
     }
 
-    private void AddModelInputMediaNudge(IReadOnlyList<SerializableMediaReference> mediaReferences)
-    {
-        if (mediaReferences.Count == 0)
-            return;
-
-        var itemText = mediaReferences.Count == 1 ? "file" : "files";
-        _state = _state.AddSystemNudge(
-            $"A tool loaded {mediaReferences.Count} media {itemText} for model-visible inspection. " +
-            "Use the attached media along with the tool result to answer the user.",
-            mediaReferences);
-    }
-
     private void TryCompleteStreamedToolBatch()
     {
-        if (!_activeToolBatch.CanComplete)
+        if (_activeToolBatch.CompleteIfReady(
+                _state,
+                _turnState,
+                _config.MaxToolIterationsPerTurn) is not BatchCompletion.Ready completion)
             return;
 
-        CompleteToolBatch(_activeToolBatch.CompletedCount);
-    }
-
-    private void CompleteToolBatch(int resultCount)
-    {
-        AddModelInputMediaNudge(_mediaBuffer.DrainSnapshot());
-
-        if (_activeToolBatch.GetCompletedCycle() is { } completedCycle)
-            _turnState.ObserveCompleted(completedCycle);
-
-        var budgetStatus = _turnState.RecordToolCompletion(resultCount, _config.MaxToolIterationsPerTurn);
-
+        _state = completion.State;
+        var newUserInputAdmitted = false;
         if (_buffer.Count > 0)
         {
             TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
                 _buffer.Count, _turnState.ToolIterationCount);
-            if (DrainBufferedUserMessages())
-                budgetStatus = ToolBudgetStatus.Ok.Instance;
+            newUserInputAdmitted = DrainBufferedUserMessages();
         }
 
-        switch (budgetStatus)
+        var next = completion.ChooseNext(newUserInputAdmitted, ShouldCompact());
+        switch (next)
         {
-            case ToolBudgetStatus.Exhausted exhausted:
+            case ToolBatchNextAction.ContinueWithoutTools exhausted:
                 TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
                     _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, _turnState.ToolIterationCount);
                 _state = _state.AddSystemNudge(exhausted.NudgeText);
                 FireLlmCall(forceNoTools: true);
                 return;
-            case ToolBudgetStatus.NudgeNeeded nudge:
-                _state = _state.AddSystemNudge(nudge.NudgeText);
+            case ToolBatchNextAction.ContinueModel { NudgeText: { } nudge }:
+                _state = _state.AddSystemNudge(nudge);
+                break;
+            case ToolBatchNextAction.RequestCompaction { NudgeText: { } nudge }:
+                _state = _state.AddSystemNudge(nudge);
                 break;
         }
 
-        if (ShouldCompact())
+        if (next is ToolBatchNextAction.RequestCompaction)
         {
             _log.Info("Compaction threshold reached during tool loop ({InputTokens} tokens >= {Threshold} limit), starting compaction",
                 _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
@@ -5068,7 +4795,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _toolApprovals.ClearCalls();
         ClearActiveToolBatchTracking();
         TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
-            _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, resultCount);
+            _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, completion.ResultCount);
         MarkApprovalRunningAfterRedrive();
         FireLlmCall();
     }

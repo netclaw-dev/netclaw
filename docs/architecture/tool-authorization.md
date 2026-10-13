@@ -509,6 +509,12 @@ Leaks today:
 | Data | Call-local. Git repository facts are read from disk at each check. The protected path sets are process-local. |
 | Rules | [TA-6](../../openspec/specs/tool-authorization/spec.md#requirement-ta-6-path-access-decisions-own-file-tool-authority) |
 
+The session accepts a project-directory change through
+[`WorkingContextUpdater.AcceptToolResult`](../../src/Netclaw.Actors/Sessions/WorkingContextUpdater.cs).
+This rule requires a successful `set_working_directory` receipt with a declared project directory.
+Within the tool-result journal callback, the actor applies the accepted context and refreshes the prompt when the directory changes.
+`PathAccessPolicy` continues to decide path access for each later call.
+
 Leaks today:
 
 - More than 11 places check for a link, 3 functions normalize Windows paths,
