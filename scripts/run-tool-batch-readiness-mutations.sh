@@ -7,6 +7,7 @@ approval_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionToolWorkflow
 inspection_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionModelContext.cs"
 history_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionState.cs"
 stop_source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionExecutionLifetime.cs"
+input_source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionInputFlow.cs"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
 output_path="${1:-$repo_root/artifacts/stryker/tool-batch-readiness}"
 if [[ "$output_path" != /* ]]; then
@@ -99,6 +100,18 @@ read -r reap_span_start reap_span_end reap_line reap_column reap_end_column < <(
   ' "$stop_source_file"
 )
 
+read -r input_span_start input_span_end input_line input_column input_end_column < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $marker = "!item.IsReplay";
+    $start = index($_, $marker);
+    die "The fresh-turn replay predicate is missing or duplicated.\n"
+      if $start < 0 || index($_, $marker, $start + 1) >= 0;
+    $line = 1 + (substr($_, 0, $start) =~ tr/\n//);
+    $column = $start - rindex(substr($_, 0, $start), "\n");
+    print "$start ", $start + length($marker), " $line $column ", $column + length($marker), "\n";
+  ' "$input_source_file"
+)
+
 (
   cd "$test_project"
   dotnet stryker \
@@ -110,6 +123,7 @@ read -r reap_span_start reap_span_end reap_line reap_column reap_end_column < <(
     --mutate "Sessions/SessionState.cs{$history_span_start..$history_span_end}" \
     --mutate "Sessions/Handlers/SessionExecutionLifetime.cs{$stop_span_start..$stop_span_end}" \
     --mutate "Sessions/Handlers/SessionExecutionLifetime.cs{$reap_span_start..$reap_span_end}" \
+    --mutate "Sessions/Handlers/SessionInputFlow.cs{$input_span_start..$input_span_end}" \
     --output "$output_path" \
     --skip-version-check
 )
@@ -204,10 +218,26 @@ jq -e --arg source "$stop_source_file" \
   exit 1
 }
 
-jq -e --argjson count "$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count))" '
+expected_input_count=1
+jq -e --arg source "$input_source_file" \
+  --argjson line "$input_line" \
+  --argjson first "$input_column" --argjson last "$input_end_column" \
+  --argjson count "$expected_input_count" '
+  [(.files[$source].mutants // [])[]
+    | select(.status != "Ignored")
+    | select(.location.start.line == $line)
+    | select(.location.end.line == $line)
+    | select(.location.start.column >= $first and .location.end.column <= $last)] as $mutants
+  | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
+' "$report" > /dev/null || {
+  echo "Expected $expected_input_count killed fresh-turn replay mutant on the selected expression." >&2
+  exit 1
+}
+
+jq -e --argjson count "$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count))" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count
 ' "$report" > /dev/null || {
-  echo "Expected exactly $((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count)) tested session reliability mutants." >&2
+  echo "Expected exactly $((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count)) tested session reliability mutants." >&2
   exit 1
 }
