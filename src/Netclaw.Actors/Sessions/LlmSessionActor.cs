@@ -429,7 +429,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            AdmitInput(cmd, InputPlacement.Buffer);
+            AdmitInput(cmd, InputPlacement.BufferDuringModel);
         });
 
         Command<DeliveryFailed>(msg =>
@@ -858,7 +858,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            AdmitInput(cmd, InputPlacement.Buffer);
+            AdmitInput(cmd, InputPlacement.BufferDuringCompaction);
         });
 
         // Buffer an approval response during compaction — compaction rewrites
@@ -1054,7 +1054,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void DrainBufferOrReady()
     {
         var continuation = _input.AdvanceAfterCompaction(RestartDrainRequested);
-        if (continuation.Action == AfterCompactionAction.Restart)
+        if (continuation.Action == InputProgressAction.Restart)
         {
             RecordRestartReminderEligibility();
             ClearBufferedMessagesForRestartDrain();
@@ -1072,7 +1072,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ApplyBufferedBatch(batch);
         }
 
-        if (continuation.Action == AfterCompactionAction.FollowUp)
+        if (continuation.Action == InputProgressAction.FollowUp)
         {
             FireLlmCall();
             TransitionTo(SessionPhase.Processing);
@@ -1625,6 +1625,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _lastInputTokenCount = usage.InputTokenCount.Value;
         }
 
+        var selected = _input.SelectedInputs;
         var turnEvent = new TurnRecorded
         {
             SessionId = _sessionId,
@@ -1635,9 +1636,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             },
             AssistantReply = reply,
             RecordedAtMs = NowMs(),
-            SourceReminderId = _input.Authority.Source?.ReminderId,
-            SourceBackgroundJobId = _input.Authority.Source?.BackgroundJobId,
-            ConsumedInputIds = _input.SelectedInputs.Ids
+            SourceReminderId = selected.ReminderId,
+            SourceBackgroundJobId = selected.BackgroundJobId,
+            ConsumedInputIds = selected.Ids
         };
 
         Persist(turnEvent, evt =>
@@ -1668,7 +1669,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void DrainBufferedMessagesOrBecomeReady()
     {
         var next = _input.AdvanceAfterTurn(RestartDrainRequested);
-        if (next.Action == AfterTurnAction.Restart)
+        if (next.Action == InputProgressAction.Restart)
         {
             RecordRestartReminderEligibility();
             ClearBufferedMessagesForRestartDrain();
@@ -1677,7 +1678,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        if (next is { Action: AfterTurnAction.FollowUp, Batch: { } batch })
+        if (next is { Action: InputProgressAction.FollowUp, Batch: { } batch })
         {
             TurnLog().Info("turn_buffer_drain count={BufferCount}", batch.Messages.Count);
             ApplyBufferedBatch(batch);
@@ -1820,8 +1821,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         switch (_input.PrepareAdmission(cmd, _state, _sessionId, NowMs()))
         {
             case AdmissionDecision.Existing:
-                if (placement == InputPlacement.Buffer)
-                    _input.BufferAlreadyAdmitted(cmd);
+                _input.AdmissionAlreadyCommitted(cmd, placement);
                 CompleteAcceptedInput(cmd, placement);
                 return;
             case AdmissionDecision.Reject rejected:
@@ -1852,7 +1852,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        if (_phase.Current == SessionPhase.Processing)
+        if (placement == InputPlacement.BufferDuringModel)
         {
             _deliveryRetry.Clear();
             _log.Info("Buffering user message (LLM call in progress)");
@@ -1968,9 +1968,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (TryResumeSlashCommand(pending))
             return true;
 
-        _input.SelectPendingInputs(pending);
-        foreach (var item in pending)
-            _state = _state with { History = _state.History.Add(item.UserMessage) };
+        foreach (var message in _input.ResumePendingInputs(pending))
+            _state = _state with { History = _state.History.Add(message) };
 
         _modelContext.ResetForNewTurn();
         _input.ResetOverflowRetry();
@@ -1987,24 +1986,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private bool TryResumeSlashCommand(IReadOnlyList<InputAdmitted> pending)
     {
         var first = pending[0];
-        if (first.ExecutableText is not { } executableText
-            || string.IsNullOrWhiteSpace(executableText)
-            || executableText.TrimStart()[0] != '/')
+        if (_input.BeginSlashResume(first) is not { } executableText)
             return false;
 
-        _input.SelectSlashInput(first.InputId);
-        if (!TryHandleSlashCommand(executableText, first.UserMessage.MediaReferences))
-        {
-            _input.ClearSelection();
-            return false;
-        }
-
-        if (_phase.Current != SessionPhase.Processing)
-            return true;
-
-        _input.BufferRecoveredTail(pending, _sessionId);
-
-        return true;
+        var handled = TryHandleSlashCommand(executableText, first.UserMessage.MediaReferences);
+        return _input.CompleteSlashResume(handled, pending, _sessionId, _phase.Current);
     }
 
     private bool ShouldCompact()
@@ -2714,6 +2700,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         MergeSuccessfulSubAgentWorkingContext(msg.Result.Completion);
 
         var userMsg = _state.FindLastUserMessage();
+        var selected = _input.SelectedInputs;
         var turnEvent = new TurnRecorded
         {
             SessionId = _sessionId,
@@ -2728,9 +2715,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Content = msg.Result.Output
             },
             RecordedAtMs = NowMs(),
-            SourceReminderId = _input.Authority.Source?.ReminderId,
-            SourceBackgroundJobId = _input.Authority.Source?.BackgroundJobId,
-            ConsumedInputIds = _input.SelectedInputs.Ids
+            SourceReminderId = selected.ReminderId,
+            SourceBackgroundJobId = selected.BackgroundJobId,
+            ConsumedInputIds = selected.Ids
         };
 
         Persist(turnEvent, evt =>

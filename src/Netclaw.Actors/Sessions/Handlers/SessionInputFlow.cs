@@ -13,11 +13,11 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions.Handlers;
 
-internal enum InputPlacement { Activate, Buffer }
+internal enum InputPlacement { Activate, BufferDuringModel, BufferDuringCompaction }
 
 internal abstract record AdmissionDecision
 {
-    internal sealed record Existing(SendUserMessage Command) : AdmissionDecision;
+    internal sealed record Existing : AdmissionDecision;
     internal sealed record Reject(string Reason) : AdmissionDecision;
     internal sealed record Duplicate : AdmissionDecision;
     internal sealed record Persist(InputAdmitted Event) : AdmissionDecision;
@@ -42,12 +42,11 @@ internal readonly record struct TurnTelemetryFacts(
     string? MessageId,
     ChannelType? ChannelType);
 
-internal enum AfterTurnAction { Restart, FollowUp, Ready }
-internal readonly record struct AfterTurnResult(AfterTurnAction Action, BufferedInputBatch? Batch);
+internal enum InputProgressAction { Restart, FollowUp, Ready }
+internal readonly record struct AfterTurnResult(InputProgressAction Action, BufferedInputBatch? Batch);
 
-internal enum AfterCompactionAction { Restart, FollowUp, Ready }
 internal readonly record struct CompactionContinuation(
-    AfterCompactionAction Action,
+    InputProgressAction Action,
     bool ResumeToolLoop,
     BufferedInputBatch? Batch,
     IWithSessionId? DeferredApproval);
@@ -112,7 +111,7 @@ internal sealed class SessionInputFlow
         long admittedAtMs)
     {
         if (command.AdmittedInputId is not null)
-            return new AdmissionDecision.Existing(command);
+            return new AdmissionDecision.Existing();
 
         var context = TurnContext.FromMessageSource(
             sessionId,
@@ -157,14 +156,20 @@ internal sealed class SessionInputFlow
         _inFlightDedup.ReserveReminder(command.Source?.ReminderId);
         _inFlightDedup.ReserveBackgroundJob(command.Source?.BackgroundJobId);
         var accepted = command with { AdmittedInputId = admitted.InputId };
-        if (placement == InputPlacement.Buffer)
-            _buffer.Add((accepted, false));
+        PlaceAccepted(accepted, placement);
         return accepted;
     }
 
-    public void BufferAlreadyAdmitted(SendUserMessage command) => _buffer.Add((command, false));
+    public void AdmissionAlreadyCommitted(SendUserMessage command, InputPlacement placement)
+        => PlaceAccepted(command, placement);
 
-    public TurnContext ActivateInput(
+    private void PlaceAccepted(SendUserMessage command, InputPlacement placement)
+    {
+        if (placement != InputPlacement.Activate)
+            _buffer.Add((command, false));
+    }
+
+    public void ActivateInput(
         SendUserMessage command,
         IReadOnlyList<InputAdmitted> pending,
         TrustContextDeriver? deriver)
@@ -184,7 +189,6 @@ internal sealed class SessionInputFlow
         _context = context;
         _trust = deriver?.DeriveFromTurnContext(context);
         BindTelemetry(command.Source, context.TurnId);
-        return context;
     }
 
     public void ActivateRecoveredInput(
@@ -201,13 +205,32 @@ internal sealed class SessionInputFlow
         _inFlightDedup.ReserveReminder(source?.ReminderId);
     }
 
-    public void SelectSlashInput(InputId id) => _selectedIds.Add(id);
-    public void SelectPendingInputs(IReadOnlyList<InputAdmitted> pending)
-        => _selectedIds.AddRange(pending.Select(static item => item.InputId));
-    public void ClearSelection() => _selectedIds.Clear();
-
-    public void BufferRecoveredTail(IReadOnlyList<InputAdmitted> pending, SessionId sessionId)
+    public string? BeginSlashResume(InputAdmitted first)
     {
+        if (first.ExecutableText is not { } executableText
+            || string.IsNullOrWhiteSpace(executableText)
+            || executableText.TrimStart()[0] != '/')
+            return null;
+
+        _selectedIds.Add(first.InputId);
+        return executableText;
+    }
+
+    public bool CompleteSlashResume(
+        bool handled,
+        IReadOnlyList<InputAdmitted> pending,
+        SessionId sessionId,
+        SessionPhase phase)
+    {
+        if (!handled)
+        {
+            _selectedIds.Clear();
+            return false;
+        }
+
+        if (phase != SessionPhase.Processing)
+            return true;
+
         foreach (var item in pending.Skip(1))
         {
             _buffer.Add((new SendUserMessage
@@ -218,6 +241,14 @@ internal sealed class SessionInputFlow
                 AdmittedInputId = item.InputId
             }, false));
         }
+
+        return true;
+    }
+
+    public IReadOnlyList<SerializableChatMessage> ResumePendingInputs(IReadOnlyList<InputAdmitted> pending)
+    {
+        _selectedIds.AddRange(pending.Select(static item => item.InputId));
+        return pending.Select(static item => item.UserMessage).ToArray();
     }
 
     public void BufferReplay(SendUserMessage command) => _buffer.Insert(0, (command, true));
@@ -245,12 +276,12 @@ internal sealed class SessionInputFlow
     public AfterTurnResult AdvanceAfterTurn(bool restartDrainRequested)
     {
         if (restartDrainRequested)
-            return new AfterTurnResult(AfterTurnAction.Restart, null);
+            return new AfterTurnResult(InputProgressAction.Restart, null);
 
         var batch = DrainBufferedBatch();
         return batch is null
-            ? new AfterTurnResult(AfterTurnAction.Ready, null)
-            : new AfterTurnResult(AfterTurnAction.FollowUp, batch);
+            ? new AfterTurnResult(InputProgressAction.Ready, null)
+            : new AfterTurnResult(InputProgressAction.FollowUp, batch);
     }
 
     public ToolBatchInputAdvance AdvanceAfterToolBatch(
@@ -267,13 +298,13 @@ internal sealed class SessionInputFlow
 
     public void TurnCommitted(TurnRecorded evt)
     {
-        _inFlightDedup.CompleteReminder(evt.SourceReminderId);
-        _inFlightDedup.CompleteBackgroundJob(evt.SourceBackgroundJobId);
-        _selectedIds.Clear();
+        ReleaseRecordedSources(evt);
         _emittedText = false;
     }
 
-    public void RoutedTurnCommitted(TurnRecorded evt)
+    public void RoutedTurnCommitted(TurnRecorded evt) => ReleaseRecordedSources(evt);
+
+    private void ReleaseRecordedSources(TurnRecorded evt)
     {
         _inFlightDedup.CompleteReminder(evt.SourceReminderId);
         _inFlightDedup.CompleteBackgroundJob(evt.SourceBackgroundJobId);
@@ -321,7 +352,7 @@ internal sealed class SessionInputFlow
         if (restartDrainRequested)
         {
             DiscardCompactionContinuationForRestart();
-            return new CompactionContinuation(AfterCompactionAction.Restart, false, null, null);
+            return new CompactionContinuation(InputProgressAction.Restart, false, null, null);
         }
 
         var resume = _resumeToolLoopAfterCompaction;
@@ -330,8 +361,8 @@ internal sealed class SessionInputFlow
         var deferred = _deferredApproval;
         _deferredApproval = null;
         var action = resume || batch is not null
-            ? AfterCompactionAction.FollowUp
-            : AfterCompactionAction.Ready;
+            ? InputProgressAction.FollowUp
+            : InputProgressAction.Ready;
         return new CompactionContinuation(action, resume, batch, deferred);
     }
 
