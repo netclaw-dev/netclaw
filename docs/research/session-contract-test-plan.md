@@ -225,7 +225,7 @@ Use this order after the first two PRs. Keep exact APIs provisional until each b
 
 3. Complete coherent tool state and safe continuation. Transfer remaining dispatch/resumption rules with their state. Recheck recurrence overlap against the current `dev`.
 4. Extract context and request preparation. Preserve stale-generation rejection, authority, prompt inputs, and model request equivalence.
-5. Consolidate terminal state changes in `SessionState`. Remove duplicate live and recovery reducers. Prove reminder deduplication after recovery.
+5. Consolidate terminal state changes in `SessionState`. Remove duplicate live and recovery reducers. Prove the recovered reminder ledger contract.
 6. Simplify activity and restart decisions. First prove committed turn identity and actor restart replay. Then transfer coherent lifecycle responsibilities.
 7. Consolidate and measure. Remove obsolete paths, duplicate state, temporary adapters, and unjustified contracts. Compare the whole production footprint.
 
@@ -242,7 +242,10 @@ Report repository production net after replacement code and adapters before any 
 
 The current actor repeats terminal state changes for text replies, routed replies, and journal recovery.
 The recovery branch can omit the completed reminder ledger when it restores the user message first.
-That can allow a completed reminder to run again. Source review found this risk; a regression test must confirm it.
+An independent baseline test proves this gap for an accepted `InputAdmitted` event with a null `SourceMessageId`.
+No source evidence confirms that a historic producer emitted that event shape.
+The current reminder producer uses one stable key for `MessageId` and `ReminderId`.
+Source-key deduplication protects a short replay while that key remains in the recent-key set.
 
 Extend `SessionState`, which already owns history, durable inputs, and completed source records.
 Use one reducer to close the exact input IDs, append each required message once, and update the source records.
@@ -307,22 +310,24 @@ The OpenSpec correction names workflow ownership and aligns one-time approval wi
 The parent actor still journals durable answers before wait release. Child waits remain live-only.
 Independent and root review approve the integrated change. Slopwatch, headers, and whitespace checks pass.
 [PR #2439](https://github.com/netclaw-dev/netclaw/pull/2439) merged into `dev` as `32348bfb`.
-[PR #2441](https://github.com/netclaw-dev/netclaw/pull/2441) now contains the tool workflow transfer.
-It targets `dev` at head `83a86ef1`, with all required area and change labels.
-The rebase preserves the tested tree. Hosted checks remain pending.
+[PR #2441](https://github.com/netclaw-dev/netclaw/pull/2441) merged into `dev` as `123daad6959df84460508fd89826c4404b0956e8`.
+All 30 hosted checks passed before merge. One post-merge check skipped.
+The merged tree equals the Stage 4 base tree at `83a86ef1`.
 Stage 4 starts on `feature/session-model-context` from that head.
 Separate authors own production and tests. They first establish the focused context baseline.
 The focused baseline passes all 125 tests.
 The new context owner reuses the actor's call ID for inspection replies and removes the separate inspection counter.
 It also removes the unused recall result field from the model completion message.
 The same recall cache supplies request preparation. A second actor recall field is no longer necessary.
-Independent review and final test evidence remain pending.
+Root committed the Stage 4 source and tests at `527a7e00`.
 The final focused run passes 13 cases. The full actor suite passes 5,749 cases and retains 41 existing skips.
 Slopwatch, copyright headers, and whitespace checks pass.
 The actor loses 288 lines and ten fields. This slice adds 39 total production lines, including the new owner.
 Three duplicate actor facts disappear; eight fields move into the owner, and one owner reference replaces them.
 The cumulative actor reduction is 1,131 lines. Total production source falls by 56 lines across the three extractions.
-The stale-reply negative control and final root delivery approval remain pending.
+The stale-reply negative control failed at the expected assertion. The unchanged test passed after exact source restoration.
+The combined Stage 4 mutation gate killed all three selected mutants in 1 minute 46 seconds.
+Stage 4 delivery remains separate from the merged base PR.
 
 The independent test author owns baseline evidence. The product author owns extraction. The root owns review and each delivery decision.
 Accordant fit and exact owner API remain engineering checks. Persistence or authority changes remain explicit product decisions.
