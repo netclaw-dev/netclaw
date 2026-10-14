@@ -52,22 +52,6 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName, runId.Value);
     }
 
-    public static void ChildSpawned(ILogger? logger, ToolInvocationContext context, string agentName, SubAgentRunId runId)
-    {
-        using (BeginSessionScope(logger, context.SessionId))
-            logger?.LogInformation(
-                "SubAgent [{AgentName}] child actor spawned (runId={RunId}); dispatching RunSubAgent",
-                agentName, runId.Value);
-    }
-
-    public static void Completed(ILogger? logger, ToolInvocationContext context, string agentName, SubAgentRunId runId, bool success, long durationMs)
-    {
-        using (BeginSessionScope(logger, context.SessionId))
-            logger?.LogInformation(
-                "SubAgent [{AgentName}] completed (runId={RunId}, success={Success}, duration={Duration}ms)",
-                agentName, runId.Value, success, durationMs);
-    }
-
     public static void RunFailed(ILogger? logger, ToolInvocationContext context, string agentName, SubAgentRunId runId, Exception ex)
     {
         using (BeginSessionScope(logger, context.SessionId))
