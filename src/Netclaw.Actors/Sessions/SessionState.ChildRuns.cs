@@ -16,6 +16,9 @@ public sealed partial record SessionState
 {
     public ImmutableDictionary<SubAgentRunId, BackgroundChildRun> ChildRuns { get; init; } = [];
 
+    public IEnumerable<BackgroundChildRun> GetExecutableChildRuns()
+        => ChildRuns.Values.Where(run => !TryGetLegacyChildDisposition(run.RunId, out _));
+
     public SessionState Apply(ChildRunAccepted evt)
     {
         var run = evt.Run;
