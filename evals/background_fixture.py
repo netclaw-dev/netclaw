@@ -41,7 +41,8 @@ class Fixture:
         self.tool_results = {}
         self.forward_timeout = 300
         self.strip_child_inspection_hint = False
-        self.child_hint_observations = {}
+        self.child_hint_observations = []
+        self.child_hint_call_ids = set()
 
     def control(self, action, data):
         with self.condition:
@@ -59,7 +60,8 @@ class Fixture:
                 if type(strip_hint) is not bool:
                     raise ValueError("The spill hint control needs a Boolean value.")
                 self.strip_child_inspection_hint = strip_hint
-                self.child_hint_observations = {}
+                self.child_hint_observations = []
+                self.child_hint_call_ids = set()
             elif action == "release":
                 self.released.add(data["nonce"])
                 self.condition.notify_all()
@@ -71,7 +73,7 @@ class Fixture:
                 raise ValueError("Unknown fixture control.")
             return {"ready": self.ready.copy(),
                     "model_requests": self.model_requests, "tool_results": self.tool_results.copy(),
-                    "child_hint_observations": list(self.child_hint_observations.values())}
+                    "child_hint_observations": self.child_hint_observations.copy()}
 
     def arrive(self, data, hold):
         key = f'{data["nonce"]}-{data["slot"]}'
@@ -97,11 +99,13 @@ class Fixture:
                     updated_text = message_text(updated)
                     continuation = SPILL_CONTINUATION in updated_text and call_id in re.findall(
                         r"CallId='([^']+)'", updated_text)
-                    if call_id not in self.child_hint_observations:
-                        self.child_hint_observations[call_id] = {
+                    if found:
+                        self.child_hint_call_ids.add(call_id)
+                    if found or call_id in self.child_hint_call_ids:
+                        self.child_hint_observations.append({
                             "call_id": call_id, "hint_seen": found, "hint_removed": removed,
                             "continuation_preserved": continuation,
-                            "tool_call_id_preserved": message.get("tool_call_id") == call_id}
+                            "tool_call_id_preserved": message.get("tool_call_id") == call_id})
                     text = updated_text
                     self.tool_results[message["tool_call_id"]] = text
             if self.mode == "model":
@@ -129,7 +133,7 @@ class Fixture:
 
     def _strip_hint_content(self, content):
         if isinstance(content, str):
-            return content.replace(CHILD_INSPECTION_HINT, "."), content.count(CHILD_INSPECTION_HINT)
+            return content.replace(CHILD_INSPECTION_HINT, ""), content.count(CHILD_INSPECTION_HINT)
         if isinstance(content, list):
             updated = []
             removed = 0

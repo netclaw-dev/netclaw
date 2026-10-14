@@ -2404,14 +2404,14 @@ lines[399] = "Record 400 verification phrase: cobalt-heron-4471.\n"
 
 setup_coordination_spill_hint_present() {
     setup_coordination_retained_child_inspection
-    curl -fsS -H 'Content-Type: application/json' \
+    curl -fsS --connect-timeout 5 --max-time 10 -H 'Content-Type: application/json' \
         -d '{"strip_child_inspection_hint":false}' \
         "http://127.0.0.1:$SPILL_FIXTURE_PORT/control/spill-hint" >/dev/null
 }
 
 setup_coordination_spill_hint_absent() {
     setup_coordination_retained_child_inspection
-    curl -fsS -H 'Content-Type: application/json' \
+    curl -fsS --connect-timeout 5 --max-time 10 -H 'Content-Type: application/json' \
         -d '{"strip_child_inspection_hint":true}' \
         "http://127.0.0.1:$SPILL_FIXTURE_PORT/control/spill-hint" >/dev/null
 }
@@ -2429,15 +2429,15 @@ assert_coordination_spill_hint_absent() {
 coordination_spill_hint_evidence() {
     local expect_removed="$1" snapshot calls spawn_count completed_count observations
     snapshot="${STDOUT_FILE%.txt}_spill-hint.txt"
-    curl -fsS -H 'Content-Type: application/json' -d '{}' \
+    curl -fsS --connect-timeout 5 --max-time 10 -H 'Content-Type: application/json' -d '{}' \
         "http://127.0.0.1:$SPILL_FIXTURE_PORT/control/snapshot" > "$snapshot" || return 1
     observations=$(jq -c '.child_hint_observations' "$snapshot") || return 1
     [[ $(jq 'length' <<<"$observations") -gt 0 ]] || return 1
     if [[ "$expect_removed" == true ]]; then
-        jq -e 'all(.[]; .hint_seen and .hint_removed == 1 and .continuation_preserved and .tool_call_id_preserved)' \
+        jq -e 'all(.[]; (.call_id | length > 0) and .hint_seen and .hint_removed == 1 and .continuation_preserved and .tool_call_id_preserved)' \
             <<<"$observations" >/dev/null || return 1
     else
-        jq -e 'all(.[]; .hint_seen and .hint_removed == 0 and .continuation_preserved and .tool_call_id_preserved)' \
+        jq -e 'all(.[]; (.call_id | length > 0) and .hint_seen and .hint_removed == 0 and .continuation_preserved and .tool_call_id_preserved)' \
             <<<"$observations" >/dev/null || return 1
     fi
     calls=$(coordination_all_tool_calls) || return 1
