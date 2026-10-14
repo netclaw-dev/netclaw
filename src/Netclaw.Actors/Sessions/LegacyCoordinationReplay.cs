@@ -26,20 +26,27 @@ public static class LegacyCoordinationReplay
             Proto.ChildRunAcceptedProto accepted => ApplyAccepted(state, evt, accepted),
             Proto.ChildRunEventProto childEvent => ApplyChildEvent(state, evt, childEvent),
             Proto.InputAdmittedProto input => ApplyExtendedInput(state, evt, input),
-            Proto.InputClosedProto or Proto.ToolBatchStartedProto or Proto.ToolCallRecordedProto
-                => PreserveExtendedEvent(state, evt),
+            Proto.InputClosedProto input => ValidateLegacyInputClosed(state, evt, input),
+            Proto.ToolBatchStartedProto batch => ValidateLegacyToolBatch(state, evt, batch),
             _ => throw new InvalidDataException($"Unsupported deployed coordination manifest '{evt.Manifest}'.")
         };
     }
 
-    public static ISessionEvent GetCoreEvent(LegacyCoordinationEvent evt)
+    public static ISessionEvent? GetCoreEvent(LegacyCoordinationEvent evt)
         => evt.LegacyPayload switch
         {
             Proto.InputClosedProto input => NetclawProtoMapper.FromProto(input),
-            Proto.ToolBatchStartedProto batch => NetclawProtoMapper.FromProto(batch),
-            Proto.ToolCallRecordedProto result => NetclawProtoMapper.FromProto(result),
+            Proto.ToolBatchStartedProto { MetadataOnly: false } batch => NetclawProtoMapper.FromProto(batch),
+            Proto.ToolBatchStartedProto => null,
             _ => throw new InvalidDataException($"Legacy manifest '{evt.Manifest}' has no ordinary core event.")
         };
+
+    public static TurnContextRecord? GetLegacyTaskContext(LegacyCoordinationEvent evt)
+    {
+        if (evt.LegacyPayload is not Proto.ToolBatchStartedProto { MetadataOnly: true, LegacyTaskContext: not null } batch)
+            return null;
+        return NetclawProtoMapper.FromLegacyTurnContext(batch.LegacyTaskContext);
+    }
 
     public static ImmutableArray<ISessionEvent> GetLegacyChildApprovalEvents(SessionState state)
         => [.. state.LegacyCoordinationEvidence
@@ -57,7 +64,7 @@ public static class LegacyCoordinationReplay
         if (identityReason is null && adoption.HasContinuedChildRunId)
             return ApplyChildAdoption(state, evt, adoption, inputIds, context!);
 
-        var reason = identityReason ?? ValidateOrdinaryAdoption(state, inputIds);
+        var reason = identityReason ?? ValidateOrdinaryAdoption(state, inputIds, adoption);
 
         if (reason is null)
         {
@@ -93,18 +100,39 @@ public static class LegacyCoordinationReplay
         return null;
     }
 
-    private static string? ValidateOrdinaryAdoption(SessionState state, IReadOnlyList<InputId> inputIds)
+    private static string? ValidateOrdinaryAdoption(SessionState state, IReadOnlyList<InputId> inputIds,
+        Proto.ToolTaskAdoptedProto adoption)
     {
+        if (adoption.HasContinuedChildRunId || adoption.StartsChildContinuationWindow)
+            return "The deployed ordinary adoption has child-continuation identity without a correlated child delivery.";
         if (state.PendingInputs.Take(inputIds.Count).Select(static input => input.InputId).SequenceEqual(inputIds) is false)
             return "The deployed adoption IDs do not match the next pending input prefix.";
         if (inputIds.Any(id => state.PendingInputs.All(input => input.InputId != id)))
             return "The deployed adoption names an input that is not pending.";
+        if (inputIds.Any(state.IsLegacyInputQuarantined))
+            return "The deployed adoption names a quarantined legacy input.";
+        var selected = state.PendingInputs.Take(inputIds.Count).ToArray();
+        if (selected.Any(input => input.SourceChildRunId is not null))
+            return "The deployed ordinary adoption contains a child delivery without child-run correlation.";
+        if (selected[^1].SourceBackgroundJobId is { } jobId)
+        {
+            if (selected.Length != 1 || adoption.ContinuedJobKey != jobId.Value)
+                return "The deployed job adoption does not match the exact pending job input.";
+            if (!state.TryGetBackgroundContinuation(selected[0], out _, out var reason))
+                return $"The deployed job adoption has no valid exact lineage: {reason}.";
+        }
+        else if (adoption.HasContinuedJobKey)
+        {
+            return "The deployed adoption names a job that its exact pending inputs do not contain.";
+        }
         return null;
     }
 
     private static SessionState ApplyChildAdoption(SessionState state, LegacyCoordinationEvent evt,
         Proto.ToolTaskAdoptedProto adoption, IReadOnlyList<InputId> inputIds, TurnContextRecord context)
     {
+        if (!adoption.StartsChildContinuationWindow || adoption.HasContinuedJobKey)
+            return Quarantine(state, evt, inputIds, "The deployed child adoption has invalid continuation-window or job identity.");
         var orderedCorrelations = state.LegacyCoordinationEvidence
             .Where(item => item.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation
                            && item.InputIds.Count == 1 && inputIds.Contains(item.InputIds[0]))
@@ -115,6 +143,29 @@ public static class LegacyCoordinationReplay
             || !string.Equals(adoption.ContinuedChildRunId, correlations[inputIds[^1]].ChildRunId?.Value,
                 StringComparison.Ordinal))
             return Quarantine(state, evt, inputIds, "The deployed child adoption lacks exact delivery correlation.");
+
+        if (correlations.Count != 1)
+        {
+            var quarantined = Quarantine(state, evt, inputIds,
+                "The deployed adoption contains multiple child deliveries, which the current parent path cannot restore safely.");
+            foreach (var evidence in correlations.Values)
+            {
+                if (evidence.ChildRunId is not { } runId)
+                    continue;
+                quarantined = quarantined.RetainLegacyCoordinationEvidence(new LegacyCoordinationEvidence
+                {
+                    Manifest = evt.Manifest,
+                    Payload = [],
+                    Disposition = LegacyCoordinationDisposition.UnresolvedLegacyChild,
+                    InputIds = evidence.InputIds,
+                    ActiveInputIds = evidence.InputIds,
+                    ChildRunId = runId,
+                    DeliveryCallId = evidence.DeliveryCallId,
+                    Reason = "The deployed parent adoption has multiple child deliveries."
+                });
+            }
+            return quarantined;
+        }
 
         var runs = new List<(SubAgentRunId Id, ChildPreparedResult Delivery)>();
         foreach (var inputId in inputIds)
@@ -145,13 +196,15 @@ public static class LegacyCoordinationReplay
             });
         }
 
-        var correlationSet = correlations.Values.ToHashSet();
+        var correlation = correlations[inputIds[0]];
         return state with
         {
             History = history,
             ChildRuns = childRuns,
             LegacyCoordinationEvidence = state.LegacyCoordinationEvidence
-                .Where(item => !correlationSet.Contains(item)).ToImmutableList()
+                .Where(item => !ReferenceEquals(item, correlation))
+                .Append(correlation with { ActiveInputIds = inputIds.ToArray() })
+                .ToImmutableList()
         };
     }
 
@@ -340,8 +393,49 @@ public static class LegacyCoordinationReplay
         Proto.InputAdmittedProto proto)
     {
         var input = NetclawProtoMapper.FromProto(proto);
+        if (input.SessionId != evt.SessionId || string.IsNullOrWhiteSpace(input.InputId.Value)
+            || state.PendingInputs.Any(existing => existing.InputId == input.InputId))
+            throw new InvalidDataException("A deployed input admission repeats or changes its session identity.");
         var next = state.Apply(input);
         var inputIds = new[] { input.InputId };
+        if (proto.BackgroundJobLineageVersion != 0 || proto.BackgroundJobOrigin is not null)
+            return Quarantine(next, evt, inputIds,
+                "The deployed input has versioned job lineage that the current runtime cannot validate against its producer record.");
+        if (proto.HasSourceBackgroundJobId && (input.SourceBackgroundJobId is not { } jobId
+                || string.IsNullOrWhiteSpace(jobId.Value) || input.SourceMessageId != jobId.Value
+                || input.TurnContext.SourceKind != Netclaw.Actors.Jobs.BackgroundJobManagerActor.SourceKind
+                || input.TurnContext.RequesterPrincipal != Netclaw.Configuration.PrincipalClassification.VerifiedAutomation
+                || input.TurnContext.TransportAuthenticity != Netclaw.Configuration.TransportAuthenticity.LocalProcess))
+            return Quarantine(next, evt, inputIds,
+                "The deployed job input does not match its trusted source identity.");
+        if (proto.HasSourceChildRunId)
+        {
+            var runId = new SubAgentRunId(proto.SourceChildRunId);
+            var unresolved = next.RetainLegacyCoordinationEvidence(new LegacyCoordinationEvidence
+            {
+                Manifest = evt.Manifest,
+                Payload = evt.Payload,
+                Disposition = LegacyCoordinationDisposition.QuarantinedInvalidAdoption,
+                InputIds = inputIds,
+                ActiveInputIds = inputIds,
+                ChildRunId = runId,
+                Reason = "A standalone deployed child input has no exact lifecycle delivery record."
+            });
+            if (next.ChildRuns.ContainsKey(runId))
+                unresolved = unresolved.RetainLegacyCoordinationEvidence(new LegacyCoordinationEvidence
+                {
+                    Manifest = evt.Manifest,
+                    Payload = [],
+                    Disposition = LegacyCoordinationDisposition.UnresolvedLegacyChild,
+                    InputIds = inputIds,
+                    ActiveInputIds = inputIds,
+                    ChildRunId = runId,
+                    Reason = "A standalone deployed child input has no exact lifecycle delivery record."
+                });
+            return unresolved;
+        }
+        if (!proto.HasSourceBackgroundJobId)
+            return next;
         return next.RetainLegacyCoordinationEvidence(new LegacyCoordinationEvidence
         {
             Manifest = evt.Manifest,
@@ -349,23 +443,74 @@ public static class LegacyCoordinationReplay
             Disposition = LegacyCoordinationDisposition.PreservedLegacyFacts,
             InputIds = inputIds,
             ActiveInputIds = inputIds,
-            Reason = "The deployed input has lineage fields with no current runtime consumer."
+            Reason = "The deployed input has a trusted legacy job source with no versioned producer lineage."
         });
     }
 
-    private static SessionState PreserveExtendedEvent(SessionState state, LegacyCoordinationEvent evt)
+    private static SessionState ValidateLegacyInputClosed(SessionState state, LegacyCoordinationEvent evt,
+        Proto.InputClosedProto proto)
     {
-        var inputIds = evt.LegacyPayload is Proto.InputClosedProto input
-            ? input.InputIds.Select(static id => new InputId(id)).ToArray()
-            : Array.Empty<InputId>();
-        return state.RetainLegacyCoordinationEvidence(new LegacyCoordinationEvidence
+        var ids = proto.InputIds.Select(static value => new InputId(value)).ToArray();
+        if (evt.SessionId != new SessionId(proto.SessionId?.Value ?? string.Empty)
+            || ids.Length == 0 || ids.Any(static id => string.IsNullOrWhiteSpace(id.Value))
+            || ids.Distinct().Count() != ids.Length)
+            throw new InvalidDataException("A deployed input closure has invalid session or input identity.");
+
+        var pending = state.PendingInputs.Where(input => ids.Contains(input.InputId)).ToArray();
+        if (pending.Length != ids.Length || !pending.Select(static input => input.InputId).SequenceEqual(ids)
+            || pending.Any(input => input.SessionId != evt.SessionId))
+            throw new InvalidDataException("A deployed input closure does not match the exact pending input sequence.");
+
+        if (proto.HasTaskId && pending.Any(input => input.TurnContext.TurnId != proto.TaskId))
+            throw new InvalidDataException("A deployed input closure names a different task authority.");
+
+        if (proto.HasSourceBackgroundJobId)
         {
-            Manifest = evt.Manifest,
-            Payload = evt.Payload,
-            Disposition = LegacyCoordinationDisposition.PreservedLegacyFacts,
-            InputIds = inputIds,
-            Reason = "The deployed event has extension facts with no current runtime consumer."
-        });
+            var jobId = new BackgroundJobId(proto.SourceBackgroundJobId);
+            if (string.IsNullOrWhiteSpace(jobId.Value) || pending.Length != 1 || pending[0].SourceBackgroundJobId != jobId
+                || pending[0].SourceMessageId != jobId.Value
+                || pending[0].TurnContext.SourceKind != Netclaw.Actors.Jobs.BackgroundJobManagerActor.SourceKind
+                || pending[0].TurnContext.RequesterPrincipal != Netclaw.Configuration.PrincipalClassification.VerifiedAutomation
+                || pending[0].TurnContext.TransportAuthenticity != Netclaw.Configuration.TransportAuthenticity.LocalProcess)
+                throw new InvalidDataException("A deployed job closure does not match its exact trusted pending input.");
+        }
+        else if (pending.Any(static input => input.SourceBackgroundJobId is not null))
+        {
+            throw new InvalidDataException("A deployed closure omits the pending input's background job identity.");
+        }
+
+        if (proto.RejectedJobReport is not null)
+        {
+            var report = NetclawProtoMapper.FromProto(proto.RejectedJobReport);
+            if (!proto.HasSourceBackgroundJobId || report.Role != ChatRole.Assistant
+                || report.ToolCalls.Count != 0 || report.MediaReferences.Count != 0
+                || report.ToolCallId is not null || report.Name is not null)
+                throw new InvalidDataException("A deployed rejected-job report has an unsafe role or shape.");
+        }
+
+        return state;
+    }
+
+    private static SessionState ValidateLegacyToolBatch(SessionState state, LegacyCoordinationEvent evt,
+        Proto.ToolBatchStartedProto proto)
+    {
+        if (!proto.MetadataOnly && proto.LegacyTaskContext is null)
+            return state;
+        if (proto.LegacyTaskContext is null)
+            throw new InvalidDataException("A deployed legacy tool batch has no authority context.");
+        var context = NetclawProtoMapper.FromLegacyTurnContext(proto.LegacyTaskContext);
+        if (context.SessionId != evt.SessionId
+            || proto.LoopAdmission is not null && context.TurnId != proto.LoopAdmission.TaskId
+            || proto.MetadataOnly && (proto.LoopAdmission is null || string.IsNullOrWhiteSpace(proto.LoopAdmission.TaskId)))
+            throw new InvalidDataException("A deployed legacy tool batch changes its session or task authority.");
+        var adopted = state.LegacyCoordinationEvidence.LastOrDefault(item =>
+            item.Disposition == LegacyCoordinationDisposition.AppliedOrdinaryAdoption
+            && item.AdoptedContext is not null && item.AdoptedContext.TurnId == context.TurnId);
+        var pending = state.PendingInputs.Where(input => input.TurnContext.TurnId == context.TurnId).ToArray();
+        if ((adopted?.AdoptedContext is { } adoptedContext && !SameContext(context, adoptedContext))
+            || (pending.Length > 0 && pending.Any(input => !SameContext(context, input.TurnContext))))
+            throw new InvalidDataException("A deployed metadata-only tool batch differs from its admitted authority.");
+        return state;
     }
 
     private static SessionState Quarantine(SessionState state, LegacyCoordinationEvent evt,

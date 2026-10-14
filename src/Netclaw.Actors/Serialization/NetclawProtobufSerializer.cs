@@ -189,8 +189,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private static object ReadInputAdmitted(byte[] bytes)
     {
         var proto = Proto.InputAdmittedProto.Parser.ParseFrom(bytes);
-        if (proto.HasSourceChildRunId || proto.HasSourceBackgroundJobId || proto.BackgroundJobLineageVersion != 0
-            || proto.BackgroundJobOrigin is not null)
+        if (proto.HasSourceChildRunId || proto.BackgroundJobLineageVersion != 0 || proto.BackgroundJobOrigin is not null)
             return Legacy(proto.SessionId?.Value ?? string.Empty, InputAdmittedManifest, bytes, proto, proto.AdmittedAtMs);
         return NetclawProtoMapper.FromProto(proto);
     }
@@ -198,7 +197,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private static object ReadInputClosed(byte[] bytes)
     {
         var proto = Proto.InputClosedProto.Parser.ParseFrom(bytes);
-        if (proto.HasTaskId || proto.HasSourceBackgroundJobId || proto.RejectedJobReport is not null)
+        if (proto.HasTaskId)
             return Legacy(proto.SessionId?.Value ?? string.Empty, InputClosedManifest, bytes, proto, proto.ClosedAtMs);
         return NetclawProtoMapper.FromProto(proto);
     }
@@ -206,7 +205,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private static object ReadToolBatchStarted(byte[] bytes)
     {
         var proto = Proto.ToolBatchStartedProto.Parser.ParseFrom(bytes);
-        if (proto.LoopAdmission is not null || proto.MetadataOnly || proto.LegacyTaskContext is not null)
+        if (proto.MetadataOnly || proto.LegacyTaskContext is not null)
             return Legacy(proto.SessionId?.Value ?? string.Empty, ToolBatchStartedManifest, bytes, proto, proto.StartedAtMs);
         return NetclawProtoMapper.FromProto(proto);
     }
@@ -214,8 +213,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private static object ReadToolCallRecorded(byte[] bytes)
     {
         var proto = Proto.ToolCallRecordedProto.Parser.ParseFrom(bytes);
-        if (proto.LoopObservation is not null || proto.StartedBackgroundJob is not null)
-            return Legacy(proto.SessionId?.Value ?? string.Empty, ToolCallRecordedManifest, bytes, proto, proto.RecordedAtMs);
+        // Loop observations were a detector aid. Current job-start facts use the canonical event mapper.
         return NetclawProtoMapper.FromProto(proto);
     }
 
