@@ -11,6 +11,38 @@ The user authorizes implementation and verification. The root reviews each resul
 Hold the whole open stack until every PR head has green required checks. Then request one native stack group merge.
 Each PR must preserve accepted behavior. A behavior change needs a separate decision.
 
+## Current checkpoint: 2026-10-14
+
+The approved structural refactor is merged at [`90728b20691334694d8f57e0bf61b77b28d9901b`](https://github.com/netclaw-dev/netclaw/commit/90728b20691334694d8f57e0bf61b77b28d9901b).
+PRs [#2449](https://github.com/netclaw-dev/netclaw/pull/2449), [#2451](https://github.com/netclaw-dev/netclaw/pull/2451), and [#2454](https://github.com/netclaw-dev/netclaw/pull/2454) merged as one native group.
+PR [#2455](https://github.com/netclaw-dev/netclaw/pull/2455) then merged the adjacent child-result envelope change.
+All four pull requests passed their required head checks.
+Each expected post-merge-only check skipped.
+The four post-merge runs on `90728b20691334694d8f57e0bf61b77b28d9901b` passed: Docker `38496919949`, verification `38496919940`, and CodeQL `38496919828` and `38496919826`.
+
+The existing method counted committed source at baseline `4753b7682c353dc3b7e3932f458124052dbd6adb`.
+It counted source at final commit `90728b20691334694d8f57e0bf61b77b28d9901b`.
+The actor fell from 5,513 to 3,727 lines and from 87 to 43 instance fields.
+Production C# grew from 202,618 to 202,619 physical lines across 945 to 948 files.
+The user accepted this result and closed the structural phase.
+Production source grew by one line, so the production-line reduction target remains unmet.
+The final capability review found no further approved structural candidates.
+
+The bounded Accordant/CsCheck pilot is merged in `ActiveToolBatchAccordantTests.cs`.
+The merged tree contains nine canonical skills under `.agents/skills/accordant-*` and nine resolving Claude links under `.claude/skills/accordant-*`.
+The [Codex skills guide](https://developers.openai.com/codex/skills/), [Claude Code skills guide](https://code.claude.com/docs/en/skills), and [OpenCode skills guide](https://docs.opencode.ai/docs/skills/) document these project discovery paths.
+Filesystem path checks passed for all three clients.
+These checks do not prove that an active client session refreshed its skill catalog.
+
+Background-child wake remains a separate accepted capability and is not part of the closed structural phase.
+Its feature work remains local and unmerged.
+Its focused SQLite recovery proof passed two tests.
+The proof does not establish child delivery or whole-process crash recovery.
+That work does not show that the original synchronous actor was defective.
+It does not block structural-phase closure.
+The structural phase has no approved refactor work left.
+Any new simplification needs new evidence and review.
+
 ## Scope and evidence
 
 The first boundary covers accepted tool outcomes, completed-batch state, and the decision to continue the current turn.
@@ -115,7 +147,7 @@ The root resolves ordinary fixture design, test selection, and source organizati
 The pilot tests result order, task completion, duplicate results, and batch reset.
 Delivery retry remains outside this pilot.
 
-## Child completion: explicit product decision
+## Historical child completion decision
 
 The user requires each child result to wake its parent, as an ordinary tool result does.
 A status event alone does not satisfy this requirement.
@@ -282,7 +314,7 @@ Review the committed turn identity and lost actor restart replay marker as separ
 Actor restart replay does not provide process crash recovery.
 The broader lifecycle transfer remains required; these corrections do not complete the refactor.
 
-## Status and handoff
+## Historical status and handoff
 
 [PR #2440](https://github.com/netclaw-dev/netclaw/pull/2440) merged into the Stage 1 feature branch before its hosted checks completed.
 That historical merge did not establish hosted acceptance at the time.
