@@ -79,7 +79,7 @@ public sealed partial class CheckBackgroundJobTool : NetclawTool<CheckBackground
             result += $"\nFull output: {response.OutputFilePath}";
 
         if (response.Status is BackgroundJobStatus.Pending or BackgroundJobStatus.Running)
-            context.Outputs.TryComplete(new ToolInvocationReceipt.PendingBackgroundJob(jobId.Value));
+            context.Outputs.TryComplete(new ToolInvocationReceipt.PendingBackgroundJob());
         return result;
     }
 }
