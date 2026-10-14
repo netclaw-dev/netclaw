@@ -28,10 +28,16 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string SerializableToolCallManifest = "stc-v1";
     private const string TurnRecordedManifest = "tr-v1";
     private const string InputAdmittedManifest = "ia-v1";
+    private const string LegacyChildRunAcceptedManifest = "cra-v1";
+    private const string LegacyChildRunEventManifest = "cre-v1";
+    private const string LegacyToolTaskAdoptedManifest = "tta-v1";
     private const string InputClosedManifest = "ic-v1";
     private const string SessionTitleSetManifest = "sts-v1";
     private const string SessionCompactedManifest = "sc-v1";
-    private const string SessionSnapshotManifest = "ss-v1";
+    private const string LegacySessionSnapshotManifest = "ss-v1";
+    private const string SessionSnapshotManifest = "ss-v2";
+    private const string ChildRunAcceptedManifest = "cra-v2";
+    private const string ChildRunEventManifest = "cre-v2";
     private const string WorkingContextManifest = "wc-v1";
     private const string ReminderIdManifest = "rid-v1";
     private const string ReminderDeliveryManifest = "rd-v1";
@@ -62,6 +68,11 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(SessionTitleSet)] = SessionTitleSetManifest,
         [typeof(SessionCompacted)] = SessionCompactedManifest,
         [typeof(SessionSnapshot)] = SessionSnapshotManifest,
+        [typeof(ChildRunAccepted)] = ChildRunAcceptedManifest,
+        [typeof(ChildRunEvent.Checkpointed)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.CancellationRequested)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.TerminalRecorded)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.ResultPrepared)] = ChildRunEventManifest,
         [typeof(WorkingContext)] = WorkingContextManifest,
         [typeof(ReminderId)] = ReminderIdManifest,
         [typeof(ReminderDelivery)] = ReminderDeliveryManifest,
@@ -106,6 +117,9 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         {
             SessionIdManifest => NetclawProtoMapper.FromProto(
                 Proto.SessionIdProto.Parser.ParseFrom(bytes)),
+            LegacyChildRunAcceptedManifest => ReadLegacyChildRunAccepted(bytes),
+            LegacyChildRunEventManifest => ReadLegacyChildRunEvent(bytes),
+            LegacyToolTaskAdoptedManifest => ReadLegacyToolTaskAdopted(bytes),
             SendUserMessageManifest => NetclawProtoMapper.FromProto(
                 Proto.SendUserMessageProto.Parser.ParseFrom(bytes)),
             SerializableChatMessageManifest => NetclawProtoMapper.FromProto(
@@ -116,16 +130,21 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.SerializableToolCallProto.Parser.ParseFrom(bytes)),
             TurnRecordedManifest => NetclawProtoMapper.FromProto(
                 Proto.TurnRecordedProto.Parser.ParseFrom(bytes)),
-            InputAdmittedManifest => NetclawProtoMapper.FromProto(
-                Proto.InputAdmittedProto.Parser.ParseFrom(bytes)),
+            InputAdmittedManifest => ReadInputAdmitted(bytes),
             InputClosedManifest => NetclawProtoMapper.FromProto(
                 Proto.InputClosedProto.Parser.ParseFrom(bytes)),
             SessionTitleSetManifest => NetclawProtoMapper.FromProto(
                 Proto.SessionTitleSetProto.Parser.ParseFrom(bytes)),
             SessionCompactedManifest => NetclawProtoMapper.FromProto(
                 Proto.SessionCompactedProto.Parser.ParseFrom(bytes)),
+            LegacySessionSnapshotManifest => NetclawProtoMapper.FromLegacySnapshot(
+                Proto.SessionSnapshotProto.Parser.ParseFrom(bytes), bytes),
             SessionSnapshotManifest => NetclawProtoMapper.FromProto(
-                Proto.SessionSnapshotProto.Parser.ParseFrom(bytes)),
+                Proto.SessionSnapshotV2Proto.Parser.ParseFrom(bytes)),
+            ChildRunAcceptedManifest => NetclawProtoMapper.FromProto(
+                Proto.ChildRunAcceptedV2Proto.Parser.ParseFrom(bytes)),
+            ChildRunEventManifest => NetclawProtoMapper.FromProto(
+                Proto.ChildRunEventV2Proto.Parser.ParseFrom(bytes)),
             WorkingContextManifest => NetclawProtoMapper.FromProto(
                 Proto.WorkingContextProto.Parser.ParseFrom(bytes)),
             ReminderIdManifest => NetclawProtoMapper.FromProto(
@@ -162,4 +181,47 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 $"Unknown manifest '{manifest}'. Add it to NetclawProtobufSerializer.")
         };
     }
+
+    private static LegacyCoordinationEvent ReadLegacyChildRunAccepted(byte[] bytes)
+    {
+        var proto = Proto.ChildRunAcceptedProto.Parser.ParseFrom(bytes);
+        var run = proto.Run ?? throw new InvalidDataException("Legacy child acceptance has no run record.");
+        return Legacy(proto.SessionId, LegacyChildRunAcceptedManifest, bytes, proto, run.AcceptedAtMs);
+    }
+
+    private static object ReadInputAdmitted(byte[] bytes)
+    {
+        var proto = Proto.InputAdmittedProto.Parser.ParseFrom(bytes);
+        if (proto.HasSourceChildRunId || proto.HasSourceBackgroundJobId || proto.BackgroundJobLineageVersion != 0
+            || proto.BackgroundJobOrigin is not null)
+            return Legacy(proto.SessionId?.Value ?? string.Empty, InputAdmittedManifest, bytes, proto, proto.AdmittedAtMs);
+        return NetclawProtoMapper.FromProto(proto);
+    }
+
+    private static LegacyCoordinationEvent ReadLegacyChildRunEvent(byte[] bytes)
+    {
+        var proto = Proto.ChildRunEventProto.Parser.ParseFrom(bytes);
+        return Legacy(proto.SessionId, LegacyChildRunEventManifest, bytes, proto, proto.RecordedAtMs);
+    }
+
+    private static LegacyCoordinationEvent ReadLegacyToolTaskAdopted(byte[] bytes)
+    {
+        var proto = Proto.ToolTaskAdoptedProto.Parser.ParseFrom(bytes);
+        return Legacy(proto.SessionId?.Value ?? string.Empty, LegacyToolTaskAdoptedManifest, bytes, proto, proto.AdoptedAtMs);
+    }
+
+    private static LegacyCoordinationEvent Legacy(
+        string sessionId,
+        string manifest,
+        byte[] bytes,
+        Google.Protobuf.IMessage proto,
+        long recordedAtMs)
+        => new()
+        {
+            SessionId = new SessionId(sessionId),
+            Manifest = manifest,
+            Payload = [.. bytes],
+            LegacyPayload = proto,
+            RecordedAtMs = recordedAtMs
+        };
 }
