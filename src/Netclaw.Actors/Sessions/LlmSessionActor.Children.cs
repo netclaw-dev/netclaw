@@ -370,7 +370,7 @@ public sealed partial class LlmSessionActor
     private void RecoverChildren()
     {
         _toolWorkflow.ExpireRecoveredChildApprovals();
-        foreach (var run in _state.ChildRuns.Values.ToArray())
+        foreach (var run in _state.GetExecutableChildRuns().ToArray())
         {
             if (run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling)
                 RecordChildTerminal(run.RunId, LostChildResult(run), lost: true,
@@ -399,7 +399,7 @@ public sealed partial class LlmSessionActor
         }], findings);
     }
 
-    private bool HasReadyChildResult => _state.ChildRuns.Values.Any(run =>
+    private bool HasReadyChildResult => _state.GetExecutableChildRuns().Any(run =>
         run.Lifecycle is ChildRunLifecycle.Prepared or ChildRunLifecycle.Consumed);
 
     private void WakeForChild()

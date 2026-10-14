@@ -28,8 +28,8 @@ internal sealed partial class SessionToolWorkflow
         }
         if (!allowSelection)
             return null;
-        var run = state.ChildRuns.Values.FirstOrDefault(run => run.Lifecycle is ChildRunLifecycle.Consumed)
-            ?? state.ChildRuns.Values.FirstOrDefault(run => run.Lifecycle is ChildRunLifecycle.Prepared);
+        var run = state.GetExecutableChildRuns().FirstOrDefault(run => run.Lifecycle is ChildRunLifecycle.Consumed)
+            ?? state.GetExecutableChildRuns().FirstOrDefault(run => run.Lifecycle is ChildRunLifecycle.Prepared);
         var delivery = run?.Lifecycle switch
         {
             ChildRunLifecycle.Prepared prepared => prepared.Delivery,
@@ -40,6 +40,18 @@ internal sealed partial class SessionToolWorkflow
             return null;
         _selectedChild = new SelectedChild(new ChildContinuation(run.RunId, delivery.Result.ToolCallId!.Value), modelGeneration);
         return run;
+    }
+
+    public void RestoreConsumedChild(SessionState state, TurnContext authority, long modelGeneration)
+    {
+        var run = state.GetExecutableChildRuns().SingleOrDefault(child => child.Lifecycle is ChildRunLifecycle.Consumed);
+        if (run is null)
+            return;
+        if (!TurnContext.TryFromRecord(run.OriginalContext, out var original, out _) || original is null ||
+            original.TurnId != authority.TurnId || !original.HasSameAuthority(authority))
+            throw new InvalidOperationException("A recovered child continuation has different approval authority.");
+        var delivery = ((ChildRunLifecycle.Consumed)run.Lifecycle).Delivery;
+        _selectedChild = new SelectedChild(new ChildContinuation(run.RunId, delivery.Result.ToolCallId!.Value), modelGeneration);
     }
 
     public SessionState ModelState(SessionState state)
