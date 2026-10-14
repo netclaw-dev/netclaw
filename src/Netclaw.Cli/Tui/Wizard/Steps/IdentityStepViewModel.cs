@@ -261,7 +261,7 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
     public void SeedBuiltInAgents(NetclawPaths paths)
     {
         var agentsDir = paths.AgentsDirectory;
-        RejectAgentPathLinks(agentsDir);
+        RejectAgentPathLink(agentsDir);
         Directory.CreateDirectory(agentsDir);
 
         SeedAgentFile(agentsDir, "task-worker.md", ReadEmbeddedTemplate("task-worker.profile.md"));
@@ -335,7 +335,8 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
     private static void SeedAgentFile(string directory, string fileName, string content)
     {
         var path = Path.Combine(directory, fileName);
-        RejectAgentPathLinks(path);
+        RejectAgentPathLink(directory);
+        RejectAgentPathLink(path);
         if (Directory.Exists(path))
             throw new IOException($"An agent profile path is a directory: {path}");
         if (File.Exists(path))
@@ -347,13 +348,10 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
         writer.Write(content);
     }
 
-    private static void RejectAgentPathLinks(string path)
+    private static void RejectAgentPathLink(string path)
     {
-        for (var current = Path.GetFullPath(path); current is not null; current = Path.GetDirectoryName(current))
-        {
-            if (new FileInfo(current).LinkTarget is not null || new DirectoryInfo(current).LinkTarget is not null)
-                throw new IOException($"An agent profile path contains a symbolic link: {current}");
-        }
+        if (new FileInfo(path).LinkTarget is not null || new DirectoryInfo(path).LinkTarget is not null)
+            throw new IOException($"An agent profile path is a symbolic link: {path}");
     }
 
     private void PrefillFromExistingConfig(WizardContext context)

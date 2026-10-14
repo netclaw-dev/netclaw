@@ -46,7 +46,7 @@ internal static class ToolOutputSpill
         string redactedResult, string? toolCallId, int budget, ToolInvocationContext context,
         ILogger logger, CancellationToken ct)
         => BoundAndSpillAsync(modelFacingResult: redactedResult, spillContent: redactedResult,
-            toolCallId, budget, context, logger, ct);
+            toolCallId, budget, context, logger, ct, suggestChildInspection: false);
 
     /// <summary>
     /// Overload that separates the model-facing result from the spill content.
@@ -56,7 +56,7 @@ internal static class ToolOutputSpill
     /// </summary>
     public static async Task<string> BoundAndSpillAsync(
         string modelFacingResult, string spillContent, string? toolCallId, int budget,
-        ToolInvocationContext context, ILogger logger, CancellationToken ct)
+        ToolInvocationContext context, ILogger logger, CancellationToken ct, bool suggestChildInspection)
     {
         if (budget <= 0)
             budget = DefaultContentBudget;
@@ -80,7 +80,7 @@ internal static class ToolOutputSpill
                 spill.FailureDetail);
         }
 
-        return Compose(inline, spill, modelFacingResult.Length, budget, context.SpawnChildActor is not null);
+        return Compose(inline, spill, modelFacingResult.Length, budget, suggestChildInspection);
     }
 
     private static async Task<SpillOutcome> TryWriteSpillAsync(
