@@ -261,7 +261,10 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
     public void SeedBuiltInAgents(NetclawPaths paths)
     {
         var agentsDir = paths.AgentsDirectory;
+        RejectAgentPathLinks(agentsDir);
         Directory.CreateDirectory(agentsDir);
+
+        SeedAgentFile(agentsDir, "task-worker.md", ReadEmbeddedTemplate("task-worker.profile.md"));
 
         SeedAgentFile(agentsDir, "research-assistant.md", """
             ---
@@ -335,10 +338,25 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
     private static void SeedAgentFile(string directory, string fileName, string content)
     {
         var path = Path.Combine(directory, fileName);
+        RejectAgentPathLinks(path);
+        if (Directory.Exists(path))
+            throw new IOException($"An agent profile path is a directory: {path}");
         if (File.Exists(path))
-            return; // Do not overwrite operator customizations
+            return;
 
-        File.WriteAllText(path, content);
+        // CreateNew cannot overwrite a profile that appears after the existence check.
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using var writer = new StreamWriter(stream);
+        writer.Write(content);
+    }
+
+    private static void RejectAgentPathLinks(string path)
+    {
+        for (var current = Path.GetFullPath(path); current is not null; current = Path.GetDirectoryName(current))
+        {
+            if (new FileInfo(current).LinkTarget is not null || new DirectoryInfo(current).LinkTarget is not null)
+                throw new IOException($"An agent profile path contains a symbolic link: {current}");
+        }
     }
 
     private void PrefillFromExistingConfig(WizardContext context)
