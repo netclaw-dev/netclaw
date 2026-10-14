@@ -344,11 +344,11 @@ dotnet slopwatch analyze
 <li>Twenty-six actor, context, and replay checks pass after the history repair. They cover failed acceptance, ready-child priority, ordered user batches, and the acceptance crash cut.</li>
 <li>The final six actor boundary cases pass. They include requester authority, a cancellation reply after the journal write, and active-child approval count one to zero.</li>
 <li>The child model passes 1,000 generated cases with 9,395 valid operations. It reaches all ten required outcomes without a fixed operation suffix.</li>
-<li>The repaired spawn, streaming, and observability filter passes 28 tests. All 82 eval assertion tests pass; they do not prove model behavior.</li>
+<li>The repaired spawn, streaming, and observability filter passes 28 tests. All 84 eval assertion tests pass; they do not prove model behavior.</li>
 <li>An independent test reproduced duplicate child pairs in later requests. The repair keeps temporary model messages outside canonical history.</li>
 <li>The full actor suite passes 5,807 tests, with 41 skips and zero failures. Slopwatch and copyright checks pass on the same source.</li>
 <li>The earlier native binaries pass 29 tapes and 10 scenarios. Final binaries and the eval image build successfully; their executable hashes match.</li>
-<li>Real-provider coordination trials now run on the final image. Required model results and final hosted checks remain open.</li>
+<li>Real-provider trials use the final image. Slow provider calls exceed the trial deadline. The harness also leaves requests active after CLI timeout. A bounded harness repair must isolate later trials. Required model results and final hosted checks remain open.</li>
 </ul>
 <p>The measured checkpoint <code>68e35ae8</code> adds 232 fewer production C# lines and 7,100 fewer combined production and test C# lines than the old stack.</p>
 <p>Each comparison uses the feature's own base. Production savings remain about eight percent. The replacement adds 836 fewer actor lines than the old feature.</p>
