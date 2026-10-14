@@ -1292,64 +1292,81 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 
         await ColdRespawnAsync(sessionId);
 
-        var subscriberB = CreateTestProbe("subagent-approval-expired-events-b");
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+        var recoveredCall = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _clientProvider.Main.NextResponseGate = recoveredCall;
+        try
         {
-            SessionId = sessionId,
-            Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+            var subscriberB = CreateTestProbe("subagent-approval-expired-events-b");
+            await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+            {
+                SessionId = sessionId,
+                Filter = OutputFilter.Full
+            }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
-        var reply = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
+            await AwaitAssertAsync(() =>
+            {
+                Assert.Null(_clientProvider.Main.NextResponseGate);
+                Assert.Contains(_clientProvider.Main.ReceivedMessages, messages => FindDeliveredRunIds(messages).Contains(runId));
+            }, TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken);
+
+            var reply = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
+            {
+                SessionId = sessionId,
+                CallId = request.CallId,
+                SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+                SenderId = source.SenderId!
+            }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+            var nack = Assert.IsType<CommandNack>(reply);
+            Assert.Equal(ApprovalNackReasons.PromptExpired, nack.Reason);
+            await subscriberB.FishForMessageAsync<TextOutput>(
+                output => output.Text.Contains("expired", StringComparison.OrdinalIgnoreCase),
+                TimeSpan.FromSeconds(15),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.False(_recordingApprovalTool.WasCalled);
+
+            await AwaitAssertAsync(() =>
+            {
+                var resumedRequest = _clientProvider.Main.ReceivedMessages
+                    .LastOrDefault(messages => FindDeliveredRunIds(messages).Contains(runId));
+                Assert.NotNull(resumedRequest);
+                var resumedCall = Assert.Single(
+                    resumedRequest!.SelectMany(static message => message.Contents.OfType<FunctionCallContent>()),
+                    call => call.Name == "child_run_result"
+                        && call.Arguments is { } arguments
+                        && arguments.TryGetValue("run_id", out var deliveredRunId)
+                        && string.Equals(deliveredRunId?.ToString(), runId, StringComparison.Ordinal));
+                Assert.NotEqual("call-spawn-approval-expire", resumedCall.CallId);
+                var resumedResult = Assert.Single(resumedRequest
+                    .SelectMany(static message => message.Contents.OfType<FunctionResultContent>()),
+                    result => result.CallId == resumedCall.CallId);
+                Assert.Contains("child owner was lost", resumedResult.Result?.ToString(), StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("uncertain", resumedResult.Result?.ToString(), StringComparison.OrdinalIgnoreCase);
+
+                var originalReceipt = Assert.Single(resumedRequest
+                    .SelectMany(static message => message.Contents.OfType<FunctionResultContent>()),
+                    result => result.CallId == "call-spawn-approval-expire");
+                using (var originalJson = JsonDocument.Parse(originalReceipt.Result?.ToString()!))
+                    Assert.Equal("accepted", originalJson.RootElement.GetProperty("state").GetString());
+
+                var spawnCalls = _clientProvider.Main.ReceivedMessages
+                    .SelectMany(static callMessages => callMessages)
+                    .SelectMany(static message => message.Contents.OfType<FunctionCallContent>())
+                    .Where(static call => call.Name == "spawn_agent")
+                    .Select(static call => call.CallId)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+                Assert.Equal(1, spawnCalls);
+                return Task.CompletedTask;
+            }, TimeSpan.FromSeconds(15), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(1, _clientProvider.Compaction.CallCount);
+            Assert.False(_recordingApprovalTool.WasCalled);
+        }
+        finally
         {
-            SessionId = sessionId,
-            CallId = request.CallId,
-            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
-            SenderId = source.SenderId!
-        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-
-        var nack = Assert.IsType<CommandNack>(reply);
-        Assert.Equal(ApprovalNackReasons.PromptExpired, nack.Reason);
-        var notice = await subscriberB.FishForMessageAsync<TextOutput>(
-            output => output.Text.Contains("expired", StringComparison.OrdinalIgnoreCase),
-            TimeSpan.FromSeconds(15),
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.False(_recordingApprovalTool.WasCalled);
-
-        await AwaitAssertAsync(() =>
-        {
-            var resumedRequest = _clientProvider.Main.ReceivedMessages
-                .LastOrDefault(messages => FindDeliveredRunIds(messages).Contains(runId));
-            Assert.NotNull(resumedRequest);
-            var resumedCall = Assert.Single(
-                resumedRequest!.SelectMany(static message => message.Contents.OfType<FunctionCallContent>()),
-                call => call.Name == "child_run_result"
-                    && call.Arguments is { } arguments
-                    && arguments.TryGetValue("run_id", out var deliveredRunId)
-                    && string.Equals(deliveredRunId?.ToString(), runId, StringComparison.Ordinal));
-            Assert.NotEqual("call-spawn-approval-expire", resumedCall.CallId);
-            var resumedResult = Assert.Single(resumedRequest
-                .SelectMany(static message => message.Contents.OfType<FunctionResultContent>()),
-                result => result.CallId == resumedCall.CallId);
-            Assert.Contains("child owner was lost", resumedResult.Result?.ToString(), StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("uncertain", resumedResult.Result?.ToString(), StringComparison.OrdinalIgnoreCase);
-
-            var originalReceipt = Assert.Single(resumedRequest
-                .SelectMany(static message => message.Contents.OfType<FunctionResultContent>()),
-                result => result.CallId == "call-spawn-approval-expire");
-            using (var originalJson = JsonDocument.Parse(originalReceipt.Result?.ToString()!))
-                Assert.Equal("accepted", originalJson.RootElement.GetProperty("state").GetString());
-
-            var spawnCalls = _clientProvider.Main.ReceivedMessages
-                .SelectMany(static callMessages => callMessages)
-                .SelectMany(static message => message.Contents.OfType<FunctionCallContent>())
-                .Where(static call => call.Name == "spawn_agent")
-                .Select(static call => call.CallId)
-                .Distinct(StringComparer.Ordinal)
-                .Count();
-            Assert.Equal(1, spawnCalls);
-            return Task.CompletedTask;
-        }, TimeSpan.FromSeconds(15), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+            recoveredCall.TrySetResult();
+        }
     }
 
     [Fact]
