@@ -38,6 +38,31 @@ coordination_session_actor_log() { printf '%s\n' "$EVAL_HOME/data/sessions/eval_
             ], capture_output=True, text=True)
             return completed.returncode == 0
 
+    def evaluate_spill_hint(self, assertion, response, observations, tool_calls=(), parent_log=""):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "stdout.json"
+            output.write_text(json.dumps({"sessionId": "eval/coordination", "response": json.dumps(response),
+                                          "toolCalls": list(tool_calls)}))
+            actor_log = root / "session.log"
+            actor_log.write_text(parent_log)
+            snapshot = root / "snapshot.json"
+            snapshot.write_text(json.dumps({"child_hint_observations": observations}))
+            command = r'''source "$1"
+EVAL_HOME="$2"
+STDOUT_FILE="$3"
+SNAPSHOT_INPUT="$4"
+ACTOR_LOG="$5"
+SPILL_FIXTURE_PORT=1
+coordination_session_actor_log() { printf '%s\n' "$ACTOR_LOG"; }
+curl() { cat "$SNAPSHOT_INPUT"; }
+"$6"'''
+            completed = subprocess.run([
+                "bash", "-c", command, "bash", str(RUNNER), str(root), str(output), str(snapshot),
+                str(actor_log), assertion,
+            ], capture_output=True, text=True)
+            return completed.returncode == 0
+
     @staticmethod
     def call(name, task):
         return {
@@ -65,6 +90,27 @@ coordination_session_actor_log() { printf '%s\n' "$EVAL_HOME/data/sessions/eval_
             "assert_coordination_retained_child_inspection",
             {"record": 400},
         ))
+
+    def test_spill_hint_pair_requires_exposure_and_exact_ablation_but_not_child_selection(self):
+        response = {"record": 400, "verification": "cobalt-heron-4471"}
+        common = {"call_id": "spill-call", "hint_seen": True, "continuation_preserved": True,
+                  "tool_call_id_preserved": True}
+        self.assertTrue(self.evaluate_spill_hint(
+            "assert_coordination_spill_hint_present", response, [{**common, "hint_removed": 0}],
+        ))
+        self.assertTrue(self.evaluate_spill_hint(
+            "assert_coordination_spill_hint_absent", response, [{**common, "hint_removed": 1}],
+        ))
+        for assertion, observations in (
+            ("assert_coordination_spill_hint_present", []),
+            ("assert_coordination_spill_hint_absent", []),
+            ("assert_coordination_spill_hint_present", [{**common, "hint_removed": 1}]),
+            ("assert_coordination_spill_hint_absent", [{**common, "hint_removed": 0}]),
+            ("assert_coordination_spill_hint_absent", [{**common, "continuation_preserved": False,
+                                                        "hint_removed": 1}]),
+        ):
+            with self.subTest(assertion=assertion, observations=observations):
+                self.assertFalse(self.evaluate_spill_hint(assertion, response, observations))
 
     def test_independent_synthesis_requires_exact_counts_and_two_terminal_children(self):
         tasks = [
