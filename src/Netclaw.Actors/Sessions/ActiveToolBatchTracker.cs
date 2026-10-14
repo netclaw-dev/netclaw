@@ -191,13 +191,13 @@ internal abstract record BatchCompletion
     internal sealed record Ready(SessionState State, int ResultCount) : BatchCompletion
     {
         public ToolBatchNextAction ChooseNext(bool compactionDue)
-            => compactionDue ? new ToolBatchNextAction.RequestCompaction(null) : new ToolBatchNextAction.ContinueModel(null);
+            => compactionDue ? ToolBatchNextAction.RequestCompaction : ToolBatchNextAction.ContinueModel;
     }
 
 }
 
-internal abstract record ToolBatchNextAction
+internal enum ToolBatchNextAction
 {
-    internal sealed record ContinueModel(string? NudgeText) : ToolBatchNextAction;
-    internal sealed record RequestCompaction(string? NudgeText) : ToolBatchNextAction;
+    ContinueModel,
+    RequestCompaction
 }
