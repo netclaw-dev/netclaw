@@ -9,6 +9,7 @@ using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -19,6 +20,41 @@ namespace Netclaw.Actors.Sessions;
 
 public sealed partial class LlmSessionActor
 {
+    private void ApplyLegacyCoordination(LegacyCoordinationEvent evt)
+    {
+        _state = LegacyCoordinationReplay.Apply(_state, evt);
+        if (evt.Manifest is "ic-v1" or "tbs-v1" or "tcr-v1")
+        {
+            switch (LegacyCoordinationReplay.GetCoreEvent(evt))
+            {
+                case InputClosed closed: _state = _state.Apply(closed); break;
+                case ToolBatchStarted batch:
+                    RestoreConsumedInputs(batch.ConsumedInputIds, batch.UserMessage);
+                    ApplyToolBatchStarted(batch);
+                    break;
+                case ToolCallRecorded result: ApplyToolCallRecorded(result); break;
+            }
+        }
+        HydrateLegacyChildApprovals();
+        foreach (var evidence in _state.LegacyCoordinationEvidence.Where(item =>
+                     item.Disposition is LegacyCoordinationDisposition.QuarantinedInvalidAdoption or LegacyCoordinationDisposition.UnresolvedLegacyChild))
+            _log.Warning("Legacy coordination quarantined manifest={Manifest} reason={Reason} inputIds={InputIds}",
+                evidence.Manifest, evidence.Reason, string.Join(",", evidence.InputIds));
+    }
+
+    private void HydrateLegacyChildApprovals()
+    {
+        foreach (var evt in LegacyCoordinationReplay.GetLegacyChildApprovalEvents(_state))
+        {
+            switch (evt)
+            {
+                case ToolApprovalRequested requested: ApplyToolApprovalRequested(requested); break;
+                case ToolApprovalResolved resolved: ApplyToolApprovalResolved(resolved); break;
+            }
+        }
+        _state = _state.ClearLegacyChildApprovalEvents();
+    }
+
     private void CommandChildMessages()
     {
         Command<AcceptChildStart>(AcceptChild);
@@ -60,7 +96,7 @@ public sealed partial class LlmSessionActor
             var run = _state.ChildRuns.GetValueOrDefault(message.RunId);
             if (run?.Lifecycle is ChildRunLifecycle.Terminal terminal && ReferenceEquals(terminal.Result, message.ExpectedTerminal))
                 Self.Tell(BuildPreparedChild(run, terminal.Result, terminal.Result.Result,
-                    $"Result evidence preparation failed: {message.Error.Message}"));
+                    $"Result evidence preparation failed: {message.Error.Message}", reviewedContext: null));
         });
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
         Command<RecoverChildRuns>(_ => RecoverChildren());
@@ -73,18 +109,22 @@ public sealed partial class LlmSessionActor
         var existing = _state.ChildRuns.Values.FirstOrDefault(run => run.StartKey == message.StartKey);
         if (existing is not null)
         {
-            if (existing.ArgumentsDigest != prepared.ArgumentsDigest || !SameChildOwner(existing.OriginalContext, message.OriginalContext))
+            if (existing.ArgumentsDigest != prepared.ArgumentsDigest || !HasSameChildAuthority(existing.OriginalContext, message.OriginalContext))
                 replyTo.Tell(new Status.Failure(new InvalidOperationException("The child start identity already names a different request.")));
             else
                 replyTo.Tell(new ChildRunAcceptance(existing.RunId, existing.ScopeId));
             return;
         }
-        if (RestartDrainRequested || message.Cancellation.IsCancellationRequested ||
-            !TurnContext.TryFromRecord(message.OriginalContext, out _, out _) ||
-            _input.Authority.Context is not { } current || current.TurnId.Value != message.StartKey.TurnId ||
-            !SameChildOwner(current.ToRecord(), message.OriginalContext) ||
-            message.StartKey is ChildRunStartKey.Tool tool && !_toolWorkflow.IsPendingChildStart(tool.CallId) ||
-            message.StartKey is ChildRunStartKey.Slash slash && !_input.SelectedInputs.Ids.Contains(slash.InputId))
+        var authorityIsCurrent = _input.Authority.Context is { } current &&
+            current.TurnId.Value == message.StartKey.TurnId &&
+            HasSameChildAuthority(current.ToRecord(), message.OriginalContext);
+        var invocationIsCurrent = message.StartKey switch
+        {
+            ChildRunStartKey.Tool tool => _toolWorkflow.IsPendingChildStart(tool.CallId),
+            ChildRunStartKey.Slash slash => _input.SelectedInputs.Ids.Contains(slash.InputId),
+            _ => false
+        };
+        if (RestartDrainRequested || message.Cancellation.IsCancellationRequested || !authorityIsCurrent || !invocationIsCurrent)
         {
             replyTo.Tell(new Status.Failure(new InvalidOperationException("The child start no longer belongs to an active invocation.")));
             return;
@@ -123,7 +163,10 @@ public sealed partial class LlmSessionActor
                 };
                 child.Tell(prepared.Execution with { Scope = scope, OwnedRun = execution, Cancellation = execution.Token }, Self);
                 EmitOutput(new SubAgentOutput
-                { SessionId = _sessionId, AgentName = run.AgentName, Phase = SubAgentPhase.Started }, OutputFilter.ToolCalls);
+                {
+                    SessionId = _sessionId, AgentName = run.AgentName, Phase = SubAgentPhase.Started,
+                    TimestampMs = NowMs(), ToolCount = prepared.ToolCount
+                }, OutputFilter.ToolCalls);
             }
             catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
             {
@@ -131,23 +174,30 @@ public sealed partial class LlmSessionActor
                 {
                     AgentName = run.AgentName, Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnError),
                     Output = $"The accepted child could not start: {error.Message}"
-                }, lost: true, warning: "No child relaunch will occur.", ActorRefs.Nobody);
+                }, lost: false, warning: "No child relaunch will occur.", ActorRefs.Nobody);
             }
         });
     }
 
-    private static bool SameChildOwner(TurnContextRecord left, TurnContextRecord right)
-        => left.SessionId == right.SessionId && left.Audience == right.Audience && left.Boundary == right.Boundary &&
-           left.RequesterSenderId == right.RequesterSenderId && left.RequesterPrincipal == right.RequesterPrincipal &&
-           left.ChannelType == right.ChannelType && left.TransportAuthenticity == right.TransportAuthenticity &&
-           left.PayloadTaint == right.PayloadTaint && left.SourceScope == right.SourceScope && left.SourceKind == right.SourceKind &&
-           left.HasAdoptedContext == right.HasAdoptedContext && left.HasThirdPartyAdoptedContext == right.HasThirdPartyAdoptedContext &&
-           left.AdoptedSpeakerIds.SequenceEqual(right.AdoptedSpeakerIds, StringComparer.Ordinal);
+    private static bool HasSameChildAuthority(TurnContextRecord left, TurnContextRecord right)
+        => TurnContext.TryFromRecord(left, out var original, out _) && original is not null &&
+           TurnContext.TryFromRecord(right, out var candidate, out _) && candidate is not null &&
+           original.HasSameAuthority(candidate);
 
     private void ControlChild(ChildRunControl command)
     {
         var replyTo = Sender;
-        if (!_state.ChildRuns.TryGetValue(command.RunId, out var run) || !SameChildOwner(run.OriginalContext, command.Requester))
+        if (_state.TryGetLegacyChildDisposition(command.RunId, out var legacy) &&
+            legacy.AdoptedContext is { } original && HasSameChildAuthority(original, command.Requester))
+        {
+            replyTo.Tell(JsonSerializer.Serialize(new
+            {
+                run_id = command.RunId.Value, state = "quarantined", reason = legacy.Reason,
+                pending_approval_count = 0, terminal = false
+            }));
+            return;
+        }
+        if (!_state.ChildRuns.TryGetValue(command.RunId, out var run) || !HasSameChildAuthority(run.OriginalContext, command.Requester))
         {
             replyTo.Tell("Error: This child run is not available to the requester.");
             return;
@@ -169,13 +219,36 @@ public sealed partial class LlmSessionActor
         });
     }
 
-    private string ChildStatus(BackgroundChildRun run) => JsonSerializer.Serialize(new
+    private string ChildStatus(BackgroundChildRun run)
     {
-        run_id = run.RunId.Value, scope_id = run.ScopeId.Value,
-        state = run.Lifecycle.GetType().Name.ToLowerInvariant(),
-        pending_approval_count = _toolWorkflow.ChildApprovalCount(run.RunId),
-        terminal = run.Lifecycle is ChildRunLifecycle.Terminal or ChildRunLifecycle.Prepared or ChildRunLifecycle.Consumed or ChildRunLifecycle.Closed
-    });
+        var terminal = run.Lifecycle switch
+        {
+            ChildRunLifecycle.Terminal raw => raw.Result,
+            ChildRunLifecycle.Prepared prepared => prepared.Delivery.Terminal,
+            ChildRunLifecycle.Consumed consumed => consumed.Delivery.Terminal,
+            _ => null
+        };
+        var closed = run.Lifecycle as ChildRunLifecycle.Closed;
+        var checkpoint = run.Lifecycle switch
+        {
+            ChildRunLifecycle.Accepted accepted => accepted.Checkpoint,
+            ChildRunLifecycle.Cancelling cancelling => cancelling.Checkpoint,
+            _ => null
+        };
+        return JsonSerializer.Serialize(new
+        {
+            run_id = run.RunId.Value, scope_id = run.ScopeId.Value, agent = run.AgentName.Value,
+            source_operation = run.SourceOperation, accepted_at_ms = run.AcceptedAtMs,
+            state = run.Lifecycle.GetType().Name.ToLowerInvariant(),
+            pending_approval_count = _toolWorkflow.ChildApprovalCount(run.RunId),
+            terminal = terminal is not null || closed is not null,
+            outcome = (terminal?.Result.Outcome ?? closed?.Outcome)?.ToString().ToLowerInvariant(),
+            reason = (terminal?.Result.OutcomeReason ?? closed?.Reason)?.Value,
+            summary = terminal?.Result.Output ?? checkpoint?.Summary,
+            completed_round = checkpoint?.CompletedRound,
+            warning = terminal?.EvidenceWarning
+        });
+    }
 
     private void RecordChildTerminal(SubAgentRunId runId, SubAgentResult result, bool lost, string? warning, IActorRef child)
     {
@@ -202,7 +275,9 @@ public sealed partial class LlmSessionActor
             EmitOutput(new SubAgentOutput
             {
                 SessionId = _sessionId, AgentName = run.AgentName, Phase = SubAgentPhase.Completed,
-                Success = result.Success, Outcome = result.Outcome, OutcomeReason = result.OutcomeReason
+                Success = result.Success, Outcome = result.Outcome, OutcomeReason = result.OutcomeReason,
+                TimestampMs = NowMs(), Duration = TimeSpan.FromMilliseconds(Math.Max(0, NowMs() - run.AcceptedAtMs)),
+                FindingsCount = result.FindingsCount
             }, OutputFilter.ToolCalls);
             PrepareChildResult(_state.ChildRuns[runId], terminal);
         });
@@ -211,10 +286,12 @@ public sealed partial class LlmSessionActor
     private void PrepareChildResult(BackgroundChildRun run, ChildRunTerminal terminal)
     {
         var owner = Self;
+        var initialSnapshot = run.InitialWorkingSnapshot
+            ?? throw new InvalidOperationException("A terminal child requires its initial context snapshot before preparation.");
         var spawner = _subAgentSpawner;
         if (spawner is null)
         {
-            owner.Tell(BuildPreparedChild(run, terminal, terminal.Result, "Child evidence preparation is unavailable."));
+            owner.Tell(BuildPreparedChild(run, terminal, terminal.Result, "Child evidence preparation is unavailable.", reviewedContext: null));
             return;
         }
         _ = PrepareAsync();
@@ -223,13 +300,13 @@ public sealed partial class LlmSessionActor
             try
             {
                 var result = await spawner.EnrichWorkingContextResultAsync(terminal.Result,
-                    run.InitialWorkingSnapshot, run.OriginalContext.Audience, CancellationToken.None);
+                    initialSnapshot, run.OriginalContext.Audience, CancellationToken.None);
                 if (result.Success)
                 {
                     var storage = _sessionStorage.ForChild(run.RunId, run.ScopeId);
                     result = result with { LogPath = storage.LogPath.Value, ArtifactDirectory = storage.ArtifactDirectory.Value };
                 }
-                owner.Tell(BuildPreparedChild(run, terminal, result, terminal.EvidenceWarning));
+                owner.Tell(BuildPreparedChild(run, terminal, result, terminal.EvidenceWarning, result.WorkingContext));
             }
             catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
             { owner.Tell(new ChildPreparationFailed(run.RunId, terminal, error)); }
@@ -237,7 +314,7 @@ public sealed partial class LlmSessionActor
     }
 
     private static ChildResultPrepared BuildPreparedChild(BackgroundChildRun run, ChildRunTerminal terminal,
-        SubAgentResult result, string? warning)
+        SubAgentResult result, string? warning, WorkingContextDelta? reviewedContext)
     {
         var callId = new ToolCallId($"child-result-{run.RunId.Value}");
         var call = new SerializableChatMessage
@@ -260,7 +337,7 @@ public sealed partial class LlmSessionActor
                 log_path = result.LogPath, artifact_directory = result.ArtifactDirectory, warning, lost = terminal.Lost
             })
         };
-        return new ChildResultPrepared(run.RunId, terminal, call, body, result.WorkingContext);
+        return new ChildResultPrepared(run.RunId, terminal, call, body, reviewedContext);
     }
 
     private bool ChildTerminated(IActorRef child)
@@ -282,7 +359,9 @@ public sealed partial class LlmSessionActor
         return new SubAgentResult
         {
             AgentName = run.AgentName,
-            Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.ActorStopped),
+            Completion = checkpoint is null
+                ? new ChildRunCompletion.Failed(SubAgentOutcomeReason.ActorStopped)
+                : new ChildRunCompletion.Partial(SubAgentOutcomeReason.ActorStopped, checkpoint.ConfirmedActivity),
             Output = checkpoint is null ? "The child owner was lost. External effects are uncertain; the child will not restart."
                 : $"The child owner was lost after round {checkpoint.CompletedRound}. {checkpoint.Summary} External effects after that checkpoint are uncertain."
         };
@@ -290,6 +369,7 @@ public sealed partial class LlmSessionActor
 
     private void RecoverChildren()
     {
+        _toolWorkflow.ExpireRecoveredChildApprovals();
         foreach (var run in _state.ChildRuns.Values.ToArray())
         {
             if (run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling)
@@ -301,12 +381,38 @@ public sealed partial class LlmSessionActor
         WakeForChild();
     }
 
+    private BackgroundChildRun? UnconsumedChild(ChildContinuation? continuation)
+        => continuation is not null && _state.ChildRuns.TryGetValue(continuation.RunId, out var run) &&
+           run.Lifecycle is ChildRunLifecycle.Prepared ? run : null;
+
+    private void ReviewConsumedChildFindings(BackgroundChildRun? run)
+    {
+        if (run?.Lifecycle is not ChildRunLifecycle.Prepared prepared || !prepared.Delivery.Terminal.Result.Success)
+            return;
+        var result = prepared.Delivery.Terminal.Result;
+        var findings = SessionToolExecutionPipeline.ReviewChildFindings(run.RunId, run.AgentName,
+            TimeSpan.Zero, result.Findings, _sessionId);
+        ProcessChildFindings([new CompletedSubAgentRun
+        {
+            RunId = run.RunId, AgentName = run.AgentName, Completion = result.Completion,
+            FindingsCount = result.FindingsCount
+        }], findings);
+    }
+
+    private bool HasReadyChildResult => _state.ChildRuns.Values.Any(run =>
+        run.Lifecycle is ChildRunLifecycle.Prepared or ChildRunLifecycle.Consumed);
+
     private void WakeForChild()
     {
-        if (_phase.Current != SessionPhase.Ready || RestartDrainRequested || _input.HasBufferedContinuation ||
-            _toolWorkflow.HasPendingApprovals() ||
-            !_state.ChildRuns.Values.Any(run => run.Lifecycle is ChildRunLifecycle.Prepared or ChildRunLifecycle.Consumed))
+        if (_phase.Current != SessionPhase.Ready || RestartDrainRequested ||
+            _toolWorkflow.HasPendingApprovals() || !HasReadyChildResult)
             return;
+        if (_toolWorkflow.HasApprovalHistory(_state))
+        {
+            var abandoned = BuildInterruptedToolBatchAfterRecoveryEvent();
+            Persist(abandoned, evt => { ApplyToolBatchAbandoned(evt); WakeForChild(); });
+            return;
+        }
         _turnState.ResetForNewTurn();
         _modelContext.ResetForNewTurn();
         TransitionTo(SessionPhase.Processing);

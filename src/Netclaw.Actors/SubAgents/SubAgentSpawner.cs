@@ -16,9 +16,9 @@ using static Netclaw.Actors.SubAgents.SubAgentProtocol;
 namespace Netclaw.Actors.SubAgents;
 
 /// <summary>
-/// Shared utility that encapsulates the subagent spawn-ask-report lifecycle.
-/// Resolves audience-scoped runtime tools, spawns a <see cref="SubAgentActor"/> as a child of the
-/// owning session actor, awaits results, and emits observability notifications.
+/// Resolves child tools and authority before the session accepts a durable start.
+/// The session owns the <see cref="SubAgentActor"/> and its terminal result.
+/// The public foreground adapter remains available for explicit foreground callers.
 /// Singleton — registered in DI.
 /// </summary>
 public sealed class SubAgentSpawner
@@ -109,7 +109,7 @@ public sealed class SubAgentSpawner
             prepared = await PrepareRunAsync(profile, task, runtimeContext, context, ct, systemPromptOverlay);
             context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
             {
-                RunId = prepared.RunId, AgentName = profile.Name, IsStarted = true
+                RunId = prepared.RunId, AgentName = profile.Name, IsStarted = true, ToolCount = prepared.ToolCount
             });
             var spawn = context.SpawnChildActor
                 ?? throw new InvalidOperationException("A child start requires an owning session.");
@@ -254,7 +254,7 @@ public sealed class SubAgentSpawner
         });
         var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(digestInput)));
-        return new PreparedChildStart(props, actorName, runId, definition.Name, digest, childStorage,
+        return new PreparedChildStart(props, actorName, runId, definition.Name, digest, childStorage, definition.Tools.Count,
             new RunSubAgent
             {
                 Scope = childScope,
