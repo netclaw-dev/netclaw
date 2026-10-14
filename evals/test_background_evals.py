@@ -13,7 +13,7 @@ from unittest.mock import patch
 import urllib.request
 
 from background_evals import HOLD, MARK, ModelFailure, Run, queue_verdict, verify_grants, wait_for_job_state
-from background_fixture import Fixture, handler_for
+from background_fixture import CHILD_INSPECTION_HINT, Fixture, SPILL_CONTINUATION, handler_for
 
 
 class LaunchOracleTests(unittest.TestCase):
@@ -196,6 +196,68 @@ class ProviderFixtureTests(unittest.TestCase):
                         self.assertEqual(b'data: {"upstream":true}\n\ndata: [DONE]\n\n', response.read())
                     self.assertEqual([("/v1/chat/completions", "Bearer fixture-key", body)], received)
                     self.assertEqual(1, self.fixture.control("snapshot", {})["model_requests"])
+                finally:
+                    upstream.shutdown()
+                    relay.shutdown()
+                    for thread in threads:
+                        thread.join(2)
+
+    def test_spill_hint_pair_forwards_only_the_optional_hint_change(self):
+        received = []
+
+        class Upstream(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                return
+
+            def do_POST(self):
+                received.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                body = b'{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        with ThreadingHTTPServer(("127.0.0.1", 0), Upstream) as upstream:
+            self.fixture.upstream = f"http://127.0.0.1:{upstream.server_port}/v1/chat/completions"
+            self.fixture.control("mode", {"mode": "model"})
+            with ThreadingHTTPServer(("127.0.0.1", 0), handler_for(self.fixture)) as relay:
+                threads = [threading.Thread(target=server.serve_forever) for server in (upstream, relay)]
+                for thread in threads:
+                    thread.start()
+                try:
+                    for strip_hint in (False, True):
+                        self.fixture.control("spill-hint", {"strip_child_inspection_hint": strip_hint})
+                        hint_text = ("Retained output window. " + CHILD_INSPECTION_HINT +
+                                     " continue with tool_output_read using CallId='spill-call' offset=0 limit=4")
+                        original = {
+                            "model": "fixture-model",
+                            "messages": [
+                                {"role": "system", "content": "Keep the system instruction."},
+                                {"role": "assistant", "content": "Keep the assistant message."},
+                                {"role": "tool", "tool_call_id": "load-call", "content": "schema loaded"},
+                                {"role": "tool", "tool_call_id": "spill-call", "content": hint_text},
+                            ],
+                            "tools": [{"function": {"name": "tool_output_read", "parameters": {"type": "object"}}}],
+                            "stream": False,
+                        }
+                        expected = json.loads(json.dumps(original))
+                        if strip_hint:
+                            expected["messages"][-1]["content"] = hint_text.replace(CHILD_INSPECTION_HINT, "")
+                        request_start = len(received)
+                        for _ in range(2):
+                            request = urllib.request.Request(
+                                f"http://127.0.0.1:{relay.server_port}/v1/chat/completions",
+                                data=json.dumps(original).encode(), headers={"Content-Type": "application/json"})
+                            with urllib.request.urlopen(request, timeout=2) as response:
+                                self.assertEqual(200, response.status)
+                        self.assertEqual([expected, expected], received[request_start:])
+                        observations = self.fixture.control("snapshot", {})["child_hint_observations"]
+                        self.assertEqual(2, len(observations))
+                        self.assertTrue(all(item["call_id"] == "spill-call" and item["hint_seen"]
+                                            and item["hint_removed"] == int(strip_hint)
+                                            and item["continuation_preserved"] and item["tool_call_id_preserved"]
+                                            for item in observations))
                 finally:
                     upstream.shutdown()
                     relay.shutdown()
