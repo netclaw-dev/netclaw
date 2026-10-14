@@ -11,15 +11,21 @@ fi
 # Resolve exact boundaries. An absent or duplicate marker must fail before Stryker starts.
 spans="$(
   perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
-    @targets = /class ActiveExecutionTracker/
-      ? (
+    if (/class ActiveExecutionTracker/) {
+      @targets = (
           ["execution.ExecutionId == executionId", 1],
           ["_executing.Remove(reminderId);", 1]
-        )
-      : (
+        );
+    } elsif (/class ReminderExecutionActor/) {
+      @targets = (
+          ["unrelatedTurn.SourceReminderId != expectedKey", 1]
+        );
+    } else {
+      @targets = (
           ["execution.ExecutionId != outcome.ExecutionId", 1],
           ["finally\n        {\n            _activeExecutions.TryRemove(outcome.Id, outcome.ExecutionId, out _);\n            replyTo.Tell(new ReminderExecutionAccepted(outcome.ExecutionId));\n        }", 1]
         );
+    }
     for $target (@targets) {
       ($marker, $count) = @$target;
       $start = index($_, $marker);
@@ -35,7 +41,8 @@ spans="$(
       print "$file $start ", $start + length($marker), " $first $last $count\n";
     }
   ' "$repo_root/src/Netclaw.Actors/Reminders/ReminderManagerActor.cs" \
-    "$repo_root/src/Netclaw.Actors/Reminders/ActiveExecutionTracker.cs"
+    "$repo_root/src/Netclaw.Actors/Reminders/ActiveExecutionTracker.cs" \
+    "$repo_root/src/Netclaw.Actors/Reminders/ReminderExecutionActor.cs"
 )"
 
 mutate_args=()

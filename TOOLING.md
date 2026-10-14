@@ -386,7 +386,7 @@ Run the reminder execution gate:
 ./scripts/run-reminder-execution-mutations.sh
 ```
 
-The script reuses the xUnit 2 harness and selects four mutations:
+The script reuses the xUnit 2 harness and selects five mutations:
 
 | Boundary | Expected mutant |
 |----------|-----------------|
@@ -394,13 +394,14 @@ The script reuses the xUnit 2 harness and selects four mutations:
 | Manager acceptance reply | Remove the reply from `finally` |
 | Tracker removal ownership | Reverse the execution-ID comparison |
 | Tracker guard cleanup | Remove the dictionary removal |
+| Reminder terminal identity | Reverse the `SourceReminderId` comparison |
 
-Each location must produce one killed mutant. The report must contain exactly four tested mutants.
+Each location must produce one killed mutant. The report must contain exactly five tested mutants.
 The gate fails if a target is absent, ignored, survives, exceeds its time limit, or cannot compile.
 The selector rejects absent or duplicate source markers before Stryker starts.
 Unrelated compiler errors do not count as tested mutants.
 
-Seven cases use the real manager, execution tracker, actor mailbox, definition store, and history store.
+Seven settlement cases use the real manager, execution tracker, actor mailbox, definition store, and history store.
 An isolated host supplies the local Akka.Reminders scheduler with an in-memory store.
 The fixture observes execution IDs through the existing dispatch event and holds the session pipeline on a task.
 Actor replies provide barriers. The tests use no delay or sleep to wait for state.
@@ -410,6 +411,12 @@ They require B's guard, history, failure count, and alerts to remain unchanged.
 A current-termination control must record the failure and release its guard.
 Success and failure cases require the correct acceptance ID, history, failure count, and subsequent dispatch.
 A directory at the atomic-write path causes a real save failure; cleanup and the acceptance reply must still occur.
+
+The terminal-identity case drives `ReminderExecutionActor` with a local test
+pipeline. It sends a failed terminal from another reminder key, then a
+successful terminal for the expected key. The first terminal must not settle
+the execution. This target checks cross-turn output correlation; it does not
+prove a durable completion receipt for a completed duplicate delivery.
 
 These tests preserve PRD-008 SCHED-005 and SCHED-007.
 See [the execution and settlement contract](openspec/specs/netclaw-scheduling/spec.md) and
@@ -422,7 +429,9 @@ It also filters the complete `finally` deletion when the acceptance-reply mutant
 Thus, the cleanup mutant targets the tracker dictionary, not the manager's `TryRemove` call.
 An explicit local deletion of that call must also make the cleanup cases fail before this gate changes.
 
-The final local run took 95 seconds after package restore.
+The last measured four-mutant local run took 95 seconds after package restore.
+The fifth mutant stays in the same Stryker invocation and CI group. Its added
+runtime is not measured yet; record it after the next authorized run.
 The separate CI job retains a 10-minute timeout and uploads `reminder-execution-mutation-report`.
 Its report directory is `artifacts/stryker/reminder-execution`.
 
