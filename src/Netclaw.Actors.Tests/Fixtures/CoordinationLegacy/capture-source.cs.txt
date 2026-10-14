@@ -17,8 +17,11 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
     {
         var (state, run) = Acceptance(Owner, slash: false);
         var terminal = Terminal(run);
+        var checkpoint = new ChildRunCheckpoint(1, "Neutral checkpoint.",
+            new WorkingContextDelta { ReadFiles = ["/neutral/source.txt"] });
         var preparedRun = run with
         {
+            ChildCheckpoint = checkpoint,
             Terminal = terminal,
             TerminalSequenceNr = 1,
             PreparedTerminal = terminal
@@ -69,6 +72,51 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
             InputIds = [delivered.InputId],
             AdoptedAtMs = 123470
         };
+        var downstreamCall = new SerializableChatMessage
+        {
+            Role = ChatRole.Assistant,
+            ToolCalls =
+            [
+                new SerializableToolCall
+                {
+                    CallId = new ToolCallId("downstream-call"),
+                    Name = new ToolName("file_read"),
+                    ArgumentsJson = "{\"path\":\"/neutral/result.txt\"}"
+                }
+            ]
+        };
+        var downstreamBatch = new ToolBatchStarted
+        {
+            SessionId = Owner,
+            UserMessage = inputA.UserMessage,
+            AssistantMessage = downstreamCall,
+            ConsumedInputIds = [delivered.InputId],
+            StartedAtMs = 123472
+        };
+        var downstreamResult = new ToolCallRecorded
+        {
+            SessionId = Owner,
+            ToolResult = new SerializableChatMessage
+            {
+                Role = ChatRole.Tool,
+                Name = "file_read",
+                ToolCallId = new ToolCallId("downstream-call"),
+                Content = "Neutral downstream result."
+            },
+            RecordedAtMs = 123473
+        };
+        var downstreamTurn = new TurnRecorded
+        {
+            SessionId = Owner,
+            UserMessage = inputA.UserMessage,
+            AssistantReply = new SerializableChatMessage
+            {
+                Role = ChatRole.Assistant,
+                Content = "The parent completed the child result turn."
+            },
+            ConsumedInputIds = [],
+            RecordedAtMs = 123474
+        };
         var deliveredRun = preparedRun with
         {
             StartBatchSettled = true,
@@ -85,7 +133,8 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
         };
         var ambiguousDeliverySnapshot = legacyPairSnapshot with
         {
-            History = [inputA.UserMessage]
+            History = [inputA.UserMessage],
+            PendingInputs = []
         };
         var preparedUndeliveredSnapshot = new SessionSnapshot
         {
@@ -115,8 +164,7 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
         {
             ("child-run-accepted", new ChildRunAccepted { SessionId = Owner, Run = run }),
             ("child-started", new ChildRunEvent.Started { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123457 }),
-            ("child-checkpoint", new ChildRunEvent.Checkpointed(
-                new ChildRunCheckpoint(1, "Neutral checkpoint.", new WorkingContextDelta { ReadFiles = ["/neutral/source.txt"] }))
+            ("child-checkpoint", new ChildRunEvent.Checkpointed(checkpoint)
                 { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123458 }),
             ("child-cancellation-requested", new ChildRunEvent.CancellationRequested { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123459 }),
             ("child-dispatch-closed", new ChildRunEvent.DispatchClosed { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123460 }),
@@ -128,6 +176,9 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
             ("valid-ordinary-input-adoption", ordinaryAdoption),
             ("invalid-2453-adoption-of-b-while-a-pending", invalidAdoption),
             ("valid-child-delivery-adoption", childAdoption),
+            ("child-downstream-tool-batch", downstreamBatch),
+            ("child-downstream-tool-result", downstreamResult),
+            ("child-downstream-final-turn", downstreamTurn),
             ("input-closed", new InputClosed { SessionId = Owner, InputIds = [inputB.InputId], ClosedAtMs = 123464 }),
             ("tool-batch-started", new ToolBatchStarted
             {
