@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
 using System.Text.Json;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.SubAgents;

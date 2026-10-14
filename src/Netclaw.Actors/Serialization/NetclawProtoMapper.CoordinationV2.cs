@@ -95,7 +95,8 @@ internal static partial class NetclawProtoMapper
                         ? new ChildRunLifecycle.Prepared(delivery)
                         : activeParentTask
                             ? new ChildRunLifecycle.Consumed(delivery)
-                            : new ChildRunLifecycle.Closed(delivery.Result.ToolCallId,
+                            : new ChildRunLifecycle.Closed(delivery.Result.ToolCallId
+                                ?? throw new InvalidDataException("A deployed child delivery has no call identity."),
                                 delivery.Terminal.Result.Outcome, delivery.Terminal.Result.OutcomeReason)
                 };
                 if (!activeParentTask)
