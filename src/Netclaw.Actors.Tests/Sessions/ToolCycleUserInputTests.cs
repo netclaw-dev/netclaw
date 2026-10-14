@@ -96,28 +96,44 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
     }
 
     [Fact]
-    public async Task User_input_queued_during_terminal_reply_restores_tools_for_the_new_request()
+    public async Task User_input_queued_before_terminal_settlement_starts_a_fresh_tool_request()
     {
+        // Arrange
         var ct = TestContext.Current.CancellationToken;
         ConfigureRepeatedCalls();
         _client.Inner.AlwaysReturnToolCalls = true;
-        _client.Pause = PausePoint.ToolFreeReply;
+        _client.Pause = PausePoint.PostCorrectionResponse;
         var sessionId = new SessionId("cycle-user-input/terminal-reply");
         var subscriber = await StartRequestAsync(sessionId);
 
-        await _client.CallPaused.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        Assert.Equal(2, _executor.Count);
-        await SendNewRequestAsync(sessionId);
-        foreach (var decision in new[] { false, true, false })
-            _client.Inner.PlannedToolCallDecisions.Enqueue(decision);
-        _client.ResumeCall.TrySetResult();
-        await ExpectTurnCompletedAsync(subscriber);
-        await ExpectTurnCompletedAsync(subscriber);
+        try
+        {
+            // Act
+            await _client.CallPaused.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            Assert.Equal(2, _executor.Count);
+            await SendRequestAsync(sessionId, "A fresh request after the correction.");
+            foreach (var decision in new[] { true, true, false })
+                _client.Inner.PlannedToolCallDecisions.Enqueue(decision);
+            _client.ResumeCall.TrySetResult();
+            var terminal = await subscriber.FishForMessageAsync<TextOutput>(
+                message => message.Text.Contains("The result is partial.", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(10), cancellationToken: ct);
+            await ExpectTurnCompletedAsync(subscriber);
+            await ExpectTurnCompletedAsync(subscriber);
 
-        Assert.Equal(3, _executor.Count);
-        Assert.Equal(7, _client.Inner.CallCount);
-        Assert.Empty(_client.Inner.ReceivedToolNames[4]);
-        Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[5]);
+            // Assert
+            Assert.Contains("last refused operation did not execute", terminal.Text, StringComparison.Ordinal);
+            Assert.Equal(3, _executor.Count);
+            Assert.Equal(6, _client.Inner.CallCount);
+            Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[4]);
+            Assert.Contains(_client.Inner.ReceivedMessages[4], message =>
+                message.Role == Microsoft.Extensions.AI.ChatRole.User
+                && message.Text == "A fresh request after the correction.");
+        }
+        finally
+        {
+            _client.ResumeCall.TrySetResult();
+        }
     }
 
     [Theory]
@@ -150,7 +166,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Overflow_replay_preserves_text_only_state_unless_a_new_user_request_arrives(bool newUserInput)
+    public async Task Overflow_replay_preserves_unresolved_correction_unless_new_user_input_arrives(bool newUserInput)
     {
         var ct = TestContext.Current.CancellationToken;
         var sessionId = new SessionId("cycle-user-input/overflow-replay");
@@ -164,7 +180,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         _client.Inner.AfterToolCallResponse = count =>
         {
             _client.Inner.ToolCallsOnFirstCall = Calls(count + 1);
-            if (++toolResponses == 4)
+            if (++toolResponses == 3)
             {
                 _client.Inner.PlannedExceptions.Enqueue(new ProviderException(
                     "maximum context length exceeded", "HTTP 400: maximum context length exceeded", statusCode: 400));
@@ -173,22 +189,35 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         await SendNewRequestAsync(sessionId);
         await _client.CallPaused.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
         Assert.Equal(2, _executor.Count);
-        if (newUserInput)
+        try
         {
-            await SendNewRequestAsync(sessionId);
+            // Act
+            if (newUserInput)
+                await SendNewRequestAsync(sessionId);
             _client.Inner.PlannedToolCallDecisions.Enqueue(true);
-        }
-        _client.Inner.PlannedToolCallDecisions.Enqueue(false);
-        _client.ResumeCall.TrySetResult();
-        await subscriber.FishForMessageAsync<object>(message => message is CompactionOutput,
-            TimeSpan.FromSeconds(10), cancellationToken: ct);
-        await ExpectTurnCompletedAsync(subscriber);
+            if (newUserInput)
+                _client.Inner.PlannedToolCallDecisions.Enqueue(false);
+            _client.ResumeCall.TrySetResult();
+            await subscriber.FishForMessageAsync<object>(message => message is CompactionOutput,
+                TimeSpan.FromSeconds(10), cancellationToken: ct);
+            var texts = new List<string>();
+            await subscriber.FishForMessageAsync<object>(message =>
+            {
+                if (message is TextOutput text)
+                    texts.Add(text.Text);
+                return message is TurnCompleted;
+            }, TimeSpan.FromSeconds(10), cancellationToken: ct);
 
-        Assert.Equal(newUserInput ? 3 : 2, _executor.Count);
-        if (newUserInput)
+            // Assert
+            Assert.Equal(newUserInput ? 3 : 2, _executor.Count);
             Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[^1]);
-        else
-            Assert.Empty(_client.Inner.ReceivedToolNames[^1]);
+            if (!newUserInput)
+                Assert.Contains(texts, text => text.Contains("The result is partial.", StringComparison.Ordinal));
+        }
+        finally
+        {
+            _client.ResumeCall.TrySetResult();
+        }
     }
 
     private void ConfigureRepeatedCalls()
@@ -231,7 +260,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
         => subscriber.FishForMessageAsync<object>(message => message is TurnCompleted,
             TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-    private enum PausePoint { None, ToolFreeReply, Compaction }
+    private enum PausePoint { None, PostCorrectionResponse, Compaction }
 
     private sealed class PausedChatClient : IChatClient
     {
@@ -250,7 +279,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
             var shouldPause = Pause switch
             {
                 PausePoint.Compaction => compaction,
-                PausePoint.ToolFreeReply => !compaction && options?.Tools is not { Count: > 0 },
+                PausePoint.PostCorrectionResponse => !compaction && Inner.CallCount == 3,
                 _ => false
             };
             if (shouldPause && Interlocked.Exchange(ref _didPause, 1) == 0)
