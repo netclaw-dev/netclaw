@@ -269,6 +269,17 @@ public sealed class ToolOutputSpillFreshSessionTests : IDisposable
         if (allowReader && registerReader)
             tools.Add(ToolOutputReadTool.ToolName);
         config.AudienceProfiles.Team.AllowedTools = tools;
+        if (registerSpawn && !allowSpawn)
+        {
+            config.AudienceProfiles.Team.ApprovalPolicy = new ToolApprovalConfig
+            {
+                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+                {
+                    ["spawn_agent"] = ToolApprovalMode.Deny,
+                },
+            };
+        }
+
         return new DispatchingToolExecutor(registry, TestToolAccessPolicy.Create(config));
     }
 

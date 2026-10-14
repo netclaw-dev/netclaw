@@ -9,6 +9,7 @@ using System.Threading.Channels;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Cli.Daemon;
+using R3;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 if (args.Length != 4 || !int.TryParse(args[1], out var timeoutSeconds) || !int.TryParse(args[2], out var requiredChildren))
@@ -19,6 +20,7 @@ if (args.Length != 4 || !int.TryParse(args[1], out var timeoutSeconds) || !int.T
 
 var outputs = Channel.CreateUnbounded<SessionOutput>();
 var calls = new List<object>();
+var turnResponses = new List<string>();
 var currentResponse = new StringBuilder();
 var firstResponse = "";
 var finalResponse = "";
@@ -73,6 +75,7 @@ try
             case TurnCompleted:
                 turnCompletions++;
                 finalResponse = currentResponse.ToString();
+                turnResponses.Add(finalResponse);
                 if (turnCompletions == 1)
                 {
                     firstResponse = finalResponse;
@@ -80,7 +83,9 @@ try
                 }
                 currentResponse.Clear();
                 receivedTextDelta = false;
-                if (turnCompletions > 1 && completedChildren >= requiredChildren)
+                if (turnCompletions > 1 &&
+                    completedChildren >= requiredChildren &&
+                    HasSynthesisFields(finalResponse))
                     completed = true;
                 break;
             case ErrorOutput error:
@@ -105,9 +110,28 @@ var envelope = new
         activeChildrenAtFirstCompletion,
         completedChildren,
         turnCompletions,
+        turnResponses,
         userMessagesSent = 1,
         automaticContinuation
     }
 };
 Console.WriteLine(JsonSerializer.Serialize(envelope, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
 return activeChildrenAtFirstCompletion > 0 && automaticContinuation ? 0 : 1;
+
+static bool HasSynthesisFields(string response)
+{
+    try
+    {
+        using var document = JsonDocument.Parse(response);
+        var root = document.RootElement;
+        return root.ValueKind == JsonValueKind.Object &&
+               root.TryGetProperty("eastUnresolved", out var east) && east.ValueKind == JsonValueKind.Number &&
+               root.TryGetProperty("westUnresolved", out var west) && west.ValueKind == JsonValueKind.Number &&
+               root.TryGetProperty("totalUnresolved", out var total) && total.ValueKind == JsonValueKind.Number &&
+               root.TryGetProperty("highestRegion", out var highest) && highest.ValueKind == JsonValueKind.String;
+    }
+    catch (JsonException)
+    {
+        return false;
+    }
+}
