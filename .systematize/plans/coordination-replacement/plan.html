@@ -335,9 +335,11 @@ dotnet slopwatch analyze
 <ul>
 <li>Fourteen focused legacy replay and SQLite recovery tests pass. The actor tests recover from a separate database backup.</li>
 <li>Four snapshot tests pass. They check old primitive bytes, old snapshot reads, and new snapshot round trips.</li>
-<li>The repeated-tool run passed 34 tests and failed four. Test corrections need a new run.</li>
-<li>Actor proof remains open for failed acceptance, ready-child priority, whole user-message batches, and a crash after acceptance.</li>
-<li>Combined tests, mutation checks, native smoke, model evals, and final source counts remain open.</li>
+<li>The recurrence checks passed 124 tests. They include generated operation sequences and productive child work beyond the old iteration limit.</li>
+<li>All eight selected reliability mutants were killed. No selected mutant survived, timed out, or failed to run.</li>
+<li>Actor checks passed failed acceptance and the crash cut after the journal commit. Ready-child and whole-message-batch checks remain incomplete.</li>
+<li>Source review found a possible duplicate child result in later model requests. An independent test must confirm or reject it.</li>
+<li>Combined tests, complete native smoke, model evals, and final source counts remain open.</li>
 </ul>
 <p>The source checkpoint showed only 229 fewer production lines than the old feature stack, about eight percent. This does not establish a large source reduction.</p>
 <p>The final review must include all actor partial files and the cost of readers for deployed data.</p>
