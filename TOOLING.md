@@ -27,6 +27,15 @@
 | `scripts/Add-FileHeaders.ps1 -Verify` | CI: check all files have headers (exit 1 if missing) |
 | `scripts/Add-FileHeaders.ps1 -WhatIf` | Preview which files need headers |
 
+## Tool Execution Test Fixtures
+
+Tests that use `DispatchingToolExecutor` must pass the same argument validation as a model call.
+Supply `_rationale` when the test needs a valid call. Omit it only when the test checks rejection.
+Use the test's private paths in both the execution context and the access policy.
+Before testing a later effect, assert the required receipt or result from the real executor.
+An error string can expose an invalid fixture before the intended tool runs.
+A `FakeToolExecutor` result does not prove that the real executor accepts those arguments.
+
 ## Focused Mutation Tests
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
