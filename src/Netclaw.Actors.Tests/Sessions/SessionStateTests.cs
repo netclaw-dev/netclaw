@@ -646,7 +646,7 @@ public class SessionStateTests
         };
 
         ChildRunCompletion completion = partial
-            ? new ChildRunCompletion.Partial(SubAgentOutcomeReason.ToolIterationBudgetExhausted, child)
+            ? new ChildRunCompletion.Partial(SubAgentOutcomeReason.ToolCycleStopped, child)
             : new ChildRunCompletion.Completed(child);
 
         var merged = WorkingContextUpdater.MergeSuccessfulSubAgentWorkingContext(WorkingContext.Empty, completion);

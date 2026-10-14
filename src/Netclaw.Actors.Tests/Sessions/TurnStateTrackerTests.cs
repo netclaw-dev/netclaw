@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using CsCheck;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Handlers;
@@ -12,14 +13,15 @@ using Xunit;
 namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
-/// Covers <see cref="TurnStateTracker.EvaluateEmptyResponse"/>: a thinking-only
-/// response (reasoning emitted, no final answer) must get a thinking-specific
-/// nudge, and the post-tool path must tolerate several retries before failing
-/// the turn.
+/// Covers turn state, tool recurrence, and empty-response behavior.
 /// </summary>
 public sealed class TurnStateTrackerTests
 {
     private const string ThinkingNudgeMarker = "only reasoning";
+    private const string RecurrenceSampleSeed = "ToolRepeatModel1";
+
+    private sealed record CompletedRound(string Identity, int Outcome);
+    private sealed record RecurrenceScenario(CompletedRound[] Rounds, string CandidateIdentity);
 
     public enum ToolPhase
     {
@@ -36,7 +38,7 @@ public sealed class TurnStateTrackerTests
     {
         var tracker = new TurnStateTracker();
         if (phase == ToolPhase.AfterToolUse)
-            tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+            tracker.RecordToolCompletion(resultCount: 1);
 
         var action = tracker.EvaluateEmptyResponse(kind, truncated: false);
 
@@ -51,7 +53,7 @@ public sealed class TurnStateTrackerTests
     public void TruncatedThinkingOnly_GetsBrevityNudge_NotStopThinkingScold()
     {
         var tracker = new TurnStateTracker();
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1);
 
         // A length-truncated thinking-only response was cut off, not refused —
         // it must get the brevity nudge, never the "stop thinking" scold.
@@ -74,7 +76,7 @@ public sealed class TurnStateTrackerTests
         // toward the failure threshold — the consecutive counters reset on each
         // tool batch.
         var tracker = new TurnStateTracker();
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1);
 
         for (var i = 0; i < 10; i++)
         {
@@ -103,7 +105,7 @@ public sealed class TurnStateTrackerTests
     public void PostToolThinkingOnly_RetriesSeveralTimesBeforeFailing()
     {
         var tracker = new TurnStateTracker();
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1);
 
         // The first 8 consecutive thinking-only responses retry.
         for (var i = 0; i < 8; i++)
@@ -118,9 +120,7 @@ public sealed class TurnStateTrackerTests
     {
         var tracker = new TurnStateTracker();
 
-        var status = tracker.RecordToolCompletion(resultCount: 8, maxToolIterationsPerTurn: 30);
-
-        Assert.IsType<ToolBudgetStatus.Ok>(status);
+        tracker.RecordToolCompletion(resultCount: 8);
         Assert.Equal(1, tracker.ToolIterationCount);
         // ToolCallCount remains for telemetry only — it counts results, not iterations.
         Assert.Equal(8, tracker.ToolCallCount);
@@ -131,32 +131,21 @@ public sealed class TurnStateTrackerTests
     {
         var tracker = new TurnStateTracker();
 
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
-        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1);
+        tracker.RecordToolCompletion(resultCount: 1);
+        tracker.RecordToolCompletion(resultCount: 1);
 
         Assert.Equal(3, tracker.ToolIterationCount);
     }
 
     [Fact]
-    public void ReachingIterationCap_ReturnsExhausted()
+    public void IterationCountDoesNotStopUsefulWork()
     {
         var tracker = new TurnStateTracker();
-        const int cap = 4;
+        for (var i = 0; i < 64; i++)
+            tracker.RecordToolCompletion(resultCount: 1);
 
-        // First (cap - 1) iterations stay below the limit.
-        for (var i = 0; i < cap - 1; i++)
-        {
-            var status = tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: cap);
-            Assert.IsNotType<ToolBudgetStatus.Exhausted>(status);
-        }
-
-        // The cap-th iteration hits the limit.
-        var capped = tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: cap);
-        var exhausted = Assert.IsType<ToolBudgetStatus.Exhausted>(capped);
-        Assert.Contains("executive summary", exhausted.NudgeText, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Partial or Unknown", exhausted.NudgeText, StringComparison.Ordinal);
-        Assert.Equal(cap, tracker.ToolIterationCount);
+        Assert.Equal(64, tracker.ToolIterationCount);
     }
 
     [Fact]
@@ -165,9 +154,7 @@ public sealed class TurnStateTrackerTests
         // 100 tool results delivered in a single iteration must NOT trigger the cap.
         var tracker = new TurnStateTracker();
 
-        var status = tracker.RecordToolCompletion(resultCount: 100, maxToolIterationsPerTurn: 5);
-
-        Assert.IsType<ToolBudgetStatus.Ok>(status);
+        tracker.RecordToolCompletion(resultCount: 100);
         Assert.Equal(1, tracker.ToolIterationCount);
         Assert.Equal(100, tracker.ToolCallCount);
     }
@@ -275,7 +262,7 @@ public sealed class TurnStateTrackerTests
 
         var candidate = Prepare(Call("candidate", "sample/" + candidateAction));
 
-        var decision = tracker.EvaluateBeforeDispatch(candidate.Action);
+        var decision = tracker.EvaluateAdjacentBeforeDispatch(candidate.Action);
 
         Assert.Equal(ToolCycleDecisionKind.Correct, decision.Kind);
         Assert.Equal(expectedPeriod, decision.Period);
@@ -294,7 +281,7 @@ public sealed class TurnStateTrackerTests
             batch,
             ("call-1", ToolInvocationOutcomeCategory.Success, "second")));
 
-        var decision = tracker.EvaluateBeforeDispatch(batch.Action);
+        var decision = tracker.EvaluateAdjacentBeforeDispatch(batch.Action);
 
         Assert.Equal(ToolCycleDecisionKind.Execute, decision.Kind);
     }
@@ -315,13 +302,157 @@ public sealed class TurnStateTrackerTests
             ("call-a", ToolInvocationOutcomeCategory.Success, "same"),
             ("call-b", ToolInvocationOutcomeCategory.Success, "new")));
 
-        var decision = tracker.EvaluateBeforeDispatch(batch.Action);
+        var decision = tracker.EvaluateBeforeDispatch(batch);
 
-        Assert.Equal(ToolCycleDecisionKind.Execute, decision.Kind);
+        Assert.Equal(ToolCycleDecisionKind.Correct, decision.Kind);
+        Assert.Equal(["call-a"], decision.RefusedCallIds);
     }
 
     [Fact]
-    public void RepeatedBlockedAction_StopsUntilAnotherActionCompletes()
+    public void DuplicateCallsCountOncePerRound_AndEveryRepeatedCallIdGetsRefused()
+    {
+        var tracker = new TurnStateTracker();
+        var duplicateRound = Prepare(
+            Call("round-1-a", "sample/read", ("id", "item-1")),
+            Call("round-1-b", "sample/read", ("id", "item-1")));
+        var singleRound = Prepare(Call("round-2", "sample/read", ("id", "item-1")));
+        tracker.ObserveCompleted(Complete(
+            duplicateRound,
+            ("round-1-a", ToolInvocationOutcomeCategory.Success, "same"),
+            ("round-1-b", ToolInvocationOutcomeCategory.Success, "same")));
+        tracker.ObserveCompleted(Complete(
+            singleRound,
+            ("round-2", ToolInvocationOutcomeCategory.Success, "same")));
+
+        var candidate = Prepare(
+            Call("candidate-a", "sample/read", ("id", "item-1")),
+            Call("candidate-b", "sample/read", ("id", "item-1")));
+
+        var decision = tracker.EvaluateBeforeDispatch(candidate);
+
+        Assert.Equal(ToolCycleDecisionKind.Correct, decision.Kind);
+        Assert.Equal(new[] { "candidate-a", "candidate-b" }, decision.RefusedCallIds.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void RepeatedIdentityDoesNotBlockAProductiveSibling()
+    {
+        var tracker = new TurnStateTracker();
+        var first = Prepare(Call("round-1", "sample/read", ("id", "item-1")));
+        var second = Prepare(Call("round-2", "sample/read", ("id", "item-1")));
+        tracker.ObserveCompleted(Complete(first, ("round-1", ToolInvocationOutcomeCategory.Success, "same")));
+        tracker.ObserveCompleted(Complete(second, ("round-2", ToolInvocationOutcomeCategory.Success, "same")));
+
+        var candidate = Prepare(
+            Call("repeat", "sample/read", ("id", "item-1")),
+            Call("diagnostic", "sample/diagnostic", ("id", "host-1")));
+
+        var decision = tracker.EvaluateBeforeDispatch(candidate);
+
+        Assert.Equal(ToolCycleDecisionKind.Correct, decision.Kind);
+        Assert.Equal(new[] { "repeat" }, decision.RefusedCallIds);
+    }
+
+    [Fact]
+    public void ChangedOutcomeResetsOnlyThatIdentity()
+    {
+        var tracker = new TurnStateTracker();
+        var first = Prepare(
+            Call("round-1-a", "sample/read", ("id", "a")),
+            Call("round-1-b", "sample/read", ("id", "b")));
+        var second = Prepare(
+            Call("round-2-a", "sample/read", ("id", "a")),
+            Call("round-2-b", "sample/read", ("id", "b")));
+        var changed = Prepare(
+            Call("round-3-a", "sample/read", ("id", "a")),
+            Call("round-3-b", "sample/read", ("id", "b")));
+        tracker.ObserveCompleted(Complete(first,
+            ("round-1-a", ToolInvocationOutcomeCategory.Success, "same"),
+            ("round-1-b", ToolInvocationOutcomeCategory.Success, "same")));
+        tracker.ObserveCompleted(Complete(second,
+            ("round-2-a", ToolInvocationOutcomeCategory.Success, "same"),
+            ("round-2-b", ToolInvocationOutcomeCategory.Success, "same")));
+        tracker.ObserveCompleted(Complete(changed,
+            ("round-3-a", ToolInvocationOutcomeCategory.Success, "changed"),
+            ("round-3-b", ToolInvocationOutcomeCategory.Success, "same")));
+
+        var candidate = Prepare(
+            Call("candidate-a", "sample/read", ("id", "a")),
+            Call("candidate-b", "sample/read", ("id", "b")));
+
+        var decision = tracker.EvaluateBeforeDispatch(candidate);
+
+        Assert.Equal(ToolCycleDecisionKind.Correct, decision.Kind);
+        Assert.Equal(new[] { "candidate-b" }, decision.RefusedCallIds);
+    }
+
+    [Fact]
+    public void SyntheticCorrectionDoesNotCountAsAnActualOutcome()
+    {
+        var tracker = new TurnStateTracker();
+        var call = Prepare(Call("call-1", "sample/read", ("id", "item-1")));
+        tracker.ObserveCompleted(Complete(call, ("call-1", ToolInvocationOutcomeCategory.Success, "same")));
+        tracker.ObserveCompleted(CompleteSynthetic(
+            call,
+            ("call-1", ToolInvocationOutcomeCategory.Success, "correction")));
+
+        Assert.Equal(ToolCycleDecisionKind.Execute, tracker.EvaluateBeforeDispatch(call).Kind);
+    }
+
+    [Fact]
+    public void Generated_completed_rounds_match_the_independent_identity_model()
+    {
+        var identities = Gen.OneOfConst("alpha", "beta", "gamma");
+        var rounds = Gen.Select(identities, Gen.Int[0, 2],
+            static (identity, outcome) => new CompletedRound(identity, outcome));
+        var scenarios = Gen.Select(rounds.Array[1, 8], identities,
+            static (completed, candidate) => new RecurrenceScenario(completed, candidate));
+        var cases = 0;
+
+        scenarios.Sample(scenario =>
+        {
+            var tracker = new TurnStateTracker();
+            var model = new Dictionary<string, (int Outcome, int EqualRounds)>(StringComparer.Ordinal);
+            for (var i = 0; i < scenario.Rounds.Length; i++)
+            {
+                var round = scenario.Rounds[i];
+                var target = Call($"target-{i}", "sample/read", ("id", round.Identity));
+                var unrelated = Call($"noise-{i}", "sample/diagnostic", ("id", i));
+                var batch = Prepare(target, unrelated);
+                tracker.ObserveCompleted(Complete(
+                    batch,
+                    ($"target-{i}", ToolInvocationOutcomeCategory.Success, $"outcome-{round.Outcome}"),
+                    ($"noise-{i}", ToolInvocationOutcomeCategory.Success, $"noise-{i}")));
+
+                model.TryGetValue(round.Identity, out var prior);
+                var equalRounds = prior.Outcome == round.Outcome ? prior.EqualRounds + 1 : 1;
+                model[round.Identity] = (round.Outcome, equalRounds);
+            }
+
+            var candidate = Prepare(Call(
+                "candidate",
+                "sample/read",
+                ("id", scenario.CandidateIdentity)));
+            var shouldRefuse = model.TryGetValue(scenario.CandidateIdentity, out var evidence)
+                && evidence.EqualRounds >= 2;
+            var decision = tracker.EvaluateBeforeDispatch(candidate);
+
+            Assert.Equal(shouldRefuse ? ToolCycleDecisionKind.Correct : ToolCycleDecisionKind.Execute, decision.Kind);
+            Assert.Equal(
+                shouldRefuse ? new[] { "candidate" } : Array.Empty<string>(),
+                decision.RefusedCallIds);
+            if (shouldRefuse)
+                Assert.Equal(ToolCycleDecisionKind.Stop, tracker.EvaluateBeforeDispatch(candidate).Kind);
+            cases++;
+        }, iter: 1_000, seed: RecurrenceSampleSeed, threads: 1,
+            print: scenario => $"candidate={scenario.CandidateIdentity}; "
+                + string.Join(" -> ", scenario.Rounds.Select(round => $"{round.Identity}:{round.Outcome}")));
+
+        Assert.True(cases >= 1_000, $"CsCheck ran only {cases} cases.");
+    }
+
+    [Fact]
+    public void RepeatedCall_StopsUntilItsOwnOutcomeChanges()
     {
         var tracker = new TurnStateTracker();
         var repeated = Prepare(Call("call-a", "sample/a"));
@@ -334,18 +465,26 @@ public sealed class TurnStateTrackerTests
 
         Assert.Equal(
             ToolCycleDecisionKind.Correct,
-            tracker.EvaluateBeforeDispatch(repeated.Action).Kind);
+            tracker.EvaluateBeforeDispatch(repeated).Kind);
         Assert.Equal(
             ToolCycleDecisionKind.Stop,
-            tracker.EvaluateBeforeDispatch(repeated.Action).Kind);
+            tracker.EvaluateBeforeDispatch(repeated).Kind);
 
         tracker.ObserveCompleted(Complete(
             other,
             ("call-b", ToolInvocationOutcomeCategory.Success, "different")));
 
         Assert.Equal(
+            ToolCycleDecisionKind.Stop,
+            tracker.EvaluateBeforeDispatch(repeated).Kind);
+
+        tracker.ObserveCompleted(Complete(
+            repeated,
+            ("call-a", ToolInvocationOutcomeCategory.Success, "changed")));
+
+        Assert.Equal(
             ToolCycleDecisionKind.Execute,
-            tracker.EvaluateBeforeDispatch(repeated.Action).Kind);
+            tracker.EvaluateBeforeDispatch(repeated).Kind);
     }
 
     [Fact]
@@ -361,14 +500,14 @@ public sealed class TurnStateTrackerTests
 
         Assert.Equal(
             ToolCycleDecisionKind.Correct,
-            tracker.EvaluateBeforeDispatch(batch.Action).Kind);
+            tracker.EvaluateBeforeDispatch(batch).Kind);
 
         tracker.ResetForNewTurn();
 
         Assert.Equal(0, tracker.CompletedCycleHistoryCount);
         Assert.Equal(
             ToolCycleDecisionKind.Execute,
-            tracker.EvaluateBeforeDispatch(batch.Action).Kind);
+            tracker.EvaluateBeforeDispatch(batch).Kind);
     }
 
     [Fact]
@@ -392,11 +531,22 @@ public sealed class TurnStateTrackerTests
     private static CompletedToolCycleIteration Complete(
         PreparedToolCycleBatch batch,
         params (string CallId, ToolInvocationOutcomeCategory Category, string Text)[] results)
+        => Complete(batch, results, synthetic: false);
+
+    private static CompletedToolCycleIteration CompleteSynthetic(
+        PreparedToolCycleBatch batch,
+        params (string CallId, ToolInvocationOutcomeCategory Category, string Text)[] results)
+        => Complete(batch, results, synthetic: true);
+
+    private static CompletedToolCycleIteration Complete(
+        PreparedToolCycleBatch batch,
+        (string CallId, ToolInvocationOutcomeCategory Category, string Text)[] results,
+        bool synthetic = false)
         => ToolCycleSignatureFactory.Complete(
             batch,
             results.ToDictionary(
                 static result => result.CallId,
-                static result => new ToolCycleResult(result.Category, result.Text),
+                result => new ToolCycleResult(result.Category, result.Text) { Synthetic = synthetic },
                 StringComparer.Ordinal));
 
     private static FunctionCallContent Call(

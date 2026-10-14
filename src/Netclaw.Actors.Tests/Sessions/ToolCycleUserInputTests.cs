@@ -96,38 +96,6 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
     }
 
     [Fact]
-    public async Task New_user_input_discards_the_exhausted_budget_from_the_completed_batch()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        static List<FunctionCallContent> DistinctCalls(int number)
-        {
-            var calls = Calls(number);
-            calls[0].Arguments!["query"] = number;
-            return calls;
-        }
-
-        _client.Inner.ToolCallsOnFirstCall = DistinctCalls(1);
-        _client.Inner.AfterToolCallResponse = count =>
-            _client.Inner.ToolCallsOnFirstCall = DistinctCalls(count + 1);
-        _client.Inner.AlwaysReturnToolCalls = true;
-        _executor.PauseAtCall = MaximumToolIterations;
-        var sessionId = new SessionId("cycle-user-input/exhausted-budget");
-        var subscriber = await StartRequestAsync(sessionId);
-
-        await _executor.CallPaused.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        Assert.Equal(MaximumToolIterations, _executor.Count);
-        await SendNewRequestAsync(sessionId);
-        _client.Inner.PlannedToolCallDecisions.Enqueue(true);
-        _client.Inner.PlannedToolCallDecisions.Enqueue(false);
-        _executor.ResumeCall.TrySetResult();
-        await ExpectTurnCompletedAsync(subscriber);
-
-        Assert.Equal(MaximumToolIterations + 1, _executor.Count);
-        Assert.Equal(MaximumToolIterations + 2, _client.Inner.CallCount);
-        Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[MaximumToolIterations]);
-    }
-
-    [Fact]
     public async Task User_input_queued_during_terminal_reply_restores_tools_for_the_new_request()
     {
         var ct = TestContext.Current.CancellationToken;

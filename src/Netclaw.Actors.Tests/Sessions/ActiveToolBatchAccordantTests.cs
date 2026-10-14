@@ -219,7 +219,7 @@ public sealed class ActiveToolBatchAccordantTests(ITestOutputHelper output)
         {
             var nextBatch = _sequence.Batch(_batchNumber + 1);
             _trace.Add($"ProbeCompletion(next={nextBatch.First},{nextBatch.Second})");
-            var completion = _tracker.CompleteIfReady(_session, _turnState, 10);
+            var completion = _tracker.CompleteIfReady(_session, _turnState);
             var observation = completion is BatchCompletion.Ready ready
                 ? new BatchObservation(true, ready.ResultCount, History(ready.State))
                 : new BatchObservation(false, 0, History(_session));

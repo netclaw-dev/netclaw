@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Event;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -1403,82 +1404,63 @@ public class SubAgentActorTests : SubAgentActorTestBase
     }
 
     [Fact]
-    public async Task Max_iterations_forces_text_response()
+    public async Task Distinct_productive_tool_rounds_continue_past_the_former_limit()
     {
-        var fakeTool = new FakeNetclawTool("looper", "loop result");
-        var fakeClient = new FakeChatClient
-        {
-            ToolCallsOnFirstCall =
-            [
-                CreateToolCall("call-loop", "looper")
-            ],
-            AlwaysReturnToolCalls = true
-        };
-
-        var definition = CreateDefinition([fakeTool]);
+        const int FormerDefaultLimit = 30;
+        const int UsefulRounds = FormerDefaultLimit + 1;
+        var tool = new ProgressTool();
+        var responses = Enumerable.Range(1, UsefulRounds)
+            .Select(round => (IReadOnlyList<AIContent>)[CreateToolCall(
+                $"call-{round}",
+                "looper",
+                new Dictionary<string, object?> { ["query"] = $"step-{round}" })])
+            .ToArray();
+        var fakeClient = new ScriptedToolCallChatClient(responses, "Task complete.");
+        var definition = CreateDefinition([tool]);
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             definition,
             fakeClient,
-            PermissivePolicy(),
-            maxToolIterations: 3));
+            PermissivePolicy()));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Loop forever", Timeout = TimeSpan.FromSeconds(10) },
-            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Use each distinct result", Timeout = TimeSpan.FromSeconds(30) },
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        // After the configured tool budget, force a no-tools call which returns text.
         Assert.True(result.Success);
-        Assert.Equal(SubAgentRunOutcome.Partial, result.Outcome);
-        Assert.Equal(SubAgentOutcomeReason.ToolIterationBudgetExhausted, result.OutcomeReason);
-        Assert.Equal(4, fakeClient.CallCount);
-        Assert.NotNull(fakeClient.LastReceivedMessages);
-        Assert.Contains(fakeClient.LastReceivedMessages,
-            message => message.Role == ChatRole.User
-                       && message.Text.Contains("Start wrapping up your tool usage", StringComparison.Ordinal));
-        Assert.Contains(fakeClient.LastReceivedMessages,
-            message => message.Role == ChatRole.User
-                       && message.Text.Contains("Do NOT request any more tools", StringComparison.Ordinal));
+        Assert.Equal(SubAgentRunOutcome.Completed, result.Outcome);
+        Assert.Null(result.OutcomeReason);
+        Assert.Equal("Task complete.", result.Output);
+        Assert.Equal(UsefulRounds + 1, fakeClient.CallCount);
+        Assert.Equal(Enumerable.Range(1, UsefulRounds).Select(static round => $"step-{round}"), tool.Queries);
     }
 
     [Fact]
-    public async Task Exact_tool_cycle_gets_one_correction_then_stops()
+    public async Task Repeated_corrected_call_stops_without_another_model_request()
     {
         var diagnostics = CreateTestProbe();
         Sys.EventStream.Subscribe(diagnostics, typeof(Warning));
-        var executionCount = 0;
-        var fakeTool = new FakeNetclawTool(
-            "mutate_state",
-            "loop result",
-            onExecute: _ => Interlocked.Increment(ref executionCount));
-        var fakeClient = new FakeChatClient
-        {
-            ToolCallsOnFirstCall =
-            [
-                CreateToolCall("call-loop", "mutate_state")
-            ],
-            AlwaysReturnToolCalls = true,
-            ResponseTextsByCall =
-            [
-                "unused",
-                "unused",
-                "unused",
-                "unused",
-                string.Empty,
-                "Final partial report."
-            ]
-        };
+        var tool = new ProgressTool();
+        FunctionCallContent Call(string callId, string query)
+            => CreateToolCall(callId, "looper", new Dictionary<string, object?> { ["query"] = query });
+        IReadOnlyList<AIContent>[] responses =
+        [
+            [Call("repeat-1", "repeat"), Call("diagnostic-1", "diagnostic-1")],
+            [Call("repeat-2", "repeat"), Call("diagnostic-2", "diagnostic-2")],
+            [Call("repeat-3", "repeat"), Call("diagnostic-3", "diagnostic-3")],
+            [Call("repeat-4", "repeat"), Call("diagnostic-4", "diagnostic-4")]
+        ];
+        var fakeClient = new ScriptedToolCallChatClient(responses, "This response must not run.");
 
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
-            CreateDefinition([fakeTool]),
+            CreateDefinition([tool]),
             fakeClient,
-            PermissivePolicy(),
-            maxToolIterations: 10));
+            PermissivePolicy()));
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
                 Scope = SubAgentTestScope.Create(),
-                Task = "Repeat the same tool.",
+                Task = "Repeat one call and run a diagnostic each round.",
                 Timeout = TimeSpan.FromSeconds(10)
             },
             TimeSpan.FromSeconds(10),
@@ -1487,17 +1469,19 @@ public class SubAgentActorTests : SubAgentActorTestBase
         Assert.True(result.Success);
         Assert.Equal(SubAgentRunOutcome.Partial, result.Outcome);
         Assert.Equal(SubAgentOutcomeReason.ToolCycleStopped, result.OutcomeReason);
-        Assert.Equal(6, fakeClient.CallCount);
-        Assert.Equal(2, executionCount);
-        Assert.Equal("Final partial report.", result.Output);
-        Assert.NotNull(fakeClient.LastReceivedMessages);
-        var toolResults = fakeClient.LastReceivedMessages
+        Assert.Equal(4, fakeClient.CallCount);
+        Assert.Equal(
+            ["diagnostic-1", "diagnostic-2", "diagnostic-3", "repeat", "repeat"],
+            tool.Queries.Order(StringComparer.Ordinal));
+        Assert.Contains("result is partial", result.Output, StringComparison.OrdinalIgnoreCase);
+        var toolResults = fakeClient.ReceivedMessagesByCall[^1]
             .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
             .Select(static toolResult => toolResult.Result?.ToString() ?? string.Empty)
             .ToList();
-        Assert.Equal(2, toolResults.Count(static text => text == "loop result"));
+        Assert.Equal(2, toolResults.Count(static text => text == "result:repeat"));
+        Assert.Equal(3, toolResults.Count(static text => text.StartsWith("result:diagnostic-", StringComparison.Ordinal)));
         Assert.Single(toolResults, static text =>
-            text.Contains("repeated action-and-outcome cycle", StringComparison.Ordinal));
+            text.Contains("same action completed twice", StringComparison.Ordinal));
         for (var i = 0; i < 2; i++)
         {
             var diagnostic = await diagnostics.FishForMessageAsync<Warning>(
@@ -1507,7 +1491,7 @@ public class SubAgentActorTests : SubAgentActorTestBase
             Assert.Equal($"TurnStateTracker (akka://{Sys.Name})", diagnostic.LogSource);
             Assert.DoesNotContain(agent.Path.Name, diagnostic.LogSource, StringComparison.Ordinal);
             var properties = Assert.IsAssignableFrom<LogMessage>(diagnostic.Message).GetProperties();
-            Assert.Equal(["DecisionKind", "Period", "Repetitions"], properties.Keys.Order(StringComparer.Ordinal));
+            Assert.Equal(["DecisionKind", "RefusedCalls"], properties.Keys.Order(StringComparer.Ordinal));
         }
     }
 
@@ -2318,6 +2302,94 @@ internal sealed class DelayingParentApprovalBridge : IParentConsentBridge
         // hand-rolled WhenAny+Register+TCS dance.
         var answer = await _decisionFactory().WaitAsync(ct);
         return ConsentStep.From(answer, request.CallName, request.Approval);
+    }
+}
+
+internal sealed class ProgressTool : INetclawTool
+{
+    private readonly ConcurrentQueue<string> _queries = new();
+
+    public string Name => "looper";
+    public LlmFacingToolName LlmFacingName => LlmFacingToolName.FromCanonical(Name);
+    public string Description => "Returns a result for one distinct query.";
+    public string GrantCategory => "builtin";
+    public System.Text.Json.JsonElement ParameterSchema => default;
+    public IReadOnlyList<string> Queries => _queries.ToArray();
+
+    public AITool ToAITool() => AIFunctionFactory.Create(
+        (string query) => $"result:{query}",
+        name: Name,
+        description: Description);
+
+    public Task<string> ExecuteAsync(
+        IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var query = arguments?["query"]?.ToString()
+            ?? throw new InvalidOperationException("The query argument is required.");
+        _queries.Enqueue(query);
+        return Task.FromResult($"result:{query}");
+    }
+}
+
+internal sealed class ScriptedToolCallChatClient(
+    IReadOnlyList<IReadOnlyList<AIContent>> toolResponses,
+    string finalResponse) : IChatClient
+{
+    private readonly List<IReadOnlyList<ChatMessage>> _receivedMessages = [];
+    private int _callCount;
+
+    public int CallCount => Volatile.Read(ref _callCount);
+    public IReadOnlyList<IReadOnlyList<ChatMessage>> ReceivedMessagesByCall => _receivedMessages;
+
+    public Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var callNumber = Record(messages);
+        return Task.FromResult(Response(callNumber));
+    }
+
+    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var callNumber = Record(messages);
+        return StreamResponse(Response(callNumber), cancellationToken);
+    }
+
+    public object? GetService(Type serviceType, object? serviceKey = null) => null;
+    public void Dispose() { }
+
+    private int Record(IEnumerable<ChatMessage> messages)
+    {
+        var callNumber = Interlocked.Increment(ref _callCount);
+        _receivedMessages.Add(messages.ToArray());
+        return callNumber;
+    }
+
+    private ChatResponse Response(int callNumber)
+    {
+        IReadOnlyList<AIContent> contents = callNumber <= toolResponses.Count
+            ? toolResponses[callNumber - 1]
+            : [new TextContent(finalResponse)];
+        return new ChatResponse(new ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, contents.ToList()));
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> StreamResponse(
+        ChatResponse response,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        foreach (var update in response.ToChatResponseUpdates())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return update;
+            await Task.Yield();
+        }
     }
 }
 
