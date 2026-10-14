@@ -92,8 +92,7 @@ the child inspected the named artifacts.
 | Grounding & Alignment | 4 | Uses tools to verify facts, admits uncertainty, and resolves announced attachment paths from the authoritative session root |
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
 | Deployment Mission | 1 | Applies the disk mission playbook, loads its required skill, and returns reviewed sales email |
-| Subagents | 3 | Delegates through `spawn_agent`, completes ambiguous work, preserves specialized guidance, and declares a different named project before shell inspection |
-| Coordination | 3 | Checks exact retained-result and artifact outcomes, plus child completion and automatic parent continuation after an early response |
+| Subagents | 7 | Covers four existing child tasks and three coordination cases. Checks retained-result and artifact outcomes, child completion, and automatic parent continuation. |
 | Coding Context | 1 | Repeatedly switches between isolated linked worktrees, alternates branch and one-of-four target files by run, and verifies Git grounding, wrong-file/worktree safety, and path-free child handoff |
 | Session Storage | 4 | Verifies managed temporary APIs, parent-child log handoff, and managed worktree creation |
 | Complex Task Execution | 6 | Multi-step tool chains complete successfully, incl. bounded tool output — given only the goal (no handling hints), the agent retrieves a deep line from oversized shell output and from a large file, which is only possible by coping with the bound the way AGENTS.md/skills/steer text direct; and in a session with no shell call, the agent reads the middle of an oversized skill through `tool_output_read` |
