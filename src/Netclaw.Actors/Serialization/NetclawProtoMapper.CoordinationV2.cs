@@ -204,9 +204,9 @@ internal static partial class NetclawProtoMapper
             return true;
         }
 
-        if (pendingResult?.ToolCallId is not { } pendingCallId)
+        if (pendingResult?.ToolCallId is not { } preparedCallId)
             return false;
-        var pendingCall = LegacyCoordinationReplay.LegacyDeliveryCall(run, pendingCallId);
+        var pendingCall = LegacyCoordinationReplay.LegacyDeliveryCall(run, preparedCallId);
         delivery = new ChildPreparedResult(terminal.Result, pendingCall, pendingResult, null);
         hasPendingInput = true;
         return true;
