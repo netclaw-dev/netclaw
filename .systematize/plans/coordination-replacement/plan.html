@@ -253,7 +253,7 @@ Return key insights, evidence locations, and uncertainties.</code></pre>
 <li><strong>Acceptance:</strong> fail the acceptance write and assert zero child calls. Lose the successful reply and retry the same start identity. Assert one accepted run.</li>
 <li><strong>Recovery:</strong> fail after terminal save, after preparation, and before or after parent consumption. Replay the journal. Assert the same result identity, no lost confirmed result, and no repeat child execution.</li>
 <li><strong>Authority:</strong> create two requesters. Resolve an approval or cancellation with the wrong requester or stale attempt. Assert zero grant writes and zero extra dispatch. Include the authorized control.</li>
-<li><strong>Status:</strong> hold one unresolved child approval. The authorized requester sees <code>pending_approvals = 1</code>; a foreign requester sees no protected status. Resolve it and require zero pending approvals.</li>
+<li><strong>Status:</strong> hold one unresolved child approval. The authorized requester sees <code>pending_approval_count = 1</code>; a foreign requester sees no protected status. Resolve it and require zero pending approvals.</li>
 <li><strong>Input order:</strong> queue ordinary inputs A and B while a child finishes. Assert that A and B remain one ordered batch and do not replace child authority.</li>
 <li><strong>Legacy data:</strong> use fixed bytes produced by deployed <code>9f79c0c4</code>. Cover <code>tta-v1</code>, <code>cra-v1</code>, <code>cre-v1</code>, extended records, snapshots, and the reported invalid adoption. Preserve accepted identities, results, authority, consent, and job lineage. Do not construct all fixtures with the new serializer.</li>
 </ol>
@@ -337,11 +337,13 @@ dotnet slopwatch analyze
 <li>Four snapshot tests pass. They check old primitive bytes, old snapshot reads, and new snapshot round trips.</li>
 <li>The recurrence checks passed 124 tests. They include generated operation sequences and productive child work beyond the old iteration limit.</li>
 <li>All eight selected reliability mutants were killed. No selected mutant survived, timed out, or failed to run.</li>
-<li>Twenty-four actor, context, and replay checks pass after the history repair. They cover failed acceptance, ready-child priority, ordered user batches, and the acceptance crash cut.</li>
+<li>Twenty-six actor, context, and replay checks pass after the history repair. They cover failed acceptance, ready-child priority, ordered user batches, and the acceptance crash cut.</li>
+<li>The actor control tests verify requester authority and a cancellation reply after the journal write. The unresolved approval status check remains open.</li>
 <li>An independent test reproduced duplicate child pairs in later requests. The repair keeps temporary model messages outside canonical history.</li>
 <li>Combined tests, complete native smoke, model evals, and final source counts remain open.</li>
 </ul>
-<p>The source checkpoint showed only 229 fewer production lines than the old feature stack, about eight percent. This does not establish a large source reduction.</p>
+<p>The latest measured checkpoint uses <code>99a6ea53</code>. It adds 231 fewer production lines and 7,401 fewer combined production and test lines than the old stack.</p>
+<p>Each comparison uses the feature's own base. Production savings remain about eight percent. Later test fixes require a final count.</p>
 <p>The final review must include all actor partial files and the cost of readers for deployed data.</p>
 <p>The public choices are confirmed. The OpenSpec change records the approved direction; implementation and verification remain separate work.</p>
 <p>The formal change is <code>openspec/changes/simplify-agent-coordination</code>. This HTML page owns the delivery sequence and verification procedures.</p>
