@@ -307,7 +307,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Equal("summarizer", completed.AgentName.Value);
         Assert.True(completed.Success);
         Assert.Equal(SubAgentRunOutcome.Completed, completed.Outcome);
-        Assert.True(completed.Duration > TimeSpan.Zero);
+        Assert.True(completed.TimestampMs >= started.TimestampMs);
+        Assert.True(completed.Duration >= TimeSpan.FromMilliseconds(completed.TimestampMs - started.TimestampMs));
         Assert.Equal(0, completed.FindingsCount);
 
         await AwaitAssertAsync(() => Assert.True(_clientProvider.Main.CallCount >= 3,
@@ -1040,6 +1041,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 new Dictionary<string, object?>())
         ]);
         _clientProvider.Compaction.PlannedResponses.Enqueue([new TextContent("Fresh child completed.")]);
+        // The first parent turn must consume its reply before the child result selector can run.
+        var childModelGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _clientProvider.Compaction.NextResponseGate = childModelGate;
 
         var sessionId = new SessionId("console/subagent-failure-isolation");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -1064,13 +1068,29 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 Content = content,
                 Source = BuildPersonalSource()
             }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-            await ExpectChildTerminalAndParentResumeAsync(
+
+            if (completedChildren == 0)
+            {
+                await ExpectTurnCompletedAsync(
+                    subscriber,
+                    TimeSpan.FromSeconds(10),
+                    TestContext.Current.CancellationToken);
+                childModelGate.TrySetResult();
+            }
+
+            var (terminal, _) = await ExpectChildTerminalAndParentResumeWithOutputsAsync(
                 subscriber,
                 "summarizer",
                 TestContext.Current.CancellationToken,
                 parentCallCountBeforeSend,
                 parentResumeMarker,
                 ++completedChildren);
+            Assert.Equal(completedChildren == 2, terminal.Success);
+            Assert.Equal(
+                completedChildren == 2 ? SubAgentRunOutcome.Completed : SubAgentRunOutcome.Failed,
+                terminal.Outcome);
+            if (completedChildren == 1)
+                Assert.Equal(SubAgentOutcomeReason.LlmCallFailed, terminal.OutcomeReason);
         }
 
         Assert.True(failureProbe.WasCalled);
