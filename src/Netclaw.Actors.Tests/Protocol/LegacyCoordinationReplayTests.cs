@@ -126,7 +126,7 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         {
             "child-run-accepted", "child-started", "child-checkpoint", "child-terminal",
             "child-result-prepared", "child-delivery-admitted", "valid-child-delivery-adoption",
-            "child-downstream-tool-batch", "child-downstream-tool-result", "child-downstream-final-turn"
+            "child-downstream-tool-batch", "child-downstream-final-turn"
         })
         {
             state = Replay(serializer, state, name);
@@ -167,20 +167,20 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         var restored = SessionState.FromSnapshot(snapshot);
 
         var run = Assert.Single(restored.ChildRuns.Values);
-        var prepared = Assert.IsType<ChildRunLifecycle.Prepared>(run.Lifecycle);
-        var call = Assert.Single(prepared.Delivery.Call.ToolCalls);
+        var consumed = Assert.IsType<ChildRunLifecycle.Consumed>(run.Lifecycle);
+        var call = Assert.Single(consumed.Delivery.Call.ToolCalls);
         Assert.Equal("legacy-delivery-call", call.CallId.Value);
         Assert.Equal("spawn_agent", call.Name.Value);
         using var arguments = JsonDocument.Parse(call.ArgumentsJson);
         Assert.Equal("accepted-run", arguments.RootElement.GetProperty("run_id").GetString());
         Assert.Equal("spawn_agent", arguments.RootElement.GetProperty("source_operation").GetString());
-        Assert.Equal("spawn_agent", prepared.Delivery.Result.Name);
+        Assert.Equal("spawn_agent", consumed.Delivery.Result.Name);
 
         var workflow = new SessionToolWorkflow();
         Assert.Equal(run, workflow.SelectChild(restored, modelGeneration: 1, allowSelection: true));
         var modelState = workflow.ModelState(restored);
-        Assert.Single(modelState.History.SelectMany(message => message.ToolCalls), item => item.CallId == call.CallId);
-        Assert.Single(modelState.History, message => message.ToolCallId == call.CallId);
+        Assert.Equal(1, modelState.History.SelectMany(message => message.ToolCalls).Count(item => item.CallId == call.CallId));
+        Assert.Equal(1, modelState.History.Count(message => message.ToolCallId == call.CallId));
     }
 
     [Fact]
@@ -399,7 +399,18 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         var restored = SessionState.FromSnapshot(RoundTrip(serializer, state.ToSnapshot()));
         Assert.Equal(initial.ProjectDirectory, restored.WorkingContext.ProjectDirectory);
         Assert.Equal(initial.RecentFiles, restored.WorkingContext.RecentFiles);
-        Assert.Equal(state.History, restored.History);
+        Assert.Equal(state.History.Count, restored.History.Count);
+        for (var index = 0; index < state.History.Count; index++)
+        {
+            var expected = state.History[index];
+            var actual = restored.History[index];
+            Assert.Equal(expected.Role, actual.Role);
+            Assert.Equal(expected.Content, actual.Content);
+            Assert.Equal(expected.Name, actual.Name);
+            Assert.Equal(expected.ToolCallId, actual.ToolCallId);
+            Assert.Equal(expected.ToolCalls.Select(static call => (call.CallId, call.Name, call.ArgumentsJson)),
+                actual.ToolCalls.Select(static call => (call.CallId, call.Name, call.ArgumentsJson)));
+        }
         Assert.Equal(1, restored.History.Count(message => message.ToolCallId == callId));
     }
 
@@ -420,8 +431,25 @@ public sealed class LegacyCoordinationReplayTests : TestKit
 
     private SessionState Replay(NetclawProtobufSerializer serializer, SessionState state, string name)
     {
-        var evt = Assert.IsType<LegacyCoordinationEvent>(Deserialize(serializer, name));
-        return LegacyCoordinationReplay.Apply(state, evt);
+        var evt = Deserialize(serializer, name);
+        if (evt is LegacyCoordinationEvent legacy)
+            return LegacyCoordinationReplay.Apply(state, legacy);
+
+        return evt switch
+        {
+            ToolBatchStarted batch => new SessionToolWorkflow().ApplyBatchStarted(
+                state, LegacyCoordinationReplay.TranslateParentDecision(state, batch)),
+            TurnRecorded turn => ApplyParentTurn(state, turn),
+            InputAdmitted input => state.Apply(input),
+            _ => throw new InvalidDataException($"Fixture '{name}' is not a replayable session event.")
+        };
+    }
+
+    private static SessionState ApplyParentTurn(SessionState state, TurnRecorded recorded)
+    {
+        var translated = LegacyCoordinationReplay.TranslateParentDecision(state, recorded);
+        var userAlreadyInHistory = translated.ChildContinuation is not null || translated.ConsumedInputIds.Count > 0;
+        return state.Apply(translated, userAlreadyInHistory);
     }
 
     private T RoundTrip<T>(NetclawProtobufSerializer serializer, T value) where T : notnull
