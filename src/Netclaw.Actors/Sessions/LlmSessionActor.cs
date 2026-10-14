@@ -197,16 +197,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         }
 
         // ── Recovery handlers ──
-        Recover<TurnRecorded>(evt =>
-        {
-            RestoreConsumedInputs(evt.ConsumedInputIds, evt.UserMessage);
-            // Consumed IDs identify restored history. Equal text is a legacy-only rule.
-            var userAlreadyInHistory = evt.ConsumedInputIds.Count > 0
-                                       || _state.FindLastUserMessage() == evt.UserMessage;
-            _state = _state.Apply(evt, userAlreadyInHistory);
-            _toolWorkflow.CompleteTurn();
-            _input.ClearTurnContext();
-        });
+        Recover<TurnRecorded>(RecoverParentTurn);
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
         Recover<SessionBackgroundJobsReaped>(evt => _state = _state.Apply(evt));
         Recover<SessionCompacted>(evt =>
@@ -215,13 +206,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _toolWorkflow.CompleteTurn();
             _input.ClearTurnContext();
         });
-        Recover<ToolBatchStarted>(evt =>
-        {
-            RestoreConsumedInputs(evt.ConsumedInputIds, evt.UserMessage);
-            ApplyToolBatchStarted(evt);
-        });
+        Recover<ToolBatchStarted>(RecoverParentBatch);
         Recover<InputAdmitted>(evt => _state = _state.Apply(evt));
-        Recover<InputClosed>(evt => _state = _state.Apply(evt));
+        Recover<InputClosed>(RecoverParentClosure);
         Recover<ChildRunAccepted>(evt => _state = _state.Apply(evt));
         Recover<ChildRunEvent>(evt => _state = _state.Apply(evt));
         Recover<LegacyCoordinationEvent>(ApplyLegacyCoordination);
@@ -1926,6 +1913,27 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         }
         TryReplyAck();
     }
+
+    private void RecoverParentTurn(TurnRecorded recorded)
+    {
+        var evt = LegacyCoordinationReplay.TranslateParentDecision(_state, recorded);
+        RestoreConsumedInputs(evt.ConsumedInputIds, evt.UserMessage);
+        var userAlreadyInHistory = evt.ChildContinuation is not null || evt.ConsumedInputIds.Count > 0
+                                   || _state.FindLastUserMessage() == evt.UserMessage;
+        _state = _state.Apply(evt, userAlreadyInHistory);
+        _toolWorkflow.CompleteTurn();
+        _input.ClearTurnContext();
+    }
+
+    private void RecoverParentBatch(ToolBatchStarted recorded)
+    {
+        var evt = LegacyCoordinationReplay.TranslateParentDecision(_state, recorded);
+        RestoreConsumedInputs(evt.ConsumedInputIds, evt.UserMessage);
+        ApplyToolBatchStarted(evt);
+    }
+
+    private void RecoverParentClosure(InputClosed recorded)
+        => _state = _state.Apply(LegacyCoordinationReplay.TranslateParentDecision(_state, recorded));
 
     private void RestoreConsumedInputs(IReadOnlyList<InputId> inputIds, SerializableChatMessage lastUserMessage)
     {
