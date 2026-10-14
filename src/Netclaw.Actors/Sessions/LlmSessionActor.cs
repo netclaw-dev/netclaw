@@ -3659,18 +3659,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             ApplyBufferedBatch(batch);
         }
 
-        var next = advance.Next;
-        switch (next)
-        {
-            case ToolBatchNextAction.ContinueModel { NudgeText: { } nudge }:
-                _state = _state.AddSystemNudge(nudge);
-                break;
-            case ToolBatchNextAction.RequestCompaction { NudgeText: { } nudge }:
-                _state = _state.AddSystemNudge(nudge);
-                break;
-        }
-
-        if (next is ToolBatchNextAction.RequestCompaction)
+        if (advance.Next == ToolBatchNextAction.RequestCompaction)
         {
             _log.Info("Compaction threshold reached during tool loop ({InputTokens} tokens >= {Threshold} limit), starting compaction",
                 _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
