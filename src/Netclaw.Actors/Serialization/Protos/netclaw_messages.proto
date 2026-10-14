@@ -95,6 +95,7 @@ message TurnRecordedProto {
   optional string source_reminder_id = 5;
   optional string source_background_job_id = 6;
   repeated string consumed_input_ids = 7;
+  ChildContinuationProto child_continuation = 8;
 }
 
 message InputAdmittedProto {
@@ -131,6 +132,7 @@ message InputClosedProto {
   optional string task_id = 4;
   optional string source_background_job_id = 5;
   SerializableChatMessageProto rejected_job_report = 6;
+  ChildContinuationProto child_continuation = 7;
 }
 
 message SessionTitleSetProto {
@@ -171,6 +173,12 @@ message ToolBatchStartedProto {
   reserved 8;
   bool metadata_only = 9;
   ToolApprovalRequestedProto.TurnContextRecordProto legacy_task_context = 10;
+  ChildContinuationProto child_continuation = 11;
+}
+
+message ChildContinuationProto {
+  string run_id = 1;
+  string delivery_call_id = 2;
 }
 
 message ToolCallRecordedProto {

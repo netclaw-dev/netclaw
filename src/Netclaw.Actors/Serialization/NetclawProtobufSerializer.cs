@@ -131,8 +131,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
             TurnRecordedManifest => NetclawProtoMapper.FromProto(
                 Proto.TurnRecordedProto.Parser.ParseFrom(bytes)),
             InputAdmittedManifest => ReadInputAdmitted(bytes),
-            InputClosedManifest => NetclawProtoMapper.FromProto(
-                Proto.InputClosedProto.Parser.ParseFrom(bytes)),
+            InputClosedManifest => ReadInputClosed(bytes),
             SessionTitleSetManifest => NetclawProtoMapper.FromProto(
                 Proto.SessionTitleSetProto.Parser.ParseFrom(bytes)),
             SessionCompactedManifest => NetclawProtoMapper.FromProto(
@@ -161,10 +160,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.CursorAdvancedProto.Parser.ParseFrom(bytes)),
             MemoriesDistilledV2Manifest => NetclawProtoMapper.FromProto(
                 Proto.MemoriesDistilledV2Proto.Parser.ParseFrom(bytes)),
-            ToolBatchStartedManifest => NetclawProtoMapper.FromProto(
-                Proto.ToolBatchStartedProto.Parser.ParseFrom(bytes)),
-            ToolCallRecordedManifest => NetclawProtoMapper.FromProto(
-                Proto.ToolCallRecordedProto.Parser.ParseFrom(bytes)),
+            ToolBatchStartedManifest => ReadToolBatchStarted(bytes),
+            ToolCallRecordedManifest => ReadToolCallRecorded(bytes),
             ToolApprovalRequestedManifest => NetclawProtoMapper.FromProto(
                 Proto.ToolApprovalRequestedProto.Parser.ParseFrom(bytes)),
             ToolApprovalResolvedManifest => NetclawProtoMapper.FromProto(
@@ -195,6 +192,30 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         if (proto.HasSourceChildRunId || proto.HasSourceBackgroundJobId || proto.BackgroundJobLineageVersion != 0
             || proto.BackgroundJobOrigin is not null)
             return Legacy(proto.SessionId?.Value ?? string.Empty, InputAdmittedManifest, bytes, proto, proto.AdmittedAtMs);
+        return NetclawProtoMapper.FromProto(proto);
+    }
+
+    private static object ReadInputClosed(byte[] bytes)
+    {
+        var proto = Proto.InputClosedProto.Parser.ParseFrom(bytes);
+        if (proto.HasTaskId || proto.HasSourceBackgroundJobId || proto.RejectedJobReport is not null)
+            return Legacy(proto.SessionId?.Value ?? string.Empty, InputClosedManifest, bytes, proto, proto.ClosedAtMs);
+        return NetclawProtoMapper.FromProto(proto);
+    }
+
+    private static object ReadToolBatchStarted(byte[] bytes)
+    {
+        var proto = Proto.ToolBatchStartedProto.Parser.ParseFrom(bytes);
+        if (proto.LoopAdmission is not null || proto.MetadataOnly || proto.LegacyTaskContext is not null)
+            return Legacy(proto.SessionId?.Value ?? string.Empty, ToolBatchStartedManifest, bytes, proto, proto.StartedAtMs);
+        return NetclawProtoMapper.FromProto(proto);
+    }
+
+    private static object ReadToolCallRecorded(byte[] bytes)
+    {
+        var proto = Proto.ToolCallRecordedProto.Parser.ParseFrom(bytes);
+        if (proto.LoopObservation is not null || proto.StartedBackgroundJob is not null)
+            return Legacy(proto.SessionId?.Value ?? string.Empty, ToolCallRecordedManifest, bytes, proto, proto.RecordedAtMs);
         return NetclawProtoMapper.FromProto(proto);
     }
 

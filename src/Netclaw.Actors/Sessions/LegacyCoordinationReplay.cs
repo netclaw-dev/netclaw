@@ -26,9 +26,20 @@ public static class LegacyCoordinationReplay
             Proto.ChildRunAcceptedProto accepted => ApplyAccepted(state, evt, accepted),
             Proto.ChildRunEventProto childEvent => ApplyChildEvent(state, evt, childEvent),
             Proto.InputAdmittedProto input => ApplyExtendedInput(state, evt, input),
+            Proto.InputClosedProto or Proto.ToolBatchStartedProto or Proto.ToolCallRecordedProto
+                => PreserveExtendedEvent(state, evt),
             _ => throw new InvalidDataException($"Unsupported deployed coordination manifest '{evt.Manifest}'.")
         };
     }
+
+    public static ISessionEvent GetCoreEvent(LegacyCoordinationEvent evt)
+        => evt.LegacyPayload switch
+        {
+            Proto.InputClosedProto input => NetclawProtoMapper.FromProto(input),
+            Proto.ToolBatchStartedProto batch => NetclawProtoMapper.FromProto(batch),
+            Proto.ToolCallRecordedProto result => NetclawProtoMapper.FromProto(result),
+            _ => throw new InvalidDataException($"Legacy manifest '{evt.Manifest}' has no ordinary core event.")
+        };
 
     public static ImmutableArray<ISessionEvent> GetLegacyChildApprovalEvents(SessionState state)
         => [.. state.LegacyCoordinationEvidence
@@ -315,6 +326,7 @@ public static class LegacyCoordinationReplay
         {
             ChildRuns = state.ChildRuns.SetItem(run.RunId, run with
             {
+                InitialWorkingSnapshot = null,
                 Lifecycle = new ChildRunLifecycle.Prepared(delivery)
             }),
             LegacyCoordinationEvidence = state.LegacyCoordinationEvidence
@@ -338,6 +350,21 @@ public static class LegacyCoordinationReplay
             InputIds = inputIds,
             ActiveInputIds = inputIds,
             Reason = "The deployed input has lineage fields with no current runtime consumer."
+        });
+    }
+
+    private static SessionState PreserveExtendedEvent(SessionState state, LegacyCoordinationEvent evt)
+    {
+        var inputIds = evt.LegacyPayload is Proto.InputClosedProto input
+            ? input.InputIds.Select(static id => new InputId(id)).ToArray()
+            : Array.Empty<InputId>();
+        return state.RetainLegacyCoordinationEvidence(new LegacyCoordinationEvidence
+        {
+            Manifest = evt.Manifest,
+            Payload = evt.Payload,
+            Disposition = LegacyCoordinationDisposition.PreservedLegacyFacts,
+            InputIds = inputIds,
+            Reason = "The deployed event has extension facts with no current runtime consumer."
         });
     }
 
@@ -487,10 +514,13 @@ public static class LegacyCoordinationReplay
         return proto;
     }
 
-    private static string LegacyToolName(BackgroundChildRun run)
+    internal static string LegacyToolName(BackgroundChildRun run)
         => run.StartKey is ChildRunStartKey.Slash ? "skill_load" : run.SourceOperation;
 
-    private static string LegacyTerminalBody(BackgroundChildRun run, ChildRunTerminal terminal,
+    internal static string LegacyDeliveryArguments(BackgroundChildRun run)
+        => JsonSerializer.Serialize(new { run_id = run.RunId.Value, source_operation = run.SourceOperation });
+
+    internal static string LegacyTerminalBody(BackgroundChildRun run, ChildRunTerminal terminal,
         ChildRunCheckpoint? checkpoint)
     {
         var result = terminal.Result;
@@ -519,14 +549,14 @@ public static class LegacyCoordinationReplay
         });
     }
 
-    private static SerializableChatMessage LegacyDeliveryCall(BackgroundChildRun run, ToolCallId callId) => new()
+    internal static SerializableChatMessage LegacyDeliveryCall(BackgroundChildRun run, ToolCallId callId) => new()
     {
         Role = ChatRole.Assistant,
         ToolCalls = [new SerializableToolCall
         {
             CallId = callId,
             Name = new ToolName(LegacyToolName(run)),
-            ArgumentsJson = JsonSerializer.Serialize(new { run_id = run.RunId.Value, source_operation = run.SourceOperation })
+            ArgumentsJson = LegacyDeliveryArguments(run)
         }]
     };
 
@@ -552,7 +582,7 @@ public static class LegacyCoordinationReplay
                && results[0].MediaReferences.Count == 0;
     }
 
-    private static bool SameContext(TurnContextRecord first, TurnContextRecord second)
+    internal static bool SameContext(TurnContextRecord first, TurnContextRecord second)
         => first.SessionId == second.SessionId && first.TurnId == second.TurnId
            && first.Audience == second.Audience && first.Boundary == second.Boundary
            && first.ChannelType == second.ChannelType && first.RequesterSenderId == second.RequesterSenderId
