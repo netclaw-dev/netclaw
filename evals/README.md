@@ -56,6 +56,11 @@ default provider.
    `$EVAL_HOME` is deleted. A throwaway root-in-container cleanup step
    handles files the daemon wrote as UID 0.
 
+A memory warm-up prompt that exits with a nonzero status stops the suite. The
+harness archives its output and status, then stops its private container. A
+trial prompt that exits with a nonzero status does not stop the suite. The
+trial gets an inconclusive state.
+
 The harness preloads `evals/fixtures/config/netclaw.json` into the ephemeral
 home before startup. It auto-approves tools and grants read/write access for the
 Personal audience because headless sessions cannot answer approval prompts or
