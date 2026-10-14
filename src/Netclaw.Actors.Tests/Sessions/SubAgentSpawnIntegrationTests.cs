@@ -1918,8 +1918,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             .ToHashSet(StringComparer.Ordinal);
 
         var routedAcceptedRunIds = request
-            .Where(static message => message.Role == ChatRole.Assistant)
-            .SelectMany(static message => message.Contents.OfType<TextContent>())
+            .Where(static message => message.Role == Microsoft.Extensions.AI.ChatRole.Assistant)
+            .SelectMany(static message => message.Contents.OfType<Microsoft.Extensions.AI.TextContent>())
             .Select(static text => ParseAcceptedRunId(text.Text))
             .Where(static runId => !string.IsNullOrWhiteSpace(runId))
             .Select(static runId => runId!);
