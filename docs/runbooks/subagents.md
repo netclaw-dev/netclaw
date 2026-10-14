@@ -100,8 +100,9 @@ first user message is just the raw task, identical to the pre-context protocol.
    session delivers a paired `child_run_result` call and tool result.
 
 Child creation is marshaled back onto the session actor thread, so supervision
-stays within Akka's actor-thread rules. If the parent tool call is cancelled or
-times out, the subagent is cancelled too. The timeout is an inactivity budget: a
+stays within Akka's actor-thread rules. After durable acceptance, the child can
+continue after the `spawn_agent` call returns. An explicit run cancellation or
+session shutdown stops the child. The timeout is an inactivity budget: a
 responsive subagent is not stopped merely because wall-clock time has elapsed.
 
 ### Observability
@@ -320,7 +321,7 @@ known-good version.
   back-and-forth interaction with the user.
 - Subagents have no fixed maximum number of tool iterations. A final response
   completes the run; cancellation or an inactivity timeout can stop it.
-  A recurrence refusal settles the parent turn without another model request.
+  A recurrence refusal can settle the child turn without another model request.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.
