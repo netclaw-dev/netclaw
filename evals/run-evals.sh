@@ -143,6 +143,7 @@ STDOUT_FILE=""
 STDERR_FILE=""
 LAST_TURN_STDOUT_FILE=""
 DAEMON_LOG_LINES_BEFORE=0
+COORDINATION_INITIAL_STDOUT_FILE=""
 
 # Per-trial state (set by begin_trial, read by the evidence helpers)
 TRIAL_RAW=""
@@ -2326,68 +2327,103 @@ assert_subagent_specialization_precedence() {
 }
 
 setup_coordination_retained_child_inspection() {
-    local run="$1"
-    COORDINATION_LOG_MARKER="$TMPDIR_EVAL/coordination-inspection-$run.marker"
-    touch "$COORDINATION_LOG_MARKER"
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" python3 -c '
+from pathlib import Path
+root = Path("/home/netclaw/.netclaw/workspaces/coordination-retained-inspection")
+root.mkdir(parents=True, exist_ok=True)
+lines = [f"Record {number} contains routine status data.\n" for number in range(1, 801)]
+lines[399] = "Record 400 verification phrase: cobalt-heron-4471.\n"
+(root / "records.txt").write_text("".join(lines), encoding="utf-8")
+'
+}
+
+coordination_session_actor_log() {
+    stdout_json_session_actor_log_path
+}
+
+coordination_child_logs() {
+    local parent_log envelope
+    parent_log=$(coordination_session_actor_log) || return 1
+    envelope=$(dirname "$(dirname "$parent_log")")
+    [[ -d "$envelope/subagents" ]] || return 1
+    find "$envelope/subagents" -type f -path '*/logs/session.log' -print 2>/dev/null
+}
+
+coordination_log_has_tool_read() {
+    local parent_log
+    parent_log=$(coordination_session_actor_log) || return 1
+    if grep -qaF 'Tool call: tool_output_read ' "$parent_log"; then
+        return 0
+    fi
+    local child_log
+    while IFS= read -r child_log; do
+        [[ -n "$child_log" ]] || continue
+        if grep -qaF 'Tool call: tool_output_read ' "$child_log"; then
+            return 0
+        fi
+    done < <(coordination_child_logs)
+    return 1
+}
+
+coordination_child_completion_count() {
+    local parent_log
+    parent_log=$(coordination_session_actor_log) || return 1
+    grep -acF 'SubAgent completed:' "$parent_log" || true
+}
+
+coordination_response_json() {
+    jq -er '.response | fromjson' "$STDOUT_FILE" 2>/dev/null
 }
 
 assert_coordination_retained_child_inspection() {
     stdout_json_envelope_valid || return 1
-    stdout_json_tool_called 'spawn_agent' || return 1
-    stdout_json_response_contains 'cobalt-heron-4471' || return 1
-    stdout_json_response_contains 'record 160' || return 1
-
-    local load_count
-    load_count=$(jq '[.toolCalls[]? | select(.toolName == "skill_load")] | length' "$STDOUT_FILE")
-    [[ "$load_count" -eq 1 ]] || return 1
-
-    local -a child_logs
-    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
-        -path '*/subagents/*/logs/session.log' \
-        -newer "$COORDINATION_LOG_MARKER" 2>/dev/null)
-    [[ "${#child_logs[@]}" -ge 1 ]] || return 1
-
-    local child_log
-    for child_log in "${child_logs[@]}"; do
-        if grep -aq 'tool_output_read' "$child_log"; then
-            return 0
-        fi
-    done
-    return 1
+    coordination_log_has_tool_read || return 1
+    coordination_response_json | jq -e \
+        '.record == 400 and .verification == "cobalt-heron-4471"' >/dev/null
 }
 
 assert_coordination_independent_synthesis() {
     stdout_json_envelope_valid || return 1
-    stdout_json_response_contains '6' || return 1
-    stdout_json_response_contains 'west' || return 1
+    coordination_response_json | jq -e \
+        '.eastUnresolved == 2 and .westUnresolved == 4 and .totalUnresolved == 6 and .highestRegion == "west"' >/dev/null \
+        || return 1
 
-    local spawn_count distinct_tasks
-    spawn_count=$(jq '[.toolCalls[]? | select(.toolName == "spawn_agent")] | length' "$STDOUT_FILE")
+    local calls_file="${COORDINATION_INITIAL_STDOUT_FILE:-$STDOUT_FILE}"
+    local spawn_count distinct_tasks completed_count
+    spawn_count=$(jq '[.toolCalls[]? | select(.toolName == "spawn_agent")] | length' "$calls_file")
     distinct_tasks=$(jq '[.toolCalls[]? | select(.toolName == "spawn_agent")
-        | (.argumentsJson | fromjson | .Task // .task // "")] | unique | length' "$STDOUT_FILE")
-    [[ "$spawn_count" -ge 2 && "$distinct_tasks" -ge 2 ]]
+        | (.argumentsJson | fromjson | .Task // .task // "")
+        | select(test("East"; "i"))] | length' "$calls_file")
+    local west_tasks
+    west_tasks=$(jq '[.toolCalls[]? | select(.toolName == "spawn_agent")
+        | (.argumentsJson | fromjson | .Task // .task // "")
+        | select(test("West"; "i"))] | length' "$calls_file")
+    completed_count=$(coordination_child_completion_count) || return 1
+    [[ "$spawn_count" -ge 2 && "$distinct_tasks" -ge 1 && "$west_tasks" -ge 1 && "$completed_count" -ge 2 ]]
 }
 
 setup_coordination_artifact_review() {
-    local run="$1"
-    COORDINATION_LOG_MARKER="$TMPDIR_EVAL/coordination-review-$run.marker"
-    touch "$COORDINATION_LOG_MARKER"
+    local root="/home/netclaw/.netclaw/workspaces/coordination-artifact-review"
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" mkdir -p "$root"
+    printf '%s\n' 'public bool IsReady(int pendingCount) => pendingCount >= 0;' \
+        | docker exec -i --user netclaw "$EVAL_CONTAINER_NAME" tee "$root/artifact-a.cs" >/dev/null
+    printf '%s\n' 'public bool CanRun(int pendingCount) => pendingCount == 0;' \
+        | docker exec -i --user netclaw "$EVAL_CONTAINER_NAME" tee "$root/artifact-b.cs" >/dev/null
+    printf '%s\n' '{"artifactA":{"pendingCount":2,"actualResult":true},"artifactB":{"pendingCount":0,"actualResult":true}}' \
+        | docker exec -i --user netclaw "$EVAL_CONTAINER_NAME" tee "$root/observed-inputs.json" >/dev/null
 }
 
 assert_coordination_artifact_review() {
     stdout_json_envelope_valid || return 1
-    stdout_json_tool_called 'spawn_agent' || return 1
-    stdout_json_response_contains 'artifact a' || return 1
-    stdout_json_response_contains 'artifact b' || return 1
-    stdout_json_response_contains 'empty' || return 1
-    stdout_json_response_contains 'no defect' \
-        || stdout_json_response_contains 'correct' || return 1
-
-    local -a child_logs
-    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
-        -path '*/subagents/*/logs/session.log' \
-        -newer "$COORDINATION_LOG_MARKER" 2>/dev/null)
-    [[ "${#child_logs[@]}" -ge 1 ]]
+    local calls_file="${COORDINATION_INITIAL_STDOUT_FILE:-$STDOUT_FILE}"
+    jq -e '[.toolCalls[]? | select(.toolName == "spawn_agent")
+        | (.argumentsJson | fromjson | .Task // .task // "")
+        | select(test("artifact-a.cs"; "i") and test("artifact-b.cs"; "i"))] | length >= 1' \
+        "$calls_file" >/dev/null || return 1
+    coordination_response_json | jq -e \
+        '.artifactA.verdict == "defect" and .artifactA.observedForTwoPending == true and .artifactA.expectedForTwoPending == false and .artifactB.verdict == "clean" and .artifactB.observedForZeroPending == true and .artifactB.expectedForZeroPending == true' >/dev/null \
+        || return 1
+    [[ "$(coordination_child_completion_count)" -ge 1 ]]
 }
 
 setup_subagent_project_scope_declaration() {
@@ -3624,6 +3660,70 @@ run_case() {
     finish_case "$case_name" "$description"
 }
 
+# Coordination cases use one follow-up turn after the first acceptance turn.
+# The follow-up lets the parent consume terminal child results in the same session.
+run_coordination_followup_case() {
+    local case_name="$1"; shift
+    local description="$1"; shift
+    local initial_prompt="$1"; shift
+    local followup_prompt="$1"
+    local assert_fn="assert_${case_name}"
+
+    if [[ "$CATEGORY_SKIPPED" == "true" ]] || [[ -n "$FILTER_CASE" && "$case_name" != "$FILTER_CASE" ]]; then
+        return
+    fi
+    check_daemon_alive
+    if ! declare -f "$assert_fn" >/dev/null 2>&1; then
+        printf "  [SKIP] %-30s — assertion function %s not defined\n" "$case_name" "$assert_fn"
+        return
+    fi
+
+    local passes=0 run
+    for ((run = 1; run <= RUNS; run++)); do
+        MULTI_TURN_STDOUT_FILE=""
+        MULTI_TURN_STDERR_FILE=""
+        local setup_fn="setup_${case_name}"
+        if declare -f "$setup_fn" >/dev/null 2>&1; then
+            "$setup_fn" "$run"
+        fi
+        run_prompt "$initial_prompt" json
+        COORDINATION_INITIAL_STDOUT_FILE="$STDOUT_FILE"
+        local session_id
+        session_id=$(jq -r '.sessionId // empty' "$COORDINATION_INITIAL_STDOUT_FILE" 2>/dev/null)
+        if [[ -z "$session_id" ]]; then
+            continue
+        fi
+
+        run_prompt_resume "$session_id" "$followup_prompt" json
+        STDOUT_FILE="$LAST_TURN_STDOUT_FILE"
+        store_metrics "$case_name" "$run" 2 "$LAST_TURN_USAGE_LINE"
+
+        EVAL_ASSERTION_DETAILS=""
+        if $assert_fn 2>/dev/null; then
+            passes=$((passes + 1))
+            store_result "$case_name" "$run" "$initial_prompt" 1 "pass"
+        else
+            local details="fail"
+            [[ -n "${EVAL_ASSERTION_DETAILS:-}" ]] && details="$EVAL_ASSERTION_DETAILS"
+            store_result "$case_name" "$run" "$initial_prompt" 0 "$details"
+        fi
+    done
+
+    local score threshold_met
+    score=$(awk "BEGIN {printf \"%.2f\", $passes / $RUNS}")
+    threshold_met=$(awk "BEGIN {print ($score >= $THRESHOLD) ? 1 : 0}")
+    CATEGORY_CASES=$((CATEGORY_CASES + 1))
+    TOTAL_CASES=$((TOTAL_CASES + 1))
+    if [[ "$threshold_met" == "1" ]]; then
+        CATEGORY_PASSED=$((CATEGORY_PASSED + 1))
+        PASSED_CASES=$((PASSED_CASES + 1))
+        printf "  [PASS] %-30s %d/%d (%s)  — %s\n" "$case_name" "$passes" "$RUNS" "$score" "$description"
+    else
+        FAILED_CASES=$((FAILED_CASES + 1))
+        printf "  [FAIL] %-30s %d/%d (%s)  — %s\n" "$case_name" "$passes" "$RUNS" "$score" "$description"
+    fi
+}
+
 # ─── Case Definitions ────────────────────────────────────────────────────────
 
 run_all() {
@@ -3922,16 +4022,16 @@ run_all() {
         "Delegate to headless-analyst: draft an outbound email for Jordan, a technology leader evaluating autonomous operations. Return the worker's final email."
 
     run_case --json coordination_retained_child_inspection "child inspects a retained result and returns the correct evidence" \
-        "Load the eval-spill-probe skill. Ask a permitted child to find the exact phrase that one record holds. Return the phrase and its source context." \
-        "Use eval-spill-probe. Ask a separate helper to identify the exact verification phrase in its records, then report the phrase and context."
+        "Read /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Find Record 400 and return JSON only with fields record and verification." \
+        "Inspect /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Return JSON only with record and verification for Record 400."
 
-    run_case --json coordination_independent_synthesis "two scoped investigations support one correct parent conclusion" \
-        "Ask two independent helpers to analyze these records. East has 8 failed requests and 6 recovered requests. West has 11 failed requests and 7 recovered requests. Report total unresolved requests and the region with more unresolved requests." \
-        "Delegate separate reviews of East (8 failed, 6 recovered) and West (11 failed, 7 recovered). Then report the total unresolved count and the region with more unresolved requests."
+    run_coordination_followup_case coordination_independent_synthesis "two scoped investigations support one correct parent conclusion" \
+        "Ask for independent investigations. East has 8 failed and 6 recovered requests. West has 11 failed and 7 recovered requests. Unresolved means failed minus recovered." \
+        "Wait for the terminal results from both investigations. Then return JSON only with eastUnresolved, westUnresolved, totalUnresolved, and highestRegion."
 
-    run_case --json coordination_artifact_review "an independent reviewer finds a planted defect and clears a clean control" \
-        "Ask a separate reviewer to inspect both artifacts. Artifact A sets `IsReady = pendingCount >= 0`; Artifact B sets `CanRun = pendingCount > 0`. Report the defect in Artifact A and the review result for Artifact B." \
-        "Have an independent reviewer check these two snippets. Artifact A uses `IsReady = pendingCount >= 0`. Artifact B uses `CanRun = pendingCount > 0`. Report any defect in A and whether B has a defect."
+    run_coordination_followup_case coordination_artifact_review "an independent reviewer finds a planted defect and clears a clean control" \
+        "Ask an independent reviewer to inspect /home/netclaw/.netclaw/workspaces/coordination-artifact-review/artifact-a.cs, artifact-b.cs, and observed-inputs.json. Contract: pendingCount is nonnegative and readiness is true only when pendingCount equals zero." \
+        "Wait for the reviewer result. Return JSON only with artifactA fields verdict, observedForTwoPending, expectedForTwoPending; and artifactB fields verdict, observedForZeroPending, expectedForZeroPending."
 
     run_multi_turn_case subagent_project_scope_declaration "subagent declares a different named project before shell inspection" \
         "Use spawn_agent with agent project-scope-analyst. Ask it to inspect /home/netclaw/.netclaw/workspaces/project-scope-target with exactly two shell_execute calls: git status --short and git diff --stat. Return the command results, project layout, and build-file summary. Keep the parent project unchanged."

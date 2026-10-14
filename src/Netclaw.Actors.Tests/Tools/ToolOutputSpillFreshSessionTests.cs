@@ -188,7 +188,7 @@ public sealed class ToolOutputSpillFreshSessionTests : IDisposable
             SpawnChildActor = SpawnChildActor,
         });
         var result = await ToolOutputSpill.BoundAndSpillAsync(
-            new string('x', 400), "call-unretained", budget: 100, context.Invocation,
+            new string('x', 400), new string('x', 400), "call-unretained", budget: 100, context.Invocation,
             Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
             TestContext.Current.CancellationToken,
             suggestChildInspection: true);
