@@ -87,13 +87,19 @@ internal static partial class NetclawProtoMapper
             if (oldRun.HasDeliveryInputId
                 && TryGetLegacySnapshotDelivery(snapshot, proto, oldRun, run, out var delivery, out var pending))
             {
+                var activeParentTask = pending || proto.AdoptedTaskInputIds.Contains(oldRun.DeliveryInputId);
                 legacyRuns[index] = run with
                 {
                     InitialWorkingSnapshot = null,
                     Lifecycle = pending
                         ? new ChildRunLifecycle.Prepared(delivery)
-                        : new ChildRunLifecycle.Consumed(delivery)
+                        : activeParentTask
+                            ? new ChildRunLifecycle.Consumed(delivery)
+                            : new ChildRunLifecycle.Closed(delivery.Result.ToolCallId,
+                                delivery.Terminal.Result.Outcome, delivery.Terminal.Result.OutcomeReason)
                 };
+                if (!activeParentTask)
+                    continue;
                 evidence.Add(new LegacyCoordinationEvidence
                 {
                     Manifest = "ss-v1",
