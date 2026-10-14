@@ -30,6 +30,7 @@ var completedChildren = 0;
 var turnCompletions = 0;
 var activeChildrenAtFirstCompletion = 0;
 var receivedTextDelta = false;
+var completed = false;
 
 await using var client = new DaemonClient(args[0]);
 using var subscription = client.SessionOutput.Subscribe(output => outputs.Writer.TryWrite(output));
@@ -45,7 +46,6 @@ try
         args[3],
         cancellationToken);
 
-    var completed = false;
     while (!completed)
     {
         var output = await outputs.Reader.ReadAsync(cancellationToken);

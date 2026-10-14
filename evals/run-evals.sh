@@ -1099,14 +1099,14 @@ run_multi_turn_case() {
     local case_name="$1"; shift
     local description="$1"; shift
     local -a prompts=("$@")
-    if (( PROMPT_TIMEOUT > MAX_PROMPT_TIMEOUT )); then
-        MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
-    fi
     local assert_fn="assert_${case_name}"
 
     # Skip if category or case filter excludes this case
     if [[ "$CATEGORY_SKIPPED" == "true" ]]; then return; fi
     if [[ -n "$FILTER_CASE" && "$case_name" != "$FILTER_CASE" ]]; then return; fi
+    if (( PROMPT_TIMEOUT > MAX_PROMPT_TIMEOUT )); then
+        MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
+    fi
 
     check_daemon_alive
 
@@ -3159,9 +3159,6 @@ run_case() {
     local case_name="$1"; shift
     local description="$1"; shift
     local -a prompts=("$@")
-    if (( PROMPT_TIMEOUT > MAX_PROMPT_TIMEOUT )); then
-        MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
-    fi
     if [[ "$case_name" == "coordination_artifact_review" ]]; then
         observer_children=1
     fi
@@ -3170,6 +3167,9 @@ run_case() {
     # Skip if category or case filter excludes this case
     if [[ "$CATEGORY_SKIPPED" == "true" ]]; then return; fi
     if [[ -n "$FILTER_CASE" && "$case_name" != "$FILTER_CASE" ]]; then return; fi
+    if (( PROMPT_TIMEOUT > MAX_PROMPT_TIMEOUT )); then
+        MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
+    fi
 
     # Bail early if daemon died
     check_daemon_alive
