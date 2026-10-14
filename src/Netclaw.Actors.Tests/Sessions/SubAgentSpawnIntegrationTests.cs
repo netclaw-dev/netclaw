@@ -1187,11 +1187,22 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var started = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SubAgentPhase.Started, started.Phase);
 
-        var accepted = await subscriber.FishForMessageAsync<ToolResultOutput>(
-            output => output.CallId.Value == parentCallId,
-            TimeSpan.FromSeconds(5),
+        ToolResultOutput? accepted = null;
+        ToolInteractionRequest? request = null;
+        // The child approval and parent acceptance receipt can arrive in either order.
+        await subscriber.FishForMessageAsync<SessionOutput>(
+            output =>
+            {
+                if (output is ToolResultOutput result && result.CallId.Value == parentCallId)
+                    accepted = result;
+                if (output is ToolInteractionRequest interaction && interaction.ToolName.Value == ApprovalProbeToolName)
+                    request = interaction;
+                return accepted is not null && request is not null;
+            },
+            TimeSpan.FromSeconds(15),
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("spawn_agent", accepted.ToolName.Value);
+
+        Assert.Equal("spawn_agent", accepted!.ToolName.Value);
         string runId;
         using (var acceptedJson = JsonDocument.Parse(accepted.Result))
         {
@@ -1199,11 +1210,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             runId = acceptedJson.RootElement.GetProperty("run_id").GetString()!;
         }
 
-        var request = await subscriber.FishForMessageAsync<ToolInteractionRequest>(
-            interaction => interaction.ToolName.Value == ApprovalProbeToolName,
-            TimeSpan.FromSeconds(15),
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.NotEqual(childCallId, request.CallId.Value);
+        Assert.NotEqual(childCallId, request!.CallId.Value);
         Assert.StartsWith($"{runId}/subagent-approval/", request.CallId.Value, StringComparison.Ordinal);
         Assert.Contains("subagent-approval", request.CallId.Value, StringComparison.Ordinal);
         Assert.DoesNotContain(childCallId, request.CallId.Value, StringComparison.Ordinal);
