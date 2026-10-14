@@ -816,7 +816,10 @@ public sealed class SerializationRoundTripTests : TestKit
             }
         }.ToByteArray();
 
-        Assert.Equal(expected, Serialize(wrapped));
+        Assert.Equal(expected, SerializeLegacySnapshot(wrapped));
+
+        var legacyResult = DeserializeLegacySnapshot(expected);
+        Assert.Equal(new Netclaw.Actors.Jobs.BackgroundJobId("job-55"), legacyResult.ActiveBackgroundJobs[0].JobId);
 
         var result = RoundTrip(wrapped);
         Assert.Equal(new Netclaw.Actors.Jobs.BackgroundJobId("job-55"), result.ActiveBackgroundJobs[0].JobId);
@@ -825,9 +828,7 @@ public sealed class SerializationRoundTripTests : TestKit
     [Fact]
     public void SessionSnapshot_eligible_turn_number_wrap_is_byte_identical_to_raw_primitive_proto()
     {
-        // Pass 7d wraps SessionSnapshot.EligibleDeliveryTurnNumber in the
-        // TurnNumber value object. The proto field stays a primitive int32, so
-        // the journal bytes must be identical to the pre-wrap representation.
+        // The v1 snapshot field stays a primitive int32 after the value wrap.
         var wrapped = new SessionSnapshot
         {
             TurnCount = 7,
@@ -841,7 +842,10 @@ public sealed class SerializationRoundTripTests : TestKit
             EligibleDeliveryTurnNumber = 7
         }.ToByteArray();
 
-        Assert.Equal(expected, Serialize(wrapped));
+        Assert.Equal(expected, SerializeLegacySnapshot(wrapped));
+
+        var legacyResult = DeserializeLegacySnapshot(expected);
+        Assert.Equal(new TurnNumber(7), legacyResult.EligibleDeliveryTurnNumber);
 
         var result = RoundTrip(wrapped);
         Assert.Equal(new TurnNumber(7), result.EligibleDeliveryTurnNumber);
@@ -850,8 +854,7 @@ public sealed class SerializationRoundTripTests : TestKit
     [Fact]
     public void SessionSnapshot_null_eligible_turn_number_omits_proto_field()
     {
-        // A null EligibleDeliveryTurnNumber must leave the optional proto field
-        // unset — byte-identical to the pre-wrap int? null representation.
+        // A null v1 EligibleDeliveryTurnNumber leaves the optional field unset.
         var wrapped = new SessionSnapshot
         {
             TurnCount = 3,
@@ -864,7 +867,9 @@ public sealed class SerializationRoundTripTests : TestKit
             TurnCount = 3
         }.ToByteArray();
 
-        Assert.Equal(expected, Serialize(wrapped));
+        Assert.Equal(expected, SerializeLegacySnapshot(wrapped));
+
+        Assert.Null(DeserializeLegacySnapshot(expected).EligibleDeliveryTurnNumber);
 
         var result = RoundTrip(wrapped);
         Assert.Null(result.EligibleDeliveryTurnNumber);
@@ -1216,7 +1221,10 @@ public sealed class SerializationRoundTripTests : TestKit
             TurnCount = 2
         }.ToByteArray();
 
-        Assert.Equal(expected, Serialize(wrapped));
+        Assert.Equal(expected, SerializeLegacySnapshot(wrapped));
+        var codec = new Serialization.NetclawProtobufSerializer((Akka.Actor.ExtendedActorSystem)Sys);
+        Assert.Equal("ss-v2", codec.Manifest(wrapped));
+        Assert.Equal(2, RoundTrip(wrapped).TurnCount);
     }
 
     [Fact]
@@ -1292,6 +1300,13 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Empty(result.Proposals);
         Assert.Equal(0L, result.TimestampMs);
     }
+
+    private byte[] SerializeLegacySnapshot(SessionSnapshot snapshot)
+        => NetclawProtoMapper.ToProto(snapshot).ToByteArray();
+
+    private SessionSnapshot DeserializeLegacySnapshot(byte[] bytes)
+        => Assert.IsType<SessionSnapshot>(new NetclawProtobufSerializer(
+            (Akka.Actor.ExtendedActorSystem)Sys).FromBinary(bytes, "ss-v1"));
 
     private static ConsentAnswer MapLegacyApprovalDecision(string selectedKey) => selectedKey switch
     {
