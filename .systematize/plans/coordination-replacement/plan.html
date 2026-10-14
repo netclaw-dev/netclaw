@@ -87,7 +87,7 @@
     <div class="eyebrow">Systematize · Architecture decision</div>
     <h1>Cooperate with fewer components</h1>
     <p class="lead">Replace PRs #2420–#2422 on the refactored session owners. Keep useful skills. Prove the runtime with focused tests.</p>
-    <span class="status">Implementation authorized · first slice active · 14 October 2026</span>
+    <span class="status">Three draft PRs · verification incomplete · 14 October 2026</span>
   </div></header>
   <nav aria-label="Proposal sections"><div class="wrap"><a href="#example">Concrete change</a><a href="#decisions">Agreed behavior</a><a href="#delivery">Delivery</a><a href="#skills">Skills</a><a href="#proof">Tests</a><a href="#evals">Evals</a><a href="#baseline">Evidence</a></div></nav>
   <main class="wrap" id="main"><section id="example" class="card recommendation">
@@ -330,11 +330,22 @@ dotnet slopwatch analyze
 <section id="handoff" class="card">
 <h2>Implementation handoff and current status</h2>
 <p><strong>Current authority:</strong> implement, validate, and publish labeled replacement PRs. Merge the dependent group only after all required checks pass. No deployment is authorized.</p>
+<p><strong>Replacement stack:</strong> <a href="https://github.com/netclaw-dev/netclaw/pull/2464">#2464: child execution and recovery</a>, <a href="https://github.com/netclaw-dev/netclaw/pull/2466">#2466: repeated-tool control</a>, and <a href="https://github.com/netclaw-dev/netclaw/pull/2467">#2467: cooperation guidance</a>.</p>
+<p>All three PRs are drafts. The old stack remains open until the replacement passes review.</p>
+<ul>
+<li>Fourteen focused legacy replay and SQLite recovery tests pass. The actor tests recover from a separate database backup.</li>
+<li>Four snapshot tests pass. They check old primitive bytes, old snapshot reads, and new snapshot round trips.</li>
+<li>The repeated-tool run passed 34 tests and failed four. Test corrections need a new run.</li>
+<li>Actor proof remains open for failed acceptance, ready-child priority, whole user-message batches, and a crash after acceptance.</li>
+<li>Combined tests, mutation checks, native smoke, model evals, and final source counts remain open.</li>
+</ul>
+<p>The source checkpoint showed only 229 fewer production lines than the old feature stack, about eight percent. This does not establish a large source reduction.</p>
+<p>The final review must include all actor partial files and the cost of readers for deployed data.</p>
 <p>The public choices are confirmed. The OpenSpec change records the approved direction; implementation and verification remain separate work.</p>
 <p>The formal change is <code>openspec/changes/simplify-agent-coordination</code>. This HTML page owns the delivery sequence and verification procedures.</p>
-<p>Before implementation, reconcile existing ephemeral-worker and best-effort deduplication rules with the approved child and recovery contract through OpenSpec.</p>
+<p>The OpenSpec delta replaces the old ephemeral-worker and best-effort deduplication rules with the approved child and recovery contract.</p>
 <p><strong>Traceability:</strong> PRD-001 FR-002/003 cover session output and recovery; FR-005/011 cover authority; FR-016 covers coordinated restart.</p>
-<p>The final draft adds FR-017 for durable child work and parent responsiveness. Carry its approved guarantees into the target PRD before implementation.</p>
+<p>PRD-001 FR-017 now records durable child work and parent responsiveness.</p>
 <p>PRD-004 CLI-001A covers profile provisioning. PRD-007 covers identity and skill guidance. Keep those links with the relevant skill and profile changes.</p>
 <p>The proposed <code>background-subagent-runs</code> and <code>agent-coordination</code> capabilities are new against this base. Existing <code>turn-loop-governance</code> needs a delta.</p>
 <p>Record the source of each retained rule. Do not treat the older PROJECT_CONTEXT deferred-feature list or draft glossary terms as proof of current behavior.</p>
@@ -354,7 +365,7 @@ dotnet slopwatch analyze
 <li><a href="https://github.com/netclaw-dev/netclaw/blob/90728b20691334694d8f57e0bf61b77b28d9901b/src/Netclaw.Actors/Sessions/Handlers/SessionInputFlow.cs">Current input owner</a>; <a href="https://github.com/netclaw-dev/netclaw/blob/90728b20691334694d8f57e0bf61b77b28d9901b/src/Netclaw.Actors/Sessions/SessionToolWorkflow.cs">current tool owner</a>.</li>
 <li><a href="https://github.com/netclaw-dev/netclaw/blob/aa03a13c90687141a26beaeeccc07e07783bca43/docs/spec/GLOSSARY.md">Engineering glossary</a>; <a href="https://github.com/netclaw-dev/netclaw/blob/aa03a13c90687141a26beaeeccc07e07783bca43/TOOLING.md">repository test and mutation procedures</a>.</li>
 </ul>
-<p><small>Planning evidence: source inspection and report review. No product test, live eval, migration, or deployment ran for this plan.</small></p>
+<p><small>The evidence above comes from isolated test worktrees. No live migration, model eval, or deployment passed yet.</small></p>
 </section>
 </main>
   <footer><div class="wrap">A proposal is not an approval. Estimates are not measured results.</div></footer>
