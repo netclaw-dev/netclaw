@@ -836,7 +836,9 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
             {
                 var outputs = await _outputs.Task.ConfigureAwait(false);
                 return index < outputs.Count ? (index + 1, outputs[index]) : default;
-            }).Via(killSwitch.Flow<SessionOutput>());
+            })
+                .Concat(Source.Maybe<SessionOutput>().MapMaterializedValue(_ => NotUsed.Instance))
+                .Via(killSwitch.Flow<SessionOutput>());
 
             return Task.FromResult(new MaterializedSession(input, output, killSwitch));
         }
@@ -868,6 +870,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
         }
 
         cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await earlyCompletion);
         return await pipeline.InputCaptured;
     }
 

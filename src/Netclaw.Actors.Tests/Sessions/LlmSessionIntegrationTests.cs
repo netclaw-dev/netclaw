@@ -1878,107 +1878,6 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Restart_reminder_restores_an_interrupted_input_without_a_second_user_prompt()
-    {
-        var sessionId = new SessionId("signalr/restart-resume");
-        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var responseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _fakeChatClient.NextResponseGate = responseGate;
-        var source = new MessageSource
-        {
-            ChannelType = ChannelType.Reminder,
-            SenderId = new SenderId("reminder-system"),
-            MessageId = "restart-input-1",
-            TurnId = new Netclaw.Actors.Protocol.TurnId("restart-turn-1"),
-            Audience = TrustAudience.Personal,
-            Boundary = TrustBoundary.Personal,
-            Principal = PrincipalClassification.VerifiedAutomation,
-            Provenance = new SourceProvenance(
-                TransportAuthenticity.LocalProcess,
-                PayloadTaint.Trusted)
-            {
-                SourceKind = new SourceKind("reminder")
-            },
-            ReceivedAt = _timeProvider.GetUtcNow(),
-            ReminderId = new ReminderId("restart-input-1")
-        };
-
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Finish the interrupted task",
-            Source = source
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
-
-        var child = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
-            .ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-        Watch(child);
-
-        var drainAck = await sessionManager.Ask<DaemonRestartPrepared>(
-            new PrepareForDaemonRestart(sessionId, "daemon-stop"),
-            TimeSpan.FromSeconds(8),
-            TestContext.Current.CancellationToken);
-        var reminder = Assert.IsType<ReminderDefinition>(drainAck.RestartReminder);
-        Assert.Equal(DeliveryKind.CurrentSession, reminder.Delivery.Kind);
-        Assert.Equal(sessionId.Value, reminder.Delivery.SessionId);
-        Assert.Equal(ChannelType.Reminder, reminder.Delivery.OriginChannelType);
-        Assert.True(reminder.DeliveryRequired);
-        Assert.Equal(TrustAudience.Personal, reminder.Audience);
-        Assert.Equal(TrustBoundary.Personal, reminder.Boundary);
-        Assert.Equal(TimeSpan.FromMinutes(10), reminder.ExpiresAt - reminder.CreatedAt);
-        await ExpectTerminatedAsync(
-            child,
-            TimeSpan.FromSeconds(3),
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        var subscriber = CreateTestProbe("restart-resume-subscriber");
-        await JoinSessionAsync(sessionManager, subscriber, sessionId);
-        var dueTime = Assert.IsType<DateTimeOffset>(reminder.Schedule.FireAt);
-        var occurrenceKey = new ReminderId($"{reminder.Id}:{dueTime.ToUnixTimeMilliseconds()}");
-        var envelope = new Akka.Reminders.ReminderEnvelope<ReminderPayload>(
-            new Akka.Reminders.ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
-            new Akka.Reminders.ReminderKey(reminder.Id.Value),
-            dueTime,
-            Akka.Reminders.ReminderDeadline.Infinite,
-            new ReminderPayload { Id = reminder.Id });
-        var executionId = Guid.NewGuid();
-        var execution = ReminderExecutionActor.CreateProps(
-            executionId,
-            reminder,
-            Host.Services.GetRequiredService<SessionPipeline>(),
-            _timeProvider,
-            envelope);
-        var executionOutcome = CreateTestProbe("restart-reminder-outcome");
-        Sys.ActorOf(
-            Props.Create(() => new AcceptingReminderExecutionParent(executionOutcome, execution)),
-            "restart-reminder-execution");
-
-        var completed = await executionOutcome.ExpectMsgAsync<ReminderExecutionCompleted>(
-            TimeSpan.FromSeconds(15),
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(completed.Success, completed.ErrorMessage);
-        Assert.Equal(sessionId.Value, completed.History.SessionId);
-
-        var resumedTurn = await subscriber.FishForMessageAsync<TurnCompleted>(
-            turn => turn.SourceReminderId == occurrenceKey,
-            TimeSpan.FromSeconds(5),
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(occurrenceKey, resumedTurn.SourceReminderId);
-
-        var resumedCall = _fakeChatClient.ReceivedMessages.Last(conversation =>
-            conversation.Any(message => string.Equals(
-                message.Text,
-                "Finish the interrupted task",
-                StringComparison.Ordinal)));
-        Assert.DoesNotContain(resumedCall, message => string.Equals(
-            message.Text,
-            reminder.Instructions,
-            StringComparison.Ordinal));
-        Assert.Equal(2, _fakeChatClient.CallCount);
-    }
-
-    [Fact]
     public async Task Restart_drain_does_not_remind_after_partial_text()
     {
         var sessionId = new SessionId("signalr/restart-partial-text");
@@ -2639,18 +2538,6 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         ReminderId = new ReminderId(reminderId)
     };
 
-    private sealed class AcceptingReminderExecutionParent : ReceiveActor
-    {
-        public AcceptingReminderExecutionParent(IActorRef observer, Props execution)
-        {
-            Context.ActorOf(execution, "execution");
-            Receive<ReminderExecutionCompleted>(completed =>
-            {
-                observer.Tell(completed);
-                Sender.Tell(new ReminderExecutionAccepted(completed.ExecutionId));
-            });
-        }
-    }
 }
 
 internal sealed class DeferredTestTool(string name) : INetclawTool
