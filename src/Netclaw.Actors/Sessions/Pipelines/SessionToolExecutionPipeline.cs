@@ -799,16 +799,8 @@ internal sealed class SessionToolExecutionPipeline
         {
             var stream = executor.ExecuteStreamAsync(toolCall, context, cancellationToken);
 
-            // Self-monitoring tools (spawn_agent) own their liveness end to end and
-            // always drive their stream to a terminal item, so the parent does not
-            // supervise them at all — it drains to that terminal item under caller
-            // (turn/user) cancellation only. For spawn_agent the terminal item is
-            // produced by SpawnAgentTool's stream, which completes when SpawnAsync
-            // returns; SpawnAsync's finally unconditionally completes the activity
-            // channel, and SubAgentActor.PostStop guarantees the reply that lets
-            // SpawnAsync return even on a crash. (Note: PostStop alone only unblocks
-            // the spawner Ask — the terminal stream item depends on that finally
-            // running.)
+            // Self-monitoring tools own their terminal stream contract.
+            // Caller cancellation still bounds their lifetime.
             if (executor.GetLivenessMode(toolCall) == ToolLivenessMode.SelfMonitoring)
                 return await DrainToCompletionAsync(stream, toolCall.Name, cancellationToken);
 

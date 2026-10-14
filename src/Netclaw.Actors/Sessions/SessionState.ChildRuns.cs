@@ -74,7 +74,7 @@ public sealed partial record SessionState
     }
 
     public SessionState Apply(InputClosed evt)
-        {
+    {
         if (evt.RejectedJobReport is not null && evt.SourceBackgroundJobId is null)
             throw new InvalidDataException("A rejected job report requires its source job identity.");
         var next = CommitChildContinuation(evt.ChildContinuation, close: true)

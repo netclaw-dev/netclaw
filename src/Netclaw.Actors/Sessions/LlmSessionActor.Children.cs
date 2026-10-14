@@ -258,7 +258,7 @@ public sealed partial class LlmSessionActor
         _execution.CloseChild(runId);
         // The durable owner copies the mutable findings before it hands the event to persistence.
         var terminal = new ChildRunTerminal(result with
-        { RunId = runId, ScopeId = run.ScopeId, Findings = [.. result.Findings] }, lost, warning);
+        { RunId = runId, ScopeId = run.ScopeId, Findings = result.Findings.Select(finding => finding with { Evidence = finding.Evidence.ToArray() }).ToList() }, lost, warning);
         var evt = new ChildRunEvent.TerminalRecorded(terminal)
         { SessionId = _sessionId, RunId = runId, RecordedAtMs = NowMs() };
         _ = _state.Apply(evt);
@@ -395,7 +395,7 @@ public sealed partial class LlmSessionActor
         ProcessChildFindings([new CompletedSubAgentRun
         {
             RunId = run.RunId, AgentName = run.AgentName, Completion = result.Completion,
-            FindingsCount = result.FindingsCount
+            FindingsCount = result.FindingsCount, Duration = TimeSpan.Zero
         }], findings);
     }
 
