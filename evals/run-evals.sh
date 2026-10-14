@@ -65,6 +65,7 @@ EVAL_ASSET_ROOT="${NETCLAW_EVAL_ASSET_ROOT:-$REPO_ROOT}"
 RUNS="${NETCLAW_EVAL_RUNS:-5}"
 THRESHOLD="${NETCLAW_EVAL_THRESHOLD:-0.80}"
 PROMPT_TIMEOUT="${NETCLAW_EVAL_TIMEOUT:-60}"
+MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
 EVAL_PORT="${NETCLAW_EVAL_PORT:-5299}"
 EVAL_CONTAINER_NAME="netclaw-eval-$$"
 # True after seed_eval_memories seeded the store. reset_memory_store acts only then.
@@ -367,6 +368,7 @@ category:  ${FILTER_CATEGORY:-all}
 case:      ${FILTER_CASE:-all}
 seed:      $EVAL_SEED
 timeout:   ${PROMPT_TIMEOUT:-60}s
+max_case_timeout: ${MAX_PROMPT_TIMEOUT:-60}s
 runs:      ${RUNS:-5}
 threshold: ${THRESHOLD:-0.80}
 passed:    ${PASSED_CASES:-0}/${TOTAL_CASES:-0}
@@ -414,7 +416,7 @@ build_local_image() {
 }
 
 build_coordination_observer() {
-    if [[ -n "$FILTER_CASE" && "$FILTER_CASE" != "coordination_independent_synthesis" ]]; then
+    if [[ -n "$FILTER_CASE" && "$FILTER_CASE" != "coordination_independent_synthesis" && "$FILTER_CASE" != "coordination_artifact_review" ]]; then
         return 0
     fi
     if [[ -n "$FILTER_CATEGORY" && "${FILTER_CATEGORY,,}" != *subagent* ]]; then
@@ -1510,6 +1512,9 @@ run_multi_turn_case() {
     local case_name="$1"; shift
     local description="$1"; shift
     local -a prompts=("$@")
+    if (( PROMPT_TIMEOUT > MAX_PROMPT_TIMEOUT )); then
+        MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
+    fi
     local assert_fn="assert_${case_name}"
 
     # Skip if category or case filter excludes this case
@@ -3652,6 +3657,12 @@ run_case() {
     local case_name="$1"; shift
     local description="$1"; shift
     local -a prompts=("$@")
+    if (( PROMPT_TIMEOUT > MAX_PROMPT_TIMEOUT )); then
+        MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
+    fi
+    if [[ "$case_name" == "coordination_artifact_review" ]]; then
+        observer_children=1
+    fi
     local assert_fn="assert_${case_name}"
 
     # Skip if category or case filter excludes this case
@@ -4009,9 +4020,8 @@ run_all() {
     run_case --json --coordination-observer coordination_independent_synthesis "two child investigations finish after an initial parent answer" \
         "Ask for independent investigations. East has 8 failed and 6 recovered requests. West has 11 failed and 7 recovered requests. Unresolved means failed minus recovered. After you start the work, give an immediate short status and end your turn while the investigations remain active. After their results return, continue without another user message and report JSON only with eastUnresolved, westUnresolved, totalUnresolved, and highestRegion."
 
-    run_multi_turn_case --json coordination_artifact_review "an independent reviewer finds a planted defect and clears a clean control" \
-        "Ask an independent reviewer to inspect /home/netclaw/.netclaw/workspaces/coordination-artifact-review/artifact-a.cs, artifact-b.cs, and observed-inputs.json. Contract: pendingCount is nonnegative and readiness is true only when pendingCount equals zero." \
-        "Wait for the reviewer result. Return JSON only with artifactA fields verdict, observedForTwoPending, expectedForTwoPending; and artifactB fields verdict, observedForZeroPending, expectedForZeroPending."
+    run_case --json --coordination-observer coordination_artifact_review "an independent reviewer finds a planted defect and clears a clean control" \
+        "Ask one independent reviewer to inspect /home/netclaw/.netclaw/workspaces/coordination-artifact-review/artifact-a.cs, artifact-b.cs, and observed-inputs.json. Contract: pendingCount is nonnegative and readiness is true only when pendingCount equals zero. Wait for the reviewer result. Then return JSON only with artifactA fields verdict, observedForTwoPending, expectedForTwoPending; and artifactB fields verdict, observedForZeroPending, expectedForZeroPending."
 
     run_multi_turn_case subagent_project_scope_declaration "subagent declares a different named project before shell inspection" \
         "Use spawn_agent with agent project-scope-analyst. Ask it to inspect /home/netclaw/.netclaw/workspaces/project-scope-target with exactly two shell_execute calls: git status --short and git diff --stat. Return the command results, project layout, and build-file summary. Keep the parent project unchanged."
