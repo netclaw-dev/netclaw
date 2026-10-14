@@ -34,6 +34,7 @@ Netclaw needs reliable parent and child work, safe recovery, and clear tool guid
 - `turn-loop-governance`: Replace repeated-tool and child-loop limits with the intended recurrence contract.
 - `netclaw-session`: Define input progress, duplicate delivery, journal compatibility, and restart recovery rules.
 - `netclaw-subagents`: Define child acceptance, result handoff, approval authority, cancellation, and recovery behavior.
+- `tool-authorization`: Record durable child consent without permission to replay uncertain child work.
 - `skill-execution-routing`: Preserve routed skill behavior and child launch authority.
 - `netclaw-agent-memory`: Retain useful deployment guidance for delegation and cooperation.
 
