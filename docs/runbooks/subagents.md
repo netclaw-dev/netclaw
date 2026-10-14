@@ -87,15 +87,17 @@ first user message is just the raw task, identical to the pre-context protocol.
    policy, then `SubAgentToolPolicy` removes tools that are statically denied to
    subagents (`spawn_agent`). Agent definition `tools:` metadata is advisory and
    does not narrow runtime authorization.
-3. A `SubAgentActor` is spawned as a **child of the session actor** (supervised,
-   lifecycle-managed — stops when the session stops).
-4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
-5. After a final response or an inactivity timeout, the subagent returns a
-   terminal run result. The runtime sets no fixed tool-iteration ceiling.
-6. `spawn_agent` returns the accepted run ID at once. The terminal result arrives
-   in a later parent turn as a `child_run_result` tool result. It holds the agent
-   name, run id, outcome (`completed`, `partial`, or `failed`), optional reason,
-   diagnostics pointer, and the subagent's final text.
+3. The session actor persists child acceptance and the accepted `spawn_agent`
+   tool result before it starts the child actor.
+4. The `spawn_agent` tool returns the durable run ID. The child runs as a
+   supervised child of the session actor and can outlive the parent model call.
+5. A final response completes the child run. An inactivity timeout or
+   cancellation can stop it. The runtime sets no fixed tool-iteration ceiling.
+6. After the session records and prepares a terminal result, it selects that
+   result at a safe parent model boundary. Ready results take priority. The
+   session delivers a paired `child_run_result` call and tool result. The result
+   holds the agent name, run id, outcome (`completed`, `partial`, or `failed`),
+   optional reason, diagnostics pointer, and the subagent's final text.
 
 Child creation is marshaled back onto the session actor thread, so supervision
 stays within Akka's actor-thread rules. If the parent tool call is cancelled or
@@ -362,7 +364,8 @@ known-good version.
   return a result. They do not maintain conversation history or support
   back-and-forth interaction with the user.
 - Subagents have no fixed maximum number of tool iterations. A final response
-  or an inactivity timeout ends the run.
+  completes the run; cancellation or an inactivity timeout can stop it.
+  A recurrence refusal settles the parent turn without another model request.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.
