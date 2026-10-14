@@ -1,0 +1,144 @@
+// Temporary fixture capture. This file exists only in the isolated historical checkout.
+using System.Security.Cryptography;
+using System.Text.Json;
+using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
+using Netclaw.Actors.SubAgents;
+using Netclaw.Tools;
+using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
+
+namespace Netclaw.Actors.Tests.SubAgents;
+
+public sealed partial class BackgroundChildLedgerAdversarialTests
+{
+    [Fact]
+    public void Capture_neutral_deployed_wire_fixtures()
+    {
+        var (state, run) = Acceptance(Owner, slash: false);
+        var terminal = Terminal(run);
+        var preparedRun = run with
+        {
+            Terminal = terminal,
+            TerminalSequenceNr = 1,
+            PreparedTerminal = terminal
+        };
+        var delivered = Delivery(preparedRun, "legacy-delivery-call");
+        var context = run.OriginalContext;
+        var inputA = new InputAdmitted
+        {
+            SessionId = Owner,
+            InputId = new InputId("legacy-input-a"),
+            TurnContext = context,
+            UserMessage = new SerializableChatMessage
+            {
+                Role = ChatRole.User,
+                Content = "Neutral task A."
+            }
+        };
+        var inputB = new InputAdmitted
+        {
+            SessionId = Owner,
+            InputId = new InputId("legacy-input-b"),
+            TurnContext = context,
+            UserMessage = new SerializableChatMessage
+            {
+                Role = ChatRole.User,
+                Content = "Neutral task B."
+            }
+        };
+        var invalidAdoption = new ToolTaskAdopted(false)
+        {
+            SessionId = Owner,
+            TurnContext = context,
+            InputIds = [inputB.InputId],
+            AdoptedAtMs = 123460
+        };
+
+        var records = new (string Name, object Value)[]
+        {
+            ("child-run-accepted", new ChildRunAccepted { SessionId = Owner, Run = run }),
+            ("child-started", new ChildRunEvent.Started { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123457 }),
+            ("child-checkpoint", new ChildRunEvent.Checkpointed(
+                new ChildRunCheckpoint(1, "Neutral checkpoint.", new WorkingContextDelta { ReadFiles = ["/neutral/source.txt"] }))
+                { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123458 }),
+            ("child-cancellation-requested", new ChildRunEvent.CancellationRequested { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123459 }),
+            ("child-dispatch-closed", new ChildRunEvent.DispatchClosed { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123460 }),
+            ("child-terminal", new ChildRunEvent.TerminalRecorded(terminal, 1) { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123461 }),
+            ("child-result-prepared", new ChildRunEvent.ResultPrepared(terminal, 1) { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123462 }),
+            ("child-delivery-admitted", new ChildRunEvent.DeliveryAdmitted(delivered) { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123463 }),
+            ("input-admitted-a-no-source-id", inputA),
+            ("input-admitted-b-no-source-id", inputB),
+            ("invalid-2453-adoption-of-b-while-a-pending", invalidAdoption),
+            ("input-closed", new InputClosed { SessionId = Owner, InputIds = [inputB.InputId], ClosedAtMs = 123464 }),
+            ("tool-batch-started", new ToolBatchStarted
+            {
+                SessionId = Owner,
+                UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Neutral task." },
+                AssistantMessage = new SerializableChatMessage { Role = ChatRole.Assistant },
+                ConsumedInputIds = [inputB.InputId],
+                StartedAtMs = 123465
+            }),
+            ("tool-call-recorded", new ToolCallRecorded
+            {
+                SessionId = Owner,
+                ToolResult = new SerializableChatMessage
+                {
+                    Role = ChatRole.Tool,
+                    Name = "file_read",
+                    ToolCallId = new ToolCallId("neutral-read-call"),
+                    Content = "Neutral result."
+                },
+                RecordedAtMs = 123466
+            }),
+            ("tool-approval-requested", new ToolApprovalRequested
+            {
+                SessionId = Owner,
+                CallId = "neutral-approval-call",
+                AuthorizationAttemptId = "neutral-attempt",
+                ToolName = "file_write",
+                Patterns = ["file_write"],
+                CandidateVerbs = ["file_write"],
+                Audience = context.Audience,
+                Boundary = context.Boundary,
+                ChannelType = context.ChannelType,
+                RequesterSenderId = context.RequesterSenderId,
+                RequesterPrincipal = context.RequesterPrincipal,
+                TurnContext = context,
+                RequestedAtMs = 123467
+            }),
+            ("tool-approval-resolved", new ToolApprovalResolved
+            {
+                SessionId = Owner,
+                CallId = "neutral-approval-call",
+                AuthorizationAttemptId = "neutral-attempt",
+                Decision = "approve_once",
+                ResolvedAtMs = 123468
+            }),
+            ("session-snapshot", new SessionSnapshot { History = [inputA.UserMessage] })
+        };
+
+        var fixture = records.Select(record =>
+        {
+            var serializer = Codec(record.Value);
+            var payload = serializer.ToBinary(record.Value);
+            return new
+            {
+                name = record.Name,
+                manifest = serializer.Manifest(record.Value),
+                base64 = Convert.ToBase64String(payload),
+                sha256 = Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant()
+            };
+        }).ToArray();
+
+        var path = Environment.GetEnvironmentVariable("NETCLAW_HISTORICAL_FIXTURE_OUTPUT")
+            ?? throw new InvalidOperationException("Set NETCLAW_HISTORICAL_FIXTURE_OUTPUT.");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, JsonSerializer.Serialize(new
+        {
+            sourceRevision = "9f79c0c4b637f005ffba5572d0bf50aa550464f2",
+            serializerIdentifier = 150,
+            records = fixture
+        }, new JsonSerializerOptions { WriteIndented = true }));
+    }
+}
