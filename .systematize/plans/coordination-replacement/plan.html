@@ -337,8 +337,8 @@ dotnet slopwatch analyze
 <li>Four snapshot tests pass. They check old primitive bytes, old snapshot reads, and new snapshot round trips.</li>
 <li>The recurrence checks passed 124 tests. They include generated operation sequences and productive child work beyond the old iteration limit.</li>
 <li>All eight selected reliability mutants were killed. No selected mutant survived, timed out, or failed to run.</li>
-<li>Actor checks passed failed acceptance and the crash cut after the journal commit. Ready-child and whole-message-batch checks remain incomplete.</li>
-<li>Source review found a possible duplicate child result in later model requests. An independent test must confirm or reject it.</li>
+<li>Twenty-four actor, context, and replay checks pass after the history repair. They cover failed acceptance, ready-child priority, ordered user batches, and the acceptance crash cut.</li>
+<li>An independent test reproduced duplicate child pairs in later requests. The repair keeps temporary model messages outside canonical history.</li>
 <li>Combined tests, complete native smoke, model evals, and final source counts remain open.</li>
 </ul>
 <p>The source checkpoint showed only 229 fewer production lines than the old feature stack, about eight percent. This does not establish a large source reduction.</p>
