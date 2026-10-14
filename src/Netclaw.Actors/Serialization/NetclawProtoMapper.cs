@@ -201,6 +201,8 @@ internal static partial class NetclawProtoMapper
             UserMessage = ToProto(evt.UserMessage),
             AdmittedAtMs = evt.AdmittedAtMs
         };
+        if (evt.SourceBackgroundJobId is { } sourceBackgroundJobId)
+            proto.SourceBackgroundJobId = sourceBackgroundJobId.Value;
         if (evt.SourceMessageId is not null)
             proto.SourceMessageId = evt.SourceMessageId;
         if (evt.ExecutableText is not null)
@@ -213,6 +215,8 @@ internal static partial class NetclawProtoMapper
     {
         SessionId = FromProto(proto.SessionId),
         InputId = new InputId(proto.InputId),
+        SourceBackgroundJobId = proto.HasSourceBackgroundJobId
+            ? new BackgroundJobId(proto.SourceBackgroundJobId) : null,
         SourceMessageId = proto.HasSourceMessageId ? proto.SourceMessageId : null,
         UserMessage = FromProto(proto.UserMessage),
         ExecutableText = proto.HasExecutableText ? proto.ExecutableText : null,
