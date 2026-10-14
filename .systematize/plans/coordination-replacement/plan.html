@@ -244,7 +244,9 @@ Return key insights, evidence locations, and uncertainties.</code></pre>
 <h2>Proof with less test machinery</h2>
 <p>Use each test level for a specific claim. Keep Arrange, Act, Assert and use xUnit theories for useful input variants.</p>
 <p>Use the existing Accordant and CsCheck approach for generated operation sequences. Define legal preconditions and expected state changes independently of the implementation.</p>
-<p>Generate acceptance, completion, cancellation, approval, duplicate delivery, parent progress, and recovery operations. Let the generator explore their order.</p>
+<p>Generate acceptance, completion, cancellation intent, duplicate consumption, ordinary parent turns, and snapshot restoration through the existing reducer model.</p>
+<p>Let the generator explore their order. Preserve each generated argument in the adapter and expected result.</p>
+<p>Approval state belongs to the workflow and actor. Use actor tests for approval transitions, requester access, live dispatch, and journal acknowledgement.</p>
 <p>A pure state model cannot prove mailbox delivery or SQLite replay. Keep focused actor and persistence tests for those boundaries.</p>
 <details><summary>Next-slice recipes and commands — proposed, not executed</summary><div class="detail" id="recipes">
 <p>Extend the current <code>LlmSessionTestBase</code>, subagent integration fixtures, and <code>ActiveToolBatchAccordantTests</code> patterns. Use acknowledgements and controllable model/tool fakes.</p>
@@ -338,7 +340,9 @@ dotnet slopwatch analyze
 <li>The recurrence checks passed 124 tests. They include generated operation sequences and productive child work beyond the old iteration limit.</li>
 <li>All eight selected reliability mutants were killed. No selected mutant survived, timed out, or failed to run.</li>
 <li>Twenty-six actor, context, and replay checks pass after the history repair. They cover failed acceptance, ready-child priority, ordered user batches, and the acceptance crash cut.</li>
-<li>The actor control tests verify requester authority and a cancellation reply after the journal write. The unresolved approval status check remains open.</li>
+<li>The final six actor boundary cases pass. They include requester authority, a cancellation reply after the journal write, and active-child approval count one to zero.</li>
+<li>The child model passes 1,000 generated cases with 9,395 valid operations. It reaches all ten required outcomes without a fixed operation suffix.</li>
+<li>The repaired spawn, streaming, and observability filter passes 28 tests. All 80 eval assertion tests pass; they do not prove model behavior.</li>
 <li>An independent test reproduced duplicate child pairs in later requests. The repair keeps temporary model messages outside canonical history.</li>
 <li>Combined tests, complete native smoke, model evals, and final source counts remain open.</li>
 </ul>
