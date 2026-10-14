@@ -84,6 +84,9 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     public IReadOnlyList<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; init; } =
         Array.Empty<AdoptedContextSnapshotRecord>();
 
+    public IReadOnlyList<LegacyCoordinationEvidence> LegacyCoordinationEvidence { get; init; } =
+        Array.Empty<LegacyCoordinationEvidence>();
+
     public IReadOnlyList<SessionProtocol.InputAdmitted> PendingInputs { get; init; } =
         Array.Empty<SessionProtocol.InputAdmitted>();
 

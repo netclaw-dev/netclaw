@@ -7,6 +7,8 @@ using System.Collections.Immutable;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.SubAgents;
+using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
@@ -74,6 +76,9 @@ public sealed partial record SessionState
     public ImmutableDictionary<string, AdoptedContextAuditRecord> AdoptedContextRecords { get; init; } =
         [];
 
+    /// <summary>Legacy coordination facts that survive journal truncation at a snapshot.</summary>
+    public ImmutableList<LegacyCoordinationEvidence> LegacyCoordinationEvidence { get; init; } = [];
+
     /// <summary>
     /// In-memory best-effort dedup ledger for background-job-originated turns.
     /// Not persisted to snapshot; rebuilds from event replay.
@@ -105,8 +110,74 @@ public sealed partial record SessionState
             return this;
 
         var ids = inputIds.ToHashSet();
-        return this with { PendingInputs = PendingInputs.RemoveAll(evt => ids.Contains(evt.InputId)) };
+        var evidence = LegacyCoordinationEvidence.Select(item =>
+        {
+            if (item.Disposition is not (LegacyCoordinationDisposition.AppliedOrdinaryAdoption
+                or LegacyCoordinationDisposition.AppliedChildContinuation or LegacyCoordinationDisposition.PreservedLegacyFacts)
+                || !item.ActiveInputIds.Any(ids.Contains))
+                return item;
+
+            var activeIds = item.ActiveInputIds.Where(id => !ids.Contains(id)).ToArray();
+            return item with
+            {
+                ActiveInputIds = activeIds
+            };
+        })
+        .Where(item => item.Disposition is not (LegacyCoordinationDisposition.AppliedOrdinaryAdoption
+                           or LegacyCoordinationDisposition.AppliedChildContinuation or LegacyCoordinationDisposition.PreservedLegacyFacts)
+                       || item.ActiveInputIds.Count > 0 || item.HasRetainedFacts)
+        .ToImmutableList();
+
+        return this with
+        {
+            PendingInputs = PendingInputs.RemoveAll(evt => ids.Contains(evt.InputId)),
+            LegacyCoordinationEvidence = evidence
+        };
     }
+
+    public bool IsLegacyInputQuarantined(InputId inputId)
+        => LegacyCoordinationEvidence.Any(evidence =>
+            (evidence.Disposition is LegacyCoordinationDisposition.QuarantinedInvalidAdoption
+                or LegacyCoordinationDisposition.UnresolvedLegacyChild)
+            && evidence.InputIds.Contains(inputId));
+
+    public bool TryGetLegacyChildDisposition(SubAgentRunId runId, out LegacyCoordinationEvidence evidence)
+    {
+        evidence = LegacyCoordinationEvidence.LastOrDefault(item =>
+            item.Disposition == LegacyCoordinationDisposition.UnresolvedLegacyChild
+            && item.ChildRunId == runId)!;
+        return evidence is not null;
+    }
+
+    public bool TryGetLegacyInputContext(InputId inputId, out TurnContextRecord context)
+    {
+        var evidence = LegacyCoordinationEvidence.LastOrDefault(item =>
+            item.Disposition == LegacyCoordinationDisposition.AppliedOrdinaryAdoption
+            && item.ActiveInputIds.Contains(inputId)
+            && item.AdoptedContext is not null);
+        if (evidence?.AdoptedContext is { } adoptedContext)
+        {
+            context = adoptedContext;
+            return true;
+        }
+
+        context = null!;
+        return false;
+    }
+
+    public SessionState RetainLegacyCoordinationEvidence(LegacyCoordinationEvidence evidence)
+        => this with { LegacyCoordinationEvidence = LegacyCoordinationEvidence.Add(evidence) };
+
+    public SessionState ClearLegacyChildApprovalEvents()
+        => this with
+        {
+            LegacyCoordinationEvidence = LegacyCoordinationEvidence
+                .Select(evidence => evidence with { ApprovalEvents = Array.Empty<SessionProtocol.ISessionEvent>() })
+                .Where(evidence => evidence.Disposition is LegacyCoordinationDisposition.QuarantinedInvalidAdoption
+                                   or LegacyCoordinationDisposition.UnresolvedLegacyChild
+                                   || evidence.ActiveInputIds.Count > 0 || evidence.HasRetainedFacts)
+                .ToImmutableList()
+        };
 
     public static string? SourceMessageKey(InputAdmitted evt)
         => string.IsNullOrWhiteSpace(evt.SourceMessageId)
@@ -456,6 +527,11 @@ public sealed partial record SessionState
             Title = Title,
             WorkingContext = WorkingContext.IsEmpty ? null : WorkingContext,
             ActiveBackgroundJobs = [.. ActiveBackgroundJobs.Values],
+            LegacyCoordinationEvidence = LegacyCoordinationEvidence
+                .Where(evidence => evidence.Disposition is LegacyCoordinationDisposition.QuarantinedInvalidAdoption
+                                   or LegacyCoordinationDisposition.UnresolvedLegacyChild
+                                   || evidence.ActiveInputIds.Count > 0 || evidence.HasRetainedFacts)
+                .ToArray(),
             AdoptedContextRecords = [.. AdoptedContextRecords.Values
                 .OrderBy(record => record.AuthorizedMessageId, StringComparer.Ordinal)
                 .Select(record => new SessionSnapshot.AdoptedContextSnapshotRecord
@@ -519,7 +595,8 @@ public sealed partial record SessionState
             Title = snapshot.Title,
             WorkingContext = snapshot.WorkingContext ?? WorkingContext.Empty,
             ActiveBackgroundJobs = activeJobs,
-            AdoptedContextRecords = adoptedContextRecords
+            AdoptedContextRecords = adoptedContextRecords,
+            LegacyCoordinationEvidence = [.. snapshot.LegacyCoordinationEvidence]
         };
     }
 }
