@@ -92,9 +92,12 @@ internal sealed partial class SessionToolWorkflow
         long nowMs)
     {
         var request = dispatch.Request;
+        currentTurn = dispatch.ChildContext ?? currentTurn;
         return new ToolApprovalRequested
         {
             SessionId = sessionId,
+            SourceChildRunId = dispatch.SourceChildRunId,
+            OriginalChildCallId = dispatch.OriginalChildCallId,
             CallId = request.CallId.Value,
             AuthorizationAttemptId = request.AuthorizationAttemptId,
             ToolName = request.ToolName.Value,
@@ -136,7 +139,7 @@ internal sealed partial class SessionToolWorkflow
         var pending = FindLatestPending(candidate => CanApprovePending(candidate, text.SenderId));
         if (pending is null)
         {
-            nackReason = PendingCount > 0
+            nackReason = PendingParentCount > 0
                 ? ApprovalNackReasons.WrongRequester
                 : HasApprovalHistory(state)
                     ? ApprovalNackReasons.PromptExpired
@@ -250,6 +253,7 @@ internal sealed partial class SessionToolWorkflow
         {
             SessionId = sessionId,
             CallId = accepted.CallId.Value,
+            SourceChildRunId = accepted.Pending.Request.SourceChildRunId,
             AuthorizationAttemptId = accepted.Pending.AuthorizationAttemptId.Value,
             Decision = ConsentAnswerCodec.ToJournalText(accepted.Answer),
             ResolvedAtMs = nowMs
@@ -287,7 +291,7 @@ internal sealed partial class SessionToolWorkflow
     }
 
     public bool HasApprovalHistory(SessionState state)
-        => ResolvedCount > 0
+        => ResolvedParentCount > 0
            || ParkedToolBatchHistory.FindRedrivableAssistantMessage(state.History, null) is not null;
 
     private static ApprovalResponseResult ValidateResponse(

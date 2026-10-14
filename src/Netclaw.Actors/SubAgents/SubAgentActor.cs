@@ -107,6 +107,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly List<AiChatMessage> _history = [];
     private readonly ManagedTemporaryCorrectionState _managedTemporaryCorrections = new();
     private long _llmCallId;
+    private ChildRunExecution? _ownedRun;
+    private int _checkpointRound;
     private IActorRef _replyTo = ActorRefs.Nobody;
     private CancellationTokenSource? _executionCts;
 
@@ -368,6 +370,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         Receive<RunSubAgent>(msg =>
         {
             _replyTo = Sender;
+            _ownedRun = msg.OwnedRun;
 
             _approvalBridge = msg.Scope.Authority.InteractiveApproval is InteractiveApprovalCapability.Available available
                 ? available.Bridge
@@ -449,6 +452,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void Processing()
     {
+        Receive<ChildCheckpointCommitted>(message => FireLlmCall(message.ForceNoTools));
+        Receive<ChildTerminalCommitted>(_ => Context.Stop(Self));
         Receive<LlmResponseReceived>(msg =>
         {
             // The streaming call finished; re-baseline to the inter-delta budget for
@@ -879,6 +884,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             : ToolExecutionWatchdogState.RunningApprovalCapableTools;
 
         _ = ExecuteToolsAsync(
+            _ownedRun,
             executor,
             toolCalls,
             ToolExecutionContext,
@@ -924,6 +930,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void FireLlmCall(bool forceNoTools = false)
     {
+        if (_ownedRun is { } owned && _turnState.ToolIterationCount > _checkpointRound)
+        {
+            _checkpointRound = _turnState.ToolIterationCount;
+            var checkpoint = new ChildRunCheckpoint(_checkpointRound,
+                $"Completed {_checkpointRound} tool rounds.", _fileActivity.BuildResult());
+            _ = CommitCheckpointAsync(owned, checkpoint, forceNoTools, Self);
+            return;
+        }
         _turnState.ForceNoToolsActive |= forceNoTools;
         forceNoTools = _turnState.ForceNoToolsActive;
         // Each LLM call starts fresh on the generous prefill budget; the watchdog
@@ -958,7 +972,24 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             messages.Count,
             options?.Tools?.Count > 0,
             forceNoTools);
-        _ = InvokeLlmAsync(client, messages, options, self, callId, _executionCts?.Token ?? CancellationToken.None);
+        var token = _executionCts?.Token ?? CancellationToken.None;
+        if (_ownedRun is { } ownedRun)
+            _ = ownedRun.Enter(async () => { await InvokeLlmAsync(client, messages, options, self, callId, token); return true; });
+        else
+            _ = InvokeLlmAsync(client, messages, options, self, callId, token);
+    }
+
+    private static async Task CommitCheckpointAsync(ChildRunExecution owned, ChildRunCheckpoint checkpoint,
+        bool forceNoTools, IActorRef self)
+    {
+        try
+        {
+            await owned.Owner.Ask<SessionProtocol.CommandAck>(
+                new ChildCheckpointReached(owned.RunId, checkpoint, self), Timeout.InfiniteTimeSpan, owned.Token);
+            self.Tell(new ChildCheckpointCommitted(forceNoTools));
+        }
+        catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
+        { self.Tell(SubAgentCancelled.Instance); }
     }
 
     private IReadOnlyList<AITool> ResolveCoreAiTools()
@@ -1065,16 +1096,21 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             : [];
 
         var workingContextResult = BuildWorkingContextResult(success);
-        _replyTo.Tell(new SubAgentResult
+        var result = new SubAgentResult
         {
             Completion = ChildRunCompletion.FromReportedOutcome(resolvedOutcome, outcomeReason, workingContextResult),
             Output = output,
             AgentName = _definition.Name,
             Findings = findings,
             FindingsCount = findings.Count,
-        });
-
-        Context.Stop(Self);
+        };
+        if (_ownedRun is { } owned)
+            owned.Owner.Tell(new ChildTerminalReturned(owned.RunId, result), Self);
+        else
+        {
+            _replyTo.Tell(result);
+            Context.Stop(Self);
+        }
     }
 
     /// <summary>
@@ -1446,6 +1482,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     }
 
     private static async Task ExecuteToolsAsync(
+        ChildRunExecution? ownedRun,
         IToolExecutor executor,
         List<FunctionCallContent> toolCalls,
         ToolExecutionContext executionContext,
@@ -1508,7 +1545,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
                 try
                 {
-                    var result = await executor.ExecuteAsync(tc, toolContext, ct);
+                    var result = await (ownedRun is null ? executor.ExecuteAsync(tc, toolContext, ct)
+                        : ownedRun.Enter(() => executor.ExecuteAsync(tc, toolContext, ct)));
                     return BuildToolResult(
                         cleanedTc,
                         result,
@@ -1594,7 +1632,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         retryContext.Approval.RestoreAuthorizationAttemptId(
                             toolContext.Approval.AuthorizationAttemptId);
                         retryContext.Approval.SeedOneTimeConsent(retryConsent);
-                        var result = await executor.ExecuteAsync(tc, retryContext, ct);
+                        var result = await (ownedRun is null ? executor.ExecuteAsync(tc, retryContext, ct)
+                            : ownedRun.Enter(() => executor.ExecuteAsync(tc, retryContext, ct)));
                         return BuildToolResult(
                             cleanedTc,
                             ConsentAnswerCodec.AppendResultNote(result, step.Answer),

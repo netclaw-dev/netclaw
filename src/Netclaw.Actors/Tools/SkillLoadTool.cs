@@ -174,7 +174,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
                 skill.Name,
                 SkillLoadLog.SessionToken(context));
 
-            var routedResult = await _subAgentSpawner.SpawnAsync(
+            var routedResult = await _subAgentSpawner.StartRunAsync(
                 profile,
                 args.Task,
                 args.Context,
@@ -182,9 +182,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
                 ct,
                 systemPromptOverlay: routedBody);
 
-            return routedResult.Success
-                ? routedResult.Output
-                : $"Subagent '{profile.Name}' failed: {routedResult.Output}";
+            return routedResult.ToJson();
         }
 
         string body;

@@ -30,6 +30,6 @@ public static partial class SessionProtocol
         public sealed record Checkpointed(ChildRunCheckpoint Checkpoint) : ChildRunEvent;
         public sealed record CancellationRequested : ChildRunEvent;
         public sealed record TerminalRecorded(ChildRunTerminal Terminal) : ChildRunEvent;
-        public sealed record ResultPrepared(SerializableChatMessage Call, SerializableChatMessage Result) : ChildRunEvent;
+        public sealed record ResultPrepared(SerializableChatMessage Call, SerializableChatMessage Result, WorkingContextDelta? ReviewedWorkingContext) : ChildRunEvent;
     }
 }

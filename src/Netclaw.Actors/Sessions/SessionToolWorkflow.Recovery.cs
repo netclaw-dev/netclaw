@@ -96,9 +96,9 @@ internal sealed partial class SessionToolWorkflow
     }
 
     public bool ShouldAbandonResolvedAfterRecovery()
-        => ResolvedCount > 0 && PendingCount == 0;
+        => ResolvedParentCount > 0 && PendingParentCount == 0;
 
-    public bool ShouldAbandonResolvedForIdle() => ResolvedCount > 0;
+    public bool ShouldAbandonResolvedForIdle() => ResolvedParentCount > 0;
 
     // Security boundary: only a person can abandon an open approval. Automation (a reminder fire, a webhook, a
     // background job completion) cannot answer a prompt, so it must not cancel one. Its input waits until the
@@ -111,7 +111,7 @@ internal sealed partial class SessionToolWorkflow
         PrincipalClassification? inputPrincipal,
         long nowMs)
     {
-        if (PendingCount > 0)
+        if (PendingParentCount > 0)
         {
             if (IsAutomation(inputPrincipal))
                 return new NewInputPlan.WaitForApproval();
@@ -125,7 +125,7 @@ internal sealed partial class SessionToolWorkflow
                 nowMs));
         }
 
-        if (ResolvedCount > 0)
+        if (ResolvedParentCount > 0)
             return new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
                 sessionId,
@@ -158,16 +158,17 @@ internal sealed partial class SessionToolWorkflow
                 nowMs);
 
     public bool ShouldAbandonInterruptedAfterRecovery(SessionState state)
-        => PendingCount == 0
-           && ResolvedCount == 0
+        => PendingParentCount == 0
+           && ResolvedParentCount == 0
            && ParkedToolBatchHistory.FindRedrivableAssistantMessage(state.History, null) is not null;
 
-    public bool HasPendingApprovals() => PendingCount > 0;
+    public bool HasPendingApprovals() => PendingParentCount > 0;
 
     // A parked batch still waits for an answer, or has an answer and no result yet. Input admitted after it waits.
-    public bool HasParkedApprovals() => PendingCount > 0 || ResolvedCount > 0;
+    // Only parent approvals count: a child approval belongs to the child run and must not hold the parent's input.
+    public bool HasParkedApprovals() => PendingParentCount > 0 || ResolvedParentCount > 0;
 
-    public int PendingDiagnosticCount => PendingCount;
+    public int PendingDiagnosticCount => PendingParentCount;
 
-    public int ResolvedDiagnosticCount => ResolvedCount;
+    public int ResolvedDiagnosticCount => ResolvedParentCount;
 }
