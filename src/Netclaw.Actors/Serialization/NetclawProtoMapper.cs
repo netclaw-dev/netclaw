@@ -18,7 +18,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Serialization;
 
-internal static class NetclawProtoMapper
+internal static partial class NetclawProtoMapper
 {
     private const int NoAssignmentDigestWireKind = 1;
     private const int ExactAssignmentDigestWireKind = 2;
@@ -41,7 +41,9 @@ internal static class NetclawProtoMapper
         ToolApprovalResolved v => ToProto(v),
         ToolBatchAbandoned v => ToProto(v),
         SessionBackgroundJobsReaped v => ToProto(v),
-        SessionSnapshot v => ToProto(v),
+        SessionSnapshot v => ToProtoV2(v),
+        ChildRunAccepted v => ToProto(v),
+        ChildRunEvent v => ToProto(v),
         WorkingContext v => ToProto(v),
         ReminderId v => ToProto(v),
         ReminderDelivery v => ToProto(v),
@@ -584,6 +586,10 @@ internal static class NetclawProtoMapper
             AdoptedSpeakerIds = proto.AdoptedSpeakerIds.ToArray(),
             SupportsInteractiveApproval = proto.SupportsInteractiveApproval
         };
+
+    internal static TurnContextRecord FromLegacyTurnContext(
+        Proto.ToolApprovalRequestedProto.Types.TurnContextRecordProto proto)
+        => FromProto(proto);
 
     private static ChannelDeliveryTargetInfo FromProto(
         Proto.ToolApprovalRequestedProto.Types.TurnContextRecordProto.Types.ChannelDeliveryTargetRecordProto proto)
