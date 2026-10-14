@@ -2,7 +2,7 @@
 
 `legacy-writer-records.json` contains neutral payloads from the deployed draft writer at revision `9f79c0c4b637f005ffba5572d0bf50aa550464f2`.
 
-The isolated capture used the historical `NetclawProtobufSerializer.Manifest(object)` and `ToBinary(object)` methods. `capture-source.cs.txt` holds the temporary test method. The pinned test class supplies its fixture helpers.
+The isolated capture used the historical `NetclawProtobufSerializer.Manifest(object)` and `ToBinary(object)` methods. `capture-source.cs.txt` holds the temporary test method. The pinned test class supplies its fixture helpers and applies the successful child lifecycle through the old reducer before it writes the records.
 
 To reproduce the corpus from a repository clone, use the exact writer revision and run:
 
@@ -12,7 +12,7 @@ cp src/Netclaw.Actors.Tests/Fixtures/CoordinationLegacy/capture-source.cs.txt /t
 NETCLAW_HISTORICAL_FIXTURE_OUTPUT=/tmp/netclaw-legacy-capture/legacy-writer-records.json dotnet test /tmp/netclaw-legacy-capture/src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj --filter 'FullyQualifiedName~Capture_neutral_deployed_wire_fixtures' -m:1
 ```
 
-The candidate serializer did not create these payloads. The original corpus hash was `994682681c870ae7b5242405c488c445569f3dd8f327ac6b18d3d0ee0ec85a36`. The prior 22-record corpus hash was `c6e126f2c282db52c228f95da5c515786928c2b0cf7db672d6ab20d3ccd0b41b`. The current 25-record corpus hash is `7d1f6e95464196d231696058c314b3edc6dd6ac70222737978da2e3478dad6f6`.
+The candidate serializer did not create these payloads. The original corpus hash was `994682681c870ae7b5242405c488c445569f3dd8f327ac6b18d3d0ee0ec85a36`. The prior 22-record corpus hash was `c6e126f2c282db52c228f95da5c515786928c2b0cf7db672d6ab20d3ccd0b41b`. The prior 25-record corpus hash was `7d1f6e95464196d231696058c314b3edc6dd6ac70222737978da2e3478dad6f6`. The current 25-record corpus hash is `41361f06def7650057c4948105e7035f4157445bd31a6bf0019aee76c071e819`.
 
 The corpus contains `cra-v1`, all seven `cre-v1` facts, three `tta-v1` facts, `ia-v1`, `ic-v1`, `tbs-v1`, `tcr-v1`, `tar-v1`, `tares-v1`, and two `ss-v1` snapshots. Each record stores the manifest, Base64 payload, and payload SHA-256.
 
