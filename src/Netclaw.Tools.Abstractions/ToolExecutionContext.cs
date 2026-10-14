@@ -85,6 +85,17 @@ internal abstract class ToolInvocationReceipt
         public string? DeclaredProjectDirectory { get; }
     }
 
+    internal sealed class PendingBackgroundJob : ToolInvocationReceipt
+    {
+        public PendingBackgroundJob(string jobId) : base(ToolInvocationOutcomeCategory.Success)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+            JobId = jobId;
+        }
+
+        public string JobId { get; }
+    }
+
     internal sealed class Correction : ToolInvocationReceipt
     {
         public Correction(ToolRemediationCode remediationCode) : base(ToolInvocationOutcomeCategory.RecoverableCorrection)

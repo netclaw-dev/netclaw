@@ -139,7 +139,7 @@ public sealed class SessionInputFlowRequesterTests
             _state = _state.CloseInputs(_flow.SelectedInputs.Ids);
             _flow.ToolBatchCommitted();
             return _flow.AdvanceAfterToolBatch(
-                new BatchCompletion.Ready(_state, 1, ToolBudgetStatus.Ok.Instance), compactionDue: false);
+                new BatchCompletion.Ready(_state, 1), compactionDue: false);
         }
 
         public CompactionContinuation FinishCompaction() => _flow.AdvanceAfterCompaction(restartDrainRequested: false);

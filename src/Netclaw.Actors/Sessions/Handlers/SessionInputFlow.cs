@@ -422,7 +422,7 @@ internal sealed class SessionInputFlow
         bool compactionDue)
     {
         var batch = DrainBufferedBatch(continuesTurn: true);
-        var next = completion.ChooseNext(batch?.StartsNewTurn == true, compactionDue);
+        var next = completion.ChooseNext(compactionDue);
         return new ToolBatchInputAdvance(batch, next);
     }
 

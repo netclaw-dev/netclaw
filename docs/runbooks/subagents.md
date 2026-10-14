@@ -355,3 +355,24 @@ A restore loses later journal facts and does not reverse external effects.
 Use the fixed-byte compatibility and actor recovery checks in `Netclaw.Actors.Tests` for candidate validation.
 Record the exact candidate, test filter, database copy, and results in the release evidence.
 No live deployment or database restore forms part of this source change.
+
+## Repeated tool work
+
+The parent and child use exact tool identities and actual results to detect repeated work.
+After two equal feedback rounds, the runtime returns a correction for each repeated call.
+A repeat after that correction ends the turn without another model request.
+Unrelated calls remain available. Live context compaction preserves this evidence.
+A process restart does not restore a detector checkpoint or repeat tool calls automatically.
+
+Authorized status queries for a pending background job can repeat.
+Each query repeats the normal access checks. Cancellation and inaccessible jobs receive no exception.
+
+`MaxToolIterationsPerTurn` remains readable in old configuration files. The runtime does not enforce that value.
+Useful work can exceed the former parent and child iteration limits.
+The runtime still enforces deadlines, cancellation, and authorization.
+Distinct calls can continue indefinitely if no other stop condition applies.
+
+A recurrence refusal executes no tool and grants no authority.
+The result retains the call identity, validation error, and authorization-attempt identity.
+The runtime does not request consent merely to refuse a repeated call.
+Every call that can execute still passes the normal authorization checks.

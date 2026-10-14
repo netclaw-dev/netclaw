@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.108.2"
+  version: "2.108.3"
 ---
 
 # Netclaw Operations
@@ -229,6 +229,15 @@ when done; background jobs are killed when the session passivates).
 Full detail — delivery contract, proactive channel messaging, approval scoping,
 job lifecycle — is in
 `skill_read_resource('netclaw-operations', 'references/scheduling.md')`.
+
+## Repeated tool calls
+
+Two equal feedback rounds for the same tool and arguments cause a correction before the next dispatch.
+Change the approach after that correction. Another repeat ends the turn without another model request.
+Unrelated calls and context compaction do not erase this evidence.
+An authorized status query for a pending background job can repeat through the normal access checks.
+`MaxToolIterationsPerTurn` is a legacy config field. The runtime no longer enforces its fixed limit.
+Deadlines, cancellation, and tool policy still apply.
 
 ## Tool argument validation
 

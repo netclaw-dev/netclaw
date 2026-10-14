@@ -535,7 +535,7 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
             var selected = _flow.SelectedInputs;
             _state = _state.CloseInputs(selected.Ids);
             _flow.ToolBatchCommitted();
-            var advance = _flow.AdvanceAfterToolBatch(new BatchCompletion.Ready(_state, 1, ToolBudgetStatus.Ok.Instance), compactionDue: false);
+            var advance = _flow.AdvanceAfterToolBatch(new BatchCompletion.Ready(_state, 1), compactionDue: false);
             var batch = advance.Batch?.Messages ?? [];
             if (batch.Count > 0)
                 _explored.Add(Explored.ToolBoundaryDrain);

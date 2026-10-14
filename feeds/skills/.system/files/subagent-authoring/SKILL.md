@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.4.0"
+  version: "1.4.1"
 ---
 
 # Subagent Authoring
@@ -141,10 +141,10 @@ Parent-mediated tool approval is still allowed for concrete tool calls when the
 parent channel supports it. Treat approval as a security gate, not as a dialogue
 channel.
 
-Subagents share the same tool-loop budget strategy as parent sessions: budget
-nudges, duplicate-call nudges, and force-no-tools wrap-up. The current
-subagent budget is 30 tool iterations per run, where one LLM response with any
-number of parallel tool calls counts as one iteration.
+Parent sessions and subagents detect repeated calls from exact arguments and actual results.
+After two equal feedback rounds, the runtime refuses the next matching call and returns a correction.
+A repeat after that correction ends the turn. Use a different approach after a correction.
+Useful work can exceed the former iteration limits. Deadlines, cancellation, and tool policy still apply.
 
 The parent-facing `spawn_agent` result is an explicit terminal text envelope:
 agent name, run id, outcome (`completed`, `partial`, or `failed`), optional

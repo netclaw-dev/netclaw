@@ -468,6 +468,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         Command<ToolExecutionSingleCompleted>(msg =>
         {
+            if (!_execution.OwnsToolDispatch(msg.DispatchToken))
+                return;
             var result = msg.Result;
             Persist(new ToolCallRecorded
             {
@@ -484,8 +486,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             });
         });
 
-        Command<ToolExecutionBatchCompleted>(_ =>
+        Command<ToolExecutionBatchCompleted>(msg =>
         {
+            if (!_execution.OwnsToolDispatch(msg.DispatchToken))
+                return;
             _execution.OnToolBatchMessage();
             _toolWorkflow.MarkExecutionTaskCompleted();
             TryCompleteStreamedToolBatch();
@@ -493,6 +497,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         Command<ToolExecutionFailed>(msg =>
         {
+            if (!_execution.OwnsToolDispatch(msg.DispatchToken))
+                return;
             _execution.OnToolFailure();
             _toolWorkflow.DiscardPendingMedia();
             TurnLog().Error(msg.Cause, "turn_tool_execution_failed");
@@ -656,10 +662,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (analysis.Kind == LlmResponseKind.ToolCalls && _turnState.ForceNoToolsActive)
         {
             TurnLog().Warning(
-                "turn_force_no_tools_violation toolCallCount={ToolCallCount} budgetUsed={BudgetUsed} max={Max}",
-                analysis.ToolCalls.Count,
-                _turnState.ToolCallCount,
-                _config.MaxToolIterationsPerTurn);
+                "turn_force_no_tools_violation toolCallCount={ToolCallCount}",
+                analysis.ToolCalls.Count);
             FailCurrentTurn(
                 TextOnlyResponseViolationMessage,
                 new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
@@ -1344,17 +1348,15 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (prepared.Decision.Kind != ToolCycleDecisionKind.Execute)
         {
             Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
-                "Tool cycle decision kind={DecisionKind} period={Period} repetitions={Repetitions}",
-                prepared.Decision.Kind,
-                prepared.Decision.Period,
-                prepared.Decision.Repetitions);
+                "Tool recurrence decision kind={DecisionKind} refused={RefusedCount}",
+                prepared.Decision.Kind, prepared.Decision.RefusedCallIds.Count);
         }
 
         if (prepared is PreparedFreshBatch.Stop)
         {
             RecordIntermediateUsage(usage);
-            _state = _state.AddSystemNudge(ToolCycleMessages.Final);
-            FireLlmCall(forceNoTools: true);
+            HandleTextResponse(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, ToolCycleMessages.Final),
+                usage: null, streamedText: false, streamedThinking: false);
             return;
         }
 
@@ -1396,7 +1398,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         List<FunctionCallContent> toolCalls,
         UsageDetails? usage,
         PreparedToolCycleBatch preparedCycleBatch,
-        ToolCycleDecision cycleDecision)
+        ToolCycleBatchDecision cycleDecision)
     {
 
         // Surface preamble text immediately before tool execution starts.
@@ -1438,13 +1440,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         RecordIntermediateUsage(usage);
 
-        if (cycleDecision.Kind == ToolCycleDecisionKind.Correct)
-        {
-            EmitToolCycleCorrection(toolCalls);
-            return;
-        }
-
-        DispatchToolBatch(toolCalls, preparedCycleBatch: preparedCycleBatch);
+        DispatchToolBatch(toolCalls, preparedCycleBatch: preparedCycleBatch, refusedCallIds: cycleDecision.RefusedCallIds);
     }
 
     private void RecordIntermediateUsage(UsageDetails? usage)
@@ -1457,34 +1453,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _lastInputTokenCount = usage.InputTokenCount.Value;
     }
 
-    private void EmitToolCycleCorrection(IReadOnlyList<FunctionCallContent> toolCalls)
-    {
-        _toolWorkflow.StartDispatch(toolCalls, cycle: null, executor: null, recordCompletedCycle: false);
-        foreach (var call in toolCalls)
-        {
-            var receipt = new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle);
-            var message = ToolRemediationPresenter.Present(
-                new SerializableChatMessage
-                {
-                    Role = Protocol.ChatRole.Tool,
-                    Content = ToolCycleMessages.Correction,
-                    ToolCallId = new ToolCallId(call.CallId),
-                    Name = call.Name
-                },
-                receipt,
-                setWorkingDirectoryAvailable: false);
-            Self.Tell(new ToolExecutionSingleCompleted(new ToolCallResult(
-                message,
-                [],
-                [],
-                [],
-                AuthorizationAttemptId.New(),
-                Receipt: receipt)));
-        }
-
-        Self.Tell(new ToolExecutionBatchCompleted());
-    }
-
     /// <summary>
     /// Dispatches a tool batch to <see cref="SessionToolExecutionPipeline"/>.
     /// Both the fresh batch and <see cref="HandleToolInteractionResponseWhenIdle"/>
@@ -1493,6 +1461,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     /// </summary>
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
+        IReadOnlySet<string> refusedCallIds,
         ApprovalRedrivePlan? approvalPlan = null,
         PreparedToolCycleBatch? preparedCycleBatch = null,
         bool recordCompletedCycle = true)
@@ -1567,7 +1536,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             setWorkingDirectoryAvailable,
             setWorkingDirectoryTool is null ? null : setWorkingDirectoryTool.CanDeclare,
             approvalPlan,
-            toolExecutionCt);
+            toolExecutionCt,
+            refusedCallIds);
 
         _execution.AttachTool(pipeline.ExecuteAsync(batch));
     }
@@ -3289,7 +3259,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                     _input.RestoreTurnAuthority(dispatch.TurnContext, _trustContextDeriver);
                     UpdateCrashContext();
                     TransitionTo(SessionPhase.Processing);
-                    DispatchToolBatch(dispatch.Calls, approvalPlan: dispatch.ApprovalPlan,
+                    DispatchToolBatch(dispatch.Calls, new HashSet<string>(), approvalPlan: dispatch.ApprovalPlan,
                         recordCompletedCycle: false);
                     TryReplyAck();
                     return;
@@ -3618,13 +3588,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     {
         if (_toolWorkflow.CompleteIfReady(
                 _state,
-                _turnState,
-                _config.MaxToolIterationsPerTurn) is not BatchCompletion.Ready completion)
+                _turnState) is not BatchCompletion.Ready completion)
             return;
 
         _state = completion.State;
         var advance = _toolWorkflow.HasChildContinuation || HasReadyChildResult
-            ? new ToolBatchInputAdvance(null, completion.ChooseNext(newUserInputAdmitted: false, ShouldCompact()))
+            ? new ToolBatchInputAdvance(null, completion.ChooseNext(ShouldCompact()))
             : _input.AdvanceAfterToolBatch(completion, ShouldCompact());
         if (advance.Batch is { } batch)
         {
@@ -3636,12 +3605,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var next = advance.Next;
         switch (next)
         {
-            case ToolBatchNextAction.ContinueWithoutTools exhausted:
-                TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
-                    _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, _turnState.ToolIterationCount);
-                _state = _state.AddSystemNudge(exhausted.NudgeText);
-                FireLlmCall(forceNoTools: true);
-                return;
             case ToolBatchNextAction.ContinueModel { NudgeText: { } nudge }:
                 _state = _state.AddSystemNudge(nudge);
                 break;
@@ -3662,8 +3625,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         _toolWorkflow.ClearNormalBatch();
         _execution.ClearToolTracking();
-        TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
-            _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, completion.ResultCount);
+        TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} resultCount={ResultCount}",
+            _turnState.ToolIterationCount, _turnState.ToolCallCount, completion.ResultCount);
         FireLlmCall();
     }
 
