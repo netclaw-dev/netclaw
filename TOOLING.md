@@ -429,9 +429,7 @@ It also filters the complete `finally` deletion when the acceptance-reply mutant
 Thus, the cleanup mutant targets the tracker dictionary, not the manager's `TryRemove` call.
 An explicit local deletion of that call must also make the cleanup cases fail before this gate changes.
 
-The last measured four-mutant local run took 95 seconds after package restore.
-The fifth mutant stays in the same Stryker invocation and CI group. Its added
-runtime is not measured yet; record it after the next authorized run.
+The five-mutant local run took 122 seconds after package restore.
 The separate CI job retains a 10-minute timeout and uploads `reminder-execution-mutation-report`.
 Its report directory is `artifacts/stryker/reminder-execution`.
 
