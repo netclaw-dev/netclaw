@@ -27,7 +27,7 @@ public sealed record BackgroundChildRun
     public required string SourceOperation { get; init; }
     public required string ArgumentsDigest { get; init; }
     public required SessionProtocol.TurnContextRecord OriginalContext { get; init; }
-    public required WorkingContextSnapshot InitialWorkingSnapshot { get; init; }
+    public required WorkingContextSnapshot? InitialWorkingSnapshot { get; init; }
     public required long AcceptedAtMs { get; init; }
     public required ChildRunLifecycle Lifecycle { get; init; }
 }
