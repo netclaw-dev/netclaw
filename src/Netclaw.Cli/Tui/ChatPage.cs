@@ -73,6 +73,8 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
             .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
+                if (ViewModel.RejectIfTooLarge(text)) return;
+
                 _promptInput.Clear();
 
                 // Render user message

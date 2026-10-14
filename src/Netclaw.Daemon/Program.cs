@@ -231,7 +231,7 @@ static async Task RunDaemonAsync(
     builder.Services.AddMattermostActionEndpointRateLimiting();
 
     // SignalR for remote clients (CLI thin client, Blazor ops console)
-    builder.Services.AddSignalR();
+    builder.Services.AddSessionHubSignalR();
     builder.Services.AddSingleton<SessionCatalogService>();
     builder.Services.AddSingleton<ISessionLifecycleObserver>(sp => sp.GetRequiredService<SessionCatalogService>());
     builder.Services.AddSingleton<ClaimsPrincipalMapper>();

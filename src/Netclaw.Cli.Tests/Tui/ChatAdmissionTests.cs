@@ -68,6 +68,30 @@ public sealed class ChatAdmissionTests : IDisposable
         finally { release.TrySetResult(); }
     }
 
+    [Fact]
+    public async Task Over_limit_text_is_refused_with_an_error_and_stays_in_the_composer()
+    {
+        var transport = new FakeDaemonHubTransport();
+        await using var client = new DaemonClient("http://localhost", transport, reconnectDelays: [TimeSpan.Zero]);
+        var input = new VirtualInputSource();
+        var terminal = new VirtualTerminal(100, 30);
+        using var chat = new ChatViewModel(client, TimeProvider.System, new ModelCapabilities { ModelId = "test" }, new ChatNavigationState(), Paths);
+        var statuses = new List<string>();
+        using var statusSub = chat.StatusMessage.Subscribe(value => { lock (statuses) statuses.Add(value); });
+        await using var provider = CreateHost(chat, input, terminal);
+        // 90,000 e-acute chars are ~180 KB of UTF-8 but 540 KB once JSON-escaped, past the 512 KB frame limit.
+        input.EnqueuePaste(new string('\u00e9', 90_000));
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+        await provider.GetRequiredService<TerminaApplication>().RunAsync(TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(transport.Invocations, call => call.Method == "SendMessage");
+        lock (statuses) Assert.Contains("Message is too large to send (528 KB; limit 512 KB).", statuses);
+        // Refused text is not echoed into the transcript as a sent "You:" line; it stays in the composer.
+        Assert.DoesNotContain("You:", terminal.ToString());
+    }
+
     private static ServiceProvider CreateHost(ChatViewModel chat, VirtualInputSource input, VirtualTerminal terminal)
     {
         var services = new ServiceCollection();

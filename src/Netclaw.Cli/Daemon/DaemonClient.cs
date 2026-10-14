@@ -99,6 +99,9 @@ public sealed class DaemonClient : IAsyncDisposable
     public Task SendAsync(string text, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        // Refuse before posting: an over-limit frame makes the server close the connection and the text is lost.
+        if (SessionHubLimits.CheckText(text) is { } tooLarge)
+            return Task.FromException(new InvalidOperationException(tooLarge));
         return Post(new SendText(text, cancellationToken));
     }
     public Task RespondToInteractionAsync(string callId, string selectedKey, CancellationToken cancellationToken = default)
