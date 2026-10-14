@@ -1516,6 +1516,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
+        var parentCallCountBeforeSend = _clientProvider.Main.CallCount;
+        var parentResumeMarker = PrepareParentResumeMarker();
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
@@ -1523,13 +1525,17 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             Source = BuildReminderSource()
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        var outputs = await CollectThroughChildTerminalAndTurnAsync(
+        var (completed, outputs) = await ExpectChildTerminalAndParentResumeWithOutputsAsync(
             subscriber,
-            TestContext.Current.CancellationToken);
+            "summarizer",
+            TestContext.Current.CancellationToken,
+            parentCallCountBeforeSend,
+            parentResumeMarker);
 
-        Assert.Equal(0, _clientProvider.Main.CallCount);
+        Assert.Equal(parentCallCountBeforeSend + 1, _clientProvider.Main.CallCount);
+        Assert.Equal(SubAgentPhase.Completed, completed.Phase);
         Assert.Equal(1, _clientProvider.Compaction.CallCount);
-        AssertAcceptedSpawnReceipt(Assert.Single(outputs.OfType<TextOutput>()).Text);
+        AssertAcceptedSpawnReceipt(outputs.OfType<TextOutput>().First().Text);
 
         var subagentCall = Assert.Single(_clientProvider.Compaction.ReceivedMessages);
         Assert.Contains(subagentCall, m =>
@@ -1553,6 +1559,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         var reminderSource = BuildReminderSource("ops-route:1712000000000");
+        var parentCallCountBeforeSend = _clientProvider.Main.CallCount;
+        var parentResumeMarker = PrepareParentResumeMarker();
 
         var firstAck = await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -1562,12 +1570,18 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, firstAck.SessionId);
 
-        var outputs = await CollectThroughChildTerminalAndTurnAsync(
+        var (completed, outputs) = await ExpectChildTerminalAndParentResumeWithOutputsAsync(
             subscriber,
-            TestContext.Current.CancellationToken);
-        AssertAcceptedSpawnReceipt(Assert.Single(outputs.OfType<TextOutput>()).Text);
+            "summarizer",
+            TestContext.Current.CancellationToken,
+            parentCallCountBeforeSend,
+            parentResumeMarker);
+        Assert.Equal(parentCallCountBeforeSend + 1, _clientProvider.Main.CallCount);
+        Assert.Equal(SubAgentPhase.Completed, completed.Phase);
+        AssertAcceptedSpawnReceipt(outputs.OfType<TextOutput>().First().Text);
 
         var callsAfterFirst = _clientProvider.Compaction.CallCount;
+        var parentCallsAfterFirst = _clientProvider.Main.CallCount;
 
         var duplicateAck = await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -1580,6 +1594,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         await AwaitAssertAsync(() =>
         {
             Assert.Equal(callsAfterFirst, _clientProvider.Compaction.CallCount);
+            Assert.Equal(parentCallsAfterFirst, _clientProvider.Main.CallCount);
             return Task.CompletedTask;
         }, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
     }
@@ -1601,6 +1616,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var reminderSource = BuildReminderSource("ops-route:1712000000001");
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _clientProvider.Compaction.NextResponseGate = gate;
+        var parentCallCountBeforeSend = _clientProvider.Main.CallCount;
+        var parentResumeMarker = PrepareParentResumeMarker();
 
         var firstAck = await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -1634,11 +1651,14 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 
         gate.TrySetResult();
 
-        await ExpectChildTerminalAsync(
+        var completed = await ExpectChildTerminalAndParentResumeAsync(
             subscriber,
             "summarizer",
-            TestContext.Current.CancellationToken);
-        await ExpectTurnCompletedAsync(subscriber, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken,
+            parentCallCountBeforeSend,
+            parentResumeMarker);
+        Assert.Equal(SubAgentPhase.Completed, completed.Phase);
+        Assert.Equal(parentCallCountBeforeSend + 1, _clientProvider.Main.CallCount);
 
         await AwaitAssertAsync(() =>
         {
@@ -1673,6 +1693,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         var source = BuildReminderSource();
+        var parentCallCountBeforeSend = _clientProvider.Main.CallCount;
+        var parentResumeMarker = PrepareParentResumeMarker();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -1681,13 +1703,16 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             Source = source
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        var outputs = await CollectThroughChildTerminalAndTurnAsync(
+        var (completed, outputs) = await ExpectChildTerminalAndParentResumeWithOutputsAsync(
             subscriber,
-            TestContext.Current.CancellationToken);
-        var text = Assert.Single(outputs.OfType<TextOutput>());
+            "summarizer",
+            TestContext.Current.CancellationToken,
+            parentCallCountBeforeSend,
+            parentResumeMarker);
+        Assert.Equal(parentCallCountBeforeSend + 1, _clientProvider.Main.CallCount);
+        Assert.Equal(SubAgentPhase.Completed, completed.Phase);
 
-        AssertAcceptedSpawnReceipt(text.Text);
-        Assert.Equal(0, _clientProvider.Main.CallCount);
+        AssertAcceptedSpawnReceipt(outputs.OfType<TextOutput>().First().Text);
         Assert.Equal(2, _clientProvider.Compaction.CallCount);
         Assert.NotNull(_recordingFileReadTool);
         Assert.True(_recordingFileReadTool!.WasCalled);
@@ -1729,26 +1754,6 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             ReceivedAt = DateTimeOffset.UtcNow,
             ReminderId = reminderId is null ? null : new ReminderId(reminderId)
         };
-    }
-
-    private static async Task<IReadOnlyList<SessionOutput>> CollectThroughChildTerminalAndTurnAsync(
-        Akka.TestKit.TestProbe probe,
-        CancellationToken ct)
-    {
-        var outputs = new List<SessionOutput>();
-        var childCompleted = false;
-        var turnCompleted = false;
-        for (var i = 0; i < 32; i++)
-        {
-            var output = await probe.ExpectMsgAsync<SessionOutput>(TimeSpan.FromSeconds(15), cancellationToken: ct);
-            outputs.Add(output);
-            childCompleted |= output is SubAgentOutput { Phase: SubAgentPhase.Completed };
-            turnCompleted |= output is TurnCompleted;
-            if (childCompleted && turnCompleted)
-                return outputs;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected a child terminal event and a turn completion.");
     }
 
     private static async Task<IReadOnlyList<SessionOutput>> CollectTurnOutputsAsync(
@@ -1812,6 +1817,25 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         string parentResumeMarker,
         int expectedChildResults = 1)
     {
+        var result = await ExpectChildTerminalAndParentResumeWithOutputsAsync(
+            probe,
+            agentName,
+            ct,
+            parentCallCountBeforeSend,
+            parentResumeMarker,
+            expectedChildResults);
+        return result.Terminal;
+    }
+
+    private async Task<(SubAgentOutput Terminal, IReadOnlyList<SessionOutput> Outputs)> ExpectChildTerminalAndParentResumeWithOutputsAsync(
+        Akka.TestKit.TestProbe probe,
+        string agentName,
+        CancellationToken ct,
+        int parentCallCountBeforeSend,
+        string parentResumeMarker,
+        int expectedChildResults = 1)
+    {
+        var outputs = new List<SessionOutput>();
         SubAgentOutput? terminal = null;
         var markerSeen = false;
         var resumedTurnCompleted = false;
@@ -1820,6 +1844,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             var output = await probe.ExpectMsgAsync<SessionOutput>(
                 TimeSpan.FromSeconds(15),
                 cancellationToken: ct);
+            outputs.Add(output);
             if (output is SubAgentOutput child
                 && child.Phase == SubAgentPhase.Completed
                 && child.AgentName.Value == agentName)
@@ -1846,7 +1871,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             return Task.CompletedTask;
         }, TimeSpan.FromSeconds(15), TimeSpan.FromMilliseconds(100), cancellationToken: ct);
 
-        return terminal!;
+        return (terminal!, outputs);
     }
 
     private string PrepareParentResumeMarker()
