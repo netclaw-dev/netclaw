@@ -24,6 +24,8 @@ internal static class SessionHubFrame
     // Largest invocation id the client can produce (a 32-bit counter) and a session id longer than real ones.
     private const string MaxInvocationId = "2147483647";
     private static readonly string PlaceholderSessionId = new('s', 64);
+    // Must stay the default JSON protocol: HubConnectionBuilderExtensions builds the client connection with
+    // the builder's default protocol, and this measures the bytes that connection will write.
     private static readonly JsonHubProtocol Protocol = new();
 
     /// <summary>Exact bytes of the <c>SendMessage</c> invocation frame, record separator included.</summary>
@@ -36,8 +38,11 @@ internal static class SessionHubFrame
         var size = MeasureSendMessageFrame(text);
         if (size <= SessionHubLimits.MaxReceiveMessageBytes - HeadroomBytes)
             return null;
-        // Round up to one decimal so an over-limit size never prints as the limit itself.
-        var kb = Math.Ceiling(size * 10.0 / 1024) / 10;
-        return $"Message is too large to send ({kb.ToString("0.0", CultureInfo.InvariantCulture)} KB; limit {SessionHubLimits.MaxReceiveMessageBytes / 1024} KB).";
+        // Print the limit actually applied (rounded down) and the size rounded up, one decimal each, so the
+        // printed size always exceeds the printed limit.
+        var limit = SessionHubLimits.MaxReceiveMessageBytes - HeadroomBytes;
+        var limitKb = Math.Floor(limit * 10.0 / 1024) / 10;
+        var sizeKb = Math.Ceiling(size * 10.0 / 1024) / 10;
+        return $"Message is too large to send ({sizeKb.ToString("0.0", CultureInfo.InvariantCulture)} KB; limit {limitKb.ToString("0.0", CultureInfo.InvariantCulture)} KB).";
     }
 }

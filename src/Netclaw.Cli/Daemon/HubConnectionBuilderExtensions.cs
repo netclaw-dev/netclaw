@@ -36,6 +36,7 @@ public static class HubConnectionBuilderExtensions
         string hubUrl,
         Func<Task<string?>>? tokenFactory)
     {
+        // Uses the builder's default JSON hub protocol; SessionHubFrame measures chat frames with the same one.
         return tokenFactory is null
             ? builder.WithUrl(hubUrl)
             : builder.WithUrl(hubUrl, options => { options.AccessTokenProvider = tokenFactory; });

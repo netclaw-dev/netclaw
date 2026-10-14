@@ -98,7 +98,7 @@ public sealed class ChatAdmissionTests : IDisposable
 
         Assert.DoesNotContain(transport.Invocations, call => call.Method == "SendMessage");
         var screen = terminal.ToString();
-        Assert.Contains("limit 512 KB)", screen);
+        Assert.Contains("limit 511.7 KB)", screen);
         Assert.Equal(2, CountOccurrences(screen, "[error] Message is too large"));
         Assert.DoesNotContain("You:", screen);
     }

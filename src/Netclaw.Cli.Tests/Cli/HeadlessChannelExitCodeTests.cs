@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Protocol;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -57,10 +58,11 @@ public sealed class HeadlessChannelExitCodeTests : IAsyncDisposable
     [Fact]
     public async Task Over_limit_prompt_fails_before_connecting_or_creating_a_session()
     {
+        using var directory = new DisposableTempDir();
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var channel = new HeadlessChannel(
             _client,
-            new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-headless-oversize-" + Guid.NewGuid().ToString("N"))),
+            new NetclawPaths(directory.Path),
             new SignalingLifetime(stopped),
             TimeProvider.System,
             new HeadlessOptions(new string('a', 600_000)),
