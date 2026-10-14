@@ -57,6 +57,7 @@ internal sealed class ToolIndexUpdater : IHostedService
     {
         LoadFileBasedAgents();
 
+        _toolRegistry.Register(new CheckAgentRunTool());
         _toolRegistry.Register(new SpawnAgentTool(
             _subAgentRegistry, _subAgentSpawner, _paths, _subAgentConfig, _agentLoader,
             _loggerFactory.CreateLogger<SpawnAgentTool>()));

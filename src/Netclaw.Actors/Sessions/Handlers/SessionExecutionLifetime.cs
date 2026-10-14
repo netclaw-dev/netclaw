@@ -7,6 +7,8 @@ using Akka.Actor;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.SubAgents;
+using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions.Handlers;
@@ -60,6 +62,44 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     }
 
     private readonly ProcessingWatchdog _watchdog = new();
+    private readonly Dictionary<SubAgentRunId, (IActorRef Actor, ChildRunExecution Execution)> _children = [];
+
+    public ChildRunExecution TrackChild(SubAgentRunId runId, IActorRef child)
+    {
+        var execution = new ChildRunExecution(runId, actor);
+        _children.Add(runId, (child, execution));
+        return execution;
+    }
+
+    public bool HasLiveChildren => _children.Count > 0;
+    public bool OwnsChild(SubAgentRunId runId, IActorRef child)
+        => _children.TryGetValue(runId, out var live) && live.Actor.Equals(child);
+    public SubAgentRunId? FindChild(IActorRef child)
+        => _children.Where(pair => pair.Value.Actor.Equals(child)).Select(pair => (SubAgentRunId?)pair.Key).FirstOrDefault();
+    public void CloseChild(SubAgentRunId runId)
+    {
+        if (_children.TryGetValue(runId, out var live))
+        {
+            live.Execution.Close();
+            _ = ObserveChildStop(runId, live.Execution, dispose: false);
+        }
+    }
+    public void ReleaseChild(SubAgentRunId runId)
+    {
+        if (_children.Remove(runId, out var live))
+            _ = ObserveChildStop(runId, live.Execution, dispose: true);
+    }
+    public void StopChildren()
+    {
+        foreach (var runId in _children.Keys.ToArray())
+            ReleaseChild(runId);
+    }
+    private async Task ObserveChildStop(SubAgentRunId runId, ChildRunExecution execution, bool dispose)
+    {
+        try { await execution.StopAsync(); }
+        catch (Exception error) { actor.Tell(new ChildStopFailed(runId, error)); }
+        finally { if (dispose) execution.Dispose(); }
+    }
     private CancellationTokenSource? _modelCts;
     private Task? _modelTask;
     private long _modelCallId;

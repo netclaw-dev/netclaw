@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -20,7 +21,8 @@ public sealed partial record SessionState
         var run = evt.Run;
         if (run.StartKey.SessionId != evt.SessionId || run.OriginalContext.SessionId != evt.SessionId ||
             run.StartKey.TurnId != run.OriginalContext.TurnId || run.Lifecycle is not ChildRunLifecycle.Accepted ||
-            string.IsNullOrWhiteSpace(run.RunId.Value) || string.IsNullOrWhiteSpace(run.ArgumentsDigest))
+            string.IsNullOrWhiteSpace(run.RunId.Value) || string.IsNullOrWhiteSpace(run.ArgumentsDigest) ||
+            !TurnContext.TryFromRecord(run.OriginalContext, out _, out _))
             throw new InvalidOperationException("Child acceptance has invalid identity or authority.");
         if (ChildRuns.ContainsKey(run.RunId) || ChildRuns.Values.Any(existing => existing.StartKey == run.StartKey))
             throw new InvalidOperationException("Child acceptance repeats a durable start identity.");
@@ -53,8 +55,9 @@ public sealed partial record SessionState
                 when terminal.Terminal.Result.RunId == run.RunId && terminal.Terminal.Result.ScopeId == run.ScopeId
                 => new ChildRunLifecycle.Terminal(terminal.Terminal),
             (ChildRunLifecycle.Terminal terminal, ChildRunEvent.ResultPrepared prepared)
-                when IsCanonicalChildPair(run, prepared.Call, prepared.Result)
-                => new ChildRunLifecycle.Prepared(new ChildPreparedResult(terminal.Result, prepared.Call, prepared.Result)),
+                when IsCanonicalChildPair(run, prepared.Call, prepared.Result) &&
+                     (terminal.Result.Result.Success == (prepared.ReviewedWorkingContext is not null))
+                => new ChildRunLifecycle.Prepared(new ChildPreparedResult(terminal.Result, prepared.Call, prepared.Result, prepared.ReviewedWorkingContext)),
             _ => throw new InvalidOperationException("Child event is invalid for its current lifecycle.")
         };
         return this with { ChildRuns = ChildRuns.SetItem(run.RunId, run with { Lifecycle = next }) };
@@ -86,7 +89,14 @@ public sealed partial record SessionState
             ? new ChildRunLifecycle.Closed(continuation.DeliveryCallId,
                 delivery.Terminal.Result.Outcome, delivery.Terminal.Result.OutcomeReason)
             : new ChildRunLifecycle.Consumed(delivery);
-        return this with { History = history, ChildRuns = ChildRuns.SetItem(run.RunId, run with { Lifecycle = next }) };
+        var workingContext = run.Lifecycle is ChildRunLifecycle.Prepared && delivery.ReviewedWorkingContext is { } reviewed
+            ? WorkingContextUpdater.MergeSuccessfulSubAgentWorkingContext(WorkingContext, new ChildRunCompletion.Completed(reviewed))
+            : WorkingContext;
+        return this with
+        {
+            History = history, WorkingContext = workingContext,
+            ChildRuns = ChildRuns.SetItem(run.RunId, run with { Lifecycle = next })
+        };
     }
 
     private static bool IsCanonicalChildPair(BackgroundChildRun run, SerializableChatMessage call, SerializableChatMessage result)

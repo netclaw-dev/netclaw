@@ -46,5 +46,5 @@ public abstract record ChildRunLifecycle
 
 public sealed record ChildRunCheckpoint(int CompletedRound, string Summary, WorkingContextDelta ConfirmedActivity);
 public sealed record ChildRunTerminal(SubAgentProtocol.SubAgentResult Result, bool Lost, string? EvidenceWarning);
-public sealed record ChildPreparedResult(ChildRunTerminal Terminal, SerializableChatMessage Call, SerializableChatMessage Result);
+public sealed record ChildPreparedResult(ChildRunTerminal Terminal, SerializableChatMessage Call, SerializableChatMessage Result, WorkingContextDelta? ReviewedWorkingContext);
 public sealed record ChildContinuation(SubAgentRunId RunId, ToolCallId DeliveryCallId);

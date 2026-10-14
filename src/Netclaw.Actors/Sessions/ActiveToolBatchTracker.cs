@@ -29,6 +29,9 @@ internal sealed class ActiveToolBatchTracker
 
     private bool ExecutionTaskCompleted { get; set; }
 
+    public bool IsPending(ToolCallId callId)
+        => _expectedCallIds.Contains(callId.Value) && !_completedCallIds.Contains(callId.Value);
+
     public void Start(
         SerializableChatMessage assistantMessage,
         IEnumerable<SerializableChatMessage> existingResults)

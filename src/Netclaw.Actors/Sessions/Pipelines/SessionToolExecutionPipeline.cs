@@ -15,6 +15,7 @@ using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Security;
@@ -492,8 +493,18 @@ internal sealed class SessionToolExecutionPipeline
                 batch.TurnContext.HasThirdPartyAdoptedContext,
                 batch.TurnContext.AdoptedSpeakerIds)
             : null;
+        var spawnChildActor = batch.RunScope.SpawnChildActor
+            ?? throw new InvalidOperationException("A session tool batch requires its owner callback.");
         var callScope = batch.RunScope with
         {
+            SpawnChildActor = (request, name, token) => spawnChildActor(request switch
+            {
+                PreparedChildStart prepared => new AcceptChildStart(prepared,
+                    new ChildRunStartKey.Tool(batch.TurnContext.SessionId, batch.TurnContext.TurnId.Value,
+                        new ToolCallId(tc.CallId)), batch.TurnContext.ToRecord(), tc.Name, token),
+                ChildRunControlRequest control => new ChildRunControl(control.RunId, control.Cancel, batch.TurnContext.ToRecord()),
+                _ => request
+            }, name, token),
             InteractiveApproval = approvalBridge is null
                 ? new InteractiveApprovalCapability.Unavailable()
                 : new InteractiveApprovalCapability.Available(approvalBridge)
