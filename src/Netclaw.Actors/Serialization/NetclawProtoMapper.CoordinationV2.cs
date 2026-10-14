@@ -48,27 +48,34 @@ internal static partial class NetclawProtoMapper
 
     internal static SessionSnapshot FromLegacySnapshot(Proto.SessionSnapshotProto proto, byte[] rawPayload)
     {
-        var snapshot = FromProto(proto);
+        var childInputIds = proto.PendingInputs.Where(input => input.HasSourceChildRunId)
+            .Select(input => new InputId(input.InputId)).ToHashSet();
+        var decoded = FromProto(proto);
+        var snapshot = decoded with { PendingInputs = decoded.PendingInputs.Where(input => !childInputIds.Contains(input.InputId)).ToArray() };
         var legacyRuns = proto.ChildRuns.Select(run => FromLegacyChildRun(run)).ToArray();
         var evidence = new List<LegacyCoordinationEvidence>(snapshot.LegacyCoordinationEvidence);
-        if (proto.AdoptedTaskContext is not null || proto.AdoptedTaskInputIds.Count > 0)
+        var adoptedIds = proto.AdoptedTaskInputIds.Select(id => new InputId(id)).ToArray();
+        var adoptedInputs = snapshot.PendingInputs.Where(input => adoptedIds.Contains(input.InputId)).ToArray();
+        if (adoptedInputs.Length > 0)
         {
+            var context = proto.AdoptedTaskContext is null ? null : FromLegacyTurnContext(proto.AdoptedTaskContext);
+            var valid = context is not null && adoptedInputs.Select(input => input.InputId).SequenceEqual(adoptedIds)
+                && LegacyCoordinationReplay.SameContext(context, adoptedInputs[^1].TurnContext)
+                && adoptedInputs.All(input => LegacyCoordinationReplay.SameAuthority(context, input.TurnContext));
             evidence.Add(new LegacyCoordinationEvidence
             {
                 Manifest = "ss-v1-adopted-task",
-                Payload = [],
-                Disposition = LegacyCoordinationDisposition.PreservedLegacyFacts,
-                AdoptedContext = proto.AdoptedTaskContext is null
-                    ? null : FromLegacyTurnContext(proto.AdoptedTaskContext),
-                InputIds = proto.AdoptedTaskInputIds.Select(static id => new InputId(id)).ToArray(),
-                ActiveInputIds = proto.AdoptedTaskInputIds
-                    .Where(id => snapshot.PendingInputs.Any(input => input.InputId.Value == id))
-                    .Select(static id => new InputId(id)).ToArray(),
-                Reason = "The deployed snapshot has adopted-task context that applies to its listed pending inputs."
+                Payload = valid ? [] : [.. rawPayload],
+                Disposition = valid ? LegacyCoordinationDisposition.AppliedOrdinaryAdoption
+                    : LegacyCoordinationDisposition.QuarantinedInvalidAdoption,
+                AdoptedContext = context,
+                InputIds = adoptedIds,
+                ActiveInputIds = adoptedIds,
+                Reason = valid ? null : "The deployed snapshot adoption differs from its pending ordinary input authority."
             });
         }
 
-        var rawSnapshotRetained = false;
+        var rawSnapshotRetained = evidence.Any(item => item.Payload.Length > 0);
         for (var index = 0; index < proto.ChildRuns.Count; index++)
         {
             var oldRun = proto.ChildRuns[index];
@@ -139,6 +146,38 @@ internal static partial class NetclawProtoMapper
                 ApprovalEvents = approvals
             });
             rawSnapshotRetained |= hasAmbiguousDelivery;
+        }
+
+        foreach (var input in proto.PendingInputs.Where(input => input.HasSourceChildRunId))
+        {
+            var inputId = new InputId(input.InputId);
+            if (evidence.Any(item => item.InputIds.Contains(inputId)))
+                continue;
+            evidence.Add(new LegacyCoordinationEvidence
+            {
+                Manifest = "ss-v1", Payload = rawSnapshotRetained ? [] : [.. rawPayload],
+                Disposition = LegacyCoordinationDisposition.UnresolvedLegacyChild,
+                InputIds = [inputId], ActiveInputIds = [inputId],
+                ChildRunId = new SubAgentRunId(input.SourceChildRunId),
+                AdoptedContext = input.TurnContext is null ? null : FromLegacyTurnContext(input.TurnContext),
+                Reason = "The deployed snapshot child input has no exact unsettled delivery correlation."
+            });
+            rawSnapshotRetained = true;
+        }
+        var activeRuns = legacyRuns.Where(run => run.Lifecycle is ChildRunLifecycle.Consumed).ToArray();
+        if (activeRuns.Length > 1)
+        {
+            foreach (var run in activeRuns)
+            {
+                evidence.Add(new LegacyCoordinationEvidence
+                {
+                    Manifest = "ss-v1", Payload = rawSnapshotRetained ? [] : [.. rawPayload],
+                    Disposition = LegacyCoordinationDisposition.UnresolvedLegacyChild,
+                    ChildRunId = run.RunId, AdoptedContext = run.OriginalContext,
+                    Reason = "The deployed snapshot has more than one active child continuation."
+                });
+                rawSnapshotRetained = true;
+            }
         }
 
         return snapshot with

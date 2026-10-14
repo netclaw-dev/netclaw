@@ -826,7 +826,7 @@ public static class LegacyCoordinationReplay
                && results[0].MediaReferences.Count == 0;
     }
 
-    private static bool SameAuthority(TurnContextRecord first, TurnContextRecord second)
+    internal static bool SameAuthority(TurnContextRecord first, TurnContextRecord second)
         => TurnContext.TryFromRecord(first, out var left, out _) && left is not null &&
            TurnContext.TryFromRecord(second, out var right, out _) && right is not null && left.HasSameAuthority(right);
 
