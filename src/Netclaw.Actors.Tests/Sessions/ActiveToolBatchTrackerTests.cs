@@ -35,16 +35,16 @@ public sealed class ActiveToolBatchTrackerTests
         if (taskCompletesFirst)
             batch.MarkExecutionTaskCompleted();
         state = batch.ApplyRecordedResult(state, first);
-        Assert.IsType<BatchCompletion.Pending>(batch.CompleteIfReady(state, turn, 10));
+        Assert.IsType<BatchCompletion.Pending>(batch.CompleteIfReady(state, turn));
 
         state = batch.ApplyRecordedResult(state, second);
         if (!taskCompletesFirst)
         {
-            Assert.IsType<BatchCompletion.Pending>(batch.CompleteIfReady(state, turn, 10));
+            Assert.IsType<BatchCompletion.Pending>(batch.CompleteIfReady(state, turn));
             batch.MarkExecutionTaskCompleted();
         }
 
-        var ready = Assert.IsType<BatchCompletion.Ready>(batch.CompleteIfReady(state, turn, 10));
+        var ready = Assert.IsType<BatchCompletion.Ready>(batch.CompleteIfReady(state, turn));
         Assert.Same(state, ready.State);
         Assert.Equal(2, ready.ResultCount);
         Assert.Equal(1, turn.ToolIterationCount);
@@ -73,7 +73,7 @@ public sealed class ActiveToolBatchTrackerTests
         var replay = batch.ApplyRecordedResult(duplicate, result);
         batch.MarkExecutionTaskCompleted();
         var completed = Assert.IsType<BatchCompletion.Ready>(
-            batch.CompleteIfReady(replay, new TurnStateTracker(), 10));
+            batch.CompleteIfReady(replay, new TurnStateTracker()));
 
         // Assert
         Assert.Equal(2, state.History.Count);
@@ -124,45 +124,21 @@ public sealed class ActiveToolBatchTrackerTests
     }
 
     [Theory]
-    [InlineData("normal", false, false, "model")]
-    [InlineData("normal", false, true, "compact")]
-    [InlineData("near", false, false, "model")]
-    [InlineData("near", false, true, "compact")]
-    [InlineData("exhausted", false, false, "text")]
-    [InlineData("exhausted", false, true, "text")]
-    [InlineData("exhausted", true, true, "compact")]
-    [InlineData("near", true, true, "compact")]
-    public void New_input_resets_budget_while_compaction_keeps_its_priority(
-        string budget, bool newUserInput, bool compactionDue, string expectedAction)
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Ready_batch_compacts_only_when_compaction_is_due(bool compactionDue)
     {
         // Arrange
-        ToolBudgetStatus status = budget switch
-        {
-            "normal" => ToolBudgetStatus.Ok.Instance,
-            "near" => new ToolBudgetStatus.NudgeNeeded(1, "near-budget nudge"),
-            "exhausted" => new ToolBudgetStatus.Exhausted("exhausted nudge"),
-            _ => throw new ArgumentOutOfRangeException(nameof(budget))
-        };
-        var ready = new BatchCompletion.Ready(SessionState.Empty, 1, status);
+        var ready = new BatchCompletion.Ready(SessionState.Empty, 1);
+        var expectedAction = compactionDue
+            ? ToolBatchNextAction.RequestCompaction
+            : ToolBatchNextAction.ContinueModel;
 
         // Act
-        var action = ready.ChooseNext(newUserInput, compactionDue);
+        var action = ready.ChooseNext(compactionDue);
 
         // Assert
-        switch (expectedAction)
-        {
-            case "model":
-                var model = Assert.IsType<ToolBatchNextAction.ContinueModel>(action);
-                Assert.Equal(newUserInput || budget == "normal" ? null : "near-budget nudge", model.NudgeText);
-                break;
-            case "compact":
-                var compact = Assert.IsType<ToolBatchNextAction.RequestCompaction>(action);
-                Assert.Equal(!newUserInput && budget == "near" ? "near-budget nudge" : null, compact.NudgeText);
-                break;
-            case "text":
-                Assert.Equal("exhausted nudge", Assert.IsType<ToolBatchNextAction.ContinueWithoutTools>(action).NudgeText);
-                break;
-        }
+        Assert.Equal(expectedAction, action);
     }
 
     private static FunctionCallContent[] Calls() =>
