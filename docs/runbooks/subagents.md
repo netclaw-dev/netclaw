@@ -100,8 +100,9 @@ first user message is just the raw task, identical to the pre-context protocol.
    optional reason, diagnostics pointer, and the subagent's final text.
 
 Child creation is marshaled back onto the session actor thread, so supervision
-stays within Akka's actor-thread rules. If the parent tool call is cancelled or
-times out, the subagent is cancelled too. The timers are inactivity budgets: a
+stays within Akka's actor-thread rules. After durable acceptance, the child can
+continue after the `spawn_agent` call returns. An explicit run cancellation or
+session shutdown stops the child. The timers are inactivity budgets: a
 responsive subagent is not stopped merely because wall-clock time has elapsed.
 
 Every subagent uses the same timers from `netclaw.json`. An agent file does not
@@ -365,7 +366,7 @@ known-good version.
   back-and-forth interaction with the user.
 - Subagents have no fixed maximum number of tool iterations. A final response
   completes the run; cancellation or an inactivity timeout can stop it.
-  A recurrence refusal settles the parent turn without another model request.
+  A recurrence refusal can settle the child turn without another model request.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.
