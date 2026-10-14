@@ -316,6 +316,83 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
         }
     }
 
+    [Theory]
+    [InlineData("original-owner", true)]
+    [InlineData("other-requester", false)]
+    public async Task Child_control_keeps_requester_authority_and_acknowledges_cancellation_after_the_journal(
+        string requester, bool authorized)
+    {
+        // Arrange
+        var sessionId = new SessionId("boundary/child-control");
+        var control = await ConfigureJournalAsync(rejectAcceptance: false, holdAcceptance: false);
+        control.HoldCancellation = true;
+        var childGate = NewGate();
+        _clients.A.NextResponseGate = childGate;
+        _clients.A.ToolCallsOnFirstCall = [Probe("forbidden-after-cancel")];
+        _clients.Parent.ToolCallsOnFirstCall = [Spawn("controlled-child", "child-a")];
+        var session = await JoinAsync(sessionId);
+
+        try
+        {
+            await SendAsync(sessionId, "Start the child.", "original-owner");
+            await _clients.A.FirstCallEntered.Task.WaitAsync(Deadline, Cancellation);
+            var accepted = await control.Acceptance.Task.WaitAsync(Deadline, Cancellation);
+            var candidate = accepted.Run.OriginalContext with { RequesterSenderId = new SenderId(requester) };
+
+            // Act
+            var status = await session.Ask<string>(new ChildRunControl(accepted.Run.RunId, false, candidate), Deadline, Cancellation);
+            var cancel = session.Ask<string>(new ChildRunControl(accepted.Run.RunId, true, candidate), Deadline, Cancellation);
+
+            // Assert
+            if (authorized)
+            {
+                using var json = JsonDocument.Parse(status);
+                Assert.Equal(accepted.Run.RunId.Value, json.RootElement.GetProperty("run_id").GetString());
+                Assert.Equal(accepted.Run.ScopeId.Value, json.RootElement.GetProperty("scope_id").GetString());
+                Assert.Equal("accepted", json.RootElement.GetProperty("state").GetString());
+                Assert.Equal(0, json.RootElement.GetProperty("pending_approval_count").GetInt32());
+                Assert.False(json.RootElement.GetProperty("terminal").GetBoolean());
+            }
+            else
+            {
+                Assert.Equal("Error: This child run is not available to the requester.", status);
+                Assert.Equal(status, await cancel.WaitAsync(Deadline, Cancellation));
+                Assert.DoesNotContain(control.Committed, evt => evt is ChildRunEvent.CancellationRequested);
+                Assert.False(childGate.Task.IsCompleted);
+                var ownerStatus = await session.Ask<string>(new ChildRunControl(
+                    accepted.Run.RunId, false, accepted.Run.OriginalContext), Deadline, Cancellation);
+                using var json = JsonDocument.Parse(ownerStatus);
+                Assert.Equal("accepted", json.RootElement.GetProperty("state").GetString());
+                cancel = session.Ask<string>(new ChildRunControl(
+                    accepted.Run.RunId, true, accepted.Run.OriginalContext), Deadline, Cancellation);
+            }
+
+            var intent = await control.Cancellation.Task.WaitAsync(Deadline, Cancellation);
+            Assert.Equal(accepted.Run.RunId, intent.RunId);
+            Assert.Same(intent, Assert.Single(control.Committed.OfType<ChildRunEvent.CancellationRequested>()));
+            Assert.False(cancel.IsCompleted);
+            Assert.False(childGate.Task.IsCompleted);
+            control.ReleaseCancellation.TrySetResult();
+            using var acknowledged = JsonDocument.Parse(await cancel.WaitAsync(Deadline, Cancellation));
+            Assert.Equal("cancelling", acknowledged.RootElement.GetProperty("state").GetString());
+            Assert.False(acknowledged.RootElement.GetProperty("terminal").GetBoolean());
+            await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<ChildRunEvent.TerminalRecorded>(),
+                evt => evt.RunId == accepted.Run.RunId && !evt.Terminal.Result.Success),
+                Deadline, cancellationToken: Cancellation);
+            await StopAsync(session);
+            Assert.True(childGate.Task.IsCanceled);
+            Assert.Equal(1, _clients.A.CallCount);
+            Assert.Empty(_tool.Contexts);
+            Assert.DoesNotContain(control.Committed.OfType<ToolCallRecorded>(),
+                evt => evt.ToolResult.ToolCallId?.Value == "forbidden-after-cancel");
+        }
+        finally
+        {
+            control.ReleaseCancellation.TrySetResult();
+            childGate.TrySetResult();
+        }
+    }
+
     private async Task<AcceptanceFault> ConfigureJournalAsync(bool rejectAcceptance, bool holdAcceptance)
     {
         var control = new AcceptanceFault(rejectAcceptance, holdAcceptance);
@@ -427,6 +504,9 @@ internal sealed class AcceptanceFault(bool rejectAcceptance, bool holdAcceptance
 {
     public bool RejectAcceptance { get; } = rejectAcceptance;
     public bool HoldAcceptance { get; } = holdAcceptance;
+    public bool HoldCancellation { get; set; }
+    public TaskCompletionSource<ChildRunEvent.CancellationRequested> Cancellation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource ReleaseCancellation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public ConcurrentQueue<object> Committed { get; } = new();
     public TaskCompletionSource<ChildRunAccepted> Acceptance { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource ReleaseAcceptance { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -463,6 +543,12 @@ public sealed class AcceptanceBoundaryJournal : MemoryJournal
         {
             foreach (var evt in events)
                 active.Committed.Enqueue(evt);
+            if (events.OfType<ChildRunEvent.CancellationRequested>().SingleOrDefault() is { } cancellation)
+            {
+                active.Cancellation.TrySetResult(cancellation);
+                if (active.HoldCancellation)
+                    await active.ReleaseCancellation.Task.WaitAsync(cancellationToken);
+            }
             if (accepted is not null)
             {
                 active.Acceptance.TrySetResult(accepted);
