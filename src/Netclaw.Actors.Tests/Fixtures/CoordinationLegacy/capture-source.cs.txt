@@ -54,6 +54,35 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
             InputIds = [inputB.InputId],
             AdoptedAtMs = 123460
         };
+        var ordinaryAdoption = new ToolTaskAdopted(false)
+        {
+            SessionId = Owner,
+            TurnContext = context,
+            InputIds = [inputA.InputId],
+            AdoptedAtMs = 123469
+        };
+        var childAdoption = new ToolTaskAdopted(true)
+        {
+            SessionId = Owner,
+            TurnContext = context,
+            ContinuedChildRunId = run.RunId,
+            InputIds = [delivered.InputId],
+            AdoptedAtMs = 123470
+        };
+        var deliveredRun = preparedRun with
+        {
+            StartBatchSettled = true,
+            DeliveryInputId = delivered.InputId
+        };
+        var legacyCall = ChildRunDelivery.Call(preparedRun, new ToolCallId("legacy-delivery-call"));
+        var legacyPairSnapshot = new SessionSnapshot
+        {
+            History = [legacyCall, delivered.UserMessage],
+            ChildRuns = [deliveredRun],
+            AdoptedTaskContext = context,
+            AdoptedTaskInputIds = [delivered.InputId],
+            PendingInputs = [delivered]
+        };
 
         var records = new (string Name, object Value)[]
         {
@@ -69,7 +98,9 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
             ("child-delivery-admitted", new ChildRunEvent.DeliveryAdmitted(delivered) { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123463 }),
             ("input-admitted-a-no-source-id", inputA),
             ("input-admitted-b-no-source-id", inputB),
+            ("valid-ordinary-input-adoption", ordinaryAdoption),
             ("invalid-2453-adoption-of-b-while-a-pending", invalidAdoption),
+            ("valid-child-delivery-adoption", childAdoption),
             ("input-closed", new InputClosed { SessionId = Owner, InputIds = [inputB.InputId], ClosedAtMs = 123464 }),
             ("tool-batch-started", new ToolBatchStarted
             {
@@ -115,7 +146,8 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
                 Decision = "approve_once",
                 ResolvedAtMs = 123468
             }),
-            ("session-snapshot", new SessionSnapshot { History = [inputA.UserMessage] })
+            ("session-snapshot", new SessionSnapshot { History = [inputA.UserMessage] }),
+            ("legacy-child-pair-snapshot", legacyPairSnapshot)
         };
 
         var fixture = records.Select(record =>
