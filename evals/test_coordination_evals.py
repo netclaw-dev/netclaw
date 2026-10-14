@@ -12,7 +12,7 @@ SESSION_KEY = "eval_coordination"
 
 
 class CoordinationAssertionTests(unittest.TestCase):
-    def evaluate(self, assertion, response, tool_calls=(), parent_log="", child_logs=None):
+    def evaluate(self, assertion, response, tool_calls=(), parent_log="", child_logs=None, coordination=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "stdout.json"
@@ -20,6 +20,7 @@ class CoordinationAssertionTests(unittest.TestCase):
                 "sessionId": "eval/coordination",
                 "response": json.dumps(response),
                 "toolCalls": list(tool_calls),
+                "coordination": coordination,
             }))
             eval_home = root / "home"
             session_root = eval_home / "data/sessions" / SESSION_KEY
@@ -34,8 +35,7 @@ class CoordinationAssertionTests(unittest.TestCase):
             command = r'''source "$1"
 EVAL_HOME="$2"
 STDOUT_FILE="$3"
-COORDINATION_INITIAL_STDOUT_FILE="$3"
-stdout_json_session_actor_log_path() { printf '%s\n' "$EVAL_HOME/data/sessions/eval_coordination/logs/session.log"; }
+coordination_session_actor_log() { printf '%s\n' "$EVAL_HOME/data/sessions/eval_coordination/logs/session.log"; }
 "$4"'''
             completed = subprocess.run([
                 "bash", "-c", command, "bash", str(RUNNER), str(eval_home), str(output), assertion,
@@ -70,23 +70,34 @@ stdout_json_session_actor_log_path() { printf '%s\n' "$EVAL_HOME/data/sessions/e
             self.call("spawn_agent", "Investigate West requests."),
         ]
         terminal_log = "SubAgent completed: task-worker (success=True)\n" * 2
+        coordination = {
+            "initialResponse": "Two investigations are active.",
+            "activeChildrenAtFirstCompletion": 2,
+            "completedChildren": 2,
+            "turnCompletions": 2,
+            "userMessagesSent": 1,
+            "automaticContinuation": True,
+        }
         self.assertTrue(self.evaluate(
             "assert_coordination_independent_synthesis",
             {"eastUnresolved": 2, "westUnresolved": 4, "totalUnresolved": 6, "highestRegion": "west"},
             tasks,
             terminal_log,
+            coordination=coordination,
         ))
         self.assertFalse(self.evaluate(
             "assert_coordination_independent_synthesis",
             {"eastUnresolved": 2, "westUnresolved": 14, "totalUnresolved": 16, "highestRegion": "west"},
             tasks,
             terminal_log,
+            coordination=coordination,
         ))
         self.assertFalse(self.evaluate(
             "assert_coordination_independent_synthesis",
             {"eastUnresolved": 2, "westUnresolved": 4, "totalUnresolved": 6, "highestRegion": "west"},
             tasks,
             "SubAgent completed: task-worker (success=True)\n",
+            coordination=coordination,
         ))
 
     def test_artifact_review_binds_defect_and_clean_verdict_to_each_artifact(self):

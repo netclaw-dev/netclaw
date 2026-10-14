@@ -102,7 +102,6 @@ STDOUT_FILE=""
 STDERR_FILE=""
 LAST_TURN_STDOUT_FILE=""
 DAEMON_LOG_LINES_BEFORE=0
-COORDINATION_INITIAL_STDOUT_FILE=""
 
 # ─── Prerequisites ────────────────────────────────────────────────────────────
 
@@ -982,6 +981,25 @@ run_prompt() {
 
     # Brief pause for daemon log flush
     sleep 2
+}
+
+run_coordination_observer_prompt() {
+    local prompt="$1" required_children="$2"
+    local ts
+    ts="$(date +%s%N)"
+    STDOUT_FILE="$TMPDIR_EVAL/stdout_${ts}.txt"
+    STDERR_FILE="$TMPDIR_EVAL/stderr_${ts}.txt"
+    resolve_daemon_log
+    if [[ -f "$DAEMON_LOG" ]]; then
+        DAEMON_LOG_LINES_BEFORE=$(wc -l < "$DAEMON_LOG")
+    else
+        DAEMON_LOG_LINES_BEFORE=0
+    fi
+
+    timeout "$PROMPT_TIMEOUT" dotnet run --no-build \
+        --project "$REPO_ROOT/evals/coordination-observer/coordination-observer.csproj" -- \
+        "http://127.0.0.1:$EVAL_PORT" "$PROMPT_TIMEOUT" "$required_children" "$prompt" \
+        > "$STDOUT_FILE" 2> "$STDERR_FILE" || true
 }
 
 ## Runs a prompt against an existing (or new) named session via `chat -p --resume`.
@@ -1866,7 +1884,16 @@ lines[399] = "Record 400 verification phrase: cobalt-heron-4471.\n"
 }
 
 coordination_session_actor_log() {
-    stdout_json_session_actor_log_path
+    local session_id sql_id log_path
+    session_id=$(jq -sr '.[-1].sessionId // empty' "$STDOUT_FILE")
+    [[ -n "$session_id" ]] || return 1
+    sql_id="${session_id//\'/\'\'}"
+    log_path=$(sqlite3 -readonly "$EVAL_HOME/data/netclaw.db" \
+        "SELECT log_path FROM sessions WHERE persistence_id = 'session-$sql_id';") || return 1
+    [[ "$log_path" == /home/netclaw/.netclaw/* ]] || return 1
+    log_path="$EVAL_HOME/data/${log_path#/home/netclaw/.netclaw/}"
+    [[ -f "$log_path" ]] || return 1
+    printf '%s\n' "$log_path"
 }
 
 coordination_child_logs() {
@@ -1900,32 +1927,47 @@ coordination_child_completion_count() {
 }
 
 coordination_response_json() {
-    jq -er '.response | fromjson' "$STDOUT_FILE" 2>/dev/null
+    jq -ser '.[-1].response | fromjson' "$STDOUT_FILE" 2>/dev/null
+}
+
+coordination_envelopes_valid() {
+    jq -se 'length > 0 and all(.[]; type == "object" and (.sessionId | type == "string" and length > 0) and (.response | type == "string") and (.toolCalls == null or (.toolCalls | type == "array")))' \
+        "$STDOUT_FILE" >/dev/null 2>&1
+}
+
+coordination_all_tool_calls() {
+    jq -sc '[.[] | .toolCalls[]?]' "$STDOUT_FILE" 2>/dev/null
 }
 
 assert_coordination_retained_child_inspection() {
-    stdout_json_envelope_valid || return 1
+    coordination_envelopes_valid || return 1
+    coordination_response_json >/dev/null || return 1
     coordination_log_has_tool_read || return 1
     coordination_response_json | jq -e \
         '.record == 400 and .verification == "cobalt-heron-4471"' >/dev/null
 }
 
 assert_coordination_independent_synthesis() {
-    stdout_json_envelope_valid || return 1
+    coordination_envelopes_valid || return 1
+    coordination_response_json >/dev/null || return 1
     coordination_response_json | jq -e \
         '.eastUnresolved == 2 and .westUnresolved == 4 and .totalUnresolved == 6 and .highestRegion == "west"' >/dev/null \
         || return 1
+    jq -e '.coordination.initialResponse | type == "string" and length > 0' "$STDOUT_FILE" >/dev/null \
+        && jq -e '.coordination.activeChildrenAtFirstCompletion > 0 and .coordination.completedChildren >= 2 and .coordination.turnCompletions >= 2 and .coordination.userMessagesSent == 1 and .coordination.automaticContinuation == true' \
+            "$STDOUT_FILE" >/dev/null || return 1
 
-    local calls_file="${COORDINATION_INITIAL_STDOUT_FILE:-$STDOUT_FILE}"
+    local calls
+    calls=$(coordination_all_tool_calls) || return 1
     local spawn_count distinct_tasks completed_count
-    spawn_count=$(jq '[.toolCalls[]? | select(.toolName == "spawn_agent")] | length' "$calls_file")
-    distinct_tasks=$(jq '[.toolCalls[]? | select(.toolName == "spawn_agent")
+    spawn_count=$(jq '[.[] | select(.toolName == "spawn_agent")] | length' <<<"$calls")
+    distinct_tasks=$(jq '[.[] | select(.toolName == "spawn_agent")
         | (.argumentsJson | fromjson | .Task // .task // "")
-        | select(test("East"; "i"))] | length' "$calls_file")
+        | select(test("East"; "i"))] | length' <<<"$calls")
     local west_tasks
-    west_tasks=$(jq '[.toolCalls[]? | select(.toolName == "spawn_agent")
+    west_tasks=$(jq '[.[] | select(.toolName == "spawn_agent")
         | (.argumentsJson | fromjson | .Task // .task // "")
-        | select(test("West"; "i"))] | length' "$calls_file")
+        | select(test("West"; "i"))] | length' <<<"$calls")
     completed_count=$(coordination_child_completion_count) || return 1
     [[ "$spawn_count" -ge 2 && "$distinct_tasks" -ge 1 && "$west_tasks" -ge 1 && "$completed_count" -ge 2 ]]
 }
@@ -1942,12 +1984,14 @@ setup_coordination_artifact_review() {
 }
 
 assert_coordination_artifact_review() {
-    stdout_json_envelope_valid || return 1
-    local calls_file="${COORDINATION_INITIAL_STDOUT_FILE:-$STDOUT_FILE}"
-    jq -e '[.toolCalls[]? | select(.toolName == "spawn_agent")
+    coordination_envelopes_valid || return 1
+    coordination_response_json >/dev/null || return 1
+    local calls
+    calls=$(coordination_all_tool_calls) || return 1
+    jq -e '[.[] | select(.toolName == "spawn_agent")
         | (.argumentsJson | fromjson | .Task // .task // "")
         | select(test("artifact-a.cs"; "i") and test("artifact-b.cs"; "i"))] | length >= 1' \
-        "$calls_file" >/dev/null || return 1
+        <<<"$calls" >/dev/null || return 1
     coordination_response_json | jq -e \
         '.artifactA.verdict == "defect" and .artifactA.observedForTwoPending == true and .artifactA.expectedForTwoPending == false and .artifactB.verdict == "clean" and .artifactB.observedForZeroPending == true and .artifactB.expectedForZeroPending == true' >/dev/null \
         || return 1
@@ -3111,8 +3155,13 @@ end_category() {
 
 run_case() {
     local output_format="text"
+    local observer_children=0
     if [[ "${1:-}" == "--json" ]]; then
         output_format="json"
+        shift
+    fi
+    if [[ "${1:-}" == "--coordination-observer" ]]; then
+        observer_children=2
         shift
     fi
     local case_name="$1"; shift
@@ -3148,7 +3197,11 @@ run_case() {
         rendered_prompt="${rendered_prompt//\{\{MANAGED_WORKTREE_BRANCH\}\}/${MANAGED_WORKTREE_BRANCH:-}}"
         rendered_prompt="${rendered_prompt//\{\{CYCLE_PROMPT\}\}/${CYCLE_PROMPT:-}}"
         rendered_prompt="${rendered_prompt//\{\{EVAL_REMINDER_TARGET\}\}/${EVAL_REMINDER_TARGET:-}}"
-        run_prompt "$rendered_prompt" "$output_format"
+        if [[ "$observer_children" -gt 0 ]]; then
+            run_coordination_observer_prompt "$rendered_prompt" "$observer_children"
+        else
+            run_prompt "$rendered_prompt" "$output_format"
+        fi
 
         local passed=0
         local details="fail"
@@ -3170,70 +3223,6 @@ run_case() {
     CATEGORY_CASES=$((CATEGORY_CASES + 1))
     TOTAL_CASES=$((TOTAL_CASES + 1))
 
-    if [[ "$threshold_met" == "1" ]]; then
-        CATEGORY_PASSED=$((CATEGORY_PASSED + 1))
-        PASSED_CASES=$((PASSED_CASES + 1))
-        printf "  [PASS] %-30s %d/%d (%s)  — %s\n" "$case_name" "$passes" "$RUNS" "$score" "$description"
-    else
-        FAILED_CASES=$((FAILED_CASES + 1))
-        printf "  [FAIL] %-30s %d/%d (%s)  — %s\n" "$case_name" "$passes" "$RUNS" "$score" "$description"
-    fi
-}
-
-# Coordination cases use one follow-up turn after the first acceptance turn.
-# The follow-up lets the parent consume terminal child results in the same session.
-run_coordination_followup_case() {
-    local case_name="$1"; shift
-    local description="$1"; shift
-    local initial_prompt="$1"; shift
-    local followup_prompt="$1"
-    local assert_fn="assert_${case_name}"
-
-    if [[ "$CATEGORY_SKIPPED" == "true" ]] || [[ -n "$FILTER_CASE" && "$case_name" != "$FILTER_CASE" ]]; then
-        return
-    fi
-    check_daemon_alive
-    if ! declare -f "$assert_fn" >/dev/null 2>&1; then
-        printf "  [SKIP] %-30s — assertion function %s not defined\n" "$case_name" "$assert_fn"
-        return
-    fi
-
-    local passes=0 run
-    for ((run = 1; run <= RUNS; run++)); do
-        MULTI_TURN_STDOUT_FILE=""
-        MULTI_TURN_STDERR_FILE=""
-        local setup_fn="setup_${case_name}"
-        if declare -f "$setup_fn" >/dev/null 2>&1; then
-            "$setup_fn" "$run"
-        fi
-        run_prompt "$initial_prompt" json
-        COORDINATION_INITIAL_STDOUT_FILE="$STDOUT_FILE"
-        local session_id
-        session_id=$(jq -r '.sessionId // empty' "$COORDINATION_INITIAL_STDOUT_FILE" 2>/dev/null)
-        if [[ -z "$session_id" ]]; then
-            continue
-        fi
-
-        run_prompt_resume "$session_id" "$followup_prompt" json
-        STDOUT_FILE="$LAST_TURN_STDOUT_FILE"
-        store_metrics "$case_name" "$run" 2 "$LAST_TURN_USAGE_LINE"
-
-        EVAL_ASSERTION_DETAILS=""
-        if $assert_fn 2>/dev/null; then
-            passes=$((passes + 1))
-            store_result "$case_name" "$run" "$initial_prompt" 1 "pass"
-        else
-            local details="fail"
-            [[ -n "${EVAL_ASSERTION_DETAILS:-}" ]] && details="$EVAL_ASSERTION_DETAILS"
-            store_result "$case_name" "$run" "$initial_prompt" 0 "$details"
-        fi
-    done
-
-    local score threshold_met
-    score=$(awk "BEGIN {printf \"%.2f\", $passes / $RUNS}")
-    threshold_met=$(awk "BEGIN {print ($score >= $THRESHOLD) ? 1 : 0}")
-    CATEGORY_CASES=$((CATEGORY_CASES + 1))
-    TOTAL_CASES=$((TOTAL_CASES + 1))
     if [[ "$threshold_met" == "1" ]]; then
         CATEGORY_PASSED=$((CATEGORY_PASSED + 1))
         PASSED_CASES=$((PASSED_CASES + 1))
@@ -3543,11 +3532,10 @@ run_all() {
         "Read /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Find Record 400 and return JSON only with fields record and verification." \
         "Inspect /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Return JSON only with record and verification for Record 400."
 
-    run_coordination_followup_case coordination_independent_synthesis "two scoped investigations support one correct parent conclusion" \
-        "Ask for independent investigations. East has 8 failed and 6 recovered requests. West has 11 failed and 7 recovered requests. Unresolved means failed minus recovered." \
-        "Wait for the terminal results from both investigations. Then return JSON only with eastUnresolved, westUnresolved, totalUnresolved, and highestRegion."
+    run_case --json --coordination-observer coordination_independent_synthesis "two child investigations finish after an initial parent answer" \
+        "Ask for independent investigations. East has 8 failed and 6 recovered requests. West has 11 failed and 7 recovered requests. Unresolved means failed minus recovered. After you start the work, give an immediate short status and end your turn while the investigations remain active. After their results return, continue without another user message and report JSON only with eastUnresolved, westUnresolved, totalUnresolved, and highestRegion."
 
-    run_coordination_followup_case coordination_artifact_review "an independent reviewer finds a planted defect and clears a clean control" \
+    run_multi_turn_case --json coordination_artifact_review "an independent reviewer finds a planted defect and clears a clean control" \
         "Ask an independent reviewer to inspect /home/netclaw/.netclaw/workspaces/coordination-artifact-review/artifact-a.cs, artifact-b.cs, and observed-inputs.json. Contract: pendingCount is nonnegative and readiness is true only when pendingCount equals zero." \
         "Wait for the reviewer result. Return JSON only with artifactA fields verdict, observedForTwoPending, expectedForTwoPending; and artifactB fields verdict, observedForZeroPending, expectedForZeroPending."
 
