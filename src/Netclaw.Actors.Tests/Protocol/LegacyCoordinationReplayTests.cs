@@ -85,8 +85,7 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         var state = SessionState.Empty with { History = [originalCall] };
         foreach (var name in new[]
         {
-            "child-run-accepted", "child-started", "child-checkpoint",
-            "child-cancellation-requested", "child-dispatch-closed", "child-terminal",
+            "child-run-accepted", "child-started", "child-checkpoint", "child-terminal",
             "child-result-prepared", "child-delivery-admitted", "valid-child-delivery-adoption"
         })
         {
@@ -125,8 +124,7 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         var state = SessionState.Empty with { History = [originalCall] };
         foreach (var name in new[]
         {
-            "child-run-accepted", "child-started", "child-checkpoint",
-            "child-cancellation-requested", "child-dispatch-closed", "child-terminal",
+            "child-run-accepted", "child-started", "child-checkpoint", "child-terminal",
             "child-result-prepared", "child-delivery-admitted", "valid-child-delivery-adoption",
             "child-downstream-tool-batch", "child-downstream-tool-result", "child-downstream-final-turn"
         })

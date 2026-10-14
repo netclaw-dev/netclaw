@@ -3,7 +3,9 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Actors.Tools;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -16,17 +18,33 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
     public void Capture_neutral_deployed_wire_fixtures()
     {
         var (state, run) = Acceptance(Owner, slash: false);
-        var terminal = Terminal(run);
         var checkpoint = new ChildRunCheckpoint(1, "Neutral checkpoint.",
             new WorkingContextDelta { ReadFiles = ["/neutral/source.txt"] });
-        var preparedRun = run with
-        {
-            ChildCheckpoint = checkpoint,
-            Terminal = terminal,
-            TerminalSequenceNr = 1,
-            PreparedTerminal = terminal
-        };
+        var accepted = new ChildRunAccepted { SessionId = Owner, Run = run };
+        var started = new ChildRunEvent.Started
+            { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123457 };
+        var checkpointed = new ChildRunEvent.Checkpointed(checkpoint)
+            { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123458 };
+        var oldState = state.Apply(accepted).Apply(started).Apply(checkpointed)
+            .ApplyLoopObservation(new ToolCallRecorded
+            {
+                SessionId = Owner,
+                LoopObservation = ToolCycleSignatureFactory.CreateObservation(
+                    "start-call", new ToolInvocationReceipt.Succeeded([], null), "accepted", false)
+            })
+            .CloseInputs(run.OriginInputIds);
+        run = oldState.ChildRuns[run.RunId];
+        var terminal = Terminal(run);
+        var terminalRecorded = new ChildRunEvent.TerminalRecorded(terminal, 1)
+            { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123461 };
+        var resultPrepared = new ChildRunEvent.ResultPrepared(terminal, 1)
+            { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123462 };
+        oldState = oldState.Apply(terminalRecorded).Apply(resultPrepared);
+        var preparedRun = oldState.ChildRuns[run.RunId];
         var delivered = Delivery(preparedRun, "legacy-delivery-call");
+        var deliveryAdmitted = new ChildRunEvent.DeliveryAdmitted(delivered)
+            { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123463 };
+        oldState = oldState.Apply(deliveryAdmitted);
         var context = run.OriginalContext;
         var inputA = new InputAdmitted
         {
@@ -72,6 +90,10 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
             InputIds = [delivered.InputId],
             AdoptedAtMs = 123470
         };
+        oldState = oldState.Apply(childAdoption);
+        Assert.True(oldState.ChildRuns[run.RunId].StartBatchSettled);
+        Assert.Equal(delivered.InputId, oldState.ChildRuns[run.RunId].DeliveryInputId);
+        Assert.Equal([delivered.InputId], oldState.AdoptedTaskInputIds);
         var downstreamCall = new SerializableChatMessage
         {
             Role = ChatRole.Assistant,
@@ -162,15 +184,14 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
 
         var records = new (string Name, object Value)[]
         {
-            ("child-run-accepted", new ChildRunAccepted { SessionId = Owner, Run = run }),
-            ("child-started", new ChildRunEvent.Started { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123457 }),
-            ("child-checkpoint", new ChildRunEvent.Checkpointed(checkpoint)
-                { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123458 }),
+            ("child-run-accepted", accepted),
+            ("child-started", started),
+            ("child-checkpoint", checkpointed),
             ("child-cancellation-requested", new ChildRunEvent.CancellationRequested { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123459 }),
             ("child-dispatch-closed", new ChildRunEvent.DispatchClosed { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123460 }),
-            ("child-terminal", new ChildRunEvent.TerminalRecorded(terminal, 1) { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123461 }),
-            ("child-result-prepared", new ChildRunEvent.ResultPrepared(terminal, 1) { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123462 }),
-            ("child-delivery-admitted", new ChildRunEvent.DeliveryAdmitted(delivered) { SessionId = Owner, RunId = run.RunId, RecordedAtMs = 123463 }),
+            ("child-terminal", terminalRecorded),
+            ("child-result-prepared", resultPrepared),
+            ("child-delivery-admitted", deliveryAdmitted),
             ("input-admitted-a-no-source-id", inputA),
             ("input-admitted-b-no-source-id", inputB),
             ("valid-ordinary-input-adoption", ordinaryAdoption),
