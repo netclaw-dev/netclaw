@@ -115,8 +115,8 @@ public sealed class CheckBackgroundJobToolTests(ITestOutputHelper output) : Test
         var executor = new DispatchingToolExecutor(registry, TestToolAccessPolicy.Create(new ToolConfig()));
         var tracker = new TurnStateTracker();
 
-        await ExecuteAndObserveStatusAsync(tracker, executor, "pending-1", "job-a");
-        await ExecuteAndObserveStatusAsync(tracker, executor, "pending-2", "job-a");
+        await ExecuteAndObserveStatusAsync(tracker, executor, "pending-1", "job-a", expectPending: true);
+        await ExecuteAndObserveStatusAsync(tracker, executor, "pending-2", "job-a", expectPending: true);
 
         var sameJob = PrepareStatus(executor, "pending-candidate", "job-a");
         var sameJobDecision = tracker.EvaluateBeforeDispatch(sameJob);
@@ -136,8 +136,10 @@ public sealed class CheckBackgroundJobToolTests(ITestOutputHelper output) : Test
         Assert.Empty(untrustedClaim.ExemptCallIds);
 
         var deniedTracker = new TurnStateTracker();
-        await ExecuteAndObserveStatusAsync(deniedTracker, executor, "denied-1", "private-job");
-        await ExecuteAndObserveStatusAsync(deniedTracker, executor, "denied-2", "private-job");
+        await ExecuteAndObserveStatusAsync(
+            deniedTracker, executor, "denied-1", "private-job", expectFound: false);
+        await ExecuteAndObserveStatusAsync(
+            deniedTracker, executor, "denied-2", "private-job", expectFound: false);
         var denied = deniedTracker.EvaluateBeforeDispatch(PrepareStatus(executor, "denied-candidate", "private-job"));
         Assert.Equal(ToolCycleDecisionKind.Correct, denied.Kind);
         Assert.Empty(denied.ExemptCallIds);
@@ -156,16 +158,20 @@ public sealed class CheckBackgroundJobToolTests(ITestOutputHelper output) : Test
         var executor = new DispatchingToolExecutor(registry, TestToolAccessPolicy.Create(new ToolConfig()));
 
         var cancellationTracker = new TurnStateTracker();
-        await ExecuteAndObserveStatusAsync(cancellationTracker, executor, "cancel-1", "job-a", cancel: true);
-        await ExecuteAndObserveStatusAsync(cancellationTracker, executor, "cancel-2", "job-a", cancel: true);
+        await ExecuteAndObserveStatusAsync(
+            cancellationTracker, executor, "cancel-1", "job-a", cancel: true);
+        await ExecuteAndObserveStatusAsync(
+            cancellationTracker, executor, "cancel-2", "job-a", cancel: true);
         var cancellation = cancellationTracker.EvaluateBeforeDispatch(
             PrepareStatus(executor, "cancel-candidate", "job-a", cancel: true));
         Assert.Equal(ToolCycleDecisionKind.Correct, cancellation.Kind);
         Assert.Empty(cancellation.ExemptCallIds);
 
         var outcomeTracker = new TurnStateTracker();
-        await ExecuteAndObserveStatusAsync(outcomeTracker, executor, "pending-1", "job-a");
-        await ExecuteAndObserveStatusAsync(outcomeTracker, executor, "pending-2", "job-a");
+        await ExecuteAndObserveStatusAsync(
+            outcomeTracker, executor, "pending-1", "job-a", expectPending: true);
+        await ExecuteAndObserveStatusAsync(
+            outcomeTracker, executor, "pending-2", "job-a", expectPending: true);
         statuses["job-a"] = Status("job-a", BackgroundJobStatus.Completed, found: true, exitCode: 0);
 
         await ExecuteAndObserveStatusAsync(outcomeTracker, executor, "completed-1", "job-a");
@@ -185,12 +191,24 @@ public sealed class CheckBackgroundJobToolTests(ITestOutputHelper output) : Test
         DispatchingToolExecutor executor,
         string callId,
         string jobId,
+        bool expectPending = false,
+        bool expectFound = true,
         bool cancel = false)
     {
         var call = StatusCall(callId, jobId, cancel);
         var batch = ToolCycleSignatureFactory.Prepare([call], executor);
         var context = MakeContext();
         var result = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
+        Assert.Equal(expectPending, context.Receipt is ToolInvocationReceipt.PendingBackgroundJob);
+        if (expectPending)
+            Assert.StartsWith($"Job {jobId}: pending", result, StringComparison.Ordinal);
+        else if (!expectFound)
+            Assert.Contains("not found or not accessible", result, StringComparison.Ordinal);
+        else if (cancel)
+            Assert.Contains("Cancellation request sent", result, StringComparison.Ordinal);
+        else
+            Assert.StartsWith($"Job {jobId}: completed", result, StringComparison.Ordinal);
+
         tracker.ObserveCompleted(ToolCycleSignatureFactory.Complete(batch,
             new Dictionary<string, ToolCycleResult>(StringComparer.Ordinal)
             {
@@ -230,7 +248,8 @@ public sealed class CheckBackgroundJobToolTests(ITestOutputHelper output) : Test
         => new(callId, CheckBackgroundJobTool.ToolName, new Dictionary<string, object?>
         {
             ["JobId"] = jobId,
-            ["Cancel"] = cancel
+            ["Cancel"] = cancel,
+            ["_rationale"] = "Check the status of this background job."
         });
 
     private static BackgroundJobStatusResponse Status(
