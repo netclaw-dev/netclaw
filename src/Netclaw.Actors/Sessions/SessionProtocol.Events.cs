@@ -69,6 +69,8 @@ public static partial class SessionProtocol
 
         public InputId InputId { get; init; }
 
+        public BackgroundJobId? SourceBackgroundJobId { get; init; }
+
         public string? SourceMessageId { get; init; }
 
         public required SerializableChatMessage UserMessage { get; init; }
