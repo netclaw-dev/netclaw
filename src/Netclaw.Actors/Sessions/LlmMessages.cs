@@ -65,7 +65,7 @@ internal sealed record LlmCallFailed(Exception Cause) : INoSerializationVerifica
     public long CallId { get; init; }
 }
 
-internal sealed record ToolExecutionSingleCompleted(ToolCallResult Result) : INoSerializationVerificationNeeded;
+internal sealed record ToolExecutionSingleCompleted(ToolCallResult Result, CancellationToken DispatchToken) : INoSerializationVerificationNeeded;
 
 internal sealed record ToolExposureRequest(ToolName ToolName);
 
@@ -82,7 +82,7 @@ internal sealed record ToolExposureRequest(ToolName ToolName);
 internal sealed record JobReapResolved(long Epoch, int ReapedCount, Exception? Error)
     : INoSerializationVerificationNeeded;
 
-internal sealed record ToolExecutionBatchCompleted : INoSerializationVerificationNeeded;
+internal sealed record ToolExecutionBatchCompleted(CancellationToken DispatchToken) : INoSerializationVerificationNeeded;
 
 internal sealed record WorkingContextSnapshotReady(
     long Generation,
@@ -142,6 +142,7 @@ internal sealed record AcceptedSubAgentFinding : INoSerializationVerificationNee
 /// </summary>
 internal sealed record ToolExecutionFailed : INoSerializationVerificationNeeded
 {
+    public required CancellationToken DispatchToken { get; init; }
     public required Exception Cause { get; init; }
 }
 

@@ -477,6 +477,9 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         return _toolCts.Token;
     }
 
+    public bool OwnsToolDispatch(CancellationToken token)
+        => _toolCts is not null && _toolCts.Token == token && !token.IsCancellationRequested;
+
     public void AttachTool(Task task)
     {
         if (_toolCts is null || _toolTask is { IsCompleted: false })
@@ -485,8 +488,6 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         _toolTask = task;
     }
 
-    // A synthetic correction can send the batch message without a tool task.
-    // The message does not prove that an ordinary pipeline task returned.
     public void OnToolBatchMessage()
     {
         StopWatchdog();

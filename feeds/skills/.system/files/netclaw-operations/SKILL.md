@@ -231,6 +231,15 @@ Full detail — delivery contract, proactive channel messaging, approval scoping
 job lifecycle — is in
 `skill_read_resource('netclaw-operations', 'references/scheduling.md')`.
 
+## Repeated tool calls
+
+Two equal feedback rounds for the same tool and arguments cause a correction before the next dispatch.
+Change the approach after that correction. Another repeat ends the turn without another model request.
+Unrelated calls and context compaction do not erase this evidence.
+An authorized status query for a pending background job can repeat through the normal access checks.
+`MaxToolIterationsPerTurn` is a legacy config field. The runtime no longer enforces its fixed limit.
+Deadlines, cancellation, and tool policy still apply.
+
 ## Tool argument validation
 
 Prefer the canonical argument names exactly as a tool declares them, and the
