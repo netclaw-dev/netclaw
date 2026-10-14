@@ -282,6 +282,7 @@ archive_eval_run() {
         mkdir -p "$archive_dir/stdout"
         cp "$TMPDIR_EVAL"/stdout_*.txt "$archive_dir/stdout/" 2>/dev/null || true
         cp "$TMPDIR_EVAL"/stderr_*.txt "$archive_dir/stdout/" 2>/dev/null || true
+        cp "$TMPDIR_EVAL"/prompt_status_*.txt "$archive_dir/stdout/" 2>/dev/null || true
     fi
 
     # Write run metadata, including the immutable image identity so before/after
@@ -718,10 +719,17 @@ seed_eval_memories() {
     # the normal headless path so the session pipeline creates netclaw.db before
     # fixture seeding runs.
     if ! docker exec "$EVAL_CONTAINER_NAME" test -f "$db_path" 2>/dev/null; then
-        NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
-        NETCLAW_HOME="$EVAL_HOME" \
+        local ts exit_code=0
+        ts="$(date +%s%N)"
+        if NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
+            NETCLAW_HOME="$EVAL_HOME" \
             timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p "Warm up memory initialization. Reply with OK only." \
-            >/dev/null 2>&1 || true
+            > "$TMPDIR_EVAL/stdout_${ts}_warmup.txt" 2> "$TMPDIR_EVAL/stderr_${ts}_warmup.txt"; then
+            :
+        else
+            exit_code=$?
+        fi
+        check_prompt_exit_status "$ts" "$exit_code" "Memory warm-up prompt"
     fi
 
     # Wait for the daemon to create the database.
@@ -937,6 +945,19 @@ pick_variant() {
     echo "${arr[RANDOM % ${#arr[@]}]}"
 }
 
+check_prompt_exit_status() {
+    local timestamp="$1" exit_code="$2" prompt_kind="$3"
+    printf '%s\n' "$exit_code" > "$TMPDIR_EVAL/prompt_status_${timestamp}.txt"
+    if (( exit_code != 0 )); then
+        if (( exit_code == 124 )); then
+            echo "ERROR: $prompt_kind timed out after ${PROMPT_TIMEOUT}s; the eval run stops to prevent overlapping model requests." >&2
+        else
+            echo "ERROR: $prompt_kind exited with status $exit_code; the eval run stops before another prompt." >&2
+        fi
+        exit 2
+    fi
+}
+
 # ─── Prompt Runner ────────────────────────────────────────────────────────────
 
 check_daemon_alive() {
@@ -992,10 +1013,16 @@ run_prompt() {
     # "[error] Unknown output type from daemon: ...") to stderr, and a
     # trailing diagnostic line breaks jq's parse of the JSON envelope on
     # stdout, producing a false eval failure rather than a real one.
-    NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
-    NETCLAW_HOME="$EVAL_HOME" \
+    local exit_code=0
+    if NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
+        NETCLAW_HOME="$EVAL_HOME" \
         timeout "$PROMPT_TIMEOUT" stdbuf -oL -eL "$NETCLAW_BIN" chat -p "${output_args[@]}" "$prompt" \
-        > "$STDOUT_FILE" 2> "$STDERR_FILE" || true
+        > "$STDOUT_FILE" 2> "$STDERR_FILE"; then
+        :
+    else
+        exit_code=$?
+    fi
+    check_prompt_exit_status "$ts" "$exit_code" "Prompt"
 
     # Brief pause for daemon log flush
     sleep 2
@@ -1014,10 +1041,16 @@ run_coordination_observer_prompt() {
         DAEMON_LOG_LINES_BEFORE=0
     fi
 
-    timeout "$PROMPT_TIMEOUT" dotnet run --no-build \
+    local exit_code=0
+    if timeout "$PROMPT_TIMEOUT" dotnet run --no-build \
         --project "$REPO_ROOT/evals/coordination-observer/coordination-observer.csproj" -- \
         "http://127.0.0.1:$EVAL_PORT" "$PROMPT_TIMEOUT" "$required_children" "$prompt" \
-        > "$STDOUT_FILE" 2> "$STDERR_FILE" || true
+        > "$STDOUT_FILE" 2> "$STDERR_FILE"; then
+        :
+    else
+        exit_code=$?
+    fi
+    check_prompt_exit_status "$ts" "$exit_code" "Coordination observer"
 }
 
 ## Runs a prompt against an existing (or new) named session via `chat -p --resume`.
@@ -1065,15 +1098,21 @@ run_prompt_resume() {
         output_args+=(--json)
     fi
 
-    NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
-    NETCLAW_HOME="$EVAL_HOME" \
+    local exit_code=0
+    if NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
+        NETCLAW_HOME="$EVAL_HOME" \
         timeout "$PROMPT_TIMEOUT" stdbuf -oL -eL "$NETCLAW_BIN" chat -p --resume "$session_id" \
         "${output_args[@]}" "$prompt" \
-        > "$turn_file" 2> "$turn_stderr_file" || true
+        > "$turn_file" 2> "$turn_stderr_file"; then
+        :
+    else
+        exit_code=$?
+    fi
 
     # Append this turn's output to the shared files so assertions see all turns.
     cat "$turn_file" >> "$STDOUT_FILE"
     cat "$turn_stderr_file" >> "$STDERR_FILE"
+    check_prompt_exit_status "$ts" "$exit_code" "Resumed prompt"
 
     # Per-turn metrics — read the usage line from this turn's file only.
     LAST_TURN_STDOUT_FILE="$turn_file"
@@ -3820,10 +3859,9 @@ main() {
     fi
     start_eval_daemon
     init_db
-    seed_eval_memories
-
     RUN_ID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c "import uuid; print(uuid.uuid4())")
     STARTED_AT=$(date -Iseconds)
+    seed_eval_memories
 
     echo ""
     echo "=== Netclaw Eval Suite (containerized, $RUNS runs per case, threshold: $THRESHOLD) ==="
