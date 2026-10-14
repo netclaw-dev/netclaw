@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
 
@@ -52,6 +53,8 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
 
     public IReadOnlyList<SerializableChatMessage> History { get; init; } =
         Array.Empty<SerializableChatMessage>();
+
+    public IReadOnlyList<BackgroundChildRun> ChildRuns { get; init; } = [];
 
     public int TurnCount { get; init; }
 

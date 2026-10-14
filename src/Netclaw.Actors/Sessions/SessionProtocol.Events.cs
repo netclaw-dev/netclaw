@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
@@ -48,6 +49,8 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
 
+        public ChildContinuation? ChildContinuation { get; init; }
+
         public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 
         public DateTimeOffset Timestamp => RecordedAt;
@@ -86,6 +89,8 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> InputIds { get; init; } = [];
 
+        public ChildContinuation? ChildContinuation { get; init; }
+
         public long ClosedAtMs { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(ClosedAtMs);
@@ -108,6 +113,8 @@ public static partial class SessionProtocol
         public long StartedAtMs { get; init; }
 
         public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
+
+        public ChildContinuation? ChildContinuation { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(StartedAtMs);
     }
@@ -167,6 +174,10 @@ public static partial class SessionProtocol
 
     public sealed record ToolApprovalRequested : ISessionEvent
     {
+        public ToolCallId? OriginalChildCallId { get; init; }
+
+        public SubAgentRunId? SourceChildRunId { get; init; }
+
         public SessionId SessionId { get; init; }
 
         public string CallId { get; init; } = string.Empty;
@@ -217,6 +228,8 @@ public static partial class SessionProtocol
 
     public sealed record ToolApprovalResolved : ISessionEvent
     {
+        public SubAgentRunId? SourceChildRunId { get; init; }
+
         public SessionId SessionId { get; init; }
 
         public string CallId { get; init; } = string.Empty;
