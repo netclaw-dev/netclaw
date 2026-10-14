@@ -147,7 +147,7 @@ public sealed class ToolOutputSpillFreshSessionTests : IDisposable
             _sessionDirectory,
             Path.Combine(_temp.Path, "sessions", "fresh-session", "logs"),
             "parent").ForChild(new SubAgentRunId("child-run"), new SubAgentScopeId("parent/subagent/child"));
-        Assert.Equal(_sessionDirectory, childStorage.SessionDirectory);
+        Assert.Equal(_sessionDirectory, childStorage.SessionDirectory.Value);
 
         var childContext = TestToolExecutionContext.CreateBoundWithStorage(
             "signalr/fresh-session",
