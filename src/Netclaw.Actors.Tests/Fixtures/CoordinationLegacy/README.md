@@ -1,10 +1,18 @@
 # Historical coordination wire corpus
 
-`legacy-writer-records.json` contains neutral bytes from the deployed draft writer at revision `9f79c0c4b637f005ffba5572d0bf50aa550464f2`.
+`legacy-writer-records.json` contains neutral payloads from the deployed draft writer at revision `9f79c0c4b637f005ffba5572d0bf50aa550464f2`.
 
-The isolated capture test used the old `NetclawProtobufSerializer.Manifest(object)` and `ToBinary(object)` methods. The temporary capture source is retained in the assessment evidence directory. The candidate serializer did not create these bytes.
+The isolated capture used the historical `NetclawProtobufSerializer.Manifest(object)` and `ToBinary(object)` methods. `capture-source.cs.txt` holds the temporary test method. The pinned test class supplies its fixture helpers.
 
-Corpus SHA-256: `994682681c870ae7b5242405c488c445569f3dd8f327ac6b18d3d0ee0ec85a36`.
+To reproduce the corpus from a repository clone, use the exact writer revision and run:
+
+```bash
+git worktree add --detach /tmp/netclaw-legacy-capture 9f79c0c4b637f005ffba5572d0bf50aa550464f2
+cp src/Netclaw.Actors.Tests/Fixtures/CoordinationLegacy/capture-source.cs.txt /tmp/netclaw-legacy-capture/src/Netclaw.Actors.Tests/SubAgents/BackgroundChildLegacyFixtureCapture.cs
+NETCLAW_HISTORICAL_FIXTURE_OUTPUT=/tmp/netclaw-legacy-capture/legacy-writer-records.json dotnet test /tmp/netclaw-legacy-capture/src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj --filter 'FullyQualifiedName~Capture_neutral_deployed_wire_fixtures' -m:1
+```
+
+The candidate serializer did not create these payloads. The corpus SHA-256 is `994682681c870ae7b5242405c488c445569f3dd8f327ac6b18d3d0ee0ec85a36`.
 
 The corpus contains `cra-v1`, all seven `cre-v1` facts, `tta-v1`, `ia-v1`, `ic-v1`, `tbs-v1`, `tcr-v1`, `tar-v1`, `tares-v1`, and `ss-v1`. Each record stores the manifest, Base64 payload, and payload SHA-256.
 
