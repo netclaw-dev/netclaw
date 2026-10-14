@@ -244,6 +244,7 @@ NETCLAW_EVAL_PROVIDER_TYPE=openai-compatible \
 NETCLAW_EVAL_PROVIDER_ENDPOINT=http://your-model-server:8000/v1 \
 NETCLAW_EVAL_MODEL_ID=your-model \
 NETCLAW_EVAL_CATEGORY='Coordination Spill Hint' \
+NETCLAW_EVAL_RUNS=3 \
 NETCLAW_EVAL_TIMEOUT=300 \
   ./evals/run-evals.sh
 ```
