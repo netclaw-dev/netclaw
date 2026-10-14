@@ -16,7 +16,7 @@ Its 120-second timeout is an inactivity bound, not a task lifetime budget.
 3. Verify the source revision or release tag. Review the asset before a copy.
 4. Resolve the configured agent directory. Its default is the `agents` directory under the configured Netclaw home.
 5. Inspect the directory and `task-worker.md` destination under normal file policy.
-6. Stop if a path is unresolved, a directory occupies the destination, or any destination component is a symbolic link.
+6. Stop if a path is unresolved, a directory occupies the destination, or the configured agent directory or destination is a symbolic link.
 7. If the ordinary destination is absent, copy the reviewed asset to `task-worker.md` through authorized file tools.
 8. If a regular file exists, compare it with the asset and preserve its content by default.
 9. Apply a replacement only after explicit operator update authority. Preserve any operator edits that the operator wants to retain.
