@@ -279,10 +279,12 @@ dotnet slopwatch analyze
 <p>Use the same model for the eval fallback and compaction roles. Verify access from the isolated eval container before trials.</p>
 <p>The model-list request passed. It does not prove chat completion, tool calls, context capacity, or concurrent parent and child requests.</p>
 <table class="stack-table" role="table"><thead role="rowgroup"><tr role="row"><th role="columnheader">Task</th><th role="columnheader">Observable result</th><th role="columnheader">Wrong behavior to reject</th></tr></thead><tbody role="rowgroup">
-<tr role="row"><td role="cell" data-label="Task">Inspect a retained large result</td><td role="cell" data-label="Observable result">A child answers a focused question with correct evidence locations from a fixture that contains distractors.</td><td role="cell" data-label="Wrong behavior to reject">Repeat the source action, cite inaccessible output, or return an unsupported conclusion.</td></tr>
-<tr role="row"><td role="cell" data-label="Task">Combine two independent investigations</td><td role="cell" data-label="Observable result">Children receive bounded scopes. The parent combines their evidence into the requested result.</td><td role="cell" data-label="Wrong behavior to reject">Conflicting write scopes, false completion, or a final answer before required results arrive.</td></tr>
-<tr role="row"><td role="cell" data-label="Task">Review an artifact with a planted defect</td><td role="cell" data-label="Observable result">A separate reviewer finds the known defect. The parent addresses it or states the unresolved issue.</td><td role="cell" data-label="Wrong behavior to reject">The author approves its own artifact or the parent ignores the known defect.</td></tr>
+<tr role="row"><td role="cell" data-label="Task">Inspect a retained large result</td><td role="cell" data-label="Observable result">The parent returns the correct record number and verification phrase from a fixture that contains distractors. Delegation remains optional.</td><td role="cell" data-label="Wrong behavior to reject">Return the wrong record number, omit the verification phrase, or invent its value.</td></tr>
+<tr role="row"><td role="cell" data-label="Task">Combine two independent investigations</td><td role="cell" data-label="Observable result">Two children complete. The parent first responds while child work remains active, then returns correct totals without another user message.</td><td role="cell" data-label="Wrong behavior to reject">Return incorrect totals, omit child calls or completions, or require another user message to resume.</td></tr>
+<tr role="row"><td role="cell" data-label="Task">Review an artifact with a planted defect</td><td role="cell" data-label="Observable result">A child completes. The parent identifies the defective artifact and the valid artifact, with correct observed and expected Boolean values.</td><td role="cell" data-label="Wrong behavior to reject">Omit the child call or completion, miss the known defect, or report incorrect Boolean values.</td></tr>
 </tbody></table>
+<p>The current traces prove child calls, completions, and parent outcomes. They do not prove which child inspected each artifact or supplied each fact.</p>
+<p>Deterministic tests cover authority, result delivery, and recovery. These model trials do not replace those tests.</p>
 <p>These are outcome claims, not exact scripts. Do not require fixed prose, file names, tool order, or child counts beyond the task's actual requirements.</p>
 <p>Use an independent fixture oracle and actual tool traces. Include known-bad traces to prove each checker rejects its named wrong behavior.</p>
 <p>For the optional spill hint, compare paired hinted and unhinted runs. A model that answers correctly without delegation is not automatically a failure.</p>
@@ -342,7 +344,7 @@ dotnet slopwatch analyze
 <li>Twenty-six actor, context, and replay checks pass after the history repair. They cover failed acceptance, ready-child priority, ordered user batches, and the acceptance crash cut.</li>
 <li>The final six actor boundary cases pass. They include requester authority, a cancellation reply after the journal write, and active-child approval count one to zero.</li>
 <li>The child model passes 1,000 generated cases with 9,395 valid operations. It reaches all ten required outcomes without a fixed operation suffix.</li>
-<li>The repaired spawn, streaming, and observability filter passes 28 tests. All 80 eval assertion tests pass; they do not prove model behavior.</li>
+<li>The repaired spawn, streaming, and observability filter passes 28 tests. All 82 eval assertion tests pass; they do not prove model behavior.</li>
 <li>An independent test reproduced duplicate child pairs in later requests. The repair keeps temporary model messages outside canonical history.</li>
 <li>Combined tests, complete native smoke, model evals, and final source counts remain open.</li>
 </ul>
