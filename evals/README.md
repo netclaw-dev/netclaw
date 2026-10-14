@@ -139,6 +139,14 @@ The suite runs prompts via `netclaw chat -p` against the eval container and
 verifies both **stdout output** (tool calls, text content) and **daemon
 log patterns** (skill loading, memory recall, checkpoint formation).
 
+Coordination checks separate task accuracy from optional spill-hint uptake and
+child-resume proof. The synthesis observer proves active child work at the
+first parent response, later child completions, and automatic continuation.
+It does not link child tasks to child results or record child tool calls, so it
+cannot prove each child's inspection scope. The artifact case checks a child
+spawn and completion plus the exact parent outcome, but it cannot prove that
+the child inspected the named artifacts.
+
 | Category | Cases | What It Validates |
 |----------|-------|-------------------|
 | Identity & Self-Awareness | 5 | Bot knows its name, version, repo, session ID, and routes all identity-file concerns without a skill dependency |
@@ -149,6 +157,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
 | Deployment Mission | 1 | Applies the disk mission playbook, loads its required skill, and returns reviewed sales email |
 | Subagents | 3 | Delegates through `spawn_agent`, completes ambiguous work, preserves specialized guidance, and declares a different named project before shell inspection |
+| Coordination | 3 | Checks exact retained-result and artifact outcomes, plus child completion and automatic parent continuation after an early response |
 | Coding Context | 1 | Repeatedly switches between isolated linked worktrees, alternates branch and one-of-four target files by run, and verifies Git grounding, wrong-file/worktree safety, and path-free child handoff |
 | Session Storage | 4 | Verifies managed temporary APIs, parent-child log handoff, and managed worktree creation |
 | Complex Task Execution | 6 | Multi-step tool chains complete successfully, incl. bounded tool output — given only the goal (no handling hints), the agent retrieves a deep line from oversized shell output and from a large file, which is only possible by coping with the bound the way AGENTS.md/skills/steer text direct; and in a session with no shell call, the agent reads the middle of an oversized skill through `tool_output_read` |

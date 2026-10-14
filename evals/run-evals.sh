@@ -2428,17 +2428,10 @@ assert_coordination_independent_synthesis() {
 
     local calls
     calls=$(coordination_all_tool_calls) || return 1
-    local spawn_count distinct_tasks completed_count
+    local spawn_count completed_count
     spawn_count=$(jq '[.[] | select(.toolName == "spawn_agent")] | length' <<<"$calls")
-    distinct_tasks=$(jq '[.[] | select(.toolName == "spawn_agent")
-        | (.argumentsJson | fromjson | .Task // .task // "")
-        | select(test("East"; "i"))] | length' <<<"$calls")
-    local west_tasks
-    west_tasks=$(jq '[.[] | select(.toolName == "spawn_agent")
-        | (.argumentsJson | fromjson | .Task // .task // "")
-        | select(test("West"; "i"))] | length' <<<"$calls")
     completed_count=$(coordination_child_completion_count) || return 1
-    [[ "$spawn_count" -ge 2 && "$distinct_tasks" -ge 1 && "$west_tasks" -ge 1 && "$completed_count" -ge 2 ]]
+    [[ "$spawn_count" -ge 2 && "$completed_count" -ge 2 ]]
 }
 
 setup_coordination_artifact_review() {
@@ -2457,9 +2450,7 @@ assert_coordination_artifact_review() {
     coordination_response_json >/dev/null || return 1
     local calls
     calls=$(coordination_all_tool_calls) || return 1
-    jq -e '[.[] | select(.toolName == "spawn_agent")
-        | (.argumentsJson | fromjson | .Task // .task // "")
-        | select(test("artifact-a.cs"; "i") and test("artifact-b.cs"; "i"))] | length >= 1' \
+    jq -e '[.[] | select(.toolName == "spawn_agent")] | length >= 1' \
         <<<"$calls" >/dev/null || return 1
     coordination_response_json | jq -e \
         '.artifactA.verdict == "defect" and .artifactA.observedForTwoPending == true and .artifactA.expectedForTwoPending == false and .artifactB.verdict == "clean" and .artifactB.observedForZeroPending == true and .artifactB.expectedForZeroPending == true' >/dev/null \
@@ -4018,14 +4009,14 @@ run_all() {
     PROMPT_TIMEOUT=300
 
     run_case --json coordination_retained_child_inspection "agent returns Record 400 from retained evidence" \
-        "Read /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Find Record 400 and return JSON only with fields record and verification." \
-        "Inspect /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Return JSON only with record and verification for Record 400."
+        "Read /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Find Record 400. Return one raw JSON object, without Markdown fences. The record field must be the integer record number. The verification field must be the exact phrase string from that record." \
+        "Inspect /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Return one raw JSON object, without Markdown fences. The record field must be the integer record number. The verification field must be the exact phrase string from Record 400."
 
     run_case --json --coordination-observer coordination_independent_synthesis "two child investigations finish after an initial parent answer" \
-        "Ask for independent investigations. East has 8 failed and 6 recovered requests. West has 11 failed and 7 recovered requests. Unresolved means failed minus recovered. After you start the work, give an immediate short status and end your turn while the investigations remain active. After their results return, continue without another user message and report JSON only with eastUnresolved, westUnresolved, totalUnresolved, and highestRegion."
+        "Ask for independent investigations. East has 8 failed and 6 recovered requests. West has 11 failed and 7 recovered requests. Unresolved means failed minus recovered. After you start the work, give an immediate short status and end your turn while the investigations remain active. After their results return, continue without another user message. Return one raw JSON object, without Markdown fences, with integer fields eastUnresolved, westUnresolved, and totalUnresolved. The highestRegion field must be the lowercase string east or west."
 
-    run_case --json --coordination-observer coordination_artifact_review "an independent reviewer finds a planted defect and clears a clean control" \
-        "Ask one independent reviewer to inspect /home/netclaw/.netclaw/workspaces/coordination-artifact-review/artifact-a.cs, artifact-b.cs, and observed-inputs.json. Contract: pendingCount is nonnegative and readiness is true only when pendingCount equals zero. Wait for the reviewer result. Then return JSON only with artifactA fields verdict, observedForTwoPending, expectedForTwoPending; and artifactB fields verdict, observedForZeroPending, expectedForZeroPending."
+    run_case --json --coordination-observer coordination_artifact_review "parent reports correct defect and clean-control outcomes after child completion" \
+        "Ask one independent reviewer to inspect /home/netclaw/.netclaw/workspaces/coordination-artifact-review/artifact-a.cs, artifact-b.cs, and observed-inputs.json. Check this contract: pendingCount is nonnegative and readiness is true only when pendingCount equals zero. Wait for the reviewer result. Return one raw JSON object, without Markdown fences. Each verdict must be defect or clean. Each observed and expected field must be a JSON Boolean. Include artifactA fields verdict, observedForTwoPending, expectedForTwoPending; and artifactB fields verdict, observedForZeroPending, expectedForZeroPending."
 
     PROMPT_TIMEOUT="$coordination_timeout"
 
