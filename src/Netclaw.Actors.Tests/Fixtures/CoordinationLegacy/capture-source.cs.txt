@@ -164,6 +164,74 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
             ChildRuns = [preparedRun],
             WorkingContext = new WorkingContext { ProjectDirectory = "/repo/prepared" }
         };
+        var (_, actorRun) = Acceptance(Owner, slash: false);
+        var actorFirst = new InputAdmitted
+        {
+            SessionId = Owner,
+            InputId = actorRun.OriginInputIds[0],
+            TurnContext = actorRun.OriginalContext,
+            UserMessage = new SerializableChatMessage
+            {
+                Role = ChatRole.User,
+                Content = "Neutral actor input one."
+            }
+        };
+        var actorSecond = actorFirst with
+        {
+            InputId = actorRun.OriginInputIds[1],
+            UserMessage = new SerializableChatMessage
+            {
+                Role = ChatRole.User,
+                Content = "Neutral actor input two."
+            }
+        };
+        var actorAdoption = new ToolTaskAdopted(false)
+        {
+            SessionId = Owner,
+            TurnContext = actorRun.OriginalContext,
+            InputIds = actorRun.OriginInputIds,
+            AdoptedAtMs = 123455
+        };
+        var actorStartCall = new SerializableChatMessage
+        {
+            Role = ChatRole.Assistant,
+            ToolCalls =
+            [
+                new SerializableToolCall
+                {
+                    CallId = new ToolCallId("start-call"),
+                    Name = new ToolName("spawn_agent"),
+                    ArgumentsJson = "{\"agent\":\"worker\",\"task\":\"Neutral actor task\"}"
+                }
+            ]
+        };
+        var actorStartBatch = new ToolBatchStarted
+        {
+            SessionId = Owner,
+            UserMessage = actorFirst.UserMessage,
+            AssistantMessage = actorStartCall,
+            ConsumedInputIds = actorRun.OriginInputIds,
+            LoopAdmission = new ToolLoopAdmission
+            {
+                TaskId = actorRun.OriginalContext.TurnId,
+                ActionHash = "start-action",
+                Calls = [new ToolLoopPreparedCall("start-call", "spawn_agent", "start-args", false)]
+            },
+            StartedAtMs = 123455
+        };
+        var actorSeedState = SessionState.Empty.Apply(actorFirst).Apply(actorSecond).Apply(actorAdoption)
+            .ApplyLoopAdmission(actorStartBatch);
+        actorSeedState = actorSeedState.Apply(accepted).Apply(started).Apply(checkpointed)
+            .ApplyLoopObservation(new ToolCallRecorded
+            {
+                SessionId = Owner,
+                LoopObservation = ToolCycleSignatureFactory.CreateObservation(
+                    "start-call", new ToolInvocationReceipt.Succeeded([], null), "accepted", false)
+            })
+            .CloseInputs(actorRun.OriginInputIds)
+            .Apply(terminalRecorded).Apply(resultPrepared).Apply(deliveryAdmitted).Apply(childAdoption);
+        Assert.True(actorSeedState.ChildRuns[actorRun.RunId].StartBatchSettled);
+        Assert.Equal(delivered.InputId, actorSeedState.ChildRuns[actorRun.RunId].DeliveryInputId);
         var ordinarySnapshot = new SessionSnapshot
         {
             History = [inputA.UserMessage],
@@ -248,7 +316,11 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
             ("session-snapshot", ordinarySnapshot),
             ("prepared-undelivered-child-snapshot", preparedUndeliveredSnapshot),
             ("ambiguous-child-delivery-snapshot", ambiguousDeliverySnapshot),
-            ("legacy-child-pair-snapshot", legacyPairSnapshot)
+            ("legacy-child-pair-snapshot", legacyPairSnapshot),
+            ("actor-origin-input-one", actorFirst),
+            ("actor-origin-input-two", actorSecond),
+            ("actor-parent-task-adoption", actorAdoption),
+            ("actor-start-batch", actorStartBatch)
         };
 
         var fixture = records.Select(record =>

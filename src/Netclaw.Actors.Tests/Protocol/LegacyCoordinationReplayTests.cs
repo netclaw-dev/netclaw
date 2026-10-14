@@ -122,19 +122,25 @@ public sealed class LegacyCoordinationReplayTests : TestKit
             ]
         };
         var state = SessionState.Empty with { History = [originalCall] };
+        var workflow = new SessionToolWorkflow();
         foreach (var name in new[]
         {
             "child-run-accepted", "child-started", "child-checkpoint", "child-terminal",
             "child-result-prepared", "child-delivery-admitted", "valid-child-delivery-adoption",
-            "child-downstream-tool-batch", "child-downstream-final-turn"
+            "child-downstream-tool-batch", "child-downstream-tool-result", "child-downstream-final-turn"
         })
         {
-            state = Replay(serializer, state, name);
+            state = Replay(serializer, state, name, workflow);
         }
 
         var runId = new SubAgentRunId("accepted-run");
         Assert.IsType<ChildRunLifecycle.Closed>(state.ChildRuns[runId].Lifecycle);
-        Assert.Null(new SessionToolWorkflow().SelectChild(state, modelGeneration: 2, allowSelection: true));
+        Assert.Null(workflow.SelectChild(state, modelGeneration: 2, allowSelection: true));
+        var downstreamResult = Assert.Single(state.History,
+            message => message.ToolCallId?.Value == "downstream-call");
+        Assert.Equal("file_read", downstreamResult.Name);
+        Assert.Equal(ChatRole.Tool, downstreamResult.Role);
+        Assert.Equal("Neutral downstream result.", downstreamResult.Content);
         Assert.DoesNotContain(state.LegacyCoordinationEvidence,
             evidence => evidence.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation);
     }
@@ -429,16 +435,22 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         return serializer.FromBinary(bytes, record.Manifest);
     }
 
-    private SessionState Replay(NetclawProtobufSerializer serializer, SessionState state, string name)
+    private SessionState Replay(
+        NetclawProtobufSerializer serializer,
+        SessionState state,
+        string name,
+        SessionToolWorkflow? workflow = null)
     {
+        workflow ??= new SessionToolWorkflow();
         var evt = Deserialize(serializer, name);
         if (evt is LegacyCoordinationEvent legacy)
             return LegacyCoordinationReplay.Apply(state, legacy);
 
         return evt switch
         {
-            ToolBatchStarted batch => new SessionToolWorkflow().ApplyBatchStarted(
+            ToolBatchStarted batch => workflow.ApplyBatchStarted(
                 state, LegacyCoordinationReplay.TranslateParentDecision(state, batch)),
+            ToolCallRecorded result => workflow.ApplyRecordedResult(state, result.ToolResult),
             TurnRecorded turn => ApplyParentTurn(state, turn),
             InputAdmitted input => state.Apply(input),
             _ => throw new InvalidDataException($"Fixture '{name}' is not a replayable session event.")

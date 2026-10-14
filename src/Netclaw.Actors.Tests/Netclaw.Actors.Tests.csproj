@@ -12,6 +12,7 @@
   <ItemGroup>
     <PackageReference Include="Akka.Hosting.TestKit" />
     <PackageReference Include="Akka.Persistence.Hosting" />
+    <PackageReference Include="Akka.Persistence.Sql.Hosting" />
     <PackageReference Include="CsCheck" />
     <PackageReference Include="Microsoft.Accordant" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />

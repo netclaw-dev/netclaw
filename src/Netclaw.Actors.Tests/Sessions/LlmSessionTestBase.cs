@@ -49,6 +49,14 @@ public abstract class LlmSessionTestBase : TestKit, IAsyncDisposable
     /// </summary>
     protected virtual bool UseTestScheduler => false;
 
+    /// <summary>Configures the journal and snapshot stores for a session test host.</summary>
+    protected virtual void ConfigureSessionPersistence(AkkaConfigurationBuilder builder)
+        => builder.WithInMemoryJournal().WithInMemorySnapshotStore();
+
+    /// <summary>Configures the Netclaw serializer for a session test host.</summary>
+    protected virtual void ConfigureSessionSerialization(AkkaConfigurationBuilder builder)
+        => builder.WithNetclawSerialization();
+
     /// <summary>
     /// Moves virtual scheduler time forward, synchronously delivering any
     /// scheduler items (e.g. the processing watchdog timeout) that fall due.
@@ -85,10 +93,8 @@ public abstract class LlmSessionTestBase : TestKit, IAsyncDisposable
                 "akka.scheduler.implementation = \"Akka.TestKit.TestScheduler, Akka.TestKit\"",
                 HoconAddMode.Prepend);
 
-        builder
-            .WithInMemoryJournal()
-            .WithInMemorySnapshotStore()
-            .WithNetclawSerialization();
+        ConfigureSessionPersistence(builder);
+        ConfigureSessionSerialization(builder);
 
         if (VerifySerialization)
             builder.WithSerializationVerification();
