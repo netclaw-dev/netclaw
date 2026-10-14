@@ -13,7 +13,6 @@ namespace Netclaw.Cli.Tests.Tui.Wizard;
 
 public sealed class IdentityStepViewModelTests : WizardStepTestBase
 {
-
     [Fact]
     public void SubStepCount_IsFour()
     {
@@ -141,7 +140,7 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
     public void SeedBuiltInAgents_RejectsALinkedAgentDirectory()
     {
         if (OperatingSystem.IsWindows())
-            return;
+            Assert.Skip("Directory symlink creation needs POSIX filesystem semantics.");
 
         using var step = new IdentityStepViewModel();
         var agentsDirectory = Context.Paths.AgentsDirectory;
@@ -166,7 +165,7 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
     public void SeedBuiltInAgents_RejectsALinkedTaskWorkerTarget()
     {
         if (OperatingSystem.IsWindows())
-            return;
+            Assert.Skip("File symlink creation needs POSIX filesystem semantics.");
 
         using var step = new IdentityStepViewModel();
         var target = Path.Combine(Context.Paths.BasePath, "agent-seed-target");
@@ -191,7 +190,7 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
     public void SeedBuiltInAgents_AllowsAnOrdinaryOperatingSystemAncestorAlias()
     {
         if (OperatingSystem.IsWindows())
-            return;
+            Assert.Skip("This ancestor alias case uses POSIX symbolic-link semantics.");
 
         using var step = new IdentityStepViewModel();
         var realRoot = Path.Combine(Context.Paths.BasePath, "agent-seed-real-root");
