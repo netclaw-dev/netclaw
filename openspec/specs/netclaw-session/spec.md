@@ -38,10 +38,14 @@ pass it to the tool execution pipeline. During Processing, the session actor
 SHALL route `ToolInteractionResponse` messages to the workflow. The workflow
 SHALL validate each response and return a typed outcome. For an accepted
 parent-session answer, the actor SHALL journal the resolution before the
-workflow releases the blocked call. A subagent approval wait SHALL remain
-live-only and SHALL not create a parent approval journal event. The session
-actor SHALL record a grant answer through `IToolApprovalService` with the
-selected grant scope.
+workflow releases the blocked call. For a child run with durable acceptance,
+the session actor SHALL persist the child approval request and each accepted
+resolution in the parent journal. The request SHALL retain the child's original
+authority and requester. The actor SHALL persist an accepted resolution before
+it releases the child's blocked tool call. A child approval wait without
+durable child-run acceptance SHALL remain live-only and SHALL create no parent
+approval journal event. The session actor SHALL record a grant answer through
+`IToolApprovalService` with the selected grant scope.
 An `ApproveOnce` answer SHALL let only the exact blocked call retry once. It
 SHALL create no session or persistent grant.
 
@@ -99,12 +103,22 @@ dedup set can be rebuilt via event replay).
 - **AND** the actor journals the resolution before the workflow completes the live wait
 - **AND** the blocked tool call proceeds from the accepted decision
 
-#### Scenario: Subagent approval response stays live-only
+#### Scenario: Subagent approval response stays live-only without durable acceptance
 
 - **GIVEN** a subagent has a live approval wait through its parent session
+- **AND** the child has no durable run acceptance
 - **WHEN** a valid `ToolInteractionResponse` message arrives
 - **THEN** the workflow completes that live wait
-- **AND** the actor does not journal a parent approval resolution
+- **AND** the actor journals neither a parent approval request nor a resolution
+
+#### Scenario: Durable child approval facts precede release
+
+- **GIVEN** a child run has durable acceptance with its original requester and authority
+- **AND** the parent journal contains the child's correlated approval request
+- **WHEN** the original requester sends a valid approval response
+- **THEN** the parent journal records the correlated approval resolution
+- **AND** the request retains the child's original requester and authority
+- **AND** the actor releases the blocked child tool call only after it persists the resolution
 
 #### Scenario: ToolInteractionRequest delivered as lifecycle event
 
