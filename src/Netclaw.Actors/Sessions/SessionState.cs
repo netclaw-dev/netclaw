@@ -80,8 +80,7 @@ public sealed partial record SessionState
     public ImmutableList<LegacyCoordinationEvidence> LegacyCoordinationEvidence { get; init; } = [];
 
     /// <summary>
-    /// In-memory best-effort dedup ledger for background-job-originated turns.
-    /// Not persisted to snapshot; rebuilds from event replay.
+    /// Durable deduplication for completed and rejected background-job deliveries.
     /// </summary>
     public IImmutableSet<BackgroundJobId> ProcessedBackgroundJobIds { get; init; } =
         ImmutableHashSet<BackgroundJobId>.Empty;
@@ -134,6 +133,11 @@ public sealed partial record SessionState
             LegacyCoordinationEvidence = evidence
         };
     }
+
+    public IReadOnlyList<InputAdmitted> GetExecutablePendingInputs()
+        => PendingInputs.Where(input => !IsLegacyInputQuarantined(input.InputId))
+            .Select(input => TryGetLegacyInputContext(input.InputId, out var context)
+                ? input with { TurnContext = context } : input).ToArray();
 
     public bool IsLegacyInputQuarantined(InputId inputId)
         => LegacyCoordinationEvidence.Any(evidence =>
@@ -527,6 +531,7 @@ public sealed partial record SessionState
             Title = Title,
             WorkingContext = WorkingContext.IsEmpty ? null : WorkingContext,
             ActiveBackgroundJobs = [.. ActiveBackgroundJobs.Values],
+            ProcessedBackgroundJobIds = [.. ProcessedBackgroundJobIds],
             LegacyCoordinationEvidence = LegacyCoordinationEvidence
                 .Where(evidence => evidence.Disposition is LegacyCoordinationDisposition.QuarantinedInvalidAdoption
                                    or LegacyCoordinationDisposition.UnresolvedLegacyChild
@@ -595,6 +600,7 @@ public sealed partial record SessionState
             Title = snapshot.Title,
             WorkingContext = snapshot.WorkingContext ?? WorkingContext.Empty,
             ActiveBackgroundJobs = activeJobs,
+            ProcessedBackgroundJobIds = snapshot.ProcessedBackgroundJobIds.ToImmutableHashSet(),
             AdoptedContextRecords = adoptedContextRecords,
             LegacyCoordinationEvidence = [.. snapshot.LegacyCoordinationEvidence]
         };

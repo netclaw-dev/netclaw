@@ -14,7 +14,7 @@ using static Netclaw.Actors.SubAgents.SubAgentProtocol;
 namespace Netclaw.Actors.SubAgents;
 
 internal sealed record PreparedChildStart(Props Props, string ActorName, SubAgentRunId RunId,
-    AgentName AgentName, string ArgumentsDigest, SessionStoragePaths Storage, RunSubAgent Execution);
+    AgentName AgentName, string ArgumentsDigest, SessionStoragePaths Storage, int ToolCount, RunSubAgent Execution);
 internal sealed record AcceptChildStart(PreparedChildStart Prepared, ChildRunStartKey StartKey,
     TurnContextRecord OriginalContext, string SourceOperation, CancellationToken Cancellation)
     : INoSerializationVerificationNeeded;

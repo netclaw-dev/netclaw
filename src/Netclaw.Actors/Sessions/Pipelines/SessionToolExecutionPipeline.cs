@@ -454,30 +454,8 @@ internal sealed class SessionToolExecutionPipeline
 
             if (!info.IsStarted && info.Success)
             {
-                foreach (var finding in info.Findings)
-                {
-                    var findingDecision = ReviewSubAgentFinding(finding, batch.SessionId);
-                    acceptedFindings.Add(new AcceptedSubAgentFinding
-                    {
-                        RunId = info.RunId,
-                        AgentName = new SubAgents.AgentName(info.AgentName),
-                        Duration = info.Duration,
-                        Shape = finding.Shape,
-                        Title = finding.Title,
-                        Content = finding.Content,
-                        Kind = finding.Kind,
-                        Sensitivity = finding.Sensitivity,
-                        RecallMode = finding.RecallMode,
-                        UpdateSemantics = finding.UpdateSemantics,
-                        Confidence = finding.Confidence,
-                        Durability = finding.Durability,
-                        Reusability = finding.Reusability,
-                        Evidence = finding.Evidence,
-                        FreshnessAtMs = finding.FreshnessAtMs,
-                        Decision = findingDecision.Decision,
-                        DecisionReason = findingDecision.Reason
-                    });
-                }
+                acceptedFindings.AddRange(ReviewChildFindings(info.RunId,
+                    new SubAgents.AgentName(info.AgentName), info.Duration, info.Findings, batch.SessionId));
             }
         });
         var approvalBridge = CanRequestInteractiveApproval(batch.TurnContext)
@@ -888,6 +866,24 @@ internal sealed class SessionToolExecutionPipeline
     /// Reviews a sub-agent finding to decide whether it should be accepted,
     /// deferred, or rejected for memory persistence.
     /// </summary>
+    internal static IReadOnlyList<AcceptedSubAgentFinding> ReviewChildFindings(
+        SubAgentRunId runId, SubAgents.AgentName agentName, TimeSpan duration,
+        IEnumerable<SubAgentFinding> findings, SessionId sessionId)
+        => findings.Select(finding =>
+        {
+            var decision = ReviewSubAgentFinding(finding, sessionId);
+            return new AcceptedSubAgentFinding
+            {
+                RunId = runId, AgentName = agentName, Duration = duration,
+                Shape = finding.Shape, Title = finding.Title, Content = finding.Content,
+                Kind = finding.Kind, Sensitivity = finding.Sensitivity, RecallMode = finding.RecallMode,
+                UpdateSemantics = finding.UpdateSemantics, Confidence = finding.Confidence,
+                Durability = finding.Durability, Reusability = finding.Reusability,
+                Evidence = finding.Evidence, FreshnessAtMs = finding.FreshnessAtMs,
+                Decision = decision.Decision, DecisionReason = decision.Reason
+            };
+        }).ToArray();
+
     internal static SubAgentFindingReviewResult ReviewSubAgentFinding(
         SubAgentFinding finding,
         SessionId sessionId)

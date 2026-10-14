@@ -64,6 +64,12 @@ internal sealed partial class SessionToolWorkflow
         => _calls.Values.Count(call => call is PendingToolApproval && call.Pending.Request.SourceChildRunId == runId);
     public bool IsChildApproval(ToolCallId callId)
         => _calls.TryGetValue(callId.Value, out var call) && call.Pending.Request.SourceChildRunId is not null;
+    public void ExpireRecoveredChildApprovals()
+    {
+        foreach (var key in _calls.Where(pair => pair.Value.Pending.Request.SourceChildRunId is not null)
+                     .Select(pair => pair.Key).ToArray())
+            _calls.Remove(key);
+    }
     public void ExpireChildApprovals(SubAgentRunId runId)
     {
         foreach (var key in _calls.Where(pair => pair.Value.Pending.Request.SourceChildRunId == runId)

@@ -1105,7 +1105,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             FindingsCount = findings.Count,
         };
         if (_ownedRun is { } owned)
+        {
+            owned.Close();
+            Become(() => Receive<ChildTerminalCommitted>(_ => Context.Stop(Self)));
             owned.Owner.Tell(new ChildTerminalReturned(owned.RunId, result), Self);
+        }
         else
         {
             _replyTo.Tell(result);
