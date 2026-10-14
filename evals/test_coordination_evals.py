@@ -12,7 +12,7 @@ SESSION_KEY = "eval_coordination"
 
 
 class CoordinationAssertionTests(unittest.TestCase):
-    def evaluate(self, assertion, response, tool_calls=(), parent_log="", child_logs=None, coordination=None):
+    def evaluate(self, assertion, response, tool_calls=(), parent_log="", coordination=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "stdout.json"
@@ -27,10 +27,6 @@ class CoordinationAssertionTests(unittest.TestCase):
             parent_path = session_root / "logs/session.log"
             parent_path.parent.mkdir(parents=True)
             parent_path.write_text(parent_log)
-            for (session_key, child_id), contents in (child_logs or {}).items():
-                path = eval_home / "data/sessions" / session_key / "subagents" / child_id / "logs/session.log"
-                path.parent.mkdir(parents=True)
-                path.write_text(contents)
 
             command = r'''source "$1"
 EVAL_HOME="$2"
@@ -50,63 +46,14 @@ coordination_session_actor_log() { printf '%s\n' "$EVAL_HOME/data/sessions/eval_
             "argumentsJson": json.dumps({"Task": task}),
         }
 
-    def test_retained_output_accepts_direct_read_without_delegation(self):
-        calls = [
-            {
-                "toolName": "file_read",
-                "callId": "source-call",
-                "argumentsJson": json.dumps({
-                    "Path": "/home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt",
-                    "StartLine": 0,
-                }),
-            },
-            {
-                "toolName": "tool_output_read",
-                "callId": "receipt-read-call",
-                "argumentsJson": json.dumps({"CallId": "source-call", "Start": 15000, "Limit": 10000}),
-            },
-        ]
+    def test_retained_inspection_requires_the_exact_file_outcome(self):
         self.assertTrue(self.evaluate(
             "assert_coordination_retained_child_inspection",
             {"record": 400, "verification": "cobalt-heron-4471"},
-            calls,
-            parent_log="Tool result: tool_output_read (call=receipt-read-call) → Record 400 verification phrase: cobalt-heron-4471.\n",
         ))
-
-    def test_retained_output_rejects_missing_read_and_unrelated_child_log(self):
         self.assertFalse(self.evaluate(
             "assert_coordination_retained_child_inspection",
-            {"record": 400, "verification": "cobalt-heron-4471"},
-            child_logs={("other_eval", "child-1"): "Tool call: tool_output_read (call=read-call)\n"},
-        ))
-
-    def test_retained_output_rejects_a_receipt_for_another_source_or_an_error(self):
-        source = {
-            "toolName": "file_read",
-            "callId": "source-call",
-            "argumentsJson": json.dumps({
-                "Path": "/home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt",
-                "StartLine": 0,
-            }),
-        }
-        wrong_receipt = {
-            "toolName": "tool_output_read",
-            "callId": "receipt-read-call",
-            "argumentsJson": json.dumps({"CallId": "other-source", "Start": 15000}),
-        }
-        response = {"record": 400, "verification": "cobalt-heron-4471"}
-        self.assertFalse(self.evaluate(
-            "assert_coordination_retained_child_inspection",
-            response,
-            [source, wrong_receipt],
-            parent_log="Tool result: tool_output_read (call=receipt-read-call) → Record 400 verification phrase: cobalt-heron-4471.\n",
-        ))
-        wrong_receipt["argumentsJson"] = json.dumps({"CallId": "source-call", "Start": 15000})
-        self.assertFalse(self.evaluate(
-            "assert_coordination_retained_child_inspection",
-            response,
-            [source, wrong_receipt],
-            parent_log="Tool result: tool_output_read (call=receipt-read-call) → Error: CallId is not retained.\n",
+            {"record": 40, "verification": "cobalt-heron-4471"},
         ))
 
     def test_independent_synthesis_requires_exact_counts_and_two_terminal_children(self):
