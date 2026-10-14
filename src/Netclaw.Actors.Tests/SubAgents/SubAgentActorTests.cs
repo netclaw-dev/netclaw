@@ -56,6 +56,35 @@ public class SubAgentActorTests : SubAgentActorTestBase
         // No persistence or hosting needed — SubAgentActor is standalone
     }
 
+    [Fact]
+    public async Task Child_does_not_restart_work_while_parent_holds_terminal_commit()
+    {
+        var client = new FakeChatClient();
+        var owner = CreateTestProbe("child-terminal-owner");
+        using var execution = new ChildRunExecution(new SubAgentRunId("terminal-ack-run"), owner.Ref);
+        var actor = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), client, PermissivePolicy()));
+        actor.Tell(new RunSubAgent
+        {
+            Scope = SubAgentTestScope.Create(),
+            Task = "Return a short result.",
+            Timeout = TimeSpan.FromSeconds(10),
+            OwnedRun = execution,
+            Cancellation = execution.Token
+        }, owner.Ref);
+
+        var terminal = await owner.ExpectMsgAsync<ChildTerminalReturned>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(new SubAgentRunId("terminal-ack-run"), terminal.RunId);
+        Assert.Equal(1, client.CallCount);
+
+        var watcher = CreateTestProbe("child-terminal-watcher");
+        watcher.Watch(actor);
+        owner.Send(actor, new ChildCheckpointCommitted(ForceNoTools: false));
+        owner.Send(actor, new ChildTerminalCommitted());
+        await watcher.ExpectTerminatedAsync(actor, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, client.CallCount);
+    }
+
     private static string MalformedToolCallMarkup() => """
         <function=shell_execute>
         <parameter=Command>
