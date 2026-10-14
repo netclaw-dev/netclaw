@@ -1394,6 +1394,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             AssistantMessage = ready.AssistantMessage,
             StartedAtMs = NowMs(),
             ConsumedInputIds = _input.SelectedInputs.Ids,
+            SourceBackgroundJobId = _input.SelectedInputs.BackgroundJobId,
             ChildContinuation = _toolWorkflow.ChildDecision(_execution.CurrentModelCallId)
         };
         _ = _state.CommitChildContinuation(started.ChildContinuation, close: false);
@@ -3444,6 +3445,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             SessionId = _sessionId,
             InputIds = _input.SelectedInputs.Ids,
+            SourceBackgroundJobId = _input.SelectedInputs.BackgroundJobId,
             ChildContinuation = _toolWorkflow.ChildDecision(_execution.CurrentModelCallId),
             ClosedAtMs = NowMs()
         };

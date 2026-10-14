@@ -42,6 +42,15 @@ internal sealed partial class SessionToolWorkflow
         return run;
     }
 
+    public void ValidateRecoveredAuthority(TurnContext context)
+    {
+        foreach (var entry in _calls.Values.Where(call => call.Pending.Request.SourceChildRunId is null))
+        {
+            if (entry.Pending.TurnContext is not { } authority || !authority.HasSameAuthority(context))
+                throw new InvalidDataException("A legacy task context differs from its recovered approval authority.");
+        }
+    }
+
     public void RestoreConsumedChild(SessionState state, TurnContext authority, long modelGeneration)
     {
         var run = state.GetExecutableChildRuns().SingleOrDefault(child => child.Lifecycle is ChildRunLifecycle.Consumed);

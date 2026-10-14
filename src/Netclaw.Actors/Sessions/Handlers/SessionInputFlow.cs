@@ -119,6 +119,7 @@ internal sealed class SessionInputFlow
         {
             SessionId = sessionId,
             InputId = InputId.New(),
+            SourceBackgroundJobId = command.Source?.BackgroundJobId,
             SourceMessageId = command.Source?.MessageId
                 ?? command.Source?.ReminderId?.Value
                 ?? command.Source?.BackgroundJobId?.Value,
