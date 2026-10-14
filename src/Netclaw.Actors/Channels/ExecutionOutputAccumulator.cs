@@ -85,6 +85,20 @@ public sealed class ExecutionOutputAccumulator
     /// </summary>
     public string GetAccumulatedText() => _buffer.ToString().Trim();
 
+    /// <summary>Clears output state before the next correlated session turn.</summary>
+    public void Reset()
+    {
+        _buffer.Clear();
+        _sawTextDelta = false;
+        _notifyAttempted = false;
+        _notifyFailed = false;
+        _notifyFailureDetail = null;
+        _firstDeniedCall = null;
+        LastErrorMessage = null;
+        LastErrorCause = null;
+        LastErrorCategory = null;
+    }
+
     /// <summary>
     /// Whether a notification tool was invoked during this execution.
     /// </summary>

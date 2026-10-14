@@ -31,7 +31,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
     /// </summary>
     private static readonly object ExecutionAttemptTimerKey = new();
     private static readonly object DeliveryBackstopTimerKey = new();
-    private static readonly object ReminderSessionAckTimerKey = new();
     /// <summary>
     /// Backstop timeout for CurrentSession reminders with
     /// <c>DeliveryRequired=true</c> waiting for a
@@ -53,8 +52,8 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
     /// (see #1492). A <see cref="ReceiveTimeout"/> reset by every session output
     /// fires after this much silence and concludes the run as failed, releasing
     /// the guard so the next fire can run. Reset by real output, so it never
-    /// preempts a live turn. Mode B (CurrentSession) does NOT arm this — its wait
-    /// is bounded separately by <see cref="DeliveryObservedTimeout"/>.
+    /// preempts a live turn. CurrentSession reminders that resume a local
+    /// Reminder session also use this to bound terminal output after admission.
     /// </summary>
     internal static TimeSpan ExecutionStallTimeout = TimeSpan.FromMinutes(20);
 
@@ -128,7 +127,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
         Receive<ExecutionStarted>(_ => { });
         Receive<CommandAck>(HandleReminderSessionAck);
         Receive<CommandNack>(HandleReminderSessionNack);
-        Receive<ReminderSessionAckTimeout>(_ => HandleReminderSessionAckTimeout());
         Receive<ReminderDeliveryResult>(HandleDeliveryResult);
         Receive<DeliveryBackstopTimeout>(HandleDeliveryBackstopTimeout);
         Receive<ExecutionAttemptTimeoutReached>(_ => HandleExecutionAttemptTimeout());
@@ -362,10 +360,11 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
             output => self.Tell(new ExecutionOutput(output)),
             (_, failure) => self.Tell(new OutputStreamTerminated(failure)));
 
+        _expectedReminderDeliveryKey = source.ReminderId;
         _awaitingReminderSessionAck = true;
         Timers.StartSingleTimer(
-            ReminderSessionAckTimerKey,
-            ReminderSessionAckTimeout.Instance,
+            ExecutionAttemptTimerKey,
+            ExecutionAttemptTimeoutReached.Instance,
             ReminderSettings.DefaultAckTimeout);
 
         await inputWriter.WriteAsync(new ChannelInput
@@ -394,7 +393,17 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
             return;
 
         _awaitingReminderSessionAck = false;
-        Timers.Cancel(ReminderSessionAckTimerKey);
+        var remaining = ExecutionAttemptTimeout - (_timeProvider.GetUtcNow() - _dispatchedAt);
+        if (remaining <= TimeSpan.Zero)
+        {
+            HandleExecutionAttemptTimeout();
+            return;
+        }
+
+        Timers.StartSingleTimer(
+            ExecutionAttemptTimerKey,
+            ExecutionAttemptTimeoutReached.Instance,
+            remaining);
         _log.Info(
             "reminder_restart_session_accepted execution_id={ExecutionId} session_id={SessionId}",
             _executionId,
@@ -409,17 +418,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
             return;
 
         _awaitingReminderSessionAck = false;
-        Timers.Cancel(ReminderSessionAckTimerKey);
         ReportOutcome(false, $"Session rejected restart reminder: {nack.Reason}");
-    }
-
-    private void HandleReminderSessionAckTimeout()
-    {
-        if (!_awaitingReminderSessionAck)
-            return;
-
-        _awaitingReminderSessionAck = false;
-        ReportOutcome(false, $"Timed out waiting for session recovery acknowledgement after {ReminderSettings.DefaultAckTimeout}.");
     }
 
     /// <summary>
@@ -612,15 +611,48 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
 
     private void HandleOutput(ExecutionOutput wrapper)
     {
+        var localReminderKey = _expectedReminderDeliveryKey;
+        if (localReminderKey is { } expectedKey)
+        {
+            if (wrapper.Output is TurnCompleted unrelatedTurn)
+            {
+                if (unrelatedTurn.SourceReminderId != expectedKey)
+                {
+                    _accumulator.Reset();
+                    return;
+                }
+
+                if (unrelatedTurn.Outcome != TurnOutcome.Completed)
+                {
+                    var reason = _accumulator.LastErrorMessage
+                        ?? $"Reminder session turn ended with outcome {unrelatedTurn.Outcome}.";
+                    ReportOutcome(false, reason);
+                    return;
+                }
+            }
+            else if (wrapper.Output is ErrorOutput)
+            {
+                // ErrorOutput has no reminder key. Wait for its correlated terminal event.
+                _accumulator.ProcessOutput(wrapper.Output);
+                return;
+            }
+        }
+
         var action = _accumulator.ProcessOutput(wrapper.Output);
         switch (action)
         {
             case OutputAction.TurnCompleted:
                 {
                     // A failed turn emits its ErrorOutput first and a closing TurnCompleted(Failed) after it.
-                    // The error already settled the run as failed, so do not log it again as a success.
+                    // The correlated terminal settles the local Reminder route after its ErrorOutput.
                     if (_completed)
                         break;
+
+                    if (localReminderKey is not null && _accumulator.LastErrorMessage is { } errorMessage)
+                    {
+                        ReportOutcome(false, errorMessage);
+                        break;
+                    }
 
                     var result = _accumulator.GetAccumulatedText();
                     var notifyFailureMessage = _accumulator.BuildNotifyFailureMessage(
@@ -669,6 +701,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
         if (_completed || _settlementStarted)
             return;
 
+        if (_awaitingReminderSessionAck)
+        {
+            _awaitingReminderSessionAck = false;
+            ReportOutcome(false, $"Timed out waiting for session recovery acknowledgement after {ReminderSettings.DefaultAckTimeout}.");
+            return;
+        }
+
         _log.Warning(
             "ReminderExecution reached its absolute limit: execution_id={0} reminder_id={1} title={2} timeout={3}.",
             _executionId, _definition.Id, _definition.Title, ExecutionAttemptTimeout);
@@ -693,7 +732,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
 
         Context.SetReceiveTimeout(null);
         Timers.Cancel(ExecutionAttemptTimerKey);
-        Timers.Cancel(ReminderSessionAckTimerKey);
 
         _completed = true;
 
@@ -771,8 +809,4 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
     /// actor crashed mid-turn).
     /// </summary>
     private sealed record DeliveryBackstopTimeout(ReminderId ReminderDeliveryKey) : INoSerializationVerificationNeeded;
-    private sealed record ReminderSessionAckTimeout : INoSerializationVerificationNeeded
-    {
-        public static readonly ReminderSessionAckTimeout Instance = new();
-    }
 }
