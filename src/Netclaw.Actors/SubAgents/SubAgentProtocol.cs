@@ -68,6 +68,8 @@ public static class SubAgentProtocol
     /// </summary>
     public sealed record RunSubAgent : ISubAgentCommand
     {
+        internal ChildRunExecution? OwnedRun { get; init; }
+
         /// <summary>
         /// Framework-owned authority and read-only working snapshot forked from
         /// the parent invocation. The child receives no reference to parent
