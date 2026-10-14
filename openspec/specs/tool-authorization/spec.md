@@ -68,7 +68,7 @@ coordinator. TA-9 states that order.
 | Prompt options | `ToolAccessPolicy.BuildApprovalOptions` | Call-local |
 | Approval note in the tool result | `ConsentAnswerCodec.AppendResultNote` | Call-local |
 | Consent request, answer, and requester check | `SessionToolExecutionPipeline`, `LlmSessionActor`, `ApprovalButtonValueCodec`, `PendingApprovalLookup` | Durable journal; actor-local unanswered state |
-| Subagent consent | `ParentSessionApprovalBridge`, `SubAgentActor` | Actor-local, live-only |
+| Subagent consent | `ParentSessionApprovalBridge`, `SubAgentActor`, `SessionToolWorkflow` | Durable run facts; actor-local live wait |
 | Launch re-verification | `ShellProcessLaunch` | Call-local |
 
 A code PR that moves a decision updates this table and the architecture
@@ -1503,9 +1503,13 @@ requester, and the inherited parent working directory. A subagent SHALL use
 chat grants of its parent session, and its own chat grants SHALL NOT reach the
 parent.
 
-- A subagent consent request SHALL be live-only. After a daemon or parent
-  restart, Netclaw SHALL reject the old prompt as expired and SHALL close the
-  interrupted `spawn_agent` call.
+- A durably accepted child SHALL record its consent request and resolution
+  with its original run, concrete call, requester, and authority.
+- The parent SHALL preserve those facts while it serves another user turn.
+- After a daemon or parent restart, Netclaw SHALL reject the old child prompt
+  as expired. Recovery SHALL report uncertain child work without a new child
+  dispatch. The accepted start result SHALL remain distinct from the later
+  terminal result.
 - An answer that arrives after the subagent wait ends SHALL NOT run the tool.
 - A subagent without a parent bridge SHALL NOT ask. Its run SHALL fail with
   `ToolExecutionFailed`.
@@ -1524,6 +1528,20 @@ parent.
 - **WHEN** the requester answers the old prompt
 - **THEN** Netclaw rejects the answer as expired
 - **AND** the tool does not run
+
+#### Scenario: Another parent turn does not replace child approval authority
+
+- **GIVEN** Alice starts a child that requests consent
+- **AND** the parent accepts another user turn
+- **WHEN** Alice answers the original child prompt while its wait remains live
+- **THEN** the child receives consent only for the original concrete call
+- **AND** the prompt retains Alice's original authority and options
+
+#### Scenario: Another requester cannot approve the child call
+
+- **GIVEN** Alice owns a child consent request
+- **WHEN** Bob answers that request
+- **THEN** the system rejects the answer before a grant or tool dispatch
 
 ### Requirement: TA-13 The persistent grant store fails closed
 
