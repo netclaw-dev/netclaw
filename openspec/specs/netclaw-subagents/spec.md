@@ -444,7 +444,7 @@ Each sub-agent approval-gated tool call SHALL settle exactly once as approved, d
 - **WHEN** the approval decision is delivered
 - **THEN** the tool is not executed
 - **AND** the sub-agent receives a tool-result message explaining that approval was denied
-- **AND** the sub-agent may continue or finish within the normal tool-iteration limit
+- **AND** the sub-agent may continue or finish subject to recurrence governance
 
 #### Scenario: Timed-out approval becomes tool result
 - **GIVEN** a sub-agent approval-gated tool call receives an expired or timed-out approval decision
