@@ -148,7 +148,7 @@ internal static partial class NetclawProtoMapper
         if (run.Lifecycle is not ChildRunLifecycle.Terminal terminal)
             return false;
         var toolName = LegacyCoordinationReplay.LegacyToolName(run);
-        var expectedBody = LegacyCoordinationReplay.LegacyTerminalBody(run, terminal,
+        var expectedBody = LegacyCoordinationReplay.LegacyTerminalBody(run, terminal.Result,
             oldRun.ChildCheckpoint is null ? null : LegacyCoordinationReplay.FromLegacyCheckpoint(oldRun.ChildCheckpoint));
         var pendingProto = snapshotProto.PendingInputs.SingleOrDefault(input => input.InputId == oldRun.DeliveryInputId);
         if (pendingProto is not null)
