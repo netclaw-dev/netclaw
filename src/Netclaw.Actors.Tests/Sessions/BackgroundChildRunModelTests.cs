@@ -134,7 +134,8 @@ public sealed class BackgroundChildRunModelTests(ITestOutputHelper output)
             => contract with { TerminalSeen = true },
         Action.Prepare when contract.TerminalSeen && !contract.ResultReady
             => contract with { ResultReady = true },
-        Action.Consume when contract.ResultReady && !contract.ContinuationClosed
+        Action.Consume when contract.ResultReady
+            && (!contract.ContinuationClosed || contract.PairCommitCount == 1)
             => contract with { PairCommitCount = Math.Max(1, contract.PairCommitCount) },
         Action.Close when contract.ResultReady || contract.PairCommitCount == 1
             => contract with { PairCommitCount = 1, ContinuationClosed = true },
@@ -202,7 +203,7 @@ public sealed class BackgroundChildRunModelTests(ITestOutputHelper output)
                 or ChildRunLifecycle.Consumed or ChildRunLifecycle.Closed,
             ResultReady: lifecycle is ChildRunLifecycle.Prepared or ChildRunLifecycle.Consumed
                 or ChildRunLifecycle.Closed,
-            PairCommitCount: Math.Min(callCount, resultCount),
+            PairCommitCount: callCount,
             ContinuationClosed: lifecycle is ChildRunLifecycle.Closed,
             OrdinaryUserCount: state.History.Count(message => message == OrdinaryMessage(userId)));
     }

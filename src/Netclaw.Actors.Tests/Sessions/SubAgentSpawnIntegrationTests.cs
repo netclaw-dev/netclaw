@@ -276,7 +276,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var started = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SubAgentPhase.Started, started.Phase);
         Assert.Equal("summarizer", started.AgentName.Value);
-        Assert.Equal(3, started.ToolCount);
+        Assert.Equal(4, started.ToolCount);
         await _clientProvider.Compaction.FirstCallEntered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var acceptance = await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
