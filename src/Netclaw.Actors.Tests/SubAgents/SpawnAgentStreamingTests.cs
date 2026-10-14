@@ -19,7 +19,7 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.SubAgents;
 
-/// <summary>Verifies that spawn dispatch returns durable acceptance to its caller.</summary>
+/// <summary>Verifies that the executor forwards child acceptance without activity updates.</summary>
 public class SpawnAgentStreamingTests : TestKit
 {
     public SpawnAgentStreamingTests(ITestOutputHelper output) : base(output: output) { }
@@ -32,6 +32,7 @@ public class SpawnAgentStreamingTests : TestKit
     [Fact]
     public async Task Spawn_agent_returns_acceptance_without_child_activity_updates()
     {
+        // Arrange
         using var dir = new DisposableTempDir();
         var paths = new NetclawPaths(dir.Path);
         paths.EnsureDirectoriesExist();
@@ -103,6 +104,7 @@ public class SpawnAgentStreamingTests : TestKit
 
         Assert.Equal(ToolLivenessMode.Opaque, executor.GetLivenessMode(spawnCall));
 
+        // Act
         var activity = new List<ToolActivityUpdate>();
         string? result = null;
         await foreach (var update in executor.ExecuteStreamAsync(
@@ -121,6 +123,7 @@ public class SpawnAgentStreamingTests : TestKit
             }
         }
 
+        // Assert
         Assert.Empty(activity);
         Assert.NotNull(result);
         Assert.True(result.StartsWith("{", StringComparison.Ordinal), $"Expected an acceptance receipt but got: {result}");
