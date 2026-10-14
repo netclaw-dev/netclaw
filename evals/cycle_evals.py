@@ -137,7 +137,7 @@ class CycleFixture(Fixture):
                     raise ValueError("Cycle sidecar request budget reached.")
                 return None
             if self.case == "terminal" and self.phase == 5:
-                raise ValueError("A fifth model request followed the repeated refused action.")
+                raise ValueError("A model request followed terminal settlement.")
             if not tools:
                 if self.phase != 0:
                     raise ValueError("Unexpected model request after the scripted terminal repeat.")
