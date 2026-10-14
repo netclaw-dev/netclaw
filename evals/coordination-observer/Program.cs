@@ -83,14 +83,12 @@ try
                 }
                 currentResponse.Clear();
                 receivedTextDelta = false;
-                if (turnCompletions > 1 &&
-                    completedChildren >= requiredChildren &&
-                    HasSynthesisFields(finalResponse))
-                    completed = true;
                 break;
             case ErrorOutput error:
                 throw new InvalidOperationException(error.Message);
         }
+
+        completed = HasFinalOutcome();
     }
 }
 catch (OperationCanceledException) when (timeout.IsCancellationRequested)
@@ -116,7 +114,18 @@ var envelope = new
     }
 };
 Console.WriteLine(JsonSerializer.Serialize(envelope, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
-return activeChildrenAtFirstCompletion > 0 && automaticContinuation ? 0 : 1;
+return completed ? 0 : 1;
+
+bool HasFinalOutcome()
+{
+    if (completedChildren < requiredChildren)
+        return false;
+
+    if (HasSynthesisFields(finalResponse))
+        return turnCompletions > 1 && activeChildrenAtFirstCompletion > 0;
+
+    return HasArtifactReviewFields(finalResponse);
+}
 
 static bool HasSynthesisFields(string response)
 {
@@ -134,4 +143,29 @@ static bool HasSynthesisFields(string response)
     {
         return false;
     }
+}
+
+static bool HasArtifactReviewFields(string response)
+{
+    try
+    {
+        using var document = JsonDocument.Parse(response);
+        var root = document.RootElement;
+        return root.ValueKind == JsonValueKind.Object &&
+               HasArtifactFields(root, "artifactA", "observedForTwoPending", "expectedForTwoPending") &&
+               HasArtifactFields(root, "artifactB", "observedForZeroPending", "expectedForZeroPending");
+    }
+    catch (JsonException)
+    {
+        return false;
+    }
+}
+
+static bool HasArtifactFields(JsonElement root, string artifactName, string observedField, string expectedField)
+{
+    return root.TryGetProperty(artifactName, out var artifact) &&
+           artifact.ValueKind == JsonValueKind.Object &&
+           artifact.TryGetProperty("verdict", out var verdict) && verdict.ValueKind == JsonValueKind.String &&
+           artifact.TryGetProperty(observedField, out var observed) && observed.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+           artifact.TryGetProperty(expectedField, out var expected) && expected.ValueKind is JsonValueKind.True or JsonValueKind.False;
 }
