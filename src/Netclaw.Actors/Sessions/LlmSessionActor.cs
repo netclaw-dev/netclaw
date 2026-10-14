@@ -3276,6 +3276,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 case RecoveredContinuation.Dispatch dispatch:
                     _log.Info("Re-driving parked tool batch ({Count} call(s)) after approval response for {CallId}",
                         dispatch.Calls.Count, msg.CallId);
+                    _toolWorkflow.RestoreConsumedChild(_state, dispatch.TurnContext, _execution.CurrentModelCallId);
                     _input.RestoreTurnAuthority(dispatch.TurnContext, _trustContextDeriver);
                     UpdateCrashContext();
                     TransitionTo(SessionPhase.Processing);
