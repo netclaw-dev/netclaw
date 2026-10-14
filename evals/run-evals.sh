@@ -4025,7 +4025,7 @@ run_all() {
         "Use spawn_agent with agent headless-analyst to write a prospecting email to Casey, a VP of Engineering interested in reducing operational toil. Return its final email." \
         "Delegate to headless-analyst: draft an outbound email for Jordan, a technology leader evaluating autonomous operations. Return the worker's final email."
 
-    run_case --json coordination_retained_child_inspection "child inspects a retained result and returns the correct evidence" \
+    run_case --json coordination_retained_child_inspection "agent returns Record 400 from retained evidence" \
         "Read /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Find Record 400 and return JSON only with fields record and verification." \
         "Inspect /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Return JSON only with record and verification for Record 400."
 
