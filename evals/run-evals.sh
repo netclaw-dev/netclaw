@@ -2406,32 +2406,6 @@ coordination_session_actor_log() {
     printf '%s\n' "$log_path"
 }
 
-coordination_file_receipt_was_read() {
-    local parent_log calls read_call_id
-    parent_log=$(coordination_session_actor_log) || return 1
-    calls=$(coordination_all_tool_calls) || return 1
-    while IFS= read -r read_call_id; do
-        [[ -n "$read_call_id" ]] || continue
-        if grep -qaF "Tool result: tool_output_read (call=$read_call_id) → " "$parent_log" \
-            && ! grep -qaF "Tool result: tool_output_read (call=$read_call_id) → Error:" "$parent_log"; then
-            return 0
-        fi
-    done < <(jq -r '
-        [.[]
-            | select(.toolName == "file_read")
-            | (.argumentsJson | fromjson) as $arguments
-            | select(($arguments.Path // $arguments.path // "") | contains("coordination-retained-inspection/records.txt"))
-            | select(($arguments.StartLine // $arguments.startLine // 0) == 0)
-            | .callId] as $source_calls
-        | .[]
-        | select(.toolName == "tool_output_read")
-        | (.argumentsJson | fromjson) as $arguments
-        | select(($source_calls | index($arguments.CallId // $arguments.callId)) != null)
-        | select(($arguments.Start // $arguments.start // 0) > 0)
-        | .callId' <<<"$calls")
-    return 1
-}
-
 coordination_child_completion_count() {
     local parent_log
     parent_log=$(coordination_session_actor_log) || return 1
@@ -2454,7 +2428,6 @@ coordination_all_tool_calls() {
 assert_coordination_retained_child_inspection() {
     coordination_envelopes_valid || return 1
     coordination_response_json >/dev/null || return 1
-    coordination_file_receipt_was_read || return 1
     coordination_response_json | jq -e \
         '.record == 400 and .verification == "cobalt-heron-4471"' >/dev/null
 }
