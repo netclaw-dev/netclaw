@@ -112,13 +112,11 @@ public static class LegacyCoordinationReplay
         if (inputIds.Any(state.IsLegacyInputQuarantined))
             return "The deployed adoption names a quarantined legacy input.";
         var selected = state.PendingInputs.Take(inputIds.Count).ToArray();
-        if (selected.Any(input => input.SourceChildRunId is not null))
-            return "The deployed ordinary adoption contains a child delivery without child-run correlation.";
         if (selected[^1].SourceBackgroundJobId is { } jobId)
         {
             if (selected.Length != 1 || adoption.ContinuedJobKey != jobId.Value)
                 return "The deployed job adoption does not match the exact pending job input.";
-            if (!state.TryGetBackgroundContinuation(selected[0], out _, out var reason))
+            if (!IsValidLegacyJobInput(state, selected[0], out var reason))
                 return $"The deployed job adoption has no valid exact lineage: {reason}.";
         }
         else if (adoption.HasContinuedJobKey)
@@ -126,6 +124,31 @@ public static class LegacyCoordinationReplay
             return "The deployed adoption names a job that its exact pending inputs do not contain.";
         }
         return null;
+    }
+
+    private static bool IsValidLegacyJobInput(SessionState state, InputAdmitted input, out string reason)
+    {
+        reason = "invalid trusted job metadata";
+        if (input.SessionId != input.TurnContext.SessionId
+            || input.SourceBackgroundJobId is not { } sourceJob || input.SourceMessageId != sourceJob.Value
+            || input.TurnContext.TurnId != sourceJob.Value
+            || input.TurnContext.SourceKind != Netclaw.Actors.Jobs.BackgroundJobManagerActor.SourceKind
+            || input.TurnContext.RequesterPrincipal != Netclaw.Configuration.PrincipalClassification.VerifiedAutomation
+            || input.TurnContext.TransportAuthenticity != Netclaw.Configuration.TransportAuthenticity.LocalProcess
+            || !sourceJob.Value.StartsWith(Netclaw.Actors.Jobs.BackgroundJobManagerActor.JobDeliveryKeyPrefix,
+                StringComparison.Ordinal))
+            return false;
+
+        if (state.ActiveBackgroundJobs.TryGetValue(sourceJob.Value, out var tracked)
+            && (tracked.JobId.Value != sourceJob.Value[Netclaw.Actors.Jobs.BackgroundJobManagerActor.JobDeliveryKeyPrefix.Length..]
+                || tracked.Audience != input.TurnContext.Audience || tracked.Boundary != input.TurnContext.Boundary))
+        {
+            reason = "the trusted source differs from the tracked job owner";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
     }
 
     private static SessionState ApplyChildAdoption(SessionState state, LegacyCoordinationEvent evt,
@@ -159,6 +182,7 @@ public static class LegacyCoordinationReplay
                     Disposition = LegacyCoordinationDisposition.UnresolvedLegacyChild,
                     InputIds = evidence.InputIds,
                     ActiveInputIds = evidence.InputIds,
+                    AdoptedContext = evidence.AdoptedContext,
                     ChildRunId = runId,
                     DeliveryCallId = evidence.DeliveryCallId,
                     Reason = "The deployed parent adoption has multiple child deliveries."
@@ -372,6 +396,7 @@ public static class LegacyCoordinationReplay
             Disposition = LegacyCoordinationDisposition.AppliedChildContinuation,
             InputIds = [input.InputId],
             ActiveInputIds = [input.InputId],
+            AdoptedContext = run.OriginalContext,
             ChildRunId = run.RunId,
             DeliveryCallId = callId
         };
@@ -418,6 +443,7 @@ public static class LegacyCoordinationReplay
                 Disposition = LegacyCoordinationDisposition.QuarantinedInvalidAdoption,
                 InputIds = inputIds,
                 ActiveInputIds = inputIds,
+                AdoptedContext = input.TurnContext,
                 ChildRunId = runId,
                 Reason = "A standalone deployed child input has no exact lifecycle delivery record."
             });
@@ -429,6 +455,7 @@ public static class LegacyCoordinationReplay
                     Disposition = LegacyCoordinationDisposition.UnresolvedLegacyChild,
                     InputIds = inputIds,
                     ActiveInputIds = inputIds,
+                    AdoptedContext = input.TurnContext,
                     ChildRunId = runId,
                     Reason = "A standalone deployed child input has no exact lifecycle delivery record."
                 });
