@@ -1908,7 +1908,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var resultsByCallId = contents
             .OfType<FunctionResultContent>()
             .ToLookup(static result => result.CallId, StringComparer.Ordinal);
-        return contents
+        var toolAcceptedRunIds = contents
             .OfType<FunctionCallContent>()
             .Where(static call => call.Name == "spawn_agent")
             .SelectMany(call => resultsByCallId[call.CallId]
@@ -1916,6 +1916,16 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             .Where(static runId => !string.IsNullOrWhiteSpace(runId))
             .Select(static runId => runId!)
             .ToHashSet(StringComparer.Ordinal);
+
+        var routedAcceptedRunIds = request
+            .Where(static message => message.Role == ChatRole.Assistant)
+            .SelectMany(static message => message.Contents.OfType<TextContent>())
+            .Select(static text => ParseAcceptedRunId(text.Text))
+            .Where(static runId => !string.IsNullOrWhiteSpace(runId))
+            .Select(static runId => runId!);
+
+        toolAcceptedRunIds.UnionWith(routedAcceptedRunIds);
+        return toolAcceptedRunIds;
     }
 
     private static HashSet<string> FindDeliveredRunIds(IEnumerable<ChatMessage> request)
@@ -1958,13 +1968,24 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         if (string.IsNullOrWhiteSpace(result))
             return null;
 
-        using var json = JsonDocument.Parse(result);
-        var root = json.RootElement;
-        return root.TryGetProperty("state", out var state)
-            && state.GetString() == "accepted"
-            && root.TryGetProperty("run_id", out var runId)
-            ? runId.GetString()
-            : null;
+        try
+        {
+            using var json = JsonDocument.Parse(result);
+            var root = json.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("state", out var state) ||
+                state.ValueKind != JsonValueKind.String || state.GetString() != "accepted" ||
+                !root.TryGetProperty("run_id", out var runId) ||
+                runId.ValueKind != JsonValueKind.String)
+                return null;
+
+            var value = runId.GetString();
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private async Task ColdRespawnAsync(SessionId sessionId)
