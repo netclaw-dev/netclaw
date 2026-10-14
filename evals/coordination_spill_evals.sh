@@ -25,7 +25,7 @@ start_coordination_spill_fixture() {
     EVAL_PROVIDER_ENDPOINT="http://127.0.0.1:$SPILL_FIXTURE_PORT/v1"
     EVAL_PROVIDER_API_KEY=""
     EVAL_DATA_PROTECTION_KEYS=""
-    curl -fsS -H 'Content-Type: application/json' -d '{"mode":"model"}' \
+    curl -fsS --connect-timeout 5 --max-time 10 -H 'Content-Type: application/json' -d '{"mode":"model"}' \
         "http://127.0.0.1:$SPILL_FIXTURE_PORT/control/mode" >/dev/null
     # Keep the configured pass threshold. Three runs require three passes.
     RUNS=3
