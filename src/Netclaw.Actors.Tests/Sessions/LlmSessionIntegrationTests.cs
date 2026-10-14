@@ -2784,6 +2784,9 @@ internal sealed class FakeChatClient : IChatClient
     /// </summary>
     public Queue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
 
+    /// <summary>This fake selects response content from the captured request.</summary>
+    public Func<IReadOnlyList<ChatMessage>, IReadOnlyList<AIContent>?>? ResponseContentsSelector { get; set; }
+
     public Action<int>? AfterToolCallResponse { get; set; }
 
     /// <summary>
@@ -2920,6 +2923,16 @@ internal sealed class FakeChatClient : IChatClient
                 AfterToolCallResponse?.Invoke(_callCount);
                 return toolResponse;
             }
+        }
+
+        if (ResponseContentsSelector?.Invoke(messageList) is { } selectedContents)
+        {
+            var selectedResponse = new ChatResponse(new ChatMessage(
+                Microsoft.Extensions.AI.ChatRole.Assistant,
+                new List<AIContent>(selectedContents)));
+            if (usageOverride is not null)
+                selectedResponse.Usage = usageOverride;
+            return selectedResponse;
         }
 
         if (PlannedResponses.Count > 0)
