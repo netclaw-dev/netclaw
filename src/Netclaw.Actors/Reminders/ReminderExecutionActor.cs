@@ -622,6 +622,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
                     return;
                 }
 
+                // Compaction and context recovery can emit ErrorOutput before a successful terminal.
                 if (unrelatedTurn.Outcome != TurnOutcome.Completed)
                 {
                     var reason = _accumulator.LastErrorMessage
@@ -647,12 +648,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
                     // The correlated terminal settles the local Reminder route after its ErrorOutput.
                     if (_completed)
                         break;
-
-                    if (localReminderKey is not null && _accumulator.LastErrorMessage is { } errorMessage)
-                    {
-                        ReportOutcome(false, errorMessage);
-                        break;
-                    }
 
                     var result = _accumulator.GetAccumulatedText();
                     var notifyFailureMessage = _accumulator.BuildNotifyFailureMessage(
