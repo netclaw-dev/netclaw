@@ -197,6 +197,14 @@ class CycleVerdictTests(unittest.TestCase):
         self.assertTrue(result["groups"]["runtime_contract"]["passed"])
         self.assertFalse(result["groups"]["model_task"]["passed"])
 
+    def test_terminal_rejects_later_intervention_without_losing_the_initial_pair(self):
+        snapshot, output, log = evidence("terminal")
+        snapshot["tool_results"]["later-cycle"] = CORRECTION
+        result = verdict(snapshot, output, log)
+        self.assertFalse(result["passed"])
+        self.assertTrue(result["checks"]["initial_correction_pair"])
+        self.assertFalse(result["checks"]["no_additional_cycle_interventions"])
+
     def test_prose_or_an_ambiguous_status_remains_a_strict_model_failure(self):
         for case, response_change in (("correction", "status"), ("metadata_repair", "prose"),
                                       ("metadata_repair", "blocked_flag")):
