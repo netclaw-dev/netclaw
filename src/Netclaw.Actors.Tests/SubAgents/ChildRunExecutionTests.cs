@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Collections.Concurrent;
 using Akka.Actor;
+using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
@@ -15,6 +16,8 @@ namespace Netclaw.Actors.Tests.SubAgents;
 public sealed class ChildRunExecutionTests(ITestOutputHelper output) : TestKit(output: output)
 {
     private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(10);
+
+    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider) { }
 
     [Fact]
     public void Close_ack_rejects_later_dispatch_without_requesting_cancellation()
