@@ -82,7 +82,10 @@ public sealed partial record SessionState
         // A terminal parent event can have no consumed IDs after an earlier batch closed them.
         var correlations = LegacyCoordinationEvidence.Where(item =>
             item.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation &&
-            (inputIds.Count == 0 || item.InputIds.Any(inputIds.Contains))).ToArray();
+            item.ChildRunId is { } runId && ChildRuns.TryGetValue(runId, out var run) &&
+            (inputIds.Count == 0
+                ? run.Lifecycle is ChildRunLifecycle.Consumed
+                : item.InputIds.Any(inputIds.Contains))).ToArray();
         var next = this;
         foreach (var correlation in correlations)
         {
