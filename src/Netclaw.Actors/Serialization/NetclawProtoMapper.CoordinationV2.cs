@@ -85,13 +85,15 @@ internal static partial class NetclawProtoMapper
                 return events;
             }).ToArray();
             if (oldRun.HasDeliveryInputId
-                && TryGetLegacySnapshotDelivery(snapshot, proto, oldRun, run, out var delivery, out var pending))
+                && TryGetLegacySnapshotDelivery(snapshot, proto, oldRun, run, out var delivery,
+                    out var hasHistoryPair, out var hasPendingInput))
             {
-                var activeParentTask = pending || proto.AdoptedTaskInputIds.Contains(oldRun.DeliveryInputId);
+                var activeParentTask = hasHistoryPair
+                    && (hasPendingInput || proto.AdoptedTaskInputIds.Contains(oldRun.DeliveryInputId));
                 legacyRuns[index] = run with
                 {
                     InitialWorkingSnapshot = null,
-                    Lifecycle = pending
+                    Lifecycle = !hasHistoryPair
                         ? new ChildRunLifecycle.Prepared(delivery)
                         : activeParentTask
                             ? new ChildRunLifecycle.Consumed(delivery)
@@ -107,7 +109,7 @@ internal static partial class NetclawProtoMapper
                     Payload = [],
                     Disposition = LegacyCoordinationDisposition.AppliedChildContinuation,
                     InputIds = inputIds,
-                    ActiveInputIds = pending ? inputIds : Array.Empty<InputId>(),
+                    ActiveInputIds = hasPendingInput ? inputIds : Array.Empty<InputId>(),
                     AdoptedContext = run.OriginalContext,
                     ChildRunId = runId,
                     DeliveryCallId = delivery.Result.ToolCallId,
@@ -148,49 +150,65 @@ internal static partial class NetclawProtoMapper
 
     private static bool TryGetLegacySnapshotDelivery(SessionSnapshot snapshot,
         Proto.SessionSnapshotProto snapshotProto, Proto.BackgroundChildRunProto oldRun,
-        BackgroundChildRun run, out ChildPreparedResult delivery, out bool pending)
+        BackgroundChildRun run, out ChildPreparedResult delivery, out bool hasHistoryPair,
+        out bool hasPendingInput)
     {
         delivery = null!;
-        pending = false;
+        hasHistoryPair = false;
+        hasPendingInput = false;
         if (run.Lifecycle is not ChildRunLifecycle.Terminal terminal)
             return false;
         var toolName = LegacyCoordinationReplay.LegacyToolName(run);
         var expectedBody = LegacyCoordinationReplay.LegacyTerminalBody(run, terminal.Result,
             oldRun.ChildCheckpoint is null ? null : LegacyCoordinationReplay.FromLegacyCheckpoint(oldRun.ChildCheckpoint));
         var pendingProto = snapshotProto.PendingInputs.SingleOrDefault(input => input.InputId == oldRun.DeliveryInputId);
+        SerializableChatMessage? pendingResult = null;
         if (pendingProto is not null)
         {
             if (!pendingProto.HasSourceChildRunId || pendingProto.SourceChildRunId != run.RunId.Value
                 || pendingProto.UserMessage?.ToolCallId is not { } pendingCallId
                 || run.StartKey is ChildRunStartKey.Tool original && original.CallId.Value == pendingCallId)
                 return false;
-            var result = FromProto(pendingProto.UserMessage);
+            pendingResult = FromProto(pendingProto.UserMessage);
             var context = pendingProto.TurnContext is null ? null : FromLegacyTurnContext(pendingProto.TurnContext);
             if (pendingProto.SessionId?.Value != run.StartKey.SessionId.Value
                 || context is null || !LegacyCoordinationReplay.SameContext(context, run.OriginalContext)
-                || result.Role != ChatRole.Tool || result.Name != toolName || result.Content != expectedBody)
+                || pendingResult.Role != ChatRole.Tool || pendingResult.Name != toolName
+                || pendingResult.Content != expectedBody)
                 return false;
-            var callId = new ToolCallId(pendingCallId);
-            var call = LegacyCoordinationReplay.LegacyDeliveryCall(run, callId);
-            delivery = new ChildPreparedResult(terminal.Result, call, result, null);
-            pending = true;
-            return true;
         }
 
         var expectedArguments = LegacyCoordinationReplay.LegacyDeliveryArguments(run);
-        var callIds = snapshot.History.SelectMany(message => message.ToolCalls)
+        var historyCalls = snapshot.History.SelectMany(message => message.ToolCalls)
             .Where(call => call.Name.Value == toolName && call.ArgumentsJson == expectedArguments)
-            .Select(static call => call.CallId).Distinct().ToArray();
-        if (callIds.Length != 1)
+            .ToArray();
+        if (historyCalls.Length > 1)
             return false;
-        var matchingResults = snapshot.History.Where(message => message.Role == ChatRole.Tool
-            && message.ToolCallId == callIds[0] && message.Name == toolName && message.Content == expectedBody).ToArray();
-        if (matchingResults.Length != 1)
+        if (historyCalls.Length == 1)
+        {
+            var callId = historyCalls[0].CallId;
+            if (snapshot.History.SelectMany(message => message.ToolCalls)
+                    .Count(call => call.CallId == callId) != 1)
+                return false;
+            var matchingResults = snapshot.History.Where(message => message.Role == ChatRole.Tool
+                && message.ToolCallId == callId && message.Name == toolName && message.Content == expectedBody).ToArray();
+            if (matchingResults.Length != 1 || (pendingResult is not null
+                    && (pendingResult.ToolCallId != callId || pendingResult.Role != matchingResults[0].Role
+                        || pendingResult.Name != matchingResults[0].Name || pendingResult.Content != matchingResults[0].Content)))
+                return false;
+
+            var canonicalCall = LegacyCoordinationReplay.LegacyDeliveryCall(run, callId);
+            delivery = new ChildPreparedResult(terminal.Result, canonicalCall, matchingResults[0], null);
+            hasHistoryPair = true;
+            hasPendingInput = pendingProto is not null;
+            return true;
+        }
+
+        if (pendingResult?.ToolCallId is not { } pendingCallId)
             return false;
-        var canonicalCall = LegacyCoordinationReplay.LegacyDeliveryCall(run, callIds[0]);
-        if (!snapshot.History.Any(message => message.ToolCalls.Count(call => call.CallId == callIds[0]) == 1))
-            return false;
-        delivery = new ChildPreparedResult(terminal.Result, canonicalCall, matchingResults[0], null);
+        var pendingCall = LegacyCoordinationReplay.LegacyDeliveryCall(run, pendingCallId);
+        delivery = new ChildPreparedResult(terminal.Result, pendingCall, pendingResult, null);
+        hasPendingInput = true;
         return true;
     }
 
