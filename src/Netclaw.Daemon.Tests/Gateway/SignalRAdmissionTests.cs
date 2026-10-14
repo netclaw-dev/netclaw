@@ -322,11 +322,61 @@ public sealed class SignalRAdmissionTests(ITestOutputHelper output) : TestKit(ou
         Assert.Equal(0, _model.Calls);
     }
 
+    [Theory]
+    [InlineData("a", "repro")]
+    [InlineData("a", "fill")]
+    [InlineData("\u0001", "fill")]
+    [InlineData("\u00e9", "fill")]
+    [InlineData("\u4e2d", "fill")]
+    [InlineData("<&>'+\"\\", "fill")]
+    [InlineData("\ud83d\ude00", "fill")]
+    [InlineData("a", "over")]
+    public async Task Hub_accepts_a_frame_up_to_the_limit_and_closes_the_connection_past_it(string unit, string mode)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var client = await ConnectAsync();
+        var closed = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.Closed += e => { closed.TrySetResult(e); return Task.CompletedTask; };
+        var ensured = await client.InvokeAsync<SessionEnsureResultDto>("EnsureSession", null, "tui", ct);
+
+        // Measure with the same JSON hub protocol the client uses. "repro" is the 40,000 characters from the
+        // original report, "fill" is as many units as fit in a frame of exactly the limit, "over" is one byte past.
+        var protocol = new Microsoft.AspNetCore.SignalR.Protocol.JsonHubProtocol();
+        int Frame(string value) => protocol.GetMessageBytes(
+            new Microsoft.AspNetCore.SignalR.Protocol.InvocationMessage("1", "SendMessage", [ensured.SessionId, value])).Length;
+        var overhead = Frame("");
+        var text = mode switch
+        {
+            "repro" => new string('a', 40_000),
+            "fill" => string.Concat(Enumerable.Repeat(unit, (SessionHubLimits.MaxReceiveMessageBytes - overhead) / (Frame(unit) - overhead))),
+            _ => new string('a', SessionHubLimits.MaxReceiveMessageBytes - overhead + 1),
+        };
+        var expectDelivered = mode != "over";
+        Assert.Equal(expectDelivered, Frame(text) <= SessionHubLimits.MaxReceiveMessageBytes);
+
+        var journal = Persistence.Instance.Apply(Sys).JournalFor("test-journal");
+        var writes = CreateTestProbe();
+        await journal.Ask<Done>(new WriteGate(writes, Task.CompletedTask, false), TimeSpan.FromSeconds(10), ct);
+        _model.Release.TrySetResult();
+        var send = client.InvokeAsync("SendMessage", ensured.SessionId, text, ct);
+        if (expectDelivered)
+        {
+            await send.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            var admitted = await writes.FishForMessageAsync<InputAdmitted>(_ => true, TimeSpan.FromSeconds(30), cancellationToken: ct);
+            Assert.Equal(text, admitted.UserMessage.Content);
+        }
+        else
+        {
+            await Record.ExceptionAsync(() => send.WaitAsync(TimeSpan.FromSeconds(30), ct));
+            Assert.NotNull(await closed.Task.WaitAsync(TimeSpan.FromSeconds(30), ct));
+        }
+    }
+
     private async Task<HubConnection> ConnectAsync()
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
-        builder.Services.AddSignalR();
+        builder.Services.AddSessionHubSignalR();
         builder.Services.AddSingleton(new DaemonConfig());
         builder.Services.AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
             .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(

@@ -148,16 +148,8 @@ public partial class ChatViewModel : ReactiveViewModel
     }
 
     /// <summary>
-    /// Shows the size error and returns true when <paramref name="text"/> is too large to send. Callers keep
-    /// the user's text in the composer in that case.
-    /// </summary>
-    public bool RejectIfTooLarge(string text)
-    {
-        if (SessionHubLimits.CheckText(text) is not { } error) return false;
-        StatusMessage.Value = error;
-        RequestRedraw();
-        return true;
-    }
+    /// <summary>Returns the size error when <paramref name="text"/> is too large to send, otherwise null.</summary>
+    public static string? CheckMessageSize(string text) => SessionHubFrame.CheckText(text);
 
     /// <summary>Posts user text before the caller can request normal quit.</summary>
     public Task SubmitAsync(string text)

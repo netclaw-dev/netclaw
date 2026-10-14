@@ -69,27 +69,46 @@ public sealed class ChatAdmissionTests : IDisposable
     }
 
     [Fact]
-    public async Task Over_limit_text_is_refused_with_an_error_and_stays_in_the_composer()
+    public async Task Over_limit_text_is_refused_with_a_transcript_error_and_stays_in_the_composer()
     {
         var transport = new FakeDaemonHubTransport();
         await using var client = new DaemonClient("http://localhost", transport, reconnectDelays: [TimeSpan.Zero]);
         var input = new VirtualInputSource();
-        var terminal = new VirtualTerminal(100, 30);
+        var terminal = new VirtualTerminal(80, 30);
         using var chat = new ChatViewModel(client, TimeProvider.System, new ModelCapabilities { ModelId = "test" }, new ChatNavigationState(), Paths);
-        var statuses = new List<string>();
-        using var statusSub = chat.StatusMessage.Subscribe(value => { lock (statuses) statuses.Add(value); });
+        var ready = Gate();
+        var refused = Gate();
+        using var statusSub = chat.StatusMessage.Subscribe(value =>
+        {
+            if (value == "Ready") ready.TrySetResult();
+            if (value.StartsWith("Message is too large", StringComparison.Ordinal)) refused.TrySetResult();
+        });
         await using var provider = CreateHost(chat, input, terminal);
-        // 90,000 e-acute chars are ~180 KB of UTF-8 but 540 KB once JSON-escaped, past the 512 KB frame limit.
-        input.EnqueuePaste(new string('\u00e9', 90_000));
+        var run = provider.GetRequiredService<TerminaApplication>().RunAsync(TestContext.Current.CancellationToken);
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        // 600,000 raw ASCII characters is past the 512 KB frame limit. Paste it, press Enter (refused), then
+        // press Enter again: the composer must still hold the text, so the second Enter is refused too.
+        input.EnqueuePaste(new string('a', 600_000));
+        input.EnqueueKey(ConsoleKey.Enter);
+        await refused.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
-        await provider.GetRequiredService<TerminaApplication>().RunAsync(TestContext.Current.CancellationToken)
-            .WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+        await run.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(transport.Invocations, call => call.Method == "SendMessage");
-        lock (statuses) Assert.Contains("Message is too large to send (528 KB; limit 512 KB).", statuses);
-        // Refused text is not echoed into the transcript as a sent "You:" line; it stays in the composer.
-        Assert.DoesNotContain("You:", terminal.ToString());
+        var screen = terminal.ToString();
+        Assert.Contains("limit 512 KB)", screen);
+        Assert.Equal(2, CountOccurrences(screen, "[error] Message is too large"));
+        Assert.DoesNotContain("You:", screen);
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        for (var i = text.IndexOf(value, StringComparison.Ordinal); i >= 0; i = text.IndexOf(value, i + value.Length, StringComparison.Ordinal))
+            count++;
+        return count;
     }
 
     private static ServiceProvider CreateHost(ChatViewModel chat, VirtualInputSource input, VirtualTerminal terminal)

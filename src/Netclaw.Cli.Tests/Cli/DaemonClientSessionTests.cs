@@ -81,54 +81,6 @@ public sealed class DaemonClientSessionTests
     }
 
 
-    [Theory]
-    [InlineData(40_000)]
-    [InlineData(SessionHubLimits.MaxReceiveMessageBytes - SessionHubLimits.EnvelopeHeadroomBytes)]
-    public async Task SendAsync_delivers_large_plain_text_up_to_the_limit(int length)
-    {
-        var text = new string('a', length);
-        Assert.Null(SessionHubLimits.CheckText(text));
-
-        using var host = await StartFakeHubAsync();
-        var state = host.Services.GetRequiredService<FakeSessionState>();
-        await using var client = InMemorySignalRClientFactory.Create(host);
-        await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui, TestContext.Current.CancellationToken);
-
-        await client.SendAsync(text, TestContext.Current.CancellationToken);
-
-        Assert.Equal(text, Assert.Single(state.Messages));
-    }
-
-    [Fact]
-    public async Task SendAsync_delivers_the_largest_accepted_text_made_of_characters_json_escapes()
-    {
-        // Quotes, backslashes, control characters, markup characters, BMP non-ASCII and a surrogate pair all
-        // expand when JSON-encoded. Fill right up to the client-side limit: if the check under-measured, the
-        // server would drop the connection and this send would throw.
-        string[] units = ["\"", "\\", "\n", "\u0001", "<&>'+", "\u00e9", "\u20ac", "\ud83d\ude00"];
-        var text = new System.Text.StringBuilder();
-        var total = 0;
-        for (var i = 0; ; i++)
-        {
-            var unit = units[i % units.Length];
-            var size = SessionHubLimits.MeasureEncodedTextBytes(unit);
-            if (total + size > SessionHubLimits.MaxReceiveMessageBytes - SessionHubLimits.EnvelopeHeadroomBytes) break;
-            text.Append(unit);
-            total += size;
-        }
-        var payload = text.ToString();
-        Assert.Null(SessionHubLimits.CheckText(payload));
-
-        using var host = await StartFakeHubAsync();
-        var state = host.Services.GetRequiredService<FakeSessionState>();
-        await using var client = InMemorySignalRClientFactory.Create(host);
-        await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui, TestContext.Current.CancellationToken);
-
-        await client.SendAsync(payload, TestContext.Current.CancellationToken);
-
-        Assert.Equal(payload, Assert.Single(state.Messages));
-    }
-
     [Fact]
     public async Task SendAsync_refuses_over_limit_text_without_sending_and_keeps_the_connection()
     {
@@ -141,7 +93,7 @@ public sealed class DaemonClientSessionTests
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => client.SendAsync(text, TestContext.Current.CancellationToken));
-        Assert.Equal("Message is too large to send (610 KB; limit 512 KB).", error.Message);
+        Assert.Equal("Message is too large to send (609.8 KB; limit 512 KB).", error.Message);
         Assert.Empty(state.Messages);
 
         // The same connection still works afterwards.
@@ -149,14 +101,49 @@ public sealed class DaemonClientSessionTests
         Assert.Equal("still-here", Assert.Single(state.Messages));
     }
 
-    [Theory]
-    [InlineData(87_210, true)]
-    [InlineData(87_211, false)]
-    public void CheckText_counts_escaped_size_not_characters(int length, bool fits)
+    [Fact]
+    public void CheckText_measures_the_exact_frame_so_raw_characters_are_not_over_counted()
     {
-        // Each e-acute is 2 UTF-8 bytes but 6 bytes once the hub JSON-escapes it, so the budget
-        // (512 KB minus headroom) holds 87,210 of them.
-        Assert.Equal(fits, SessionHubLimits.CheckText(new string('\u00e9', length)) is null);
+        // The hub protocol writes e-acute, CJK and <>&'+ as raw UTF-8, not as \\uXXXX escapes.
+        Assert.Null(SessionHubFrame.CheckText(new string('\u00e9', 200_000)));
+        Assert.Null(SessionHubFrame.CheckText(new string('\u4e2d', 150_000)));
+        Assert.Null(SessionHubFrame.CheckText(string.Concat(Enumerable.Repeat("<&>'+", 100_000))));
+    }
+
+    [Fact]
+    public void CheckText_boundary_is_the_limit_minus_headroom()
+    {
+        var overhead = SessionHubFrame.MeasureSendMessageFrame("");
+        var fits = SessionHubLimits.MaxReceiveMessageBytes - SessionHubFrame.HeadroomBytes - overhead;
+        Assert.Null(SessionHubFrame.CheckText(new string('a', fits)));
+        Assert.NotNull(SessionHubFrame.CheckText(new string('a', fits + 1)));
+    }
+
+    [Fact]
+    public void CheckText_counts_escaped_characters_at_their_escaped_size()
+    {
+        var overhead = SessionHubFrame.MeasureSendMessageFrame("");
+        // Control characters are written as 6-byte \\u00XX escapes.
+        Assert.Equal(overhead + 6 * 1000, SessionHubFrame.MeasureSendMessageFrame(new string('\u0001', 1000)));
+        Assert.Null(SessionHubFrame.CheckText(new string('\u0001', 80_000)));
+        Assert.NotNull(SessionHubFrame.CheckText(new string('\u0001', 90_000)));
+    }
+
+    [Fact]
+    public void CheckText_does_not_throw_on_lone_surrogates()
+    {
+        var size = SessionHubFrame.MeasureSendMessageFrame("a\ud800b\udc00c");
+        Assert.True(size > 0);
+        Assert.Null(SessionHubFrame.CheckText("a\ud800b\udc00c"));
+    }
+
+    [Fact]
+    public void Over_limit_error_never_prints_the_limit_as_the_size()
+    {
+        var overhead = SessionHubFrame.MeasureSendMessageFrame("");
+        // One byte over the frame limit (headroom ignored): must read as visibly over 512 KB.
+        var text = new string('a', SessionHubLimits.MaxReceiveMessageBytes - overhead + 1);
+        Assert.Equal("Message is too large to send (512.1 KB; limit 512 KB).", SessionHubFrame.CheckText(text));
     }
 
     private static async Task<IHost> StartFakeHubAsync()
@@ -240,7 +227,7 @@ public sealed class DaemonClientSessionTests
 
             _state.RecordMessage(text);
 
-            // Echo only short text: the client's own receive limit is 32 KB, so echoing a big message would drop it.
+            // Echo only short text: echoing a large message back is not needed and would only slow the test.
             await Clients.Caller.ReceiveOutput(new SessionOutputDto
             {
                 Type = "text",

@@ -107,6 +107,10 @@ public sealed class HeadlessChannel : IChannel
         {
             _paths.EnsureDirectoriesExist();
 
+            // Refuse before connecting so an over-limit prompt does not leave an empty session behind.
+            if (SessionHubFrame.CheckText(_prompt) is { } tooLarge)
+                throw new InvalidOperationException(tooLarge);
+
             var turnCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
             using var connectionSubscription = _daemonClient.ConnectionEvents.Subscribe(evt =>

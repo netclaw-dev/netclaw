@@ -19,7 +19,10 @@ namespace Netclaw.Cli.Tests.Cli;
 /// </summary>
 public sealed class HeadlessChannelExitCodeTests : IAsyncDisposable
 {
-    private readonly DaemonClient _client = new("http://127.0.0.1:1", new FakeDaemonHubTransport());
+    private readonly FakeDaemonHubTransport _transport = new();
+    private readonly DaemonClient _client;
+
+    public HeadlessChannelExitCodeTests() => _client = new("http://127.0.0.1:1", _transport);
 
     public ValueTask DisposeAsync() => _client.DisposeAsync();
 
@@ -49,6 +52,45 @@ public sealed class HeadlessChannelExitCodeTests : IAsyncDisposable
         channel.HandleOutput(Completed(outcome), null);
 
         Assert.Equal(0, channel.ExitCode);
+    }
+
+    [Fact]
+    public async Task Over_limit_prompt_fails_before_connecting_or_creating_a_session()
+    {
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = new HeadlessChannel(
+            _client,
+            new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-headless-oversize-" + Guid.NewGuid().ToString("N"))),
+            new SignalingLifetime(stopped),
+            TimeProvider.System,
+            new HeadlessOptions(new string('a', 600_000)),
+            NullLogger<HeadlessChannel>.Instance);
+        var stderr = new StringWriter();
+        var original = Console.Error;
+        Console.SetError(stderr);
+        try
+        {
+            await channel.StartAsync(TestContext.Current.CancellationToken);
+            await stopped.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, Environment.ExitCode);
+            Assert.Contains("Message is too large to send", stderr.ToString());
+            Assert.Equal(0, _transport.StartAttempts);
+            Assert.Equal(0, _transport.EnsureSessionCalls);
+        }
+        finally
+        {
+            Console.SetError(original);
+            Environment.ExitCode = 0;
+        }
+    }
+
+    private sealed class SignalingLifetime(TaskCompletionSource stopped) : IHostApplicationLifetime
+    {
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+        public void StopApplication() => stopped.TrySetResult();
     }
 
     private static TurnCompleted Completed(TurnOutcome outcome) => new()

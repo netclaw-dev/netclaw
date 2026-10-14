@@ -100,7 +100,7 @@ public sealed class DaemonClient : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
         // Refuse before posting: an over-limit frame makes the server close the connection and the text is lost.
-        if (SessionHubLimits.CheckText(text) is { } tooLarge)
+        if (SessionHubFrame.CheckText(text) is { } tooLarge)
             return Task.FromException(new InvalidOperationException(tooLarge));
         return Post(new SendText(text, cancellationToken));
     }
