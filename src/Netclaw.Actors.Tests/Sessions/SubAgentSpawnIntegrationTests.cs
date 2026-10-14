@@ -1074,10 +1074,19 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         }
 
         Assert.True(failureProbe.WasCalled);
-        var firstChildRequest = _clientProvider.Main.ReceivedMessages[1];
-        var firstRunId = ParseAcceptedRunId(GetToolResult(firstChildRequest, "call-failure-spawn-1"));
+        var spawnReceiptRequest = _clientProvider.Main.ReceivedMessages
+            .LastOrDefault(request => request.SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
+                .Any(result => result.CallId == "call-failure-spawn-1"));
+        Assert.NotNull(spawnReceiptRequest);
+        var firstRunId = ParseAcceptedRunId(GetToolResult(spawnReceiptRequest!, "call-failure-spawn-1"));
         Assert.False(string.IsNullOrWhiteSpace(firstRunId));
-        Assert.Contains("synthetic child model failure", GetChildRunResult(firstChildRequest, firstRunId!), StringComparison.Ordinal);
+        var failedChildResultRequest = _clientProvider.Main.ReceivedMessages
+            .LastOrDefault(request => FindDeliveredRunIds(request).Contains(firstRunId!));
+        Assert.NotNull(failedChildResultRequest);
+        Assert.Contains(
+            "synthetic child model failure",
+            GetChildRunResult(failedChildResultRequest!, firstRunId!),
+            StringComparison.Ordinal);
         Assert.Equal(
             ["file_read", "load_tool", "search_tools"],
             _clientProvider.Compaction.ReceivedToolNames[0]
