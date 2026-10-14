@@ -2309,7 +2309,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         var call = _modelContext.StartCall(
             callId,
-            _toolWorkflow.ModelState(_state),
+            _state,
+            _toolWorkflow.ChildDecision(callId),
             _input.Authority.Context,
             _input.Authority.Source,
             _input.Authority.Trust,
@@ -2449,7 +2450,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             "working_context_inspection_failed generation={Generation}",
             message.Generation);
         var request = _modelContext.CompleteInspection(
-            message, _toolWorkflow.ModelState(_state), CurrentTurnAudience(), _input.Authority.Trust);
+            message, _state, _toolWorkflow.ChildDecision(message.Generation), CurrentTurnAudience(), _input.Authority.Trust);
         if (request is not null)
             ApplyPreparedModelRequest(request);
     }
@@ -2466,7 +2467,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         }
 
         var request = _modelContext.CompleteInspection(
-            message, _toolWorkflow.ModelState(_state), CurrentTurnAudience(), _input.Authority.Trust);
+            message, _state, _toolWorkflow.ChildDecision(message.Generation), CurrentTurnAudience(), _input.Authority.Trust);
         if (request is not null)
             ApplyPreparedModelRequest(request);
     }
