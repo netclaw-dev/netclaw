@@ -230,6 +230,24 @@ The common archive includes a synthetic relay snapshot and an assertion report.
 These cases cover the parent actor. They do not replace child actor tests,
 private incident replay, or observe-only acceptance evidence.
 
+## Coordination Spill Hint Pair
+
+This opt-in pair runs the same retained-output task with the optional child-inspection hint present and absent.
+The relay removes only that exact hint from provider-bound tool results in the absent arm.
+It preserves the result text, spill call ID, continuation instruction, tool schemas, prompt, and authority.
+The pair runs each arm three times and keeps the configured pass threshold.
+Task accuracy gates each arm. The archive records child calls and completions as separate uptake data.
+The pair does not force child use or prove a causal rate because separate model trials can differ.
+
+```bash
+NETCLAW_EVAL_PROVIDER_TYPE=openai-compatible \
+NETCLAW_EVAL_PROVIDER_ENDPOINT=http://your-model-server:8000/v1 \
+NETCLAW_EVAL_MODEL_ID=your-model \
+NETCLAW_EVAL_CATEGORY='Coordination Spill Hint' \
+NETCLAW_EVAL_TIMEOUT=300 \
+  ./evals/run-evals.sh
+```
+
 #### Raw-output review of the first fixed run
 
 The five-trial Qwen run on September 12, 2026, has 8 strict passes from 25 trials.

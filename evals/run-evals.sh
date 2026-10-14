@@ -218,6 +218,10 @@ cleanup_eval_env() {
         kill "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
         wait "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
     fi
+    if [[ -n "${SPILL_FIXTURE_PID_SAVED:-}" ]]; then
+        kill "$SPILL_FIXTURE_PID_SAVED" 2>/dev/null || true
+        wait "$SPILL_FIXTURE_PID_SAVED" 2>/dev/null || true
+    fi
     # TMPDIR_EVAL only holds host-owned per-prompt stdout/stderr captures, so a
     # plain rm always succeeds — no force_rmrf fallback needed.
     if [[ -n "${TMPDIR_EVAL:-}" && -d "$TMPDIR_EVAL" ]]; then
@@ -1898,6 +1902,53 @@ lines = [f"Record {number} contains routine status data.\n" for number in range(
 lines[399] = "Record 400 verification phrase: cobalt-heron-4471.\n"
 (root / "records.txt").write_text("".join(lines), encoding="utf-8")
 '
+}
+
+setup_coordination_spill_hint_present() {
+    setup_coordination_retained_child_inspection
+    curl -fsS -H 'Content-Type: application/json' \
+        -d '{"strip_child_inspection_hint":false}' \
+        "http://127.0.0.1:$SPILL_FIXTURE_PORT/control/spill-hint" >/dev/null
+}
+
+setup_coordination_spill_hint_absent() {
+    setup_coordination_retained_child_inspection
+    curl -fsS -H 'Content-Type: application/json' \
+        -d '{"strip_child_inspection_hint":true}' \
+        "http://127.0.0.1:$SPILL_FIXTURE_PORT/control/spill-hint" >/dev/null
+}
+
+assert_coordination_spill_hint_present() {
+    assert_coordination_retained_child_inspection || return 1
+    coordination_spill_hint_evidence false
+}
+
+assert_coordination_spill_hint_absent() {
+    assert_coordination_retained_child_inspection || return 1
+    coordination_spill_hint_evidence true
+}
+
+coordination_spill_hint_evidence() {
+    local expect_removed="$1" snapshot calls spawn_count completed_count observations
+    snapshot="${STDOUT_FILE%.txt}_spill-hint.txt"
+    curl -fsS -H 'Content-Type: application/json' -d '{}' \
+        "http://127.0.0.1:$SPILL_FIXTURE_PORT/control/snapshot" > "$snapshot" || return 1
+    observations=$(jq -c '.child_hint_observations' "$snapshot") || return 1
+    [[ $(jq 'length' <<<"$observations") -gt 0 ]] || return 1
+    if [[ "$expect_removed" == true ]]; then
+        jq -e 'all(.[]; .hint_seen and .hint_removed == 1 and .continuation_preserved and .tool_call_id_preserved)' \
+            <<<"$observations" >/dev/null || return 1
+    else
+        jq -e 'all(.[]; .hint_seen and .hint_removed == 0 and .continuation_preserved and .tool_call_id_preserved)' \
+            <<<"$observations" >/dev/null || return 1
+    fi
+    calls=$(coordination_all_tool_calls) || return 1
+    spawn_count=$(jq '[.[] | select(.toolName == "spawn_agent")] | length' <<<"$calls")
+    completed_count=$(coordination_child_completion_count) || return 1
+    jq -n --argjson observations "$observations" --argjson spawnCalls "$spawn_count" \
+        --argjson completedChildren "$completed_count" \
+        '{observations:$observations,spawnCalls:$spawnCalls,completedChildren:$completedChildren}' \
+        > "${STDOUT_FILE%.txt}_spill-hint-uptake.txt"
 }
 
 coordination_session_actor_log() {
@@ -3756,10 +3807,16 @@ main() {
     NETCLAW_VER=$("$NETCLAW_BIN" --version 2>/dev/null | head -1 || echo "unknown")
 
     local cycle_cases=false
+    local spill_cases=false
     if [[ "$FILTER_CASE" == tool_cycle_* || "${FILTER_CATEGORY,,}" == "tool cycles" ]]; then
         source "$REPO_ROOT/evals/cycle_evals.sh"
         start_cycle_fixture
         cycle_cases=true
+    fi
+    if [[ "$FILTER_CASE" == coordination_spill_hint_* || "${FILTER_CATEGORY,,}" == "coordination spill hint" ]]; then
+        source "$REPO_ROOT/evals/coordination_spill_evals.sh"
+        start_coordination_spill_fixture
+        spill_cases=true
     fi
     start_eval_daemon
     init_db
@@ -3783,6 +3840,8 @@ main() {
 
     if [[ "$cycle_cases" == true ]]; then
         run_cycle_cases
+    elif [[ "$spill_cases" == true ]]; then
+        run_coordination_spill_hint_cases
     else
         run_all
     fi
