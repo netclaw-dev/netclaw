@@ -273,7 +273,8 @@ def verdict(snapshot, output, actor_log):
     runtime["fresh_script_ids"] = len(ids) == (5 if case == "terminal" else 4) and len(set(ids)) == len(ids)
     corrections = [i for i, text in snapshot["tool_results"].items() if CORRECTION in text]
     expected_corrections = [] if case in {"changed_result", "metadata_repair"} else ids[3:4]
-    runtime["initial_correction_pair"] = corrections == expected_corrections
+    initial_corrections = [call_id for call_id in ids if call_id in corrections]
+    runtime["initial_correction_pair"] = initial_corrections == expected_corrections
     model["no_additional_cycle_interventions"] = corrections == expected_corrections
     calls = output.get("toolCalls") or []
     runtime["script_protocol"] = [c["callId"] for c in calls[:4]] == ids[:4]
