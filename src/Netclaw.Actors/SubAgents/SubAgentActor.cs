@@ -1763,6 +1763,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             {
                 var callId = result.Message.ToolCallId
                     ?? throw new InvalidOperationException("A child tool result requires a call identity.");
+                // Validate before mailbox delivery so the normal task can report a malformed batch.
                 ArgumentNullException.ThrowIfNull(callId.Value);
                 if (!callIds.Add(callId.Value))
                     throw new ArgumentException("A child tool result has a duplicate call identity.", nameof(results));

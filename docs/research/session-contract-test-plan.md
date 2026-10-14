@@ -104,7 +104,7 @@ The test adapter may change internally after extraction; accepted oracle rules a
 | --- | --- | --- |
 | Safe continuation prevents incomplete provider history and duplicate work. | Existing tests prove selected paths; source repeats outcome/continuation work. Does the split still serve a necessary delivery distinction? | Keep ingress-specific commit order. Consolidate domain rules. Prove both completion orders and partial failure. |
 | Durable approval resumption lets the UI safely resume interrupted work. | The test base uses in-memory journal/snapshots. Does this prove process durability? No. | Retain actor-recovery proof and existing persistence formats. Do not call it disk/process proof or an archive feature. |
-| Persisted results precede live session effects. | The session pipeline has one active streamed consumer. `SubAgentActor` has a separate aggregate result path. | Retain streamed commit order and the shared child aggregate message. Remove the unused session pipeline aggregate mode. |
+| Persisted results precede live session effects. | The session pipeline has one active streamed consumer. `SubAgentActor` keeps each child tool result in a private local envelope. | Retain streamed commit order. Keep each child tool result with its receipt and authorization facts. Do not treat this local envelope as a parent wake. |
 | Generated histories expose omissions across different result orders. | `ActiveToolBatchTracker` has a small state and a direct test seam. | Run the Accordant/CsCheck component pilot in the current refactor. Keep actor tests for journal and provider behavior. Require generated transitions, replay, and a production negative control. |
 
 Classify a mismatch as a product defect, test/adapter defect, or unresolved specification rule.
@@ -122,6 +122,10 @@ A status event alone does not satisfy this requirement.
 The refactor must prefer one completion mechanism over a separate child-result path through generic user input.
 It must preserve each result, its original authority, and its durable identity.
 It must prevent duplicate effects and duplicate model calls.
+
+The private result envelope only carries tool results across the `SubAgentActor` mailbox.
+It does not wake the parent session after a background child run completes.
+That wake contract remains separate work.
 
 PR #2421 at `2494a01eac5eb9310dee0c53577b695ca386de93` currently requires a terminal result to wait behind the active parent turn.
 That rule conflicts with the new decision.
@@ -206,7 +210,7 @@ Do not claim that narrower result completes the session refactor.
 
 Retain the same actor assertions and add direct owner tests through the independent test author.
 Remove the aggregate main-session handler: the sole production batch constructor selects streamed results, and synthetic cycle correction uses streamed messages.
-Retain the shared `ToolExecutionCompleted` type: `SubAgentActor` sends it to itself.
+Keep the child completion envelope private to `SubAgentActor`; it carries the existing per-call result records.
 Replace direct pipeline-test aggregate mode with assertions on streamed replies.
 Verify those retained callers. Preserve the live session commit boundary; do not normalize journal semantics.
 Root review checks source ownership, preserved effects, separate test authorship, and required checks before PR delivery.
@@ -237,7 +241,8 @@ Use this order after the first two PRs. Keep exact APIs provisional until each b
 
 The current Step 7 deletion scope removes the old memory extractor and its compaction reply path.
 Checkpoint curation remains the active memory path. The session pipeline retains streamed tool replies only.
-`SubAgentActor` retains its shared `ToolExecutionCompleted` message and its own aggregate child path.
+`SubAgentActor` keeps a private result envelope with per-call records instead of parallel aggregate maps.
+This local envelope does not implement the separate background-child wake contract.
 Direct pipeline tests must assert streamed result content, metadata, and batch completion.
 
 Each step needs a narrow baseline, an independent test author, product changes, verification, root approval, and PR publication.
