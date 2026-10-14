@@ -14,6 +14,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
@@ -187,6 +188,7 @@ internal sealed class SessionToolBatch
             _toolCalls = Array.AsReadOnly(value.ToArray());
         }
     }
+    public IReadOnlySet<string> RefusedCallIds { get; init; } = new HashSet<string>();
     public TurnContext TurnContext { get; }
     public ToolRunScope RunScope { get; }
     public required ToolExecutionTimeout DefaultTimeout { get; init; }
@@ -321,7 +323,7 @@ internal sealed class SessionToolExecutionPipeline
                         result.Receipt,
                         batch.SetWorkingDirectoryAvailable)
                 };
-                batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result));
+                batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result, batch.CancellationToken));
                 return result;
             });
             var results = await Task.WhenAll(tasks);
@@ -340,11 +342,11 @@ internal sealed class SessionToolExecutionPipeline
                         (receipt as ToolInvocationReceipt.Correction)?.RemediationCode.ToString());
             }
 
-            batch.ReplyTo.Tell(new ToolExecutionBatchCompleted());
+            batch.ReplyTo.Tell(new ToolExecutionBatchCompleted(batch.CancellationToken));
         }
         catch (TimeoutException ex)
         {
-            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex });
+            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, DispatchToken = batch.CancellationToken });
         }
         catch (OperationCanceledException) when (batch.CancellationToken.IsCancellationRequested)
         {
@@ -353,7 +355,7 @@ internal sealed class SessionToolExecutionPipeline
         }
         catch (Exception ex)
         {
-            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex });
+            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, DispatchToken = batch.CancellationToken });
         }
     }
 
@@ -388,13 +390,25 @@ internal sealed class SessionToolExecutionPipeline
             return new ToolCallResult(new SerializableChatMessage
             {
                 Role = Protocol.ChatRole.Tool,
-                Content = rejection.Message,
+                Content = batch.RefusedCallIds.Contains(tc.CallId)
+                    ? $"{rejection.Message}\n{ToolCycleMessages.Correction}" : rejection.Message,
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             }, [], [], [], authorizationAttemptId, FailureCode: rejection.DenyReason,
-                Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
+                Receipt: batch.RefusedCallIds.Contains(tc.CallId)
+                    ? new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle)
+                    : new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
         }
 
+        if (batch.RefusedCallIds.Contains(tc.CallId))
+        {
+            var correction = new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle);
+            return new ToolCallResult(new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool, ToolCallId = new ToolCallId(tc.CallId),
+                Name = tc.Name, Content = ToolCycleMessages.Correction
+            }, [], [], [], authorizationAttemptId, Receipt: correction);
+        }
         var meta = interpretation.Meta;
         tc = interpretation.Cleaned;
 

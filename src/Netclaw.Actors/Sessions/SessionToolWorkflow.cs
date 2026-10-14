@@ -77,14 +77,14 @@ internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, string>? ManagedTemporaryDenialDirectories,
     IReadOnlyDictionary<string, AuthorizationAttemptId>? AuthorizationAttemptIds);
 
-internal abstract record PreparedFreshBatch(ToolCycleDecision Decision)
+internal abstract record PreparedFreshBatch(ToolCycleBatchDecision Decision)
 {
-    internal sealed record Stop(ToolCycleDecision Decision) : PreparedFreshBatch(Decision);
+    internal sealed record Stop(ToolCycleBatchDecision Decision) : PreparedFreshBatch(Decision);
 
     internal sealed record Ready(
         List<FunctionCallContent> Calls,
         PreparedToolCycleBatch Cycle,
-        ToolCycleDecision Decision,
+        ToolCycleBatchDecision Decision,
         SerializableChatMessage AssistantMessage) : PreparedFreshBatch(Decision);
 }
 
@@ -119,7 +119,7 @@ internal sealed partial class SessionToolWorkflow
         // Canonical names must reach the journal, cycle policy, outputs, and executor.
         registry?.CanonicalizeToolCalls(response, calls);
         var cycle = ToolCycleSignatureFactory.Prepare(calls, executor);
-        var decision = turn.EvaluateBeforeDispatch(cycle.Action);
+        var decision = turn.EvaluateBeforeDispatch(cycle);
         if (decision.Kind == ToolCycleDecisionKind.Stop)
             return new PreparedFreshBatch.Stop(decision);
 
@@ -171,10 +171,12 @@ internal sealed partial class SessionToolWorkflow
         bool setWorkingDirectoryAvailable,
         Func<string, ToolInvocationContext, bool>? canDeclareWorkingDirectory,
         ApprovalRedrivePlan? approvalPlan,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlySet<string> refusedCallIds)
         => new(turnContext, environment)
         {
             ToolCalls = calls,
+            RefusedCallIds = refusedCallIds,
             DefaultTimeout = timeout,
             ReplyTo = replyTo,
             EmitSubAgentOutput = emitSubAgentOutput,
@@ -214,8 +216,8 @@ internal sealed partial class SessionToolWorkflow
 
     public ToolCallId RecordOutcome(ToolCallResult result) => _activeBatch.RecordOutcome(result);
 
-    public BatchCompletion CompleteIfReady(SessionState state, TurnStateTracker turn, int limit)
-        => _activeBatch.CompleteIfReady(state, turn, limit);
+    public BatchCompletion CompleteIfReady(SessionState state, TurnStateTracker turn)
+        => _activeBatch.CompleteIfReady(state, turn);
 
     public void ClearCompletedBatch() => _activeBatch.Clear();
 

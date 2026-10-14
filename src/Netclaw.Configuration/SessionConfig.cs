@@ -18,11 +18,8 @@ namespace Netclaw.Configuration;
 public sealed record SessionConfig
 {
     /// <summary>
-    /// Maximum number of LLM-to-tools-to-LLM iterations allowed per turn. One
-    /// LLM response that requests any number of parallel tool calls counts as
-    /// exactly one iteration. At ~75% of this limit a budget-awareness nudge
-    /// is injected; at 100% tools are stripped and the model is asked to
-    /// summarize its work (force-no-tools completion).
+    /// Legacy configuration field. The runtime preserves the value but does not enforce a fixed iteration ceiling.
+    /// Exact recurrence rules govern repeated work. Deadlines, cancellation, and authorization still apply.
     /// </summary>
     public int MaxToolIterationsPerTurn { get; init; } = 60;
 
