@@ -4036,6 +4036,10 @@ run_all() {
         "Use spawn_agent with agent headless-analyst to write a prospecting email to Casey, a VP of Engineering interested in reducing operational toil. Return its final email." \
         "Delegate to headless-analyst: draft an outbound email for Jordan, a technology leader evaluating autonomous operations. Return the worker's final email."
 
+    # Child completion can exceed the default model response window.
+    local coordination_timeout="$PROMPT_TIMEOUT"
+    PROMPT_TIMEOUT=300
+
     run_case --json coordination_retained_child_inspection "agent returns Record 400 from retained evidence" \
         "Read /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Find Record 400 and return JSON only with fields record and verification." \
         "Inspect /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Return JSON only with record and verification for Record 400."
@@ -4045,6 +4049,8 @@ run_all() {
 
     run_case --json --coordination-observer coordination_artifact_review "an independent reviewer finds a planted defect and clears a clean control" \
         "Ask one independent reviewer to inspect /home/netclaw/.netclaw/workspaces/coordination-artifact-review/artifact-a.cs, artifact-b.cs, and observed-inputs.json. Contract: pendingCount is nonnegative and readiness is true only when pendingCount equals zero. Wait for the reviewer result. Then return JSON only with artifactA fields verdict, observedForTwoPending, expectedForTwoPending; and artifactB fields verdict, observedForZeroPending, expectedForZeroPending."
+
+    PROMPT_TIMEOUT="$coordination_timeout"
 
     run_multi_turn_case subagent_project_scope_declaration "subagent declares a different named project before shell inspection" \
         "Use spawn_agent with agent project-scope-analyst. Ask it to inspect /home/netclaw/.netclaw/workspaces/project-scope-target with exactly two shell_execute calls: git status --short and git diff --stat. Return the command results, project layout, and build-file summary. Keep the parent project unchanged."
