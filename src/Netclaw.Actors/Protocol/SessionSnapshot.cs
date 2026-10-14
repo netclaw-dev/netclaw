@@ -81,6 +81,10 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     public IReadOnlyList<ActiveJobInfo> ActiveBackgroundJobs { get; init; } =
         Array.Empty<ActiveJobInfo>();
 
+    /// <summary>Background job IDs that the session already accepted.</summary>
+    public IReadOnlyList<BackgroundJobId> ProcessedBackgroundJobIds { get; init; } =
+        [];
+
     public IReadOnlyList<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; init; } =
         Array.Empty<AdoptedContextSnapshotRecord>();
 

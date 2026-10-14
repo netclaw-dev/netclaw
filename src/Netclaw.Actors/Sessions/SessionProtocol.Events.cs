@@ -91,6 +91,10 @@ public static partial class SessionProtocol
 
         public ChildContinuation? ChildContinuation { get; init; }
 
+        public BackgroundJobId? SourceBackgroundJobId { get; init; }
+
+        public SerializableChatMessage? RejectedJobReport { get; init; }
+
         public long ClosedAtMs { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(ClosedAtMs);
@@ -129,6 +133,8 @@ public static partial class SessionProtocol
         public SessionId SessionId { get; init; }
 
         public SerializableChatMessage ToolResult { get; init; } = new();
+
+        public ActiveJobInfo? StartedBackgroundJob { get; init; }
 
         public long RecordedAtMs { get; init; }
 
