@@ -34,11 +34,8 @@ public sealed partial class LlmSessionActor
         {
             switch (LegacyCoordinationReplay.GetCoreEvent(_state, evt))
             {
-                case InputClosed closed: _state = _state.Apply(closed); break;
-                case ToolBatchStarted batch:
-                    RestoreConsumedInputs(batch.ConsumedInputIds, batch.UserMessage);
-                    ApplyToolBatchStarted(batch);
-                    break;
+                case InputClosed closed: RecoverParentClosure(closed); break;
+                case ToolBatchStarted batch: RecoverParentBatch(batch); break;
                 case ToolCallRecorded result: ApplyToolCallRecorded(result); break;
             }
         }

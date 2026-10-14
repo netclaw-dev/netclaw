@@ -194,7 +194,7 @@ public sealed partial record SessionState
     internal SessionState Apply(TurnRecorded evt, bool userAlreadyInHistory)
     {
         var closed = CommitChildContinuation(evt.ChildContinuation, close: true)
-            .CloseLegacyChildContinuations(evt.ConsumedInputIds).CloseInputs(evt.ConsumedInputIds);
+            .CloseInputs(evt.ConsumedInputIds);
         // Live history already has the user message. Replay can restore it by input ID.
         var history = userAlreadyInHistory || evt.ChildContinuation is not null
             ? closed.History : closed.History.Add(evt.UserMessage);

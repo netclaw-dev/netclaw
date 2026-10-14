@@ -344,3 +344,25 @@ known-good version.
   three-slot `NetclawChatClientProvider` role system, which currently resolves
   to a single configured model for most installs. Per-agent model selection
   is tracked in a follow-on issue pending a multi-model provider architecture.
+
+## Coordination journal migration and restore
+
+The compatibility reader accepts deployed child manifests `cra-v1`, `cre-v1`, and `tta-v1`.
+It translates exact old child delivery correlations before the ordinary parent recovery path.
+The current writer uses `cra-v2`, `cre-v2`, and `ss-v2` for child facts and snapshots.
+Older binaries cannot read these records. Do not downgrade a database in place.
+
+Unresolved historical evidence remains inert and visible through the owner status response.
+Recovery does not relaunch uncertain child work or convert child results into user input.
+An exact settled delivery stays settled. A ready result can resume only its original parent authority.
+
+The restore unit is a complete, consistent pre-upgrade SQLite backup.
+The backup must include the journal and snapshot tables from the same database state.
+Retain its hash, source revision, and backup procedure receipt before an upgrade.
+Restore a copied backup with the intended binary and prove actor recovery before an operational rollback.
+A serializer round-trip alone does not prove database restore or runtime recovery.
+A restore loses later journal facts and does not reverse external effects.
+
+Use the fixed-byte compatibility and actor recovery checks in `Netclaw.Actors.Tests` for candidate validation.
+Record the exact candidate, test filter, database copy, and results in the release evidence.
+No live deployment or database restore forms part of this source change.
