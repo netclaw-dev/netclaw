@@ -90,8 +90,8 @@ first user message is just the raw task, identical to the pre-context protocol.
 3. A `SubAgentActor` is spawned as a **child of the session actor** (supervised,
    lifecycle-managed — stops when the session stops).
 4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
-5. After at most 30 tool iterations, a final response, or an inactivity timeout,
-   the subagent returns a terminal run result.
+5. After a final response or an inactivity timeout, the subagent returns a
+   terminal run result. The runtime sets no fixed tool-iteration ceiling.
 6. `spawn_agent` returns the accepted run ID at once. The terminal result arrives
    in a later parent turn as a `child_run_result` tool result. It holds the agent
    name, run id, outcome (`completed`, `partial`, or `failed`), optional reason,
@@ -379,8 +379,8 @@ known-good version.
 - Subagents are **single-turn**: they receive a task, run their tool loop, and
   return a result. They do not maintain conversation history or support
   back-and-forth interaction with the user.
-- Subagents have a **maximum of 30 tool iterations** before being forced to
-  produce a text response.
+- Subagents have no fixed maximum number of tool iterations. A final response
+  or an inactivity timeout ends the run.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.
