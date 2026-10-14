@@ -18,8 +18,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
-/// Integration tests for the max tool iterations safety circuit breaker.
-/// Verifies that unbounded agentic tool loops are terminated after the configured limit.
+/// Integration tests for productive tool work without a fixed iteration ceiling.
 /// </summary>
 public class MaxToolIterationTests : LlmSessionTestBase
 {
@@ -59,16 +58,18 @@ public class MaxToolIterationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Tool_iteration_limit_forces_text_response()
+    public async Task Distinct_productive_tool_rounds_continue_past_the_former_limit()
     {
-        // Configure: LLM always returns tool calls when tools are available
-        _fakeChatClient.ToolCallsOnFirstCall =
-        [
-            new FunctionCallContent("call-1", "web_search",
-                new Dictionary<string, object?> { ["query"] = "test" })
-        ];
-        _fakeChatClient.AlwaysReturnToolCalls = true;
-        _fakeToolExecutor.Results["web_search"] = "search result";
+        const int FormerLimit = 3;
+        const int UsefulRounds = FormerLimit + 2;
+        for (var i = 1; i <= UsefulRounds; i++)
+        {
+            _fakeChatClient.PlannedResponses.Enqueue([
+                new FunctionCallContent($"call-{i}", "web_search",
+                    new Dictionary<string, object?> { ["query"] = $"query-{i}" })]);
+        }
+        _fakeToolExecutor.ExecuteOverride = (call, _) =>
+            Task.FromResult($"result:{call.Arguments!["query"]}");
 
         var sessionId = new SessionId("test-channel/max-iter-test");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -84,172 +85,24 @@ public class MaxToolIterationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Keep calling tools forever"
+            Content = "Use each distinct search result to complete the task"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        // Expect 3 rounds of tool calls (the configured limit); each call is followed by a tool result
-        for (var i = 0; i < 3; i++)
+        var results = new List<ToolResultOutput>();
+        for (var i = 0; i < UsefulRounds; i++)
         {
             await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-            await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+            results.Add(await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken));
         }
 
-        // After circuit breaker fires, LLM is called without tools → text response
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
-
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        // 4 LLM calls total: 3 returned tool calls + 1 forced text (no tools)
-        Assert.Equal(4, _fakeChatClient.CallCount);
-
-        // The cycle guard blocks the third execution and returns a paired correction.
-        Assert.Equal(2, _fakeToolExecutor.CallCount);
-    }
-
-    [Fact]
-    public async Task Tool_iteration_limit_fails_turn_when_model_keeps_emitting_tool_calls_without_tools()
-    {
-        _fakeChatClient.ToolCallsOnFirstCall =
-        [
-            new FunctionCallContent("call-1", "web_search",
-                new Dictionary<string, object?> { ["query"] = "test" })
-        ];
-        _fakeChatClient.AlwaysReturnToolCalls = true;
-        _fakeChatClient.IgnoreToolAvailability = true;
-        _fakeToolExecutor.Results["web_search"] = "search result";
-
-        var sessionId = new SessionId("test-channel/max-iter-violation");
-        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("max-iter-violation-sub");
-
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
-
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Keep calling tools even when disabled"
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-
-        for (var i = 0; i < 3; i++)
-        {
-            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-            await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        }
-
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        // The model broke a rule the runtime enforces. A provider outage uses ProviderFailure.
-        // Asserted by name: the error category contract in HeadlessTurnErrorCategoryTests names ModelBehavior.
-        Assert.Equal("ModelBehavior", error.Category.ToString());
-        Assert.Contains("required text only", error.Message, StringComparison.Ordinal);
-
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(4, _fakeChatClient.CallCount);
-        Assert.Equal(2, _fakeToolExecutor.CallCount);
-    }
-
-    [Fact]
-    public async Task Tool_iteration_counter_resets_between_turns()
-    {
-        // Configure: LLM always returns tool calls when tools are available
-        _fakeChatClient.ToolCallsOnFirstCall =
-        [
-            new FunctionCallContent("call-1", "web_search",
-                new Dictionary<string, object?> { ["query"] = "test" })
-        ];
-        _fakeChatClient.AlwaysReturnToolCalls = true;
-        _fakeToolExecutor.Results["web_search"] = "search result";
-
-        var sessionId = new SessionId("test-channel/iter-reset-test");
-        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("iter-reset-sub");
-
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
-
-        // Turn 1: hits the limit at 3
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "First turn"
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-
-        for (var i = 0; i < 3; i++)
-        {
-            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-            await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        }
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        // Turn 2: counter should be reset, so it also gets 3 tool iterations
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Second turn"
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-
-        for (var i = 0; i < 3; i++)
-        {
-            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-            await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        }
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        // 8 LLM calls total: 2 turns × (3 tool + 1 text)
-        Assert.Equal(8, _fakeChatClient.CallCount);
-
-        // Each turn executes twice before the cycle guard blocks the third batch.
-        Assert.Equal(4, _fakeToolExecutor.CallCount);
-    }
-
-    [Fact]
-    public async Task Normal_tool_use_within_limit_works_unchanged()
-    {
-        // Configure: LLM returns tool call only on first call (default behavior)
-        _fakeChatClient.ToolCallsOnFirstCall =
-        [
-            new FunctionCallContent("call-1", "web_search",
-                new Dictionary<string, object?> { ["query"] = "test" })
-        ];
-        _fakeToolExecutor.Results["web_search"] = "search result";
-
-        var sessionId = new SessionId("test-channel/normal-tool-test");
-        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("normal-tool-sub");
-
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
-
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Search for something"
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-
-        // One tool call, then normal text response (well within limit of 3)
-        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        // 2 LLM calls: 1 tool call + 1 text
-        Assert.Equal(2, _fakeChatClient.CallCount);
-        Assert.Equal(1, _fakeToolExecutor.CallCount);
+        Assert.Equal(UsefulRounds, _fakeToolExecutor.CallCount);
+        Assert.Equal(UsefulRounds + 1, _fakeChatClient.CallCount);
+        Assert.Equal(Enumerable.Range(1, UsefulRounds).Select(static round => $"result:query-{round}"),
+            results.Select(static result => result.Result));
+        Assert.All(_fakeChatClient.ReceivedToolNames.Take(UsefulRounds), names => Assert.Contains("web_search", names));
     }
 }

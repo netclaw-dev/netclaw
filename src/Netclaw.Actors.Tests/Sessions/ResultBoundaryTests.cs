@@ -103,7 +103,7 @@ public sealed class ResultBoundaryTests
         ChildRunCompletion completion = outcome switch
         {
             "completed" => new ChildRunCompletion.Completed(WorkingContextDelta.Empty),
-            "partial" => new ChildRunCompletion.Partial(SubAgentOutcomeReason.ToolIterationBudgetExhausted, WorkingContextDelta.Empty),
+            "partial" => new ChildRunCompletion.Partial(SubAgentOutcomeReason.ToolCycleStopped, WorkingContextDelta.Empty),
             "failed" => new ChildRunCompletion.Failed(SubAgentOutcomeReason.LlmCallFailed),
             "cancelled" => new ChildRunCompletion.Cancelled(SubAgentOutcomeReason.CancelledByParent),
             _ => throw new ArgumentException("Unexpected test outcome.", nameof(outcome))
