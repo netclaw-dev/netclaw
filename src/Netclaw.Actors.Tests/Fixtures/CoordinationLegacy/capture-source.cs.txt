@@ -83,6 +83,33 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
             AdoptedTaskInputIds = [delivered.InputId],
             PendingInputs = [delivered]
         };
+        var ambiguousDeliverySnapshot = legacyPairSnapshot with
+        {
+            History = [inputA.UserMessage]
+        };
+        var preparedUndeliveredSnapshot = new SessionSnapshot
+        {
+            History = [inputA.UserMessage],
+            ChildRuns = [preparedRun],
+            WorkingContext = new WorkingContext { ProjectDirectory = "/repo/prepared" }
+        };
+        var ordinarySnapshot = new SessionSnapshot
+        {
+            History = [inputA.UserMessage],
+            WorkingContext = new WorkingContext { ProjectDirectory = "/repo/ordinary" },
+            ActiveBackgroundJobs =
+            [
+                new Netclaw.Actors.Jobs.ActiveJobInfo
+                {
+                    JobId = new Netclaw.Actors.Jobs.BackgroundJobId("legacy-job-1"),
+                    Command = "dotnet test",
+                    Rationale = "Verify the ordinary snapshot.",
+                    StartedAtMs = 123471,
+                    Audience = Netclaw.Configuration.TrustAudience.Team,
+                    Boundary = Netclaw.Configuration.TrustBoundary.Team
+                }
+            ]
+        };
 
         var records = new (string Name, object Value)[]
         {
@@ -146,7 +173,9 @@ public sealed partial class BackgroundChildLedgerAdversarialTests
                 Decision = "approve_once",
                 ResolvedAtMs = 123468
             }),
-            ("session-snapshot", new SessionSnapshot { History = [inputA.UserMessage] }),
+            ("session-snapshot", ordinarySnapshot),
+            ("prepared-undelivered-child-snapshot", preparedUndeliveredSnapshot),
+            ("ambiguous-child-delivery-snapshot", ambiguousDeliverySnapshot),
             ("legacy-child-pair-snapshot", legacyPairSnapshot)
         };
 

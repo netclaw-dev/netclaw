@@ -233,8 +233,11 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Spawn_agent_runs_under_session_and_emits_subagent_events()
+    public async Task Spawn_agent_returns_durable_acceptance_then_wakes_parent_with_fresh_result_pair()
     {
+        var childGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var parentWakeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _clientProvider.Compaction.NextResponseGate = childGate;
         _clientProvider.Main.ToolCallsOnFirstCall =
         [
             CreateToolCall(
@@ -247,6 +250,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 })
         ];
 
+        try
+        {
         var sessionId = new SessionId("console/subagent-integration");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("subagent-events");
@@ -271,24 +276,58 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var started = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SubAgentPhase.Started, started.Phase);
         Assert.Equal("summarizer", started.AgentName.Value);
-        Assert.Equal(4, started.ToolCount);
+        Assert.Equal(3, started.ToolCount);
+        await _clientProvider.Compaction.FirstCallEntered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        var completed = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(SubAgentPhase.Completed, completed.Phase);
-        Assert.Equal("summarizer", completed.AgentName.Value);
-        Assert.True(completed.Success);
-        Assert.Equal(0, completed.FindingsCount);
-        Assert.Null(completed.MemoryDecision);
-
-        // Drain the tool result output for spawn_agent emitted after tool execution
-        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var acceptance = await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("call-spawn", acceptance.CallId.Value);
+        Assert.Equal("spawn_agent", acceptance.ToolName.Value);
+        string runId;
+        using (var acceptedJson = JsonDocument.Parse(acceptance.Result))
+        {
+            Assert.Equal("accepted", acceptedJson.RootElement.GetProperty("state").GetString());
+            Assert.Equal("check_agent_run", acceptedJson.RootElement.GetProperty("control_tool").GetString());
+            runId = acceptedJson.RootElement.GetProperty("run_id").GetString()!;
+            Assert.False(string.IsNullOrWhiteSpace(runId));
+        }
 
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
+        // The child model stays behind a barrier until the parent returns its acceptance.
+        Assert.Equal(1, _clientProvider.Compaction.CallCount);
         Assert.Equal(2, _clientProvider.Main.CallCount);
+        _clientProvider.Main.NextResponseGate = parentWakeGate;
+        childGate.TrySetResult();
+
+        var completed = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(SubAgentPhase.Completed, completed.Phase);
+        Assert.Equal("summarizer", completed.AgentName.Value);
+        Assert.True(completed.Success);
+        Assert.Equal(SubAgentRunOutcome.Completed, completed.Outcome);
+        Assert.True(completed.Duration > TimeSpan.Zero);
+        Assert.Equal(0, completed.FindingsCount);
+
+        await AwaitAssertAsync(() => Assert.True(_clientProvider.Main.CallCount >= 3,
+            $"Expected a parent wake with the child result pair, saw {_clientProvider.Main.CallCount} calls."),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var parentWake = _clientProvider.Main.ReceivedMessages[2];
+        var resultCall = Assert.Single(parentWake.SelectMany(message => message.Contents.OfType<FunctionCallContent>()),
+            call => call.Name == "child_run_result");
+        var result = Assert.Single(parentWake.SelectMany(message => message.Contents.OfType<FunctionResultContent>()),
+            item => item.CallId == resultCall.CallId);
+        Assert.NotEqual("call-spawn", resultCall.CallId);
+        Assert.Equal(runId, resultCall.Arguments?["run_id"]?.ToString());
+        Assert.Equal("spawn_agent", resultCall.Arguments?["source_operation"]?.ToString());
+        Assert.Contains(runId, result.Result?.ToString(), StringComparison.Ordinal);
+        Assert.Contains("[fake]", result.Result?.ToString(), StringComparison.Ordinal);
+        Assert.Single(parentWake, message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+            && message.Text == "Use a subagent to summarize the file");
+        parentWakeGate.TrySetResult();
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
         Assert.Equal(1, _clientProvider.Compaction.CallCount);
 
         var subagentCall = Assert.Single(_clientProvider.Compaction.ReceivedMessages);
@@ -328,6 +367,13 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             childToolNames);
         Assert.Contains("attach_file", mainToolNames);
         Assert.DoesNotContain("attach_file", childToolNames);
+
+        }
+        finally
+        {
+            childGate.TrySetResult();
+            parentWakeGate.TrySetResult();
+        }
     }
 
     [Fact]
