@@ -21,6 +21,7 @@ public sealed partial record SessionState
         var run = evt.Run;
         if (run.StartKey.SessionId != evt.SessionId || run.OriginalContext.SessionId != evt.SessionId ||
             run.StartKey.TurnId != run.OriginalContext.TurnId || run.Lifecycle is not ChildRunLifecycle.Accepted ||
+            run.InitialWorkingSnapshot is null ||
             string.IsNullOrWhiteSpace(run.RunId.Value) || string.IsNullOrWhiteSpace(run.ArgumentsDigest) ||
             !TurnContext.TryFromRecord(run.OriginalContext, out _, out _))
             throw new InvalidOperationException("Child acceptance has invalid identity or authority.");
@@ -43,6 +44,8 @@ public sealed partial record SessionState
     {
         if (!ChildRuns.TryGetValue(evt.RunId, out var run) || run.OriginalContext.SessionId != evt.SessionId)
             throw new InvalidOperationException("Child event does not name an accepted run.");
+        if (run.InitialWorkingSnapshot is null && run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling or ChildRunLifecycle.Terminal)
+            throw new InvalidOperationException("An unprepared child requires its initial context snapshot.");
         ChildRunLifecycle next = (run.Lifecycle, evt) switch
         {
             (ChildRunLifecycle.Accepted current, ChildRunEvent.Checkpointed update)
@@ -56,15 +59,28 @@ public sealed partial record SessionState
                 => new ChildRunLifecycle.Terminal(terminal.Terminal),
             (ChildRunLifecycle.Terminal terminal, ChildRunEvent.ResultPrepared prepared)
                 when IsCanonicalChildPair(run, prepared.Call, prepared.Result) &&
-                     (terminal.Result.Result.Success == (prepared.ReviewedWorkingContext is not null))
+                     (terminal.Result.Result.Success || prepared.ReviewedWorkingContext is null)
                 => new ChildRunLifecycle.Prepared(new ChildPreparedResult(terminal.Result, prepared.Call, prepared.Result, prepared.ReviewedWorkingContext)),
             _ => throw new InvalidOperationException("Child event is invalid for its current lifecycle.")
         };
-        return this with { ChildRuns = ChildRuns.SetItem(run.RunId, run with { Lifecycle = next }) };
+        return this with
+        {
+            ChildRuns = ChildRuns.SetItem(run.RunId, run with
+            {
+                Lifecycle = next,
+                InitialWorkingSnapshot = next is ChildRunLifecycle.Prepared ? null : run.InitialWorkingSnapshot
+            })
+        };
     }
 
     public SessionState Apply(InputClosed evt)
-        => CommitChildContinuation(evt.ChildContinuation, close: true).CloseInputs(evt.InputIds);
+        {
+        if (evt.RejectedJobReport is not null && evt.SourceBackgroundJobId is null)
+            throw new InvalidDataException("A rejected job report requires its source job identity.");
+        var next = CommitChildContinuation(evt.ChildContinuation, close: true)
+            .CloseInputs(evt.InputIds).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
+        return evt.RejectedJobReport is { } report ? next with { History = next.History.Add(report) } : next;
+    }
 
     internal SessionState CommitChildContinuation(ChildContinuation? continuation, bool close)
     {

@@ -134,7 +134,7 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     public RestartAction RequestRestart(
         IActorRef replyTo,
         SessionPhase phase,
-        int selectedInputCount,
+        bool hasActiveTurn,
         bool hasBufferedContinuation,
         bool canParkDurableApprovals)
     {
@@ -145,7 +145,7 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         if (TryStopDurableApprovalWaits(phase, hasBufferedContinuation, canParkDurableApprovals))
             return RestartAction.StopToolTask;
 
-        if (phase == SessionPhase.Processing && HasLiveModel && selectedInputCount > 0)
+        if (phase == SessionPhase.Processing && HasLiveModel && hasActiveTurn)
         {
             timers.StartSingleTimer(
                 RestartModelGraceTimerKey,
@@ -167,10 +167,10 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
            && canParkDurableApprovals
            && RequestToolStop();
 
-    public long? PlanRestartModelStop(RestartModelGraceExpired message, SessionPhase phase, int selectedInputCount)
+    public long? PlanRestartModelStop(RestartModelGraceExpired message, SessionPhase phase, bool hasActiveTurn)
         => RestartDrainRequested
            && phase == SessionPhase.Processing
-           && selectedInputCount > 0
+           && hasActiveTurn
            && CanDispatchPreparedModel(message.CallId)
             ? message.CallId
             : null;
@@ -198,13 +198,13 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     public ReminderEligibility MarkRestartReminderEligible(
         int pendingInputCount,
         bool emittedText,
-        int selectedInputCount,
+        bool hasActiveTurn,
         DateTimeOffset now)
     {
         if (pendingInputCount == 0)
             return ReminderEligibility.None;
 
-        if (emittedText && selectedInputCount > 0)
+        if (emittedText && hasActiveTurn)
             return ReminderEligibility.EmittedText;
 
         _restartInterruptionAt = now;

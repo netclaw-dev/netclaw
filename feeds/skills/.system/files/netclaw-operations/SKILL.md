@@ -197,6 +197,21 @@ receive a read-only project/recent-file snapshot. Successful and partial runs
 return only file edits confirmed through their own tools; failed or cancelled
 runs contribute no parent working-context changes.
 
+## Child agent runs
+
+`spawn_agent`, routed `skill_load`, and a routed slash command return after durable acceptance.
+The response contains `run_id` and `scope_id`. Acceptance does not mean completion.
+Continue independent work. A ready child result arrives as tool output at the next safe parent boundary.
+Another child's unfinished work does not delay a ready result.
+Use `check_agent_run` with the returned `run_id` for a status check.
+The original owner can see `pending_approval_count` and request cancellation with `cancel: true`.
+A cancellation acknowledgement reports intent. Wait for the terminal result before you report that the child stopped.
+Do not poll status in a loop. Use it when the user needs a status update or intervention.
+The terminal result includes authorized log and artifact paths when available.
+Use normal file tools for those exact paths. Do not derive a broader session path.
+A lost child reports uncertainty. Recovery does not repeat its external work.
+A result with an evidence warning does not authorize parent context adoption.
+
 ## Scheduling & Background Jobs
 
 Reminders: `set_reminder` with schedule type `once` / `interval` / `cron`. Always
