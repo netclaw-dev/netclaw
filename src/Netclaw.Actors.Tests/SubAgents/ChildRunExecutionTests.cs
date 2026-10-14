@@ -3,15 +3,16 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Akka.Actor;
 using System.Collections.Concurrent;
+using Akka.Actor;
+using Akka.Hosting.TestKit;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.SubAgents;
 
-public sealed class ChildRunExecutionTests
+public sealed class ChildRunExecutionTests(ITestOutputHelper output) : TestKit(output: output)
 {
     private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(10);
 
@@ -28,7 +29,7 @@ public sealed class ChildRunExecutionTests
     }
 
     [Fact]
-    public void Close_ack_waits_for_an_admitted_dispatch_delegate()
+    public async Task Close_ack_waits_for_an_admitted_dispatch_delegate()
     {
         using var execution = new ChildRunExecution(new SubAgentRunId("close-race-run"), ActorRefs.Nobody);
         using var delegateEntered = new ManualResetEventSlim();
@@ -74,11 +75,12 @@ public sealed class ChildRunExecutionTests
         try
         {
             Assert.True(closeStarted.Wait(Ceiling, TestContext.Current.CancellationToken));
-            var reachedClose = SpinWait.SpinUntil(
-                () => closeCompleted.IsSet || (closer.ThreadState & ThreadState.WaitSleepJoin) != 0,
-                Ceiling);
-            Assert.True(reachedClose, "The close thread did not reach the gate.");
-            Assert.False(closeCompleted.IsSet, "Close returned while an admitted dispatch held the gate.");
+            await AwaitAssertAsync(() =>
+            {
+                Assert.False(closeCompleted.IsSet, "Close returned while an admitted dispatch held the gate.");
+                Assert.True((closer.ThreadState & ThreadState.WaitSleepJoin) != 0,
+                    "The close thread did not wait for the admitted dispatch gate.");
+            }, Ceiling, cancellationToken: TestContext.Current.CancellationToken);
         }
         finally
         {

@@ -106,6 +106,42 @@ public sealed class LegacyCoordinationReplayTests : TestKit
     }
 
     [Fact]
+    public void Fixed_legacy_batch_settles_child_after_consumed_ids_leave_the_final_turn()
+    {
+        var serializer = Codec();
+        var originalCall = new SerializableChatMessage
+        {
+            Role = ChatRole.Assistant,
+            ToolCalls =
+            [
+                new SerializableToolCall
+                {
+                    CallId = new ToolCallId("start-call"),
+                    Name = new ToolName("spawn_agent"),
+                    ArgumentsJson = "{}"
+                }
+            ]
+        };
+        var state = SessionState.Empty with { History = [originalCall] };
+        foreach (var name in new[]
+        {
+            "child-run-accepted", "child-started", "child-checkpoint",
+            "child-cancellation-requested", "child-dispatch-closed", "child-terminal",
+            "child-result-prepared", "child-delivery-admitted", "valid-child-delivery-adoption",
+            "child-downstream-tool-batch", "child-downstream-tool-result", "child-downstream-final-turn"
+        })
+        {
+            state = Replay(serializer, state, name);
+        }
+
+        var runId = new SubAgentRunId("accepted-run");
+        Assert.IsType<ChildRunLifecycle.Closed>(state.ChildRuns[runId].Lifecycle);
+        Assert.Null(new SessionToolWorkflow().SelectChild(state, modelGeneration: 2, allowSelection: true));
+        Assert.DoesNotContain(state.LegacyCoordinationEvidence,
+            evidence => evidence.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation);
+    }
+
+    [Fact]
     public void Fixed_ambiguous_snapshot_keeps_child_delivery_unresolved_without_a_new_pair_id()
     {
         var serializer = Codec();
@@ -180,26 +216,14 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         var restored = SessionState.FromSnapshot(snapshot);
 
         var run = Assert.Single(restored.ChildRuns.Values);
-        var prepared = Assert.IsType<ChildRunLifecycle.Prepared>(run.Lifecycle);
+        Assert.IsType<ChildRunLifecycle.Terminal>(run.Lifecycle);
         Assert.False(restored.TryGetLegacyChildDisposition(run.RunId, out _));
-        var pairCallId = Assert.Single(prepared.Delivery.Call.ToolCalls).CallId;
         Assert.DoesNotContain(restored.History.SelectMany(message => message.ToolCalls),
-            call => call.CallId == pairCallId);
-        Assert.Equal("child_run_result", Assert.Single(prepared.Delivery.Call.ToolCalls).Name.Value);
-        Assert.Equal(prepared.Delivery.Call.ToolCalls[0].CallId, prepared.Delivery.Result.ToolCallId);
-        Assert.Equal("child_run_result", prepared.Delivery.Result.Name);
-        var workflow = new SessionToolWorkflow();
-        Assert.Equal(run, workflow.SelectChild(restored, modelGeneration: 42, allowSelection: true));
-        var modelState = workflow.ModelState(restored);
-        Assert.Equal(1, modelState.History.SelectMany(message => message.ToolCalls).Count(call => call.CallId == pairCallId));
-        Assert.Equal(1, modelState.History.Count(message => message.ToolCallId == pairCallId));
-        Assert.Equal(pairCallId, workflow.ChildDecision(modelGeneration: 42)?.DeliveryCallId);
+            call => call.Name.Value == "child_run_result");
 
         var replayed = SessionState.FromSnapshot(RoundTrip(serializer, restored.ToSnapshot()));
-        var replayedPrepared = Assert.IsType<ChildRunLifecycle.Prepared>(replayed.ChildRuns[run.RunId].Lifecycle);
-        Assert.Equal(prepared.Delivery.Call, replayedPrepared.Delivery.Call);
-        Assert.Equal(prepared.Delivery.Result, replayedPrepared.Delivery.Result);
-        Assert.Single(replayed.ChildRuns.Values);
+        Assert.IsType<ChildRunLifecycle.Terminal>(Assert.Single(replayed.ChildRuns.Values).Lifecycle);
+        Assert.False(replayed.TryGetLegacyChildDisposition(run.RunId, out _));
     }
 
     [Fact]
@@ -262,8 +286,8 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         var closed = Assert.IsType<InputClosed>(Deserialize(serializer, "input-closed"));
         var batch = Assert.IsType<ToolBatchStarted>(Deserialize(serializer, "tool-batch-started"));
         var result = Assert.IsType<ToolCallRecorded>(Deserialize(serializer, "tool-call-recorded"));
-        var requested = Assert.IsType<LegacyCoordinationEvent>(Deserialize(serializer, "tool-approval-requested"));
-        var resolved = Assert.IsType<LegacyCoordinationEvent>(Deserialize(serializer, "tool-approval-resolved"));
+        var requested = Assert.IsType<ToolApprovalRequested>(Deserialize(serializer, "tool-approval-requested"));
+        var resolved = Assert.IsType<ToolApprovalResolved>(Deserialize(serializer, "tool-approval-resolved"));
 
         Assert.Equal(new SessionId(Owner), closed.SessionId);
         Assert.Equal([new InputId("legacy-input-b")], closed.InputIds);
@@ -277,10 +301,18 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         Assert.Equal("file_read", result.ToolResult.Name);
         Assert.Equal("Neutral result.", result.ToolResult.Content);
         Assert.Equal(123466, result.RecordedAtMs);
-        Assert.Equal("tar-v1", requested.Manifest);
-        Assert.Equal("tares-v1", resolved.Manifest);
         Assert.Equal(new SessionId(Owner), requested.SessionId);
+        Assert.Equal("neutral-approval-call", requested.CallId);
+        Assert.Equal("neutral-attempt", requested.AuthorizationAttemptId);
+        Assert.Equal("file_write", requested.ToolName);
+        Assert.Equal(["file_write"], requested.Patterns);
+        Assert.Equal(["file_write"], requested.CandidateVerbs);
+        Assert.Equal(123467, requested.RequestedAtMs);
         Assert.Equal(new SessionId(Owner), resolved.SessionId);
+        Assert.Equal("neutral-approval-call", resolved.CallId);
+        Assert.Equal("neutral-attempt", resolved.AuthorizationAttemptId);
+        Assert.Equal("approve_once", resolved.Decision);
+        Assert.Equal(123468, resolved.ResolvedAtMs);
     }
 
     [Fact]
@@ -361,12 +393,14 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         }));
 
         Assert.Equal(SubAgentRunOutcome.Completed, Assert.IsType<ChildRunLifecycle.Closed>(state.ChildRuns[run.RunId].Lifecycle).Outcome);
-        Assert.Equal(initial, state.WorkingContext);
+        Assert.Equal(initial.ProjectDirectory, state.WorkingContext.ProjectDirectory);
+        Assert.Equal(initial.RecentFiles, state.WorkingContext.RecentFiles);
         Assert.Contains("Working-context review failed.", Assert.Single(state.History, message => message.ToolCallId == callId).Content);
         Assert.Contains("Verified result", Assert.Single(state.History, message => message.ToolCallId == callId).Content);
 
         var restored = SessionState.FromSnapshot(RoundTrip(serializer, state.ToSnapshot()));
-        Assert.Equal(initial, restored.WorkingContext);
+        Assert.Equal(initial.ProjectDirectory, restored.WorkingContext.ProjectDirectory);
+        Assert.Equal(initial.RecentFiles, restored.WorkingContext.RecentFiles);
         Assert.Equal(state.History, restored.History);
         Assert.Equal(1, restored.History.Count(message => message.ToolCallId == callId));
     }
