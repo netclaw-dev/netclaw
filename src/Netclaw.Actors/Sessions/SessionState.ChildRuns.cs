@@ -78,9 +78,11 @@ public sealed partial record SessionState
 
     internal SessionState CloseLegacyChildContinuations(IReadOnlyList<InputId> inputIds)
     {
+        // A legacy child delivery stays open through intermediate tool batches.
+        // A terminal parent event can have no consumed IDs after an earlier batch closed them.
         var correlations = LegacyCoordinationEvidence.Where(item =>
             item.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation &&
-            item.InputIds.Any(inputIds.Contains)).ToArray();
+            (inputIds.Count == 0 || item.InputIds.Any(inputIds.Contains))).ToArray();
         var next = this;
         foreach (var correlation in correlations)
         {
