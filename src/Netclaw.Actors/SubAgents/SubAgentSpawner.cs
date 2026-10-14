@@ -103,7 +103,6 @@ public sealed class SubAgentSpawner
     {
         IActorRef? child = null;
         PreparedChildStart? prepared = null;
-        SubAgentSpawnBreadcrumbs.SpawnRequested(_logger, context, profile.Name, task.Length);
         try
         {
             prepared = await PrepareRunAsync(profile, task, runtimeContext, context, ct, systemPromptOverlay);
@@ -130,6 +129,13 @@ public sealed class SubAgentSpawner
         }
         catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
         {
+            if (prepared is not null)
+            {
+                if (child is null)
+                    SubAgentSpawnBreadcrumbs.ChildSpawnFailed(_logger, context, profile.Name, prepared.RunId, error);
+                else
+                    SubAgentSpawnBreadcrumbs.RunFailed(_logger, context, profile.Name, prepared.RunId, error);
+            }
             if (child is not null)
                 TryStopSubAgent(child);
             var result = new SubAgentResult
@@ -173,12 +179,19 @@ public sealed class SubAgentSpawner
         SubAgentProfile profile, string task, string? runtimeContext,
         ToolInvocationContext context, CancellationToken ct, string? systemPromptOverlay)
     {
+        SubAgentSpawnBreadcrumbs.SpawnRequested(_logger, context, profile.Name, task.Length);
         if (context.SpawnChildActor is null)
+        {
+            SubAgentSpawnBreadcrumbs.NoSessionContext(_logger, context, profile.Name);
             throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable, "A child start requires an owning session.");
+        }
         var exposure = ResolveTools(context);
         if (exposure.Tools.Count == 0)
+        {
+            SubAgentSpawnBreadcrumbs.NoToolsAvailable(_logger, context, profile.Name);
             throw new ChildStartRejectedException(SubAgentOutcomeReason.NoToolsAvailable,
                 "No child tools are available under the parent audience policy.");
+        }
         var definition = new SubAgentDefinition
         {
             Name = new AgentName(profile.Name),

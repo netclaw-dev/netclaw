@@ -174,6 +174,7 @@ public sealed partial class LlmSessionActor
             }
             catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
             {
+                _log.Error(error, "Accepted child failed to start for {RunId}", run.RunId);
                 RecordChildTerminal(run.RunId, new SubAgentResult
                 {
                     AgentName = run.AgentName, Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnError),
