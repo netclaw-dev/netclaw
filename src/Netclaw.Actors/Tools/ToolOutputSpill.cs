@@ -80,7 +80,7 @@ internal static class ToolOutputSpill
                 spill.FailureDetail);
         }
 
-        return Compose(inline, spill, modelFacingResult.Length, budget);
+        return Compose(inline, spill, modelFacingResult.Length, budget, context.SpawnChildActor is not null);
     }
 
     private static async Task<SpillOutcome> TryWriteSpillAsync(
@@ -136,13 +136,15 @@ internal static class ToolOutputSpill
         }
     }
 
-    private static string Compose(string inline, SpillOutcome spill, int fullLength, int budget)
+    private static string Compose(string inline, SpillOutcome spill, int fullLength, int budget, bool canDelegate)
     {
         var sb = new StringBuilder(inline);
         sb.Append($"\n\n[output truncated to {budget} chars of {fullLength}");
         if (spill.CallId is not null)
         {
             sb.Append($"; continue with tool_output_read using CallId='{spill.CallId}' and a bounded Start/Limit window instead of re-running");
+            if (canDelegate)
+                sb.Append(". For a focused evidence question, consider a permitted child profile. Give it this CallId and ask it to inspect bounded tool_output_read windows. Do not repeat the source action");
         }
         else
         {
