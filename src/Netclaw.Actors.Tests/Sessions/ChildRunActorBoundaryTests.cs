@@ -259,16 +259,6 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
                 item => item.CallId.Value == "child-b-authority", Deadline, cancellationToken: Cancellation);
             Assert.Equal("original-owner", approval.RequesterSenderId?.Value);
             Assert.Empty(_tool.Contexts);
-            var owner = await ResolveSessionAsync(sessionId);
-            var ownerStatus = await owner.Ask<string>(new ChildRunControl(
-                acceptedB.Run.RunId, false, acceptedB.Run.OriginalContext), Deadline, Cancellation);
-            using var pendingStatus = JsonDocument.Parse(ownerStatus);
-            Assert.Equal(acceptedB.Run.RunId.Value, pendingStatus.RootElement.GetProperty("run_id").GetString());
-            Assert.Equal(1, pendingStatus.RootElement.GetProperty("pending_approval_count").GetInt32());
-            var foreignStatus = await owner.Ask<string>(new ChildRunControl(
-                acceptedB.Run.RunId, false,
-                acceptedB.Run.OriginalContext with { RequesterSenderId = new SenderId("later-user") }), Deadline, Cancellation);
-            Assert.Equal("Error: This child run is not available to the requester.", foreignStatus);
             var approvalReply = await ActorRegistry.Get<SessionManagerActorKey>().Ask<ISessionResponse>(new ToolInteractionResponse
             {
                 SessionId = sessionId, CallId = approval.CallId,
@@ -279,11 +269,6 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
             await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<TurnRecorded>(), evt =>
                 evt.UserMessage.Content.Contains("Ordinary message two.", StringComparison.Ordinal)),
                 Deadline, cancellationToken: Cancellation);
-            var resolvedStatus = await owner.Ask<string>(new ChildRunControl(
-                acceptedB.Run.RunId, false, acceptedB.Run.OriginalContext), Deadline, Cancellation);
-            using var completedApprovalStatus = JsonDocument.Parse(resolvedStatus);
-            Assert.Equal(acceptedB.Run.RunId.Value, completedApprovalStatus.RootElement.GetProperty("run_id").GetString());
-            Assert.Equal(0, completedApprovalStatus.RootElement.GetProperty("pending_approval_count").GetInt32());
             var authority = Assert.Single(_tool.Contexts);
             Assert.Equal(TrustBoundary.Personal, authority.Boundary);
             Assert.Equal(TrustAudience.Personal, authority.Audience);
@@ -328,6 +313,73 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
             parentBoundary.TrySetResult();
             childContinuation.TrySetResult();
             _preparation.Release.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task Active_child_approval_count_changes_only_after_the_owner_resolves_approval()
+    {
+        // Arrange
+        var sessionId = new SessionId("boundary/active-child-approval");
+        var control = await ConfigureJournalAsync(rejectAcceptance: false, holdAcceptance: false);
+        var childCompletion = NewGate();
+        _clients.Parent.ToolCallsOnFirstCall = [Spawn("approval-child", "child-a")];
+        _clients.A.ToolCallsOnFirstCall = [Probe("active-child-authority")];
+        _clients.A.AfterToolCallResponse = _ => _clients.A.NextResponseGate = childCompletion;
+        var subscriber = CreateTestProbe();
+        await JoinSessionAsync(ActorRegistry.Get<SessionManagerActorKey>(), subscriber, sessionId, OutputFilter.Full);
+        var session = await ResolveSessionAsync(sessionId);
+
+        try
+        {
+            // Act
+            await SendAsync(sessionId, "Start the child with an approval.", "original-owner");
+            var approval = await subscriber.FishForMessageAsync<ToolInteractionRequest>(
+                item => item.ToolName.Value == "authority_probe", Deadline, cancellationToken: Cancellation);
+            var accepted = await control.Acceptance.Task.WaitAsync(Deadline, Cancellation);
+            var ownerStatus = await session.Ask<string>(new ChildRunControl(
+                accepted.Run.RunId, false, accepted.Run.OriginalContext), Deadline, Cancellation);
+            var foreignStatus = await session.Ask<string>(new ChildRunControl(
+                accepted.Run.RunId, false,
+                accepted.Run.OriginalContext with { RequesterSenderId = new SenderId("other-requester") }), Deadline, Cancellation);
+
+            // Assert
+            Assert.Equal("original-owner", approval.RequesterSenderId?.Value);
+            Assert.Empty(_tool.Contexts);
+            using var pending = JsonDocument.Parse(ownerStatus);
+            Assert.Equal(accepted.Run.RunId.Value, pending.RootElement.GetProperty("run_id").GetString());
+            Assert.Equal(1, pending.RootElement.GetProperty("pending_approval_count").GetInt32());
+            Assert.False(pending.RootElement.GetProperty("terminal").GetBoolean());
+            Assert.Equal("Error: This child run is not available to the requester.", foreignStatus);
+            Assert.DoesNotContain(control.Committed.OfType<ChildRunEvent.TerminalRecorded>(), evt => evt.RunId == accepted.Run.RunId);
+            var reply = await ActorRegistry.Get<SessionManagerActorKey>().Ask<ISessionResponse>(new ToolInteractionResponse
+            {
+                SessionId = sessionId, CallId = approval.CallId,
+                SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+                SenderId = new SenderId("original-owner")
+            }, Deadline, Cancellation);
+            Assert.IsType<CommandAck>(reply);
+            await AwaitAssertAsync(() =>
+            {
+                Assert.Single(_tool.Contexts);
+                Assert.Equal(2, _clients.A.CallCount);
+                Assert.Null(_clients.A.NextResponseGate);
+            }, Deadline, cancellationToken: Cancellation);
+            var resolvedStatus = await session.Ask<string>(new ChildRunControl(
+                accepted.Run.RunId, false, accepted.Run.OriginalContext), Deadline, Cancellation);
+            using var resolved = JsonDocument.Parse(resolvedStatus);
+            Assert.Equal(accepted.Run.RunId.Value, resolved.RootElement.GetProperty("run_id").GetString());
+            Assert.Equal(0, resolved.RootElement.GetProperty("pending_approval_count").GetInt32());
+            Assert.False(resolved.RootElement.GetProperty("terminal").GetBoolean());
+            Assert.False(childCompletion.Task.IsCompleted);
+            Assert.DoesNotContain(control.Committed.OfType<ChildRunEvent.TerminalRecorded>(), evt => evt.RunId == accepted.Run.RunId);
+            childCompletion.TrySetResult();
+            await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<ChildRunEvent.TerminalRecorded>(),
+                evt => evt.RunId == accepted.Run.RunId && evt.Terminal.Result.Success), Deadline, cancellationToken: Cancellation);
+        }
+        finally
+        {
+            childCompletion.TrySetResult();
         }
     }
 
