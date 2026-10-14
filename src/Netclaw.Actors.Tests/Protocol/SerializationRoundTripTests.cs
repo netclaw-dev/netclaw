@@ -15,6 +15,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Security.Authorization.Consent;
 using Netclaw.Tools;
@@ -873,6 +874,69 @@ public sealed class SerializationRoundTripTests : TestKit
 
         var result = RoundTrip(wrapped);
         Assert.Null(result.EligibleDeliveryTurnNumber);
+    }
+
+    [Theory]
+    [InlineData(true, true, true, true)]
+    [InlineData(true, true, false, false)]
+    [InlineData(true, false, true, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, false, false, true)]
+    public void SessionSnapshot_v2_child_initial_snapshot_requires_a_complete_pair(
+        bool lifecycleNeedsSnapshot,
+        bool hasWorkingContext,
+        bool hasGit,
+        bool shouldRestore)
+    {
+        // Arrange
+        var initialSnapshot = new WorkingContextSnapshot
+        {
+            WorkingContext = WorkingContext.Empty,
+            Git = new GitWorkingContextInspection.Skipped()
+        };
+        var run = new BackgroundChildRun
+        {
+            RunId = new SubAgentRunId("run-1"),
+            ScopeId = new SubAgentScopeId("scope-1"),
+            StartKey = new ChildRunStartKey.Tool(new SessionId("session-1"), "turn-1", new ToolCallId("call-1")),
+            AgentName = new AgentName("worker"),
+            SourceOperation = "spawn_agent",
+            ArgumentsDigest = "digest-1",
+            OriginalContext = new TurnContextRecord
+            {
+                SessionId = new SessionId("session-1"),
+                TurnId = "turn-1",
+                Boundary = TrustBoundary.Public,
+                RequesterPrincipal = PrincipalClassification.UntrustedExternal
+            },
+            InitialWorkingSnapshot = initialSnapshot,
+            AcceptedAtMs = 1,
+            Lifecycle = new ChildRunLifecycle.Accepted(null)
+        };
+        var proto = NetclawProtoMapper.ToProtoV2(new SessionSnapshot { ChildRuns = [run] });
+        var child = Assert.Single(proto.ChildRuns);
+        if (!lifecycleNeedsSnapshot)
+            child.Closed = new Serialization.Proto.ChildRunClosedV2Proto
+            {
+                DeliveryCallId = "delivery-1",
+                Outcome = (int)SubAgentRunOutcome.Completed
+            };
+        if (!hasWorkingContext) child.InitialWorkingContext = null!;
+        if (!hasGit) child.InitialGit = null!;
+
+        // Act and Assert
+        if (!shouldRestore)
+        {
+            Assert.Throws<InvalidDataException>(() => NetclawProtoMapper.FromProto(proto));
+            return;
+        }
+
+        var restored = NetclawProtoMapper.FromProto(proto);
+        var restoredRun = Assert.Single(restored.ChildRuns);
+        Assert.Equal(lifecycleNeedsSnapshot, restoredRun.InitialWorkingSnapshot is not null);
     }
 
     [Fact]
