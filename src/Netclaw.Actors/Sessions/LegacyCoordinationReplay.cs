@@ -33,14 +33,58 @@ public static class LegacyCoordinationReplay
         };
     }
 
-    public static ISessionEvent? GetCoreEvent(LegacyCoordinationEvent evt)
+    public static ISessionEvent? GetCoreEvent(SessionState state, LegacyCoordinationEvent evt)
         => evt.LegacyPayload switch
         {
             Proto.InputClosedProto input => NetclawProtoMapper.FromProto(input),
-            Proto.ToolBatchStartedProto { MetadataOnly: false } batch => NetclawProtoMapper.FromProto(batch),
+            Proto.ToolBatchStartedProto { MetadataOnly: false } batch => TranslateLegacyToolBatch(state, batch),
             Proto.ToolBatchStartedProto => null,
             _ => throw new InvalidDataException($"Legacy manifest '{evt.Manifest}' has no ordinary core event.")
         };
+
+    private static ToolBatchStarted TranslateLegacyToolBatch(SessionState state, Proto.ToolBatchStartedProto proto)
+    {
+        var batch = NetclawProtoMapper.FromProto(proto);
+        var consumedIds = proto.ConsumedInputIds.Select(static id => new InputId(id)).ToArray();
+        if (consumedIds.Distinct().Count() != consumedIds.Length)
+            throw new InvalidDataException("A deployed tool batch repeats a consumed input ID.");
+
+        var correlations = state.LegacyCoordinationEvidence
+            .Where(evidence => evidence.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation
+                && evidence.InputIds.Count == 1 && consumedIds.Contains(evidence.InputIds[0]))
+            .ToArray();
+        if (correlations.Length == 0)
+            return batch;
+        if (correlations.Length != 1)
+            throw new InvalidDataException("A deployed tool batch consumes more than one child delivery.");
+
+        var correlation = correlations[0];
+        if (correlation.ChildRunId is not { } runId || correlation.DeliveryCallId is not { } deliveryCallId
+            || !state.ChildRuns.TryGetValue(runId, out var run)
+            || run.Lifecycle is not ChildRunLifecycle.Consumed consumed
+            || consumed.Delivery.Result.ToolCallId != deliveryCallId)
+            throw new InvalidDataException("A deployed tool batch has no exact active child delivery.");
+
+        var continuation = new ChildContinuation(runId, deliveryCallId);
+        if (batch.ChildContinuation is not null && batch.ChildContinuation != continuation)
+            throw new InvalidDataException("A deployed tool batch changes its child delivery identity.");
+
+        var ordinaryIds = consumedIds.Where(id => id != correlation.InputIds[0]).ToArray();
+        var pendingById = state.PendingInputs.ToDictionary(static input => input.InputId);
+        if (ordinaryIds.Any(id => !pendingById.ContainsKey(id)))
+            throw new InvalidDataException("A deployed tool batch names an ordinary input that is not pending.");
+
+        var userMessage = batch.UserMessage;
+        if (ordinaryIds.Length > 0 && consumedIds[^1] == correlation.InputIds[0])
+            userMessage = pendingById[ordinaryIds[^1]].UserMessage;
+
+        return batch with
+        {
+            ConsumedInputIds = ordinaryIds,
+            ChildContinuation = continuation,
+            UserMessage = userMessage
+        };
+    }
 
     public static TurnContextRecord? GetLegacyTaskContext(LegacyCoordinationEvent evt)
     {
