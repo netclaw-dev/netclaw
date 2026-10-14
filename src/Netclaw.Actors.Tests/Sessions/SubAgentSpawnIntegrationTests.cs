@@ -326,6 +326,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Single(parentWake, message => message.Role == Microsoft.Extensions.AI.ChatRole.User
             && message.Text == "Use a subagent to summarize the file");
         parentWakeGate.TrySetResult();
+        var finalText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("fake", finalText.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, _clientProvider.Compaction.CallCount);
