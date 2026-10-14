@@ -1886,15 +1886,21 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         _fakeChatClient.NextResponseGate = responseGate;
         var source = new MessageSource
         {
-            ChannelType = ChannelType.SignalR,
-            SenderId = new SenderId("operator-1"),
+            ChannelType = ChannelType.Reminder,
+            SenderId = new SenderId("reminder-system"),
             MessageId = "restart-input-1",
             TurnId = new Netclaw.Actors.Protocol.TurnId("restart-turn-1"),
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.Personal,
-            Principal = PrincipalClassification.Operator,
-            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
-            ReceivedAt = _timeProvider.GetUtcNow()
+            Principal = PrincipalClassification.VerifiedAutomation,
+            Provenance = new SourceProvenance(
+                TransportAuthenticity.LocalProcess,
+                PayloadTaint.Trusted)
+            {
+                SourceKind = new SourceKind("reminder")
+            },
+            ReceivedAt = _timeProvider.GetUtcNow(),
+            ReminderId = new ReminderId("restart-input-1")
         };
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -1915,6 +1921,9 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             TestContext.Current.CancellationToken);
         var reminder = Assert.IsType<ReminderDefinition>(drainAck.RestartReminder);
         Assert.Equal(DeliveryKind.CurrentSession, reminder.Delivery.Kind);
+        Assert.Equal(sessionId.Value, reminder.Delivery.SessionId);
+        Assert.Equal(ChannelType.Reminder, reminder.Delivery.OriginChannelType);
+        Assert.True(reminder.DeliveryRequired);
         Assert.Equal(TrustAudience.Personal, reminder.Audience);
         Assert.Equal(TrustBoundary.Personal, reminder.Boundary);
         Assert.Equal(TimeSpan.FromMinutes(10), reminder.ExpiresAt - reminder.CreatedAt);
@@ -1925,34 +1934,37 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
         var subscriber = CreateTestProbe("restart-resume-subscriber");
         await JoinSessionAsync(sessionManager, subscriber, sessionId);
+        var dueTime = Assert.IsType<DateTimeOffset>(reminder.Schedule.FireAt);
+        var occurrenceKey = new ReminderId($"{reminder.Id}:{dueTime.ToUnixTimeMilliseconds()}");
+        var envelope = new Akka.Reminders.ReminderEnvelope<ReminderPayload>(
+            new Akka.Reminders.ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+            new Akka.Reminders.ReminderKey(reminder.Id.Value),
+            dueTime,
+            Akka.Reminders.ReminderDeadline.Infinite,
+            new ReminderPayload { Id = reminder.Id });
+        var executionId = Guid.NewGuid();
+        var execution = ReminderExecutionActor.CreateProps(
+            executionId,
+            reminder,
+            Host.Services.GetRequiredService<SessionPipeline>(),
+            _timeProvider,
+            envelope);
+        var executionOutcome = CreateTestProbe("restart-reminder-outcome");
+        Sys.ActorOf(
+            Props.Create(() => new AcceptingReminderExecutionParent(executionOutcome, execution)),
+            "restart-reminder-execution");
 
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = reminder.Instructions,
-            Source = new MessageSource
-            {
-                ChannelType = ChannelType.SignalR,
-                SenderId = new SenderId("reminder-system"),
-                MessageId = $"{reminder.Id}:1",
-                TurnId = new Netclaw.Actors.Protocol.TurnId($"{reminder.Id}:1"),
-                Audience = reminder.Audience,
-                Boundary = reminder.Boundary,
-                Principal = PrincipalClassification.VerifiedAutomation,
-                Provenance = new SourceProvenance(
-                    TransportAuthenticity.LocalProcess,
-                    PayloadTaint.Trusted),
-                ReceivedAt = _timeProvider.GetUtcNow(),
-                ReminderId = new ReminderId($"{reminder.Id}:1")
-            }
-        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        var completed = await executionOutcome.ExpectMsgAsync<ReminderExecutionCompleted>(
+            TimeSpan.FromSeconds(15),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(completed.Success, completed.ErrorMessage);
+        Assert.Equal(sessionId.Value, completed.History.SessionId);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(
-            TimeSpan.FromSeconds(3),
+        var resumedTurn = await subscriber.FishForMessageAsync<TurnCompleted>(
+            turn => turn.SourceReminderId == occurrenceKey,
+            TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(
-            TimeSpan.FromSeconds(3),
-            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(occurrenceKey, resumedTurn.SourceReminderId);
 
         var resumedCall = _fakeChatClient.ReceivedMessages.Last(conversation =>
             conversation.Any(message => string.Equals(
@@ -1963,6 +1975,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             message.Text,
             reminder.Instructions,
             StringComparison.Ordinal));
+        Assert.Equal(2, _fakeChatClient.CallCount);
     }
 
     [Fact]
@@ -2625,6 +2638,19 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         ReceivedAt = _timeProvider.GetUtcNow(),
         ReminderId = new ReminderId(reminderId)
     };
+
+    private sealed class AcceptingReminderExecutionParent : ReceiveActor
+    {
+        public AcceptingReminderExecutionParent(IActorRef observer, Props execution)
+        {
+            Context.ActorOf(execution, "execution");
+            Receive<ReminderExecutionCompleted>(completed =>
+            {
+                observer.Tell(completed);
+                Sender.Tell(new ReminderExecutionAccepted(completed.ExecutionId));
+            });
+        }
+    }
 }
 
 internal sealed class DeferredTestTool(string name) : INetclawTool
