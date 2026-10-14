@@ -259,6 +259,16 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
                 item => item.CallId.Value == "child-b-authority", Deadline, cancellationToken: Cancellation);
             Assert.Equal("original-owner", approval.RequesterSenderId?.Value);
             Assert.Empty(_tool.Contexts);
+            var owner = await ResolveSessionAsync(sessionId);
+            var ownerStatus = await owner.Ask<string>(new ChildRunControl(
+                acceptedB.Run.RunId, false, acceptedB.Run.OriginalContext), Deadline, Cancellation);
+            using var pendingStatus = JsonDocument.Parse(ownerStatus);
+            Assert.Equal(acceptedB.Run.RunId.Value, pendingStatus.RootElement.GetProperty("run_id").GetString());
+            Assert.Equal(1, pendingStatus.RootElement.GetProperty("pending_approval_count").GetInt32());
+            var foreignStatus = await owner.Ask<string>(new ChildRunControl(
+                acceptedB.Run.RunId, false,
+                acceptedB.Run.OriginalContext with { RequesterSenderId = new SenderId("later-user") }), Deadline, Cancellation);
+            Assert.Equal("Error: This child run is not available to the requester.", foreignStatus);
             var approvalReply = await ActorRegistry.Get<SessionManagerActorKey>().Ask<ISessionResponse>(new ToolInteractionResponse
             {
                 SessionId = sessionId, CallId = approval.CallId,
@@ -269,6 +279,11 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
             await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<TurnRecorded>(), evt =>
                 evt.UserMessage.Content.Contains("Ordinary message two.", StringComparison.Ordinal)),
                 Deadline, cancellationToken: Cancellation);
+            var resolvedStatus = await owner.Ask<string>(new ChildRunControl(
+                acceptedB.Run.RunId, false, acceptedB.Run.OriginalContext), Deadline, Cancellation);
+            using var completedApprovalStatus = JsonDocument.Parse(resolvedStatus);
+            Assert.Equal(acceptedB.Run.RunId.Value, completedApprovalStatus.RootElement.GetProperty("run_id").GetString());
+            Assert.Equal(0, completedApprovalStatus.RootElement.GetProperty("pending_approval_count").GetInt32());
             var authority = Assert.Single(_tool.Contexts);
             Assert.Equal(TrustBoundary.Personal, authority.Boundary);
             Assert.Equal(TrustAudience.Personal, authority.Audience);
