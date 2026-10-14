@@ -198,13 +198,13 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     public ReminderEligibility MarkRestartReminderEligible(
         int pendingInputCount,
         bool emittedText,
-        bool hasActiveTurn,
+        int selectedInputCount,
         DateTimeOffset now)
     {
         if (pendingInputCount == 0)
             return ReminderEligibility.None;
 
-        if (emittedText && hasActiveTurn)
+        if (emittedText && selectedInputCount > 0)
             return ReminderEligibility.EmittedText;
 
         _restartInterruptionAt = now;

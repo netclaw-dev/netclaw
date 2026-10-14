@@ -210,7 +210,7 @@ Do not poll status in a loop. Use it when the user needs a status update or inte
 The terminal result includes authorized log and artifact paths when available.
 Use normal file tools for those exact paths. Do not derive a broader session path.
 A lost child reports uncertainty. Recovery does not repeat its external work.
-A result with an evidence warning does not authorize parent context adoption.
+If result evidence preparation fails, do not assume parent context adoption.
 
 ## Scheduling & Background Jobs
 
