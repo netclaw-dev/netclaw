@@ -184,9 +184,8 @@ public sealed class LegacyCoordinationReplayTests : TestKit
 
         var workflow = new SessionToolWorkflow();
         Assert.Equal(run, workflow.SelectChild(restored, modelGeneration: 1, allowSelection: true));
-        var modelState = workflow.ModelState(restored);
-        Assert.Equal(1, modelState.History.SelectMany(message => message.ToolCalls).Count(item => item.CallId == call.CallId));
-        Assert.Equal(1, modelState.History.Count(message => message.ToolCallId == call.CallId));
+        Assert.Equal(1, restored.History.SelectMany(message => message.ToolCalls).Count(item => item.CallId == call.CallId));
+        Assert.Equal(1, restored.History.Count(message => message.ToolCallId == call.CallId));
     }
 
     [Fact]
