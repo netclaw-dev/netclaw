@@ -19,7 +19,6 @@ namespace Netclaw.Actors.Sessions;
 
 internal enum ApprovalNoticeKind
 {
-    None,
     Expired,
     WrongRequester,
     OptionUnavailable
@@ -183,7 +182,7 @@ internal sealed partial class SessionToolWorkflow
         if (!TryGetPending(response.CallId.Value, out var pending))
             return new ApprovalResponseResult.Rejected(
                 ApprovalNackReasons.PromptExpired,
-                ApprovalNoticeKind.None,
+                ApprovalNoticeKind.Expired,
                 "unknown_call");
 
         var validation = ValidateResponse(pending, response);
