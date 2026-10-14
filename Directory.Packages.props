@@ -32,7 +32,7 @@
     <PackageVersion Include="Akka.Cluster.Sharding" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="Akka.Persistence" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="Akka.Persistence.Hosting" Version="$(AkkaHostingVersion)" />
-    <PackageVersion Include="Akka.Persistence.Sql.Hosting" Version="1.5.70" />
+    <PackageVersion Include="Akka.Persistence.Sql.Hosting" Version="$(AkkaPersistenceSqlHostingVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders.Sqlite" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Anthropic" Version="12.50.0" />
