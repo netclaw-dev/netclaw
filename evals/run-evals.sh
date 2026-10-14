@@ -1672,6 +1672,11 @@ stdout_json_tool_called() {
         "$STDOUT_FILE" >/dev/null 2>&1
 }
 
+stdout_json_response_contains() {
+    local pattern="$1"
+    jq -r '.response // empty' "$STDOUT_FILE" | grep -qia "$pattern" 2>/dev/null
+}
+
 stdout_json_tool_call_arguments() {
     local tool_name="$1"
     jq -ce --arg tool_name "$tool_name" \
@@ -2339,6 +2344,71 @@ assert_subagent_specialization_precedence() {
     reply=$(cli_final_reply "$cli_log")
     grep -aiqE '^[[:space:]]*(\*\*|__)?subject(\*\*|__)?[[:space:]]*:' <<<"$reply" || return 1
     grep -aFq 'Would Tuesday or Wednesday work for a 15-minute call?' <<<"$reply"
+}
+
+setup_coordination_retained_child_inspection() {
+    local run="$1"
+    COORDINATION_LOG_MARKER="$TMPDIR_EVAL/coordination-inspection-$run.marker"
+    touch "$COORDINATION_LOG_MARKER"
+}
+
+assert_coordination_retained_child_inspection() {
+    stdout_json_envelope_valid || return 1
+    stdout_json_tool_called 'spawn_agent' || return 1
+    stdout_json_response_contains 'cobalt-heron-4471' || return 1
+    stdout_json_response_contains 'record 160' || return 1
+
+    local load_count
+    load_count=$(jq '[.toolCalls[]? | select(.toolName == "skill_load")] | length' "$STDOUT_FILE")
+    [[ "$load_count" -eq 1 ]] || return 1
+
+    local -a child_logs
+    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
+        -path '*/subagents/*/logs/session.log' \
+        -newer "$COORDINATION_LOG_MARKER" 2>/dev/null)
+    [[ "${#child_logs[@]}" -ge 1 ]] || return 1
+
+    local child_log
+    for child_log in "${child_logs[@]}"; do
+        if grep -aq 'tool_output_read' "$child_log"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+assert_coordination_independent_synthesis() {
+    stdout_json_envelope_valid || return 1
+    stdout_json_response_contains '6' || return 1
+    stdout_json_response_contains 'west' || return 1
+
+    local spawn_count distinct_tasks
+    spawn_count=$(jq '[.toolCalls[]? | select(.toolName == "spawn_agent")] | length' "$STDOUT_FILE")
+    distinct_tasks=$(jq '[.toolCalls[]? | select(.toolName == "spawn_agent")
+        | (.argumentsJson | fromjson | .Task // .task // "")] | unique | length' "$STDOUT_FILE")
+    [[ "$spawn_count" -ge 2 && "$distinct_tasks" -ge 2 ]]
+}
+
+setup_coordination_artifact_review() {
+    local run="$1"
+    COORDINATION_LOG_MARKER="$TMPDIR_EVAL/coordination-review-$run.marker"
+    touch "$COORDINATION_LOG_MARKER"
+}
+
+assert_coordination_artifact_review() {
+    stdout_json_envelope_valid || return 1
+    stdout_json_tool_called 'spawn_agent' || return 1
+    stdout_json_response_contains 'artifact a' || return 1
+    stdout_json_response_contains 'artifact b' || return 1
+    stdout_json_response_contains 'empty' || return 1
+    stdout_json_response_contains 'no defect' \
+        || stdout_json_response_contains 'correct' || return 1
+
+    local -a child_logs
+    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
+        -path '*/subagents/*/logs/session.log' \
+        -newer "$COORDINATION_LOG_MARKER" 2>/dev/null)
+    [[ "${#child_logs[@]}" -ge 1 ]]
 }
 
 setup_subagent_project_scope_declaration() {
@@ -3873,6 +3943,18 @@ run_all() {
     run_case subagent_specialization_precedence "parent returns an email with a subject and the call line, and leaves the agent files unchanged" \
         "Use spawn_agent with agent headless-analyst to write a prospecting email to Casey, a VP of Engineering interested in reducing operational toil. Return its final email." \
         "Delegate to headless-analyst: draft an outbound email for Jordan, a technology leader evaluating autonomous operations. Return the worker's final email."
+
+    run_case --json coordination_retained_child_inspection "child inspects a retained result and returns the correct evidence" \
+        "Load the eval-spill-probe skill. Ask a permitted child to find the exact phrase that one record holds. Return the phrase and its source context." \
+        "Use eval-spill-probe. Ask a separate helper to identify the exact verification phrase in its records, then report the phrase and context."
+
+    run_case --json coordination_independent_synthesis "two scoped investigations support one correct parent conclusion" \
+        "Ask two independent helpers to analyze these records. East has 8 failed requests and 6 recovered requests. West has 11 failed requests and 7 recovered requests. Report total unresolved requests and the region with more unresolved requests." \
+        "Delegate separate reviews of East (8 failed, 6 recovered) and West (11 failed, 7 recovered). Then report the total unresolved count and the region with more unresolved requests."
+
+    run_case --json coordination_artifact_review "an independent reviewer finds a planted defect and clears a clean control" \
+        "Ask a separate reviewer to inspect both artifacts. Artifact A sets `IsReady = pendingCount >= 0`; Artifact B sets `CanRun = pendingCount > 0`. Report the defect in Artifact A and the review result for Artifact B." \
+        "Have an independent reviewer check these two snippets. Artifact A uses `IsReady = pendingCount >= 0`. Artifact B uses `CanRun = pendingCount > 0`. Report any defect in A and whether B has a defect."
 
     run_multi_turn_case subagent_project_scope_declaration "subagent declares a different named project before shell inspection" \
         "Use spawn_agent with agent project-scope-analyst. Ask it to inspect /home/netclaw/.netclaw/workspaces/project-scope-target with exactly two shell_execute calls: git status --short and git diff --stat. Return the command results, project layout, and build-file summary. Keep the parent project unchanged."
