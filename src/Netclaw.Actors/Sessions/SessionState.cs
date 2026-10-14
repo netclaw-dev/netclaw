@@ -126,7 +126,7 @@ public sealed partial record SessionState
         var evidence = LegacyCoordinationEvidence.Select(item =>
         {
             if (item.Disposition is not (LegacyCoordinationDisposition.AppliedOrdinaryAdoption
-                or LegacyCoordinationDisposition.AppliedChildContinuation or LegacyCoordinationDisposition.PreservedLegacyFacts)
+                or LegacyCoordinationDisposition.PreservedLegacyFacts)
                 || !item.ActiveInputIds.Any(ids.Contains))
                 return item;
 
@@ -137,7 +137,7 @@ public sealed partial record SessionState
             };
         })
         .Where(item => item.Disposition is not (LegacyCoordinationDisposition.AppliedOrdinaryAdoption
-                           or LegacyCoordinationDisposition.AppliedChildContinuation or LegacyCoordinationDisposition.PreservedLegacyFacts)
+                           or LegacyCoordinationDisposition.PreservedLegacyFacts)
                        || item.ActiveInputIds.Count > 0 || item.HasRetainedFacts)
         .ToImmutableList();
 
@@ -207,7 +207,8 @@ public sealed partial record SessionState
 
     internal SessionState Apply(TurnRecorded evt, bool userAlreadyInHistory)
     {
-        var closed = CommitChildContinuation(evt.ChildContinuation, close: true).CloseInputs(evt.ConsumedInputIds);
+        var closed = CommitChildContinuation(evt.ChildContinuation, close: true)
+            .CloseLegacyChildContinuations(evt.ConsumedInputIds).CloseInputs(evt.ConsumedInputIds);
         var processedReminders = closed.ProcessedReminderIds;
         if (evt.SourceReminderId is { } reminderId && !string.IsNullOrEmpty(reminderId.Value))
             processedReminders = processedReminders.Add(reminderId);

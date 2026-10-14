@@ -23,6 +23,13 @@ public sealed partial class LlmSessionActor
     private void ApplyLegacyCoordination(LegacyCoordinationEvent evt)
     {
         _state = LegacyCoordinationReplay.Apply(_state, evt);
+        if (LegacyCoordinationReplay.GetLegacyTaskContext(evt) is { } legacyContext)
+        {
+            if (!TurnContext.TryFromRecord(legacyContext, out var context, out var reason) || context is null)
+                throw new InvalidDataException($"Legacy task authority is invalid: {reason}");
+            _toolWorkflow.ValidateRecoveredAuthority(context);
+            _input.RestoreTurnAuthority(context, _trustContextDeriver);
+        }
         if (evt.Manifest is "ic-v1" or "tbs-v1" or "tcr-v1")
         {
             switch (LegacyCoordinationReplay.GetCoreEvent(evt))
