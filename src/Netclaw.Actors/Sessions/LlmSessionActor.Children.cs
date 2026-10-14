@@ -32,7 +32,7 @@ public sealed partial class LlmSessionActor
         }
         if (evt.Manifest is "ic-v1" or "tbs-v1" or "tcr-v1")
         {
-            switch (LegacyCoordinationReplay.GetCoreEvent(evt))
+            switch (LegacyCoordinationReplay.GetCoreEvent(_state, evt))
             {
                 case InputClosed closed: _state = _state.Apply(closed); break;
                 case ToolBatchStarted batch:
