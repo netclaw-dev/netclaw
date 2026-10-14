@@ -8,6 +8,7 @@ using Xunit;
 
 namespace Netclaw.Configuration.Tests;
 
+[Collection(nameof(ProcessEnvironmentCollection))]
 public sealed class NamedModelConfigurationTests
 {
     [Fact]

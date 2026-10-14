@@ -15,7 +15,7 @@ namespace Netclaw.Configuration.Tests;
 /// serialized via a collection fixture to prevent parallel xUnit test runs
 /// from clobbering each other's view of <c>NETCLAW_HOME</c>.
 /// </summary>
-[Collection(nameof(NetclawHomeEnvCollection))]
+[Collection(nameof(ProcessEnvironmentCollection))]
 public sealed class NetclawPathsTests : IDisposable
 {
     private const string EnvVar = "NETCLAW_HOME";
@@ -196,12 +196,10 @@ public sealed class NetclawPathsTests : IDisposable
 }
 
 /// <summary>
-/// Collection definition used to serialize tests that mutate the
-/// <c>NETCLAW_HOME</c> process environment variable. xUnit runs test classes
-/// in different collections in parallel; this collection ensures no other
-/// test class racing against it can observe or overwrite the variable mid-run.
+/// Tests in this collection change process environment variables.
+/// Other test classes read them, so they must not run at the same time.
 /// </summary>
-[CollectionDefinition(nameof(NetclawHomeEnvCollection), DisableParallelization = true)]
-public sealed class NetclawHomeEnvCollection
+[CollectionDefinition(nameof(ProcessEnvironmentCollection), DisableParallelization = true)]
+public sealed class ProcessEnvironmentCollection
 {
 }

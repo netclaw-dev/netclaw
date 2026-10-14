@@ -17,6 +17,7 @@ namespace Netclaw.Configuration.Tests;
 /// A configured Tools list must replace the default list, so an operator can narrow tool
 /// grants, file roots, attachment categories, and the HTTP allow list.
 /// </summary>
+[Collection(nameof(ProcessEnvironmentCollection))]
 public sealed class ToolConfigBindingTests : IDisposable
 {
     private const string TeamTools = "AudienceProfiles:Team:AllowedTools";

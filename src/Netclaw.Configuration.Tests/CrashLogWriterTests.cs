@@ -7,7 +7,7 @@ using Xunit;
 
 namespace Netclaw.Configuration.Tests;
 
-[Collection(nameof(NetclawHomeEnvCollection))]
+[Collection(nameof(ProcessEnvironmentCollection))]
 public sealed class CrashLogWriterTests : IDisposable
 {
     private const string EnvVar = "NETCLAW_HOME";
