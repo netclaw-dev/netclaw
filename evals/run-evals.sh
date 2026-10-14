@@ -413,6 +413,18 @@ build_local_image() {
     echo "→ Local build complete: $NETCLAW_IMAGE"
 }
 
+build_coordination_observer() {
+    if [[ -n "$FILTER_CASE" && "$FILTER_CASE" != "coordination_independent_synthesis" ]]; then
+        return 0
+    fi
+    if [[ -n "$FILTER_CATEGORY" && "${FILTER_CATEGORY,,}" != *subagent* ]]; then
+        return 0
+    fi
+
+    echo "→ Building the coordination eval observer..."
+    dotnet build "$REPO_ROOT/evals/coordination-observer/coordination-observer.csproj" --verbosity quiet
+}
+
 # ─── Eval Daemon Lifecycle ────────────────────────────────────────────────────
 
 # Substitute {{PLACEHOLDER}} tokens in identity templates with eval defaults.
@@ -2394,27 +2406,29 @@ coordination_session_actor_log() {
     printf '%s\n' "$log_path"
 }
 
-coordination_child_logs() {
-    local parent_log envelope
+coordination_file_receipt_was_read() {
+    local parent_log calls read_call_id
     parent_log=$(coordination_session_actor_log) || return 1
-    envelope=$(dirname "$(dirname "$parent_log")")
-    [[ -d "$envelope/subagents" ]] || return 1
-    find "$envelope/subagents" -type f -path '*/logs/session.log' -print 2>/dev/null
-}
-
-coordination_log_has_tool_read() {
-    local parent_log
-    parent_log=$(coordination_session_actor_log) || return 1
-    if grep -qaF 'Tool call: tool_output_read ' "$parent_log"; then
-        return 0
-    fi
-    local child_log
-    while IFS= read -r child_log; do
-        [[ -n "$child_log" ]] || continue
-        if grep -qaF 'Tool call: tool_output_read ' "$child_log"; then
+    calls=$(coordination_all_tool_calls) || return 1
+    while IFS= read -r read_call_id; do
+        [[ -n "$read_call_id" ]] || continue
+        if grep -qaF "Tool result: tool_output_read (call=$read_call_id) → " "$parent_log" \
+            && ! grep -qaF "Tool result: tool_output_read (call=$read_call_id) → Error:" "$parent_log"; then
             return 0
         fi
-    done < <(coordination_child_logs)
+    done < <(jq -r '
+        [.[]
+            | select(.toolName == "file_read")
+            | (.argumentsJson | fromjson) as $arguments
+            | select(($arguments.Path // $arguments.path // "") | contains("coordination-retained-inspection/records.txt"))
+            | select(($arguments.StartLine // $arguments.startLine // 0) == 0)
+            | .callId] as $source_calls
+        | .[]
+        | select(.toolName == "tool_output_read")
+        | (.argumentsJson | fromjson) as $arguments
+        | select(($source_calls | index($arguments.CallId // $arguments.callId)) != null)
+        | select(($arguments.Start // $arguments.start // 0) > 0)
+        | .callId' <<<"$calls")
     return 1
 }
 
@@ -2440,7 +2454,7 @@ coordination_all_tool_calls() {
 assert_coordination_retained_child_inspection() {
     coordination_envelopes_valid || return 1
     coordination_response_json >/dev/null || return 1
-    coordination_log_has_tool_read || return 1
+    coordination_file_receipt_was_read || return 1
     coordination_response_json | jq -e \
         '.record == 400 and .verification == "cobalt-heron-4471"' >/dev/null
 }
@@ -2452,7 +2466,7 @@ assert_coordination_independent_synthesis() {
         '.eastUnresolved == 2 and .westUnresolved == 4 and .totalUnresolved == 6 and .highestRegion == "west"' >/dev/null \
         || return 1
     jq -e '.coordination.initialResponse | type == "string" and length > 0' "$STDOUT_FILE" >/dev/null \
-        && jq -e '.coordination.activeChildrenAtFirstCompletion > 0 and .coordination.completedChildren >= 2 and .coordination.turnCompletions >= 2 and .coordination.userMessagesSent == 1 and .coordination.automaticContinuation == true' \
+        && jq -e '(.coordination.turnResponses | type == "array" and length >= 2) and .coordination.turnResponses[0] == .coordination.initialResponse and .coordination.activeChildrenAtFirstCompletion > 0 and .coordination.completedChildren >= 2 and .coordination.turnCompletions >= 2 and .coordination.userMessagesSent == 1 and .coordination.automaticContinuation == true' \
             "$STDOUT_FILE" >/dev/null || return 1
 
     local calls
@@ -4261,6 +4275,7 @@ run_all() {
 main() {
     check_prerequisites
     build_local_image
+    build_coordination_observer
 
     # Verify CLI binary exists (may have just been built by build_local_image).
     if [[ ! -x "$NETCLAW_BIN" ]]; then
