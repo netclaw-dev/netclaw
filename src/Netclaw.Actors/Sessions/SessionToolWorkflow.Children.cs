@@ -63,14 +63,6 @@ internal sealed partial class SessionToolWorkflow
         _selectedChild = new SelectedChild(new ChildContinuation(run.RunId, delivery.Result.ToolCallId!.Value), modelGeneration);
     }
 
-    public SessionState ModelState(SessionState state)
-    {
-        if (_selectedChild is not { } selected ||
-            state.ChildRuns[selected.Continuation.RunId].Lifecycle is not ChildRunLifecycle.Prepared prepared)
-            return state;
-        return state with { History = state.History.Add(prepared.Delivery.Call).Add(prepared.Delivery.Result) };
-    }
-
     public ChildContinuation? ChildDecision(long modelGeneration)
     {
         if (_selectedChild is not { } selected)

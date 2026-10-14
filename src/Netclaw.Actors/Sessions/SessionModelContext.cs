@@ -11,6 +11,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Sessions.Pipelines;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -144,6 +145,7 @@ internal sealed class SessionModelContext
     internal ContextCall StartCall(
         long callId,
         SessionState state,
+        ChildContinuation? childContinuation,
         TurnContext? admittedTurn,
         MessageSource? sourceFallback,
         EffectiveTrustContext? toolTrust,
@@ -155,7 +157,7 @@ internal sealed class SessionModelContext
     {
         _inspection = null;
         if (_recall.TurnRecallCache is not null)
-            return new ContextCall.Ready(PrepareRequest(state, ResolveAudience(admittedTurn, sourceFallback), toolTrust, forceNoTools, restartNotice));
+            return new ContextCall.Ready(PrepareRequest(state, childContinuation, ResolveAudience(admittedTurn, sourceFallback), toolTrust, forceNoTools, restartNotice));
 
         var recallWatch = Stopwatch.StartNew();
         var resolved = _recall.ResolveForTurn(
@@ -173,6 +175,7 @@ internal sealed class SessionModelContext
     internal PreparedModelRequest? CompleteInspection(
         WorkingContextSnapshotReady result,
         SessionState currentState,
+        ChildContinuation? childContinuation,
         TrustAudience currentAudience,
         EffectiveTrustContext? currentToolTrust)
     {
@@ -186,12 +189,13 @@ internal sealed class SessionModelContext
         var updated = string.IsNullOrEmpty(volatileBlock)
             ? currentState
             : currentState.AddVolatileContextNudge(volatileBlock);
-        return PrepareRequest(updated, currentAudience, currentToolTrust, intent.ForceNoTools, intent.RestartNotice);
+        return PrepareRequest(updated, childContinuation, currentAudience, currentToolTrust, intent.ForceNoTools, intent.RestartNotice);
     }
 
     internal PreparedModelRequest? CompleteInspection(
         WorkingContextSnapshotFailed result,
         SessionState currentState,
+        ChildContinuation? childContinuation,
         TrustAudience currentAudience,
         EffectiveTrustContext? currentToolTrust)
     {
@@ -204,19 +208,25 @@ internal sealed class SessionModelContext
             Git = new GitWorkingContextInspection.Unavailable("working context inspection failed")
         };
         return CompleteInspection(new WorkingContextSnapshotReady(result.Generation, snapshot),
-            currentState, currentAudience, currentToolTrust);
+            currentState, childContinuation, currentAudience, currentToolTrust);
     }
 
     private PreparedModelRequest PrepareRequest(
         SessionState state,
+        ChildContinuation? childContinuation,
         TrustAudience audience,
         EffectiveTrustContext? toolTrust,
         bool forceNoTools,
         string? restartNotice)
     {
-        // The body already entered history before this method runs.
+        // The durable parent decision owns the child pair in canonical history.
+        // Until that decision, only the model request contains the prepared pair.
+        var modelState = childContinuation is { } child &&
+                         state.ChildRuns[child.RunId].Lifecycle is ChildRunLifecycle.Prepared prepared
+            ? state with { History = state.History.Add(prepared.Delivery.Call).Add(prepared.Delivery.Result) }
+            : state;
         var messages = SessionMessageAssembler.Assemble(
-            BuildAssemblyInput(state, audience, null, restartNotice, string.Empty));
+            BuildAssemblyInput(modelState, audience, null, restartNotice, string.Empty));
         _startupContextInjected = true;
 
         var exposed = ResolveExposedTools(toolTrust);
