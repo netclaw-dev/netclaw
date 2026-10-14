@@ -38,11 +38,10 @@ internal static class SessionHubFrame
         var size = MeasureSendMessageFrame(text);
         if (size <= SessionHubLimits.MaxReceiveMessageBytes - HeadroomBytes)
             return null;
-        // Print the limit actually applied (rounded down) and the size rounded up, one decimal each, so the
-        // printed size always exceeds the printed limit.
-        var limit = SessionHubLimits.MaxReceiveMessageBytes - HeadroomBytes;
-        var limitKb = Math.Floor(limit * 10.0 / 1024) / 10;
-        var sizeKb = Math.Ceiling(size * 10.0 / 1024) / 10;
-        return $"Message is too large to send ({sizeKb.ToString("0.0", CultureInfo.InvariantCulture)} KB; limit {limitKb.ToString("0.0", CultureInfo.InvariantCulture)} KB).";
+        // Report the frame plus the headroom, the same quantity the check compares with the 512 KB limit, so
+        // "over the client's limit" means the reported size exceeds 512 KB and rounding up to one decimal
+        // always prints more than 512.0.
+        var sizeKb = Math.Ceiling((size + HeadroomBytes) * 10.0 / 1024) / 10;
+        return $"Message is too large to send ({sizeKb.ToString("0.0", CultureInfo.InvariantCulture)} KB; limit {SessionHubLimits.MaxReceiveMessageBytes / 1024} KB).";
     }
 }

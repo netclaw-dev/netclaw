@@ -93,7 +93,7 @@ public sealed class DaemonClientSessionTests
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => client.SendAsync(text, TestContext.Current.CancellationToken));
-        Assert.Equal("Message is too large to send (609.8 KB; limit 511.7 KB).", error.Message);
+        Assert.Equal("Message is too large to send (610.1 KB; limit 512 KB).", error.Message);
         Assert.Empty(state.Messages);
 
         // The same connection still works afterwards.
@@ -144,7 +144,11 @@ public sealed class DaemonClientSessionTests
         // One byte over the client's limit (hub limit minus headroom): the printed size must exceed the
         // printed limit, including when both would round to the same whole number of KB.
         var text = new string('a', SessionHubLimits.MaxReceiveMessageBytes - SessionHubFrame.HeadroomBytes - overhead + 1);
-        Assert.Equal("Message is too large to send (511.8 KB; limit 511.7 KB).", SessionHubFrame.CheckText(text));
+        var error = SessionHubFrame.CheckText(text);
+        Assert.Equal("Message is too large to send (512.1 KB; limit 512 KB).", error);
+        Assert.NotNull(error);
+        var printed = double.Parse(error![(error.IndexOf('(') + 1)..error.IndexOf(" KB;", StringComparison.Ordinal)], System.Globalization.CultureInfo.InvariantCulture);
+        Assert.True(printed > 512);
     }
 
     private static async Task<IHost> StartFakeHubAsync()
