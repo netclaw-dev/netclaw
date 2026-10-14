@@ -208,7 +208,7 @@ public sealed partial record SessionState
     internal SessionState Apply(TurnRecorded evt, bool userAlreadyInHistory)
     {
         var closed = CommitChildContinuation(evt.ChildContinuation, close: true)
-            .CloseLegacyChildContinuations(evt.ConsumedInputIds).CloseInputs(evt.ConsumedInputIds);
+            .CloseInputs(evt.ConsumedInputIds);
         var processedReminders = closed.ProcessedReminderIds;
         if (evt.SourceReminderId is { } reminderId && !string.IsNullOrEmpty(reminderId.Value))
             processedReminders = processedReminders.Add(reminderId);

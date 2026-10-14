@@ -76,36 +76,12 @@ public sealed partial record SessionState
         };
     }
 
-    internal SessionState CloseLegacyChildContinuations(IReadOnlyList<InputId> inputIds)
-    {
-        // A legacy child delivery stays open through intermediate tool batches.
-        // A terminal parent event can have no consumed IDs after an earlier batch closed them.
-        var correlations = LegacyCoordinationEvidence.Where(item =>
-            item.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation &&
-            item.ChildRunId is { } runId && ChildRuns.TryGetValue(runId, out var run) &&
-            (inputIds.Count == 0
-                ? run.Lifecycle is ChildRunLifecycle.Consumed
-                : item.InputIds.Any(inputIds.Contains))).ToArray();
-        var next = this;
-        foreach (var correlation in correlations)
-        {
-            if (correlation.ChildRunId is not { } runId || correlation.DeliveryCallId is not { } callId ||
-                next.TryGetLegacyChildDisposition(runId, out _))
-                continue;
-            next = next.CommitChildContinuation(new ChildContinuation(runId, callId), close: true);
-        }
-        return next with
-        {
-            LegacyCoordinationEvidence = next.LegacyCoordinationEvidence.RemoveRange(correlations)
-        };
-    }
-
     public SessionState Apply(InputClosed evt)
     {
         if (evt.RejectedJobReport is not null && evt.SourceBackgroundJobId is null)
             throw new InvalidDataException("A rejected job report requires its source job identity.");
         var next = CommitChildContinuation(evt.ChildContinuation, close: true)
-            .CloseLegacyChildContinuations(evt.InputIds).CloseInputs(evt.InputIds).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
+            .CloseInputs(evt.InputIds).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
         return evt.RejectedJobReport is { } report ? next with { History = next.History.Add(report) } : next;
     }
 
@@ -138,7 +114,11 @@ public sealed partial record SessionState
         return this with
         {
             History = history, WorkingContext = workingContext,
-            ChildRuns = ChildRuns.SetItem(run.RunId, run with { Lifecycle = next })
+            ChildRuns = ChildRuns.SetItem(run.RunId, run with { Lifecycle = next }),
+            LegacyCoordinationEvidence = close
+                ? LegacyCoordinationEvidence.RemoveAll(item => item.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation
+                    && item.ChildRunId == run.RunId)
+                : LegacyCoordinationEvidence
         };
     }
 

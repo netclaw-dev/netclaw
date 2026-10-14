@@ -6,6 +6,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.SubAgents;
@@ -37,53 +38,69 @@ public static class LegacyCoordinationReplay
         => evt.LegacyPayload switch
         {
             Proto.InputClosedProto input => NetclawProtoMapper.FromProto(input),
-            Proto.ToolBatchStartedProto { MetadataOnly: false } batch => TranslateLegacyToolBatch(state, batch),
+            Proto.ToolBatchStartedProto { MetadataOnly: false } batch => NetclawProtoMapper.FromProto(batch),
             Proto.ToolBatchStartedProto => null,
             _ => throw new InvalidDataException($"Legacy manifest '{evt.Manifest}' has no ordinary core event.")
         };
 
-    private static ToolBatchStarted TranslateLegacyToolBatch(SessionState state, Proto.ToolBatchStartedProto proto)
+    public static ToolBatchStarted TranslateParentDecision(SessionState state, ToolBatchStarted evt)
     {
-        var batch = NetclawProtoMapper.FromProto(proto);
-        var consumedIds = proto.ConsumedInputIds.Select(static id => new InputId(id)).ToArray();
-        if (consumedIds.Distinct().Count() != consumedIds.Length)
-            throw new InvalidDataException("A deployed tool batch repeats a consumed input ID.");
-
-        var correlations = state.LegacyCoordinationEvidence
-            .Where(evidence => evidence.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation
-                && evidence.InputIds.Count == 1 && consumedIds.Contains(evidence.InputIds[0]))
-            .ToArray();
-        if (correlations.Length == 0)
-            return batch;
-        if (correlations.Length != 1)
-            throw new InvalidDataException("A deployed tool batch consumes more than one child delivery.");
-
-        var correlation = correlations[0];
-        if (correlation.ChildRunId is not { } runId || correlation.DeliveryCallId is not { } deliveryCallId
-            || !state.ChildRuns.TryGetValue(runId, out var run)
-            || run.Lifecycle is not ChildRunLifecycle.Consumed consumed
-            || consumed.Delivery.Result.ToolCallId != deliveryCallId)
-            throw new InvalidDataException("A deployed tool batch has no exact active child delivery.");
-
-        var continuation = new ChildContinuation(runId, deliveryCallId);
-        if (batch.ChildContinuation is not null && batch.ChildContinuation != continuation)
-            throw new InvalidDataException("A deployed tool batch changes its child delivery identity.");
-
-        var ordinaryIds = consumedIds.Where(id => id != correlation.InputIds[0]).ToArray();
-        var pendingById = state.PendingInputs.ToDictionary(static input => input.InputId);
-        if (ordinaryIds.Any(id => !pendingById.ContainsKey(id)))
-            throw new InvalidDataException("A deployed tool batch names an ordinary input that is not pending.");
-
-        var userMessage = batch.UserMessage;
-        if (ordinaryIds.Length > 0 && consumedIds[^1] == correlation.InputIds[0])
-            userMessage = pendingById[ordinaryIds[^1]].UserMessage;
-
-        return batch with
+        var translated = TranslateParentInputs(state, evt.ConsumedInputIds, evt.ChildContinuation);
+        return evt with
         {
-            ConsumedInputIds = ordinaryIds,
-            ChildContinuation = continuation,
-            UserMessage = userMessage
+            ConsumedInputIds = translated.InputIds,
+            ChildContinuation = translated.Continuation,
+            UserMessage = translated.LastOrdinaryMessage ?? evt.UserMessage
         };
+    }
+
+    public static TurnRecorded TranslateParentDecision(SessionState state, TurnRecorded evt)
+    {
+        var translated = TranslateParentInputs(state, evt.ConsumedInputIds, evt.ChildContinuation);
+        return evt with
+        {
+            ConsumedInputIds = translated.InputIds,
+            ChildContinuation = translated.Continuation,
+            UserMessage = translated.LastOrdinaryMessage ?? evt.UserMessage
+        };
+    }
+
+    public static InputClosed TranslateParentDecision(SessionState state, InputClosed evt)
+    {
+        var translated = TranslateParentInputs(state, evt.InputIds, evt.ChildContinuation);
+        return evt with { InputIds = translated.InputIds, ChildContinuation = translated.Continuation };
+    }
+
+    private static (IReadOnlyList<InputId> InputIds, ChildContinuation? Continuation,
+        SerializableChatMessage? LastOrdinaryMessage) TranslateParentInputs(
+        SessionState state, IReadOnlyList<InputId> inputIds, ChildContinuation? current)
+    {
+        if (current is not null)
+            return (inputIds, current, null);
+        if (inputIds.Distinct().Count() != inputIds.Count)
+            throw new InvalidDataException("A parent decision repeats an input ID.");
+        var correlations = state.LegacyCoordinationEvidence.Where(item =>
+            item.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation &&
+            item.ChildRunId is { } runId && !state.TryGetLegacyChildDisposition(runId, out _) &&
+            state.ChildRuns.TryGetValue(runId, out var run) && run.Lifecycle is ChildRunLifecycle.Consumed &&
+            (inputIds.Count == 0 || item.InputIds.Any(inputIds.Contains))).ToArray();
+        if (correlations.Length == 0)
+            return (inputIds, null, null);
+        if (correlations.Length != 1)
+            throw new InvalidDataException("A parent decision has more than one active legacy child correlation.");
+        var correlation = correlations[0];
+        if (correlation.ChildRunId is not { } childId || correlation.DeliveryCallId is not { } callId ||
+            correlation.InputIds.Count != 1 ||
+            state.ChildRuns[childId].Lifecycle is not ChildRunLifecycle.Consumed consumed ||
+            consumed.Delivery.Result.ToolCallId != callId)
+            throw new InvalidDataException("A parent decision has no exact active child delivery.");
+        var ordinaryIds = inputIds.Where(id => !correlation.InputIds.Contains(id)).ToArray();
+        var pending = state.PendingInputs.ToDictionary(input => input.InputId);
+        if (ordinaryIds.Any(id => !pending.ContainsKey(id)))
+            throw new InvalidDataException("A parent decision names an ordinary input that is not pending.");
+        var lastOrdinary = ordinaryIds.Length > 0 && inputIds[^1] == correlation.InputIds[0]
+            ? pending[ordinaryIds[^1]].UserMessage : null;
+        return (ordinaryIds, new ChildContinuation(childId, callId), lastOrdinary);
     }
 
     public static TurnContextRecord? GetLegacyTaskContext(LegacyCoordinationEvent evt)
@@ -157,6 +174,10 @@ public static class LegacyCoordinationReplay
         if (inputIds.Any(state.IsLegacyInputQuarantined))
             return "The deployed adoption names a quarantined legacy input.";
         var selected = state.PendingInputs.Take(inputIds.Count).ToArray();
+        var adoptedContext = adoption.TurnContext is null ? null : NetclawProtoMapper.FromLegacyTurnContext(adoption.TurnContext);
+        if (adoptedContext is null || !SameContext(adoptedContext, selected[^1].TurnContext)
+            || selected.Any(input => !SameAuthority(input.TurnContext, adoptedContext)))
+            return "The deployed adoption differs from its pending input authority.";
         if (selected[^1].SourceBackgroundJobId is { } jobId)
         {
             if (selected.Length != 1 || adoption.ContinuedJobKey != jobId.Value)
@@ -524,17 +545,23 @@ public static class LegacyCoordinationReplay
     {
         var ids = proto.InputIds.Select(static value => new InputId(value)).ToArray();
         if (evt.SessionId != new SessionId(proto.SessionId?.Value ?? string.Empty)
-            || ids.Length == 0 || ids.Any(static id => string.IsNullOrWhiteSpace(id.Value))
+            || ids.Any(static id => string.IsNullOrWhiteSpace(id.Value))
             || ids.Distinct().Count() != ids.Length)
             throw new InvalidDataException("A deployed input closure has invalid session or input identity.");
 
-        var pending = state.PendingInputs.Where(input => ids.Contains(input.InputId)).ToArray();
-        if (pending.Length != ids.Length || !pending.Select(static input => input.InputId).SequenceEqual(ids)
+        var translated = TranslateParentDecision(state, NetclawProtoMapper.FromProto(proto));
+        var pending = state.GetExecutablePendingInputs().Where(input => translated.InputIds.Contains(input.InputId)).ToArray();
+        if (pending.Length != translated.InputIds.Count || !pending.Select(static input => input.InputId).SequenceEqual(translated.InputIds)
             || pending.Any(input => input.SessionId != evt.SessionId))
             throw new InvalidDataException("A deployed input closure does not match the exact pending input sequence.");
 
-        if (proto.HasTaskId && pending.Any(input => input.TurnContext.TurnId != proto.TaskId))
-            throw new InvalidDataException("A deployed input closure names a different task authority.");
+        var taskContext = translated.ChildContinuation is { } child
+            ? state.ChildRuns[child.RunId].OriginalContext
+            : pending.LastOrDefault()?.TurnContext;
+        if (proto.HasTaskId && taskContext is not null && taskContext.TurnId != proto.TaskId)
+            throw new InvalidDataException("A deployed input closure names a different adopted task authority.");
+        if (taskContext is not null && pending.Any(input => !SameAuthority(input.TurnContext, taskContext)))
+            throw new InvalidDataException("A deployed input closure mixes different input authority.");
 
         if (proto.HasSourceBackgroundJobId)
         {
@@ -578,7 +605,7 @@ public static class LegacyCoordinationReplay
         var adopted = state.LegacyCoordinationEvidence.LastOrDefault(item =>
             item.Disposition == LegacyCoordinationDisposition.AppliedOrdinaryAdoption
             && item.AdoptedContext is not null && item.AdoptedContext.TurnId == context.TurnId);
-        var pending = state.PendingInputs.Where(input => input.TurnContext.TurnId == context.TurnId).ToArray();
+        var pending = state.GetExecutablePendingInputs().Where(input => input.TurnContext.TurnId == context.TurnId).ToArray();
         if ((adopted?.AdoptedContext is { } adoptedContext && !SameContext(context, adoptedContext))
             || (pending.Length > 0 && pending.Any(input => !SameContext(context, input.TurnContext))))
             throw new InvalidDataException("A deployed metadata-only tool batch differs from its admitted authority.");
@@ -798,6 +825,10 @@ public static class LegacyCoordinationReplay
                && results[0].ToolCalls.Count == 0
                && results[0].MediaReferences.Count == 0;
     }
+
+    private static bool SameAuthority(TurnContextRecord first, TurnContextRecord second)
+        => TurnContext.TryFromRecord(first, out var left, out _) && left is not null &&
+           TurnContext.TryFromRecord(second, out var right, out _) && right is not null && left.HasSameAuthority(right);
 
     internal static bool SameContext(TurnContextRecord first, TurnContextRecord second)
         => first.SessionId == second.SessionId && first.TurnId == second.TurnId

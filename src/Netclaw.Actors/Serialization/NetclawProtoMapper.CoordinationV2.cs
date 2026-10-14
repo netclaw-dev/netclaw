@@ -101,7 +101,7 @@ internal static partial class NetclawProtoMapper
                                 ?? throw new InvalidDataException("A deployed child delivery has no call identity."),
                                 delivery.Terminal.Result.Outcome, delivery.Terminal.Result.OutcomeReason)
                 };
-                if (!activeParentTask)
+                if (hasHistoryPair && !activeParentTask)
                     continue;
                 evidence.Add(new LegacyCoordinationEvidence
                 {
@@ -109,7 +109,7 @@ internal static partial class NetclawProtoMapper
                     Payload = [],
                     Disposition = LegacyCoordinationDisposition.AppliedChildContinuation,
                     InputIds = inputIds,
-                    ActiveInputIds = hasPendingInput ? inputIds : Array.Empty<InputId>(),
+                    ActiveInputIds = inputIds,
                     AdoptedContext = run.OriginalContext,
                     ChildRunId = runId,
                     DeliveryCallId = delivery.Result.ToolCallId,
