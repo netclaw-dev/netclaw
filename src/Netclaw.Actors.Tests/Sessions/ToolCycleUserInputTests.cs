@@ -168,6 +168,7 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
     [InlineData(true)]
     public async Task Overflow_replay_preserves_unresolved_correction_unless_new_user_input_arrives(bool newUserInput)
     {
+        // Arrange
         var ct = TestContext.Current.CancellationToken;
         var sessionId = new SessionId("cycle-user-input/overflow-replay");
         var subscriber = await StartRequestAsync(sessionId);
