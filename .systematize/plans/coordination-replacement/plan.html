@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:,">
+  <title>Cooperate with fewer components</title>
+  <style>
+    :root { --paper:#f6f5f0; --ink:#202b33; --muted:#52616b; --line:#d7dedb;
+      --accent:#155e58; --soft:#e9f2ef; --warn:#875018; --warm:#fff3dd; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink);
+      font:16px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    a { color:var(--accent); text-underline-offset:.2em; overflow-wrap:anywhere; }
+    a:hover { text-decoration-thickness:2px; }
+    :focus-visible { outline:3px solid #b45c25; outline-offset:4px; }
+    .skip { position:absolute; top:-80px; left:16px; padding:12px; background:white; z-index:10; }
+    .skip:focus { top:12px; }
+    .wrap { max-width:1120px; padding:0 28px; margin:auto; }
+    header { padding:54px 0 30px; border-bottom:1px solid var(--line); }
+    .eyebrow { font-size:.77rem; text-transform:uppercase; letter-spacing:.16em;
+      font-weight:750; color:var(--accent); }
+    h1 { max-width:900px; font-size:clamp(2rem,4.7vw,3.5rem); line-height:1.12;
+      letter-spacing:-.045em; margin:18px 0; }
+    h2 { font-size:1.55rem; line-height:1.25; letter-spacing:-.025em; margin:0 0 16px; }
+    h3 { font-size:1.06rem; margin:0 0 8px; }
+    h1,h2,h3 { overflow-wrap:anywhere; }
+    p { margin:0 0 14px; } li + li { margin-top:6px; }
+    .lead { max-width:850px; font-size:1.13rem; color:var(--muted); }
+    .status { display:inline-block; background:var(--warm); color:#69400f;
+      padding:5px 12px; border-radius:5px; font-size:.8rem; font-weight:700; }
+    nav { padding:16px 0; border-bottom:1px solid var(--line); }
+    nav .wrap { display:flex; flex-wrap:wrap; gap:12px 25px; }
+    nav a { font-size:.88rem; font-weight:650; }
+    main { padding-top:30px; padding-bottom:60px; }
+    section { margin:0 0 30px; scroll-margin-top:20px; }
+    .card { background:#fff; padding:26px; border:1px solid var(--line); border-radius:12px; }
+    .recommendation { border-left:5px solid var(--accent); }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+    .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin:22px 0; }
+    .metric { padding:20px; background:var(--soft); border-radius:9px; }
+    .metric strong { display:block; font-size:1.85rem; line-height:1.2; letter-spacing:-.035em; }
+    .metric span { display:block; margin-top:8px; font-size:.86rem; color:var(--muted); }
+    .muted, small { color:var(--muted); } .note { background:var(--warm); padding:14px 18px; border-radius:7px; }
+    .tag { display:inline-block; padding:2px 8px; font-size:.75rem; font-weight:700;
+      border:1px solid var(--line); border-radius:4px; margin-right:5px; }
+    details { background:white; border:1px solid var(--line); border-radius:9px; margin:12px 0; }
+    summary { padding:17px 20px; cursor:pointer; font-weight:650; }
+    details[open] summary { border-bottom:1px solid var(--line); }
+    .detail { padding:20px; }
+    .table-scroll { overflow:auto; }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    th,td { text-align:left; vertical-align:top; padding:11px 12px; border-bottom:1px solid var(--line);
+      overflow-wrap:anywhere; }
+    th { color:var(--muted); font-weight:650; background:#f8faf9; }
+    caption { text-align:left; color:var(--muted); padding-bottom:10px; }
+    code,pre { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.85em; }
+    code { overflow-wrap:anywhere; } pre { background:#eef2f1; padding:16px; overflow:auto; line-height:1.6;
+      white-space:pre-wrap; overflow-wrap:anywhere; }
+    pre code { font-size:inherit; } svg { display:block; width:100%; height:auto; }
+    .flow { display:flex; flex-direction:column; gap:9px; margin:18px 0 0; }
+    .step { border:1px solid var(--line); border-radius:7px; padding:10px 14px; background:#f8faf9; }
+    .step.proposed { background:var(--soft); border-color:#90b5ab; }
+    .arrow { text-align:center; color:var(--muted); line-height:1; }
+    footer { padding:24px 0; border-top:1px solid var(--line); color:var(--muted); font-size:.85rem; }
+    @media(max-width:700px) { .wrap { padding:0 18px; } header { padding-top:30px; }
+      .grid,.metrics { grid-template-columns:1fr; } .card { padding:20px; } .metric { padding:16px; }
+      th,td { padding:10px 8px; }
+      .stack-table,.stack-table tbody,.stack-table tr,.stack-table td { display:block; width:100%; }
+      .stack-table thead { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+      .stack-table tr + tr { border-top:2px solid var(--line); margin-top:16px; }
+      .stack-table td { overflow-wrap:anywhere; }
+      .stack-table td::before { content:attr(data-label); display:block; font-weight:700;
+        color:var(--muted); margin-bottom:5px; } }
+    @media print { #decisions { break-before:page; } body { background:white; font-size:10pt; } .wrap { max-width:none; padding:0; }
+      .skip,nav { display:none; } header { padding:0 0 16px; } h1 { font-size:25pt; }
+      section,.card { break-inside:auto; } h2,h3,summary { break-after:avoid; }
+      tr,.step,.flow { break-inside:avoid; } .table-scroll,pre { overflow:visible; }
+      pre { white-space:pre-wrap; overflow-wrap:anywhere; } details::details-content { content-visibility:visible; }
+      details { break-inside:auto; } .metrics { grid-template-columns:repeat(3,1fr); } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to proposal</a>
+  <header><div class="wrap">
+    <div class="eyebrow">Systematize · Architecture decision</div>
+    <h1>Cooperate with fewer components</h1>
+    <p class="lead">Replace PRs #2420–#2422 on the refactored session owners. Keep useful skills. Prove the runtime with focused tests.</p>
+    <span class="status">Implementation authorized · first slice active · 14 October 2026</span>
+  </div></header>
+  <nav aria-label="Proposal sections"><div class="wrap"><a href="#example">Concrete change</a><a href="#decisions">Agreed behavior</a><a href="#delivery">Delivery</a><a href="#skills">Skills</a><a href="#proof">Tests</a><a href="#evals">Evals</a><a href="#baseline">Evidence</a></div></nav>
+  <main class="wrap" id="main"><section id="example" class="card recommendation">
+<h2>A completed child should be a tool result</h2>
+<p>A parent asks a child to inspect a log. The parent remains available. When the child finishes, the parent uses its evidence and answers.</p>
+<p>The deployed stack routes that result through ordinary input admission and durable task selection. Each step adds state that another step must interpret.</p>
+<div class="grid">
+<div><h3>Current path</h3><pre><code>Save child result
+Prepare result
+Save DeliveryAdmitted(InputAdmitted)
+Queue SendUserMessage
+Save ToolTaskAdopted
+Build the tool call/result pair
+Ask the parent model</code></pre></div>
+<div><h3>Proposed path</h3><pre><code>Save child result
+Prepare result
+Tool workflow selects it at a safe boundary
+Model context supplies the tool call/result pair
+Save the parent's decision and consumption together</code></pre></div>
+</div>
+<p><small>These steps are schematic. They omit normal authorization, serialization, and output steps. The replacement retains those checks.</small></p>
+<p>Here, <strong>consumption</strong> means a saved parent decision records that it used the result. It does not mean the model provider receives exactly one request.</p>
+<p>A crash can repeat a model request. It must not repeat uncertain child actions. Keep the child's original authority through later tools and approvals.</p>
+<p><strong>Recommendation:</strong> replace the runtime mechanisms on the refactored <code>dev</code> base. Retain the useful composition and cooperation skills.</p>
+<p><strong>Smaller alternative:</strong> repair the deployed stack and port it. That changes fewer contracts initially, but retains the duplicate input and task-selection paths.</p>
+</section>
+
+<section id="decisions" class="card">
+<h2>Agreed behavior</h2>
+<p><span class="tag">Confirmed by the operator</span> The operator approved these behaviors and authorized implementation of the replacement stack.</p>
+<h3>1. Return as soon as the task is safely accepted</h3>
+<p>Netclaw validates the request and saves the accepted child task. Then <code>spawn_agent</code> or the routed skill returns a run ID and accepted status.</p>
+<p>The parent does not wait for the child to finish. A five-minute log inspection can continue while the parent answers another question.</p>
+<p>Acceptance is not completion or a promise to resume uncertain child actions after a crash. A failed acceptance write starts no child.</p>
+<p>This retains the deployed draft's contract. Current <code>dev</code> differs, so update its tool instructions and all routed adapters together.</p>
+<h3>2. Deliver each result when it is ready</h3>
+<p>If child A still needs result preparation, ready child B can reach the parent first. Do not enforce the order in which children finished.</p>
+<p>Remove the terminal-order queue and its sequence checks where no other consumer requires them.</p>
+<p>A result still waits for a safe parent boundary. It cannot interrupt an active model call or incomplete tool batch.</p>
+<p>Ordinary user inputs retain their whole ordered batch. This rule orders user input; it does not impose child completion order.</p>
+</section>
+
+<section id="scope" class="card">
+<h2>Outcome and scope</h2>
+<p>One objective governs this replacement: useful cooperation with fewer independent states and fewer interactions between owners.</p>
+<ul>
+<li>The parent receives completed child work without a reminder or another user message.</li>
+<li>Status shows facts, including pending approvals and confirmed progress.</li>
+<li>Cancellation, consent, recovery, and duplicate handling preserve the original authority.</li>
+<li>Repeat-tool rules permit productive changes and reject proven recurrence.</li>
+<li>Skills guide scoped delegation, artifact exchange, independent review, and evidence-based completion.</li>
+<li>A retained large tool result suggests focused child inspection for the parent's question.</li>
+</ul>
+<p><strong>Excluded:</strong> a universal job framework, recursive child delegation, new child shell-job support, automatic context-window probing, provider configuration repairs, and an eval-runner rewrite.</p>
+<p>Shell-job result roles need a separate contract. They remain outside this replacement. Do not attach a second result to the original submission call.</p>
+<p>Issue #2453 remains a deployment gate. Its reminder route and failed-recovery notification need a bounded repair or verified resolution before rollout.</p>
+</section>
+
+<section id="owners" class="card">
+<h2>Reuse the components we just established</h2>
+<table class="stack-table" role="table"><thead role="rowgroup"><tr role="row"><th role="columnheader">Owner</th><th role="columnheader">Responsibility</th><th role="columnheader">What disappears</th></tr></thead><tbody role="rowgroup">
+<tr role="row"><td role="cell" data-label="Owner"><code>SessionInputFlow</code></td><td role="cell" data-label="Responsibility">Ordinary user input, selection, and authority.</td><td role="cell" data-label="What disappears">Child results in the user-input queue.</td></tr>
+<tr role="row"><td role="cell" data-label="Owner"><code>SessionToolWorkflow</code></td><td role="cell" data-label="Responsibility">Batch readiness, direct result selection, and approval correlation.</td><td role="cell" data-label="What disappears">Duplicate readiness checks and a second child approval state machine.</td></tr>
+<tr role="row"><td role="cell" data-label="Owner"><code>SessionExecutionLifetime</code></td><td role="cell" data-label="Responsibility">Live child resources, cancellation, and local dispatch closure.</td><td role="cell" data-label="What disappears">Parallel actor fields that describe the same live resources.</td></tr>
+<tr role="row"><td role="cell" data-label="Owner"><code>SessionState</code></td><td role="cell" data-label="Responsibility">Accepted identities, authority, required approval facts, terminal results, and result consumption.</td><td role="cell" data-label="What disappears">New durable child delivery-admission and task-adoption events.</td></tr>
+<tr role="row"><td role="cell" data-label="Owner"><code>SessionModelContext</code></td><td role="cell" data-label="Responsibility">One valid tool call/result pair in the parent request.</td><td role="cell" data-label="What disappears">Transcript reconstruction scattered through child and input handlers.</td></tr>
+<tr role="row"><td role="cell" data-label="Owner"><code>TurnStateTracker</code></td><td role="cell" data-label="Responsibility">Repeat-tool decisions from canonical calls and outcomes.</td><td role="cell" data-label="What disappears">Loop-state copies inside child delivery and task adoption.</td></tr>
+</tbody></table>
+<p>Add one private child-state representation where the durable facts need an owner. Do not introduce a universal workflow engine or callback collection.</p>
+<p>Keep raw terminal results before asynchronous preparation. A preparation failure must not erase completed work.</p>
+<p>Derive pending approval count from the existing consent records. Do not save another lifecycle flag to express that count.</p>
+<details><summary>State and recovery rules</summary><div class="detail">
+<ul>
+<li>Acceptance commits before the child starts. A failed write produces zero child calls.</li>
+<li>Cancellation intent survives restart. Live dispatch closes before cancellation reports completion.</li>
+<li>Owner loss does not automatically restart uncertain child actions.</li>
+<li>A saved terminal result permits preparation to retry without child execution.</li>
+<li>A prepared result remains available until a correlated parent decision consumes it.</li>
+<li>A decision that starts tools retains the child authority until those tools and approvals settle.</li>
+<li>A compact closed-run identity rejects duplicate starts after transcript compaction.</li>
+<li>Validation occurs before the journal write. Replay remains strict; it does not silently ignore invalid events.</li>
+<li>Ordinary admitted inputs remain pending until <code>ToolBatchStarted</code>, <code>TurnRecorded</code>, or <code>InputClosed</code> consumes their identities.</li>
+</ul>
+<p>The exact event fields and legacy translation remain design work. These rules constrain that work; they do not approve a finished wire schema.</p>
+</div></details>
+</section>
+
+<section id="skills" class="card">
+<h2>Keep the useful skills</h2>
+<p>Preserve the coordination skill and task-worker profile where they express real work practices. A smaller runtime does not require weaker agent guidance.</p>
+<p>Keep the four workflow resources and reusable templates as optional guidance. Do not make their exact format a model acceptance rule.</p>
+<p><code>agent-coordination</code> owns work practices. <code>subagent-authoring</code> owns profile and runtime facts. <code>netclaw-operations</code> owns operator setup.</p>
+<ul>
+<li><strong>Compose:</strong> split a task into useful outcomes and dependencies; choose work that can proceed independently.</li>
+<li><strong>Cooperate:</strong> give each child a bounded scope, relevant context, a usable artifact reference, and a clear return contract.</li>
+<li><strong>Review:</strong> separate the author from the reviewer; compare evidence before the parent reports completion.</li>
+<li><strong>Recover:</strong> use status and cancellation when needed; report approval waits and failures honestly.</li>
+</ul>
+<p>Keep detailed examples as optional resources. Remove instructions that require one exact file name, table shape, or child order without a product reason.</p>
+<p>The spill hint should suggest inspection for a question, rather than a summary of the whole file:</p>
+<pre><code>Large output retained. Consider delegating inspection
+for evidence relevant to your current question.
+
+Example child task:
+Inspect this output for the cause of the failed deployment.
+Return key insights, evidence locations, and uncertainties.</code></pre>
+<p>The existing spill response exposes a call ID. Verify a child-readable reference under current authority before suggesting this task.</p>
+<p>Do not suggest inspection when retention fails. Do not start a child automatically. Reuse the current spill decision without another threshold or setting.</p>
+</section>
+
+<section id="delivery" class="card">
+<h2>Delivery</h2>
+<p>The sequence below replaces the three draft PRs. The operator authorized implementation and replacement PRs. Deployment remains separate.</p>
+<p>Keep the old draft refs as evidence. Reuse their meaningful assertions; do not port their full test and eval infrastructure.</p>
+<h3>PR 1 — Complete child work through the existing session owners</h3>
+<p><strong>Concrete change:</strong> connect the real spawn adapter to durable acceptance, child execution, prepared output, and direct parent continuation.</p>
+<p>Include cancellation, consent, status, recovery, and required legacy readers in this usable slice. A public child start must not ship without its control rules.</p>
+<p>Change the session tool workflow, execution lifetime, model context, state projection, and child adapters. Add no generic child input-admission path.</p>
+<p>Update affected tool guidance and its version in this PR. Update OpenSpec rules and the authorization architecture document with the new decision ownership.</p>
+<p><strong>Start conditions:</strong> the public behavior choices are confirmed. Define the parent-decision correlation and the legacy data contract before the new writer.</p>
+<p><strong>Review map:</strong> acceptance before execution; original authority; batch readiness; result consumption; recovery without another child execution.</p>
+<p><strong>Intermediate behavior:</strong> the new child path is complete. Current <code>dev</code> loop guards remain until PR 2. Guidance uses only the implemented child contract.</p>
+<p><strong>Evidence:</strong> run the next-slice recipes below on the combined branch. Include valid deployed bytes and explicit rejection or settlement of the invalid-adoption fixture.</p>
+<p><strong>Retirement:</strong> do not carry the old child input queue, child task adoption, or duplicate approval owner into this branch.</p>
+<p>Legacy readers remain until the supported data set no longer needs them. Count them as production code.</p>
+<h3>PR 2 — Preserve repeat-tool rules without copied coordination state</h3>
+<p>Port the final draft's exact per-call recurrence, adjacent-cycle rules, and trusted pending-job exceptions into the existing tracker and tool-result path.</p>
+<p>Preserve productive changes, valid correction evidence, and job-origin checks. Remove replaced counters or limits only after their required guarantees have equivalent proof.</p>
+<p><strong>Dependency:</strong> use PR 1's final result and authority contract. Unit-model work can proceed in parallel; integration uses the actual predecessor.</p>
+<p><strong>Intermediate behavior:</strong> one tracker owns the selected rules. Compaction preserves the agreed live window; a new task follows the final draft's reset rules.</p>
+<p><strong>Gate:</strong> deterministic equal/changed outcome, compaction, correction, and job-lineage cases. Review each rule that #2422 changed from #2421.</p>
+<p><strong>Retirement:</strong> remove obsolete detector copies and tests that assert their private storage shape. Keep behavior assertions.</p>
+<h3>PR 3 — Retain cooperation skills and add the spill hint</h3>
+<p>Port the useful coordination resources and task-worker profile. Match their tool instructions to the implemented start, status, and result behavior.</p>
+<p>Add the focused spill-inspection suggestion through the existing spill response. Prove the child can access the supplied reference without broader authority.</p>
+<p><strong>Dependency:</strong> runtime tool contracts from PRs 1 and 2. Content review can start earlier; real-model cases use the combined branch.</p>
+<p><strong>Gate:</strong> deterministic spill and discovery checks, existing required skill evals, and the small coordination eval set below.</p>
+<p><strong>Retirement:</strong> omit duplicate scripted scenarios and prompt-format assertions without a product contract. Do not replace the eval runner.</p>
+<p>Update affected system skills and their versions. Skill publication remains separate from a binary release.</p>
+<details><summary>Merge, rollout, and reversal</summary><div class="detail">
+<p>Use <code>feature/*</code> base branches when the replacement needs dependent PRs. Label each PR and name its predecessor.</p>
+<p>Wait until the entire dependent stack passes its required checks. Merge the group in dependency order; do not merge isolated green members early.</p>
+<p>Keep the reminder repair separate if it can stand alone. Coordinate with open PR #1987 before changing the same reminder behavior.</p>
+<p>Before rollout, test a consistent copy of deployed journals with the exact candidate binary. Preserve a hashed backup and a documented restore path.</p>
+<p>Exercise valid legacy child facts and the invalid adoption from #2453. Ambiguous identity must produce an explicit operator-visible disposition without execution.</p>
+<p>Fix or prove resolution of the unsupported Reminder restart route and delayed recovery error before rollout.</p>
+<p>Run one real-provider parent-responsiveness check before rollout. Hold child work and require a parent response; fake providers cannot prove shared backend capacity.</p>
+<p>A decoder alone cannot repair an invalid event. An older binary may also fail after new-format writes. A source revert does not reverse data changes.</p>
+<p>Do not deploy during planning. Later rollout requires a reviewable binary, evidence, data transition, and restore procedure.</p>
+</div></details>
+</section>
+
+<section id="proof" class="card">
+<h2>Proof with less test machinery</h2>
+<p>Use each test level for a specific claim. Keep Arrange, Act, Assert and use xUnit theories for useful input variants.</p>
+<p>Use the existing Accordant and CsCheck approach for generated operation sequences. Define legal preconditions and expected state changes independently of the implementation.</p>
+<p>Generate acceptance, completion, cancellation, approval, duplicate delivery, parent progress, and recovery operations. Let the generator explore their order.</p>
+<p>A pure state model cannot prove mailbox delivery or SQLite replay. Keep focused actor and persistence tests for those boundaries.</p>
+<details><summary>Next-slice recipes and commands — proposed, not executed</summary><div class="detail" id="recipes">
+<p>Extend the current <code>LlmSessionTestBase</code>, subagent integration fixtures, and <code>ActiveToolBatchAccordantTests</code> patterns. Use acknowledgements and controllable model/tool fakes.</p>
+<ol>
+<li><strong>Parent wake:</strong> hold the parent model call, finish a child, then release the parent. Observe the next model request without a user message or reminder. Repeat at idle, tool-batch, and compaction boundaries. Assert a complete tool pair and zero child user-input admissions.</li>
+<li><strong>Acceptance:</strong> fail the acceptance write and assert zero child calls. Lose the successful reply and retry the same start identity. Assert one accepted run.</li>
+<li><strong>Recovery:</strong> fail after terminal save, after preparation, and before or after parent consumption. Replay the journal. Assert the same result identity, no lost confirmed result, and no repeat child execution.</li>
+<li><strong>Authority:</strong> create two requesters. Resolve an approval or cancellation with the wrong requester or stale attempt. Assert zero grant writes and zero extra dispatch. Include the authorized control.</li>
+<li><strong>Status:</strong> hold one unresolved child approval. The authorized requester sees <code>pending_approvals = 1</code>; a foreign requester sees no protected status. Resolve it and require zero pending approvals.</li>
+<li><strong>Input order:</strong> queue ordinary inputs A and B while a child finishes. Assert that A and B remain one ordered batch and do not replace child authority.</li>
+<li><strong>Legacy data:</strong> use fixed bytes produced by deployed <code>9f79c0c4</code>. Cover <code>tta-v1</code>, <code>cra-v1</code>, <code>cre-v1</code>, extended records, snapshots, and the reported invalid adoption. Preserve accepted identities, results, authority, consent, and job lineage. Do not construct all fixtures with the new serializer.</li>
+</ol>
+<p><strong>Enabling work:</strong> the test author must add the child journal fault fixture and a verified legacy-byte corpus where current fixtures lack them.</p>
+<p>Capture actor acknowledgements before a restart. Reuse repository-owned temp directories and dispose the actor system before deleting SQLite files.</p>
+<p>Retain the revision, seed, operation trace, discovered test count, and sanitized failure output. A setup failure, skipped test, or zero discovery is not proof.</p>
+<pre><code>dotnet test src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj --filter 'FullyQualifiedName~SubAgentSpawnIntegrationTests|FullyQualifiedName~SessionInputFlowTests|FullyQualifiedName~ActiveToolBatchAccordantTests'
+dotnet slopwatch analyze
+./scripts/Add-FileHeaders.ps1 -Verify</code></pre>
+<p>The filter names existing tests. It does not run proposed child cases until their test author adds them to the relevant fixtures or updates the filter.</p>
+<p>Restore with the repository's pinned .NET SDK first. Run the affected full project and required CI on the integrated candidate.</p>
+<p>Review focused mutation targets for precommit validation, original authority, and cancellation dispatch closure. Add narrow targets only when deterministic tests reject those unsafe changes.</p>
+</div></details>
+</section>
+
+<section id="evals" class="card">
+<h2>A small coordination eval set</h2>
+<p>Keep existing mandatory skill evals. Add three distinct coordination tasks through the current harness, without a new scoring framework.</p>
+<p><strong>Selected eval endpoint:</strong> <code>https://spark2.testlab.petabridge.net</code>. The operator selected this endpoint.</p>
+<p>Its <code>/v1/models</code> response on 14 October 2026 lists one model: <code>Qwen3.8-Flash-Next</code>. Use that model for the planned trials.</p>
+<p>Use the same model for the eval fallback and compaction roles. Verify access from the isolated eval container before trials.</p>
+<p>The model-list request passed. It does not prove chat completion, tool calls, context capacity, or concurrent parent and child requests.</p>
+<table class="stack-table" role="table"><thead role="rowgroup"><tr role="row"><th role="columnheader">Task</th><th role="columnheader">Observable result</th><th role="columnheader">Wrong behavior to reject</th></tr></thead><tbody role="rowgroup">
+<tr role="row"><td role="cell" data-label="Task">Inspect a retained large result</td><td role="cell" data-label="Observable result">A child answers a focused question with correct evidence locations from a fixture that contains distractors.</td><td role="cell" data-label="Wrong behavior to reject">Repeat the source action, cite inaccessible output, or return an unsupported conclusion.</td></tr>
+<tr role="row"><td role="cell" data-label="Task">Combine two independent investigations</td><td role="cell" data-label="Observable result">Children receive bounded scopes. The parent combines their evidence into the requested result.</td><td role="cell" data-label="Wrong behavior to reject">Conflicting write scopes, false completion, or a final answer before required results arrive.</td></tr>
+<tr role="row"><td role="cell" data-label="Task">Review an artifact with a planted defect</td><td role="cell" data-label="Observable result">A separate reviewer finds the known defect. The parent addresses it or states the unresolved issue.</td><td role="cell" data-label="Wrong behavior to reject">The author approves its own artifact or the parent ignores the known defect.</td></tr>
+</tbody></table>
+<p>These are outcome claims, not exact scripts. Do not require fixed prose, file names, tool order, or child counts beyond the task's actual requirements.</p>
+<p>Use an independent fixture oracle and actual tool traces. Include known-bad traces to prove each checker rejects its named wrong behavior.</p>
+<p>For the optional spill hint, compare paired hinted and unhinted runs. A model that answers correctly without delegation is not automatically a failure.</p>
+<p>Separate task accuracy from hint uptake. Explicit delegation tasks can require a child call; an optional suggestion cannot establish that universal rule.</p>
+<p>Use a small fixed repeat count for initial diagnosis and report each model separately. Do not infer model-tier causality from 6/10 versus 10/10.</p>
+<p>Start with three trials per new case on the selected deployment model. This is a diagnostic budget, not a statistical reliability claim.</p>
+<p>Run paired spill-hint controls separately. Test another model only when a model-specific failure needs investigation.</p>
+<p>Budget live trials before execution. Reuse the same fixtures and settings for baseline and candidate. No live model calls run as part of this plan.</p>
+<p>Inspect the harness first. Headless sessions cannot prove <code>current_session</code> reminder delivery. That limitation does not block these coordination tasks.</p>
+<details><summary>Existing eval procedure and its limits</summary><div class="detail">
+<p>The current runner uses an isolated Docker home and archives each run under <code>evals/runs</code>. Docker and an authorized model endpoint are prerequisites.</p>
+<p>Set <code>NETCLAW_EVAL_PROVIDER_TYPE</code>, <code>NETCLAW_EVAL_PROVIDER_ENDPOINT</code>, and <code>NETCLAW_EVAL_MODEL_ID</code> through the existing environment setup. Do not copy credentials into receipts.</p>
+<pre><code>NETCLAW_EVAL_CASE=subagent_headless_ambiguous_task ./evals/run-evals.sh
+./evals/run-evals.sh</code></pre>
+<p>The first command checks the existing fixture and runner. Its prompt names <code>spawn_agent</code>; it does not prove unprompted delegation.</p>
+<p>Add the three proposed fixtures and objective checkers before selecting them through <code>NETCLAW_EVAL_CASE</code>. Use <code>NETCLAW_EVAL_RUNS</code> for the declared trial budget.</p>
+<p>The second command remains the repository's required full gate for skill changes. Do not lower its threshold or replace it with the targeted cases.</p>
+<p>Inspect cleanup receipts for the temporary home and container. Keep only bounded, sanitized traces with fixture, model, settings, revision, and per-case results.</p>
+<p>The current Subagents category registers four cases while its README lists three. Correct that inventory when changing these cases.</p>
+</div></details>
+</section>
+
+<section id="baseline" class="card">
+<h2>Baseline, costs, and limits</h2>
+<p>Plan base: <code>aa03a13c90687141a26beaeeccc07e07783bca43</code>. Its production code matches the completed refactor at <code>90728b20</code>.</p>
+<p>Execution base: <code>c3fd6d55810d978ee7ef6980816c1c6535320afa</code>. The intervening change fixes a Mattermost test race and does not alter the session design.</p>
+<p>Deployed draft: <code>9f79c0c4b637f005ffba5572d0bf50aa550464f2</code>. Lower PR heads: <code>ee2f7448</code> and <code>2494a01e</code>.</p>
+<p>The complete stack adds <strong>2,868 physical production C# lines</strong>. Its textual production source difference is 3,103 lines; these metrics have different scope.</p>
+<p>The provisional removal estimate includes replacement and compatibility code. It excludes tests, documentation, generated output, and the completed actor refactor.</p>
+<table class="stack-table" role="table"><thead role="rowgroup"><tr role="row"><th role="columnheader">Estimate</th><th role="columnheader">Old code removed or avoided</th><th role="columnheader">Replacement and compatibility</th><th role="columnheader">Net reduction</th></tr></thead><tbody role="rowgroup">
+<tr role="row"><td role="cell" data-label="Estimate">Conservative</td><td role="cell" data-label="Old code removed or avoided">2,600</td><td role="cell" data-label="Replacement and compatibility">2,350</td><td role="cell" data-label="Net reduction">250</td></tr>
+<tr role="row"><td role="cell" data-label="Estimate">Central</td><td role="cell" data-label="Old code removed or avoided">2,850</td><td role="cell" data-label="Replacement and compatibility">2,000</td><td role="cell" data-label="Net reduction">850</td></tr>
+<tr role="row"><td role="cell" data-label="Estimate">Favorable</td><td role="cell" data-label="Old code removed or avoided">3,100</td><td role="cell" data-label="Replacement and compatibility">1,700</td><td role="cell" data-label="Net reduction">1,400</td></tr>
+</tbody></table>
+<p><strong>Low confidence:</strong> compatibility alone may need 350–650 replacement lines. Final schema and invalid-record handling can change these estimates.</p>
+<p>Measure the final candidate with the same physical C# collector. Also compare independent states, decision owners, and actor fields. File movement is not deletion.</p>
+<details><summary>Evidence corrections and counterexamples</summary><div class="detail">
+<p>The normal turn-end buffer drain exists in the deployed source. The reported missed wake remains a case to reproduce, not proof of a missing drain call.</p>
+<p>The 8,000-character MCP schema threshold only emits a warning. It does not truncate the schema.</p>
+<p>The child status response omits approval count, but approval prompts and activity notifications exist.</p>
+<p>Current target code cannot decode all deployed draft records. The earlier local rejection guard is not a migration plan.</p>
+<p>A rebuild would lose its rationale if it merely moved the old queues and flags into helpers. PR 1 must show their removal through its real consumer.</p>
+<p>A model eval can show useful cooperation. It cannot prove crash recovery, authority, or duplicate-execution safety.</p>
+</div></details>
+</section>
+
+<section id="handoff" class="card">
+<h2>Implementation handoff and current status</h2>
+<p><strong>Current authority:</strong> implement, validate, and publish labeled replacement PRs. Merge the dependent group only after all required checks pass. No deployment is authorized.</p>
+<p>The public choices are confirmed. The OpenSpec change records the approved direction; implementation and verification remain separate work.</p>
+<p>The formal change is <code>openspec/changes/simplify-agent-coordination</code>. This HTML page owns the delivery sequence and verification procedures.</p>
+<p>Before implementation, reconcile existing ephemeral-worker and best-effort deduplication rules with the approved child and recovery contract through OpenSpec.</p>
+<p><strong>Traceability:</strong> PRD-001 FR-002/003 cover session output and recovery; FR-005/011 cover authority; FR-016 covers coordinated restart.</p>
+<p>The final draft adds FR-017 for durable child work and parent responsiveness. Carry its approved guarantees into the target PRD before implementation.</p>
+<p>PRD-004 CLI-001A covers profile provisioning. PRD-007 covers identity and skill guidance. Keep those links with the relevant skill and profile changes.</p>
+<p>The proposed <code>background-subagent-runs</code> and <code>agent-coordination</code> capabilities are new against this base. Existing <code>turn-loop-governance</code> needs a delta.</p>
+<p>Record the source of each retained rule. Do not treat the older PROJECT_CONTEXT deferred-feature list or draft glossary terms as proof of current behavior.</p>
+<p>Update the authorization architecture document in the slice that moves an authorization decision. Add no silent behavior drift.</p>
+<p>The coordinator owns integration and adversarial review. Separate agents author product code and tests. Each receives the same approved contract and pinned baseline.</p>
+<p>Use CodeWithAaron for refactoring, type ownership, and independent review. Use the repository's OpenSpec apply workflow for implementation tasks.</p>
+<p>The shared CodeWithAaron index is <code>/home/petabridge/repositories/stannardlabs/code-like-aaron/skills/code-like-aaron/SKILL.md</code>. Pass its relevant references to each worker.</p>
+<p>Use Akka testing guidance for actor proof, Systematize verify for evidence review, and Slopwatch after code changes. Report unavailable skills honestly.</p>
+<p>Continue from the self-contained plan when optional guidance is unavailable. Pause only affected work when a required procedure cannot be established.</p>
+<p>When implementation and publication are authorized, open a meaningful draft PR early. Include its revision, proof limits, labels, and predecessor.</p>
+<p>Keep this page current after each material finding. At closure, retain its final state in Git history and remove it from active guidance.</p>
+<h3>Source references</h3>
+<ul>
+<li><a href="https://github.com/netclaw-dev/netclaw/pull/2420">PR #2420: recurrence</a>; <a href="https://github.com/netclaw-dev/netclaw/pull/2421">PR #2421: background children</a>; <a href="https://github.com/netclaw-dev/netclaw/pull/2422">PR #2422: coordination guidance</a>.</li>
+<li><a href="https://github.com/netclaw-dev/netclaw/issues/2453">Issue #2453: invalid adoption and reminder recovery</a>.</li>
+<li><a href="https://github.com/netclaw-dev/netclaw/blob/9f79c0c4b637f005ffba5572d0bf50aa550464f2/src/Netclaw.Actors/Sessions/LlmSessionActor.ChildRuns.cs#L362">Deployed child delivery</a>; <a href="https://github.com/netclaw-dev/netclaw/blob/9f79c0c4b637f005ffba5572d0bf50aa550464f2/src/Netclaw.Actors/Sessions/LlmSessionActor.cs#L2283">normal turn-end drain</a>.</li>
+<li><a href="https://github.com/netclaw-dev/netclaw/blob/90728b20691334694d8f57e0bf61b77b28d9901b/src/Netclaw.Actors/Sessions/Handlers/SessionInputFlow.cs">Current input owner</a>; <a href="https://github.com/netclaw-dev/netclaw/blob/90728b20691334694d8f57e0bf61b77b28d9901b/src/Netclaw.Actors/Sessions/SessionToolWorkflow.cs">current tool owner</a>.</li>
+<li><a href="https://github.com/netclaw-dev/netclaw/blob/aa03a13c90687141a26beaeeccc07e07783bca43/docs/spec/GLOSSARY.md">Engineering glossary</a>; <a href="https://github.com/netclaw-dev/netclaw/blob/aa03a13c90687141a26beaeeccc07e07783bca43/TOOLING.md">repository test and mutation procedures</a>.</li>
+</ul>
+<p><small>Planning evidence: source inspection and report review. No product test, live eval, migration, or deployment ran for this plan.</small></p>
+</section>
+</main>
+  <footer><div class="wrap">A proposal is not an approval. Estimates are not measured results.</div></footer>
+</body>
+</html>
