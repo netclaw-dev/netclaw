@@ -85,15 +85,12 @@ internal abstract class ToolInvocationReceipt
         public string? DeclaredProjectDirectory { get; }
     }
 
+    // The per-call output sink binds this receipt to the prepared query and its exact job arguments.
     internal sealed class PendingBackgroundJob : ToolInvocationReceipt
     {
-        public PendingBackgroundJob(string jobId) : base(ToolInvocationOutcomeCategory.Success)
+        public PendingBackgroundJob() : base(ToolInvocationOutcomeCategory.Success)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
-            JobId = jobId;
         }
-
-        public string JobId { get; }
     }
 
     internal sealed class Correction : ToolInvocationReceipt
