@@ -1878,6 +1878,94 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Restart_reminder_restores_an_interrupted_input_without_a_second_user_prompt()
+    {
+        var sessionId = new SessionId("signalr/restart-resume");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var responseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = responseGate;
+        var source = new MessageSource
+        {
+            ChannelType = ChannelType.SignalR,
+            SenderId = new SenderId("operator-1"),
+            MessageId = "restart-input-1",
+            TurnId = new Netclaw.Actors.Protocol.TurnId("restart-turn-1"),
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.Personal,
+            Principal = PrincipalClassification.Operator,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
+            ReceivedAt = _timeProvider.GetUtcNow()
+        };
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Finish the interrupted task",
+            Source = source
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        var child = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Watch(child);
+
+        var drainAck = await sessionManager.Ask<DaemonRestartPrepared>(
+            new PrepareForDaemonRestart(sessionId, "daemon-stop"),
+            TimeSpan.FromSeconds(8),
+            TestContext.Current.CancellationToken);
+        var reminder = Assert.IsType<ReminderDefinition>(drainAck.RestartReminder);
+        Assert.Equal(DeliveryKind.CurrentSession, reminder.Delivery.Kind);
+        Assert.Equal(TrustAudience.Personal, reminder.Audience);
+        Assert.Equal(TrustBoundary.Personal, reminder.Boundary);
+        Assert.Equal(TimeSpan.FromMinutes(10), reminder.ExpiresAt - reminder.CreatedAt);
+        await ExpectTerminatedAsync(
+            child,
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var subscriber = CreateTestProbe("restart-resume-subscriber");
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = reminder.Instructions,
+            Source = new MessageSource
+            {
+                ChannelType = ChannelType.SignalR,
+                SenderId = new SenderId("reminder-system"),
+                MessageId = $"{reminder.Id}:1",
+                TurnId = new Netclaw.Actors.Protocol.TurnId($"{reminder.Id}:1"),
+                Audience = reminder.Audience,
+                Boundary = reminder.Boundary,
+                Principal = PrincipalClassification.VerifiedAutomation,
+                Provenance = new SourceProvenance(
+                    TransportAuthenticity.LocalProcess,
+                    PayloadTaint.Trusted),
+                ReceivedAt = _timeProvider.GetUtcNow(),
+                ReminderId = new ReminderId($"{reminder.Id}:1")
+            }
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var resumedCall = _fakeChatClient.ReceivedMessages.Last(conversation =>
+            conversation.Any(message => string.Equals(
+                message.Text,
+                "Finish the interrupted task",
+                StringComparison.Ordinal)));
+        Assert.DoesNotContain(resumedCall, message => string.Equals(
+            message.Text,
+            reminder.Instructions,
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Restart_drain_does_not_remind_after_partial_text()
     {
         var sessionId = new SessionId("signalr/restart-partial-text");

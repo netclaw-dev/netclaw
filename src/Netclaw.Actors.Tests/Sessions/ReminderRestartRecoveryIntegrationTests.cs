@@ -50,7 +50,7 @@ public sealed class ReminderRestartRecoveryIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Restart_reminder_restores_an_interrupted_input_without_a_second_user_prompt()
+    public async Task Reminder_origin_restart_restores_an_interrupted_input_without_a_second_user_prompt()
     {
         // Arrange
         var sessionId = new SessionId("reminder/restart-resume");
