@@ -20,7 +20,7 @@ namespace Netclaw.Actors.Sessions;
 /// event via the <c>Apply</c> methods. Transient concerns (subscribers, message
 /// buffer, behavior) remain on the actor.
 /// </summary>
-public sealed record SessionState
+public sealed partial record SessionState
 {
     public sealed record AdoptedContextAuditRecord(
         string AuthorizedMessageId,
@@ -118,9 +118,10 @@ public sealed record SessionState
 
     internal SessionState Apply(TurnRecorded evt, bool userAlreadyInHistory)
     {
-        var closed = CloseInputs(evt.ConsumedInputIds);
+        var closed = CommitChildContinuation(evt.ChildContinuation, close: true).CloseInputs(evt.ConsumedInputIds);
         // Live history already has the user message. Replay can restore it by input ID.
-        var history = userAlreadyInHistory ? closed.History : closed.History.Add(evt.UserMessage);
+        var history = userAlreadyInHistory || evt.ChildContinuation is not null
+            ? closed.History : closed.History.Add(evt.UserMessage);
         return (closed with
         {
             History = history.Add(evt.AssistantReply),
@@ -449,6 +450,7 @@ public sealed record SessionState
         {
             History = new List<SerializableChatMessage>(History),
             PendingInputs = PendingInputs.ToArray(),
+            ChildRuns = [.. ChildRuns.Values],
             RecentSourceMessageKeys = RecentSourceMessageKeys.ToArray(),
             TurnCount = TurnCount,
             Title = Title,
@@ -511,6 +513,7 @@ public sealed record SessionState
         {
             History = ImmutableList.CreateRange(snapshot.History),
             PendingInputs = ImmutableList.CreateRange(snapshot.PendingInputs),
+            ChildRuns = snapshot.ChildRuns.ToImmutableDictionary(run => run.RunId),
             RecentSourceMessageKeys = ImmutableList.CreateRange(snapshot.RecentSourceMessageKeys),
             TurnCount = snapshot.TurnCount,
             Title = snapshot.Title,
