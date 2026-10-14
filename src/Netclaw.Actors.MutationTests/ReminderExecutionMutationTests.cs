@@ -34,6 +34,7 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
     private readonly Channel<Guid> _dispatches = Channel.CreateUnbounded<Guid>();
     private readonly Channel<ReminderExecutionCompleted> _localOutcomes =
         Channel.CreateUnbounded<ReminderExecutionCompleted>();
+    private readonly Channel<IActorRef> _localTerminations = Channel.CreateUnbounded<IActorRef>();
     private readonly ReminderId _id = new("ownership-probe");
     private readonly DateTimeOffset _now = TimeProvider.System.GetUtcNow();
     private IHost _host = null!;
@@ -63,7 +64,7 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
                     _alerts, NullReminderChannelNotifier.Instance)));
                 _barrier = system.ActorOf(Props.Create(() => new QueryBarrier(_manager)));
                 _localExecutionParent = system.ActorOf(
-                    Props.Create(() => new LocalExecutionParent(_localOutcomes.Writer)),
+                    Props.Create(() => new LocalExecutionParent(_localOutcomes.Writer, _localTerminations.Writer)),
                     "local-execution-parent");
             }));
         _host = builder.Build();
@@ -212,10 +213,11 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
             new StartLocalExecution(executionId, definition, pipeline, envelope), ReplyTimeout);
         var outcome = await _localOutcomes.Reader.ReadAsync().AsTask().WaitAsync(ReplyTimeout);
         var input = await pipeline.InputCaptured.WaitAsync(ReplyTimeout);
-        await pipeline.InputCompleted.WaitAsync(ReplyTimeout);
+        var terminated = await _localTerminations.Reader.ReadAsync().AsTask().WaitAsync(ReplyTimeout);
 
         // Assert
         Assert.Equal(executionId, started.ExecutionId);
+        Assert.Equal(started.Execution, terminated);
         Assert.Equal(executionId, outcome.ExecutionId);
         Assert.Equal(_id, outcome.Id);
         Assert.True(outcome.Success);
@@ -334,19 +336,22 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
         ISessionPipeline Pipeline,
         ReminderEnvelope<ReminderPayload> Envelope);
 
-    private sealed record LocalExecutionStarted(Guid ExecutionId);
+    private sealed record LocalExecutionStarted(Guid ExecutionId, IActorRef Execution);
 
     private sealed class LocalExecutionParent : ReceiveActor
     {
-        public LocalExecutionParent(ChannelWriter<ReminderExecutionCompleted> outcomes)
+        public LocalExecutionParent(
+            ChannelWriter<ReminderExecutionCompleted> outcomes,
+            ChannelWriter<IActorRef> terminations)
         {
             Receive<StartLocalExecution>(start =>
             {
-                Context.ActorOf(
+                var execution = Context.ActorOf(
                     ReminderExecutionActor.CreateProps(
                         start.ExecutionId, start.Definition, start.Pipeline, TimeProvider.System, start.Envelope),
                     $"execution-{start.ExecutionId:N}");
-                Sender.Tell(new LocalExecutionStarted(start.ExecutionId));
+                Context.Watch(execution);
+                Sender.Tell(new LocalExecutionStarted(start.ExecutionId, execution));
             });
             Receive<ReminderExecutionCompleted>(completed =>
             {
@@ -354,6 +359,11 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
                     throw new InvalidOperationException("The local outcome channel is closed.");
 
                 Sender.Tell(new ReminderExecutionAccepted(completed.ExecutionId));
+            });
+            Receive<Terminated>(terminated =>
+            {
+                if (!terminations.TryWrite(terminated.ActorRef))
+                    throw new InvalidOperationException("The local termination channel is closed.");
             });
         }
     }
@@ -364,12 +374,8 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<ChannelInput> _inputCaptured =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _inputCompleted =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<ChannelInput> InputCaptured => _inputCaptured.Task;
-
-        public Task InputCompleted => _inputCompleted.Task;
 
         public Task<MaterializedSession> CreateAsync(
             SessionId sessionId,
@@ -383,11 +389,7 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
                 _inputCaptured.TrySetResult(channelInput);
                 channelInput.AckTarget?.Tell(CommandAck.For(sessionId), ActorRefs.NoSender);
                 _inputAccepted.TrySetResult();
-            }).MapMaterializedValue<NotUsed>(completion =>
-            {
-                _ = ObserveCompletionAsync(completion);
-                return NotUsed.Instance;
-            });
+            }).ObservingFault();
             var output = Source.UnfoldAsync<int, SessionOutput>(0, async index =>
                 {
                     await _inputAccepted.Task.ConfigureAwait(false);
@@ -407,18 +409,5 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
 
         public Task<ISessionResponse> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default) =>
             Task.FromResult<ISessionResponse>(CommandAck.For(feedback.SessionId));
-
-        private async Task ObserveCompletionAsync(Task<Done> completion)
-        {
-            try
-            {
-                await completion.ConfigureAwait(false);
-                _inputCompleted.TrySetResult();
-            }
-            catch (Exception error)
-            {
-                _inputCompleted.TrySetException(error);
-            }
-        }
     }
 }
