@@ -335,7 +335,7 @@ dotnet slopwatch analyze
 <h2>Implementation handoff and current status</h2>
 <p><strong>Current authority:</strong> implement, validate, and publish labeled replacement PRs. Merge the dependent group only after all required checks pass. No deployment is authorized.</p>
 <p><strong>Replacement stack:</strong> <a href="https://github.com/netclaw-dev/netclaw/pull/2464">#2464: child execution and recovery</a>, <a href="https://github.com/netclaw-dev/netclaw/pull/2466">#2466: repeated-tool control</a>, and <a href="https://github.com/netclaw-dev/netclaw/pull/2467">#2467: cooperation guidance</a>.</p>
-<p>All three PRs are drafts. The old stack remains open until the replacement passes review.</p>
+<p>All three replacement PRs remain drafts and unmerged. Root reviewed all nine reported source sites and the partial-pair guard negative control. Root then closed PRs #2420, #2421, and #2422 at 11:39 UTC. The original remote branches remain available. Hosted CI and required real-model evals remain incomplete.</p>
 <ul>
 <li>Fourteen focused legacy replay and SQLite recovery tests pass. The actor tests recover from a separate database backup.</li>
 <li>Four snapshot tests pass. They check old primitive bytes, old snapshot reads, and new snapshot round trips.</li>
@@ -346,9 +346,13 @@ dotnet slopwatch analyze
 <li>The child model passes 1,000 generated cases with 9,395 valid operations. It reaches all ten required outcomes without a fixed operation suffix.</li>
 <li>The repaired spawn, streaming, and observability filter passes 28 tests. All 92 Python eval tests pass; they do not prove model behavior.</li>
 <li>An independent test reproduced duplicate child pairs in later requests. The repair keeps temporary model messages outside canonical history.</li>
-<li>The full actor suite passes 5,807 tests, with 41 skips and zero failures. Slopwatch and copyright checks pass on the same source.</li>
+<li>The earlier full Actors run at source checkpoint <code>68e35ae8</code> passed 5,807 tests, skipped 41, and had zero failures. Slopwatch and copyright checks passed on that source.</li>
+<li>The latest combined full Actors run at proof head <code>a3a5081a</code> passed 5,815 tests, skipped 41, and had zero failures. Its tree exactly matches the code checkpoint <code>487ae769</code>. Later plan text changes do not alter the tested code.</li>
+<li>The focused actor CI repair passes both tests. It waits for the parent turn before response selection and checks timestamp order when duration rounds to zero milliseconds.</li>
+<li>The serializer snapshot-pair theory passes all eight cases. A negative control that removes the partial-pair guard fails both Closed lifecycle partial-pair cases. Restored source passes all eight cases.</li>
+<li>The proof branch changes only two test files from <code>6b127873</code>: the child-spawn integration tests and the serialization round-trip tests.</li>
 <li>The earlier native binaries pass 29 tapes and 10 scenarios. Final binaries and the eval image build successfully; their executable hashes match.</li>
-<li>The first real-provider case failed all three trials at the five-minute deadline. The old harness left server requests active between trials. The repair stops the suite and its private container after a failed prompt. Independent tests prove that later trials do not start. The shared provider queue remains busy. Required model results and final hosted checks remain open.</li>
+<li>The first real-provider case failed all three trials at the 300-second eval deadline. The old harness left server requests active between trials. The repair stops the suite and its private container after a failed prompt. Independent tests prove that later trials do not start. The shared provider queue remains busy. Required real-model evals and hosted CI remain incomplete.</li>
 </ul>
 <p>The measured checkpoint <code>68e35ae8</code> adds 232 fewer production C# lines and 7,100 fewer combined production and test C# lines than the old stack.</p>
 <p>Each comparison uses the feature's own base. Production savings remain about eight percent. The replacement adds 836 fewer actor lines than the old feature.</p>
