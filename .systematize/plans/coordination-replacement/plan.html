@@ -346,10 +346,12 @@ dotnet slopwatch analyze
 <li>The child model passes 1,000 generated cases with 9,395 valid operations. It reaches all ten required outcomes without a fixed operation suffix.</li>
 <li>The repaired spawn, streaming, and observability filter passes 28 tests. All 82 eval assertion tests pass; they do not prove model behavior.</li>
 <li>An independent test reproduced duplicate child pairs in later requests. The repair keeps temporary model messages outside canonical history.</li>
-<li>Combined tests, complete native smoke, model evals, and final source counts remain open.</li>
+<li>The full actor suite passes 5,807 tests, with 41 skips and zero failures. Slopwatch and copyright checks pass on the same source.</li>
+<li>The earlier native binaries pass 29 tapes and 10 scenarios. Final binaries and the eval image build successfully; their executable hashes match.</li>
+<li>Real-provider coordination trials now run on the final image. Required model results and final hosted checks remain open.</li>
 </ul>
-<p>The latest measured checkpoint uses <code>99a6ea53</code>. It adds 231 fewer production lines and 7,401 fewer combined production and test lines than the old stack.</p>
-<p>Each comparison uses the feature's own base. Production savings remain about eight percent. Later test fixes require a final count.</p>
+<p>The measured checkpoint <code>68e35ae8</code> adds 232 fewer production C# lines and 7,100 fewer combined production and test C# lines than the old stack.</p>
+<p>Each comparison uses the feature's own base. Production savings remain about eight percent. The replacement adds 836 fewer actor lines than the old feature.</p>
 <p>The final review must include all actor partial files and the cost of readers for deployed data.</p>
 <p>The public choices are confirmed. The OpenSpec change records the approved direction; implementation and verification remain separate work.</p>
 <p>The formal change is <code>openspec/changes/simplify-agent-coordination</code>. This HTML page owns the delivery sequence and verification procedures.</p>
