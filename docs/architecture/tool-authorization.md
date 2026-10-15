@@ -720,7 +720,7 @@ The acknowledgement reports durable cancellation intent. It does not report term
 Recovery settles an uncertain child as lost and does not launch a replacement actor.
 A stale answer cannot dispatch a recovered child or grant authority for another child.
 A second answer to a prompt that already has a recorded answer grants nothing.
-The session replies `approval_already_answered` and adds no "expired" notice, because the prompt did not expire.
+The session replies `approval_already_answered` and posts an "already has an answer" notice. It does not say "expired", because the prompt did not expire.
 An answer for a call that never existed, or that recovery removed, keeps the "expired" notice.
 
 Child ownership (status and cancel):

@@ -3107,6 +3107,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             SessionId = _sessionId
         }, OutputFilter.Text);
 
+    private void EmitAlreadyAnsweredApprovalNotice()
+        => EmitOutput(new TextOutput(
+            "Approval response ignored: that approval prompt already has an answer.")
+        {
+            SessionId = _sessionId
+        }, OutputFilter.Text);
+
     private void EmitWrongRequesterApprovalNotice()
         => EmitOutput(new TextOutput(
             "Approval response ignored: only the requesting user can approve this tool action.")
@@ -3128,10 +3135,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             callId, rejection.Diagnostic);
         switch (rejection.Notice)
         {
-            case ApprovalNoticeKind.None:
-                break;
             case ApprovalNoticeKind.Expired:
                 EmitExpiredPromptNotice();
+                break;
+            case ApprovalNoticeKind.AlreadyAnswered:
+                EmitAlreadyAnsweredApprovalNotice();
                 break;
             case ApprovalNoticeKind.WrongRequester:
                 EmitWrongRequesterApprovalNotice();

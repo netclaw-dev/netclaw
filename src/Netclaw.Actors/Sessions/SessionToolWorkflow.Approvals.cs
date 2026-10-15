@@ -19,9 +19,8 @@ namespace Netclaw.Actors.Sessions;
 
 internal enum ApprovalNoticeKind
 {
-    // The channel already shows the recorded answer on the prompt, so the session adds no text.
-    None,
     Expired,
+    AlreadyAnswered,
     WrongRequester,
     OptionUnavailable
 }
@@ -225,10 +224,10 @@ internal sealed partial class SessionToolWorkflow
     }
 
     // A second answer for a call with a recorded answer (a double click or a channel retry) grants nothing.
-    // The prompt did not expire, so the "expired" notice would be false. An answer for a call that never
-    // existed, or that recovery removed, keeps the expired notice.
+    // It still fails loud, but the prompt did not expire, so the notice says that the prompt has an answer.
+    // An answer for a call that never existed, or that recovery removed, keeps the expired notice.
     private static ApprovalResponseResult.Rejected AlreadyAnswered()
-        => new(ApprovalNackReasons.AlreadyAnswered, ApprovalNoticeKind.None, "already_resolved");
+        => new(ApprovalNackReasons.AlreadyAnswered, ApprovalNoticeKind.AlreadyAnswered, "already_resolved");
 
     private static string ClassifyUnknownCall(string callId, IReadOnlyList<SerializableChatMessage> history)
     {
