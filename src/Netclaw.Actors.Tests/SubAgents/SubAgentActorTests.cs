@@ -1483,7 +1483,7 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
         Assert.False(fakeTool.WasCalled);
     }
 
-    private static ToolAccessPolicy PermissivePolicy() => new(
+    internal static ToolAccessPolicy PermissivePolicy() => new(
         new NetclawPaths(),
         new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
         new EffectivePolicyDefaults(
