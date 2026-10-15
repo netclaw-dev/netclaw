@@ -181,7 +181,7 @@ jobs:
           - group: guard-and-authority
             gates: skill-manage-guard no-program input-one-authority
           - group: session-reliability
-            gates: tool-batch-readiness headless-stop-rule open-child-runs
+            gates: tool-batch-readiness headless-stop-rule open-child-runs child-owner
 
     steps:
       - name: "Checkout"

@@ -95,6 +95,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, and `SessionInputFlow.DrainBufferedBatch` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn | 8 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
 | `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run and a turn with one of two open runs each get the right decision (SPEC-004, "Waiting for child runs"). The gate does not cover the missing-field case: `SessionOutputDtoMapper.FromDto` maps a missing field to an empty list, outside the mutated span, and ordinary tests cover it | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
 | `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that is not `Closed`, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
+| `TurnContext.HasSameRequester` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it | 11 killed | `./scripts/run-child-owner-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -316,6 +317,26 @@ The local Stryker run took 1 minute 52 seconds. CI runs the gate in the `session
 third gate should bring the group to about 8 minutes. The group will also hold the child owner and the report-once
 gates, which gives an expected total of 15 to 16 minutes against the limit of 25. Hosted CI must measure the
 group on a cold runner. Its report directory is `artifacts/stryker/open-child-runs`.
+
+### Child Owner Gate
+
+Run the child owner gate:
+
+```bash
+./scripts/run-child-owner-mutations.sh
+```
+
+The script selects the body of `TurnContext.HasSameRequester`.
+`LlmSessionActor.ControlChild` uses this check for child status and cancel.
+Stryker inverts each of the six field comparisons and changes each of the five `&&` operators to `||`.
+The linked `TurnContextRequesterTests` source must kill all 11 mutants.
+A stranger that differs in one requester field must not own the child.
+A later turn of the owner that differs only in per-turn fields must keep the child.
+The selector rejects a missing or repeated source marker before Stryker starts.
+The gate fails for a survivor, a changed mutant count, or a compile error in the span.
+
+CI runs it in the `session-reliability` group of the `mutation-gates` job.
+Its report directory is `artifacts/stryker/child-owner`.
 
 ### Tool Authorization Gate
 
