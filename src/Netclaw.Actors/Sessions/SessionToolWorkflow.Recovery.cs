@@ -100,9 +100,10 @@ internal sealed partial class SessionToolWorkflow
 
     public bool ShouldAbandonResolvedForIdle() => ResolvedCount > 0;
 
-    // Security boundary: only a person can abandon an open approval. A tool call that waits for an answer belongs
-    // to the person who must answer it. Automation (a reminder fire, a webhook, a background job completion) is
-    // not that person. Its input waits until the approval closes, and the approval stays open.
+    // Security boundary: only a person can abandon an open approval. Automation (a reminder fire, a webhook, a
+    // background job completion) cannot answer a prompt, so it must not cancel one. Its input waits until the
+    // approval closes, and the approval stays open. Any person may still abandon the approval, as before; this
+    // check does not compare the person with the requester of the parked call.
     // A resolved or interrupted batch has no open approval, so any input closes it before its own turn.
     public NewInputPlan PlanNewInputAbandonment(
         SessionState state,
@@ -162,6 +163,9 @@ internal sealed partial class SessionToolWorkflow
            && ParkedToolBatchHistory.FindRedrivableAssistantMessage(state.History, null) is not null;
 
     public bool HasPendingApprovals() => PendingCount > 0;
+
+    // A parked batch still waits for an answer, or has an answer and no result yet. Input admitted after it waits.
+    public bool HasParkedApprovals() => PendingCount > 0 || ResolvedCount > 0;
 
     public int PendingDiagnosticCount => PendingCount;
 

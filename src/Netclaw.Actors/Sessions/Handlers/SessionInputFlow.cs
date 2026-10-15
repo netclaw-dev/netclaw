@@ -173,8 +173,77 @@ internal sealed class SessionInputFlow
 
     private void PlaceAccepted(SendUserMessage command, InputPlacement placement)
     {
-        if (placement != InputPlacement.Activate)
+        // A recovery can rebuild an input that an actor restart also requeues. Keep one copy.
+        if (placement != InputPlacement.Activate && !IsBuffered(command.AdmittedInputId))
             _buffer.Add((command, false));
+    }
+
+    private bool IsBuffered(InputId? id)
+        => id is { } inputId && _buffer.Any(item => item.Message.AdmittedInputId == inputId);
+
+    /// <summary>
+    /// Rebuilds the waiting queue from the journal after recovery. The session acknowledged each pending input, and the
+    /// journal is the only durable copy, so a restart must not drop one. The caller passes only inputs that wait for an
+    /// open approval. Each input keeps its recorded authority. The transport source is rebuilt from the record, so a
+    /// reminder or a background job keeps its id (the record's <c>SourceMessageId</c>).
+    /// </summary>
+    public int RestoreWaitingInputs(IReadOnlyList<InputAdmitted> pending, SessionId sessionId)
+    {
+        var restored = 0;
+        foreach (var admitted in pending)
+        {
+            if (IsBuffered(admitted.InputId))
+                continue;
+
+            var authority = RecordedAuthority(admitted);
+            var source = RecordedSource(admitted, authority);
+            _inFlightDedup.ReserveReminder(source?.ReminderId);
+            _inFlightDedup.ReserveBackgroundJob(source?.BackgroundJobId);
+            _buffer.Add((new SendUserMessage
+            {
+                SessionId = sessionId,
+                Content = admitted.UserMessage.Content ?? string.Empty,
+                MediaReferences = admitted.UserMessage.MediaReferences,
+                Source = source,
+                AdmittedInputId = admitted.InputId,
+                AdmittedAuthority = authority
+            }, false));
+            restored++;
+        }
+
+        return restored;
+    }
+
+    // The journal keeps the authority and the source message id, not the transport source. A source needs a channel
+    // and a sender; a record without them had no source, so it gets none.
+    private static MessageSource? RecordedSource(InputAdmitted admitted, TurnContext authority)
+    {
+        if (authority.ChannelType is not { } channelType || authority.RequesterSenderId is not { } senderId)
+            return null;
+
+        var sourceKind = authority.Provenance.SourceKind?.Value;
+        return new MessageSource
+        {
+            ChannelType = channelType,
+            SenderId = senderId,
+            MessageId = admitted.SourceMessageId,
+            TurnId = authority.TurnId,
+            Audience = authority.Audience,
+            Boundary = authority.Boundary,
+            Principal = authority.RequesterPrincipal,
+            Provenance = authority.Provenance,
+            DefaultDeliveryTarget = authority.DefaultDeliveryTarget,
+            RequestedDeliveryTarget = authority.RequestedDeliveryTarget,
+            HasThirdPartyAdoptedContext = authority.HasThirdPartyAdoptedContext,
+            AdoptedSpeakerIds = authority.AdoptedSpeakerIds,
+            ExecutableText = admitted.ExecutableText,
+            ReminderId = sourceKind == ReminderExecutionActor.ReminderSourceKind && admitted.SourceMessageId is { } reminderKey
+                ? new ReminderId(reminderKey)
+                : null,
+            BackgroundJobId = sourceKind == BackgroundJobManagerActor.SourceKind && admitted.SourceMessageId is { } jobKey
+                ? new BackgroundJobId(jobKey)
+                : null
+        };
     }
 
     public void ActivateInput(
@@ -256,6 +325,9 @@ internal sealed class SessionInputFlow
 
     public IReadOnlyList<SerializableChatMessage> ResumePendingInputs(IReadOnlyList<InputAdmitted> pending)
     {
+        // The resumed turn consumes every pending input, including any input that recovery rebuilt into the queue.
+        var resumed = pending.Select(static item => item.InputId).ToHashSet();
+        _buffer.RemoveAll(item => item.Message.AdmittedInputId is { } id && resumed.Contains(id));
         _selectedIds.AddRange(pending.Select(static item => item.InputId));
         return pending.Select(static item => item.UserMessage).ToArray();
     }

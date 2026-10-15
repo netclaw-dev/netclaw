@@ -246,6 +246,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SetSystemPrompt();
 
             TransitionTo(SessionPhase.Ready);
+            RestoreWaitingInputs();
 
             // Resolve once at recovery time. ActorRegistry returns Nobody if
             // the dispatcher hasn't been registered (unit-test scenarios that
@@ -349,16 +350,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _log.Info(
                     "Session idle but active background jobs remain; deferring passivation");
-                return;
-            }
-
-            // An automated input waits in memory for an open approval to close.
-            // Passivation would drop the only live copy of its place in the queue.
-            if (_input.HasBufferedContinuation)
-            {
-                _log.Info(
-                    "Session idle with buffered input that waits for {PendingApprovalCount} open approval(s); deferring passivation",
-                    _toolWorkflow.PendingDiagnosticCount);
                 return;
             }
 
@@ -3195,11 +3186,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 case RecoveredContinuation.Abandon abandon:
                     _log.Warning("Cannot re-drive tool batch for call {CallId}: {Reason}", msg.CallId, abandon.Diagnostic);
                     EmitExpiredPromptNotice();
-                    Persist(abandon.Event, evt =>
-                    {
-                        ApplyToolBatchAbandoned(evt);
-                        StartWaitingInputAfterApproval();
-                    });
+                    Persist(abandon.Event, ApplyAbandonmentThenStartWaitingInput);
                     TryReplyNack(ApprovalNackReasons.PromptExpired);
                     return;
                 case RecoveredContinuation.Dispatch dispatch:
@@ -3258,7 +3245,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!_toolWorkflow.ShouldAbandonResolvedAfterRecovery())
             return false;
         _log.Info("Abandoning recovered parked tool batch after restart");
-        Persist(BuildResolvedToolBatchInterruptedByRestartEvent(), ApplyToolBatchAbandoned);
+        Persist(BuildResolvedToolBatchInterruptedByRestartEvent(), ApplyAbandonmentThenStartWaitingInput);
         return true;
     }
 
@@ -3267,8 +3254,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!_toolWorkflow.ShouldAbandonInterruptedAfterRecovery(_state))
             return false;
         _log.Info("Abandoning recovered interrupted tool batch with no recoverable approval state");
-        Persist(BuildInterruptedToolBatchAfterRecoveryEvent(), ApplyToolBatchAbandoned);
+        Persist(BuildInterruptedToolBatchAfterRecoveryEvent(), ApplyAbandonmentThenStartWaitingInput);
         return true;
+    }
+
+    private void ApplyAbandonmentThenStartWaitingInput(ToolBatchAbandoned abandoned)
+    {
+        ApplyToolBatchAbandoned(abandoned);
+        StartWaitingInputAfterApproval();
+    }
+
+    // The session acknowledged each input that waits behind a parked approval. The journal keeps it as a pending
+    // input, and the in-memory queue does not survive a restart or a passivation. Rebuild the queue here, so the
+    // input runs once after the approval closes. A parked batch closed the inputs of its own turn
+    // (ToolBatchStarted), so every pending input now is one that waits.
+    private void RestoreWaitingInputs()
+    {
+        if (!_toolWorkflow.HasParkedApprovals() || _state.PendingInputs.Count == 0)
+            return;
+
+        var restored = _input.RestoreWaitingInputs(_state.PendingInputs, _sessionId);
+        _log.Info(
+            "Restored {RestoredCount} waiting input(s) behind {PendingApprovalCount} open approval(s)",
+            restored,
+            _toolWorkflow.PendingDiagnosticCount);
     }
 
     private ToolBatchAbandoned BuildResolvedToolBatchInterruptedByRestartEvent()
