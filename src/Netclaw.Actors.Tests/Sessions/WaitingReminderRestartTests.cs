@@ -116,18 +116,4 @@ public sealed class WaitingReminderRestartTests : ApprovalWaitTestBase
         await ExpectTurnsAsync(resumed, 1);
         Assert.Contains("Finish the interrupted task", UserTexts(FakeChat.ReceivedMessages[^1]));
     }
-
-    private static MessageSource RestartReminderSource(ReminderDefinition reminder) => new()
-    {
-        ChannelType = ChannelType.Slack,
-        SenderId = new SenderId("reminder-system"),
-        MessageId = $"{reminder.Id}:1",
-        TurnId = new TurnId($"{reminder.Id}:1"),
-        Audience = reminder.Audience,
-        Boundary = reminder.Boundary,
-        Principal = PrincipalClassification.VerifiedAutomation,
-        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted),
-        ReceivedAt = new DateTimeOffset(2026, 5, 17, 12, 0, 0, TimeSpan.Zero),
-        ReminderId = new ReminderId($"{reminder.Id}:1")
-    };
 }

@@ -887,6 +887,79 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         Assert.Equal(new ReminderId($"{definition.Id}:{fireTime.ToUnixTimeMilliseconds()}"), delivered.Source.ReminderId);
     }
 
+    // Rule 3: admission ends the reminder system's job. The session acknowledges the
+    // fire once it has stored the input as a pending input. A post that the session
+    // makes later is not part of the run. The flag asks for more only for a Channel run.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CurrentSession_reminder_succeeds_at_admission_whether_or_not_delivery_is_required(
+        bool deliveryRequired)
+    {
+        var manager = await GetManagerAsync();
+        var gatewayProbe = CreateTestProbe("admission-gateway");
+        var gateway = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            $"auto-ack-admission-{deliveryRequired}");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(gateway);
+
+        // An interval schedule keeps the definition after the run, so the test can read it.
+        var definition = CreateCurrentSessionDefinition(
+            $"admission-{deliveryRequired}".ToLowerInvariant(), deliveryRequired) with
+        {
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Interval,
+                FireAt = _timeProvider.GetUtcNow().AddMinutes(5),
+                IntervalTicks = TimeSpan.FromMinutes(5).Ticks
+            },
+            ConsecutiveFailures = 2
+        };
+        _definitionStore.Save(definition);
+
+        manager.Tell(CreateEnvelope(definition.Id.Value));
+        await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // No delivery result follows the acknowledgement. The run must still end in success.
+        var historyStore = new ReminderHistoryStore(_tempDir.Paths);
+        await AwaitAssertAsync(async () =>
+        {
+            var record = Assert.Single(await historyStore.ReadAsync(definition.Id, 10));
+            Assert.Equal("ok", record.Status);
+            Assert.Equal(0, _definitionStore.Get(definition.Id)!.ConsecutiveFailures);
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+            Assert.Equal(0, health.ActiveExecutions);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(_notificationSink.Alerts, alert =>
+            alert.Category == AlertType.ReminderExecutionFailed && alert.Source == definition.Id.Value);
+    }
+
+    // The part of the old wait that stays: a session that refuses the fire at admission fails the run.
+    // The manager then nacks, and Akka.Reminders redelivers the fire.
+    [Fact]
+    public async Task CurrentSession_reminder_fails_when_the_session_refuses_the_fire()
+    {
+        var manager = await GetManagerAsync();
+        var nackGateway = Sys.ActorOf(Props.Create(() => new NackTrustedGateway("session is draining")), "nack-gateway");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(nackGateway);
+
+        var definition = CreateCurrentSessionDefinition("admission-refused", deliveryRequired: true);
+        _definitionStore.Save(definition);
+
+        manager.Tell(CreateEnvelope(definition.Id.Value));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(_notificationSink.Alerts, alert =>
+                alert.Category == AlertType.ReminderExecutionFailed
+                && alert.Source == definition.Id.Value
+                && alert.Summary.Contains("session is draining", StringComparison.OrdinalIgnoreCase));
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public async Task CurrentSession_delivery_required_succeeds_when_delivery_is_observed()
     {
@@ -1034,42 +1107,42 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
             ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        var gatewayProbe = CreateTestProbe("capacity-gateway");
-        var autoAckRef = Sys.ActorOf(
-            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-            "auto-ack-capacity");
-        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
-
-        // Fill three in-flight executions (the historical capacity limit).
+        // Hold three Mode A runs in flight (the historical capacity limit). A Mode A run
+        // creates its own session, so the fixture pipeline keeps it in flight until
+        // DisposeAsync releases the hold. A Mode B run would end at admission and could
+        // not hold a slot. Every run in this test shares the "held-" prefix, so the one
+        // hold also keeps the recurring occurrence below in flight.
         // Save before dispatch so filesystem latency cannot consume any test
         // timing window while execution slots are being filled.
+        _sessionPipeline.HoldSessions("reminder/held-");
         for (var i = 0; i < 3; i++)
         {
-            var id = $"blocking-{i}";
-            _definitionStore.Save(CreateCurrentSessionDefinition(id, deliveryRequired: true));
+            var id = $"held-{i}";
+            _definitionStore.Save(CreateDefinition("held", "Stay in flight") with
+            {
+                Id = new ReminderId(id),
+                Title = id,
+                Delivery = new ReminderDelivery { Kind = DeliveryKind.None }
+            });
         }
 
         for (var i = 0; i < 3; i++)
-            manager.Tell(CreateEnvelope($"blocking-{i}"));
+            manager.Tell(CreateEnvelope($"held-{i}"));
 
-        for (var i = 0; i < 3; i++)
+        await AwaitAssertAsync(() =>
         {
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
-            Assert.NotNull(delivered.Source.ReminderId);
-            Assert.NotNull(delivered.Source.DeliveryObserver);
-        }
+            Assert.Equal(3, _sessionPipeline.InvocationCount);
+            return Task.CompletedTask;
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         var invocationCount = _sessionPipeline.InvocationCount;
         var now = TimeProvider.System.GetUtcNow();
-        var recurringId = "concurrent-recurring";
+        var recurringId = "held-recurring";
 
-        // Keep the recurring occurrence in flight. The fixture pipeline always
-        // fails, so a free occurrence retries every 25 ms and the manager
+        // The hold also keeps the recurring occurrence in flight. The fixture pipeline
+        // always fails, so a free occurrence retries every 25 ms and the manager
         // disables the reminder about 125 ms after the first fire. The Enabled
-        // read below then races that retry loop. DisposeAsync releases the hold.
-        _sessionPipeline.HoldSessions($"reminder/{recurringId}/");
+        // read below then races that retry loop.
         var recurringReminder = new ReminderDefinition
         {
             Id = new ReminderId(recurringId),
@@ -1874,6 +1947,18 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
                 probe.Tell(msg);
                 Sender.Tell(CommandAck.For(msg.SessionId));
             });
+        }
+    }
+
+    /// <summary>
+    /// Test-only gateway stub: refuses every <see cref="DeliverTrustedSessionTurn"/> with a
+    /// <see cref="CommandNack"/>, the way a session that cannot admit the fire does.
+    /// </summary>
+    private sealed class NackTrustedGateway : ReceiveActor
+    {
+        public NackTrustedGateway(string reason)
+        {
+            Receive<DeliverTrustedSessionTurn>(msg => Sender.Tell(CommandNack.For(msg.SessionId, reason)));
         }
     }
 
