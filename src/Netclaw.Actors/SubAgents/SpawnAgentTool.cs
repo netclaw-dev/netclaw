@@ -164,6 +164,9 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         _loader?.SyncInto(_registry);
 
         var profile = _registry.TryGetByName(args.Agent);
+        if (profile is null && _loader is not null && _loader.TryGetRejection(args.Agent, out var rejection))
+            return ($"Error: Agent '{args.Agent}' was not loaded. Its file {rejection.Path} {rejection.Reason}. Fix the file and try again.", null);
+
         if (profile is null || profile.Visibility != SubAgentVisibility.UserFacing)
         {
             var available = _registry.GetUserFacing();

@@ -3,9 +3,17 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 
 namespace Netclaw.Configuration;
+
+/// <summary>
+/// A subagent definition file that failed validation. <see cref="Name"/> is null when the
+/// frontmatter has no usable name. <see cref="Reason"/> completes the sentence
+/// "Agent '{name}' at {path} ..." and does not repeat the path.
+/// </summary>
+public sealed record SubAgentFileRejection(string Path, string? Name, string Reason);
 
 /// <summary>
 /// Loads subagent definitions from <c>.md</c> files in the agents directory.
@@ -16,7 +24,10 @@ namespace Netclaw.Configuration;
 /// </summary>
 public sealed class FileSubAgentDefinitionLoader
 {
-    private sealed record LoadSnapshot(string Fingerprint, IReadOnlyList<SubAgentProfile> Profiles);
+    private sealed record LoadSnapshot(
+        string Fingerprint,
+        IReadOnlyList<SubAgentProfile> Profiles,
+        IReadOnlyList<SubAgentFileRejection> Rejections);
     private sealed record AgentDefinitionFile(string Path, string? FeedName);
 
     private readonly string _agentsDirectory;
@@ -45,6 +56,20 @@ public sealed class FileSubAgentDefinitionLoader
     public IReadOnlyList<SubAgentProfile> LoadAll()
     {
         return LoadCurrentSnapshot(ComputeDirectoryFingerprint()).Profiles;
+    }
+
+    /// <summary>
+    /// Returns the rejected file for an agent name in the latest load, when one exists.
+    /// Call <see cref="SyncInto"/> first so the snapshot is current.
+    /// </summary>
+    public bool TryGetRejection(string name, [NotNullWhen(true)] out SubAgentFileRejection? rejection)
+    {
+        lock (_snapshotGate)
+        {
+            rejection = _lastSnapshot?.Rejections.FirstOrDefault(
+                r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
+            return rejection is not null;
+        }
     }
 
     public bool RefreshIfChanged(out IReadOnlyList<SubAgentProfile> profiles)
@@ -90,8 +115,8 @@ public sealed class FileSubAgentDefinitionLoader
         // Read disk outside the lock so other callers aren't blocked. A concurrent loader
         // may race us; the gate-protected install below accepts whichever snapshot lands
         // first with the same fingerprint.
-        var profiles = LoadProfilesFromDisk();
-        var newSnapshot = new LoadSnapshot(fingerprint, profiles);
+        var (profiles, rejections) = LoadProfilesFromDisk();
+        var newSnapshot = new LoadSnapshot(fingerprint, profiles, rejections);
 
         lock (_snapshotGate)
         {
@@ -101,27 +126,28 @@ public sealed class FileSubAgentDefinitionLoader
         }
     }
 
-    private IReadOnlyList<SubAgentProfile> LoadProfilesFromDisk()
+    private (IReadOnlyList<SubAgentProfile> Profiles, IReadOnlyList<SubAgentFileRejection> Rejections) LoadProfilesFromDisk()
     {
         if (!Directory.Exists(_agentsDirectory))
         {
             _logger.LogWarning("Agents directory does not exist: {Path}", _agentsDirectory);
-            return [];
+            return ([], []);
         }
 
         var files = EnumerateAgentDefinitionFiles();
         if (files.Count == 0)
         {
             _logger.LogWarning("No agent definition files found in {Path}", _agentsDirectory);
-            return [];
+            return ([], []);
         }
 
         var results = new List<SubAgentProfile>();
+        var rejections = new List<SubAgentFileRejection>();
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var file in files)
         {
-            var profile = TryParse(file.Path);
+            var profile = TryParse(file.Path, rejections);
             if (profile is null)
                 continue;
 
@@ -137,7 +163,7 @@ public sealed class FileSubAgentDefinitionLoader
                 profile.Name, profile.ToolNames.Count, profile.TimeoutSeconds);
         }
 
-        return results;
+        return (results, rejections);
     }
 
     private string ComputeDirectoryFingerprint()
@@ -251,7 +277,7 @@ public sealed class FileSubAgentDefinitionLoader
             name);
     }
 
-    private SubAgentProfile? TryParse(string filePath)
+    private SubAgentProfile? TryParse(string filePath, List<SubAgentFileRejection> rejections)
     {
         string content;
         try
@@ -264,86 +290,70 @@ public sealed class FileSubAgentDefinitionLoader
             return null;
         }
 
-        return TryParseDefinition(filePath, content, _logger);
+        var profile = TryParseDefinition(filePath, content, _logger, out var rejection);
+        if (rejection is not null)
+            rejections.Add(rejection);
+
+        return profile;
     }
 
     public static SubAgentProfile? TryParseDefinition(string sourcePath, string content, ILogger logger)
+        => TryParseDefinition(sourcePath, content, logger, out _);
+
+    /// <summary>
+    /// Parses one definition file. A rejected file logs one warning, returns null, and sets
+    /// <paramref name="rejection"/> so the caller can name the file and reason to the model.
+    /// </summary>
+    internal static SubAgentProfile? TryParseDefinition(
+        string sourcePath,
+        string content,
+        ILogger logger,
+        out SubAgentFileRejection? rejection)
     {
+        rejection = null;
+
         var frontmatter = SubAgentMarkdownParser.ExtractFrontmatter(content);
         if (frontmatter is null)
-        {
-            logger.LogWarning(
-                "Agent definition at {Path} has missing or unparseable YAML frontmatter — skipping",
-                sourcePath);
-            return null;
-        }
+            return Reject(sourcePath, null, "has missing or unparseable YAML frontmatter", logger, out rejection);
 
         if (string.IsNullOrWhiteSpace(frontmatter.Name))
-        {
-            logger.LogWarning("Agent definition at {Path} has no 'name' in frontmatter — skipping", sourcePath);
-            return null;
-        }
+            return Reject(sourcePath, null, "has no 'name' in frontmatter", logger, out rejection);
 
+        var name = frontmatter.Name.Trim();
         if (string.IsNullOrWhiteSpace(frontmatter.Description))
-        {
-            logger.LogWarning(
-                "Agent '{Name}' at {Path} has no 'description' in frontmatter — skipping",
-                frontmatter.Name, sourcePath);
-            return null;
-        }
+            return Reject(sourcePath, name, "has no 'description' in frontmatter", logger, out rejection);
 
         var systemPrompt = SubAgentMarkdownParser.ExtractBody(content);
         if (string.IsNullOrWhiteSpace(systemPrompt))
-        {
-            logger.LogWarning(
-                "Agent '{Name}' at {Path} has an empty system prompt body — skipping",
-                frontmatter.Name, sourcePath);
-            return null;
-        }
+            return Reject(sourcePath, name, "has an empty system prompt body", logger, out rejection);
 
         // Tool metadata is optional and advisory. Runtime access is resolved from
         // the parent session audience at spawn time.
         var tools = frontmatter.Tools ?? [];
 
         if (!TryParseModelRole(frontmatter.ModelRole, out var modelRole))
-        {
-            logger.LogWarning(
-                "Agent '{Name}' at {Path} has invalid modelRole '{Value}' (expected Main or Compaction) — skipping",
-                frontmatter.Name, sourcePath, frontmatter.ModelRole);
-            return null;
-        }
+            return Reject(sourcePath, name,
+                $"has invalid modelRole '{frontmatter.ModelRole}' (expected Main or Compaction)", logger, out rejection);
 
         if (!TryParseVisibility(frontmatter.Visibility, out var visibility))
-        {
-            logger.LogWarning(
-                "Agent '{Name}' at {Path} has invalid visibility '{Value}' (expected user-facing or internal) — skipping",
-                frontmatter.Name, sourcePath, frontmatter.Visibility);
-            return null;
-        }
+            return Reject(sourcePath, name,
+                $"has invalid visibility '{frontmatter.Visibility}' (expected user-facing or internal)", logger, out rejection);
 
         // Validate timeout overrides against the same bounds the JSON config schema
         // enforces. Fail loud rather than letting an out-of-range value flow to
         // ITimerScheduler (a non-positive timeout throws) or silently exceed the
         // documented ceiling — the frontmatter path bypasses schema validation.
         if (frontmatter.TimeoutSeconds is { } timeoutSeconds && timeoutSeconds is < 5 or > 600)
-        {
-            logger.LogWarning(
-                "Agent '{Name}' at {Path} has invalid timeoutSeconds {Value} (expected 5–600) — skipping",
-                frontmatter.Name, sourcePath, timeoutSeconds);
-            return null;
-        }
+            return Reject(sourcePath, name,
+                $"has invalid timeoutSeconds {timeoutSeconds} (expected 5–600)", logger, out rejection);
 
         if (frontmatter.PrefillTimeoutSeconds is { } prefillSeconds && prefillSeconds is < 5 or > 3600)
-        {
-            logger.LogWarning(
-                "Agent '{Name}' at {Path} has invalid prefillTimeoutSeconds {Value} (expected 5–3600) — skipping",
-                frontmatter.Name, sourcePath, prefillSeconds);
-            return null;
-        }
+            return Reject(sourcePath, name,
+                $"has invalid prefillTimeoutSeconds {prefillSeconds} (expected 5–3600)", logger, out rejection);
 
         return new SubAgentProfile
         {
-            Name = frontmatter.Name.Trim(),
+            Name = name,
             Description = frontmatter.Description.Trim(),
             SystemPrompt = systemPrompt,
             ToolNames = tools,
@@ -353,6 +363,21 @@ public sealed class FileSubAgentDefinitionLoader
             EmitStructuredFindings = frontmatter.EmitStructuredFindings ?? false,
             Visibility = visibility
         };
+    }
+
+    private static SubAgentProfile? Reject(
+        string sourcePath,
+        string? name,
+        string reason,
+        ILogger logger,
+        out SubAgentFileRejection rejection)
+    {
+        rejection = new SubAgentFileRejection(sourcePath, name, reason);
+        if (name is null)
+            logger.LogWarning("Agent definition at {Path} {Reason} — skipping", sourcePath, reason);
+        else
+            logger.LogWarning("Agent '{Name}' at {Path} {Reason} — skipping", name, sourcePath, reason);
+        return null;
     }
 
     private static bool TryParseModelRole(string? value, out ModelRole role)
