@@ -519,7 +519,7 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
         Assert.Equal("spawn_agent", json.RootElement.GetProperty("source_operation").GetString());
     }
 
-    private sealed class BoundaryClients : IChatClientProvider
+    internal sealed class BoundaryClients : IChatClientProvider
     {
         public FakeChatClient Parent { get; } = new();
         public FakeChatClient A { get; } = new();
@@ -531,7 +531,7 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
         };
     }
 
-    private sealed class PreparationBarrier : IWorkingContextSnapshotProvider
+    internal sealed class PreparationBarrier : IWorkingContextSnapshotProvider
     {
         private int _holdNext;
         public TaskCompletionSource Entered { get; } = NewGate();
@@ -548,7 +548,7 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
         }
     }
 
-    private sealed class AuthorityTool : INetclawTool
+    internal sealed class AuthorityTool : INetclawTool
     {
         public ConcurrentQueue<ToolInvocationContext> Contexts { get; } = new();
         public string Name => "authority_probe";
