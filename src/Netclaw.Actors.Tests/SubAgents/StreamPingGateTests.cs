@@ -65,6 +65,41 @@ public sealed class StreamPingGateTests
         Assert.Equal(StreamActivity.Answer, activity);
     }
 
+    // The scheduler clock is wall clock time in production, so it can step back.
+    [Fact]
+    public void Answer_update_after_a_backward_clock_step_pings_at_once()
+    {
+        var clock = new ManualClock();
+        var gate = new StreamPingGate(clock, Interval);
+        Assert.True(gate.TryPing(Update(StreamActivity.Thinking, first: true), out _));
+
+        clock.Advance(TimeSpan.FromSeconds(-30));
+
+        Assert.True(gate.TryPing(Update(StreamActivity.Answer), out var activity));
+        Assert.Equal(StreamActivity.Answer, activity);
+    }
+
+    [Fact]
+    public void Interval_pings_resume_within_two_intervals_when_the_clock_steps_back()
+    {
+        var clock = new ManualClock();
+        var gate = new StreamPingGate(clock, Interval);
+        Assert.True(gate.TryPing(Update(StreamActivity.Thinking, first: true), out _));
+
+        clock.Advance(TimeSpan.FromSeconds(-30));
+
+        // 4 s of real time pass after the step, with one thinking update every 500 ms.
+        // A step of 30 s must not silence the pings for 30 s.
+        var pinged = false;
+        for (var i = 0; i < 8 && !pinged; i++)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(500));
+            pinged = gate.TryPing(Update(StreamActivity.Thinking), out _);
+        }
+
+        Assert.True(pinged);
+    }
+
     private static StreamUpdateClassification Update(StreamActivity activity, bool first = false)
         => new(activity, first);
 
