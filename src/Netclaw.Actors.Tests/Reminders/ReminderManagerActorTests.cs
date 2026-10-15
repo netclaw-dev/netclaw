@@ -55,6 +55,9 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         }
         finally
         {
+            // Release a held pipeline call after the actor system stops, so
+            // the released call cannot start a retry during teardown.
+            _sessionPipeline.ReleaseHeldSessions();
             await _tempDir.DisposeAsync();
         }
     }
@@ -1061,6 +1064,12 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         var invocationCount = _sessionPipeline.InvocationCount;
         var now = TimeProvider.System.GetUtcNow();
         var recurringId = "concurrent-recurring";
+
+        // Keep the recurring occurrence in flight. The fixture pipeline always
+        // fails, so a free occurrence retries every 25 ms and the manager
+        // disables the reminder about 125 ms after the first fire. The Enabled
+        // read below then races that retry loop. DisposeAsync releases the hold.
+        _sessionPipeline.HoldSessions($"reminder/{recurringId}/");
         var recurringReminder = new ReminderDefinition
         {
             Id = new ReminderId(recurringId),
@@ -1101,6 +1110,11 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
             Assert.True(_sessionPipeline.InvocationCount > invocationCount,
                 "Expected the recurring reminder to be executed by the pipeline.");
         }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Three blocking executions plus the recurring occurrence run together.
+        var health = await manager.Ask<ReminderHealthResponse>(
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.Equal(4, health.ActiveExecutions);
 
         var stored = _definitionStore.Get(recurringReminder.Id);
         Assert.NotNull(stored);
@@ -1866,17 +1880,42 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
     internal sealed class FailingReminderSessionPipeline(string reason) : ISessionPipeline
     {
         private int _invocationCount;
+        private volatile SessionHold? _hold;
 
         public int InvocationCount => Volatile.Read(ref _invocationCount);
 
-        public Task<MaterializedSession> CreateAsync(
+        /// <summary>
+        /// Holds each <see cref="CreateAsync"/> call for a session id that starts
+        /// with <paramref name="sessionIdPrefix"/> until <see cref="ReleaseHeldSessions"/>.
+        /// A held call keeps its reminder execution in flight. Without the hold,
+        /// the call fails at once, and the manager retries the occurrence every
+        /// 25 ms and disables the reminder at the fifth failure. A test that reads
+        /// the state of a running occurrence must hold it, or the read races that
+        /// retry loop.
+        /// </summary>
+        public void HoldSessions(string sessionIdPrefix) =>
+            _hold = new SessionHold(sessionIdPrefix);
+
+        public void ReleaseHeldSessions() => _hold?.Gate.TrySetResult();
+
+        public async Task<MaterializedSession> CreateAsync(
             SessionId sessionId,
             SessionPipelineOptions options,
             IMaterializer? materializer = null,
             CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _invocationCount);
+            var hold = _hold;
+            if (hold is not null && sessionId.Value.StartsWith(hold.SessionIdPrefix, StringComparison.Ordinal))
+                await hold.Gate.Task.WaitAsync(cancellationToken);
+
             throw new InvalidOperationException(reason);
+        }
+
+        private sealed record SessionHold(string SessionIdPrefix)
+        {
+            public TaskCompletionSource Gate { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
         public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default) =>
