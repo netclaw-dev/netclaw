@@ -163,10 +163,10 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
 
     // Two gated calls open two prompts in one turn. The operator denies the first prompt and then answers it
     // again with "approve once". The turn is still live, because the second prompt is open. The late answer
-    // must not run the tool, and it must not tell the operator that the prompt expired. The prompt did not
-    // expire. The first answer resolved it.
+    // must not run the tool. It must fail loud with an "already has an answer" notice, and it must not tell
+    // the operator that the prompt expired. The prompt did not expire. The first answer resolved it.
     [Fact]
-    public async Task Second_answer_to_a_resolved_live_prompt_grants_nothing_and_gives_no_expired_notice()
+    public async Task Second_answer_to_a_resolved_live_prompt_grants_nothing_and_says_the_prompt_has_an_answer()
     {
         _toolExecutor.GatedTools.Add("shell_execute");
         _toolExecutor.GatedTools.Add("read_file");
@@ -217,6 +217,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         var expired = notices.Where(text => text.Contains("expired", StringComparison.OrdinalIgnoreCase)).ToArray();
         Assert.True(expired.Length == 0,
             $"The first answer resolved the prompt. The second answer got this notice: {string.Join(" | ", expired)}");
+        Assert.Contains(notices, text => text.Contains("already has an answer", StringComparison.Ordinal));
 
         var lastReply = await sessionManager.Ask<ISessionResponse>(
             AnswerFrom(sessionId, prompts["call-second-answer-read"].CallId, ApprovalOptionKeys.Deny),
