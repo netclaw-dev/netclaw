@@ -72,7 +72,7 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : LlmSessionTestBase
     {
         var sessionId = new SessionId(SessionValue);
         var persistenceId = $"session-{sessionId.Value}";
-        var seeder = Sys.ActorOf(Props.Create(() => new LegacyFixtureSeeder(persistenceId)), "legacy-fixture-seeder");
+        var seeder = await StartSeederAsync(persistenceId, "legacy-fixture-seeder");
         foreach (var name in new[]
         {
             "actor-origin-input-one", "actor-origin-input-two", "actor-parent-task-adoption",
@@ -139,7 +139,7 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : LlmSessionTestBase
     {
         var sessionId = new SessionId(SessionValue);
         var persistenceId = $"session-{sessionId.Value}";
-        var seeder = Sys.ActorOf(Props.Create(() => new LegacyFixtureSeeder(persistenceId)), "ambiguous-snapshot-seeder");
+        var seeder = await StartSeederAsync(persistenceId, "ambiguous-snapshot-seeder");
         await seeder.Ask<Done>(new LegacySnapshotRecord("ambiguous-child-delivery-snapshot"),
             TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Watch(seeder);
@@ -175,7 +175,7 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : LlmSessionTestBase
     {
         var sessionId = new SessionId(SessionValue);
         var persistenceId = $"session-{sessionId.Value}";
-        var seeder = Sys.ActorOf(Props.Create(() => new LegacyFixtureSeeder(persistenceId)), "prepared-snapshot-seeder");
+        var seeder = await StartSeederAsync(persistenceId, "prepared-snapshot-seeder");
         await seeder.Ask<Done>(new LegacySnapshotRecord("prepared-undelivered-child-snapshot"),
             TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Watch(seeder);
@@ -211,6 +211,20 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : LlmSessionTestBase
     private sealed record LegacyFixtureRecord(string Name);
     private sealed record LegacySnapshotRecord(string Name);
 
+    /// <summary>
+    /// Starts a seeder and waits for its recovery. The first start of the SQL
+    /// persistence plugins happens here: plugin creation, table creation on a
+    /// new SQLite file, and recovery. That work gets the cold recovery
+    /// ceiling. The fixture Asks after recovery time only warm writes.
+    /// </summary>
+    private async Task<IActorRef> StartSeederAsync(string persistenceId, string actorName)
+    {
+        var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seeder = Sys.ActorOf(Props.Create(() => new LegacyFixtureSeeder(persistenceId, recovered)), actorName);
+        await recovered.Task.WaitAsync(ColdRecoveryCeiling, TestContext.Current.CancellationToken);
+        return seeder;
+    }
+
     private void BackupAndRestoreSqliteDatabase()
     {
         var directory = _sqliteDirectory?.Path
@@ -236,36 +250,72 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : LlmSessionTestBase
         File.Copy(backupPath, databasePath, overwrite: true);
     }
 
+    /// <summary>
+    /// Writes legacy fixture records. A journal or snapshot failure goes back
+    /// to the waiting test as an exception. Without these replies, the seeder
+    /// stops silently and the test sees only an Ask timeout.
+    /// </summary>
     private sealed class LegacyFixtureSeeder : ReceivePersistentActor
     {
-        private IActorRef? _snapshotReplyTo;
+        private readonly TaskCompletionSource _recovered;
+        private IActorRef? _replyTo;
 
         public override string PersistenceId { get; }
 
-        public LegacyFixtureSeeder(string persistenceId)
+        public LegacyFixtureSeeder(string persistenceId, TaskCompletionSource recovered)
         {
             PersistenceId = persistenceId;
+            _recovered = recovered;
+            Recover<RecoveryCompleted>(_ => _recovered.TrySetResult());
             RecoverAny(_ => { });
+            // Each test waits for each reply before it sends the next command.
+            // Thus only one reply target is open at a time. SaveSnapshot does
+            // not stash commands, so the actor itself gives no such guarantee.
             Command<LegacyFixtureRecord>(fixture =>
             {
-                var reply = Sender;
-                Persist(fixture, _ => reply.Tell(Done.Instance));
+                _replyTo = Sender;
+                Persist(fixture, _ => Reply(Done.Instance));
             });
             Command<LegacySnapshotRecord>(fixture =>
             {
-                _snapshotReplyTo = Sender;
+                _replyTo = Sender;
                 SaveSnapshot(new LegacyFixtureRecord(fixture.Name));
             });
-            Command<SaveSnapshotSuccess>(_ =>
-            {
-                _snapshotReplyTo?.Tell(Done.Instance);
-                _snapshotReplyTo = null;
-            });
-            Command<SaveSnapshotFailure>(failure =>
-            {
-                _snapshotReplyTo?.Tell(new Status.Failure(failure.Cause));
-                _snapshotReplyTo = null;
-            });
+            Command<SaveSnapshotSuccess>(_ => Reply(Done.Instance));
+            Command<SaveSnapshotFailure>(failure => Reply(new Status.Failure(failure.Cause)));
+        }
+
+        protected override void OnRecoveryFailure(Exception reason, object? message = null)
+        {
+            _recovered.TrySetException(reason);
+            base.OnRecoveryFailure(reason, message);
+        }
+
+        protected override void OnPersistFailure(Exception cause, object @event, long sequenceNr)
+        {
+            Reply(new Status.Failure(cause));
+            base.OnPersistFailure(cause, @event, sequenceNr);
+        }
+
+        protected override void OnPersistRejected(Exception cause, object @event, long sequenceNr)
+        {
+            Reply(new Status.Failure(cause));
+            base.OnPersistRejected(cause, @event, sequenceNr);
+        }
+
+        protected override void PostStop()
+        {
+            // A stop before RecoveryCompleted (for example a plugin start
+            // failure) must fail the start wait at once.
+            _recovered.TrySetException(new InvalidOperationException(
+                $"The seeder for {PersistenceId} stopped before its recovery completed."));
+            base.PostStop();
+        }
+
+        private void Reply(object message)
+        {
+            _replyTo?.Tell(message);
+            _replyTo = null;
         }
     }
 
