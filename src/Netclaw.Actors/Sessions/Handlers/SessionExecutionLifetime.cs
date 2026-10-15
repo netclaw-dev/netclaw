@@ -275,7 +275,7 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
                 continue;
             }
 
-            if (!HasSameRestartAuthority(first, candidate))
+            if (!first.HasSameAuthority(candidate))
                 return new RestartContextResult(null, "pending inputs have different authority");
         }
 
@@ -317,21 +317,6 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
             ExpiresAt = interruptedAt + RestartReminderLifetime
         }, null);
     }
-
-    private static bool HasSameRestartAuthority(TurnContext left, TurnContext right)
-        => left.SessionId == right.SessionId
-           && left.Audience == right.Audience
-           && left.Boundary == right.Boundary
-           && left.ChannelType == right.ChannelType
-           && left.RequesterSenderId == right.RequesterSenderId
-           && left.RequesterPrincipal == right.RequesterPrincipal
-           && left.Provenance == right.Provenance
-           && left.DefaultDeliveryTarget == right.DefaultDeliveryTarget
-           && left.RequestedDeliveryTarget == right.RequestedDeliveryTarget
-           && left.HasAdoptedContext == right.HasAdoptedContext
-           && left.HasThirdPartyAdoptedContext == right.HasThirdPartyAdoptedContext
-           && left.AdoptedSpeakerIds.SequenceEqual(right.AdoptedSpeakerIds, StringComparer.Ordinal)
-           && left.SupportsInteractiveApproval == right.SupportsInteractiveApproval;
 
     public long CurrentModelCallId => _modelCallId;
     public bool HasLiveModel => _modelCts is not null;
