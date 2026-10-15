@@ -335,7 +335,14 @@ A later turn of the owner that differs only in per-turn fields must keep the chi
 The selector rejects a missing or repeated source marker before Stryker starts.
 The gate fails for a survivor, a changed mutant count, or a compile error in the span.
 
+The span does not include the `HasSameRequester(right) &&` line in `TurnContext.HasSameAuthority` or the call in `ControlChild`.
+Unit tests and actor tests cover those two lines.
+
+The final local run killed 11 of 11 mutants in 1 minute 59 seconds with a warm build cache.
+A review run took 2 minutes 36 seconds with a cold report directory.
+A run on a machine with other builds in progress took 6 minutes 11 seconds.
 CI runs it in the `session-reliability` group of the `mutation-gates` job.
+That group now holds two gates. Hosted CI must measure the group time on a cold runner.
 Its report directory is `artifacts/stryker/child-owner`.
 
 ### Tool Authorization Gate

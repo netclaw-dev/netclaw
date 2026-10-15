@@ -186,16 +186,20 @@ public sealed partial class LlmSessionActor
 
     // Start idempotency: a repeated start key names the same request only under the same full turn authority.
     private static bool HasSameChildAuthority(TurnContextRecord left, TurnContextRecord right)
-        => TurnContext.TryFromRecord(left, out var original, out _) && original is not null &&
-           TurnContext.TryFromRecord(right, out var candidate, out _) && candidate is not null &&
-           original.HasSameAuthority(candidate);
+        => CompareChildContexts(left, right, static (original, candidate) => original.HasSameAuthority(candidate));
 
-    // Status and cancel: the requester that started the child owns it in each later turn. A record that
-    // cannot be read owns nothing.
+    // Status and cancel: the requester that started the child owns it in each later turn.
     private static bool HasSameChildRequester(TurnContextRecord left, TurnContextRecord right)
+        => CompareChildContexts(left, right, static (original, candidate) => original.HasSameRequester(candidate));
+
+    // A record that cannot be read matches nothing.
+    private static bool CompareChildContexts(
+        TurnContextRecord left,
+        TurnContextRecord right,
+        Func<TurnContext, TurnContext, bool> matches)
         => TurnContext.TryFromRecord(left, out var original, out _) && original is not null &&
            TurnContext.TryFromRecord(right, out var candidate, out _) && candidate is not null &&
-           original.HasSameRequester(candidate);
+           matches(original, candidate);
 
     private void ControlChild(ChildRunControl command)
     {
