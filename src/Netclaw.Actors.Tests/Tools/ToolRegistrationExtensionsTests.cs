@@ -197,28 +197,35 @@ public class ToolRegistrationExtensionsTests
             new UnavailablePromptLoader(),
             refresher,
             logger);
-        var context = TestToolExecutionContext.CreateBound(
-            "slack/thread-1",
-            Path.Combine(paths.SessionsDirectory, "thread-1"),
-            new TestToolExecutionContextOptions
-            {
-                Audience = TrustAudience.Team,
-                Boundary = TrustBoundary.Team,
-                ChannelType = "slack"
-            });
         var tool = Assert.IsType<FileReadTool>(registry.GetByName(FileReadTool.ToolName));
 
-        var result = await tool.ExecuteAsync(
-            ToolInput.Create("Path", skillFile),
-            context,
-            TestContext.Current.CancellationToken);
+        // Two sessions share one tool instance. Each log line must name the session that read the file.
+        foreach (var sessionId in new[] { "slack/thread-1", "signalr/abc" })
+        {
+            var context = TestToolExecutionContext.CreateBound(
+                sessionId,
+                Path.Combine(paths.SessionsDirectory, "thread-1"),
+                new TestToolExecutionContextOptions
+                {
+                    Audience = TrustAudience.Team,
+                    Boundary = TrustBoundary.Team,
+                    ChannelType = "slack"
+                });
 
-        Assert.Contains("# Tracked", result, StringComparison.Ordinal);
-        Assert.Contains(
-            logger.Messages,
-            static message => message.Contains(
-                "turn_skill_loaded skill=tracked-skill method=file_read",
-                StringComparison.Ordinal));
+            var result = await tool.ExecuteAsync(
+                ToolInput.Create("Path", skillFile),
+                context,
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains("# Tracked", result, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(
+            [
+                "turn_skill_loaded skill=tracked-skill method=file_read session=slack/thread-1",
+                "turn_skill_loaded skill=tracked-skill method=file_read session=signalr/abc",
+            ],
+            logger.Messages.Where(static m => m.StartsWith("turn_skill_loaded", StringComparison.Ordinal)));
     }
 
     [Fact]
