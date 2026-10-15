@@ -13,7 +13,7 @@ Netclaw needs reliable parent and child work, safe recovery, and clear tool guid
 - Replace the draft coordination mechanisms from PRs #2420–2422 with a smaller design that uses current session and tool owners.
 - `spawn_agent` and routed skill starts return after validated durable acceptance. They do not wait for child completion.
 - Deliver a child result when it becomes ready. Do not order results by child completion time.
-- Preserve parent safety: a result cannot interrupt an active model call or incomplete tool batch. Keep ordinary user inputs in their existing whole ordered batch.
+- Preserve parent safety: a result cannot interrupt an active model call or incomplete tool batch. Run ordinary user inputs one authority per turn: each turn takes the leading inputs of one requester and keeps the authority of that requester.
 - Preserve approval authority, cancellation, recurrence control, and restart recovery.
 - Preserve deployed journals. Define and test compatibility for `tta-v1`, `cra-v1`, `cre-v1`, and extended existing records before any new writer uses the target journal format.
 - Preserve acceptance identities, terminal results, authority, pending consent, job lineage, and exactly-once transfer of delivered child results. Define safe handling for invalid records without executing uncertain input or inferring duplicates from prompt text.
