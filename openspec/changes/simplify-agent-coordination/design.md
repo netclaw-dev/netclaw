@@ -38,7 +38,7 @@ The worker does not restart after an owner restart when an external action has n
 
 The session stores raw terminal output before it prepares model output. Preparation failure leaves the raw result available. A prepared result becomes eligible at once. The workflow can select it ahead of a result that is not ready, regardless of child finish time.
 
-The workflow waits for the current model call and tool batch to reach a safe boundary. The parent then records the result and its correlated decision. Ordinary inputs remain one ordered batch.
+The workflow waits for the current model call and tool batch to reach a safe boundary. The parent then records the result and its correlated decision. Ordinary inputs run in order. Each turn takes only the leading inputs of one requester, and the turn keeps the authority of that requester.
 
 ### Ordinary input has its own durable progress boundary
 
