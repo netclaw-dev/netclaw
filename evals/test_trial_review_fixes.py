@@ -25,6 +25,12 @@ Contracts that these tests fix:
   S5  A copied actor log or sub-agent log must resolve under `data/sessions`
       (and a sub-agent log under the session folder). A link into `data/keys`
       or `data/config` is not copied.
+  R1  A run without any `daemon-*.log` in `$EVAL_HOME/logs` stops with exit 2
+      and a message on stderr that names that folder. There is no
+      `no_daemon_log` status.
+  S5b A sub-agent log is copied only when its link target is a `*.log` file
+      under its own session folder. The name of the link does not count.
+  M3  The harness opens `netclaw.db` read-only.
   T1  Multi-turn evidence (M1), a crash of discover-session (M2), the CLI crash
       path, and a daemon file that must not change before the window copy (M5).
 
@@ -35,6 +41,7 @@ network, no daemon, and no sleep. Each test removes its temp folders.
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -43,6 +50,7 @@ from unittest import mock
 
 import test_trial_evidence_seeds as seeds
 import test_trial_files as trial_files
+import trial_evidence
 
 EVALS = Path(__file__).resolve().parent
 
@@ -402,6 +410,14 @@ class StartupCheckTests(unittest.TestCase):
 
                 self.assertNotIn("NETCLAW_EVAL_TIMEOUT", done.stderr)
 
+    def test_python3_that_is_new_enough_passes_the_prerequisite_check(self):
+        # S4 guard. Planted bug: invert the version test. Then every real run
+        # stops at startup because python3 is "too old". The python3 of the
+        # test host is 3.9 or later, so the message must not appear.
+        done = self.run_script(True, NETCLAW_EVAL_TIMEOUT="60")
+
+        self.assertNotIn("'python3' 3.9", done.stderr)
+
     def test_missing_python3_is_reported_by_the_prerequisite_check(self):
         # S4. Planted bug: leave python3 out of check_prerequisites. Each
         # trial runs trial_evidence.py, so the run then fails in the first
@@ -464,6 +480,36 @@ class CopyBoundaryTests(ReviewHarnessCase):
         self.assertEqual("sub-agent log\n", self.read_text(self.raw("subagents/good/agent.log")))
         self.assert_no_secret_in_runs()
 
+    def test_sub_agent_log_name_that_links_to_a_file_that_is_not_a_log_is_not_copied(self):
+        # S5b. Planted bug: test the name of the link and not its target. The
+        # link is called b.log, but it points at a private file in the tmp
+        # folder of the same session. The session folder holds more than
+        # logs, so the target must be a *.log file too.
+        log = self.make_session_log()
+        envelope = log.parent.parent
+        (envelope / "tmp" / "parent").mkdir(parents=True)
+        (envelope / "tmp" / "parent" / "notes.txt").write_text("SECRET tmp file\n")
+        subagents = envelope / "subagents"
+        (subagents / "good" / "logs").mkdir(parents=True)
+        (subagents / "good" / "logs" / "a.log").write_text("sub-agent log\n")
+        (subagents / "notes-link" / "logs").mkdir(parents=True)
+        (subagents / "notes-link" / "logs" / "b.log").symlink_to(envelope / "tmp" / "parent" / "notes.txt")
+        # Control: a link to a log file in the same session folder is fine.
+        (subagents / "log-link" / "logs").mkdir(parents=True)
+        (subagents / "log-link" / "logs" / "c.log").symlink_to(subagents / "good" / "logs" / "a.log")
+        self.write_catalog("/home/netclaw/.netclaw/sessions/dirA/logs/session.log")
+
+        done = self.run_harness("text", ["p"], FAKE_SESSION=self.SESSION)
+
+        record = self.read_json(self.raw("actor-log.json"))
+        self.assertEqual("ok", record["status"])
+        self.assertEqual(["subagents/good/a.log", "subagents/log-link/c.log"], record["subagent_logs"])
+        self.assertEqual(["subagents/notes-link/logs/b.log"], record["refused_subagent_logs"])
+        self.assertFalse(self.raw("subagents/notes-link/b.log").exists())
+        self.assertTrue(any("notes-link" in line for line in done.stderr.splitlines() if "WARN" in line),
+                        done.stderr)
+        self.assert_no_secret_in_runs()
+
     def test_actor_log_path_in_the_data_root_but_outside_the_sessions_is_not_copied(self):
         # S5. Planted bug: accept any catalog path under the data root. A catalog
         # row that names data/keys/key-1.xml (or a link to it) then copies the
@@ -489,6 +535,60 @@ class CopyBoundaryTests(ReviewHarnessCase):
                                 done.stderr)
                 self.assertFalse(self.raw("session.log").exists())
                 self.assert_no_secret_in_runs()
+
+
+class MissingDaemonLogTests(ReviewHarnessCase):
+    def test_run_without_a_daemon_log_stops_with_exit_2_and_names_the_logs_folder(self):
+        # R1. Planted bug: let `ls` fail inside the command substitution under
+        # `set -e` and `pipefail`, with its message sent to /dev/null. The run
+        # then stops with exit 2 and an empty stderr. A missing daemon log
+        # means that the daemon never started, so the run must not go on and
+        # must say why.
+        for log in (self.home / "logs").glob("daemon-*.log"):
+            log.unlink()
+
+        done = self.launch("text", ["p"], FAKE_SESSION="signalr/x")
+
+        self.assertEqual(2, done.returncode, done.stderr[-400:])
+        self.assertNotIn("DRIVER_DONE", done.stdout)
+        self.assertIn("ERROR", done.stderr)
+        self.assertIn("daemon log", done.stderr)
+        self.assertIn(str(self.home / "logs"), done.stderr)
+        self.assertFalse(self.results.exists() and self.results.read_text(),
+                         "no result may be stored for a run without a daemon")
+
+
+class CatalogReadOnlyTests(unittest.TestCase):
+    def test_catalog_is_opened_read_only(self):
+        # M3. Planted bug: open the catalog read-write. The daemon holds the
+        # file open, and the harness must never write to it. The probe tries a
+        # write on the connection that the harness opens, then lets the lookup
+        # go on.
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        home = Path(temp.name)
+        catalog = seeds.write_catalog(home, [("signalr/x", "/home/netclaw/.netclaw/sessions/a/logs/session.log")])
+        before = catalog.read_bytes()
+        real_connect = sqlite3.connect
+        write_results = []
+
+        def probing_connect(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            try:
+                connection.execute("CREATE TABLE write_probe (x)")
+                write_results.append("the write worked")
+            except sqlite3.OperationalError as error:
+                write_results.append(str(error))
+            return connection
+
+        with mock.patch.object(trial_evidence.sqlite3, "connect", probing_connect):
+            status, path = trial_evidence.catalog_log_path(catalog, "signalr/x")
+
+        self.assertEqual("ok", status)
+        self.assertEqual("/home/netclaw/.netclaw/sessions/a/logs/session.log", path)
+        self.assertEqual(1, len(write_results))
+        self.assertIn("readonly", write_results[0])
+        self.assertEqual(before, catalog.read_bytes())
 
 
 if __name__ == "__main__":
