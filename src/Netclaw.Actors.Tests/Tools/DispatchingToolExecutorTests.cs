@@ -2458,9 +2458,13 @@ public partial class DispatchingToolExecutorTests : IDisposable
     [Fact]
     public async Task One_time_approval_bypasses_policy_for_path_aware_file_patterns()
     {
+        // The control-plane root must not sit under a platform temp root. A
+        // file_write under a temp root gets managed temp-directory advice, which
+        // takes precedence over the approval prompt. The test binaries may run
+        // from /tmp, so the root uses the user profile, as other approval tests do.
         var controlPlaneRoot = Path.Combine(
-            AppContext.BaseDirectory,
-            $"netclaw-control-plane-{Guid.NewGuid():N}");
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            $".netclaw-control-plane-{Guid.NewGuid():N}");
         var targetPath = Path.Combine(controlPlaneRoot, "netclaw.json");
         var secondPath = Path.Combine(controlPlaneRoot, "devices.json");
         Directory.CreateDirectory(controlPlaneRoot);
