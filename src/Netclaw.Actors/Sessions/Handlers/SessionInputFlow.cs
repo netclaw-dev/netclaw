@@ -13,7 +13,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions.Handlers;
 
-internal enum InputPlacement { Activate, BufferDuringModel, BufferDuringCompaction }
+internal enum InputPlacement { Activate, BufferDuringModel, BufferDuringCompaction, BufferDuringApproval }
 
 internal abstract record AdmissionDecision
 {
@@ -25,9 +25,12 @@ internal abstract record AdmissionDecision
     internal sealed record Persist(InputAdmitted Event) : AdmissionDecision;
 }
 
+// AdoptsAuthority: the batch starts a turn for its own requester. The flow then holds the authority of the first
+// input in the batch, and the actor must derive trust for it before the next model call.
 internal sealed record BufferedInputBatch(
     IReadOnlyList<SendUserMessage> Messages,
-    bool StartsNewTurn);
+    bool StartsNewTurn,
+    bool AdoptsAuthority);
 
 internal readonly record struct SelectedInputFacts(
     IReadOnlyList<InputId> Ids,
@@ -156,14 +159,15 @@ internal sealed class SessionInputFlow
         InputPlacement placement)
     {
         // The journal callback applies the event before this owner reserves or places the input.
+        var authority = RecordedAuthority(admitted);
         _inFlightDedup.ReserveReminder(command.Source?.ReminderId);
         _inFlightDedup.ReserveBackgroundJob(command.Source?.BackgroundJobId);
-        var accepted = command with { AdmittedInputId = admitted.InputId };
+        var accepted = command with { AdmittedInputId = admitted.InputId, AdmittedAuthority = authority };
         PlaceAccepted(accepted, placement);
         return accepted;
     }
 
-    // Actor restart can requeue an admitted command. Keep its ID without another journal write.
+    // Actor restart can requeue an admitted command. Keep its ID and recorded authority without another journal write.
     public void AdmissionAlreadyCommitted(SendUserMessage command, InputPlacement placement)
         => PlaceAccepted(command, placement);
 
@@ -182,9 +186,7 @@ internal sealed class SessionInputFlow
             ?? throw new InvalidOperationException("The accepted input has no admission ID.");
         var admitted = pending.FirstOrDefault(input => input.InputId == id)
             ?? throw new InvalidOperationException($"Journal input {id} is missing before turn activation.");
-        if (!TurnContext.TryFromRecord(admitted.TurnContext, out var context, out var reason)
-            || context is null)
-            throw new InvalidOperationException($"Journal input {id} has invalid authority: {reason}");
+        var context = RecordedAuthority(admitted);
 
         // Use recorded identity and authority so live execution matches journal recovery.
         _emittedText = false;
@@ -244,7 +246,8 @@ internal sealed class SessionInputFlow
                 SessionId = sessionId,
                 Content = item.UserMessage.Content ?? string.Empty,
                 MediaReferences = item.UserMessage.MediaReferences,
-                AdmittedInputId = item.InputId
+                AdmittedInputId = item.InputId,
+                AdmittedAuthority = RecordedAuthority(item)
             }, false));
         }
 
@@ -259,34 +262,77 @@ internal sealed class SessionInputFlow
 
     public void BufferReplay(SendUserMessage command) => _buffer.Insert(0, (command, true));
 
-    private BufferedInputBatch? DrainBufferedBatch()
+    // Security boundary: a turn has one authority, fixed when the turn starts. A drain takes only the leading
+    // buffered inputs of one requester (TurnContext.HasSameRequester). An input from another requester waits for
+    // its own turn, so a model call never serves one requester under the authority of another.
+    //   continuesTurn: a tool batch or a compaction continues the running turn. Only inputs of the requester that
+    //                  owns that turn may join it, and the turn keeps its authority.
+    //   otherwise:     the first buffered input starts a new turn, and the flow adopts its recorded authority.
+    // A replay is the current turn's own message after an overflow, so it always joins the current turn.
+    private BufferedInputBatch? DrainBufferedBatch(bool continuesTurn)
     {
         if (_buffer.Count == 0)
             return null;
 
+        var adoptsAuthority = !continuesTurn && !_buffer[0].IsReplay;
+        var owner = adoptsAuthority ? BufferedAuthority(_buffer[0].Message) : _context;
+        var count = 0;
+        while (count < _buffer.Count && JoinsTurn(_buffer[count], owner))
+            count++;
+        if (count == 0)
+            return null;
+
+        var drained = _buffer.GetRange(0, count);
+        _buffer.RemoveRange(0, count);
+
         // Fresh input resets the turn limits; overflow replay keeps the current limits.
-        var startsNewTurn = _buffer.Any(static item => !item.IsReplay);
+        var startsNewTurn = drained.Any(static item => !item.IsReplay);
         if (startsNewTurn)
             _emittedText = false;
 
-        // The actor sends this whole ordered batch in one call, regardless of source authority.
-        var messages = _buffer.Select(static item => item.Message).ToArray();
+        var messages = drained.Select(static item => item.Message).ToArray();
         foreach (var message in messages)
         {
             if (message.AdmittedInputId is { } id && !_selectedIds.Contains(id))
                 _selectedIds.Add(id);
         }
 
-        _buffer.Clear();
-        return new BufferedInputBatch(messages, startsNewTurn);
+        if (adoptsAuthority)
+            AdoptAuthority(messages[0], BufferedAuthority(messages[0]));
+        return new BufferedInputBatch(messages, startsNewTurn, adoptsAuthority);
     }
+
+    private static bool JoinsTurn((SendUserMessage Message, bool IsReplay) input, TurnContext? owner)
+        => input.IsReplay || (owner is not null && BufferedAuthority(input.Message).HasSameRequester(owner));
+
+    private void AdoptAuthority(SendUserMessage first, TurnContext authority)
+    {
+        _source = first.Source;
+        _context = authority;
+        // The old trust belongs to another authority. Tool exposure fails closed until DeriveAdoptedTrust runs.
+        _trust = null;
+        _telemetry = new TurnTelemetryFacts(authority.TurnId, first.Source?.MessageId, first.Source?.ChannelType);
+    }
+
+    public void DeriveAdoptedTrust(TrustContextDeriver? deriver)
+        => _trust = _context is { } context ? deriver?.DeriveFromTurnContext(context) : null;
+
+    private static TurnContext BufferedAuthority(SendUserMessage message)
+        => message.AdmittedAuthority
+           ?? throw new InvalidOperationException(
+               $"Buffered input {message.AdmittedInputId?.ToString() ?? "(no admission ID)"} has no recorded authority.");
+
+    private static TurnContext RecordedAuthority(InputAdmitted admitted)
+        => TurnContext.TryFromRecord(admitted.TurnContext, out var context, out var reason) && context is not null
+            ? context
+            : throw new InvalidOperationException($"Journal input {admitted.InputId} has invalid authority: {reason}");
 
     public AfterTurnResult AdvanceAfterTurn(bool restartDrainRequested)
     {
         if (restartDrainRequested)
             return new AfterTurnResult(InputProgressAction.Restart, null);
 
-        var batch = DrainBufferedBatch();
+        var batch = DrainBufferedBatch(continuesTurn: false);
         return batch is null
             ? new AfterTurnResult(InputProgressAction.Ready, null)
             : new AfterTurnResult(InputProgressAction.FollowUp, batch);
@@ -296,7 +342,7 @@ internal sealed class SessionInputFlow
         BatchCompletion.Ready completion,
         bool compactionDue)
     {
-        var batch = DrainBufferedBatch();
+        var batch = DrainBufferedBatch(continuesTurn: true);
         var next = completion.ChooseNext(batch?.StartsNewTurn == true, compactionDue);
         return new ToolBatchInputAdvance(batch, next);
     }
@@ -369,7 +415,7 @@ internal sealed class SessionInputFlow
 
         var resume = _resumeToolLoopAfterCompaction;
         _resumeToolLoopAfterCompaction = false;
-        var batch = DrainBufferedBatch();
+        var batch = DrainBufferedBatch(continuesTurn: resume);
         // The actor replays this response only after it applies the phase transition.
         var deferred = _deferredApproval;
         _deferredApproval = null;

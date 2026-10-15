@@ -1650,6 +1650,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ApplyBufferedBatch(BufferedInputBatch batch)
     {
+        if (batch.AdoptsAuthority)
+        {
+            // The batch starts a turn for its own requester. Derive trust and the prompt audience from that
+            // requester's recorded authority, not from the previous turn.
+            _input.DeriveAdoptedTrust(_trustContextDeriver);
+            UpdateCrashContext();
+            SetSystemPrompt();
+        }
+
         if (batch.StartsNewTurn)
         {
             // A replay resumes the same turn. New input starts a fresh guard
