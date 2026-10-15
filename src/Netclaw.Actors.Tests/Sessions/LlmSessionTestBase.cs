@@ -66,8 +66,16 @@ public abstract class LlmSessionTestBase : TestKit, IAsyncDisposable
         ((Akka.TestKit.TestScheduler)Sys.Scheduler).Advance(offset);
 
     /// <summary>
+    /// The fault ceiling for a cold persistent-actor recovery. It is not an
+    /// orchestration delay. A cold start creates the persistence plugins, can
+    /// create their tables, and replays the journal. On a loaded CI runner
+    /// that work can take more than 10 seconds.
+    /// </summary>
+    protected static readonly TimeSpan ColdRecoveryCeiling = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Joins a cold session through its durable subscriber acknowledgement.
-    /// The timeout is a fault ceiling for recovery, not an orchestration delay.
+    /// The timeout is <see cref="ColdRecoveryCeiling"/>.
     /// </summary>
     protected static async Task<SessionJoined> JoinSessionAsync(
         IActorRef sessionManager,
@@ -82,7 +90,7 @@ public abstract class LlmSessionTestBase : TestKit, IAsyncDisposable
         });
 
         return await subscriber.ExpectMsgAsync<SessionJoined>(
-            TimeSpan.FromSeconds(30),
+            ColdRecoveryCeiling,
             cancellationToken: TestContext.Current.CancellationToken);
     }
 
