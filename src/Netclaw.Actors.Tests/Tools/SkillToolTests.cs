@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Skills;
@@ -25,6 +26,7 @@ public class SkillToolTests : IDisposable
     private readonly string _skillsDir;
     private readonly NetclawPaths _paths;
     private readonly SkillRegistry _registry;
+    private readonly SubAgentDefinitionRegistry _subAgentRegistry = new();
     private readonly SkillIndexContextLayer _indexLayer;
     private static readonly IMcpPromptSkillLoader PromptLoader = new UnavailablePromptLoader();
 
@@ -269,6 +271,133 @@ public class SkillToolTests : IDisposable
         var call = Assert.Single(metrics.SkillLoadedCalls);
         Assert.Equal("test-skill", call.SkillName);
         Assert.Equal(SkillLoadMethod.SkillLoadTool, call.Method);
+    }
+
+    // An eval harness outside the process parses this line to tie a skill load to one trial,
+    // so the test checks the rendered line. Two sessions share one tool instance to catch a
+    // site that logs a captured or stale session instead of the loading session.
+    [Theory]
+    [InlineData(SkillLoadPath.File)]
+    [InlineData(SkillLoadPath.Routed)]
+    [InlineData(SkillLoadPath.McpPrompt)]
+    public async Task SkillLoad_logs_turn_skill_loaded_with_session_id_of_the_loading_session(SkillLoadPath path)
+    {
+        var (skillName, input) = ArrangeSkillLoad(path);
+        var logger = new RecordingLogger<SkillLoadTool>();
+        var tool = new SkillLoadTool(
+            _registry,
+            new NoOpSkillContentScanner(),
+            new RecordingPromptLoader(McpPromptSkillLoadResult.Loaded(
+                "Rendered workflow",
+                [new McpPromptSkillMessage("user", "Check freshness.")])),
+            sessionMetrics: null,
+            subAgentRegistry: _subAgentRegistry,
+            subAgentSpawner: CreateSubAgentSpawner(),
+            logger: logger);
+
+        foreach (var sessionId in new[] { "slack/C100-1700000001.000100", "signalr/abc" })
+        {
+            var context = TestToolExecutionContext.CreateBound(sessionId, null, TrustAudience.Personal);
+            await tool.ExecuteAsync(input, context, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(
+            [
+                $"turn_skill_loaded skill={skillName} method=skill_load session=slack/C100-1700000001.000100",
+                $"turn_skill_loaded skill={skillName} method=skill_load session=signalr/abc",
+            ],
+            logger.Messages.Where(static m => m.StartsWith("turn_skill_loaded", StringComparison.Ordinal)));
+    }
+
+    // A sessionless run is a deliberate state (operator routes), not a failure. The load must
+    // succeed and the line must say so, so the harness can tell it from a real session id.
+    [Fact]
+    public async Task SkillLoad_logs_session_none_for_a_sessionless_run()
+    {
+        var (skillName, input) = ArrangeSkillLoad(SkillLoadPath.File);
+        var logger = new RecordingLogger<SkillLoadTool>();
+        var tool = new SkillLoadTool(
+            _registry,
+            new NoOpSkillContentScanner(),
+            PromptLoader,
+            sessionMetrics: null,
+            subAgentRegistry: _subAgentRegistry,
+            subAgentSpawner: null,
+            logger: logger);
+        var context = TestToolExecutionContext.CreateUnbound(
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal });
+
+        var result = await tool.ExecuteAsync(input, context, TestContext.Current.CancellationToken);
+
+        Assert.Contains("# Plain Skill", result, StringComparison.Ordinal);
+        Assert.Equal(
+            [$"turn_skill_loaded skill={skillName} method=skill_load session=none"],
+            logger.Messages.Where(static m => m.StartsWith("turn_skill_loaded", StringComparison.Ordinal)));
+    }
+
+    public enum SkillLoadPath
+    {
+        File,
+        Routed,
+        McpPrompt,
+    }
+
+    private (string SkillName, IDictionary<string, object?> Input) ArrangeSkillLoad(SkillLoadPath path)
+    {
+        switch (path)
+        {
+            case SkillLoadPath.File:
+                WriteSkill("plain-skill", """
+                    ---
+                    name: plain-skill
+                    description: A plain skill.
+                    ---
+
+                    # Plain Skill
+                    """);
+                ScanSkills();
+                return ("plain-skill", ToolInput.Create("Name", "plain-skill"));
+
+            case SkillLoadPath.Routed:
+                WriteSkill("routed-load-skill", """
+                    ---
+                    name: routed-load-skill
+                    description: A routed skill.
+                    metadata:
+                      subagent: operations-helper
+                    ---
+
+                    # Routed Skill
+                    """);
+                ScanSkills();
+                _subAgentRegistry.Register(new SubAgentProfile
+                {
+                    Name = "operations-helper",
+                    Description = "Operations helper",
+                    SystemPrompt = "You help with operations.",
+                    ToolNames = ["file_read"],
+                    Visibility = SubAgentVisibility.UserFacing
+                });
+                return ("routed-load-skill", ToolInput.Create("Name", "routed-load-skill", "Task", "check health"));
+
+            case SkillLoadPath.McpPrompt:
+                _registry.PublishMcpPromptSkills("gigatron",
+                [
+                    new SkillEntry(
+                        "mcp__gigatron__month_over_month",
+                        "Month over month",
+                        "Compare complete months.",
+                        new McpPromptSkillSource("gigatron", "month_over_month", 4, []),
+                        "mcp")
+                    {
+                        UserInvocable = false,
+                    },
+                ]);
+                return ("mcp__gigatron__month_over_month", ToolInput.Create("Name", "mcp__gigatron__month_over_month"));
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(path), path, null);
+        }
     }
 
     [Fact]

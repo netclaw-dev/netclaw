@@ -123,7 +123,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             if (startLine.HasValue || limit.HasValue)
             {
                 var lines = await ReadLinesAsync(authorizedPath, encoding, startLine ?? 1, limit, _config.MaxOutputChars, ct);
-                RecordSkillReadIfApplicable(authorizedPath);
+                RecordSkillReadIfApplicable(authorizedPath, context);
                 return context.SuccessFile(lines, authorizedPath, ToolFileActivityKind.Read);
             }
 
@@ -133,7 +133,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             // centrally in DispatchingToolExecutor; file_read only bounds its read for
             // memory safety and steers past the cap.
             var (content, truncated) = await ReadBoundedHeadAsync(authorizedPath, encoding, _config.MaxOutputChars, ct);
-            RecordSkillReadIfApplicable(authorizedPath);
+            RecordSkillReadIfApplicable(authorizedPath, context);
             var result = truncated
                 ? content + $"\n[output truncated at {_config.MaxOutputChars} chars — read a specific range with StartLine and Limit, or grep the file, for the rest]"
                 : content;
@@ -663,13 +663,16 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         }
     }
 
-    private void RecordSkillReadIfApplicable(string authorizedPath)
+    private void RecordSkillReadIfApplicable(string authorizedPath, ToolInvocationContext context)
     {
         var skill = _skillRegistry?.GetByFilePath(authorizedPath);
         if (skill is null)
             return;
 
         _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.FileRead);
-        _logger?.LogInformation("turn_skill_loaded skill={SkillName} method=file_read", skill.Name);
+        _logger?.LogInformation(
+            "turn_skill_loaded skill={SkillName} method=file_read session={SessionId}",
+            skill.Name,
+            SkillLoadLog.SessionToken(context));
     }
 }
