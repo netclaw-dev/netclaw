@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -513,7 +514,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     false,
                     "Subagent output was truncated: the model reached its output limit before it finished, "
                     + "and it made no tool call. The text is cut off and is not a result. "
-                    + $"Cut-off text: {PreviewForLog(stub, 300)}",
+                    + $"Cut-off text: {PreviewRedacted(stub, 300)}",
                     SubAgentRunOutcome.Failed,
                     SubAgentOutcomeReason.OutputTruncated);
                 return;
@@ -673,7 +674,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 // approval suppression or grace — it is only armed during an active
                 // LLM stream and is never refreshed by keepalives, so reaching it
                 // means a genuine wedge.
-                var noProgress = _noProgressBudget?.TotalSeconds ?? 0;
+                var noProgress = RequireNoProgressBudget().TotalSeconds;
                 _executionCts?.Cancel();
                 _watchdog.Stop(Timers);
                 _log.Warning(
@@ -688,7 +689,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 // One model call streamed only thinking for the whole cap. Thinking
                 // resets the no-progress deadline, so only this cap stops the call.
                 // Like the no-progress deadline, it gets no approval grace.
-                var cap = (_noProgressBudget?.TotalSeconds ?? 0) * ProcessingWatchdog.ThinkingCapMultiplier;
+                var cap = RequireNoProgressBudget().TotalSeconds * ProcessingWatchdog.ThinkingCapMultiplier;
                 _executionCts?.Cancel();
                 _watchdog.Stop(Timers);
                 _log.Warning(
@@ -1389,8 +1390,40 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         return PreviewForLog(rendered, 500);
     }
 
+    // The no-progress and thinking-cap timers arm only when a budget exists. An expiry
+    // without a budget is a bug, so it must fail loudly and not report a zero-second timeout.
+    private TimeSpan RequireNoProgressBudget()
+        => _noProgressBudget
+           ?? throw new InvalidOperationException(
+               "A no-progress watchdog expiry arrived, but the sub-agent has no no-progress budget.");
+
     private static string PreviewForLog(string? text, int maxChars)
         => SecretOutputRedactor.Redact(PreviewText(text, maxChars));
+
+    // Redaction sees the whole text first. A cut before redaction can leave a prefix of a
+    // secret that no pattern matches. The cut then falls on a text-element boundary, so it
+    // never splits a surrogate pair. The cut can still shorten a secret mask, which is safe.
+    private static string PreviewRedacted(string? text, int maxChars)
+    {
+        if (string.IsNullOrEmpty(text))
+            return "";
+
+        var redacted = SecretOutputRedactor.Redact(text.ReplaceLineEndings("\\n"));
+        if (redacted.Length <= maxChars)
+            return redacted;
+
+        var end = 0;
+        var elements = StringInfo.GetTextElementEnumerator(redacted);
+        while (elements.MoveNext())
+        {
+            var next = elements.ElementIndex + ((string)elements.Current).Length;
+            if (next > maxChars)
+                break;
+            end = next;
+        }
+
+        return redacted[..end] + "...";
+    }
 
     private static string PreviewText(string? text, int maxChars)
     {
