@@ -297,7 +297,8 @@ child status, cancellation, approval correlation, and terminal results across
 restart. It SHALL NOT repeat uncertain child actions after restart. The parent
 SHALL deliver a child result when it becomes ready, at the next safe model
 boundary, without ordering results by child completion time. Ordinary user
-inputs SHALL retain their existing ordered batch and authority.
+inputs SHALL run in ordered batches of one requester, each under its own
+recorded authority.
 
 ## Operational Requirements
 
