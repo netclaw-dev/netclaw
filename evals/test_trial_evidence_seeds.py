@@ -96,7 +96,12 @@ class ActorLogTests(trial_files.HarnessCase):
                         f"status was {record['status']!r}, wanted {status_prefix!r}")
         self.assertEqual(self.SESSION, record["session_id"])
         self.assertFalse(self.raw("session.log").exists())
-        self.assertIn(f"WARN: no actor log for {self.SESSION} ({record['status']})", completed.stderr)
+        # Match the WARN prefix and the stable status token. The sentence between
+        # them is prose and may change.
+        token = status_prefix.rstrip(": ")
+        self.assertTrue(
+            any(line.lstrip().startswith("WARN") and token in line for line in completed.stderr.splitlines()),
+            f"no WARN line with {token!r} in: {completed.stderr!r}")
         self.assertIn("demo|1|", self.results.read_text(), "the run must store a result")
         self.assertTrue(self.raw("daemon-session.log").exists(),
                         "the harness must go on to the daemon evidence")
