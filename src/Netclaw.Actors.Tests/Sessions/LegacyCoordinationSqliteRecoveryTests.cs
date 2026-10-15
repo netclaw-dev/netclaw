@@ -3,53 +3,29 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using Akka;
 using Akka.Actor;
 using Akka.Hosting;
-using Akka.Persistence;
-using Akka.Persistence.Hosting;
-using Akka.Persistence.Sql.Hosting;
-using Akka.Serialization;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Data.Sqlite;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
-using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
-using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public sealed class LegacyCoordinationSqliteRecoveryTests : LlmSessionTestBase
+public sealed class LegacyCoordinationSqliteRecoveryTests : RecordedJournalTestBase
 {
     private const string SessionValue = "signalr/child-ledger-owner";
-    private TestSessionTempDirectory? _sqliteDirectory;
     private readonly FakeChatClient _chatClient = new();
     private readonly CountingToolExecutor _toolExecutor = new();
 
-    public LegacyCoordinationSqliteRecoveryTests(ITestOutputHelper output) : base(output) { }
-
-    protected override void ConfigureSessionPersistence(AkkaConfigurationBuilder builder)
-    {
-        _sqliteDirectory = TestSessionTempDirectory.Create("netclaw-legacy-sqlite-");
-        builder.WithSqlPersistence($"Data Source={Path.Combine(_sqliteDirectory.Path, "journal.db")}", "SQLite.MS");
-    }
-
-    protected override void ConfigureSessionSerialization(AkkaConfigurationBuilder builder)
-        => builder
-            .WithCustomSerializer(
-                "netclaw-protobuf",
-                [typeof(INetclawSerializableMessage), typeof(LegacyFixtureRecord)],
-                system => new LegacyFixtureWriterSerializer(system))
-            .WithStrictSerialization();
+    public LegacyCoordinationSqliteRecoveryTests(ITestOutputHelper output)
+        : base(output, "CoordinationLegacy", "legacy-writer-records.json", "9f79c0c4b637f005ffba5572d0bf50aa550464f2") { }
 
     protected override void ConfigureSessionServices(IServiceCollection services)
     {
@@ -61,35 +37,17 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : LlmSessionTestBase
         services.AddSingleton(new ToolRegistry());
     }
 
-    protected override void DeleteOwnedDirectories()
-    {
-        SqliteConnection.ClearAllPools();
-        _sqliteDirectory?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-    }
-
     [Fact]
     public async Task Sqlite_recovery_replays_a_deployed_child_pair_and_settles_it_without_reexecution()
     {
         var sessionId = new SessionId(SessionValue);
         var persistenceId = $"session-{sessionId.Value}";
-        var seeder = await StartSeederAsync(persistenceId, "legacy-fixture-seeder");
-        foreach (var name in new[]
-        {
+        await SeedJournalAsync(persistenceId, "legacy-fixture-seeder",
             "actor-origin-input-one", "actor-origin-input-two", "actor-parent-task-adoption",
             "actor-start-batch", "child-run-accepted", "child-started", "child-checkpoint",
             "child-terminal", "child-result-prepared", "child-delivery-admitted",
             "valid-child-delivery-adoption", "child-downstream-tool-batch",
-            "child-downstream-tool-result", "child-downstream-final-turn"
-        })
-        {
-            await seeder.Ask<Done>(new LegacyFixtureRecord(name), TimeSpan.FromSeconds(10),
-                TestContext.Current.CancellationToken);
-        }
-
-        Watch(seeder);
-        Sys.Stop(seeder);
-        await ExpectTerminatedAsync(seeder, cancellationToken: TestContext.Current.CancellationToken);
-        BackupAndRestoreSqliteDatabase();
+            "child-downstream-tool-result", "child-downstream-final-turn");
 
         var manager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("legacy-sqlite-session");
@@ -139,13 +97,7 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : LlmSessionTestBase
     {
         var sessionId = new SessionId(SessionValue);
         var persistenceId = $"session-{sessionId.Value}";
-        var seeder = await StartSeederAsync(persistenceId, "ambiguous-snapshot-seeder");
-        await seeder.Ask<Done>(new LegacySnapshotRecord("ambiguous-child-delivery-snapshot"),
-            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        Watch(seeder);
-        Sys.Stop(seeder);
-        await ExpectTerminatedAsync(seeder, cancellationToken: TestContext.Current.CancellationToken);
-        BackupAndRestoreSqliteDatabase();
+        await SeedSnapshotAsync(persistenceId, "ambiguous-snapshot-seeder", "ambiguous-child-delivery-snapshot");
 
         var manager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("ambiguous-snapshot-session");
@@ -175,13 +127,7 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : LlmSessionTestBase
     {
         var sessionId = new SessionId(SessionValue);
         var persistenceId = $"session-{sessionId.Value}";
-        var seeder = await StartSeederAsync(persistenceId, "prepared-snapshot-seeder");
-        await seeder.Ask<Done>(new LegacySnapshotRecord("prepared-undelivered-child-snapshot"),
-            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        Watch(seeder);
-        Sys.Stop(seeder);
-        await ExpectTerminatedAsync(seeder, cancellationToken: TestContext.Current.CancellationToken);
-        BackupAndRestoreSqliteDatabase();
+        await SeedSnapshotAsync(persistenceId, "prepared-snapshot-seeder", "prepared-undelivered-child-snapshot");
 
         var manager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("prepared-snapshot-session");
@@ -206,162 +152,6 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : LlmSessionTestBase
             StringComparison.Ordinal);
         Assert.Empty(_toolExecutor.Calls);
         Assert.Equal(1, _chatClient.CallCount);
-    }
-
-    private sealed record LegacyFixtureRecord(string Name);
-    private sealed record LegacySnapshotRecord(string Name);
-
-    /// <summary>
-    /// Starts a seeder and waits for its recovery. The first start of the SQL
-    /// persistence plugins happens here: plugin creation, table creation on a
-    /// new SQLite file, and recovery. That work gets the cold recovery
-    /// ceiling. The fixture Asks after recovery time only warm writes.
-    /// </summary>
-    private async Task<IActorRef> StartSeederAsync(string persistenceId, string actorName)
-    {
-        var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var seeder = Sys.ActorOf(Props.Create(() => new LegacyFixtureSeeder(persistenceId, recovered)), actorName);
-        await recovered.Task.WaitAsync(ColdRecoveryCeiling, TestContext.Current.CancellationToken);
-        return seeder;
-    }
-
-    private void BackupAndRestoreSqliteDatabase()
-    {
-        var directory = _sqliteDirectory?.Path
-            ?? throw new InvalidOperationException("The test SQLite directory was not configured.");
-        var databasePath = Path.Combine(directory, "journal.db");
-        var backupPath = Path.Combine(directory, "restored-backup.db");
-        var connectionString = $"Data Source={databasePath}";
-        using (var source = new SqliteConnection(connectionString))
-        using (var destination = new SqliteConnection($"Data Source={backupPath}"))
-        {
-            source.Open();
-            destination.Open();
-            source.BackupDatabase(destination);
-        }
-
-        SqliteConnection.ClearAllPools();
-        foreach (var suffix in new[] { "-wal", "-shm", "-journal" })
-        {
-            var sidecarPath = databasePath + suffix;
-            if (File.Exists(sidecarPath))
-                File.Delete(sidecarPath);
-        }
-        File.Copy(backupPath, databasePath, overwrite: true);
-    }
-
-    /// <summary>
-    /// Writes legacy fixture records. A journal or snapshot failure goes back
-    /// to the waiting test as an exception. Without these replies, the seeder
-    /// stops silently and the test sees only an Ask timeout.
-    /// </summary>
-    private sealed class LegacyFixtureSeeder : ReceivePersistentActor
-    {
-        private readonly TaskCompletionSource _recovered;
-        private IActorRef? _replyTo;
-
-        public override string PersistenceId { get; }
-
-        public LegacyFixtureSeeder(string persistenceId, TaskCompletionSource recovered)
-        {
-            PersistenceId = persistenceId;
-            _recovered = recovered;
-            Recover<RecoveryCompleted>(_ => _recovered.TrySetResult());
-            RecoverAny(_ => { });
-            // Each test waits for each reply before it sends the next command.
-            // Thus only one reply target is open at a time. SaveSnapshot does
-            // not stash commands, so the actor itself gives no such guarantee.
-            Command<LegacyFixtureRecord>(fixture =>
-            {
-                _replyTo = Sender;
-                Persist(fixture, _ => Reply(Done.Instance));
-            });
-            Command<LegacySnapshotRecord>(fixture =>
-            {
-                _replyTo = Sender;
-                SaveSnapshot(new LegacyFixtureRecord(fixture.Name));
-            });
-            Command<SaveSnapshotSuccess>(_ => Reply(Done.Instance));
-            Command<SaveSnapshotFailure>(failure => Reply(new Status.Failure(failure.Cause)));
-        }
-
-        protected override void OnRecoveryFailure(Exception reason, object? message = null)
-        {
-            _recovered.TrySetException(reason);
-            base.OnRecoveryFailure(reason, message);
-        }
-
-        protected override void OnPersistFailure(Exception cause, object @event, long sequenceNr)
-        {
-            Reply(new Status.Failure(cause));
-            base.OnPersistFailure(cause, @event, sequenceNr);
-        }
-
-        protected override void OnPersistRejected(Exception cause, object @event, long sequenceNr)
-        {
-            Reply(new Status.Failure(cause));
-            base.OnPersistRejected(cause, @event, sequenceNr);
-        }
-
-        protected override void PostStop()
-        {
-            // A stop before RecoveryCompleted (for example a plugin start
-            // failure) must fail the start wait at once.
-            _recovered.TrySetException(new InvalidOperationException(
-                $"The seeder for {PersistenceId} stopped before its recovery completed."));
-            base.PostStop();
-        }
-
-        private void Reply(object message)
-        {
-            _replyTo?.Tell(message);
-            _replyTo = null;
-        }
-    }
-
-    private sealed class LegacyFixtureWriterSerializer : SerializerWithStringManifest
-    {
-        private readonly NetclawProtobufSerializer _reader;
-        private readonly IReadOnlyDictionary<string, FixtureRecord> _records;
-
-        public LegacyFixtureWriterSerializer(ExtendedActorSystem system) : base(system)
-        {
-            _reader = new NetclawProtobufSerializer(system);
-            var corpus = JsonSerializer.Deserialize<FixtureCorpus>(File.ReadAllBytes(Path.Combine(
-                AppContext.BaseDirectory, "Fixtures", "CoordinationLegacy", "legacy-writer-records.json")))!;
-            Assert.Equal("9f79c0c4b637f005ffba5572d0bf50aa550464f2", corpus.SourceRevision);
-            Assert.Equal(150, corpus.SerializerIdentifier);
-            _records = corpus.Records.ToDictionary(static record => record.Name, StringComparer.Ordinal);
-        }
-
-        public override int Identifier => 150;
-
-        public override string Manifest(object o)
-            => o is LegacyFixtureRecord fixture
-                ? _records[fixture.Name].Manifest
-                : _reader.Manifest(o);
-
-        public override byte[] ToBinary(object obj)
-            => obj is LegacyFixtureRecord fixture
-                ? Convert.FromBase64String(_records[fixture.Name].Base64)
-                : _reader.ToBinary(obj);
-
-        public override object FromBinary(byte[] bytes, string manifest)
-            => _reader.FromBinary(bytes, manifest);
-    }
-
-    private sealed class FixtureCorpus
-    {
-        [JsonPropertyName("sourceRevision")] public string SourceRevision { get; init; } = string.Empty;
-        [JsonPropertyName("serializerIdentifier")] public int SerializerIdentifier { get; init; }
-        [JsonPropertyName("records")] public FixtureRecord[] Records { get; init; } = [];
-    }
-
-    private sealed class FixtureRecord
-    {
-        [JsonPropertyName("name")] public string Name { get; init; } = string.Empty;
-        [JsonPropertyName("manifest")] public string Manifest { get; init; } = string.Empty;
-        [JsonPropertyName("base64")] public string Base64 { get; init; } = string.Empty;
     }
 
     private sealed class SingleClientProvider(IChatClient client) : IChatClientProvider
