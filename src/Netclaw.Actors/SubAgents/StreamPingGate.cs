@@ -46,6 +46,13 @@ internal sealed class StreamPingGate
             _pending = update.Activity;
 
         var now = _clock.Now;
+
+        // The scheduler clock is wall time, so it can step back (for example after an NTP
+        // correction). Without a re-anchor, the elapsed time stays negative until the clock
+        // catches up, and no interval ping goes out for the length of the step.
+        if (now < _lastPing)
+            _lastPing = now;
+
         var due = update.IsFirstSubstantive
                   || now - _lastPing >= _interval
                   || (update.Activity == StreamActivity.Answer && _lastSent != StreamActivity.Answer);

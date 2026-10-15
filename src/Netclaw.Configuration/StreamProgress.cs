@@ -43,7 +43,8 @@ internal static class StreamProgress
     /// <summary>
     /// Splits substantive progress into thinking and answer. Thinking is progress for
     /// the no-progress deadline, but only an answer update (text, tool call, finish
-    /// reason, other content) resets the thinking cap.
+    /// reason, other content) resets the thinking cap. An empty or whitespace-only
+    /// text part counts as thinking.
     /// </summary>
     internal static StreamActivity Classify(ChatResponseUpdate update)
     {
@@ -55,9 +56,15 @@ internal static class StreamProgress
         {
             switch (content)
             {
-                case TextContent text when !string.IsNullOrEmpty(text.Text):
+                case TextContent text when !string.IsNullOrWhiteSpace(text.Text):
                 case FunctionCallContent:
                     return StreamActivity.Answer;
+                case TextContent:
+                    // An empty or whitespace-only text part is progress, but it is not an
+                    // answer. A backend can send one next to every reasoning delta, and it
+                    // must not restart the thinking cap.
+                    activity = StreamActivity.Thinking;
+                    break;
                 case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text):
                     activity = StreamActivity.Thinking;
                     break;
