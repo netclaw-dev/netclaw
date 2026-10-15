@@ -31,6 +31,8 @@
              Link="Sessions/SessionModelContextStaleInspectionTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/SessionStateTests.cs"
              Link="Sessions/SessionStateTests.cs" />
+    <Compile Include="../Netclaw.Actors.Tests/Sessions/SessionInputFlowRequesterTests.cs"
+             Link="Sessions/SessionInputFlowRequesterTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/ProcessingWatchdogTests.cs"
              Link="Sessions/ProcessingWatchdogTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/SessionExecutionLifetimeStopIdentityTests.cs"
