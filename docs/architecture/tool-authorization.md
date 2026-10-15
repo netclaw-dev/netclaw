@@ -830,6 +830,12 @@ Facts behind the diagram (current code):
   queue from the pending `InputAdmitted` records (`RestoreWaitingInputs`).
   Each input keeps its recorded authority. The flow rebuilds the source from
   the record, so a reminder keeps its id (`SourceMessageId`).
+- When the idle handler closes a half-answered batch and input waits behind
+  it, no approval stays parked, so a recovery would not rebuild that input.
+  The session runs the waiting input first, and then it passivates
+  (`SessionExecutionLifetime.DeferIdlePassivationUntilWaitingInputEnds`).
+- An actor restart can rebuild an input and also requeue it. Activation removes
+  the queued copy, so each input reaches the model once.
 - Any person can abandon the approval, not only its requester. The check is
   fail-safe: an abandonment cancels the call and grants nothing.
   A valid example: a reminder fires while Alice's `git status` prompt is open.
