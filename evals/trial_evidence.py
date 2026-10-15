@@ -111,7 +111,8 @@ def collect_actor_log(home, session_id, destination):
     The record always says what happened. A missing catalog row or a missing
     file is a finding, not a reason to stop the run. The harness shows it.
     Only `*.log` files are copied, because a session folder can hold private
-    workspace data. The data root also holds `keys/` and `config/`, and the
+    workspace data. For a sub-agent log, the resolved target must be a `*.log`
+    file too. The data root also holds `keys/` and `config/`, and the
     model can write links in the session folders. So the checks are narrow:
 
       - The actor log must resolve under `data/sessions`.
@@ -149,9 +150,12 @@ def collect_actor_log(home, session_id, destination):
                 sub_logs = []
             for sub_log in sub_logs:
                 resolved_sub = sub_log.resolve()
-                if not stays_in(envelope, resolved_sub):
-                    print(f"WARN: sub-agent log {sub_log} resolves outside its session folder, "
-                          "not copied", file=sys.stderr)
+                # The name of the link is not enough. The target must be a
+                # *.log file too, because the session folder also holds tmp/
+                # and artifacts/ data that is not a log.
+                if not stays_in(envelope, resolved_sub) or resolved_sub.suffix != ".log":
+                    print(f"WARN: target of sub-agent log {sub_log} is not a *.log file in its "
+                          "session folder, not copied", file=sys.stderr)
                     record["refused_subagent_logs"].append(str(sub_log.relative_to(log.parent.parent)))
                     continue
                 target = destination / "subagents" / sub_log.parent.parent.name

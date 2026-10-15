@@ -1068,7 +1068,7 @@ finish_trial() {
 finish_assertion_evidence() {
     local assert_rc="$1"
     local window="$TRIAL_RAW/daemon-window.log"
-    local daemon_status="ok" lines_after=0 name
+    local lines_after name
     local -a new_files=()
     while IFS= read -r name; do
         if [[ "$name" != "$(basename "$TRIAL_DAEMON_LOG")" ]] \
@@ -1077,25 +1077,21 @@ finish_assertion_evidence() {
         fi
     done < <(find "$EVAL_HOME/logs" -maxdepth 1 -type f -name 'daemon-*.log' -printf '%f\n' | sort)
 
-    if [[ -f "$TRIAL_DAEMON_LOG" ]]; then
-        lines_after=$(wc -l < "$TRIAL_DAEMON_LOG")
-        head -n "$lines_after" "$TRIAL_DAEMON_LOG" \
-            | tail -n +"$((TRIAL_DAEMON_LINES_BEFORE + 1))" > "$window"
-    elif [[ "${#new_files[@]}" -gt 0 ]]; then
-        : > "$window"
-    else
-        daemon_status="no_daemon_log"
-        echo "  WARN: no daemon log for the trial ($daemon_status). See $TRIAL_RAW/assert.json" >&2
+    if [[ ! -f "$TRIAL_DAEMON_LOG" ]]; then
+        echo "ERROR: daemon log $TRIAL_DAEMON_LOG is gone after the assertion" >&2
+        exit 2
     fi
+    lines_after=$(wc -l < "$TRIAL_DAEMON_LOG")
+    head -n "$lines_after" "$TRIAL_DAEMON_LOG" \
+        | tail -n +"$((TRIAL_DAEMON_LINES_BEFORE + 1))" > "$window"
     for name in "${new_files[@]}"; do
         cat "$EVAL_HOME/logs/$name" >> "$window"
     done
 
-    jq -n --argjson exit_code "$assert_rc" --arg daemon_status "$daemon_status" \
+    jq -n --argjson exit_code "$assert_rc" \
         --arg daemon_log "$(basename "$TRIAL_DAEMON_LOG")" \
         --argjson before "$TRIAL_DAEMON_LINES_BEFORE" --argjson after "$lines_after" \
-        --args '{exit_code: $exit_code, daemon_status: $daemon_status,
-                 daemon_log: (if $daemon_status == "ok" then $daemon_log else null end),
+        --args '{exit_code: $exit_code, daemon_log: $daemon_log,
                  window_lines_before: $before, window_lines_after: $after,
                  extra_daemon_logs: $ARGS.positional}' "${new_files[@]}" \
         > "$TRIAL_RAW/assert.json"
@@ -1377,10 +1373,19 @@ stdout_response_not_contains() {
 ## instead of trusting a computed date. Callers re-resolve before they take a
 ## per-case line baseline; a midnight rollover inside a single case remains
 ## unhandled and acceptable.
+## A run needs a daemon log, because every assertion and the trial evidence
+## read it. When none exists, the daemon did not start or write its log, so
+## the run stops.
 resolve_daemon_log() {
     local newest
-    newest=$(ls -1t "$EVAL_HOME"/logs/daemon-*.log 2>/dev/null | head -n 1)
-    [[ -n "$newest" ]] && DAEMON_LOG="$newest"
+    # `ls` exits non-zero when no file matches. The empty check below turns
+    # that case into a clear error.
+    newest=$(ls -1t "$EVAL_HOME"/logs/daemon-*.log 2>/dev/null | head -n 1) || true
+    if [[ -z "$newest" ]]; then
+        echo "ERROR: no daemon log (daemon-*.log) in $EVAL_HOME/logs. The daemon did not write its log." >&2
+        exit 2
+    fi
+    DAEMON_LOG="$newest"
 }
 
 daemon_log_tail() {

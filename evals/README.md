@@ -445,8 +445,8 @@ while the run goes on. `<nn>` is the trial number, `01` and up.
 | `subagents/<run id>/*.log` | Logs of the sub-agents of the session |
 | `actor-log.json` | How the harness found the actor log. A status other than `ok` means that the log is missing or was refused, and the harness prints a warning. The actor log must resolve under `data/sessions`. A sub-agent log must resolve under the folder of its session. `refused_subagent_logs` lists the sub-agent logs that were refused. |
 | `daemon-session.log` | Daemon lines with the exact token `session=<id>` or `sessionId=<id>` |
-| `daemon-window.log` | Every daemon line from the start of the trial to the end of the assertion, for people to read. A trial that crosses midnight UTC adds the lines of the new daemon file. The file is absent when no daemon log exists. |
-| `assert.json` | `exit_code` of the assertion (141 is a pipe failure, 1 is a missed match), `daemon_status`, `daemon_log`, `window_lines_before`, `window_lines_after`, `extra_daemon_logs` |
+| `daemon-window.log` | Every daemon line from the start of the trial to the end of the assertion, for people to read. A trial that crosses midnight UTC adds the lines of the new daemon file. A run stops with exit 2 and an error message when `$EVAL_HOME/logs` holds no `daemon-*.log` file. |
+| `assert.json` | `exit_code` of the assertion (141 is a pipe failure, 1 is a missed match), `daemon_log`, `window_lines_before`, `window_lines_after`, `extra_daemon_logs` |
 | `assert-stderr.txt` | stderr of the assertion function. It is often empty, because the assertion helpers send their own stderr to `/dev/null`. |
 
 A multi-turn trial keeps `prompt.txt`, `cli-exit.json`, `cli-stdout.*`, and
