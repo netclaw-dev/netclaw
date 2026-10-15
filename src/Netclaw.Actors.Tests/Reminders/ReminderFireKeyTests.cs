@@ -33,6 +33,19 @@ public sealed class ReminderFireKeyTests
         Assert.Equal($"{id}:{fireTimeMs}", key.Value);
     }
 
+    [Fact]
+    public void The_largest_fire_time_parses_and_one_more_is_refused()
+    {
+        // Act
+        var atLimit = ReminderFireKey.TryParse($"weekly:{long.MaxValue}", out var key);
+        var pastLimit = ReminderFireKey.TryParse("weekly:9223372036854775808", out _);
+
+        // Assert
+        Assert.True(atLimit);
+        Assert.Equal(long.MaxValue, key.FireTimeMs);
+        Assert.False(pastLimit);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

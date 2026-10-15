@@ -69,6 +69,41 @@ public sealed class ReminderFireDropRuleTests
         Assert.IsType<AdmissionDecision.Persist>(decision);
     }
 
+    [Fact]
+    public void A_fire_that_the_journal_holds_but_no_queue_holds_never_blocks_a_newer_fire()
+    {
+        // Arrange: the 10:00 fire waits behind an operator turn. The daemon crashes, and the new flow has no queue.
+        // The journal still lists the fire as a pending input, but nothing in the session will ever run it.
+        var session = new Session();
+        session.Activate("alice");
+        session.Admit(Fire("build:1000"), InputPlacement.BufferDuringModel);
+        session.RestartWithEmptyFlow();
+
+        // Act
+        var decision = session.Prepare(Fire("build:2000"));
+
+        // Assert: the orphan is not a waiting fire, so the reminder keeps running.
+        Assert.IsType<AdmissionDecision.Persist>(decision);
+    }
+
+    [Fact]
+    public void A_fire_that_recovery_rebuilt_into_the_queue_blocks_a_newer_fire()
+    {
+        // Arrange: a parked approval closed the inputs of its own turn. The 10:00 fire waits behind that approval.
+        // The daemon restarts, and recovery rebuilds the waiting fire into the new queue.
+        var session = new Session();
+        session.Activate("alice");
+        session.Admit(Fire("build:1000"), InputPlacement.BufferDuringApproval);
+        session.RestartAndRebuildWaitingInputs();
+
+        // Act
+        var decision = session.Prepare(Fire("build:2000"));
+
+        // Assert: the fire waits in the queue, so a newer fire of the reminder is dropped.
+        var dropped = Assert.IsType<AdmissionDecision.Dropped>(decision);
+        Assert.Equal(new ReminderFireKey(new ReminderId("build"), 1000), dropped.Waiting);
+    }
+
     [Theory]
     [InlineData("check", "check-pr")]
     [InlineData("check-pr", "check")]
@@ -181,10 +216,20 @@ public sealed class ReminderFireDropRuleTests
     private sealed class Session
     {
         public static readonly SessionId Id = new("drop-rule/session");
-        private readonly SessionInputFlow _flow = new();
+        private SessionInputFlow _flow = new();
         private SessionState _state = SessionState.Empty;
 
         public AdmissionDecision Prepare(SendUserMessage command) => _flow.PrepareAdmission(command, _state, Id, 1);
+
+        // A crash or a restart without a resume: the journal keeps every pending input, and the new flow has no memory.
+        public void RestartWithEmptyFlow() => _flow = new SessionInputFlow();
+
+        public void RestartAndRebuildWaitingInputs()
+        {
+            _state = _state.CloseInputs(_flow.SelectedInputs.Ids);
+            _flow = new SessionInputFlow();
+            _flow.RestoreWaitingInputs(_state.PendingInputs.ToArray(), Id);
+        }
 
         public void Activate(string requester) => Activate(Operator(requester));
 

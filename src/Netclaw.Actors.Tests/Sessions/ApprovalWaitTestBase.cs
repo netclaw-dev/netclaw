@@ -60,6 +60,9 @@ public abstract class ApprovalWaitTestBase : LlmSessionTestBase
                 SnapshotInterval = 1,
                 TitleGenerationInterval = 0,
                 MaxInlineToolResultChars = 200,
+                // A short history still reaches the summary call, so a spec can hold a compaction open.
+                // Compaction starts only when a spec reports a full context window.
+                KeepRecentMessages = 0,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new AudienceNamingPromptProvider());

@@ -32,6 +32,12 @@ public partial class FireAdmissionModelState
     public List<string> Running { get; set; } = [];
     public List<string> SeenKeys { get; set; } = [];
     public bool Restarted { get; set; }
+    // Stored inputs that no queue holds and no turn selected, for example after a crash. They stay pending in the
+    // journal, nothing will run them, and they never count as waiting.
+    public List<string> Orphans { get; set; } = [];
+    // Labels that recovery rebuilt into the queue of an open approval. They wait, so they block a newer fire.
+    public List<string> Rebuilt { get; set; } = [];
+    public bool Approval { get; set; }
     public Dictionary<string, string> RequesterByLabel { get; set; } = new();
     public Dictionary<string, string> ReminderByLabel { get; set; } = new();
 }
@@ -62,14 +68,15 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
 
     private enum Rule { RedeliveryIsADuplicate, FireIsAdmittedUnlessAnEarlierFireWaits, FireIsDroppedWhileAnEarlierFireWaits }
 
-    private enum Kind { Operator, Fire, FinishTurn, ToolBoundary, FailTurn, Restart }
+    private enum Kind { Operator, Fire, FinishTurn, ToolBoundary, FailTurn, Restart, Crash, RestartInApproval, AnswerApproval }
 
     private enum Prediction { Duplicate, Drop, Admit }
 
     private enum Explored
     {
         FireDropped, FireAdmittedWhileEarlierFireRuns, FireAdmittedAfterEarlierFireConsumed, RedeliveredFire,
-        OtherReminderWaiting, RestartResumedInputs, FireAdmittedAfterRestart, RedeliveryAfterRestart
+        OtherReminderWaiting, RestartResumedInputs, FireAdmittedAfterRestart, RedeliveryAfterRestart,
+        FireAdmittedBesideOrphan, FireDroppedBehindRebuiltQueue
     }
 
     private sealed record Command(Kind Kind, string Requester, string? MessageId, string? ReminderId, long FireMs)
@@ -88,6 +95,7 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
     private sealed record AdmitObservation(string Outcome);
     private sealed record AdvanceObservation(string Action, string[] BatchLabels, string[] PendingLabels);
     private sealed record RestartObservation(string[] RunningLabels);
+    private sealed record RebuildObservation(string[] PendingLabels);
 
     [Fact]
     public void Generated_redelivered_inputs_are_never_admitted_twice()
@@ -111,6 +119,45 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
                 new Command(Kind.Operator, Bob, "m0", null, 0),
                 new Command(Kind.Fire, Automation, null, "check-pr", 1000),
                 new Command(Kind.Fire, Automation, null, "check-pr", 2000)
+            ]).Run();
+
+    // A crash leaves the waiting fire pending in the journal. The new session holds no queue and runs no turn for it,
+    // so the fire does not wait. The reminder must not go silent.
+    [Fact]
+    public void A_fire_is_admitted_beside_a_fire_that_a_crash_left_pending()
+        => new FlowScenario(
+            CreateSpec(Rule.FireIsAdmittedUnlessAnEarlierFireWaits),
+            [
+                new Command(Kind.Operator, Bob, "m0", null, 0),
+                new Command(Kind.Fire, Automation, null, "check", 1000),
+                new Command(Kind.Crash, string.Empty, null, null, 0),
+                new Command(Kind.Fire, Automation, null, "check", 2000)
+            ]).Run();
+
+    // A graceful restart with an operator input and a fire pending: the two inputs have different authority, so
+    // nothing resumes them (decision 6). The same reasoning as for a crash applies.
+    [Fact]
+    public void A_fire_is_admitted_beside_a_fire_that_a_restart_with_two_requesters_left_pending()
+        => new FlowScenario(
+            CreateSpec(Rule.FireIsAdmittedUnlessAnEarlierFireWaits),
+            [
+                new Command(Kind.Operator, Alice, "m0", null, 0),
+                new Command(Kind.Fire, Automation, null, "check", 1000),
+                new Command(Kind.Restart, string.Empty, null, null, 0),
+                new Command(Kind.Fire, Automation, null, "check", 2000)
+            ]).Run();
+
+    // The counterpart: recovery rebuilt the waiting fire into the queue of an open approval. This fire waits, so a
+    // newer fire of the reminder is dropped, also after the restart.
+    [Fact]
+    public void A_fire_is_dropped_while_an_earlier_fire_waits_in_the_queue_that_recovery_rebuilt()
+        => new FlowScenario(
+            CreateSpec(Rule.FireIsDroppedWhileAnEarlierFireWaits),
+            [
+                new Command(Kind.Operator, Bob, "m0", null, 0),
+                new Command(Kind.Fire, Automation, null, "check", 1000),
+                new Command(Kind.RestartInApproval, string.Empty, null, null, 0),
+                new Command(Kind.Fire, Automation, null, "check", 2000)
             ]).Run();
 
     private void RunProperty(Rule rule)
@@ -152,12 +199,14 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
             Gen.OneOfConst("check", "check-pr"),
             Gen.OneOfConst(1000L, 2000L, 3000L),
             (reminderId, fireMs) => new Command(Kind.Fire, Automation, null, reminderId, fireMs));
-        var terminal = Gen.OneOfConst(Kind.FinishTurn, Kind.ToolBoundary, Kind.FailTurn, Kind.Restart)
+        var terminal = Gen.OneOfConst(
+                Kind.FinishTurn, Kind.ToolBoundary, Kind.FailTurn, Kind.Restart,
+                Kind.Crash, Kind.RestartInApproval, Kind.AnswerApproval)
             .Select(kind => new Command(kind, string.Empty, null, null, 0));
         return Gen.Frequency(
             (3, admitOperator),
             (6, fire),
-            (5, terminal)).Array[1, 14];
+            (7, terminal)).Array[1, 14];
     }
 
     private static AccordantSpec CreateSpec(Rule rule)
@@ -167,7 +216,10 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
         spec.Operation<Unit, AdvanceObservation>("FinishTurn", (_, state) => Terminal(state));
         spec.Operation<Unit, AdvanceObservation>("FailTurn", (_, state) => Terminal(state));
         spec.Operation<Unit, AdvanceObservation>("ToolBoundary", (_, state) => ToolBoundary(state));
+        spec.Operation<Unit, AdvanceObservation>("AnswerApproval", (_, state) => AnswerApproval(state));
         spec.Operation<Unit, RestartObservation>("Restart", (_, state) => Restart(state));
+        spec.Operation<Unit, RestartObservation>("Crash", (_, state) => Crash(state));
+        spec.Operation<Unit, RebuildObservation>("RestartInApproval", (_, state) => RestartInApproval(state));
         return spec;
     }
 
@@ -206,7 +258,7 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
                 next.RequesterByLabel[request.Label] = request.Requester;
                 if (request.ReminderId is { } reminderId)
                     next.ReminderByLabel[request.Label] = reminderId;
-                if (!state.TurnOpen)
+                if (!state.TurnOpen && !state.Approval)
                 {
                     next.TurnOpen = true;
                     next.Running = [request.Label];
@@ -276,27 +328,112 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
             return ValidationResult.Invalid("Inputs from different requesters must not share one batch.");
 
         // Rule: closure. Every consumed input leaves the stored list. Every other input stays in order.
-        return actual.PendingLabels.SequenceEqual(waiting)
+        // An orphan is older than every waiting input, and no turn consumes it.
+        var stored = state.Orphans.Concat(waiting).ToList();
+        return actual.PendingLabels.SequenceEqual(stored)
             ? ValidationResult.Valid()
             : ValidationResult.Invalid(
-                $"Stored inputs must be exactly the unconsumed ones [{string.Join(',', waiting)}]. "
+                $"Stored inputs must be exactly the unconsumed ones [{string.Join(',', stored)}]. "
                 + $"Actual [{string.Join(',', actual.PendingLabels)}].");
     }
 
-    // The daemon restarts and the restart reminder resumes the stored inputs of one requester as the running turn.
+    private static List<string> Journal(FireAdmissionModelState state) => [.. state.Orphans, .. state.Pending];
+
+    private static bool OneRequester(FireAdmissionModelState state, List<string> labels)
+        => labels.Select(label => state.RequesterByLabel[label]).Distinct().Count() <= 1;
+
+    // The daemon restarts. A restart reminder resumes the stored inputs when they all have one requester, and then the
+    // resumed turn selects them. Stored inputs of several requesters do not resume (decision 6). Nothing runs them
+    // and no queue holds them, so they become orphans.
     private static ExpectedOutcomes Restart(FireAdmissionModelState state)
-        => Expect.That<RestartObservation>(actual =>
-                actual.RunningLabels.SequenceEqual(state.Pending)
+    {
+        var journal = Journal(state);
+        var resumes = journal.Count > 0 && OneRequester(state, journal);
+        return Expect.That<RestartObservation>(actual =>
+                actual.RunningLabels.SequenceEqual(resumes ? journal : [])
                     ? ValidationResult.Valid()
                     : ValidationResult.Invalid(
-                        $"The resume must select every stored input [{string.Join(',', state.Pending)}]. "
-                        + $"Actual [{string.Join(',', actual.RunningLabels)}]."))
+                        resumes
+                            ? $"The resume must select every stored input [{string.Join(',', journal)}]. "
+                              + $"Actual [{string.Join(',', actual.RunningLabels)}]."
+                            : $"Stored inputs of several requesters (or none) must not resume. "
+                              + $"Actual [{string.Join(',', actual.RunningLabels)}]."))
             .ThenState<FireAdmissionModelState>((RestartObservation actual, FireAdmissionModelState next) =>
             {
                 next.Restarted = true;
-                next.Running = [.. state.Pending];
-                next.TurnOpen = state.Pending.Count > 0;
+                next.Rebuilt = [];
+                next.Approval = false;
+                next.Orphans = [];
+                next.Pending = [];
+                next.Running = [];
+                if (actual.RunningLabels.Length > 0)
+                {
+                    next.Pending = [.. journal];
+                    next.Running = [.. actual.RunningLabels];
+                }
+                else
+                {
+                    next.Orphans = [.. journal];
+                }
+
+                next.TurnOpen = actual.RunningLabels.Length > 0;
             }, mock: () => new RestartObservation([]));
+    }
+
+    // A crash gives the new session no restart reminder. Every stored input becomes an orphan.
+    private static ExpectedOutcomes Crash(FireAdmissionModelState state)
+    {
+        var journal = Journal(state);
+        return Expect.That<RestartObservation>(actual =>
+                actual.RunningLabels.Length == 0
+                    ? ValidationResult.Valid()
+                    : ValidationResult.Invalid(
+                        $"A crash leaves no restart reminder, so no turn may select a stored input. "
+                        + $"Actual [{string.Join(',', actual.RunningLabels)}]."))
+            .ThenState<FireAdmissionModelState>((RestartObservation _, FireAdmissionModelState next) =>
+            {
+                next.Restarted = true;
+                next.Rebuilt = [];
+                next.Approval = false;
+                next.Orphans = [.. journal];
+                next.Pending = [];
+                next.Running = [];
+                next.TurnOpen = false;
+            }, mock: () => new RestartObservation([]));
+    }
+
+    // A tool call waits on an approval when the daemon stops. The parked batch closed the inputs of its own turn.
+    // Recovery rebuilds every stored input that is left into the queue, so each one waits until the approval closes.
+    private static ExpectedOutcomes RestartInApproval(FireAdmissionModelState state)
+    {
+        var waiting = Journal(state).Where(label => !state.Running.Contains(label)).ToList();
+        return Expect.That<RebuildObservation>(actual =>
+                actual.PendingLabels.SequenceEqual(waiting)
+                    ? ValidationResult.Valid()
+                    : ValidationResult.Invalid(
+                        $"Recovery must keep the stored inputs that the parked turn did not consume [{string.Join(',', waiting)}]. "
+                        + $"Actual [{string.Join(',', actual.PendingLabels)}]."))
+            .ThenState<FireAdmissionModelState>((RebuildObservation _, FireAdmissionModelState next) =>
+            {
+                next.Restarted = true;
+                next.Approval = true;
+                next.Orphans = [];
+                next.Pending = [.. waiting];
+                next.Rebuilt = [.. waiting];
+                next.Running = [];
+                next.TurnOpen = false;
+            }, mock: () => new RebuildObservation([]));
+    }
+
+    // The approval closes. The turn that follows takes the waiting inputs, or the session goes ready.
+    private static ExpectedOutcomes AnswerApproval(FireAdmissionModelState state)
+        => Expect.That<AdvanceObservation>(actual => ValidateAdvance(state, actual, midTurn: false))
+            .ThenState<FireAdmissionModelState>((AdvanceObservation actual, FireAdmissionModelState next) =>
+            {
+                ApplyAdvance(state, actual, next);
+                next.Approval = false;
+                next.TurnOpen = actual.Action == "FollowUp";
+            }, mock: () => new AdvanceObservation("Ready", [], []));
 
     private static MessageSource OperatorSource(string requester, string? messageId) => new()
     {
@@ -342,6 +479,7 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
         private SessionState _state = SessionState.Empty;
         private StateProfile _profile = new(new FireAdmissionModelState());
         private bool _turnOpen;
+        private bool _approval;
 
         public FlowScenario(AccordantSpec spec, Command[] sequence)
         {
@@ -378,8 +516,17 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
                     case Kind.ToolBoundary when _turnOpen:
                         ToolBoundary();
                         break;
-                    case Kind.Restart:
+                    case Kind.Restart when !_approval:
                         Restart();
+                        break;
+                    case Kind.Crash when !_approval:
+                        Crash();
+                        break;
+                    case Kind.RestartInApproval:
+                        RestartInApproval();
+                        break;
+                    case Kind.AnswerApproval when _approval:
+                        AnswerApproval();
                         break;
                 }
             }
@@ -392,7 +539,9 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
             var model = (FireAdmissionModelState)_profile.SingleState();
             RecordCoverage(model, request);
             var command = new SendUserMessage { SessionId = SessionId, Content = request.Label, Source = source };
-            var placement = _turnOpen ? InputPlacement.BufferDuringModel : InputPlacement.Activate;
+            var placement = _approval
+                ? InputPlacement.BufferDuringApproval
+                : _turnOpen ? InputPlacement.BufferDuringModel : InputPlacement.Activate;
 
             // PrepareAdmission is the only decision. A drop and a duplicate both store nothing and acknowledge.
             string outcome;
@@ -404,7 +553,7 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
                     if (placement == InputPlacement.Activate)
                         _flow.ActivateInput(accepted, _state.PendingInputs, null);
                     _labelById[persist.Event.InputId] = request.Label;
-                    _turnOpen = true;
+                    _turnOpen |= placement == InputPlacement.Activate;
                     outcome = "Admitted";
                     break;
                 case AdmissionDecision.Reject rejected:
@@ -424,11 +573,17 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
 
             var prediction = Predict(request, model);
             var earlierPending = model.Pending.Any(label => model.ReminderByLabel.GetValueOrDefault(label) == reminderId);
+            var orphanOfReminder = model.Orphans.Any(label => model.ReminderByLabel.GetValueOrDefault(label) == reminderId);
             var earlierSeen = model.SeenKeys.Any(key => key.StartsWith($"fire:{reminderId}:", StringComparison.Ordinal));
             switch (prediction)
             {
                 case Prediction.Drop:
                     _explored.Add(Explored.FireDropped);
+                    if (model.Rebuilt.Any(label =>
+                            model.Pending.Contains(label)
+                            && !model.Running.Contains(label)
+                            && model.ReminderByLabel.GetValueOrDefault(label) == reminderId))
+                        _explored.Add(Explored.FireDroppedBehindRebuiltQueue);
                     break;
                 case Prediction.Duplicate:
                     _explored.Add(Explored.RedeliveredFire);
@@ -436,6 +591,8 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
                         _explored.Add(Explored.RedeliveryAfterRestart);
                     break;
                 case Prediction.Admit:
+                    if (orphanOfReminder)
+                        _explored.Add(Explored.FireAdmittedBesideOrphan);
                     if (earlierPending)
                         _explored.Add(Explored.FireAdmittedWhileEarlierFireRuns);
                     else if (earlierSeen)
@@ -499,30 +656,61 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
             Verify("ToolBoundary", Unit.Value, Observe("Continue", advance.Batch?.Messages ?? []));
         }
 
-        // The daemon restarts. The new flow has no memory. The restart reminder resumes the stored inputs of one
-        // requester, as TryResumeInterruptedInput does. Stored inputs of several requesters do not resume (a
-        // separate change), so the scenario skips that restart and keeps the old flow.
+        // The daemon restarts. The new flow has no memory. A restart reminder resumes the stored inputs when they all
+        // share one authority, as TryResumeInterruptedInput does. Otherwise nothing resumes them (decision 6), and
+        // they stay pending in the journal with no queue and no turn.
         private void Restart()
         {
-            var model = (FireAdmissionModelState)_profile.SingleState();
-            if (model.Pending.Select(label => model.RequesterByLabel[label]).Distinct().Count() > 1)
-                return;
-
             var pending = _state.PendingInputs.ToArray();
             _flow = new SessionInputFlow();
-            if (pending.Length > 0)
+            var contexts = pending
+                .Select(input =>
+                {
+                    Assert.True(
+                        TurnContext.TryFromRecord(input.TurnContext, out var context, out var reason) && context is not null,
+                        reason);
+                    return context!;
+                })
+                .ToArray();
+            if (contexts.Length > 0 && contexts.Skip(1).All(contexts[0].HasSameAuthority))
             {
                 _explored.Add(Explored.RestartResumedInputs);
-                Assert.True(
-                    TurnContext.TryFromRecord(pending[0].TurnContext, out var context, out var reason) && context is not null,
-                    reason);
-                _flow.ActivateRecoveredInput(null, context, null);
+                _flow.ActivateRecoveredInput(null, contexts[0], null);
                 _flow.ResumePendingInputs(pending);
             }
 
-            _turnOpen = pending.Length > 0;
+            _turnOpen = _flow.SelectedInputs.Ids.Count > 0;
             Verify("Restart", Unit.Value, new RestartObservation(
                 _flow.SelectedInputs.Ids.Select(id => _labelById[id]).ToArray()));
+        }
+
+        // The daemon crashes. No restart reminder exists, and the new flow has no memory.
+        private void Crash()
+        {
+            _flow = new SessionInputFlow();
+            _turnOpen = false;
+            Verify("Crash", Unit.Value, new RestartObservation(
+                _flow.SelectedInputs.Ids.Select(id => _labelById[id]).ToArray()));
+        }
+
+        // A tool call waits on an approval when the daemon stops. The parked batch closed the inputs of its own turn,
+        // and recovery rebuilds every other stored input into the queue (RestoreWaitingInputs).
+        private void RestartInApproval()
+        {
+            _state = _state.CloseInputs(_flow.SelectedInputs.Ids);
+            _flow = new SessionInputFlow();
+            _flow.RestoreWaitingInputs(_state.PendingInputs.ToArray(), SessionId);
+            _turnOpen = false;
+            _approval = true;
+            Verify("RestartInApproval", Unit.Value, new RebuildObservation(
+                _state.PendingInputs.Select(input => _labelById[input.InputId]).ToArray()));
+        }
+
+        // The approval closes, and the session starts the turn for the waiting inputs.
+        private void AnswerApproval()
+        {
+            _approval = false;
+            Advance("AnswerApproval", _flow.AdvanceAfterTurn(restartDrainRequested: false));
         }
 
         private AdvanceObservation Observe(string action, IReadOnlyList<SendUserMessage> batch)

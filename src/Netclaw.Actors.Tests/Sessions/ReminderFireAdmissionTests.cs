@@ -47,6 +47,16 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
         RanAfterAnApproval
     }
 
+    // Each way leaves an earlier fire pending in the journal while nothing in the session will ever run it.
+    public enum HowOrphaned
+    {
+        CrashWhileFireWaits,
+        CrashWhileFireRuns,
+        GracefulRestartWithTwoRequesters,
+        RestartReminderExpired,
+        RestartMessageFoundAnotherTurnRunning
+    }
+
     [Theory]
     [InlineData(WaitsBehind.RunningTurn)]
     [InlineData(WaitsBehind.OpenApproval)]
@@ -216,6 +226,9 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
     public async Task A_redelivered_fire_leaves_an_interrupted_tool_batch_alone()
     {
         // Arrange: the fire starts a turn. The daemon stops while its tool call runs. The tool call stays open in history.
+        // The spec sends no join before the redelivery. A join runs the recovery abandonment after it replies, and that
+        // write races the baseline read below. It also closes the open batch before the fire arrives. The redelivered
+        // fire must wake the stopped session by itself, so the batch is still open when the fire reaches the session.
         var sessionId = new SessionId("test-channel/redelivery-after-interrupted-batch");
         var fire = Key(Build, FirstFireMs);
         ToolExecutor.BlockNextSuccessfulExecution("shell_execute");
@@ -230,10 +243,10 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
             TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await StopSessionAsync(sessionId);
         ToolExecutor.FailBlockedExecution();
-        await JoinNewSubscriberAsync(sessionId);
         var abandonedBefore = await AbandonedBatchCountAsync(sessionId);
+        Assert.Equal(0, abandonedBefore);
 
-        // Act: the recovered session receives the same fire again.
+        // Act: the stopped session receives the same fire again. The session wakes with the tool call still open.
         await SendFireAsync(sessionId, fire);
 
         // Assert: the session drops the copy with no side effect. It writes no closing result for the open call.
@@ -275,6 +288,38 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
             cancellationToken: TestContext.Current.CancellationToken);
     }
 
+    [Theory]
+    [InlineData(HowOrphaned.CrashWhileFireWaits)]
+    [InlineData(HowOrphaned.CrashWhileFireRuns)]
+    [InlineData(HowOrphaned.GracefulRestartWithTwoRequesters)]
+    [InlineData(HowOrphaned.RestartReminderExpired)]
+    [InlineData(HowOrphaned.RestartMessageFoundAnotherTurnRunning)]
+    public async Task A_fire_is_admitted_when_an_earlier_fire_is_pending_and_nothing_will_run_it(HowOrphaned how)
+    {
+        // Arrange: the 10:00 fire stays pending in the journal. No restart message and no queue will ever run it.
+        // The session did not "wait" for that fire, so it must not block the reminder.
+        var sessionId = new SessionId($"test-channel/orphan-fire-{how}");
+        var first = Key(Build, FirstFireMs);
+        var release = await OrphanFireAsync(sessionId, first, how);
+        Assert.NotEmpty(PendingInputIds(await ReadJournalAsync(sessionId)));
+
+        // Act: the 10:12 fire and the 10:24 fire arrive.
+        var second = Key(Build, FirstFireMs + TwelveMinutesMs);
+        await SendFireAsync(sessionId, second);
+
+        // Assert: the session stored the 10:12 fire and ran it. The same holds for the 10:24 fire.
+        var admitted = await AdmittedSourceKeysAsync(sessionId);
+        Assert.True(
+            admitted.Contains(second),
+            $"The session dropped the fire {second} for a pending fire that nothing will run ({how}). "
+            + $"It stored [{string.Join(", ", admitted)}].");
+        release();
+        await AwaitModelSawAsync(second);
+        var third = Key(Build, FirstFireMs + 2 * TwelveMinutesMs);
+        await SendFireAsync(sessionId, third);
+        await AwaitModelSawAsync(third);
+    }
+
     [Fact]
     public async Task A_restart_resume_message_never_becomes_an_input()
     {
@@ -307,6 +352,61 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
             request => UserTexts(request).Contains(reminder.Instructions));
     }
 
+    [Fact]
+    public async Task A_restart_resume_message_is_acknowledged_while_the_session_compacts()
+    {
+        // Arrange: the resumed turn ends and reports a full context window, so the session compacts. The summary call
+        // is held, so the session stays in compaction.
+        var sessionId = new SessionId("test-channel/restart-resume-during-compaction");
+        var (reminder, resumeGate) = await RestartAndResumeAsync(sessionId);
+        var watcher = CreateTestProbe("compaction-watcher");
+        await JoinAsync(watcher, sessionId, OutputFilter.Full);
+        var compactionGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        FakeChat.ObservationResponseGate = compactionGate;
+        FakeChat.PlannedUsageOverrides.Enqueue(new Microsoft.Extensions.AI.UsageDetails
+        {
+            InputTokenCount = 120_000,
+            OutputTokenCount = 50,
+            TotalTokenCount = 120_050
+        });
+        resumeGate.TrySetResult();
+        await AwaitAssertAsync(
+            () =>
+            {
+                Assert.Contains(
+                    FakeChat.ReceivedMessages,
+                    request => SystemText(request).Contains("You are a session summarizer", StringComparison.Ordinal));
+                return Task.CompletedTask;
+            },
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var admittedBefore = await AdmittedCountAsync(sessionId);
+        var callsBefore = FakeChat.CallCount;
+
+        // Act: Akka.Reminders delivers the restart message again while the session compacts.
+        var duringCompaction = await SendRestartMessageAsync(sessionId, reminder);
+
+        // Assert: the session acknowledges the message and stores nothing. The compaction ends, and the model never sees the text.
+        Assert.IsType<CommandAck>(duringCompaction);
+        var admittedDuring = await AdmittedCountAsync(sessionId);
+        Assert.True(
+            admittedDuring == admittedBefore,
+            $"A restart-resume message that arrives during compaction must not become an input. Stored inputs: {admittedBefore} before, {admittedDuring} after.");
+        compactionGate.TrySetResult();
+        await watcher.FishForMessageAsync(
+            message => message is CompactionOutput,
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await AwaitAssertAsync(
+            async () => Assert.Empty(PendingInputIds(await ReadJournalAsync(sessionId))),
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(admittedBefore, await AdmittedCountAsync(sessionId));
+        Assert.DoesNotContain(
+            FakeChat.ReceivedMessages.Skip(callsBefore),
+            request => UserTexts(request).Contains(reminder.Instructions));
+    }
+
     // Interrupts a turn with a daemon restart and resumes it with the restart reminder.
     // Returns the reminder and the gate that holds the resumed model call.
     private async Task<(ReminderDefinition Reminder, TaskCompletionSource ResumeGate)> RestartAndResumeAsync(
@@ -330,6 +430,79 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
         Assert.IsType<CommandAck>(first);
         await AwaitModelCallAsync(callsBefore);
         return (reminder, resumeGate);
+    }
+
+    // Leaves the first fire pending in the journal with nothing to run it. Returns the action that opens any gate
+    // the case still holds. The session is up, joined, and ready for the next fire when this method returns.
+    private async Task<Action> OrphanFireAsync(SessionId sessionId, string first, HowOrphaned how)
+    {
+        await JoinNewSubscriberAsync(sessionId);
+        switch (how)
+        {
+            case HowOrphaned.CrashWhileFireWaits:
+            {
+                var gate = await StartHeldTurnAsync(sessionId, "Run the build", RequesterSource(Requester));
+                await SendFireAsync(sessionId, first);
+                await StopSessionAsync(sessionId);
+                gate.TrySetResult();
+                await JoinNewSubscriberAsync(sessionId);
+                return () => { };
+            }
+            case HowOrphaned.CrashWhileFireRuns:
+            {
+                var gate = await StartHeldTurnAsync(sessionId, FireText(first), ReminderSource(first));
+                await StopSessionAsync(sessionId);
+                gate.TrySetResult();
+                await JoinNewSubscriberAsync(sessionId);
+                return () => { };
+            }
+            case HowOrphaned.GracefulRestartWithTwoRequesters:
+                // An operator turn runs and a fire waits behind it. The two inputs have different authority, so the
+                // restart makes no restart reminder (D2 decision 6). The spec does not assert that, because a later
+                // change can resume them. It asserts only that the journal still holds the pending fire.
+                await StartHeldTurnAsync(sessionId, "Run the build", RequesterSource(Requester));
+                await SendFireAsync(sessionId, first);
+                await RestartGracefullyAsync(sessionId);
+                await JoinNewSubscriberAsync(sessionId);
+                return () => { };
+            case HowOrphaned.RestartReminderExpired:
+            {
+                // The fire runs alone, so the restart makes a restart reminder. The daemon stays down longer than the
+                // reminder lives, so the reminder system never sends it.
+                await StartHeldTurnAsync(sessionId, FireText(first), ReminderSource(first));
+                var prepared = await RestartGracefullyAsync(sessionId);
+                Assert.NotNull(prepared.RestartReminder?.ExpiresAt);
+                await JoinNewSubscriberAsync(sessionId);
+                return () => { };
+            }
+            case HowOrphaned.RestartMessageFoundAnotherTurnRunning:
+            {
+                // The restart message arrives after an operator turn started. The message is a no-op then
+                // (D2 decision 5), so the interrupted fire stays pending. A_restart_resume_message_never_becomes_an_input
+                // proves that no-op, so this spec does not repeat it.
+                await StartHeldTurnAsync(sessionId, FireText(first), ReminderSource(first));
+                var prepared = await RestartGracefullyAsync(sessionId);
+                var reminder = Assert.IsType<ReminderDefinition>(prepared.RestartReminder);
+                await JoinNewSubscriberAsync(sessionId);
+                var held = await StartHeldTurnAsync(sessionId, "Run the build", RequesterSource(Requester));
+                Assert.IsType<CommandAck>(await SendRestartMessageAsync(sessionId, reminder));
+                return () => held.TrySetResult();
+            }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(how), how, null);
+        }
+    }
+
+    // Asks the session to drain for a daemon restart and waits until the session actor stops.
+    private async Task<DaemonRestartPrepared> RestartGracefullyAsync(SessionId sessionId)
+    {
+        var session = await ResolveSessionAsync(sessionId);
+        Watch(session);
+        var prepared = await SessionManager.Ask<DaemonRestartPrepared>(
+            new PrepareForDaemonRestart(sessionId, "daemon-stop"),
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        await ExpectTerminatedAsync(session, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        return prepared;
     }
 
     private async Task<ISessionResponse> SendRestartMessageAsync(SessionId sessionId, ReminderDefinition reminder)
