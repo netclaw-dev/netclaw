@@ -158,6 +158,67 @@ public sealed class ApprovalSecondAnswerTests : LlmSessionTestBase
         }
     }
 
+    // The stale answer targets a prompt from an earlier turn. A later turn is live and holds its own open
+    // prompt. The live route has no table entry for the old call, so only the history can say that the call
+    // has an answer. The later turn must not change: its tool waits for its own answer and then runs once.
+    [Fact]
+    public async Task Second_answer_for_an_earlier_turn_while_a_later_turn_is_live_changes_nothing()
+    {
+        var session = await StartGatedTurnAsync("call-earlier-turn");
+        var earlierCallId = session.Prompt.CallId;
+        Assert.IsType<CommandAck>(await session.AnswerAsync(earlierCallId, ApprovalOptionKeys.Deny));
+        await session.AwaitTurnCompletedAsync();
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+
+        // Turn two uses a new call ID and stays open on its own prompt.
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-later-turn", "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git log" })
+        ];
+        _fakeChatClient.PlannedToolCallDecisions.Enqueue(true);
+        await session.SendRequestAsync("Run git log");
+        await session.CollectPromptsAsync(2);
+        var laterCallId = session.Prompts["call-later-turn"].CallId;
+
+        var staleReply = await session.AnswerAsync(earlierCallId, ApprovalOptionKeys.ApproveOnce);
+        var notices = await session.DrainTextAsync();
+
+        var nack = Assert.IsType<CommandNack>(staleReply);
+        Assert.Equal(ApprovalNackReasons.AlreadyAnswered, nack.Reason);
+        Assert.Contains(notices, text => text.Contains(AlreadyAnsweredText, StringComparison.Ordinal));
+        Assert.DoesNotContain(notices, text => text.Contains("expired", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+
+        Assert.IsType<CommandAck>(await session.AnswerAsync(laterCallId, ApprovalOptionKeys.ApproveOnce));
+        await session.AwaitTurnCompletedAsync();
+        Assert.Equal(1, _toolExecutor.SuccessfulExecutions);
+    }
+
+    // A new user message replaces an open prompt. Abandonment closes the call with a synthetic result. That
+    // result is not an answer. A late first answer must get the expired reason and notice, and nothing runs.
+    // A new message can replace a parked prompt only after the session restarted.
+    [Fact]
+    public async Task Late_first_answer_to_a_prompt_that_a_new_message_replaced_gets_the_expired_reason_and_notice()
+    {
+        var session = await StartGatedTurnAsync("call-replaced");
+        var replacedCallId = session.Prompt.CallId;
+        await session.RestartAsync();
+
+        await session.SendRequestAsync("Never mind, say hello");
+        await session.AwaitTurnCompletedAsync();
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+
+        var lateReply = await session.AnswerAsync(replacedCallId, ApprovalOptionKeys.ApproveOnce);
+        var notices = await session.DrainTextAsync();
+
+        var nack = Assert.IsType<CommandNack>(lateReply);
+        Assert.Equal(ApprovalNackReasons.PromptExpired, nack.Reason);
+        Assert.Contains(notices, text => text.Contains(ExpiredText, StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(notices, text => text.Contains(AlreadyAnsweredText, StringComparison.Ordinal));
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+    }
+
     public enum AnswerPhase
     {
         LiveWait,
@@ -216,11 +277,11 @@ public sealed class ApprovalSecondAnswerTests : LlmSessionTestBase
             await _subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
         }
 
-        public async Task SendRequestAsync()
+        public async Task SendRequestAsync(string content = "Run git status")
             => await _sessionManager.Ask<CommandAck>(new SendUserMessage
             {
                 SessionId = _sessionId,
-                Content = "Run git status",
+                Content = content,
                 Source = _owner.RequesterSource("U-requester")
             }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
