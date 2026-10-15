@@ -8,7 +8,7 @@ Wait+Screen@30s /PROVIDER_42/
 Type "netclaw model set main smoke-llm __SMOKE_LLM_MODEL__ && echo MODEL_$((6*7))"
 Enter
 Wait+Screen@30s /MODEL_42/
-Type "netclaw daemon start && curl -fsS --retry 30 --retry-all-errors --retry-delay 1 --max-time 2 $NETCLAW_DAEMON_ENDPOINT/api/health/ready && echo DAEMON_$((6*7))"
+Type "mkdir -p __NETCLAW_HOME__/logs && netclaw daemon start >__NETCLAW_HOME__/logs/daemon-stdio.log 2>&1 && curl -fsS --retry 30 --retry-all-errors --retry-delay 1 --max-time 2 $NETCLAW_DAEMON_ENDPOINT/api/health/ready && echo DAEMON_$((6*7))"
 Enter
 Wait+Screen@60s /DAEMON_42/
 Show
