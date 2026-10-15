@@ -147,7 +147,7 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
             ApprovalOptionKeys.ApproveOnceKey,
             requireOfferedOption: false);
         var nack = Assert.IsType<CommandNack>(staleReply);
-        Assert.Equal(ApprovalNackReasons.PromptExpired, nack.Reason);
+        Assert.Equal(ApprovalNackReasons.AlreadyAnswered, nack.Reason);
         Assert.Equal("x", ReadMarker(project));
     }
 
