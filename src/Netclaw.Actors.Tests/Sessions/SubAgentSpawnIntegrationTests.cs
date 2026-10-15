@@ -776,30 +776,25 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     public async Task Loaded_child_tool_does_not_transfer_to_the_next_child()
     {
         RegisterSyntheticMcpCatalog();
-        _clientProvider.Main.PlannedResponses.Enqueue(
+        (string Prompt, FunctionCallContent Spawn)[] parentSpawns =
         [
-            CreateToolCall(
+            ("Run the first child.", CreateToolCall(
                 "call-isolation-spawn-1",
                 "spawn_agent",
                 new Dictionary<string, object?>
                 {
                     ["agent"] = "summarizer",
                     ["task"] = "Use one synthetic tool."
-                })
-        ]);
-        _clientProvider.Main.PlannedResponses.Enqueue([new TextContent("First child completed.")]);
-        _clientProvider.Main.PlannedResponses.Enqueue(
-        [
-            CreateToolCall(
+                })),
+            ("Run the second child.", CreateToolCall(
                 "call-isolation-spawn-2",
                 "spawn_agent",
                 new Dictionary<string, object?>
                 {
                     ["agent"] = "summarizer",
                     ["task"] = "Start without inherited tools."
-                })
-        ]);
-        _clientProvider.Main.PlannedResponses.Enqueue([new TextContent("Second child completed.")]);
+                }))
+        ];
         _clientProvider.Compaction.PlannedResponses.Enqueue(
         [
             CreateToolCall(
@@ -826,10 +821,10 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             cancellationToken: TestContext.Current.CancellationToken);
 
         var completedChildren = 0;
-        foreach (var content in new[] { "Run the first child.", "Run the second child." })
+        foreach (var (content, _) in parentSpawns)
         {
             var parentCallCountBeforeSend = _clientProvider.Main.CallCount;
-            var parentResumeMarker = PrepareParentResumeMarker();
+            var parentResumeMarker = PrepareParentSpawnReplies(parentSpawns);
             await sessionManager.Ask<CommandAck>(new SendUserMessage
             {
                 SessionId = sessionId,
@@ -867,30 +862,25 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var shellProbe = new RecordingContextTool("shell_execute", "shell must not run", "shell");
         _toolRegistry.Register(shellProbe);
 
-        _clientProvider.Main.PlannedResponses.Enqueue(
+        (string Prompt, FunctionCallContent Spawn)[] parentSpawns =
         [
-            CreateToolCall(
+            ("Run the correcting child.", CreateToolCall(
                 "call-native-child-spawn-1",
                 "spawn_agent",
                 new Dictionary<string, object?>
                 {
                     ["agent"] = "summarizer",
                     ["task"] = "Inspect with the native probe."
-                })
-        ]);
-        _clientProvider.Main.PlannedResponses.Enqueue([new TextContent("First child returned.")]);
-        _clientProvider.Main.PlannedResponses.Enqueue(
-        [
-            CreateToolCall(
+                })),
+            ("Run a fresh child.", CreateToolCall(
                 "call-native-child-spawn-2",
                 "spawn_agent",
                 new Dictionary<string, object?>
                 {
                     ["agent"] = "summarizer",
                     ["task"] = "Start without inherited tools."
-                })
-        ]);
-        _clientProvider.Main.PlannedResponses.Enqueue([new TextContent("Second child returned.")]);
+                }))
+        ];
         _clientProvider.Compaction.PlannedResponses.Enqueue(
         [
             CreateToolCall(
@@ -924,11 +914,11 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 
         var source = BuildPersonalSource();
         var parentCallCountBeforeSend = _clientProvider.Main.CallCount;
-        var parentResumeMarker = PrepareParentResumeMarker();
+        var parentResumeMarker = PrepareParentSpawnReplies(parentSpawns);
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run the correcting child.",
+            Content = parentSpawns[0].Prompt,
             Source = source
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -959,11 +949,11 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             1);
 
         parentCallCountBeforeSend = _clientProvider.Main.CallCount;
-        parentResumeMarker = PrepareParentResumeMarker();
+        parentResumeMarker = PrepareParentSpawnReplies(parentSpawns);
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run a fresh child.",
+            Content = parentSpawns[1].Prompt,
             Source = source
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         await ExpectChildTerminalAndParentResumeAsync(
@@ -1002,30 +992,25 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 new InvalidOperationException("synthetic child model failure")));
         _toolRegistry.Register(failureProbe);
 
-        _clientProvider.Main.PlannedResponses.Enqueue(
+        (string Prompt, FunctionCallContent Spawn)[] parentSpawns =
         [
-            CreateToolCall(
+            ("Run the failing child.", CreateToolCall(
                 "call-failure-spawn-1",
                 "spawn_agent",
                 new Dictionary<string, object?>
                 {
                     ["agent"] = "summarizer",
                     ["task"] = "Load the failure probe."
-                })
-        ]);
-        _clientProvider.Main.PlannedResponses.Enqueue([new TextContent("Failure was recorded.")]);
-        _clientProvider.Main.PlannedResponses.Enqueue(
-        [
-            CreateToolCall(
+                })),
+            ("Run the fresh child.", CreateToolCall(
                 "call-failure-spawn-2",
                 "spawn_agent",
                 new Dictionary<string, object?>
                 {
                     ["agent"] = "summarizer",
                     ["task"] = "Start with a clean tool set."
-                })
-        ]);
-        _clientProvider.Main.PlannedResponses.Enqueue([new TextContent("Fresh child completed.")]);
+                }))
+        ];
         _clientProvider.Compaction.PlannedResponses.Enqueue(
         [
             CreateToolCall(
@@ -1041,9 +1026,6 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 new Dictionary<string, object?>())
         ]);
         _clientProvider.Compaction.PlannedResponses.Enqueue([new TextContent("Fresh child completed.")]);
-        // The first parent turn must consume its reply before the child result selector can run.
-        var childModelGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _clientProvider.Compaction.NextResponseGate = childModelGate;
 
         var sessionId = new SessionId("console/subagent-failure-isolation");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -1058,25 +1040,16 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             cancellationToken: TestContext.Current.CancellationToken);
 
         var completedChildren = 0;
-        foreach (var content in new[] { "Run the failing child.", "Run the fresh child." })
+        foreach (var (content, _) in parentSpawns)
         {
             var parentCallCountBeforeSend = _clientProvider.Main.CallCount;
-            var parentResumeMarker = PrepareParentResumeMarker();
+            var parentResumeMarker = PrepareParentSpawnReplies(parentSpawns);
             await sessionManager.Ask<CommandAck>(new SendUserMessage
             {
                 SessionId = sessionId,
                 Content = content,
                 Source = BuildPersonalSource()
             }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-
-            if (completedChildren == 0)
-            {
-                await ExpectTurnCompletedAsync(
-                    subscriber,
-                    TimeSpan.FromSeconds(10),
-                    TestContext.Current.CancellationToken);
-                childModelGate.TrySetResult();
-            }
 
             var (terminal, _) = await ExpectChildTerminalAndParentResumeWithOutputsAsync(
                 subscriber,
@@ -1933,6 +1906,38 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             return newRunIds.Count == 1 && newRunIds.IsSubsetOf(deliveredRunIds)
                 ? [new TextContent(marker)]
                 : null;
+        };
+        return marker;
+    }
+
+    // A multi-turn spawn test must pick each parent reply from the request, not from
+    // its position. The child result can reach the parent before or after the
+    // post-spawn model call, and the session accepts both orders. If the result
+    // arrives first, it folds into the post-spawn call and that call returns the
+    // marker. A positional reply queue then shifts by one, and the next turn gets a
+    // stale text reply in place of its spawn_agent call.
+    private string PrepareParentSpawnReplies(IReadOnlyList<(string Prompt, FunctionCallContent Spawn)> spawns)
+    {
+        var marker = PrepareParentResumeMarker();
+        var resumeSelector = _clientProvider.Main.ResponseContentsSelector!;
+        _clientProvider.Main.ResponseContentsSelector = request =>
+        {
+            var issuedCallIds = request
+                .SelectMany(static message => message.Contents.OfType<FunctionCallContent>())
+                .Select(static call => call.CallId)
+                .ToHashSet(StringComparer.Ordinal);
+            var userTexts = request
+                .Where(static message => message.Role == Microsoft.Extensions.AI.ChatRole.User)
+                .Select(static message => message.Text)
+                .ToArray();
+            foreach (var (prompt, spawn) in spawns)
+            {
+                if (!issuedCallIds.Contains(spawn.CallId)
+                    && userTexts.Any(text => text.Contains(prompt, StringComparison.Ordinal)))
+                    return [spawn];
+            }
+
+            return resumeSelector(request) ?? [new TextContent("Child run accepted.")];
         };
         return marker;
     }
