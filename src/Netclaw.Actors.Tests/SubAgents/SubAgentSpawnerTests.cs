@@ -673,6 +673,66 @@ public sealed class SubAgentSpawnerTests : TestKit, IAsyncDisposable
         Assert.Contains("child-artifact", resultText);
     }
 
+    [Fact]
+    public async Task Spawn_async_gives_child_the_session_wide_no_progress_and_prefill_budgets()
+    {
+        var run = await SpawnAndCaptureRunAsync(CreateProfile(), "session-budgets-child");
+
+        Assert.Equal(new SessionConfig().NoProgressTimeout, run.NoProgressTimeout);
+        Assert.Equal(new SessionConfig().PrefillTimeout, run.PrefillTimeout);
+    }
+
+    [Fact]
+    public async Task Spawn_async_gives_child_the_session_wide_inter_delta_budget_without_timeoutSeconds()
+    {
+        var run = await SpawnAndCaptureRunAsync(CreateProfile(), "session-inter-delta-child");
+
+        Assert.Equal(new SessionConfig().FirstTokenTimeout, run.Timeout);
+    }
+
+    [Fact]
+    public async Task Spawn_async_ignores_obsolete_timeoutSeconds_for_child_inter_delta_budget()
+    {
+        var profile = FileSubAgentDefinitionLoader.TryParseDefinition("agents/obsolete-timeout.md", """
+            ---
+            name: inspector
+            description: Inspect the system
+            tools: [inspect_context]
+            timeoutSeconds: 900
+            ---
+
+            You are an inspector.
+            """, NullLogger<FileSubAgentDefinitionLoader>.Instance);
+        Assert.NotNull(profile);
+
+        var run = await SpawnAndCaptureRunAsync(profile, "obsolete-timeout-child");
+
+        Assert.Equal(new SessionConfig().FirstTokenTimeout, run.Timeout);
+    }
+
+    private async Task<RunSubAgent> SpawnAndCaptureRunAsync(SubAgentProfile profile, string childName)
+    {
+        var childProbe = CreateTestProbe(childName);
+        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", _parentSessionDir.Path, new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal,
+            ProjectDirectory = _testProjectDir.Path,
+            SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref),
+        });
+
+        var spawnTask = CreateSpawner().SpawnAsync(
+            profile,
+            "Inspect the system.",
+            runtimeContext: null,
+            context.Invocation,
+            TestContext.Current.CancellationToken);
+
+        var run = await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
+        childProbe.Reply(SuccessfulResult());
+        Assert.True((await spawnTask).Success);
+        return run;
+    }
+
     private static SubAgentSpawner CreateSpawner()
         => CreateSpawner(new WorkingContextSnapshotProvider(
             new GitWorkingContextInspector(TimeProvider.System),
