@@ -8,6 +8,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -421,7 +422,7 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
 
     public bool AcceptModelProgress(
         long callId,
-        bool substantive,
+        StreamActivity activity,
         TimeSpan prefillTimeout,
         TimeSpan interDeltaTimeout)
     {
@@ -429,7 +430,7 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
             return false;
 
         _anyContentStreamed = _watchdog.OnStreamProgress(
-            substantive, _anyContentStreamed, prefillTimeout, interDeltaTimeout, timers);
+            activity, _anyContentStreamed, prefillTimeout, interDeltaTimeout, timers);
         return true;
     }
 

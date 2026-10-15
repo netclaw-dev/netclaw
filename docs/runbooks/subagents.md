@@ -112,7 +112,7 @@ set them:
 |-------|---------|---------|---------|
 | Prefill | `SubAgents.PrefillTimeoutSeconds` | `1800` | Max wait for the first streamed delta. Keepalives refresh it. A file may set `prefillTimeoutSeconds` to override it. |
 | Inter-delta | `Session.FirstTokenTimeoutSeconds` | `600` | Max gap between streamed deltas after the first one. |
-| No progress | `SubAgents.NoProgressTimeoutSeconds` | `1200` | Hard ceiling on time without real output. Keepalives never refresh it. |
+| No progress | `SubAgents.NoProgressTimeoutSeconds` | `1200` | Hard ceiling on time without real output. Text, tool calls, and thinking refresh it. Keepalives never refresh it. One model call that streams only thinking stops at three times this value (`thinking_only_timeout`). |
 
 Agent files no longer set a per-agent timeout. A file that still contains
 `timeoutSeconds` loads, and the loader logs one warning that names the file and
@@ -120,6 +120,18 @@ says the key is obsolete and ignored. Remove the key from the file.
 
 Profiles that used the old `timeoutSeconds` default of `60` now use the
 inter-delta budget of `600` seconds. The no-progress timer still bounds the run.
+
+Two more rules end a run with outcome `failed`:
+
+- `output_truncated`: a model reply ended on the output limit
+  (`finishReason=length`) and made no tool call. The text is cut off, so it is
+  never a result. The run does not retry. The `Error:` section holds a preview
+  of the cut-off text. A reply that has a tool call still runs its tools.
+- `thinking_only_timeout`: one model call streamed only thinking, with no text
+  and no tool call, for longer than three times `SubAgents.NoProgressTimeoutSeconds`
+  (default `1200`, so 60 minutes). Thinking counts as progress for the
+  `no_substantive_output_timeout` deadline, so only this cap stops a model that
+  thinks without end. A text delta or a tool-call delta restarts the cap.
 
 ### Observability
 

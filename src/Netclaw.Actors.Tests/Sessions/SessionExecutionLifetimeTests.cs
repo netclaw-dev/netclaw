@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -36,7 +37,7 @@ public sealed class SessionExecutionLifetimeTests(ITestOutputHelper output) : Te
         var wrongStop = owner.AcceptModelStop(new ModelStoppedForRestart(call.CallId - 1, null));
         var resultDuringStop = owner.AcceptModelResult(call.CallId);
         var progressDuringStop = owner.AcceptModelProgress(
-            call.CallId, true, TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(5));
+            call.CallId, StreamActivity.Answer, TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(5));
         TestActor.Tell("stop-request-returned");
 
         // Assert: The mailbox fence detects a synchronous premature acknowledgement.
@@ -135,7 +136,7 @@ public sealed class SessionExecutionLifetimeTests(ITestOutputHelper output) : Te
         var next = owner.BeginModel();
         var staleResult = owner.AcceptModelResult(prepared.CallId);
         var staleProgress = owner.AcceptModelProgress(
-            prepared.CallId, true, TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(5));
+            prepared.CallId, StreamActivity.Answer, TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(5));
 
         // Assert
         Assert.True(accepted);

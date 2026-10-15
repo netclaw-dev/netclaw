@@ -597,6 +597,21 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 return;
 
             TimeoutException timeoutCause;
+            if (msg.ThinkingCap)
+            {
+                // One model call streamed only thinking for the whole cap. Thinking
+                // resets the no-progress deadline, so only this cap ends the call.
+                var cap = _config.NoProgressTimeout * ProcessingWatchdog.ThinkingCapMultiplier;
+                _execution.StopModelForTimeout();
+                _log.Error("Processing watchdog expired for operation {OperationName} (opId={OperationId}, thinkingCap={Cap}s)",
+                    msg.OperationName, msg.OperationId, cap.TotalSeconds);
+                FailCurrentTurn(
+                    $"The model streamed only thinking for {cap.TotalSeconds:F0} seconds. It produced no answer and no tool call. Netclaw stopped the call.",
+                    new TimeoutException($"Session LLM call streamed only thinking for {cap.TotalSeconds:F0}s without text or a tool call"),
+                    ErrorCategory.Timeout);
+                return;
+            }
+
             if (msg.NoProgress)
             {
                 // Keepalive-immune deadline: the stream produced no substantive
@@ -672,6 +687,22 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             }
         }
 
+        // A reply that ended on the output limit is cut off. Its text is a stub, not
+        // an answer, so the turn fails instead of posting the stub. A tool call is
+        // handled above. A thinking-only or empty reply takes the retry path above.
+        if (response.FinishReason == ChatFinishReason.Length)
+        {
+            TurnLog().Warning(
+                "turn_reply_truncated textChars={TextChars} thinkingChars={ThinkingChars}",
+                analysis.TextChars,
+                analysis.ThinkingChars);
+            FailCurrentTurn(
+                "The model reply was truncated: the model reached its output limit before it finished. The cut-off text was not posted. Try again with a smaller request.",
+                new InvalidOperationException("The LLM reply ended with finishReason=length and no tool call."),
+                ErrorCategory.ProviderFailure);
+            return;
+        }
+
         HandleTextResponse(lastMessage, response.Usage, msg.StreamedText, msg.StreamedThinking);
     }
 
@@ -694,7 +725,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void HandleLlmResponseDeltaReceived(LlmResponseDeltaReceived msg)
     {
         if (!_execution.AcceptModelProgress(
-                msg.CallId, msg.Substantive, _config.PrefillTimeout, _config.FirstTokenTimeout))
+                msg.CallId, msg.Activity, _config.PrefillTimeout, _config.FirstTokenTimeout))
             return;
 
         switch (msg.Content)

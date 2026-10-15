@@ -77,6 +77,8 @@ already owns:
 - wait-for-first-delta prefill budget
 - inter-delta liveness budget after model output starts
 - keepalive-immune no-progress budget
+- thinking-only cap: three times the no-progress budget for one model call that
+  streams only thinking (reason `thinking_only_timeout`)
 - approval-wait suspension and external cancellation
 - tool-iteration cap
 
@@ -187,6 +189,11 @@ without the parent killing it, while opaque tools remain bounded.
   not the parent generic `produced no activity` timeout.
 - A keepalive-only child stream SHALL be terminated by the child no-progress
   watchdog.
+- A child model call that streams only thinking for longer than three times the
+  no-progress budget SHALL be terminated with reason `thinking_only_timeout`. A
+  text delta or a tool-call delta SHALL restart that cap.
+- A child model reply that ends with `finishReason=length` and has no tool call
+  SHALL fail with reason `output_truncated` and SHALL NOT retry.
 - A sub-agent approval wait longer than the parent tool timeout SHALL remain
   pending until approval, denial, approval timeout, or parent cancellation.
 - Three parallel `spawn_agent` calls SHALL produce one terminal tool result per

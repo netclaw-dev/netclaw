@@ -81,7 +81,7 @@ internal static class SessionLlmInvoker
                 // All deltas emitted for this update share its substantive-ness, so the
                 // watchdog promotes off the prefill budget only on real output, not on a
                 // content-free keepalive.
-                var substantive = cls.HasSubstantiveContent;
+                var activity = cls.Activity;
                 var dispatched = false;
                 foreach (var content in update.Contents)
                 {
@@ -92,7 +92,7 @@ internal static class SessionLlmInvoker
                             if (textDeltaCount == 1)
                             {
                                 pendingTextDelta = text.Text;
-                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Substantive = substantive });
+                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Activity = activity });
                             }
                             else
                             {
@@ -101,11 +101,11 @@ internal static class SessionLlmInvoker
                                     self.Tell(new LlmResponseDeltaReceived(new TextContent(pendingTextDelta))
                                     {
                                         CallId = callId,
-                                        Substantive = substantive
+                                        Activity = activity
                                     });
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId, Substantive = substantive });
+                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId, Activity = activity });
                                 dispatched = true;
                             }
                             break;
@@ -115,7 +115,7 @@ internal static class SessionLlmInvoker
                             if (thinkingDeltaCount == 1)
                             {
                                 pendingThinkingDelta = thinking.Text;
-                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Substantive = substantive });
+                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Activity = activity });
                             }
                             else
                             {
@@ -124,11 +124,11 @@ internal static class SessionLlmInvoker
                                     self.Tell(new LlmResponseDeltaReceived(new TextReasoningContent(pendingThinkingDelta))
                                     {
                                         CallId = callId,
-                                        Substantive = substantive
+                                        Activity = activity
                                     });
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId, Substantive = substantive });
+                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId, Activity = activity });
                                 dispatched = true;
                             }
                             break;
@@ -140,7 +140,7 @@ internal static class SessionLlmInvoker
                 // even though it streams no UI text; a prompt_progress heartbeat is not).
                 if (!dispatched)
                 {
-                    self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Substantive = substantive });
+                    self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Activity = activity });
                 }
             },
             cancellationToken);
