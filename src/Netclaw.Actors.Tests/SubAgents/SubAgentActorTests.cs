@@ -351,6 +351,112 @@ public class SubAgentActorTests : SubAgentActorTestBase
         Assert.Contains("Response #2", result.Output);
     }
 
+    // Production case (child fea1ce26): the child ended with "Now the scene file." and
+    // 69042 chars of reasoning, no tool call, finishReason=length. The run reported
+    // success=True although the model ran out of output budget before it emitted the
+    // tool call. A reply cut off by length without a tool call is never a completion.
+    private const string TruncatedStub = "Now the scene file.";
+
+    // Wire value of the new outcome reason. Asserted as a string so the test stays
+    // independent of the C# member name.
+    private const string OutputTruncatedReason = "output_truncated";
+
+    [Fact]
+    public async Task Text_reply_cut_off_by_length_fails_with_output_truncated_reason()
+    {
+        var fakeClient = new FakeChatClient
+        {
+            ResponseContentsByCall =
+            [
+                [new TextReasoningContent(new string('t', 20_000)), new TextContent(TruncatedStub)]
+            ],
+            FinishReasonsByCall = [ChatFinishReason.Length]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), fakeClient, PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Write the scene file", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Equal(SubAgentRunOutcome.Failed, result.Outcome);
+        Assert.Equal(OutputTruncatedReason, result.OutcomeReason?.Value);
+        Assert.Contains("truncat", result.Output, StringComparison.OrdinalIgnoreCase);
+
+        // Fail fast: no retry call.
+        Assert.Equal(1, fakeClient.CallCount);
+    }
+
+    [Fact]
+    public async Task Text_reply_that_ends_with_stop_still_completes()
+    {
+        var fakeClient = new FakeChatClient
+        {
+            ResponseContentsByCall =
+            [
+                [new TextReasoningContent("plan the answer"), new TextContent("The scene file is ready.")]
+            ],
+            FinishReasonsByCall = [ChatFinishReason.Stop]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), fakeClient, PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Write the scene file", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal(SubAgentRunOutcome.Completed, result.Outcome);
+        Assert.Null(result.OutcomeReason);
+        Assert.Equal("The scene file is ready.", result.Output);
+    }
+
+    [Fact]
+    public async Task Tool_call_response_that_ends_with_length_still_runs_the_tool()
+    {
+        // Today a tool call wins over the finish reason. Keep it: only a reply with
+        // no tool call is a failure.
+        var fakeTool = new FakeNetclawTool("greet", "Hello from tool!");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                CreateToolCall("call-1", "greet", new Dictionary<string, object?> { ["name"] = "World" })
+            ],
+            FinishReasonsByCall = [ChatFinishReason.Length]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient, PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Greet the user", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(fakeTool.WasCalled);
+        Assert.True(result.Success);
+        Assert.Contains("Response #2", result.Output);
+    }
+
+    [Fact]
+    public async Task Thinking_only_reply_cut_off_by_length_still_retries_and_recovers()
+    {
+        // The existing ThinkingOnly retry path must keep working next to the new
+        // text-reply rule.
+        var fakeClient = new FakeChatClient
+        {
+            ResponseContentsByCall = [[new TextReasoningContent("still thinking")]],
+            FinishReasonsByCall = [ChatFinishReason.Length, ChatFinishReason.Stop],
+            ResponseText = "Recovered answer."
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), fakeClient, PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Answer please", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal("Recovered answer.", result.Output);
+        Assert.Equal(2, fakeClient.CallCount);
+    }
+
     [Fact]
     public async Task Tool_results_attach_two_ordered_media_files_in_one_follow_up_nudge()
     {

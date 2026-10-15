@@ -2884,6 +2884,13 @@ internal sealed class FakeChatClient : IChatClient
     public Queue<UsageDetails?> PlannedUsageOverrides { get; } = new();
 
     /// <summary>
+    /// When populated, finish reasons are dequeued per main-model response and set
+    /// on <see cref="ChatResponse.FinishReason"/>. A null entry leaves it unset.
+    /// Observation compressor and sidecar calls do not consume this queue.
+    /// </summary>
+    public Queue<ChatFinishReason?> PlannedFinishReasons { get; } = new();
+
+    /// <summary>
     /// Holds a compaction observation call until the test releases its response.
     /// </summary>
     public TaskCompletionSource? ObservationResponseGate { get; set; }
@@ -2909,8 +2916,9 @@ internal sealed class FakeChatClient : IChatClient
     public Queue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
 
     /// <summary>
-    /// The finish reason of each planned response. Null models a stream that ended with no finish
-    /// reason. A real provider that completes a reply sends one.
+    /// The finish reason of each planned response when <see cref="PlannedFinishReasons"/> is empty.
+    /// Null models a stream that ended with no finish reason. A real provider that completes a reply
+    /// sends one.
     /// </summary>
     public ChatFinishReason? PlannedFinishReason { get; set; }
 
@@ -3030,6 +3038,7 @@ internal sealed class FakeChatClient : IChatClient
         var usageOverride = PlannedUsageOverrides.Count > 0
             ? PlannedUsageOverrides.Dequeue()
             : UsageOverride;
+        var hasQueuedFinishReason = PlannedFinishReasons.TryDequeue(out var plannedFinishReason);
 
         // Return tool calls if configured
         if (ToolCallsOnFirstCall is not null)
@@ -3047,7 +3056,7 @@ internal sealed class FakeChatClient : IChatClient
                 var toolCallMessage = new ChatMessage(
                     Microsoft.Extensions.AI.ChatRole.Assistant,
                     toolCallContents);
-                var toolResponse = new ChatResponse(toolCallMessage);
+                var toolResponse = new ChatResponse(toolCallMessage) { FinishReason = plannedFinishReason };
                 if (usageOverride is not null)
                     toolResponse.Usage = usageOverride;
                 AfterToolCallResponse?.Invoke(_callCount);
@@ -3072,7 +3081,7 @@ internal sealed class FakeChatClient : IChatClient
                 Microsoft.Extensions.AI.ChatRole.Assistant,
                 new List<AIContent>(plannedContents)))
             {
-                FinishReason = PlannedFinishReason
+                FinishReason = hasQueuedFinishReason ? plannedFinishReason : PlannedFinishReason
             };
             if (usageOverride is not null)
                 plannedResponse.Usage = usageOverride;
@@ -3092,7 +3101,7 @@ internal sealed class FakeChatClient : IChatClient
             Microsoft.Extensions.AI.ChatRole.Assistant,
             contents);
 
-        var response = new ChatResponse(responseMessage);
+        var response = new ChatResponse(responseMessage) { FinishReason = plannedFinishReason };
 
         if (usageOverride is not null)
         {
