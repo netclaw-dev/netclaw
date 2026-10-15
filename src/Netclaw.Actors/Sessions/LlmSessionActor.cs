@@ -1663,8 +1663,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void CompleteDeferredIdlePassivation()
     {
-        if (_execution.ClaimDeferredIdlePassivation(_phase.Current))
-            TransitionTo(SessionPhase.Passivating);
+        if (!_execution.ClaimDeferredIdlePassivation(_phase.Current))
+            return;
+
+        // The idle path keeps a session with a live background job in memory. A job that the waiting input's turn
+        // started must not be reaped here. The re-armed idle timeout decides again, with the same check.
+        if (HasLiveBackgroundJobs)
+            return;
+
+        TransitionTo(SessionPhase.Passivating);
     }
 
     private void ApplyBufferedBatch(BufferedInputBatch batch)
