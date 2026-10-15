@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.ComponentModel;
+using System.Diagnostics;
 using Netclaw.Actors.SubAgents;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -17,16 +18,20 @@ using Netclaw.Security;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Session id for the <c>turn_skill_loaded</c> log line. An outside eval harness ties
-/// each skill load to one trial by this id, so a call with no session must fail loudly
-/// instead of logging an empty or guessed value.
+/// Session token for the <c>turn_skill_loaded</c> log line. An outside eval harness ties
+/// each skill load to one trial by this token. A sessionless run is a deliberate state
+/// (operator routes), so it logs <c>none</c>. No real session id equals <c>none</c>.
 /// </summary>
 internal static class SkillLoadLog
 {
-    public static string RequireSessionId(ToolInvocationContext context)
-        => context.SessionId
-            ?? throw new InvalidOperationException(
-                "A skill load requires a bound session. The turn_skill_loaded log line must name the session.");
+    public static string SessionToken(ToolInvocationContext context)
+        => context.RunScope.Session switch
+        {
+            ToolSessionScope.Bound bound => bound.SessionId,
+            ToolSessionScope.Sessionless => "none",
+            var other => throw new UnreachableException(
+                $"Unknown tool session scope {other.GetType().Name}."),
+        };
 }
 
 /// <summary>
@@ -165,9 +170,9 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 
             _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SkillLoadTool);
             _logger?.LogInformation(
-            "turn_skill_loaded skill={SkillName} method=skill_load session={SessionId}",
-            skill.Name,
-            SkillLoadLog.RequireSessionId(context));
+                "turn_skill_loaded skill={SkillName} method=skill_load session={SessionId}",
+                skill.Name,
+                SkillLoadLog.SessionToken(context));
 
             var routedResult = await _subAgentSpawner.SpawnAsync(
                 profile,
@@ -202,7 +207,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         _logger?.LogInformation(
             "turn_skill_loaded skill={SkillName} method=skill_load session={SessionId}",
             skill.Name,
-            SkillLoadLog.RequireSessionId(context));
+            SkillLoadLog.SessionToken(context));
 
         var sb = new StringBuilder();
         if (scanResult.Verdict == ScanVerdict.Warning)
@@ -244,7 +249,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         _logger?.LogInformation(
             "turn_skill_loaded skill={SkillName} method=skill_load session={SessionId}",
             skill.Name,
-            SkillLoadLog.RequireSessionId(context));
+            SkillLoadLog.SessionToken(context));
 
         var output = new StringBuilder();
         output.AppendLine($"## {skill.DisplayName}");

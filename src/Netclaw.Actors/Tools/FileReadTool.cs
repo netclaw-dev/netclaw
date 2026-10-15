@@ -673,6 +673,6 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         _logger?.LogInformation(
             "turn_skill_loaded skill={SkillName} method=file_read session={SessionId}",
             skill.Name,
-            SkillLoadLog.RequireSessionId(context));
+            SkillLoadLog.SessionToken(context));
     }
 }
