@@ -17,6 +17,19 @@ using Netclaw.Security;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
+/// Session id for the <c>turn_skill_loaded</c> log line. An outside eval harness ties
+/// each skill load to one trial by this id, so a call with no session must fail loudly
+/// instead of logging an empty or guessed value.
+/// </summary>
+internal static class SkillLoadLog
+{
+    public static string RequireSessionId(ToolInvocationContext context)
+        => context.SessionId
+            ?? throw new InvalidOperationException(
+                "A skill load requires a bound session. The turn_skill_loaded log line must name the session.");
+}
+
+/// <summary>
 /// Loads a skill by name, returning the body (frontmatter stripped) and
 /// a manifest of available resource files. Always available via builtin grant.
 /// </summary>
@@ -151,7 +164,10 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
                 return $"Skill '{name}' blocked by content scan: {routedScanResult.Reason}";
 
             _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SkillLoadTool);
-            _logger?.LogInformation("turn_skill_loaded skill={SkillName} method=skill_load", skill.Name);
+            _logger?.LogInformation(
+            "turn_skill_loaded skill={SkillName} method=skill_load session={SessionId}",
+            skill.Name,
+            SkillLoadLog.RequireSessionId(context));
 
             var routedResult = await _subAgentSpawner.SpawnAsync(
                 profile,
@@ -183,7 +199,10 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
             return $"Skill '{name}' blocked by content scan: {scanResult.Reason}";
 
         _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SkillLoadTool);
-        _logger?.LogInformation("turn_skill_loaded skill={SkillName} method=skill_load", skill.Name);
+        _logger?.LogInformation(
+            "turn_skill_loaded skill={SkillName} method=skill_load session={SessionId}",
+            skill.Name,
+            SkillLoadLog.RequireSessionId(context));
 
         var sb = new StringBuilder();
         if (scanResult.Verdict == ScanVerdict.Warning)
@@ -222,7 +241,10 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
             return result.Error ?? $"MCP prompt skill '{skill.Name}' failed without an error message.";
 
         _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SkillLoadTool);
-        _logger?.LogInformation("turn_skill_loaded skill={SkillName} method=skill_load", skill.Name);
+        _logger?.LogInformation(
+            "turn_skill_loaded skill={SkillName} method=skill_load session={SessionId}",
+            skill.Name,
+            SkillLoadLog.RequireSessionId(context));
 
         var output = new StringBuilder();
         output.AppendLine($"## {skill.DisplayName}");
