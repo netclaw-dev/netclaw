@@ -77,6 +77,31 @@ that breaks them.
     `provider-rename`, and `config-*`) require an executable assertion;
     the harness fails if it is missing or not executable.
 
+7. **Redirect daemon output away from the tape terminal.** The daemon
+   inherits the VHS terminal when `netclaw daemon start` starts it. Each
+   tape that starts the daemon must send that output to a log file:
+
+   ```
+   Type "mkdir -p __NETCLAW_HOME__/logs && netclaw daemon start >__NETCLAW_HOME__/logs/daemon-stdio.log 2>&1"
+   ```
+
+   Native libraries write to the process stderr at times that no anchor
+   controls. For example, ONNX Runtime writes a `GetPciBusId` warning on
+   Linux CI runners while the daemon loads the embedding model. If the
+   text lands while a TUI is open, the terminal scrolls. The TUI redraws
+   only changed cells, so the screen and the anchors then go out of
+   alignment, and the tape fails at a random step. The failure artifact
+   keeps `daemon-stdio.log` for fault analysis.
+
+   `netclaw daemon start` returns before the daemon listens. Before a
+   step that needs the daemon, wait for `/api/health/ready`, as
+   `chat-admission-quit.tape` and `reminder-run.tape` do.
+
+   The `init-*` tapes cannot apply this rule. The wizard starts the
+   daemon from inside its own TUI, so the daemon inherits the TUI
+   terminal. A scroll moves the bottom rows out of the screen that VHS
+   reads, so do not anchor those tapes on the bottom rows.
+
 ## Anatomy
 
 Each tape body is concatenated *after* `preamble.tape`, which sets up a
@@ -133,11 +158,9 @@ How it differs from the flow tapes:
 - The harness points `run-native-tape.sh` at them via the `TAPE_PREAMBLE`
   and `TAPE_BODY_DIR` env vars.
 
-The daemon inherits the VHS terminal when `netclaw daemon start` starts it.
-Each screenshot tape that starts the daemon must redirect its output to
-`__NETCLAW_HOME__/logs/daemon-stdio.log`.
-This rule keeps asynchronous native-library messages outside the captured terminal.
-The artifact keeps the redirected output for fault analysis.
+Screenshot tapes follow authoring rule 7: each tape that starts the daemon
+redirects its output to `__NETCLAW_HOME__/logs/daemon-stdio.log`. This rule
+keeps asynchronous native-library messages outside the captured terminal.
 
 Keep the recorder at 60 frames per second. End the tape with `Sleep 250ms` after
 the final state anchor. This recorder barrier produces 15 final-state frames.
