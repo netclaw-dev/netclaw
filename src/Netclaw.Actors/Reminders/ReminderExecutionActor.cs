@@ -25,6 +25,9 @@ namespace Netclaw.Actors.Reminders;
 /// </summary>
 internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
 {
+    // The provenance source kind of a reminder fire. Session recovery uses it to restore the reminder id of a waiting input.
+    internal const string ReminderSourceKind = "reminder";
+
     /// <summary>
     /// Timer keys for the two IWithTimers backstops. Distinct keys so arming
     /// one never cancels the other.
@@ -192,7 +195,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
                     TransportAuthenticity.LocalProcess,
                     PayloadTaint.Trusted)
                 {
-                    SourceKind = new SourceKind("reminder")
+                    SourceKind = new SourceKind(ReminderSourceKind)
                 },
                 Contents = [new TextContent(prompt)],
                 ReceivedAt = _timeProvider.GetUtcNow(),
@@ -261,7 +264,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
                     TransportAuthenticity.LocalProcess,
                     PayloadTaint.Trusted)
                 {
-                    SourceKind = new SourceKind("reminder")
+                    SourceKind = new SourceKind(ReminderSourceKind)
                 },
                 ReceivedAt = _dispatchedAt,
                 ReminderId = new ReminderId(reminderDeliveryKey),

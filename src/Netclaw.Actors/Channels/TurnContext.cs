@@ -52,6 +52,30 @@ public sealed record TurnContext
         => RequesterPrincipal == PrincipalClassification.VerifiedAutomation
            || RequesterSenderId is not null;
 
+    // Security boundary: this check decides who owns delegated work, such as child status and cancellation.
+    // It compares only the identity of the requester. The turn id, provenance, delivery targets, adopted
+    // context, and approval capability describe one message, and they change from turn to turn for the same
+    // person. An owner check that compares them locks the owner out of its own work in a later turn.
+    internal bool HasSameRequester(TurnContext right)
+        => SessionId == right.SessionId
+           && Audience == right.Audience
+           && Boundary == right.Boundary
+           && ChannelType == right.ChannelType
+           && RequesterSenderId == right.RequesterSenderId
+           && RequesterPrincipal == right.RequesterPrincipal;
+
+    // Turn identity is separate: restart batches can span several turns. Use this check where one authority
+    // must continue unchanged (start idempotency, approval and continuation recovery), not for ownership.
+    internal bool HasSameAuthority(TurnContext right)
+        => HasSameRequester(right)
+           && Provenance == right.Provenance
+           && DefaultDeliveryTarget == right.DefaultDeliveryTarget
+           && RequestedDeliveryTarget == right.RequestedDeliveryTarget
+           && HasAdoptedContext == right.HasAdoptedContext
+           && HasThirdPartyAdoptedContext == right.HasThirdPartyAdoptedContext
+           && AdoptedSpeakerIds.SequenceEqual(right.AdoptedSpeakerIds, StringComparer.Ordinal)
+           && SupportsInteractiveApproval == right.SupportsInteractiveApproval;
+
     public static TurnContext FromMessageSource(SessionId sessionId, TurnId turnId, MessageSource? source)
     {
         var audience = source?.Audience ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId.Value);

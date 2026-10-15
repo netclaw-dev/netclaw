@@ -471,6 +471,31 @@ consent mode. Do not call an audience a "trust".
 
 **Code anchor:** `TrustAudience`
 
+### Requester
+
+A requester is the person or system that asks for an action in a session. Six
+facts identify a requester: the session, the audience, the trust boundary, the
+channel type, the sender ID, and the principal classification.
+
+A requester is not the full turn authority. The turn ID, provenance, delivery
+targets, and adopted context belong to one message. They can change between
+turns of the same requester. Work that a requester starts, such as a child run,
+belongs to that requester in each later turn.
+
+The consent answer check is narrower: it compares the sender ID and the
+principal, because a prompt already belongs to one session.
+
+Example:
+
+```text
+Alice starts a child in turn 1 (quotes thread context)
+Alice asks for status in turn 2 (no quoted context)  -> same requester, allowed
+Bob asks for status in the same thread               -> other requester, denied
+```
+
+**Code anchors:** `TurnContext.HasSameRequester`,
+`ApprovalButtonValueCodec.CanApprove`
+
 ### Consent mode
 
 A consent mode states what a tool call needs before it runs, per audience and
