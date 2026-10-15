@@ -81,7 +81,7 @@ def catalog_log_path(db_path, session_id):
         return "no_catalog_db", None
     try:
         # Read-only, as the bash helpers read it. The daemon holds the file open.
-        database = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        database = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
         try:
             row = database.execute("SELECT log_path FROM sessions WHERE persistence_id = ?",
                                    (f"session-{session_id}",)).fetchone()
@@ -111,37 +111,52 @@ def collect_actor_log(home, session_id, destination):
     The record always says what happened. A missing catalog row or a missing
     file is a finding, not a reason to stop the run. The harness shows it.
     Only `*.log` files are copied, because a session folder can hold private
-    workspace data. A path that leaves the resolved home data root is never
-    copied. This holds for `..` segments and for symlinks, in both the actor
-    log and the sub-agent logs.
+    workspace data. The data root also holds `keys/` and `config/`, and the
+    model can write links in the session folders. So the checks are narrow:
+
+      - The actor log must resolve under `data/sessions`.
+      - A sub-agent log must resolve under the folder of this session.
+
+    The resolved file is copied, not the link, so the file cannot change
+    between the check and the copy.
     """
     record = {"session_id": session_id, "status": None, "catalog_log_path": None,
-              "subagent_logs": []}
+              "subagent_logs": [], "refused_subagent_logs": []}
     status, container_path = catalog_log_path(home / "data" / "netclaw.db", session_id)
     record["catalog_log_path"] = container_path
 
     if status == "ok" and not container_path.startswith(CONTAINER_HOME):
         status = "catalog_path_outside_home"
     data_root = (home / "data").resolve()
+    sessions_root = (data_root / "sessions").resolve()
     log = None
     if status == "ok":
         log = data_root / container_path[len(CONTAINER_HOME):]
-        if not stays_in(data_root, log):
+        resolved_log = log.resolve()
+        if not stays_in(sessions_root, resolved_log):
             status = "catalog_path_outside_home"
     if status == "ok":
-        if log.is_file():
+        if resolved_log.is_file():
             destination.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(log, destination / "session.log")
+            shutil.copyfile(resolved_log, destination / "session.log")
             # The session folder is <envelope>/logs/session.log. Sub-agents
             # live in <envelope>/subagents/<run id>/logs/*.log.
-            for sub_log in sorted(log.parent.parent.glob("subagents/*/logs/*.log")):
-                if not stays_in(data_root, sub_log):
-                    print(f"WARN: sub-agent log {sub_log} leaves the home, not copied",
-                          file=sys.stderr)
+            envelope = log.parent.parent.resolve()
+            sub_logs = sorted(log.parent.parent.glob("subagents/*/logs/*.log"))
+            if not stays_in(sessions_root, envelope):
+                print(f"WARN: session folder {envelope} is outside data/sessions, "
+                      "sub-agent logs not copied", file=sys.stderr)
+                sub_logs = []
+            for sub_log in sub_logs:
+                resolved_sub = sub_log.resolve()
+                if not stays_in(envelope, resolved_sub):
+                    print(f"WARN: sub-agent log {sub_log} resolves outside its session folder, "
+                          "not copied", file=sys.stderr)
+                    record["refused_subagent_logs"].append(str(sub_log.relative_to(log.parent.parent)))
                     continue
                 target = destination / "subagents" / sub_log.parent.parent.name
                 target.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(sub_log, target / sub_log.name)
+                shutil.copyfile(resolved_sub, target / sub_log.name)
                 record["subagent_logs"].append(f"subagents/{target.name}/{sub_log.name}")
         else:
             status = "catalog_log_missing"

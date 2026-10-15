@@ -63,10 +63,15 @@ FILTER_CASE="${NETCLAW_EVAL_CASE:-}"
 
 # One seed for the whole run. Each (case, trial) derives its own seed from it,
 # so a run filtered with NETCLAW_EVAL_CASE picks the same variants as a full run.
-# Set outside any $(...) subshell: bash reseeds RANDOM in a subshell.
 EVAL_SEED="${NETCLAW_EVAL_SEED:-$((RANDOM * 32768 + RANDOM))}"
 if [[ ! "$EVAL_SEED" =~ ^[0-9]+$ ]]; then
     echo "ERROR: NETCLAW_EVAL_SEED must be a non-negative integer, got: $EVAL_SEED" >&2
+    exit 2
+fi
+# Whole seconds. `timeout` also accepts 5m, but the trial record stores the
+# value as a JSON number, so a unit suffix would fail in the first trial.
+if [[ ! "$PROMPT_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: NETCLAW_EVAL_TIMEOUT must be a whole number of seconds, 1 or more, got: $PROMPT_TIMEOUT" >&2
     exit 2
 fi
 
@@ -146,6 +151,13 @@ check_prerequisites() {
 
     if ! command -v jq >/dev/null 2>&1; then
         echo "ERROR: 'jq' not found. Install jq to run the eval suite." >&2
+        exit 1
+    fi
+
+    # Each trial runs evals/trial_evidence.py. It needs Path.is_relative_to.
+    if ! command -v python3 >/dev/null 2>&1 \
+        || ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))'; then
+        echo "ERROR: 'python3' 3.9 or later not found. The eval suite needs it for trial evidence." >&2
         exit 1
     fi
 
@@ -936,17 +948,16 @@ finalize_db() {
 # ─── Utility Functions ────────────────────────────────────────────────────────
 
 ## Picks the prompt variant of one (case, trial). Args: case_name, trial, variant...
-## Sets PICKED_VARIANT, PICKED_VARIANT_INDEX, and PICKED_TRIAL_SEED. The caller
-## reads these variables and does not capture output: a $(...) subshell reseeds
-## RANDOM, so the seed would have no effect.
+## Sets PICKED_VARIANT, PICKED_VARIANT_INDEX, and PICKED_TRIAL_SEED. The index
+## is trial_seed % variant count. It does not use RANDOM: bash 5.1 changed that
+## generator, so the same seed would pick another variant on another host.
 pick_variant() {
     local case_name="$1" trial="$2"
     shift 2
     local -a variants=("$@")
     PICKED_TRIAL_SEED=$(python3 "$TRIAL_EVIDENCE_PY" derive-seed \
         --seed "$EVAL_SEED" --case "$case_name" --trial "$trial")
-    RANDOM=$PICKED_TRIAL_SEED
-    PICKED_VARIANT_INDEX=$((RANDOM % ${#variants[@]}))
+    PICKED_VARIANT_INDEX=$((PICKED_TRIAL_SEED % ${#variants[@]}))
     PICKED_VARIANT="${variants[PICKED_VARIANT_INDEX]}"
 }
 
@@ -963,7 +974,7 @@ DISCOVER_NO_SESSION=3
 DISCOVER_AMBIGUOUS_SESSION=4
 
 iso_now() {
-    date +%Y-%m-%dT%H:%M:%S.%3N%:z
+    date -u +%Y-%m-%dT%H:%M:%S.%3N%:z
 }
 
 ## Args: case_name, trial number
@@ -1016,14 +1027,9 @@ record_cli_call() {
 
 ## Copies the session evidence of a finished trial into raw/. A source that is
 ## missing is reported on stderr and the run goes on. The trial folder then
-## shows which source was missing.
+## shows which source was missing. The daemon evidence comes later, from
+## finish_assertion_evidence, because the assertion reads the daemon log too.
 finish_trial() {
-    if [[ -f "$TRIAL_DAEMON_LOG" ]]; then
-        tail -n +"$((TRIAL_DAEMON_LINES_BEFORE + 1))" "$TRIAL_DAEMON_LOG" > "$TRIAL_RAW/daemon-window.log"
-    else
-        echo "  WARN: no daemon log for the trial at $TRIAL_RAW" >&2
-    fi
-
     local discover_code=0
     python3 "$TRIAL_EVIDENCE_PY" discover-session --logs-dir "$EVAL_HOME/logs" \
         --known "$TRIAL_KNOWN_LOGS_FILE" > "$TRIAL_RAW/session.json" || discover_code=$?
@@ -1050,10 +1056,54 @@ finish_trial() {
     if [[ "$actor_status" != "ok" ]]; then
         echo "  WARN: no actor log for $session_id ($actor_status). See $TRIAL_RAW/actor-log.json" >&2
     fi
+}
+
+## Copies the daemon window and writes assert.json. Call it right after the
+## assertion, so the window holds every line that the assertion could read.
+## The window starts at the first line after the trial baseline, in the daemon
+## file that was current then. A multi-turn trial starts at turn 1, not at the
+## last turn. A daemon file that did not exist at the baseline (the UTC day
+## changed) is added in full, in name order.
+## Args: assertion exit code
+finish_assertion_evidence() {
+    local assert_rc="$1"
+    local window="$TRIAL_RAW/daemon-window.log"
+    local daemon_status="ok" lines_after=0 name
+    local -a new_files=()
+    while IFS= read -r name; do
+        if [[ "$name" != "$(basename "$TRIAL_DAEMON_LOG")" ]] \
+            && ! grep -qxF -- "$name" "$TRIAL_KNOWN_LOGS_FILE"; then
+            new_files+=("$name")
+        fi
+    done < <(find "$EVAL_HOME/logs" -maxdepth 1 -type f -name 'daemon-*.log' -printf '%f\n' | sort)
 
     if [[ -f "$TRIAL_DAEMON_LOG" ]]; then
-        python3 "$TRIAL_EVIDENCE_PY" daemon-session --log "$TRIAL_DAEMON_LOG" \
-            --session "$session_id" > "$TRIAL_RAW/daemon-session.log"
+        lines_after=$(wc -l < "$TRIAL_DAEMON_LOG")
+        head -n "$lines_after" "$TRIAL_DAEMON_LOG" \
+            | tail -n +"$((TRIAL_DAEMON_LINES_BEFORE + 1))" > "$window"
+    elif [[ "${#new_files[@]}" -gt 0 ]]; then
+        : > "$window"
+    else
+        daemon_status="no_daemon_log"
+        echo "  WARN: no daemon log for the trial ($daemon_status). See $TRIAL_RAW/assert.json" >&2
+    fi
+    for name in "${new_files[@]}"; do
+        cat "$EVAL_HOME/logs/$name" >> "$window"
+    done
+
+    jq -n --argjson exit_code "$assert_rc" --arg daemon_status "$daemon_status" \
+        --arg daemon_log "$(basename "$TRIAL_DAEMON_LOG")" \
+        --argjson before "$TRIAL_DAEMON_LINES_BEFORE" --argjson after "$lines_after" \
+        --args '{exit_code: $exit_code, daemon_status: $daemon_status,
+                 daemon_log: (if $daemon_status == "ok" then $daemon_log else null end),
+                 window_lines_before: $before, window_lines_after: $after,
+                 extra_daemon_logs: $ARGS.positional}' "${new_files[@]}" \
+        > "$TRIAL_RAW/assert.json"
+
+    if [[ -f "$window" && "$(jq -r '.status' "$TRIAL_RAW/session.json")" == "ok" ]]; then
+        python3 "$TRIAL_EVIDENCE_PY" daemon-session --log "$window" \
+            --session "$(jq -r '.session_id' "$TRIAL_RAW/session.json")" \
+            > "$TRIAL_RAW/daemon-session.log"
     fi
 }
 
@@ -1260,8 +1310,11 @@ run_multi_turn_case() {
 
         local passed=0
         local details="fail"
+        local assert_rc=0
         EVAL_ASSERTION_DETAILS=""
-        if $assert_fn 2> "$TRIAL_RAW/assert-stderr.txt"; then
+        $assert_fn 2> "$TRIAL_RAW/assert-stderr.txt" || assert_rc=$?
+        finish_assertion_evidence "$assert_rc"
+        if [[ "$assert_rc" -eq 0 ]]; then
             passed=1
             passes=$((passes + 1))
             details="pass"
@@ -3202,7 +3255,10 @@ run_case() {
 
         local passed=0
         local details="fail"
-        if $assert_fn 2> "$TRIAL_RAW/assert-stderr.txt"; then
+        local assert_rc=0
+        $assert_fn 2> "$TRIAL_RAW/assert-stderr.txt" || assert_rc=$?
+        finish_assertion_evidence "$assert_rc"
+        if [[ "$assert_rc" -eq 0 ]]; then
             passed=1
             passes=$((passes + 1))
             details="pass"
