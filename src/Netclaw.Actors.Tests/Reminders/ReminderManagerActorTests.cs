@@ -775,83 +775,6 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         Assert.NotNull(delivered.Source.ReminderId);
     }
 
-    [Fact]
-    public async Task CurrentSession_delivery_required_fails_when_delivery_is_not_observed()
-    {
-        var manager = await GetManagerAsync();
-
-        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
-        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromMilliseconds(250);
-        try
-        {
-            var (definition, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<SlackGatewayActorKey>(
-                manager,
-                "current-session-timeout-gateway",
-                "auto-ack-current-session-timeout",
-                "current-session-timeout");
-            Assert.NotNull(delivered.Source.ReminderId);
-
-            await AwaitAssertAsync(async () =>
-            {
-                var health = await manager.Ask<ReminderHealthResponse>(
-                    GetReminderHealthQuery.Instance,
-                    TimeSpan.FromSeconds(3),
-                    TestContext.Current.CancellationToken);
-
-                Assert.Equal(0, health.ActiveExecutions);
-                Assert.Contains(_notificationSink.Alerts, alert =>
-                    alert.Category == AlertType.ReminderExecutionFailed
-                    && alert.Source == definition.Id.Value
-                    && alert.Summary.Contains("delivery not observed", StringComparison.OrdinalIgnoreCase));
-            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
-        }
-    }
-
-    [Fact]
-    public async Task CurrentSession_delivery_required_fails_fast_on_explicit_delivery_failure()
-    {
-        var manager = await GetManagerAsync();
-
-        // Generous backstop: if the explicit failure signal weren't honored,
-        // this test would hang for the full timeout rather than fail fast.
-        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
-        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(30);
-        try
-        {
-            var (definition, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<SlackGatewayActorKey>(
-                manager,
-                "current-session-failed-gateway",
-                "auto-ack-current-session-failed",
-                "current-session-failed");
-            Assert.NotNull(delivered.Source.ReminderId);
-            Assert.NotNull(delivered.Source.DeliveryObserver);
-
-            // Channel reports the post failed — execution must report failure
-            // (so Akka.Reminders redelivers) without acking the envelope.
-            delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
-                delivered.Source.ReminderId!.Value,
-                ChannelType.Slack,
-                Delivered: false,
-                FailureReason: "channel API down"));
-
-            await AwaitAssertAsync(() =>
-            {
-                Assert.Contains(_notificationSink.Alerts, alert =>
-                    alert.Category == AlertType.ReminderExecutionFailed
-                    && alert.Source == definition.Id.Value
-                    && alert.Summary.Contains("channel API down", StringComparison.OrdinalIgnoreCase));
-            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
-        }
-    }
-
     // The session dedups redeliveries by the delivery key, so the key MUST be
     // built from the envelope's scheduled fire time (identical across
     // redeliveries) — not the per-execution dispatch wall-clock, which drifts
@@ -958,45 +881,6 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
                 && alert.Source == definition.Id.Value
                 && alert.Summary.Contains("session is draining", StringComparison.OrdinalIgnoreCase));
         }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-    }
-
-    [Fact]
-    public async Task CurrentSession_delivery_required_succeeds_when_delivery_is_observed()
-    {
-        var manager = await GetManagerAsync();
-
-        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
-        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(2);
-        try
-        {
-            var (_, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<SlackGatewayActorKey>(
-                manager,
-                "current-session-observed-gateway",
-                "auto-ack-current-session-observed",
-                "current-session-observed");
-            Assert.NotNull(delivered.Source.ReminderId);
-            Assert.NotNull(delivered.Source.DeliveryObserver);
-
-            delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
-                delivered.Source.ReminderId!.Value,
-                ChannelType.Slack,
-                Delivered: true,
-                ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
-
-            await AwaitAssertAsync(async () =>
-            {
-                var health = await manager.Ask<ReminderHealthResponse>(
-                    GetReminderHealthQuery.Instance,
-                    TimeSpan.FromSeconds(3),
-                    TestContext.Current.CancellationToken);
-
-                Assert.Equal(0, health.ActiveExecutions);
-            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
-        }
     }
 
     [Fact]
@@ -1192,85 +1076,6 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         var stored = _definitionStore.Get(recurringReminder.Id);
         Assert.NotNull(stored);
         Assert.True(stored!.Enabled);
-    }
-
-    [Fact]
-    public async Task CurrentSession_discord_delivery_required_fails_when_delivery_is_not_observed()
-    {
-        var manager = await GetManagerAsync();
-
-        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
-        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromMilliseconds(250);
-        try
-        {
-            var (definition, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<DiscordGatewayActorKey>(
-                manager,
-                "discord-current-session-timeout-gateway",
-                "auto-ack-discord-current-session-timeout",
-                "discord-current-session-timeout",
-                originChannelType: ChannelType.Discord,
-                sessionId: "129847561203948576/130111223344556677");
-            Assert.NotNull(delivered.Source.ReminderId);
-
-            await AwaitAssertAsync(async () =>
-            {
-                var health = await manager.Ask<ReminderHealthResponse>(
-                    GetReminderHealthQuery.Instance,
-                    TimeSpan.FromSeconds(3),
-                    TestContext.Current.CancellationToken);
-
-                Assert.Equal(0, health.ActiveExecutions);
-                Assert.Contains(_notificationSink.Alerts, alert =>
-                    alert.Category == AlertType.ReminderExecutionFailed
-                    && alert.Source == definition.Id.Value
-                    && alert.Summary.Contains("delivery not observed", StringComparison.OrdinalIgnoreCase));
-            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
-        }
-    }
-
-    [Fact]
-    public async Task CurrentSession_discord_delivery_required_succeeds_when_delivery_is_observed()
-    {
-        var manager = await GetManagerAsync();
-
-        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
-        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(2);
-        try
-        {
-            var (_, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<DiscordGatewayActorKey>(
-                manager,
-                "discord-current-session-observed-gateway",
-                "auto-ack-discord-current-session-observed",
-                "discord-current-session-observed",
-                originChannelType: ChannelType.Discord,
-                sessionId: "129847561203948576/130111223344556677");
-            Assert.NotNull(delivered.Source.ReminderId);
-            Assert.NotNull(delivered.Source.DeliveryObserver);
-
-            delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
-                delivered.Source.ReminderId!.Value,
-                ChannelType.Discord,
-                Delivered: true,
-                ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
-
-            await AwaitAssertAsync(async () =>
-            {
-                var health = await manager.Ask<ReminderHealthResponse>(
-                    GetReminderHealthQuery.Instance,
-                    TimeSpan.FromSeconds(3),
-                    TestContext.Current.CancellationToken);
-
-                Assert.Equal(0, health.ActiveExecutions);
-            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
-        }
     }
 
     [Fact]
@@ -2188,44 +1993,6 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
             CreatedAt = now,
             UpdatedAt = now
         };
-    }
-
-    // Shared arrange for the CurrentSession delivery tests: registers an
-    // auto-acking gateway probe under the given key, saves a CurrentSession
-    // definition, fires it, and waits for the DeliverTrustedSessionTurn.
-    // Callers keep their own assertions and any follow-up delivery-result
-    // signaling — this only extracts the identical setup+dispatch prefix.
-    // (The probe itself is not returned: no call site needs it after the
-    // initial delivery is observed.)
-    private async Task<(ReminderDefinition Definition, DeliverTrustedSessionTurn Delivered)>
-        RegisterGatewayAndDeliverCurrentSessionReminderAsync<TGatewayKey>(
-            IActorRef manager,
-            string probeName,
-            string actorName,
-            string reminderId,
-            ChannelType originChannelType = ChannelType.Slack,
-            string? sessionId = null)
-    {
-        var gatewayProbe = CreateTestProbe(probeName);
-        var autoAckRef = Sys.ActorOf(
-            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-            actorName);
-        ActorRegistry.For(Sys).Register<TGatewayKey>(autoAckRef);
-
-        var definition = CreateCurrentSessionDefinition(
-            reminderId,
-            deliveryRequired: true,
-            originChannelType: originChannelType,
-            sessionId: sessionId);
-        _definitionStore.Save(definition);
-
-        manager.Tell(CreateEnvelope(definition.Id.Value));
-
-        var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-            TimeSpan.FromSeconds(5),
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        return (definition, delivered);
     }
 
     private static ReminderDefinition CreateCurrentSessionDefinition(

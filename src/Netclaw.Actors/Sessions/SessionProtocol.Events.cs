@@ -34,10 +34,7 @@ public static partial class SessionProtocol
         /// Populated when this turn originated from a reminder firing.
         /// Format is <c>"{reminderId}:{fireTimestampMs}"</c>, matching the value
         /// placed on <see cref="Channels.MessageSource.ReminderId"/> by the
-        /// reminder dispatcher. Null for regular user turns. Used for forensics
-        /// and to rebuild the in-memory reminder dedup ledger
-        /// (<see cref="SessionState.ProcessedReminderIds"/>) from
-        /// event replay.
+        /// reminder dispatcher. Null for regular user turns. Used for forensics.
         /// </summary>
         public ReminderId? SourceReminderId { get; init; }
 

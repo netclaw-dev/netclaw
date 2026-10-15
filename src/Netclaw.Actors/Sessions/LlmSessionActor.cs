@@ -429,13 +429,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            var reminderId = cmd.Source?.ReminderId;
-            if (_input.IsReminderDuplicate(reminderId, _state))
+            if (IsRestartResume(cmd))
             {
-                TurnLog().Info(
-                    "reminder_mode_b_dedup_hit reminder={ReminderId} phase=processing",
-                    reminderId);
-                TryReplyAck();
+                AckRestartResumeNoOp(cmd);
                 return;
             }
 
@@ -836,13 +832,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            var reminderId = cmd.Source?.ReminderId;
-            if (_input.IsReminderDuplicate(reminderId, _state))
+            if (IsRestartResume(cmd))
             {
-                TurnLog().Info(
-                    "reminder_mode_b_dedup_hit reminder={ReminderId} phase=compacting",
-                    reminderId);
-                TryReplyAck();
+                AckRestartResumeNoOp(cmd);
                 return;
             }
 
@@ -1761,16 +1753,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleIncomingUserMessage(SendUserMessage cmd)
     {
-        var reminderId = cmd.Source?.ReminderId;
-        if (_input.IsReminderDuplicate(reminderId, _state))
-        {
-            TurnLog().Info(
-                "reminder_mode_b_dedup_hit reminder={ReminderId}",
-                reminderId);
-            TryReplyAck();
-            return;
-        }
-
         var bgJobId = cmd.Source?.BackgroundJobId;
         if (_input.IsBackgroundJobDuplicate(bgJobId, _state))
         {
@@ -1786,6 +1768,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (TryRejectIncompatibleInput(cmd.MediaReferences, cmd.Source))
             return;
+
+        // Decide admission before any side effect. A duplicate, a dropped fire, or a refusal must leave the
+        // session as it was, so it must not abandon an open tool batch.
+        var decision = _input.PrepareAdmission(cmd, _state, _sessionId, NowMs());
+        if (decision is not (AdmissionDecision.Existing or AdmissionDecision.Persist))
+        {
+            SettleWithoutAdmission(decision);
+            return;
+        }
 
         // A new inbound message from a person while a tool batch is still parked
         // on an approval gate means the user abandoned that approval. This is only
@@ -1803,14 +1794,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Persist(abandon.Event, evt =>
                 {
                     ApplyToolBatchAbandoned(evt);
-                    AdmitInput(cmd, InputPlacement.Activate);
+                    CommitAdmission(decision, cmd, InputPlacement.Activate);
                 });
                 return;
             case NewInputPlan.WaitForApproval:
-                AdmitInput(cmd, InputPlacement.BufferDuringApproval);
+                CommitAdmission(decision, cmd, InputPlacement.BufferDuringApproval);
                 return;
             case NewInputPlan.Activate:
-                AdmitInput(cmd, InputPlacement.Activate);
+                CommitAdmission(decision, cmd, InputPlacement.Activate);
                 return;
         }
 
@@ -1819,18 +1810,45 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void AdmitInput(SendUserMessage cmd, InputPlacement placement)
     {
-        switch (_input.PrepareAdmission(cmd, _state, _sessionId, NowMs()))
+        var decision = _input.PrepareAdmission(cmd, _state, _sessionId, NowMs());
+        if (decision is AdmissionDecision.Existing or AdmissionDecision.Persist)
+            CommitAdmission(decision, cmd, placement);
+        else
+            SettleWithoutAdmission(decision);
+    }
+
+    // The session acknowledges a duplicate or a dropped fire, so the reminder system sees success and ends its job.
+    private void SettleWithoutAdmission(AdmissionDecision decision)
+    {
+        switch (decision)
         {
-            case AdmissionDecision.Existing:
-                _input.AdmissionAlreadyCommitted(cmd, placement);
-                CompleteAcceptedInput(cmd, placement);
-                return;
             case AdmissionDecision.Reject rejected:
                 _log.Error("Rejecting input with invalid durable authority: {Reason}", rejected.Reason);
                 TryReplyNack($"Input authority cannot be stored: {rejected.Reason}");
                 return;
             case AdmissionDecision.Duplicate:
                 TryReplyAck();
+                return;
+            case AdmissionDecision.Dropped dropped:
+                TurnLog().Info(
+                    "reminder_fire_dropped reminder={ReminderId} fire={Fire} waiting={Waiting}",
+                    dropped.Fire.DefinitionId,
+                    dropped.Fire,
+                    dropped.Waiting);
+                TryReplyAck();
+                return;
+        }
+
+        throw new InvalidOperationException("Unknown input admission decision.");
+    }
+
+    private void CommitAdmission(AdmissionDecision decision, SendUserMessage cmd, InputPlacement placement)
+    {
+        switch (decision)
+        {
+            case AdmissionDecision.Existing:
+                _input.AdmissionAlreadyCommitted(cmd, placement);
+                CompleteAcceptedInput(cmd, placement);
                 return;
             case AdmissionDecision.Persist persist:
                 Persist(persist.Event, admitted =>
@@ -1934,21 +1952,32 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TransitionTo(SessionPhase.Processing);
     }
 
+    // The restart reminder is not an input. It only resumes inputs that the journal already holds.
+    private static bool IsRestartResume(SendUserMessage cmd)
+        => cmd.Source?.ReminderId?.Value is { } reminderId
+           && reminderId.StartsWith(RestartReminderIdPrefix, StringComparison.Ordinal)
+           && string.Equals(cmd.Content, SessionExecutionLifetime.RestartReminderInstruction, StringComparison.Ordinal);
+
+    // Akka.Reminders can redeliver the restart reminder. When nothing is left to resume, the work is done, so the
+    // session acknowledges and the reminder run ends in success.
+    private void AckRestartResumeNoOp(SendUserMessage cmd)
+    {
+        _log.Info(
+            "restart_resume_noop reminder={ReminderId} phase={Phase} pending={PendingCount}",
+            cmd.Source?.ReminderId,
+            _phase.Current,
+            _state.PendingInputs.Count);
+        TryReplyAck();
+    }
+
     private bool TryResumeInterruptedInput(SendUserMessage cmd)
     {
-        var reminderId = cmd.Source?.ReminderId?.Value;
-        if (reminderId is null
-            || !reminderId.StartsWith(RestartReminderIdPrefix, StringComparison.Ordinal)
-            || !string.Equals(cmd.Content, SessionExecutionLifetime.RestartReminderInstruction, StringComparison.Ordinal))
+        if (!IsRestartResume(cmd))
             return false;
 
         if (_state.PendingInputs.Count == 0)
         {
-            _log.Warning(
-                "Restart reminder {ReminderId} found no pending input for session {SessionId}.",
-                reminderId,
-                _sessionId.Value);
-            TryReplyNack("The interrupted input is no longer pending.");
+            AckRestartResumeNoOp(cmd);
             return true;
         }
 
@@ -1957,7 +1986,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _log.Warning(
                 "Restart reminder {ReminderId} cannot restore session {SessionId}: {Reason}.",
-                reminderId,
+                cmd.Source!.ReminderId,
                 _sessionId.Value,
                 restartContext.Reason ?? "invalid stored authority");
             TryReplyNack("The interrupted input authority is invalid.");

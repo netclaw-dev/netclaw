@@ -22,6 +22,8 @@ internal abstract record AdmissionDecision
     internal sealed record Reject(string Reason) : AdmissionDecision;
     // The durable source key already exists, so the actor acknowledges without execution.
     internal sealed record Duplicate : AdmissionDecision;
+    // A reminder keeps at most one waiting fire in a session. The newer fire is acknowledged and not stored.
+    internal sealed record Dropped(ReminderFireKey Fire, ReminderFireKey Waiting) : AdmissionDecision;
     internal sealed record Persist(InputAdmitted Event) : AdmissionDecision;
 }
 
@@ -88,16 +90,6 @@ internal sealed class SessionInputFlow
     public SelectedInputFacts SelectedInputs =>
         new(_selectedIds.ToArray(), _source?.ReminderId, _source?.BackgroundJobId);
 
-    public bool IsReminderDuplicate(ReminderId? reminderId, SessionState state)
-    {
-        if (reminderId is not { } id || string.IsNullOrEmpty(id.Value))
-            return false;
-
-        return state.ProcessedReminderIds.Contains(id)
-               || _inFlightDedup.IsReminderInFlight(id)
-               || _buffer.Any(item => item.Message.Source?.ReminderId == id);
-    }
-
     public bool IsBackgroundJobDuplicate(BackgroundJobId? backgroundJobId, SessionState state)
     {
         if (backgroundJobId is not { } id || string.IsNullOrEmpty(id.Value))
@@ -150,7 +142,41 @@ internal sealed class SessionInputFlow
         if (sourceKey is not null && state.RecentSourceMessageKeys.Contains(sourceKey))
             return new AdmissionDecision.Duplicate();
 
+        if (TryFindWaitingFire(evt, state, out var fire, out var waiting))
+            return new AdmissionDecision.Dropped(fire, waiting);
+
         return new AdmissionDecision.Persist(evt);
+    }
+
+    // Drop rule: the journal's pending list is the only record of what waits, so the rule holds after a restart. An input
+    // that the running turn selected is not waiting. A newer fire of its reminder gets its own turn.
+    // An input whose key is not a fire key has an unknown owner, so it is never dropped and never blocks.
+    private bool TryFindWaitingFire(
+        InputAdmitted incoming,
+        SessionState state,
+        out ReminderFireKey fire,
+        out ReminderFireKey waiting)
+    {
+        waiting = default;
+        if (!TryReadFireKey(incoming, out fire))
+            return false;
+
+        foreach (var pending in state.PendingInputs)
+        {
+            if (!_selectedIds.Contains(pending.InputId)
+                && TryReadFireKey(pending, out waiting)
+                && waiting.DefinitionId == fire.DefinitionId)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadFireKey(InputAdmitted input, out ReminderFireKey key)
+    {
+        key = default;
+        return input.TurnContext.SourceKind == ReminderExecutionActor.ReminderSourceKind
+               && ReminderFireKey.TryParse(input.SourceMessageId, out key);
     }
 
     public SendUserMessage AdmissionCommitted(
@@ -160,7 +186,6 @@ internal sealed class SessionInputFlow
     {
         // The journal callback applies the event before this owner reserves or places the input.
         var authority = RecordedAuthority(admitted);
-        _inFlightDedup.ReserveReminder(command.Source?.ReminderId);
         _inFlightDedup.ReserveBackgroundJob(command.Source?.BackgroundJobId);
         var accepted = command with { AdmittedInputId = admitted.InputId, AdmittedAuthority = authority };
         PlaceAccepted(accepted, placement);
@@ -197,7 +222,6 @@ internal sealed class SessionInputFlow
 
             var authority = RecordedAuthority(admitted);
             var source = RecordedSource(admitted, authority);
-            _inFlightDedup.ReserveReminder(source?.ReminderId);
             _inFlightDedup.ReserveBackgroundJob(source?.BackgroundJobId);
             _buffer.Add((new SendUserMessage
             {
@@ -283,7 +307,6 @@ internal sealed class SessionInputFlow
         _selectedIds.Clear();
         _source = source;
         RestoreTurnAuthority(context, deriver);
-        _inFlightDedup.ReserveReminder(source?.ReminderId);
     }
 
     public string? BeginSlashResume(InputAdmitted first)
@@ -436,7 +459,6 @@ internal sealed class SessionInputFlow
 
     private void ReleaseRecordedSources(TurnRecorded evt)
     {
-        _inFlightDedup.CompleteReminder(evt.SourceReminderId);
         _inFlightDedup.CompleteBackgroundJob(evt.SourceBackgroundJobId);
         _selectedIds.Clear();
     }
@@ -445,7 +467,6 @@ internal sealed class SessionInputFlow
 
     public void FailedTurn()
     {
-        _inFlightDedup.CompleteReminder(_source?.ReminderId);
         _inFlightDedup.CompleteBackgroundJob(_source?.BackgroundJobId);
         _context = null;
     }

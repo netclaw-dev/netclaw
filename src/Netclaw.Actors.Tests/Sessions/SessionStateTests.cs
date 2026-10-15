@@ -141,7 +141,6 @@ public class SessionStateTests
             : new[] { user, assistant };
         Assert.Equal(expected, next.History);
         Assert.Equal(1, next.TurnCount);
-        Assert.Contains(reminderId, next.ProcessedReminderIds);
         Assert.Contains(jobId, next.ProcessedBackgroundJobIds);
     }
 
@@ -632,119 +631,6 @@ public class SessionStateTests
         Assert.Equal("observer-1", message.SenderId.Value);
         Assert.Equal(timestamp, message.Timestamp);
         Assert.Equal("pending", message.AuthorityAtInclusion);
-    }
-
-    [Fact]
-    public void Apply_TurnRecorded_folds_SourceReminderId_into_ProcessedReminderIds()
-    {
-        var state = SessionState.Empty;
-        var evt = new TurnRecorded
-        {
-            SessionId = TestSessionId,
-            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "check PR" },
-            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "merged" },
-            SourceReminderId = new ReminderId("check-pr:1712000000000")
-        };
-
-        var next = state.Apply(evt);
-
-        Assert.Contains(new ReminderId("check-pr:1712000000000"), next.ProcessedReminderIds);
-        Assert.Single(next.ProcessedReminderIds);
-    }
-
-    [Fact]
-    public void Apply_TurnRecorded_with_null_SourceReminderId_does_not_grow_set()
-    {
-        var state = SessionState.Empty
-            .Apply(new TurnRecorded
-            {
-                SessionId = TestSessionId,
-                UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "hi" },
-                AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "hello" },
-                SourceReminderId = null
-            });
-
-        Assert.Empty(state.ProcessedReminderIds);
-    }
-
-    [Fact]
-    public void Apply_TurnRecorded_replay_builds_cumulative_dedup_set()
-    {
-        var state = SessionState.Empty;
-
-        state = state.Apply(new TurnRecorded
-        {
-            SessionId = TestSessionId,
-            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "r1" },
-            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "ok" },
-            SourceReminderId = new ReminderId("r1:100")
-        });
-        state = state.Apply(new TurnRecorded
-        {
-            SessionId = TestSessionId,
-            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "user turn" },
-            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "ok" },
-            SourceReminderId = null
-        });
-        state = state.Apply(new TurnRecorded
-        {
-            SessionId = TestSessionId,
-            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "r2" },
-            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "ok" },
-            SourceReminderId = new ReminderId("r2:200")
-        });
-
-        Assert.Equal(2, state.ProcessedReminderIds.Count);
-        Assert.Contains(new ReminderId("r1:100"), state.ProcessedReminderIds);
-        Assert.Contains(new ReminderId("r2:200"), state.ProcessedReminderIds);
-    }
-
-    [Fact]
-    public void Apply_SessionCompacted_preserves_ProcessedReminderIds()
-    {
-        var state = SessionState.Empty
-            .Apply(new TurnRecorded
-            {
-                SessionId = TestSessionId,
-                UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "r1" },
-                AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "ok" },
-                SourceReminderId = new ReminderId("preserved:1")
-            });
-
-        var compacted = state.Apply(new SessionCompacted
-        {
-            SessionId = TestSessionId,
-            CompactedMessages =
-            [
-                new() { Role = ChatRole.User, Content = "[session-summary session:test/session]\nsummary" }
-            ]
-        });
-
-        Assert.Contains(new ReminderId("preserved:1"), compacted.ProcessedReminderIds);
-    }
-
-    [Fact]
-    public void ProcessedReminderIds_is_not_persisted_in_snapshot()
-    {
-        // Explicit verification of the "in-memory only" contract: a state
-        // with a populated dedup set round-trips through ToSnapshot/
-        // FromSnapshot with an empty set on the restored side. This is
-        // the accepted tradeoff — duplicates across snapshot recovery
-        // are tolerable.
-        var state = SessionState.Empty
-            .Apply(new TurnRecorded
-            {
-                SessionId = TestSessionId,
-                UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "r1" },
-                AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "ok" },
-                SourceReminderId = new ReminderId("lost-on-snapshot:1")
-            });
-
-        Assert.NotEmpty(state.ProcessedReminderIds);
-
-        var restored = SessionState.FromSnapshot(state.ToSnapshot());
-
-        Assert.Empty(restored.ProcessedReminderIds);
     }
 
     [Theory]
