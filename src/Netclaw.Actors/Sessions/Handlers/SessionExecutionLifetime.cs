@@ -73,8 +73,22 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     private long _jobReapEpoch;
     private ReapOperation? _reap;
     private PassivationAttempt? _attempt;
+    private bool _idlePassivationAfterWaitingInput;
 
     public bool RestartDrainRequested => _restartDrainReplyTo is not null;
+
+    // The idle handler closed a parked batch while an acknowledged input waited behind it. The input runs first,
+    // because nothing would rebuild it after passivation. The idle decision completes when that work ends.
+    public void DeferIdlePassivationUntilWaitingInputEnds() => _idlePassivationAfterWaitingInput = true;
+
+    public bool ClaimDeferredIdlePassivation(SessionPhase phase)
+    {
+        if (!_idlePassivationAfterWaitingInput || phase != SessionPhase.Ready)
+            return false;
+
+        _idlePassivationAfterWaitingInput = false;
+        return true;
+    }
     public bool NeedsAbruptStopNotification => _attempt?.Milestone != AttemptMilestone.FinalEffectsClaimed;
 
     public RestartAction RequestRestart(
@@ -275,7 +289,7 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
                 continue;
             }
 
-            if (!HasSameRestartAuthority(first, candidate))
+            if (!first.HasSameAuthority(candidate))
                 return new RestartContextResult(null, "pending inputs have different authority");
         }
 
@@ -317,21 +331,6 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
             ExpiresAt = interruptedAt + RestartReminderLifetime
         }, null);
     }
-
-    private static bool HasSameRestartAuthority(TurnContext left, TurnContext right)
-        => left.SessionId == right.SessionId
-           && left.Audience == right.Audience
-           && left.Boundary == right.Boundary
-           && left.ChannelType == right.ChannelType
-           && left.RequesterSenderId == right.RequesterSenderId
-           && left.RequesterPrincipal == right.RequesterPrincipal
-           && left.Provenance == right.Provenance
-           && left.DefaultDeliveryTarget == right.DefaultDeliveryTarget
-           && left.RequestedDeliveryTarget == right.RequestedDeliveryTarget
-           && left.HasAdoptedContext == right.HasAdoptedContext
-           && left.HasThirdPartyAdoptedContext == right.HasThirdPartyAdoptedContext
-           && left.AdoptedSpeakerIds.SequenceEqual(right.AdoptedSpeakerIds, StringComparer.Ordinal)
-           && left.SupportsInteractiveApproval == right.SupportsInteractiveApproval;
 
     public long CurrentModelCallId => _modelCallId;
     public bool HasLiveModel => _modelCts is not null;

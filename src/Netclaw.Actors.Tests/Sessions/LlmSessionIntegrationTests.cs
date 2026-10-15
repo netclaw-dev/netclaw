@@ -858,6 +858,11 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 ("Second message", TrustAudience.Personal),
                 ("Third message", TrustAudience.Personal)
             ];
+        // One turn has one requester. Inputs from different requesters never share a follow-up call, so the
+        // mixed case runs each run of same-requester inputs as its own turn, in admission order.
+        string[][] followUpBatches = mixedAuthority
+            ? [["Personal buffer one"], ["Public buffer"], ["Personal buffer two"]]
+            : [["Second message", "Third message"]];
 
         await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
@@ -890,20 +895,23 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             }
             firstResponseGate.TrySetResult();
 
-            await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
-            await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
-
-            await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
-            await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+            for (var turn = 0; turn <= followUpBatches.Length; turn++)
+            {
+                await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+                await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+            }
 
             // Assert
-            Assert.Equal(2, _fakeChatClient.CallCount);
-            var bufferedInputs = _fakeChatClient.ReceivedMessages[1]
-                .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User
-                    && queued.Any(input => input.Content == message.Text))
-                .Select(message => message.Text)
-                .ToArray();
-            Assert.Equal(queued.Select(input => input.Content), bufferedInputs);
+            Assert.Equal(1 + followUpBatches.Length, _fakeChatClient.CallCount);
+            for (var call = 1; call <= followUpBatches.Length; call++)
+            {
+                var bufferedInputs = _fakeChatClient.ReceivedMessages[call]
+                    .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                        && queued.Any(input => input.Content == message.Text))
+                    .Select(message => message.Text)
+                    .ToArray();
+                Assert.Equal(followUpBatches.Take(call).SelectMany(static batch => batch), bufferedInputs);
+            }
 
             await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
         }

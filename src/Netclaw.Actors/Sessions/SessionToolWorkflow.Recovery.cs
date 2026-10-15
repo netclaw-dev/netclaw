@@ -6,9 +6,21 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Configuration;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
+
+// The decision for a new input while the session is Ready. An open approval can remain from a cold recovery.
+internal abstract record NewInputPlan
+{
+    private NewInputPlan() { }
+
+    internal sealed record Activate : NewInputPlan;
+    internal sealed record AbandonThenActivate(ToolBatchAbandoned Event) : NewInputPlan;
+    // The input waits in the buffer. The turn that closes the approval, or the close itself, starts its turn.
+    internal sealed record WaitForApproval : NewInputPlan;
+}
 
 internal sealed partial class SessionToolWorkflow
 {
@@ -88,37 +100,50 @@ internal sealed partial class SessionToolWorkflow
 
     public bool ShouldAbandonResolvedForIdle() => ResolvedCount > 0;
 
-    public ToolBatchAbandoned? PlanNewInputAbandonment(
+    // Security boundary: only a person can abandon an open approval. Automation (a reminder fire, a webhook, a
+    // background job completion) cannot answer a prompt, so it must not cancel one. Its input waits until the
+    // approval closes, and the approval stays open. Any person may still abandon the approval, as before; this
+    // check does not compare the person with the requester of the parked call.
+    // A resolved or interrupted batch has no open approval, so any input closes it before its own turn.
+    public NewInputPlan PlanNewInputAbandonment(
         SessionState state,
         SessionId sessionId,
+        PrincipalClassification? inputPrincipal,
         long nowMs)
     {
         if (PendingCount > 0)
         {
+            if (IsAutomation(inputPrincipal))
+                return new NewInputPlan.WaitForApproval();
+
             MarkAbandoning();
-            return CreateAbandonment(
+            return new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
                 sessionId,
                 "Tool call was not completed — the request was "
                 + "superseded by a new message before approval was given.",
-                nowMs);
+                nowMs));
         }
 
         if (ResolvedCount > 0)
-            return CreateAbandonment(
+            return new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
                 sessionId,
                 "Tool call was not completed — the session restarted after approval before the action completed.",
-                nowMs);
+                nowMs));
 
         return ShouldAbandonInterruptedAfterRecovery(state)
-            ? CreateAbandonment(
+            ? new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
                 sessionId,
                 "Tool call was not completed — the session restarted before the action completed.",
-                nowMs)
-            : null;
+                nowMs))
+            : new NewInputPlan.Activate();
     }
+
+    // An input with no source has the default principal of TurnContext.FromMessageSource (UntrustedExternal).
+    private static bool IsAutomation(PrincipalClassification? principal)
+        => principal is PrincipalClassification.VerifiedAutomation or PrincipalClassification.SystemProcess;
 
     public ToolBatchAbandoned? PlanFailedRunAbandonment(
         SessionState state,
@@ -138,6 +163,9 @@ internal sealed partial class SessionToolWorkflow
            && ParkedToolBatchHistory.FindRedrivableAssistantMessage(state.History, null) is not null;
 
     public bool HasPendingApprovals() => PendingCount > 0;
+
+    // A parked batch still waits for an answer, or has an answer and no result yet. Input admitted after it waits.
+    public bool HasParkedApprovals() => PendingCount > 0 || ResolvedCount > 0;
 
     public int PendingDiagnosticCount => PendingCount;
 
