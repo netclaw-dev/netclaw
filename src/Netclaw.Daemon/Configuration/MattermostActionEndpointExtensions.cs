@@ -291,6 +291,7 @@ public static class MattermostActionEndpointExtensions
         {
             ApprovalNackReasons.WrongRequester => "Only the requesting user can approve this tool action.",
             ApprovalNackReasons.PromptExpired => "That approval prompt has expired. Please re-issue the request and try again.",
+            ApprovalNackReasons.AlreadyAnswered => "That approval prompt already has an answer. This response changed nothing.",
             ApprovalNackReasons.OptionUnavailable => "That approval option is not available for this tool action. Please use one of the options shown on the prompt.",
             SessionIngressGate.RestartInProgressMessage => SessionIngressGate.RestartInProgressMessage,
             _ => "That approval could not be recorded. Please try again."

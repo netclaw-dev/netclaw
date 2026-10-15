@@ -19,6 +19,8 @@ namespace Netclaw.Actors.Sessions;
 
 internal enum ApprovalNoticeKind
 {
+    // The channel already shows the recorded answer on the prompt, so the session adds no text.
+    None,
     Expired,
     WrongRequester,
     OptionUnavailable
@@ -180,10 +182,12 @@ internal sealed partial class SessionToolWorkflow
     public ApprovalResponseResult PrepareLiveResponse(ToolInteractionResponse response)
     {
         if (!TryGetPending(response.CallId.Value, out var pending))
-            return new ApprovalResponseResult.Rejected(
-                ApprovalNackReasons.PromptExpired,
-                ApprovalNoticeKind.Expired,
-                "unknown_call");
+            return HasResolved(response.CallId.Value)
+                ? AlreadyAnswered()
+                : new ApprovalResponseResult.Rejected(
+                    ApprovalNackReasons.PromptExpired,
+                    ApprovalNoticeKind.Expired,
+                    "unknown_call");
 
         var validation = ValidateResponse(pending, response);
         if (validation is ApprovalResponseResult.Rejected rejected)
@@ -207,10 +211,12 @@ internal sealed partial class SessionToolWorkflow
         SessionState state)
     {
         if (!TryGetPending(response.CallId.Value, out var pending))
-            return new ApprovalResponseResult.Rejected(
-                ApprovalNackReasons.PromptExpired,
-                ApprovalNoticeKind.Expired,
-                ClassifyUnknownCall(response.CallId.Value, state.History));
+            return HasResolved(response.CallId.Value)
+                ? AlreadyAnswered()
+                : new ApprovalResponseResult.Rejected(
+                    ApprovalNackReasons.PromptExpired,
+                    ApprovalNoticeKind.Expired,
+                    ClassifyUnknownCall(response.CallId.Value, state.History));
 
         var validation = ValidateResponse(pending, response);
         if (validation is ApprovalResponseResult.Rejected rejected)
@@ -218,10 +224,14 @@ internal sealed partial class SessionToolWorkflow
         return new RecoveredDurableAccepted(pending, ((ValidatedAccepted)validation).Answer);
     }
 
-    public string ClassifyUnknownCall(string callId, IReadOnlyList<SerializableChatMessage> history)
+    // A second answer for a call with a recorded answer (a double click or a channel retry) grants nothing.
+    // The prompt did not expire, so the "expired" notice would be false. An answer for a call that never
+    // existed, or that recovery removed, keeps the expired notice.
+    private static ApprovalResponseResult.Rejected AlreadyAnswered()
+        => new(ApprovalNackReasons.AlreadyAnswered, ApprovalNoticeKind.None, "already_resolved");
+
+    private static string ClassifyUnknownCall(string callId, IReadOnlyList<SerializableChatMessage> history)
     {
-        if (HasResolved(callId))
-            return "already_resolved";
         if (ParkedToolBatchHistory.HasToolResult(history, callId))
             return "already_completed";
         if (ParkedToolBatchHistory.FindRedrivableAssistantMessage(history, callId) is not null)
