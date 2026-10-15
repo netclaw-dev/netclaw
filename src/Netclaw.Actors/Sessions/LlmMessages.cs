@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
@@ -46,15 +47,16 @@ internal sealed record LlmResponseReceived : INoSerializationVerificationNeeded
 
 /// <summary>
 /// Incremental streaming delta emitted while an LLM response is in-flight.
-/// <see cref="Substantive"/> is false for content-free keepalives (e.g.
-/// <c>prompt_progress</c> heartbeats) so the watchdog refreshes the prefill budget
-/// on them but only promotes to the tighter inter-delta budget on real output.
+/// <see cref="Activity"/> is <see cref="StreamActivity.Keepalive"/> for content-free
+/// keepalives (e.g. <c>prompt_progress</c> heartbeats) so the watchdog refreshes the
+/// prefill budget on them but only promotes to the tighter inter-delta budget on real
+/// output. It separates thinking from answer output so the thinking cap can reset.
 /// </summary>
 internal sealed record LlmResponseDeltaReceived(AIContent Content) : INoSerializationVerificationNeeded
 {
     public long CallId { get; init; }
 
-    public bool Substantive { get; init; }
+    public StreamActivity Activity { get; init; }
 }
 
 /// <summary>
@@ -151,9 +153,14 @@ internal sealed record ToolExecutionFailed : INoSerializationVerificationNeeded
 /// when the keepalive-immune no-progress deadline fired (the call produced no
 /// substantive output for the whole budget) rather than the liveness timer —
 /// the handler treats that as a hard kill with no grace, since keepalives never
-/// refresh it.
+/// refresh it. <see cref="ThinkingCap"/> is true when one model call streamed only
+/// thinking for longer than the thinking cap; it is also a hard kill.
 /// </summary>
-internal sealed record ProcessingWatchdogExpired(long OperationId, string OperationName, bool NoProgress = false)
+internal sealed record ProcessingWatchdogExpired(
+    long OperationId,
+    string OperationName,
+    bool NoProgress = false,
+    bool ThinkingCap = false)
     : INoSerializationVerificationNeeded;
 
 /// <summary>

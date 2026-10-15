@@ -7,6 +7,7 @@ using Akka.Actor;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
+using Netclaw.Configuration;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions.Handlers;
@@ -382,7 +383,7 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
 
     public bool AcceptModelProgress(
         long callId,
-        bool substantive,
+        StreamActivity activity,
         TimeSpan prefillTimeout,
         TimeSpan interDeltaTimeout)
     {
@@ -390,7 +391,7 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
             return false;
 
         _anyContentStreamed = _watchdog.OnStreamProgress(
-            substantive, _anyContentStreamed, prefillTimeout, interDeltaTimeout, timers);
+            activity, _anyContentStreamed, prefillTimeout, interDeltaTimeout, timers);
         return true;
     }
 

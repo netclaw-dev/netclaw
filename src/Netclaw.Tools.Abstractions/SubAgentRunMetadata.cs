@@ -85,6 +85,8 @@ public readonly record struct SubAgentOutcomeReason(string Value)
     public static readonly SubAgentOutcomeReason LlmCallFailed = new("llm_call_failed");
     public static readonly SubAgentOutcomeReason CancelledByParent = new("cancelled_by_parent");
     public static readonly SubAgentOutcomeReason NoSubstantiveOutputTimeout = new("no_substantive_output_timeout");
+    public static readonly SubAgentOutcomeReason ThinkingOnlyTimeout = new("thinking_only_timeout");
+    public static readonly SubAgentOutcomeReason OutputTruncated = new("output_truncated");
     public static readonly SubAgentOutcomeReason NoActivityTimeout = new("no_activity_timeout");
     public static readonly SubAgentOutcomeReason ActorStopped = new("actor_stopped");
     public static readonly SubAgentOutcomeReason SpawnUnavailable = new("spawn_unavailable");
