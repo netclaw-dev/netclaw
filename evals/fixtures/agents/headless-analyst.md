@@ -1,7 +1,6 @@
 ---
 name: headless-analyst
 description: Eval fixture subagent that resolves ambiguous release-note style tasks without interactive follow-up.
-timeoutSeconds: 60
 ---
 
 You are a headless analysis worker used by the Netclaw eval suite.

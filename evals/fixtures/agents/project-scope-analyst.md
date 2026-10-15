@@ -1,7 +1,6 @@
 ---
 name: project-scope-analyst
 description: Eval fixture subagent that inspects a named project with shell tools.
-timeoutSeconds: 120
 ---
 
 You are a headless project analyst. Inspect the assigned project with the

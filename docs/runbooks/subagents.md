@@ -13,7 +13,7 @@ the main agent stay focused on conversation and coordination.
 
 On every LLM turn, the main agent's system prompt includes an
 `[available-subagents]` section that enumerates every user-facing subagent along
-with its description, inherited tool policy, and timeout:
+with its description and inherited tool policy:
 
 ```
 [available-subagents — use spawn_agent to delegate]
@@ -21,17 +21,14 @@ with its description, inherited tool policy, and timeout:
 ## research-assistant
 Deep web research with search and citation
 Tools: inherited from parent audience policy, except denied sub-agent tools
-Timeout: 120s
 
 ## code-analyst
 Analyze code, run commands, and review files
 Tools: inherited from parent audience policy, except denied sub-agent tools
-Timeout: 120s
 
 ## summarizer
 Summarize documents and content concisely
 Tools: inherited from parent audience policy, except denied sub-agent tools
-Timeout: 60s
 
 ## How to delegate
 Call `spawn_agent(agent: "<name>", task: "<specific task>", context: "<optional background>")`.
@@ -101,8 +98,24 @@ first user message is just the raw task, identical to the pre-context protocol.
 
 Child creation is marshaled back onto the session actor thread, so supervision
 stays within Akka's actor-thread rules. If the parent tool call is cancelled or
-times out, the subagent is cancelled too. The timeout is an inactivity budget: a
+times out, the subagent is cancelled too. The timers are inactivity budgets: a
 responsive subagent is not stopped merely because wall-clock time has elapsed.
+
+Every subagent uses the same timers from `netclaw.json`. An agent file does not
+set them:
+
+| Timer | Setting | Default | Meaning |
+|-------|---------|---------|---------|
+| Prefill | `SubAgents.PrefillTimeoutSeconds` | `1800` | Max wait for the first streamed delta. Keepalives refresh it. A file may set `prefillTimeoutSeconds` to override it. |
+| Inter-delta | `Session.FirstTokenTimeoutSeconds` | `600` | Max gap between streamed deltas after the first one. |
+| No progress | `SubAgents.NoProgressTimeoutSeconds` | `1200` | Hard ceiling on time without real output. Keepalives never refresh it. |
+
+Agent files no longer set a per-agent timeout. A file that still contains
+`timeoutSeconds` loads, and the loader logs one warning that names the file and
+says the key is obsolete and ignored. Remove the key from the file.
+
+Profiles that used the old `timeoutSeconds` default of `60` now use the
+inter-delta budget of `600` seconds. The no-progress timer still bounds the run.
 
 ### Observability
 
@@ -164,7 +177,6 @@ the managed one is skipped with a warning.
 name: research-assistant
 description: Deep web research with search and citation
 modelRole: Compaction
-timeoutSeconds: 120
 visibility: user-facing
 emitStructuredFindings: false
 ---
@@ -189,7 +201,6 @@ findings into clear, well-organized summaries.
 | `description` | Yes | — | One-line description shown in the `[available-subagents]` discovery block. |
 | `tools` | No | `[]` | Advisory tool metadata retained for file-format compatibility. It does not constrain runtime tool access. |
 | `modelRole` | No | `Compaction` | `Compaction` (cheaper/faster) or `Main` (full model). |
-| `timeoutSeconds` | No | `60` | Inactivity timeout in seconds. The watchdog resets when the subagent makes progress. |
 | `visibility` | No | `user-facing` | `user-facing` (visible to `spawn_agent`) or `internal` (platform-owned, hidden). Accepts both hyphenated and PascalCase. |
 | `emitStructuredFindings` | No | `false` | When true, successful output becomes a memory-candidate finding for parent-session review. |
 
@@ -271,13 +282,13 @@ Three agents are seeded during `netclaw init`. They are regular file-based
 definitions — you can edit or delete them.
 
 **research-assistant** — Deep web research with search and citation.
-Timeout: 120s. Tools are inherited from the parent audience/profile policy.
+Tools are inherited from the parent audience/profile policy.
 
 **code-analyst** — Analyze code and review files.
-Timeout: 120s. Tools are inherited from the parent audience/profile policy.
+Tools are inherited from the parent audience/profile policy.
 
 **summarizer** — Summarize documents and content concisely.
-Timeout: 60s. Tools are inherited from the parent audience/profile policy.
+Tools are inherited from the parent audience/profile policy.
 
 ## Creating a custom agent
 
@@ -288,7 +299,6 @@ Create a single `.md` file in `~/.netclaw/agents/`:
 name: github-reviewer
 description: Read local PR notes and summarize next steps for the parent session
 modelRole: Compaction
-timeoutSeconds: 90
 visibility: user-facing
 ---
 
