@@ -416,6 +416,39 @@ After the journal callback, the owner restores that stored context for the live 
 The actor sends the acknowledgment after the callback. The journal retains the original authority.
 Schema exposure grants no execution authority. The tool execution path still applies its authorization checks.
 
+One authority per turn (buffered input):
+
+- Owner: `SessionInputFlow.DrainBufferedBatch`. The actor calls it after a turn, after a tool batch,
+  and after a compaction.
+- Rule: a turn has one authority, fixed when the turn starts. A batch holds only the leading buffered
+  inputs of one [requester](../spec/GLOSSARY.md#requester) (`TurnContext.HasSameRequester`).
+  An input from another requester waits for its own turn. Nothing changes the authority of a running turn.
+- After a turn, the first buffered input starts a new turn. The flow adopts the recorded
+  `InputAdmitted.TurnContext` of that input. The actor then derives trust and the prompt audience for it
+  (`ApplyBufferedBatch`). Until the actor derives trust, the trust context is empty, so tool exposure fails closed.
+- Inside a turn (tool batch or compaction), only inputs of the turn's requester join. The turn keeps its authority.
+- An overflow replay is the current turn's own message. It always continues the current turn.
+- Data: the buffer and the current authority are actor-local. Each buffered command carries a copy of its
+  recorded authority. The journal keeps the durable `InputAdmitted` record.
+- Before this change, the flow sent the whole buffer in one call, and the call ran under the previous
+  turn's authority (or no authority after a failed turn).
+
+```text
+schematic: drain(continuesTurn)
+  owner = continuesTurn or buffer[0] is replay ? current authority : recorded authority of buffer[0]
+  batch = leading inputs where input is replay or HasSameRequester(input, owner)
+  if the batch starts a turn: current authority = owner; trust = derive(owner)
+  the remaining inputs keep their order and wait
+```
+
+A valid example: Alice's turn runs a tool. Alice sends a second message during the tool call.
+The message joins Alice's turn at the tool boundary.
+An invalid example: a reminder turn runs a tool, and Bob sends a message during the tool call.
+Bob's message must not join the reminder turn, and it must not run under the reminder authority.
+It waits and starts its own turn under Bob's authority.
+A focused mutation gate (`./scripts/run-input-one-authority-mutations.sh`) guards the owner choice and the join rule.
+`SessionInputFlowAccordantTests` states the rule over generated sequences.
+
 Leaks today:
 
 - `ToolAccessPolicy` also parses shell text, runs hard deny, and builds the
@@ -773,14 +806,26 @@ Facts behind the diagram (current code):
   operator can answer. Evals assert this exact text.
 - The session actor journals the request before it sends the prompt
   (`HandleToolInteractionRequestDispatch` in `LlmSessionActor.cs`).
-- An unanswered request does not keep the session in memory. An answer
+- An unanswered request does not keep the session in memory, unless automated
+  input waits for it (see the next bullets). An answer
   rehydrates the session and re-drives the parked batch
   (`HandleToolInteractionResponseWhenIdle` and `SessionToolWorkflow.PlanRecoveredContinuation`).
 - No timer denies an unanswered request. The session and its subagents ask
   through one prompt, `ParentSessionApprovalBridge`, which waits with the
   session's approval timeout. The daemon sets that timeout to infinite. The
-  request waits until the operator answers, the run is cancelled, or a new user
-  message abandons the parked batch.
+  request waits until the operator answers, the run is cancelled, or a new
+  message from a person abandons the parked batch.
+- Automated input never abandons an open approval
+  (`SessionToolWorkflow.PlanNewInputAbandonment`). Input with the principal
+  `VerifiedAutomation` or `SystemProcess` (a reminder fire, a webhook, a
+  background job completion) waits in the buffer. It runs as its own turn after
+  the turn that closes the approval. If the approval closes with no re-drive,
+  the actor starts the waiting turn (`StartWaitingInputAfterApproval`). The
+  session does not passivate for idle time while such input waits.
+  A valid example: a reminder fires while Alice's `git status` prompt is open.
+  Alice approves, the command runs once, and then the reminder turn runs.
+  An invalid example: the reminder fire closes Alice's prompt with the
+  "superseded by a new message" result. The session must not do this.
 - A subagent request goes to the parent through `ParentSessionApprovalBridge`.
   It is live-only. After a restart, Netclaw rejects the old prompt as expired.
   A subagent without a parent bridge cannot ask. Its whole run fails with

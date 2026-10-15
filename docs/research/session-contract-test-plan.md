@@ -436,8 +436,9 @@ Slopwatch found zero issues. The copyright header and whitespace checks passed.
 `SessionInputFlow` now owns the live input queue, selected IDs, source reservations, current authority, telemetry, and continuation facts.
 The actor retains journal writes, phase changes, history effects, model calls, and output.
 The live turn uses the `TurnId` and authority from its committed `InputAdmitted` record.
-The owner drains all buffered messages in one ordered follow-up batch, including mixed Personal and Public sources.
-The change preserves current authority policy. It does not repair mixed-authority tool exposure or child-result wakeup.
+At that time, the owner drained all buffered messages in one ordered follow-up batch, including mixed Personal and Public sources.
+That change preserved the authority policy of that time. It did not repair mixed-authority tool exposure or child-result wakeup.
+The one-authority group below replaces this batch rule.
 
 The transfer removes thirteen direct actor fields and adds one owner reference.
 Against stop head `73b4ba2f`, the actor falls from 3,928 to 3,768 lines, a reduction of 160.
@@ -454,3 +455,17 @@ These tests observe admission after acknowledgment; they do not prove every call
 The focused session reliability gate killed all eight selected mutants in 125.78 seconds.
 Slopwatch found zero issues. The copyright header and whitespace checks passed.
 Raw results are under `planning/netclaw/session-refactor/review/evidence/input-flow-proof/` outside this repository.
+
+### One authority per turn group
+
+The operator decided that a turn has one authority, fixed when the turn starts.
+Inputs from different requesters never share a turn. An input from another requester waits for its own turn.
+`SessionInputFlow.DrainBufferedBatch` now takes only the leading buffered inputs of one requester (`TurnContext.HasSameRequester`).
+After a turn, the flow adopts the recorded authority of the first buffered input. Inside a turn, only the turn's requester joins.
+The actor derives trust and the prompt audience for an adopted authority before the model call.
+Automated input (principal `VerifiedAutomation` or `SystemProcess`) never abandons an open approval. It waits in the buffer.
+
+The pinned mixed case in `LlmSessionIntegrationTests.Buffered_messages_are_batched_into_follow_up_LLM_call` now expects three follow-up turns.
+`SessionInputFlowAccordantTests` checks order, one admission per source key, no starvation, closure, one requester per batch, and the batch authority of each model call.
+`RecoveredApprovalAbandonmentTests` and `AutomatedInputApprovalWaitTests` check that a reminder keeps an open approval and runs later.
+The focused gate `./scripts/run-input-one-authority-mutations.sh` kills 8 mutants with `SessionInputFlowRequesterTests`.
