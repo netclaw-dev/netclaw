@@ -114,7 +114,7 @@ The system SHALL persist cancellation intent before it acknowledges the intent. 
 
 The system SHALL save a child's raw terminal result before asynchronous preparation. A preparation failure SHALL leave that result available for retry. The system SHALL make a result eligible for delivery when preparation completes.
 
-The parent SHALL select a ready child result without ordering it by child completion time. It SHALL deliver that result at the next safe model boundary. It SHALL NOT interrupt an active model call or incomplete tool batch. Ordinary user inputs SHALL retain their existing ordered batch.
+The parent SHALL select a ready child result without ordering it by child completion time. It SHALL deliver that result at the next safe model boundary. It SHALL NOT interrupt an active model call or incomplete tool batch. Ordinary user inputs SHALL run in ordered batches of one requester, each under its own recorded authority.
 
 The parent SHALL record result consumption with the correlated parent decision. It SHALL keep an unconsumed result available after recovery. Delivery SHALL use the canonical assistant/tool result pair with a fresh delivery call ID that differs from the initial acceptance call ID. Consumption SHALL retain the child's original authority for downstream tools and approval. The system SHALL NOT fabricate an execution receipt or successful result when no such result exists.
 
