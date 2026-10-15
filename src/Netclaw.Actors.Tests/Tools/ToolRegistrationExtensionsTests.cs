@@ -162,6 +162,65 @@ public class ToolRegistrationExtensionsTests
     public async Task Skill_registration_preserves_file_read_logging()
     {
         using var directory = new DisposableTempDir();
+        var (tool, skillFile, logger, paths) = await CreateTrackedSkillFileReadAsync(directory);
+
+        // Two sessions share one tool instance. Each log line must name the session that read the file.
+        foreach (var sessionId in new[] { "slack/thread-1", "signalr/abc" })
+        {
+            var context = TestToolExecutionContext.CreateBound(
+                sessionId,
+                Path.Combine(paths.SessionsDirectory, "thread-1"),
+                new TestToolExecutionContextOptions
+                {
+                    Audience = TrustAudience.Team,
+                    Boundary = TrustBoundary.Team,
+                    ChannelType = "slack"
+                });
+
+            var result = await tool.ExecuteAsync(
+                ToolInput.Create("Path", skillFile),
+                context,
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains("# Tracked", result, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(
+            [
+                "turn_skill_loaded skill=tracked-skill method=file_read session=slack/thread-1",
+                "turn_skill_loaded skill=tracked-skill method=file_read session=signalr/abc",
+            ],
+            logger.Messages.Where(static m => m.StartsWith("turn_skill_loaded", StringComparison.Ordinal)));
+    }
+
+    // A sessionless run is a deliberate state (operator routes). The read must succeed
+    // and the line must say "none" instead of naming a session.
+    [Fact]
+    public async Task Skill_file_read_logs_session_none_for_a_sessionless_run()
+    {
+        using var directory = new DisposableTempDir();
+        var (tool, skillFile, logger, _) = await CreateTrackedSkillFileReadAsync(directory);
+        var context = TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            ChannelType = "slack"
+        });
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create("Path", skillFile),
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("# Tracked", result, StringComparison.Ordinal);
+        Assert.Equal(
+            ["turn_skill_loaded skill=tracked-skill method=file_read session=none"],
+            logger.Messages.Where(static m => m.StartsWith("turn_skill_loaded", StringComparison.Ordinal)));
+    }
+
+    private static async Task<(FileReadTool Tool, string SkillFile, RecordingLogger<FileReadTool> Logger, NetclawPaths Paths)>
+        CreateTrackedSkillFileReadAsync(DisposableTempDir directory)
+    {
         var paths = new NetclawPaths(directory.Path);
         paths.EnsureDirectoriesExist();
         var skillDirectory = Path.Combine(paths.SkillsDirectory, "tracked-skill");
@@ -199,33 +258,7 @@ public class ToolRegistrationExtensionsTests
             logger);
         var tool = Assert.IsType<FileReadTool>(registry.GetByName(FileReadTool.ToolName));
 
-        // Two sessions share one tool instance. Each log line must name the session that read the file.
-        foreach (var sessionId in new[] { "slack/thread-1", "signalr/abc" })
-        {
-            var context = TestToolExecutionContext.CreateBound(
-                sessionId,
-                Path.Combine(paths.SessionsDirectory, "thread-1"),
-                new TestToolExecutionContextOptions
-                {
-                    Audience = TrustAudience.Team,
-                    Boundary = TrustBoundary.Team,
-                    ChannelType = "slack"
-                });
-
-            var result = await tool.ExecuteAsync(
-                ToolInput.Create("Path", skillFile),
-                context,
-                TestContext.Current.CancellationToken);
-
-            Assert.Contains("# Tracked", result, StringComparison.Ordinal);
-        }
-
-        Assert.Equal(
-            [
-                "turn_skill_loaded skill=tracked-skill method=file_read session=slack/thread-1",
-                "turn_skill_loaded skill=tracked-skill method=file_read session=signalr/abc",
-            ],
-            logger.Messages.Where(static m => m.StartsWith("turn_skill_loaded", StringComparison.Ordinal)));
+        return (tool, skillFile, logger, paths);
     }
 
     [Fact]
@@ -324,32 +357,5 @@ public class ToolRegistrationExtensionsTests
             ToolInvocationContext context,
             CancellationToken cancellationToken) =>
             ValueTask.FromResult(McpPromptSkillLoadResult.Failed("unavailable"));
-    }
-
-    private sealed class RecordingLogger<T> : ILogger<T>
-    {
-        public List<string> Messages { get; } = [];
-
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull
-            => EmptyScope.Instance;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-            => Messages.Add(formatter(state, exception));
-
-        private sealed class EmptyScope : IDisposable
-        {
-            public static EmptyScope Instance { get; } = new();
-
-            public void Dispose()
-            {
-            }
-        }
     }
 }

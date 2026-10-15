@@ -26,6 +26,7 @@ public class SkillToolTests : IDisposable
     private readonly string _skillsDir;
     private readonly NetclawPaths _paths;
     private readonly SkillRegistry _registry;
+    private readonly SubAgentDefinitionRegistry _subAgentRegistry = new();
     private readonly SkillIndexContextLayer _indexLayer;
     private static readonly IMcpPromptSkillLoader PromptLoader = new UnavailablePromptLoader();
 
@@ -308,14 +309,38 @@ public class SkillToolTests : IDisposable
             logger.Messages.Where(static m => m.StartsWith("turn_skill_loaded", StringComparison.Ordinal)));
     }
 
+    // A sessionless run is a deliberate state (operator routes), not a failure. The load must
+    // succeed and the line must say so, so the harness can tell it from a real session id.
+    [Fact]
+    public async Task SkillLoad_logs_session_none_for_a_sessionless_run()
+    {
+        var (skillName, input) = ArrangeSkillLoad(SkillLoadPath.File);
+        var logger = new RecordingLogger<SkillLoadTool>();
+        var tool = new SkillLoadTool(
+            _registry,
+            new NoOpSkillContentScanner(),
+            PromptLoader,
+            sessionMetrics: null,
+            subAgentRegistry: _subAgentRegistry,
+            subAgentSpawner: null,
+            logger: logger);
+        var context = TestToolExecutionContext.CreateUnbound(
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal });
+
+        var result = await tool.ExecuteAsync(input, context, TestContext.Current.CancellationToken);
+
+        Assert.Contains("# Plain Skill", result, StringComparison.Ordinal);
+        Assert.Equal(
+            [$"turn_skill_loaded skill={skillName} method=skill_load session=none"],
+            logger.Messages.Where(static m => m.StartsWith("turn_skill_loaded", StringComparison.Ordinal)));
+    }
+
     public enum SkillLoadPath
     {
         File,
         Routed,
         McpPrompt,
     }
-
-    private readonly SubAgentDefinitionRegistry _subAgentRegistry = new();
 
     private (string SkillName, IDictionary<string, object?> Input) ArrangeSkillLoad(SkillLoadPath path)
     {
@@ -1983,33 +2008,6 @@ public class SkillToolTests : IDisposable
 
         public void RecordSkillLoaded(string skillName, SkillLoadMethod method)
             => SkillLoadedCalls.Add((skillName, method));
-    }
-
-    private sealed class RecordingLogger<T> : ILogger<T>
-    {
-        public List<string> Messages { get; } = [];
-
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull
-            => NullScope.Instance;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-            => Messages.Add(formatter(state, exception));
-
-        private sealed class NullScope : IDisposable
-        {
-            public static NullScope Instance { get; } = new();
-
-            public void Dispose()
-            {
-            }
-        }
     }
 
     private sealed class UnavailablePromptLoader : IMcpPromptSkillLoader
