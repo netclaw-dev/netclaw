@@ -42,6 +42,8 @@ The same accepted start identity SHALL NOT start a second child. A retry with th
 
 The system SHALL preserve the original requester, audience, and authority boundary for child tools, approvals, status, and cancellation. A child result SHALL NOT grant authority. A child worker SHALL remain ephemeral and SHALL NOT restart an uncertain external action after owner recovery. Status SHALL distinguish durable acceptance from terminal completion. The run owner's status response SHALL include the pending approval count. Other requesters SHALL NOT see that count. An approval for a stale or unrelated run, call, requester, or attempt SHALL grant no authority.
 
+Ownership of status and cancellation SHALL belong to the requester: the session, audience, trust boundary, channel type, sender ID, and principal classification. Per-turn facts of a later message SHALL NOT change ownership. These facts are the turn ID, provenance, delivery targets, adopted context, and the interactive approval flag. Start idempotency, approval recovery, and child continuation SHALL keep the full authority check.
+
 The system SHALL persist cancellation intent before it acknowledges the intent. That acknowledgement SHALL NOT mean that the run is complete. The system SHALL report terminal cancellation only after the local dispatch confirms closure, and it SHALL start no new dispatch after closure. An uncertain external effect SHALL remain explicit.
 
 #### Scenario: Child approval keeps the original requester
@@ -58,12 +60,19 @@ The system SHALL persist cancellation intent before it acknowledges the intent. 
 - **THEN** the system does not start the child again automatically
 - **AND** the run reports an explicit non-success or uncertain state
 
-#### Scenario: Status enforces run ownership
+#### Scenario: Status and cancel enforce run ownership
 
 - **GIVEN** one requester owns a child run
-- **WHEN** another requester asks for its status
-- **THEN** the system denies that status request
+- **WHEN** another requester asks for its status or asks to cancel it
+- **THEN** the system denies both requests
+- **AND** the other requester does not see the pending approval count
 - **AND** the owner can observe recorded progress and pending approval facts
+
+#### Scenario: Owner controls the child from a later turn
+
+- **GIVEN** a requester started a child run in a turn with adopted thread context
+- **WHEN** the same requester asks for status and then cancels in a later turn with no adopted context
+- **THEN** both requests succeed
 
 #### Scenario: Accepted status is not terminal status
 
