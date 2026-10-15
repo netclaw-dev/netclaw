@@ -34,6 +34,14 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
 {
     private const string ApprovalProbeToolName = "approval_probe";
     private static readonly TimeSpan ApprovalAskTimeout = TimeSpan.FromSeconds(30);
+
+    // Tool time counts against the sub-agent no-activity budget. A child with an approval
+    // bridge gets one grace cycle, so it fails after two budgets. A cold shell start on
+    // Windows CI can take more than 10 s. A test that starts a real shell uses this budget.
+    private static readonly TimeSpan RealShellInactivityBudget = TimeSpan.FromSeconds(30);
+
+    // Longer than two budgets, so a slow run reports the sub-agent result and not an AskTimeoutException.
+    private static readonly TimeSpan RealShellAskTimeout = (2 * RealShellInactivityBudget) + TimeSpan.FromSeconds(15);
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
     // Each call owns a unique temp directory (issue #2266); teardown disposes them all.
@@ -893,9 +901,9 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
                     sessionDirectory: sessionDirectory,
                     approvalBridge: approvalBridge),
                 Task = "Declare the project and retry the exact inspection.",
-                Timeout = TimeSpan.FromSeconds(5)
+                Timeout = RealShellInactivityBudget
             },
-            ApprovalAskTimeout,
+            RealShellAskTimeout,
             TestContext.Current.CancellationToken);
 
         // D2: an attended and an unattended child get the same result.
@@ -1377,6 +1385,49 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
         Assert.False(fakeTool.WasCalled);
     }
 
+    [Theory]
+    [InlineData(3000, false)]
+    [InlineData(1200, true)]
+    public async Task Subagent_with_approval_bridge_gets_one_grace_cycle_for_tool_time(
+        int toolDelayMilliseconds,
+        bool expectSuccess)
+    {
+        // Pins the budget contract that RealShellInactivityBudget relies on. Tool time counts
+        // against the no-activity budget. A child with a bridge survives one expiry (1 s) and
+        // fails at the second (2 s). The fake delays asynchronously, as a real process wait does.
+        // A blocking fake would hold the actor thread and hide the second expiry.
+        var tool = new AsyncDelayTool(TimeSpan.FromMilliseconds(toolDelayMilliseconds));
+        var client = new FakeChatClient
+        {
+            ToolCallsOnFirstCall = [CreateToolCall("call-slow", AsyncDelayTool.ToolName)]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([tool]),
+            client,
+            PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(
+                    approvalBridge: new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance)),
+                Task = "Run the slow tool.",
+                Timeout = TimeSpan.FromSeconds(1)
+            },
+            ApprovalAskTimeout,
+            TestContext.Current.CancellationToken);
+
+        if (expectSuccess)
+        {
+            Assert.True(result.Success, result.Output);
+        }
+        else
+        {
+            Assert.False(result.Success);
+            Assert.Contains("no activity for 1s", result.Output, StringComparison.Ordinal);
+        }
+    }
+
     private static ToolAccessPolicy PermissivePolicy() => new(
         new NetclawPaths(),
         new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
@@ -1477,9 +1528,9 @@ public class SubAgentActorTests : TestKit, IAsyncDisposable
             {
                 Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
                 Task = "Inspect project metrics.",
-                Timeout = TimeSpan.FromSeconds(5)
+                Timeout = RealShellInactivityBudget
             },
-            ApprovalAskTimeout,
+            RealShellAskTimeout,
             TestContext.Current.CancellationToken);
 
         return new ProjectScopeScenario(result, client, worktree);
@@ -2576,6 +2627,29 @@ internal sealed class DelayingParentApprovalBridge : IParentConsentBridge
 }
 
 internal sealed record RecordedApprovalOption(string Key, string Label);
+
+internal sealed class AsyncDelayTool(TimeSpan delay) : INetclawTool
+{
+    public const string ToolName = "async_delay";
+
+    public string Name => ToolName;
+    public LlmFacingToolName LlmFacingName => LlmFacingToolName.FromCanonical(Name);
+    public string Description => "Fake tool that completes after an asynchronous delay.";
+    public string GrantCategory => "builtin";
+    public System.Text.Json.JsonElement ParameterSchema => default;
+
+    public AITool ToAITool() => AIFunctionFactory.Create(() => "delayed", name: Name, description: Description);
+
+    [SlopwatchSuppress("SW004", "The delay is the fake tool latency, as a real process wait. The test never sleeps; it awaits the sub-agent result.")]
+    public async Task<string> ExecuteAsync(
+        IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
+        CancellationToken ct = default)
+    {
+        await Task.Delay(delay, ct);
+        return "delayed";
+    }
+}
 
 internal sealed class ReverseCompletionTool(string changedPath) : INetclawTool
 {
