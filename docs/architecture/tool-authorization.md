@@ -719,6 +719,31 @@ The child dispatch gate closes before a cancellation acknowledgement or terminal
 The acknowledgement reports durable cancellation intent. It does not report terminal completion.
 Recovery settles an uncertain child as lost and does not launch a replacement actor.
 A stale answer cannot dispatch a recovered child or grant authority for another child.
+A second answer to a prompt that already has a recorded answer grants nothing.
+The session replies `approval_already_answered` and adds no "expired" notice, because the prompt did not expire.
+An answer for a call that never existed, or that recovery removed, keeps the "expired" notice.
+
+Child ownership (status and cancel):
+
+- Owner: `LlmSessionActor.ControlChild`. It answers `check_agent_run` for status and for cancel.
+- Check: `HasSameChildRequester`, which calls `TurnContext.HasSameRequester`.
+  The check compares the [requester](../spec/GLOSSARY.md#requester): session, audience, boundary,
+  channel type, sender ID, and principal classification.
+- The check ignores the turn ID, provenance, delivery targets, adopted-context fields, and the
+  interactive approval flag. These fields describe one message, and they change between turns of one person.
+- Data: the `OriginalContext` of the run is durable in the session journal. The context of the request is call-local.
+- The child start keeps the full authority check (`HasSameChildAuthority`, `TurnContext.HasSameAuthority`)
+  for start idempotency. Approval recovery and child continuation also keep the full authority check.
+- Before this change, `ControlChild` compared the full authority. A later turn of the owner with different
+  adopted context got "This child run is not available to the requester".
+
+A valid example: Alice starts a child in a Slack thread turn that quotes earlier messages.
+In a later turn with no quoted context, Alice asks for status and then cancels. Both calls succeed.
+An invalid example: Bob asks for the status of Alice's child in the same thread.
+The check denies the request, and Bob does not see the pending approval count.
+A focused mutation gate (`./scripts/run-child-owner-mutations.sh`) guards the requester check.
+The testable rule is "Status enforces run ownership" in
+[background-subagent-runs](../../openspec/specs/background-subagent-runs/spec.md).
 
 ```mermaid
 sequenceDiagram

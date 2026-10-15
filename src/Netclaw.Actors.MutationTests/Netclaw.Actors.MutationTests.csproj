@@ -43,6 +43,8 @@
              Link="Sessions/SessionExecutionLifetimeStopPolicyTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/SessionInputFlowTests.cs"
              Link="Sessions/SessionInputFlowTests.cs" />
+    <Compile Include="../Netclaw.Actors.Tests/Channels/TurnContextRequesterTests.cs"
+             Link="Channels/TurnContextRequesterTests.cs" />
     <Compile Include="../Netclaw.Tests.Utilities/TestSessionStorageResolver.cs"
              Link="Utilities/TestSessionStorageResolver.cs" />
   </ItemGroup>

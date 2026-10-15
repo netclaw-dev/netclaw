@@ -3087,6 +3087,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             callId, rejection.Diagnostic);
         switch (rejection.Notice)
         {
+            case ApprovalNoticeKind.None:
+                break;
             case ApprovalNoticeKind.Expired:
                 EmitExpiredPromptNotice();
                 break;
