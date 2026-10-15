@@ -56,6 +56,18 @@ public sealed class FakeChatClient : IChatClient
     public IReadOnlyList<string>? ResponseTextsByCall { get; set; }
 
     /// <summary>
+    /// Per-call response contents (text, reasoning), indexed by (1-based) call number.
+    /// Takes precedence over <see cref="ResponseTextsByCall"/> for the calls it covers.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<AIContent>>? ResponseContentsByCall { get; set; }
+
+    /// <summary>
+    /// Per-call <see cref="ChatResponse.FinishReason"/>, indexed by (1-based) call number.
+    /// A null entry, or a call past the end of the list, leaves the finish reason unset.
+    /// </summary>
+    public IReadOnlyList<ChatFinishReason?>? FinishReasonsByCall { get; set; }
+
+    /// <summary>
     /// When set, a qualifying call returns these tool calls instead of text.
     /// By default only the first call qualifies; see <see cref="AlwaysReturnToolCalls"/>.
     /// </summary>
@@ -97,8 +109,14 @@ public sealed class FakeChatClient : IChatClient
             {
                 var toolCallMessage = new ChatMessage(
                     ChatRole.Assistant, new List<AIContent>(ToolCallsOnFirstCall));
-                return new ChatResponse(toolCallMessage) { Usage = UsageOverride };
+                return new ChatResponse(toolCallMessage) { Usage = UsageOverride, FinishReason = FinishReasonForCall(CallCount) };
             }
+        }
+
+        if (ResponseContentsByCall is { Count: > 0 } scripted && CallCount <= scripted.Count)
+        {
+            var scriptedMessage = new ChatMessage(ChatRole.Assistant, new List<AIContent>(scripted[CallCount - 1]));
+            return new ChatResponse(scriptedMessage) { Usage = UsageOverride, FinishReason = FinishReasonForCall(CallCount) };
         }
 
         var responseText = ResponseTextsByCall is { Count: > 0 } responses && CallCount <= responses.Count
@@ -106,8 +124,13 @@ public sealed class FakeChatClient : IChatClient
             : ResponseText ?? $"[fake] Response #{CallCount}";
 
         var responseMessage = new ChatMessage(ChatRole.Assistant, [new TextContent(responseText)]);
-        return new ChatResponse(responseMessage) { Usage = UsageOverride };
+        return new ChatResponse(responseMessage) { Usage = UsageOverride, FinishReason = FinishReasonForCall(CallCount) };
     }
+
+    private ChatFinishReason? FinishReasonForCall(int callNumber)
+        => FinishReasonsByCall is { } reasons && callNumber <= reasons.Count
+            ? reasons[callNumber - 1]
+            : null;
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages,
