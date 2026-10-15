@@ -352,6 +352,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            // An automated input waits in memory for an open approval to close.
+            // Passivation would drop the only live copy of its place in the queue.
+            if (_input.HasBufferedContinuation)
+            {
+                _log.Info(
+                    "Session idle with buffered input that waits for {PendingApprovalCount} open approval(s); deferring passivation",
+                    _toolWorkflow.PendingDiagnosticCount);
+                return;
+            }
+
             // Pending tool approvals do NOT defer passivation: approval state is
             // journaled (ToolApprovalRequested/Resolved) and an approval response
             // rehydrates the session and re-drives the parked batch, the same
@@ -1761,25 +1771,34 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (TryRejectIncompatibleInput(cmd.MediaReferences, cmd.Source))
             return;
 
-        // A new inbound message while a tool batch is still parked on an
-        // approval gate means the user abandoned that approval. This is only
+        // A new inbound message from a person while a tool batch is still parked
+        // on an approval gate means the user abandoned that approval. This is only
         // reachable on a cold-recovered session — a live session parked on
         // approval is in Processing, not Ready — so a non-empty
         // Pending approval state here is the cold-recovery signal. Close the
         // orphaned tool_use blocks before the new turn's LLM call: an assistant
         // tool_use with no matching tool_result is rejected by the provider
         // API, which would otherwise wedge every subsequent turn.
-        if (_toolWorkflow.PlanNewInputAbandonment(_state, _sessionId, NowMs()) is { } abandoned)
+        // Automated input never abandons an open approval. It waits in the buffer
+        // until the approval closes (see StartWaitingInputAfterApproval).
+        switch (_toolWorkflow.PlanNewInputAbandonment(_state, _sessionId, cmd.Source?.Principal, NowMs()))
         {
-            Persist(abandoned, evt =>
-            {
-                ApplyToolBatchAbandoned(evt);
+            case NewInputPlan.AbandonThenActivate abandon:
+                Persist(abandon.Event, evt =>
+                {
+                    ApplyToolBatchAbandoned(evt);
+                    AdmitInput(cmd, InputPlacement.Activate);
+                });
+                return;
+            case NewInputPlan.WaitForApproval:
+                AdmitInput(cmd, InputPlacement.BufferDuringApproval);
+                return;
+            case NewInputPlan.Activate:
                 AdmitInput(cmd, InputPlacement.Activate);
-            });
-            return;
+                return;
         }
 
-        AdmitInput(cmd, InputPlacement.Activate);
+        throw new InvalidOperationException("Unknown new input plan.");
     }
 
     private void AdmitInput(SendUserMessage cmd, InputPlacement placement)
@@ -1822,6 +1841,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _deliveryRetry.Clear();
             _log.Info("Buffering user message (LLM call in progress)");
+        }
+        else if (placement == InputPlacement.BufferDuringApproval)
+        {
+            _log.Info(
+                "Buffering automated input until {PendingApprovalCount} open approval(s) close",
+                _toolWorkflow.PendingDiagnosticCount);
         }
         else
         {
@@ -3165,11 +3190,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     _log.Warning("Cannot re-drive tool batch for call {CallId}: {Reason}", msg.CallId, expired.Diagnostic);
                     EmitExpiredPromptNotice();
                     TryReplyNack(ApprovalNackReasons.PromptExpired);
+                    StartWaitingInputAfterApproval();
                     return;
                 case RecoveredContinuation.Abandon abandon:
                     _log.Warning("Cannot re-drive tool batch for call {CallId}: {Reason}", msg.CallId, abandon.Diagnostic);
                     EmitExpiredPromptNotice();
-                    Persist(abandon.Event, ApplyToolBatchAbandoned);
+                    Persist(abandon.Event, evt =>
+                    {
+                        ApplyToolBatchAbandoned(evt);
+                        StartWaitingInputAfterApproval();
+                    });
                     TryReplyNack(ApprovalNackReasons.PromptExpired);
                     return;
                 case RecoveredContinuation.Dispatch dispatch:
@@ -3195,6 +3225,32 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
         await HandleToolInteractionResponseWhenIdle(structured);
+    }
+
+    // An automated input can wait in the buffer for an open approval (NewInputPlan.WaitForApproval). When the
+    // approval closes without a re-drive, nothing else drains the buffer, so start the waiting input's turn here.
+    private void StartWaitingInputAfterApproval()
+    {
+        if (_phase.Current != SessionPhase.Ready || _toolWorkflow.HasPendingApprovals())
+            return;
+
+        var next = _input.AdvanceAfterTurn(RestartDrainRequested);
+        if (next.Action == InputProgressAction.Restart)
+        {
+            RecordRestartReminderEligibility();
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
+        if (next is not { Action: InputProgressAction.FollowUp, Batch: { } batch })
+            return;
+
+        TurnLog().Info("turn_buffer_drain_after_approval count={BufferCount}", batch.Messages.Count);
+        _toolWorkflow.StartNewTurn();
+        ApplyBufferedBatch(batch);
+        FireLlmCall();
+        TransitionTo(SessionPhase.Processing);
     }
 
     private bool AbandonResolvedToolBatchAfterRecovery()
