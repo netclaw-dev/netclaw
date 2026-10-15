@@ -446,7 +446,10 @@ The message joins Alice's turn at the tool boundary.
 An invalid example: a reminder turn runs a tool, and Bob sends a message during the tool call.
 Bob's message must not join the reminder turn, and it must not run under the reminder authority.
 It waits and starts its own turn under Bob's authority.
-A focused mutation gate (`./scripts/run-input-one-authority-mutations.sh`) guards the owner choice and the join rule.
+A focused mutation gate (`./scripts/run-input-one-authority-mutations.sh`) guards the owner choice, the join rule,
+and the automation check of `PlanNewInputAbandonment`.
+Known limit: the requester check ignores provenance. Two inputs of one sender with different payload taint can share
+a turn under the trust of the first input. Today each producer sets one provenance per sender, so no live mix exists.
 `SessionInputFlowAccordantTests` states the rule over generated sequences.
 
 Leaks today:
@@ -806,8 +809,7 @@ Facts behind the diagram (current code):
   operator can answer. Evals assert this exact text.
 - The session actor journals the request before it sends the prompt
   (`HandleToolInteractionRequestDispatch` in `LlmSessionActor.cs`).
-- An unanswered request does not keep the session in memory, unless automated
-  input waits for it (see the next bullets). An answer
+- An unanswered request does not keep the session in memory. An answer
   rehydrates the session and re-drives the parked batch
   (`HandleToolInteractionResponseWhenIdle` and `SessionToolWorkflow.PlanRecoveredContinuation`).
 - No timer denies an unanswered request. The session and its subagents ask
@@ -820,8 +822,16 @@ Facts behind the diagram (current code):
   `VerifiedAutomation` or `SystemProcess` (a reminder fire, a webhook, a
   background job completion) waits in the buffer. It runs as its own turn after
   the turn that closes the approval. If the approval closes with no re-drive,
-  the actor starts the waiting turn (`StartWaitingInputAfterApproval`). The
-  session does not passivate for idle time while such input waits.
+  the actor starts the waiting turn (`StartWaitingInputAfterApproval`).
+- The session acknowledges a waiting input after the journal stores it
+  (`InputAdmitted`). The waiting queue is actor-local. A restart or an idle
+  passivation drops the queue, and the session still passivates while input
+  waits. On recovery, when a parked approval remains, the actor rebuilds the
+  queue from the pending `InputAdmitted` records (`RestoreWaitingInputs`).
+  Each input keeps its recorded authority. The flow rebuilds the source from
+  the record, so a reminder keeps its id (`SourceMessageId`).
+- Any person can abandon the approval, not only its requester. The check is
+  fail-safe: an abandonment cancels the call and grants nothing.
   A valid example: a reminder fires while Alice's `git status` prompt is open.
   Alice approves, the command runs once, and then the reminder turn runs.
   An invalid example: the reminder fire closes Alice's prompt with the

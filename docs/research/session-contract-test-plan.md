@@ -464,8 +464,11 @@ Inputs from different requesters never share a turn. An input from another reque
 After a turn, the flow adopts the recorded authority of the first buffered input. Inside a turn, only the turn's requester joins.
 The actor derives trust and the prompt audience for an adopted authority before the model call.
 Automated input (principal `VerifiedAutomation` or `SystemProcess`) never abandons an open approval. It waits in the buffer.
+Recovery rebuilds that buffer from the pending `InputAdmitted` records when a parked approval remains, so a restart or a passivation keeps the waiting input.
 
 The pinned mixed case in `LlmSessionIntegrationTests.Buffered_messages_are_batched_into_follow_up_LLM_call` now expects three follow-up turns.
 `SessionInputFlowAccordantTests` checks order, one admission per source key, no starvation, closure, one requester per batch, and the batch authority of each model call.
 `RecoveredApprovalAbandonmentTests` and `AutomatedInputApprovalWaitTests` check that a reminder keeps an open approval and runs later.
-The focused gate `./scripts/run-input-one-authority-mutations.sh` kills 8 mutants with `SessionInputFlowRequesterTests`.
+`WaitingReminderRestartTests` and `WaitingReminderPassivationTests` check that the waiting reminder survives a restart and a passivation, runs once, and leaves no pending input.
+`AdoptedAuthorityTrustTests`, `WaitingInputStartsAfterApprovalTests`, and `NewInputAbandonmentPlanTests` cover trust and prompt adoption, the start after an approval closes with no re-drive, and the automation matrix.
+The focused gate `./scripts/run-input-one-authority-mutations.sh` kills 10 mutants with `SessionInputFlowRequesterTests` and `NewInputAbandonmentPlanTests`.
