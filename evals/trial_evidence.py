@@ -96,13 +96,24 @@ def catalog_log_path(db_path, session_id):
     return "ok", row[0]
 
 
+def stays_in(root, path):
+    """True when `path`, with `..` and symlinks resolved, is at or below `root`.
+
+    The catalog text and the session folder are not trusted. A `..` segment
+    or a symlink can leave the home even when the text starts with it.
+    """
+    return path.resolve().is_relative_to(root)
+
+
 def collect_actor_log(home, session_id, destination):
     """Copy the actor log, and the sub-agent logs, of one session. Write actor-log.json.
 
     The record always says what happened. A missing catalog row or a missing
     file is a finding, not a reason to stop the run. The harness shows it.
     Only `*.log` files are copied, because a session folder can hold private
-    workspace data.
+    workspace data. A path that leaves the resolved home data root is never
+    copied. This holds for `..` segments and for symlinks, in both the actor
+    log and the sub-agent logs.
     """
     record = {"session_id": session_id, "status": None, "catalog_log_path": None,
               "subagent_logs": []}
@@ -111,14 +122,23 @@ def collect_actor_log(home, session_id, destination):
 
     if status == "ok" and not container_path.startswith(CONTAINER_HOME):
         status = "catalog_path_outside_home"
+    data_root = (home / "data").resolve()
+    log = None
     if status == "ok":
-        log = home / "data" / container_path[len(CONTAINER_HOME):]
+        log = data_root / container_path[len(CONTAINER_HOME):]
+        if not stays_in(data_root, log):
+            status = "catalog_path_outside_home"
+    if status == "ok":
         if log.is_file():
             destination.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(log, destination / "session.log")
             # The session folder is <envelope>/logs/session.log. Sub-agents
             # live in <envelope>/subagents/<run id>/logs/*.log.
             for sub_log in sorted(log.parent.parent.glob("subagents/*/logs/*.log")):
+                if not stays_in(data_root, sub_log):
+                    print(f"WARN: sub-agent log {sub_log} leaves the home, not copied",
+                          file=sys.stderr)
+                    continue
                 target = destination / "subagents" / sub_log.parent.parent.name
                 target.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(sub_log, target / sub_log.name)
