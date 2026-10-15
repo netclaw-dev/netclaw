@@ -257,6 +257,10 @@ internal sealed class SessionInputFlow
             ?? throw new InvalidOperationException($"Journal input {id} is missing before turn activation.");
         var context = RecordedAuthority(admitted);
 
+        // A recovery can rebuild this input into the queue while an actor restart also requeues it. The input runs
+        // now, so the queued copy must not run again.
+        _buffer.RemoveAll(item => item.Message.AdmittedInputId == id);
+
         // Use recorded identity and authority so live execution matches journal recovery.
         _emittedText = false;
         _selectedIds.Clear();

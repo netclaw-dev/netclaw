@@ -73,8 +73,22 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     private long _jobReapEpoch;
     private ReapOperation? _reap;
     private PassivationAttempt? _attempt;
+    private bool _idlePassivationAfterWaitingInput;
 
     public bool RestartDrainRequested => _restartDrainReplyTo is not null;
+
+    // The idle handler closed a parked batch while an acknowledged input waited behind it. The input runs first,
+    // because nothing would rebuild it after passivation. The idle decision completes when that work ends.
+    public void DeferIdlePassivationUntilWaitingInputEnds() => _idlePassivationAfterWaitingInput = true;
+
+    public bool ClaimDeferredIdlePassivation(SessionPhase phase)
+    {
+        if (!_idlePassivationAfterWaitingInput || phase != SessionPhase.Ready)
+            return false;
+
+        _idlePassivationAfterWaitingInput = false;
+        return true;
+    }
     public bool NeedsAbruptStopNotification => _attempt?.Milestone != AttemptMilestone.FinalEffectsClaimed;
 
     public RestartAction RequestRestart(

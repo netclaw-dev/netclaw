@@ -375,7 +375,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Persist(abandoned, evt =>
                 {
                     ApplyToolBatchAbandoned(evt);
-                    TransitionTo(SessionPhase.Passivating);
+                    if (!_input.HasBufferedContinuation)
+                    {
+                        TransitionTo(SessionPhase.Passivating);
+                        return;
+                    }
+
+                    // An acknowledged input waited behind the batch. After the abandonment no approval is parked,
+                    // so a recovery would not rebuild it. Run it now and passivate when its work ends.
+                    _execution.DeferIdlePassivationUntilWaitingInputEnds();
+                    StartWaitingInputAfterApproval();
+                    CompleteDeferredIdlePassivation();
                 });
                 return;
             }
@@ -1057,6 +1067,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             ClearApprovalTurnState();
             TransitionTo(SessionPhase.Ready);
+            CompleteDeferredIdlePassivation();
         }
 
         // Replay an approval response that arrived during compaction. History
@@ -1647,6 +1658,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         ClearApprovalTurnState();
         TransitionTo(SessionPhase.Ready);
+        CompleteDeferredIdlePassivation();
+    }
+
+    private void CompleteDeferredIdlePassivation()
+    {
+        if (_execution.ClaimDeferredIdlePassivation(_phase.Current))
+            TransitionTo(SessionPhase.Passivating);
     }
 
     private void ApplyBufferedBatch(BufferedInputBatch batch)
