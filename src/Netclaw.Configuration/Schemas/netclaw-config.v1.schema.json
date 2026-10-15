@@ -757,7 +757,7 @@
           "minimum": 5,
           "maximum": 3600,
           "default": 1800,
-          "description": "Generous wait-for-first-delta budget (seconds) covering queue wait and cold prefill for sub-agent LLM calls, mirroring Session.PrefillTimeoutSeconds. Content-free prompt_progress keepalives refresh it; after the first substantive delta the per-agent inter-delta budget applies. A per-agent definition may override via prefillTimeoutSeconds frontmatter."
+          "description": "Generous wait-for-first-delta budget (seconds) covering queue wait and cold prefill for sub-agent LLM calls, mirroring Session.PrefillTimeoutSeconds. Content-free prompt_progress keepalives refresh it; after the first substantive delta the Session.FirstTokenTimeoutSeconds inter-delta budget applies. A per-agent definition may override via prefillTimeoutSeconds frontmatter."
         },
         "NoProgressTimeoutSeconds": {
           "type": "integer",

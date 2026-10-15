@@ -1241,7 +1241,7 @@ public class SkillToolTests : IDisposable
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
-            NullLogger<SubAgentSpawner>.Instance);
+            NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
     }
 
     private static ISkillContentScanner CreateRegexScanner()

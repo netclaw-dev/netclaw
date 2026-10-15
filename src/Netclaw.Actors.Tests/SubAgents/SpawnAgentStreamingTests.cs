@@ -81,7 +81,7 @@ public class SpawnAgentStreamingTests : TestKit
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
-            NullLogger<SubAgentSpawner>.Instance);
+            NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
 
         registry.Register(new SpawnAgentTool(subAgentRegistry, spawner, paths));
 
@@ -185,7 +185,7 @@ public class SpawnAgentStreamingTests : TestKit
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
-            NullLogger<SubAgentSpawner>.Instance);
+            NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
 
         registry.Register(new SpawnAgentTool(subAgentRegistry, spawner, paths));
 

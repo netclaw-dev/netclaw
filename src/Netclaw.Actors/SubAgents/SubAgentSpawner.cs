@@ -35,6 +35,7 @@ public sealed class SubAgentSpawner
     private readonly IToolApprovalService? _approvalService;
     private readonly ISystemPromptProvider _promptProvider;
     private readonly SubAgentConfig _subAgentConfig;
+    private readonly SessionConfig _sessionConfig;
     private readonly ILogger<SubAgentSpawner> _logger;
     private readonly IWorkingContextSnapshotProvider _workingContextSnapshots;
 
@@ -52,6 +53,7 @@ public sealed class SubAgentSpawner
         ISystemPromptProvider promptProvider,
         IWorkingContextSnapshotProvider workingContextSnapshots,
         ILogger<SubAgentSpawner> logger,
+        SessionConfig sessionConfig,
         SubAgentConfig? subAgentConfig = null,
         Telemetry.ISessionMetrics? sessionMetrics = null)
     {
@@ -62,6 +64,7 @@ public sealed class SubAgentSpawner
         _promptProvider = promptProvider;
         _workingContextSnapshots = workingContextSnapshots;
         _subAgentConfig = subAgentConfig ?? new SubAgentConfig();
+        _sessionConfig = sessionConfig;
         _logger = logger;
         _sessionMetrics = sessionMetrics;
     }
@@ -140,7 +143,8 @@ public sealed class SubAgentSpawner
         var runId = SubAgentRunId.New();
 
         var chatClient = _chatClientProvider.GetClient(definition.ModelRole);
-        var subAgentTimeout = TimeSpan.FromSeconds(profile.TimeoutSeconds);
+        // Inter-delta budget: session-wide, so every subagent gets the same value.
+        var subAgentTimeout = _sessionConfig.FirstTokenTimeout;
         var prefillTimeout = TimeSpan.FromSeconds(
             profile.PrefillTimeoutSeconds ?? _subAgentConfig.PrefillTimeoutSeconds);
         var noProgressTimeout = TimeSpan.FromSeconds(_subAgentConfig.NoProgressTimeoutSeconds);

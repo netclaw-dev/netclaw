@@ -207,7 +207,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkingContextSnapshotProvider>.Instance),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
 
         // This fixture drives spawn_agent directly from the main model. Mark only that
         // test seam as Core; production registration keeps spawn_agent deferred.

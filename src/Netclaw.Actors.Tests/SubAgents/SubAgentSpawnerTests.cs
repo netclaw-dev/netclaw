@@ -81,7 +81,7 @@ public sealed class SubAgentSpawnerTests : TestKit, IAsyncDisposable
                 new GitWorkingContextInspector(TimeProvider.System),
                 NullLogger<WorkingContextSnapshotProvider>.Instance,
                 environment),
-            NullLogger<SubAgentSpawner>.Instance);
+            NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
 
         var childProbe = CreateTestProbe("subagent-child");
         var context = TestToolExecutionContext.CreateBound("console/subagent-parent", _parentSessionDir.Path, new TestToolExecutionContextOptions
@@ -216,7 +216,7 @@ public sealed class SubAgentSpawnerTests : TestKit, IAsyncDisposable
             new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
-            NullLogger<SubAgentSpawner>.Instance);
+            NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
 
         var notifications = new List<SubAgentNotificationInfo>();
         var childProbe = CreateTestProbe("subagent-tool-metadata-child");
@@ -562,7 +562,7 @@ public sealed class SubAgentSpawnerTests : TestKit, IAsyncDisposable
                 new GitWorkingContextInspector(TimeProvider.System),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
             NullLogger<SubAgentSpawner>.Instance,
-            sessionMetrics: metrics);
+            sessionMetrics: metrics, sessionConfig: new SessionConfig());
 
         var context = TestToolExecutionContext.CreateBound("console/subagent-parent", _parentSessionDir.Path, new TestToolExecutionContextOptions
         {
@@ -626,7 +626,7 @@ public sealed class SubAgentSpawnerTests : TestKit, IAsyncDisposable
             approvalService: null,
             new StaticSystemPromptProvider("Read the supplied file."),
             new WorkingContextSnapshotProvider(new GitWorkingContextInspector(TimeProvider.System), NullLogger<WorkingContextSnapshotProvider>.Instance),
-            NullLogger<SubAgentSpawner>.Instance);
+            NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
         var probe = CreateTestProbe("authority-child");
         var parent = TestToolExecutionContext.CreateBoundWithStorage("slack/parent", storage, new TestToolExecutionContextOptions
         {
@@ -758,7 +758,7 @@ public sealed class SubAgentSpawnerTests : TestKit, IAsyncDisposable
             approvalService: null,
             new StaticSystemPromptProvider("You are an inspector."),
             workingContextSnapshots,
-            NullLogger<SubAgentSpawner>.Instance);
+            NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
     }
 
     private static GitWorkingContextSnapshot GitSnapshot(string worktree, params string[] changedFiles) => new()

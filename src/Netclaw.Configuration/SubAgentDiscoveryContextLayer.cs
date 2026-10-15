@@ -80,7 +80,6 @@ public sealed class SubAgentDiscoveryContextLayer : IContextLayerProvider
             lines.Add($"## {agent.Name}");
             lines.Add(agent.Description);
             lines.Add("Tools: inherited from parent audience policy, except denied sub-agent tools");
-            lines.Add($"Timeout: {agent.TimeoutSeconds}s");
             lines.Add(string.Empty);
         }
 

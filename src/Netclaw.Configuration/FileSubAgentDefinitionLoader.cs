@@ -159,8 +159,8 @@ public sealed class FileSubAgentDefinitionLoader
 
             results.Add(profile);
             _logger.LogInformation(
-                "Loaded agent definition: {Name} (tool metadata={ToolCount}, timeout={Timeout}s)",
-                profile.Name, profile.ToolNames.Count, profile.TimeoutSeconds);
+                "Loaded agent definition: {Name} (tool metadata={ToolCount})",
+                profile.Name, profile.ToolNames.Count);
         }
 
         return (results, rejections);
@@ -339,13 +339,12 @@ public sealed class FileSubAgentDefinitionLoader
             return Reject(sourcePath, name,
                 $"has invalid visibility '{frontmatter.Visibility}' (expected user-facing or internal)", logger, out rejection);
 
-        // Validate timeout overrides against the same bounds the JSON config schema
-        // enforces. Fail loud rather than letting an out-of-range value flow to
-        // ITimerScheduler (a non-positive timeout throws) or silently exceed the
-        // documented ceiling — the frontmatter path bypasses schema validation.
-        if (frontmatter.TimeoutSeconds is { } timeoutSeconds && timeoutSeconds is < 5 or > 600)
-            return Reject(sourcePath, name,
-                $"has invalid timeoutSeconds {timeoutSeconds} (expected 5–600)", logger, out rejection);
+        // timeoutSeconds is obsolete. The inter-delta budget is session-wide now. Warn once
+        // per file so the operator deletes the key. A rejected file also gets this warning.
+        if (frontmatter.TimeoutSeconds is not null)
+            logger.LogWarning(
+                "Agent definition at {Path} sets obsolete key timeoutSeconds. The key is ignored. Delete it from the file.",
+                sourcePath);
 
         if (frontmatter.PrefillTimeoutSeconds is { } prefillSeconds && prefillSeconds is < 5 or > 3600)
             return Reject(sourcePath, name,
@@ -358,7 +357,6 @@ public sealed class FileSubAgentDefinitionLoader
             SystemPrompt = systemPrompt,
             ToolNames = tools,
             ModelRole = modelRole,
-            TimeoutSeconds = frontmatter.TimeoutSeconds ?? 60,
             PrefillTimeoutSeconds = frontmatter.PrefillTimeoutSeconds,
             EmitStructuredFindings = frontmatter.EmitStructuredFindings ?? false,
             Visibility = visibility
