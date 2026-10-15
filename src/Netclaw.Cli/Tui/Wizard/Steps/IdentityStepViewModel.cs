@@ -268,7 +268,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
             name: research-assistant
             description: Deep web research with search and citation
             modelRole: Compaction
-            timeoutSeconds: 120
             visibility: user-facing
             ---
 
@@ -293,7 +292,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
             name: code-analyst
             description: Analyze code, run commands, and review files
             modelRole: Compaction
-            timeoutSeconds: 120
             visibility: user-facing
             ---
 
@@ -314,7 +312,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
             name: summarizer
             description: Summarize documents and content concisely
             modelRole: Compaction
-            timeoutSeconds: 60
             visibility: user-facing
             ---
 

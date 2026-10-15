@@ -331,16 +331,18 @@ public sealed class FileSubAgentDefinitionLoader
         // the parent session audience at spawn time.
         var tools = frontmatter.Tools ?? [];
 
+        // The reason reaches the model through spawn_agent, so echo only a short excerpt of the file value.
         if (!TryParseModelRole(frontmatter.ModelRole, out var modelRole))
             return Reject(sourcePath, name,
-                $"has invalid modelRole '{frontmatter.ModelRole}' (expected Main or Compaction)", logger, out rejection);
+                $"has invalid modelRole '{Excerpt(frontmatter.ModelRole)}' (expected Main or Compaction)", logger, out rejection);
 
         if (!TryParseVisibility(frontmatter.Visibility, out var visibility))
             return Reject(sourcePath, name,
-                $"has invalid visibility '{frontmatter.Visibility}' (expected user-facing or internal)", logger, out rejection);
+                $"has invalid visibility '{Excerpt(frontmatter.Visibility)}' (expected user-facing or internal)", logger, out rejection);
 
         // timeoutSeconds is obsolete. The inter-delta budget is session-wide now. Warn once
-        // per file so the operator deletes the key. A rejected file also gets this warning.
+        // per file so the operator deletes the key. Only files that pass the checks above
+        // reach this line, so a rejected file never gets this warning.
         if (frontmatter.TimeoutSeconds is not null)
             logger.LogWarning(
                 "Agent definition at {Path} sets obsolete key timeoutSeconds. The key is ignored. Delete it from the file.",
@@ -376,6 +378,17 @@ public sealed class FileSubAgentDefinitionLoader
         else
             logger.LogWarning("Agent '{Name}' at {Path} {Reason} — skipping", name, sourcePath, reason);
         return null;
+    }
+
+    private const int MaxEchoedValueLength = 40;
+
+    private static string Excerpt(string? value)
+    {
+        if (value is null)
+            return string.Empty;
+        return value.Length <= MaxEchoedValueLength
+            ? value
+            : value[..MaxEchoedValueLength] + "...";
     }
 
     private static bool TryParseModelRole(string? value, out ModelRole role)

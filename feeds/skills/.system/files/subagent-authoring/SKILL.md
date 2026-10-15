@@ -37,7 +37,7 @@ without claiming that the child authored them.
 
 Load this when the user asks to:
 - create a new subagent
-- edit advisory tool metadata, timeout, or behavior for an existing subagent
+- edit advisory tool metadata, prefill timeout, or behavior for an existing subagent
 - diagnose why a subagent does not appear in `[available-subagents]`
 - route a slash skill through `metadata.subagent`
 

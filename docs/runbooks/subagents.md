@@ -2,10 +2,11 @@
 
 Subagents are specialist workers that the main Netclaw agent can delegate tasks
 to. Each subagent runs autonomously with its own system prompt, inherited
-audience-scoped tool surface, and timeout — then returns a synthesized result to
-the main agent. The delegation protects the main session's context window from
-token-heavy work (deep research, broad exploration, long summarization) and lets
-the main agent stay focused on conversation and coordination.
+audience-scoped tool surface, and session-wide timeouts. It then returns a
+synthesized result to the main agent. The delegation protects the main session's
+context window from token-heavy work (deep research, broad exploration, long
+summarization) and lets the main agent stay focused on conversation and
+coordination.
 
 ## How it works
 
