@@ -283,7 +283,7 @@ This follow-up does not replace either earlier fixed run.
 Run the assertion tests without a model:
 
 ```bash
-python3 -m unittest discover -s evals -p 'test_*evals.py' -v
+python3 -m unittest discover -s evals -p 'test_*.py' -v
 bash -n evals/run-evals.sh
 bash -n evals/cycle_evals.sh
 ```
@@ -328,6 +328,7 @@ the missing values. In non-interactive contexts it fails loudly.
 | `NETCLAW_EVAL_RUNS` | `5` | Runs per case |
 | `NETCLAW_EVAL_THRESHOLD` | `0.80` | Pass threshold (0.0-1.0) |
 | `NETCLAW_EVAL_TIMEOUT` | `60` | Per-prompt timeout in seconds |
+| `NETCLAW_EVAL_SEED` | random | Integer seed for the choice of prompt variants. The harness prints the seed and records it in each trial's `variant.json`. |
 
 ### Examples
 
@@ -425,6 +426,38 @@ touching the operator's `~/.netclaw/` state.
 
 Raw archives can contain prompts, session identities, tool calls, and provider
 configuration. Do not publish them. Publish only reviewed PII-free aggregates.
+
+### Trial evidence
+
+Each trial writes its evidence to `evals/runs/<run-id>/trials/<case>/<nn>/raw/`
+while the run goes on. `<nn>` is the trial number, `01` and up.
+
+| File | Content |
+|------|---------|
+| `variant.json` | `variant_index` (from 0), `variant_count`, `seed` (the run seed), `trial_seed` (the seed of this case and trial) |
+| `prompt.txt` | The prompt that the CLI received, with placeholders filled |
+| `cli-exit.json` | `exit_code` (124 means `timeout` cut the call off), `started_at`, `ended_at`, `deadline_s` |
+| `cli-stdout.txt` or `cli-stdout.json` | CLI stdout. The extension follows the output mode. |
+| `cli-stderr.txt` | CLI stderr |
+| `session.json` | Result of `trial_evidence.py discover-session`: `ok`, `no_session`, or `ambiguous_session` |
+| `cli-session.log` | The CLI session log that the trial created |
+| `session.log` | The actor log that `netclaw.db` names for the session |
+| `subagents/<run id>/*.log` | Logs of the sub-agents of the session |
+| `actor-log.json` | How the harness found the actor log. A status other than `ok` means that the log is missing, and the harness prints a warning. |
+| `daemon-session.log` | Daemon lines with the exact token `session=<id>` or `sessionId=<id>` |
+| `daemon-window.log` | Every daemon line written during the trial, for people to read |
+| `assert-stderr.txt` | stderr of the assertion function |
+
+A multi-turn trial keeps `prompt.txt`, `cli-exit.json`, `cli-stdout.*`, and
+`cli-stderr.txt` of each turn in `raw/turn-<nn>/`. It keeps the session files
+in `raw/`. The CLI log of a multi-turn trial is the log that is new since
+before the first turn.
+
+Prompt variants are repeatable. Each (case, trial) takes a seed that is a
+stable hash of the run seed, the case name, and the trial number. To repeat a
+run, set `NETCLAW_EVAL_SEED` to the seed that the earlier run printed. A run
+that `NETCLAW_EVAL_CASE` filters picks the same variants for that case as the
+full run.
 
 Windows model-pattern cases remain deferred until sanitized representative
 traffic exists. Windows contract tests remain required for path and process
