@@ -482,8 +482,10 @@ targets, and adopted context belong to one message. They can change between
 turns of the same requester. Work that a requester starts, such as a child run,
 belongs to that requester in each later turn.
 
-The consent answer check is narrower: it compares the sender ID and the
-principal, because a prompt already belongs to one session.
+The consent answer check (`ApprovalButtonValueCodec.CanApprove`) is different.
+It compares only the sender ID of the answer with the recorded requester sender
+ID. It lets any sender answer when the requester principal is
+`VerifiedAutomation` or when the recorded requester has no sender ID.
 
 Example:
 

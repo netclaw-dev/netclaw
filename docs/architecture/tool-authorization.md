@@ -719,9 +719,21 @@ The child dispatch gate closes before a cancellation acknowledgement or terminal
 The acknowledgement reports durable cancellation intent. It does not report terminal completion.
 Recovery settles an uncertain child as lost and does not launch a replacement actor.
 A stale answer cannot dispatch a recovered child or grant authority for another child.
-A second answer to a prompt that already has a recorded answer grants nothing.
-The session replies `approval_already_answered` and posts an "already has an answer" notice. It does not say "expired", because the prompt did not expire.
-An answer for a call that never existed, or that recovery removed, keeps the "expired" notice.
+An answer for a call with no open prompt grants nothing and runs nothing.
+Owner: `SessionToolWorkflow.RejectClosedCall`, on the live route and on the idle or recovered route.
+It selects only the nack reason and the notice:
+
+- A second answer to a prompt that has an answer gets reason `approval_already_answered` and an
+  "already has an answer" notice. It does not say "expired", because the prompt did not expire.
+- During the turn, the answer is actor-local in the workflow table. After the turn ends, and after a restart,
+  the durable fact is the tool result of the call in session history.
+- A synthetic abandonment result (text starts with `ParkedToolBatchHistory.AbandonedResultPrefix`) is not an answer.
+- An answer for a call that never existed, a call that recovery removed, or a call that an abandonment
+  closed gets reason `approval_prompt_expired` and the "expired" notice.
+- After a restart, an old child prompt is expired (TA-12), because child calls are not in the parent history.
+
+A valid example: Alice denies a prompt, the turn ends, and her second click on "approve once" gets
+"already has an answer". An invalid example: a forged answer for an unknown call ID gets "expired" and grants nothing.
 
 Child ownership (status and cancel):
 
@@ -734,8 +746,6 @@ Child ownership (status and cancel):
 - Data: the `OriginalContext` of the run is durable in the session journal. The context of the request is call-local.
 - The child start keeps the full authority check (`HasSameChildAuthority`, `TurnContext.HasSameAuthority`)
   for start idempotency. Approval recovery and child continuation also keep the full authority check.
-- Before this change, `ControlChild` compared the full authority. A later turn of the owner with different
-  adopted context got "This child run is not available to the requester".
 
 A valid example: Alice starts a child in a Slack thread turn that quotes earlier messages.
 In a later turn with no quoted context, Alice asks for status and then cancels. Both calls succeed.
