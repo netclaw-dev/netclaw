@@ -9,6 +9,13 @@ namespace Netclaw.Actors.Sessions;
 
 internal static class ParkedToolBatchHistory
 {
+    /// <summary>
+    /// Every production synthetic result for an abandoned call starts with this text. Journaled results from
+    /// earlier versions use the same text. A synthetic result closes the call without an answer, so a late
+    /// answer to that call is "expired", not "already answered".
+    /// </summary>
+    public const string AbandonedResultPrefix = "Tool call was not completed — ";
+
     public static IReadOnlyList<SerializableChatMessage> FindToolResultsFor(
         IReadOnlyList<SerializableChatMessage> history,
         SerializableChatMessage assistantMessage)
@@ -29,6 +36,21 @@ internal static class ParkedToolBatchHistory
         string callId)
         => history.Any(m => m.Role == ChatRole.Tool
             && m.ToolCallId?.Value == callId);
+
+    /// <summary>
+    /// True when the call has a result that is not a synthetic abandonment result. Such a result comes from a
+    /// run or a denial, so the approval prompt for the call had an answer. This only selects notice text.
+    /// It never grants authority.
+    /// </summary>
+    public static bool HasAnsweredToolResult(
+        IReadOnlyList<SerializableChatMessage> history,
+        string callId)
+        => history.Any(m => m.Role == ChatRole.Tool
+            && m.ToolCallId?.Value == callId
+            && !IsAbandonedResult(m));
+
+    private static bool IsAbandonedResult(SerializableChatMessage message)
+        => message.Content.StartsWith(AbandonedResultPrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Locates the tail assistant message carrying unanswered tool calls.

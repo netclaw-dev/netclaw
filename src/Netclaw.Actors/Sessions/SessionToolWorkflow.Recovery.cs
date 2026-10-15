@@ -62,7 +62,7 @@ internal sealed partial class SessionToolWorkflow
                 CreateAbandonment(
                     state,
                     sessionId,
-                    "Tool call was not completed — approval state could not be recovered safely.",
+                    ParkedToolBatchHistory.AbandonedResultPrefix + "approval state could not be recovered safely.",
                     nowMs),
                 diagnostic);
     }
@@ -120,7 +120,7 @@ internal sealed partial class SessionToolWorkflow
             return new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
                 sessionId,
-                "Tool call was not completed — the request was "
+                ParkedToolBatchHistory.AbandonedResultPrefix + "the request was "
                 + "superseded by a new message before approval was given.",
                 nowMs));
         }
@@ -129,14 +129,14 @@ internal sealed partial class SessionToolWorkflow
             return new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
                 sessionId,
-                "Tool call was not completed — the session restarted after approval before the action completed.",
+                ParkedToolBatchHistory.AbandonedResultPrefix + "the session restarted after approval before the action completed.",
                 nowMs));
 
         return ShouldAbandonInterruptedAfterRecovery(state)
             ? new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
                 sessionId,
-                "Tool call was not completed — the session restarted before the action completed.",
+                ParkedToolBatchHistory.AbandonedResultPrefix + "the session restarted before the action completed.",
                 nowMs))
             : new NewInputPlan.Activate();
     }
@@ -154,7 +154,7 @@ internal sealed partial class SessionToolWorkflow
             : CreateAbandonment(
                 state,
                 sessionId,
-                "Tool call was not completed — the tool run failed.",
+                ParkedToolBatchHistory.AbandonedResultPrefix + "the tool run failed.",
                 nowMs);
 
     public bool ShouldAbandonInterruptedAfterRecovery(SessionState state)

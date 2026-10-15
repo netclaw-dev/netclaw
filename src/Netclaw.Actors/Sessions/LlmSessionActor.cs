@@ -359,7 +359,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                     "Session idle with {ResolvedApprovalCount} resolved approval(s) but no completed tool result; abandoning parked tool batch before passivation",
                     _toolWorkflow.ResolvedDiagnosticCount);
                 var abandoned = BuildToolBatchAbandonedEvent(
-                    "Tool call was not completed — the session became idle before the approved action completed.");
+                    ParkedToolBatchHistory.AbandonedResultPrefix + "the session became idle before the approved action completed.");
                 Persist(abandoned, evt =>
                 {
                     ApplyToolBatchAbandoned(evt);
@@ -3196,7 +3196,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private async Task HandleProcessingApprovalResponseAsync(ToolInteractionResponse msg)
     {
-        var response = _toolWorkflow.PrepareLiveResponse(msg);
+        var response = _toolWorkflow.PrepareLiveResponse(msg, _state.History);
         if (response is ApprovalResponseResult.Rejected rejection)
         {
             EmitApprovalRejection(rejection, msg.CallId);
@@ -3397,11 +3397,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private ToolBatchAbandoned BuildResolvedToolBatchInterruptedByRestartEvent()
         => BuildToolBatchAbandonedEvent(
-            "Tool call was not completed — the session restarted after approval before the action completed.");
+            ParkedToolBatchHistory.AbandonedResultPrefix + "the session restarted after approval before the action completed.");
 
     private ToolBatchAbandoned BuildInterruptedToolBatchAfterRecoveryEvent()
         => BuildToolBatchAbandonedEvent(
-            "Tool call was not completed — the session restarted before the action completed.");
+            ParkedToolBatchHistory.AbandonedResultPrefix + "the session restarted before the action completed.");
 
     private ToolBatchAbandoned BuildToolBatchAbandonedEvent(string resultContent)
         => _toolWorkflow.CreateAbandonment(_state, _sessionId, resultContent, NowMs());

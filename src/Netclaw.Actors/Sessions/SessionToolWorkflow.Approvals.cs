@@ -178,15 +178,12 @@ internal sealed partial class SessionToolWorkflow
         return true;
     }
 
-    public ApprovalResponseResult PrepareLiveResponse(ToolInteractionResponse response)
+    public ApprovalResponseResult PrepareLiveResponse(
+        ToolInteractionResponse response,
+        IReadOnlyList<SerializableChatMessage> history)
     {
         if (!TryGetPending(response.CallId.Value, out var pending))
-            return HasResolved(response.CallId.Value)
-                ? AlreadyAnswered()
-                : new ApprovalResponseResult.Rejected(
-                    ApprovalNackReasons.PromptExpired,
-                    ApprovalNoticeKind.Expired,
-                    "unknown_call");
+            return RejectClosedCall(response.CallId.Value, history);
 
         var validation = ValidateResponse(pending, response);
         if (validation is ApprovalResponseResult.Rejected rejected)
@@ -210,12 +207,7 @@ internal sealed partial class SessionToolWorkflow
         SessionState state)
     {
         if (!TryGetPending(response.CallId.Value, out var pending))
-            return HasResolved(response.CallId.Value)
-                ? AlreadyAnswered()
-                : new ApprovalResponseResult.Rejected(
-                    ApprovalNackReasons.PromptExpired,
-                    ApprovalNoticeKind.Expired,
-                    ClassifyUnknownCall(response.CallId.Value, state.History));
+            return RejectClosedCall(response.CallId.Value, state.History);
 
         var validation = ValidateResponse(pending, response);
         if (validation is ApprovalResponseResult.Rejected rejected)
@@ -223,16 +215,32 @@ internal sealed partial class SessionToolWorkflow
         return new RecoveredDurableAccepted(pending, ((ValidatedAccepted)validation).Answer);
     }
 
-    // A second answer for a call with a recorded answer (a double click or a channel retry) grants nothing.
-    // It still fails loud, but the prompt did not expire, so the notice says that the prompt has an answer.
-    // An answer for a call that never existed, or that recovery removed, keeps the expired notice.
-    private static ApprovalResponseResult.Rejected AlreadyAnswered()
-        => new(ApprovalNackReasons.AlreadyAnswered, ApprovalNoticeKind.AlreadyAnswered, "already_resolved");
+    // An answer for a call with no open prompt grants nothing and runs nothing. Only the notice differs.
+    // A second answer (a double click or a channel retry) gets "already has an answer", because the prompt
+    // did not expire. The recorded answer is in the workflow table while the turn is live. After the turn
+    // ends, and after a restart, the call's tool result in history shows the answer. A call that never
+    // existed, a call that recovery removed, or a call that an abandonment closed keeps the expired notice.
+    private ApprovalResponseResult.Rejected RejectClosedCall(
+        string callId,
+        IReadOnlyList<SerializableChatMessage> history)
+    {
+        if (HasResolved(callId))
+            return AlreadyAnswered("already_resolved");
+        if (ParkedToolBatchHistory.HasAnsweredToolResult(history, callId))
+            return AlreadyAnswered("already_completed");
+        return new ApprovalResponseResult.Rejected(
+            ApprovalNackReasons.PromptExpired,
+            ApprovalNoticeKind.Expired,
+            ClassifyExpiredCall(callId, history));
+    }
 
-    private static string ClassifyUnknownCall(string callId, IReadOnlyList<SerializableChatMessage> history)
+    private static ApprovalResponseResult.Rejected AlreadyAnswered(string diagnostic)
+        => new(ApprovalNackReasons.AlreadyAnswered, ApprovalNoticeKind.AlreadyAnswered, diagnostic);
+
+    private static string ClassifyExpiredCall(string callId, IReadOnlyList<SerializableChatMessage> history)
     {
         if (ParkedToolBatchHistory.HasToolResult(history, callId))
-            return "already_completed";
+            return "abandoned";
         if (ParkedToolBatchHistory.FindRedrivableAssistantMessage(history, callId) is not null)
             return "orphaned_assistant_tool_use";
         return "unknown";
