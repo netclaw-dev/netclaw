@@ -182,6 +182,103 @@ class ActorLogTests(trial_files.HarnessCase):
                                          f"{copied} holds data from outside the home")
                 self.assertTrue(secret.exists())
 
+    def assert_no_secret_copied(self):
+        for copied in self.trial_dir().rglob("*"):
+            if copied.is_file():
+                self.assertNotIn("SECRET", copied.read_text(errors="replace"),
+                                 f"{copied} holds data from outside the home")
+
+    def make_outside_secret(self):
+        secret = self.root / "outside" / "secret.log"
+        secret.parent.mkdir()
+        secret.write_text("SECRET data outside the netclaw home\n")
+        return secret
+
+    def test_catalog_path_with_dot_dot_cannot_escape_the_home(self):
+        # Planted bug: test only the string prefix. A path that starts with the
+        # container home and then climbs out with `..` passes the test, and the
+        # file outside the home is copied into the trial folder.
+        secret = self.make_outside_secret()
+        climb = os.path.relpath(secret, self.home / "data")
+        self.assertTrue(climb.startswith(".."), climb)
+        (self.home / "data" / "sessions" / "x").mkdir(parents=True)
+        for name, log_path in (
+            ("absolute path with dot-dot", CONTAINER_HOME + climb),
+            ("absolute path that climbs out from a deep folder",
+             CONTAINER_HOME + "sessions/x/../../" + climb),
+            ("relative path with dot-dot", climb),
+        ):
+            with self.subTest(name):
+                write_catalog(self.home, [(self.SESSION, log_path)])
+
+                completed, record = self.run_trial()
+
+                self.assertEqual(log_path, record["catalog_log_path"])
+                self.assert_finding(completed, record, "catalog_path_outside_home")
+                self.assert_no_secret_copied()
+                self.assertTrue(secret.exists())
+
+    def test_catalog_path_through_a_symlink_cannot_escape_the_home(self):
+        # Planted bug: check the path text and ignore symlinks. A link inside
+        # the home that points outside it then leaks the target file.
+        secret = self.make_outside_secret()
+        sessions = self.home / "data" / "sessions"
+        (sessions / "file-link" / "logs").mkdir(parents=True)
+        (sessions / "file-link" / "logs" / "session.log").symlink_to(secret)
+        (sessions / "dir-link").symlink_to(secret.parent)
+        for name, log_path in (
+            ("symlinked log file", f"{CONTAINER_HOME}sessions/file-link/logs/session.log"),
+            ("symlinked folder", f"{CONTAINER_HOME}sessions/dir-link/secret.log"),
+        ):
+            with self.subTest(name):
+                write_catalog(self.home, [(self.SESSION, log_path)])
+
+                completed, record = self.run_trial()
+
+                self.assertEqual(log_path, record["catalog_log_path"])
+                self.assert_finding(completed, record, "catalog_path_outside_home")
+                self.assert_no_secret_copied()
+                self.assertTrue(secret.exists())
+
+    def test_symlink_inside_the_home_that_stays_inside_is_copied(self):
+        # Planted bug: reject every symlink. A link that stays in the home is
+        # legal, and its log is real evidence.
+        real, _ = self.make_actor_log("real")
+        link = self.home / "data" / "sessions" / "linked" / "logs" / "session.log"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(real)
+        write_catalog(self.home, [(self.SESSION, f"{CONTAINER_HOME}sessions/linked/logs/session.log")])
+
+        completed, record = self.run_trial()
+
+        self.assertEqual("ok", record["status"])
+        self.assertEqual("actor log of THIS session\n", self.read_text(self.raw("session.log")))
+        self.assertNotIn("WARN: no actor log", completed.stderr)
+
+    def test_sub_agent_log_symlink_cannot_escape_the_home(self):
+        # Planted bug: guard the main log and copy the sub-agent logs as they
+        # are. A sub-agent log that links outside the home then leaks its
+        # target, either as a file link or as a folder link.
+        secret = self.make_outside_secret()
+        log, container_path = self.make_actor_log()
+        subagents = log.parent.parent / "subagents"
+        (subagents / "file-link" / "logs").mkdir(parents=True)
+        (subagents / "file-link" / "logs" / "agent.log").symlink_to(secret)
+        (subagents / "good" / "logs").mkdir(parents=True)
+        (subagents / "good" / "logs" / "agent.log").write_text("sub-agent log\n")
+        outside_run = self.root / "outside" / "run"
+        (outside_run / "logs").mkdir(parents=True)
+        (outside_run / "logs" / "agent.log").write_text("SECRET sub-agent log outside the home\n")
+        (subagents / "dir-link").symlink_to(outside_run)
+        write_catalog(self.home, [(self.SESSION, container_path)])
+
+        completed, record = self.run_trial()
+
+        self.assertEqual("ok", record["status"])
+        self.assertEqual(["subagents/good/agent.log"], record["subagent_logs"])
+        self.assertEqual("actor log of THIS session\n", self.read_text(self.raw("session.log")))
+        self.assert_no_secret_copied()
+
     def test_catalog_path_inside_home_with_no_file_is_recorded(self):
         # Planted bug: drop the `is_file` check. copyfile raises, or the status
         # says ok while session.log is missing.
