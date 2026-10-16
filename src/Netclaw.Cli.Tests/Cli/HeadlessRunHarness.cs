@@ -43,7 +43,8 @@ internal sealed record HeadlessRun(
 
     /// <summary>The <c>TURN_FAILED</c> records in the session log.</summary>
     public IReadOnlyList<string> TurnFailedLogRecords => SessionLog
-        .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        // The channel writes each record with WriteLine. The line ending is "\r\n" on Windows.
+        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
         .Where(line => line.Contains("TURN_FAILED:", StringComparison.Ordinal))
         .ToArray();
 
