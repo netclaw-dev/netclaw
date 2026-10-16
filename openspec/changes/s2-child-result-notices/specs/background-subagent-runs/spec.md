@@ -42,7 +42,7 @@ The notice SHALL carry the recorded requester of the run owner. It SHALL join a 
 - **THEN** the notice runs once under the recorded authority of the run owner
 - **AND** a later message does not leave the notice behind, and a snapshot passes after the notice turn
 - **AND** the message that wakes the session buffers behind the notice turn and does not run first
-- **AND** an unconsumed input of a person is not part of this rule
+- **AND** an unconsumed input of a person is not part of this rule, and the recovery starts only the notices in front of the first such input, so admission order holds
 - **AND** a notice with a damaged recorded authority stays unconsumed, the log shows an Error with the run id and the reason, and the recovery of the other notices and of the lost children continues
 
 #### Scenario: A restart reminder does not become input while the session is busy
