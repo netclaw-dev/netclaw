@@ -476,32 +476,24 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
     {
         // The unit's Restart=always would bring a directly killed daemon back under the data
         // being deleted, so the reset has to use the same stop as `netclaw daemon stop`.
-        var fakeDaemon = Path.Combine(_dir.Path, "netclawd");
-        SleepStandIn.Create(fakeDaemon);
-        using var daemon = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(fakeDaemon, "600") { UseShellExecute = false })!;
-        try
-        {
-            File.WriteAllText(_paths.PidFilePath, daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            // No lock file on purpose: a real daemon's lock dies with the process, but a lock held by
-            // this test process would be released by an Exited callback that can run after the stop
-            // has already seen the exit, making the reset abort as "still running".
-            var unitPath = Path.Combine(_dir.Path, "netclaw.service");
-            File.WriteAllText(unitPath, "[Service]\nExecStart=/opt/netclaw/netclawd\n");
-            var runner = new RecordingCommandRunner(daemon.Id);
-            var systemd = new SystemdUserService(_paths.BasePath, unitPath, runner, enabledOnThisPlatform: true,
-                environReader: _ => null);
-            using var vm = new InitExistingInstallViewModel(
-                _paths, _nav, new DaemonManager(_paths, TimeProvider.System), systemd, _time);
+        // The stand-in gives the home its own port and listener, so the shutdown notice of the
+        // reset reaches this test and not port 5199.
+        using var standIn = StandInDaemon.Start(_paths.BasePath, _dir.Path);
+        // No lock file on purpose: a real daemon's lock dies with the process, but a lock held by
+        // this test process would be released by an Exited callback that can run after the stop
+        // has already seen the exit, making the reset abort as "still running".
+        var unitPath = Path.Combine(_dir.Path, "netclaw.service");
+        File.WriteAllText(unitPath, "[Service]\nExecStart=/opt/netclaw/netclawd\n");
+        var runner = new RecordingCommandRunner(standIn.Pid);
+        var systemd = new SystemdUserService(_paths.BasePath, unitPath, runner, enabledOnThisPlatform: true,
+            environReader: _ => null);
+        using var vm = new InitExistingInstallViewModel(
+            _paths, _nav, new DaemonManager(_paths, TimeProvider.System), systemd, _time);
 
-            StartFullReset(vm);
-            await CompleteResetAsync(vm);
-            await runner.StopSeen.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            if (!daemon.HasExited)
-                daemon.Kill();
-        }
+        StartFullReset(vm);
+        await CompleteResetAsync(vm);
+        await runner.StopSeen.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal("factory-reset", Assert.Single(standIn.ShutdownNotices).Reason);
     }
 
     public static bool IsLinux => OperatingSystem.IsLinux();

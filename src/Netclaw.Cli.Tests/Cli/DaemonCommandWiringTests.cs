@@ -27,7 +27,7 @@ public sealed class DaemonCommandWiringTests : IDisposable
     private readonly string _home;
     private readonly string _fakeBin;
     private readonly string _systemctlState;
-    private readonly List<Process> _children = [];
+    private readonly List<StandInDaemon> _standIns = [];
 
     public DaemonCommandWiringTests()
     {
@@ -63,12 +63,8 @@ public sealed class DaemonCommandWiringTests : IDisposable
 
     public void Dispose()
     {
-        foreach (var child in _children)
-        {
-            if (!child.HasExited)
-                child.Kill();
-            child.Dispose();
-        }
+        foreach (var standIn in _standIns)
+            standIn.Dispose();
 
         _dir.Dispose();
     }
@@ -104,6 +100,7 @@ public sealed class DaemonCommandWiringTests : IDisposable
         Dictionary<string, string>? extraEnvironment = null)
     {
         Directory.CreateDirectory(netclawHome);
+        StandInDaemon.RequireExplicitEndpoint(netclawHome);
         var cliAssembly = Path.Combine(AppContext.BaseDirectory, "netclaw.dll");
         var psi = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
@@ -159,23 +156,29 @@ public sealed class DaemonCommandWiringTests : IDisposable
             FileShare.None);
     }
 
-    /// <summary>Runs a stand-in process that <c>netclaw daemon</c> recognises as netclawd.</summary>
-    private Process StartFakeDaemonProcess(string netclawHome)
+    /// <summary>
+    /// Runs a stand-in daemon that <c>netclaw daemon</c> recognises as netclawd. It also gives
+    /// the home a port and a listener, so the shutdown notice reaches this test and not port 5199.
+    /// </summary>
+    private StandInDaemon StartFakeDaemonProcess(string netclawHome)
     {
         Directory.CreateDirectory(netclawHome);
-        var fakeDaemon = Path.Combine(_dir.Path, "netclawd");
-        SleepStandIn.Create(fakeDaemon);
-        var psi = new ProcessStartInfo(fakeDaemon, "600") { UseShellExecute = false };
-        psi.Environment["NETCLAW_HOME"] = netclawHome; // the home this daemon serves, as the real one's environment says
-        var process = Process.Start(psi)!;
-        _children.Add(process);
-        File.WriteAllText(Path.Combine(netclawHome, "netclaw.pid"), process.Id.ToString());
-
-        // No lock file on purpose: a lock held by this process would be released by an Exited
-        // callback that can run after the CLI has already seen the daemon exit, so the CLI would
-        // still report it as running.
-        return process;
+        var standIn = StandInDaemon.Start(netclawHome, _dir.Path);
+        _standIns.Add(standIn);
+        return standIn;
     }
+
+    /// <summary>Gives a home a port and a listener, with no process, so a command on it cannot reach port 5199.</summary>
+    private StandInDaemon ListenForHome(string netclawHome)
+    {
+        Directory.CreateDirectory(netclawHome);
+        var standIn = StandInDaemon.ListenOnly(netclawHome);
+        _standIns.Add(standIn);
+        return standIn;
+    }
+
+    private static void AssertOneCliStopNotice(StandInDaemon daemon)
+        => Assert.Equal("cli-stop", Assert.Single(daemon.ShutdownNotices).Reason);
 
     private static HttpListener Listen(int port, Func<HttpListenerRequest, (int Status, string Body)> handler)
     {
@@ -226,13 +229,13 @@ public sealed class DaemonCommandWiringTests : IDisposable
     // ── daemon stop / start ownership ───────────────────────────────────────
 
     /// <summary>The unit is active and its MainPID is the daemon this home's pid file records.</summary>
-    private Process UnitRunsDaemonOf(string netclawHome)
+    private StandInDaemon UnitRunsDaemonOf(string netclawHome)
     {
         InstallUnit();
         var daemon = StartFakeDaemonProcess(netclawHome);
         FakeSystemctl("active.code", "0");
         FakeSystemctl("active.out", "active\n");
-        FakeSystemctl("mainpid.out", daemon.Id + "\n");
+        FakeSystemctl("mainpid.out", daemon.Pid + "\n");
         return daemon;
     }
 
@@ -240,13 +243,14 @@ public sealed class DaemonCommandWiringTests : IDisposable
     [Fact(SkipUnless = nameof(IsLinux), Skip = "Drives the Linux systemd user-service path through a fake systemctl.")]
     public async Task Stop_GoesThroughTheUnit_ForTheDefaultHome()
     {
-        UnitRunsDaemonOf(DefaultNetclawHome);
+        var daemon = UnitRunsDaemonOf(DefaultNetclawHome);
 
         var (exitCode, output) = await RunAsync(DefaultNetclawHome, ["daemon", "stop"]);
 
         Assert.Equal(0, exitCode);
         Assert.Contains("--user stop netclaw.service", SystemctlCalls);
         Assert.Contains("Stopped systemd user service.", output);
+        AssertOneCliStopNotice(daemon);
     }
 
     [SlopwatchSuppress("SW001", "Drives the Linux systemd user-service path through a fake systemctl.")]
@@ -254,20 +258,21 @@ public sealed class DaemonCommandWiringTests : IDisposable
     public async Task Stop_GoesThroughTheUnit_ForANonDefaultHomeTheUnitServes()
     {
         // A drop-in `Environment=NETCLAW_HOME=...` makes the unit serve another home.
-        UnitRunsDaemonOf(ScratchHome);
+        var daemon = UnitRunsDaemonOf(ScratchHome);
 
         var (exitCode, output) = await RunAsync(ScratchHome, ["daemon", "stop"]);
 
         Assert.Equal(0, exitCode);
         Assert.Contains("--user stop netclaw.service", SystemctlCalls);
         Assert.Contains("Stopped systemd user service.", output);
+        AssertOneCliStopNotice(daemon);
     }
 
     [SlopwatchSuppress("SW001", "Drives the Linux systemd user-service path through a fake systemctl.")]
     [Fact(SkipUnless = nameof(IsLinux), Skip = "Drives the Linux systemd user-service path through a fake systemctl.")]
     public async Task Stop_GoesThroughTheUnit_ForASymlinkedSpellingOfTheDefaultHome()
     {
-        UnitRunsDaemonOf(DefaultNetclawHome);
+        var daemon = UnitRunsDaemonOf(DefaultNetclawHome);
         var link = Path.Combine(_dir.Path, "link-to-default");
         Directory.CreateSymbolicLink(link, DefaultNetclawHome);
 
@@ -276,6 +281,7 @@ public sealed class DaemonCommandWiringTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.Contains("--user stop netclaw.service", SystemctlCalls);
         Assert.Contains("Stopped systemd user service.", output);
+        AssertOneCliStopNotice(daemon);
     }
 
     [SlopwatchSuppress("SW001", "Drives the Linux systemd user-service path through a fake systemctl.")]
@@ -292,6 +298,7 @@ public sealed class DaemonCommandWiringTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.True(scratchDaemon.WaitForExit(5000), output);
+        AssertOneCliStopNotice(scratchDaemon);
         Assert.DoesNotContain("--user stop", SystemctlCalls);
         Assert.DoesNotContain("systemd user service", output);
     }
@@ -350,6 +357,7 @@ public sealed class DaemonCommandWiringTests : IDisposable
         Assert.Contains("--user stop netclaw.service", SystemctlCalls);
         Assert.Contains("Stopped systemd user service.", output);
         Assert.Contains("Daemon stopped", output);
+        AssertOneCliStopNotice(daemon);
     }
 
     [SlopwatchSuppress("SW001", "Drives the Linux systemd user-service path through a fake systemctl.")]
@@ -360,13 +368,14 @@ public sealed class DaemonCommandWiringTests : IDisposable
         // unit's MainPID matches it, but that process serves the default home (its environment
         // says so), so the scratch home's stop must not go through the unit.
         var unitDaemon = UnitRunsDaemonOf(DefaultNetclawHome);
-        Directory.CreateDirectory(ScratchHome);
-        File.WriteAllText(Path.Combine(ScratchHome, "netclaw.pid"), unitDaemon.Id.ToString());
+        ListenForHome(ScratchHome); // the scratch home needs a port of its own, or its notice goes to port 5199
+        File.WriteAllText(Path.Combine(ScratchHome, "netclaw.pid"), unitDaemon.Pid.ToString());
 
         var (_, output) = await RunAsync(ScratchHome, ["daemon", "stop"]);
 
         Assert.DoesNotContain("--user stop", SystemctlCalls);
         Assert.DoesNotContain("systemd user service", output);
+        Assert.Empty(unitDaemon.ShutdownNotices); // a notice from the scratch home goes to the scratch home's endpoint
     }
 
     [SlopwatchSuppress("SW001", "Drives the Linux systemd user-service path through a fake systemctl.")]
@@ -415,6 +424,7 @@ public sealed class DaemonCommandWiringTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.True(daemon.WaitForExit(5000), output);
         Assert.DoesNotContain("--user stop", SystemctlCalls);
+        AssertOneCliStopNotice(daemon);
     }
 
     [SlopwatchSuppress("SW001", "Drives the Linux systemd user-service path through a fake systemctl.")]
@@ -499,6 +509,7 @@ public sealed class DaemonCommandWiringTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.True(daemon.WaitForExit(5000), output);
         Assert.Contains("The container supervisor will restart the daemon.", output);
+        AssertOneCliStopNotice(daemon);
     }
 
     [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
@@ -512,6 +523,7 @@ public sealed class DaemonCommandWiringTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.True(daemon.WaitForExit(5000), output);
         Assert.DoesNotContain("supervisor", output);
+        AssertOneCliStopNotice(daemon);
     }
 
     [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]

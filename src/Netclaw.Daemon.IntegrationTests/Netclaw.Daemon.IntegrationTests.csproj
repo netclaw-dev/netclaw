@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <UseTestRunTempRoot>true</UseTestRunTempRoot>
   </PropertyGroup>
 
   <ItemGroup>

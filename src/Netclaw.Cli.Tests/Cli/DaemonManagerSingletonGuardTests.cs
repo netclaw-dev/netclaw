@@ -15,7 +15,7 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly DaemonManager _sut;
-    private readonly List<System.Diagnostics.Process> _fakeDaemons = [];
+    private readonly List<StandInDaemon> _standIns = [];
 
     public DaemonManagerSingletonGuardTests()
     {
@@ -160,12 +160,11 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
         // Where file locking is unsupported or disabled the probe always says "free". A status
         // call must not delete the pid file of a live daemon (its watchdog would shut it down).
         var daemon = StartFakeDaemon();
-        File.WriteAllText(_paths.PidFilePath, daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         var status = _sut.GetStatus();
 
         Assert.True(status.IsRunning);
-        Assert.Equal(daemon.Id, status.Pid);
+        Assert.Equal(daemon.Pid, status.Pid);
         Assert.True(File.Exists(_paths.PidFilePath));
     }
 
@@ -188,40 +187,24 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
     {
         // The notice must go to the daemon of the home the manager was built on, never to the
         // default home's endpoint, or a test (or any non-default home) shuts down someone else's daemon.
-        var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        using var listener = new System.Net.HttpListener();
-        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-        listener.Start();
-        var requestTask = Task.Run(async () =>
-        {
-            var received = await listener.GetContextAsync();
-            received.Response.StatusCode = 200;
-            received.Response.Close();
-            return received.Request.Url!.AbsolutePath;
-        });
-        Netclaw.Cli.Config.ClientConfigFile.WriteEndpoint(_paths, $"http://127.0.0.1:{port}");
+        // The stand-in gives this home its own port and listener, so the notice cannot reach port 5199.
         var daemon = StartFakeDaemon();
-        File.WriteAllText(_paths.PidFilePath, daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.Message);
-        var path = await requestTask.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        Assert.Equal("/api/lifecycle/shutdown", path);
+        var notice = Assert.Single(daemon.ShutdownNotices);
+        Assert.Equal("POST", notice.Method);
+        Assert.Equal("cli-stop", notice.Reason);
     }
 
     public static bool IsLinux => OperatingSystem.IsLinux();
 
-    private System.Diagnostics.Process StartFakeDaemon()
+    private StandInDaemon StartFakeDaemon()
     {
-        var fakeDaemon = Path.Combine(_dir.Path, "netclawd");
-        SleepStandIn.Create(fakeDaemon);
-        var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(fakeDaemon, "600") { UseShellExecute = false })!;
-        _fakeDaemons.Add(process);
-        return process;
+        var standIn = StandInDaemon.Start(_paths.BasePath, _dir.Path);
+        _standIns.Add(standIn);
+        return standIn;
     }
 
     private sealed class FakeSupervisor(bool supervised) : IContainerSupervisor
@@ -231,12 +214,8 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
 
     public void Dispose()
     {
-        foreach (var process in _fakeDaemons)
-        {
-            if (!process.HasExited)
-                process.Kill();
-            process.Dispose();
-        }
+        foreach (var standIn in _standIns)
+            standIn.Dispose();
 
         try { _dir.Dispose(); }
         catch (IOException) { } // slopwatch-ignore: SW003 test cleanup best-effort — directory may already be gone
