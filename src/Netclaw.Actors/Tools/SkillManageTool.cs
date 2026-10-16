@@ -489,6 +489,8 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             return $"Cannot {verb} system skills. System skills are read-only.";
         if (IsServerFeedSkill(skill))
             return $"Cannot {verb} server feed skills. Server feed skill directories are read-only.";
+        if (IsManagedGitPluginSkill(skill))
+            return $"Cannot {verb} managed Git plugin skills. Managed Git plugin directories are read-only.";
         if (IsExternalSkill(skill))
             return $"Cannot {verb} external skills. External skill directories are read-only.";
         return null;
@@ -559,6 +561,13 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         }
 
         return null;
+    }
+
+    private bool IsManagedGitPluginSkill(SkillEntry skill)
+    {
+        var managedRoot = PathUtility.Normalize(_paths.ManagedGitSkillsDirectory);
+        var skillPath = PathUtility.Normalize(Path.GetDirectoryName(skill.FilePath)!);
+        return PathUtility.IsWithinRoot(skillPath, managedRoot);
     }
 
     /// <summary>
