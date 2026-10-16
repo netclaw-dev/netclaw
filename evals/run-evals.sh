@@ -38,7 +38,7 @@
 #
 #   Eval suite knobs:
 #     NETCLAW_EVAL_RUNS          Runs per case (default: 5)
-#     NETCLAW_EVAL_THRESHOLD     Pass threshold 0.0-1.0 (default: 0.80)
+#     NETCLAW_EVAL_THRESHOLD     Pass threshold, above 0 and at most 1 (default: 0.80)
 #     NETCLAW_EVAL_TIMEOUT       Per-prompt timeout in seconds (default: 60)
 #     NETCLAW_EVAL_CATEGORY      Run only this category (case-insensitive substring match)
 #     NETCLAW_EVAL_CASE          Run only this specific case name
@@ -85,9 +85,10 @@ if [[ ! "$PROMPT_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     exit 2
 fi
 
-# A number from 0 to 1. The case status rule compares it as an exact decimal.
-if [[ ! "$THRESHOLD" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]]; then
-    echo "ERROR: NETCLAW_EVAL_THRESHOLD must be a number from 0 to 1, got: $THRESHOLD" >&2
+# A number above 0 and at most 1. The case status rule compares it as an exact
+# decimal. A threshold of 0 would pass a case that has only inconclusive trials.
+if [[ ! "$THRESHOLD" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ || "$THRESHOLD" =~ ^0(\.0+)?$ ]]; then
+    echo "ERROR: NETCLAW_EVAL_THRESHOLD must be a number above 0 and at most 1, got: $THRESHOLD" >&2
     exit 2
 fi
 
@@ -799,7 +800,10 @@ seed_eval_memories() {
 init_db() {
     [[ -z "$RESULTS_DB" ]] && return
     mkdir -p "$RESULTS_DIR"
-    python3 "$RESULTS_DB_PY" init --db "$RESULTS_DB"
+    python3 "$RESULTS_DB_PY" init --db "$RESULTS_DB" || {
+        echo "ERROR: results_db.py init failed for $RESULTS_DB" >&2
+        exit 2
+    }
 }
 
 ## Stores one trial. The row holds the status and the reason. The passed column
@@ -811,7 +815,10 @@ store_result() {
     [[ -z "$RESULTS_DB" ]] && return
     python3 "$RESULTS_DB_PY" store --db "$RESULTS_DB" --run-id "$RUN_ID" \
         "--category=$CURRENT_CATEGORY" "--case=$1" "--run-number=$2" "--prompt=$3" \
-        "--status=$4" "--reason=$5" "--details=$6"
+        "--status=$4" "--reason=$5" "--details=$6" || {
+        echo "ERROR: results_db.py store failed for $1 run $2" >&2
+        exit 2
+    }
 }
 
 ## Parses text or structured JSON usage output and stores performance metrics.
@@ -1179,7 +1186,8 @@ finish_case() {
     status=$(jq -r '.status' <<< "$result")
     score="n/a"
     if [[ "$conclusive" -gt 0 ]]; then
-        score=$(jq -r '.score' <<< "$result" | awk '{printf "%.2f", $1}')
+        score=$(jq -r '.score' <<< "$result" | awk '{printf "%.3f", $1}')
+        score="$score, threshold $THRESHOLD"
     fi
     if [[ "$CASE_INCONCLUSIVE" -gt 0 ]]; then
         score="$score, $CASE_INCONCLUSIVE inconclusive: $(format_reasons "${CASE_INCONCLUSIVE_REASONS[@]}")"
@@ -1223,7 +1231,7 @@ check_daemon_alive() {
         overall_score=$(awk "BEGIN {printf \"%.1f\", ($PASSED_CASES / ($TOTAL_CASES > 0 ? $TOTAL_CASES : 1)) * 100}")
         echo ""
         echo "─────────────────────────────────────────────────"
-        echo "ABORTED: Eval container not running. Partial results: $PASSED_CASES/$TOTAL_CASES ($overall_score%)"
+        echo "ABORTED: Eval container not running. Partial results: $PASSED_CASES/$TOTAL_CASES ($overall_score%), $FAILED_CASES failed, $INCONCLUSIVE_CASES inconclusive"
         if [[ -n "$RESULTS_DB" ]]; then
             echo "Results: $RESULTS_DB (run_id: $RUN_ID)"
         fi

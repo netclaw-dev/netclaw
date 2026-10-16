@@ -326,7 +326,7 @@ the missing values. In non-interactive contexts it fails loudly.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NETCLAW_EVAL_RUNS` | `5` | Runs per case |
-| `NETCLAW_EVAL_THRESHOLD` | `0.80` | Pass threshold, a number from 0 to 1. The run stops at startup with exit 2 for any other value. |
+| `NETCLAW_EVAL_THRESHOLD` | `0.80` | Pass threshold, a number above 0 and at most 1. The run stops at startup with exit 2 for any other value, such as `0`. The harness compares it as an exact decimal, so use `0.66` for 2 of 3, not `0.67`. |
 | `NETCLAW_EVAL_TIMEOUT` | `60` | Per-prompt timeout in whole seconds. The run stops at startup with exit 2 for any other value, such as `5m`. |
 | `NETCLAW_EVAL_SEED` | random | Integer seed for the choice of prompt variants. The harness prints the seed and records it in each trial's `variant.json`. |
 
@@ -472,16 +472,18 @@ behavior. Record the deferred cases as evidence work, not as passed evals.
 
 | Column | Content |
 |--------|---------|
-| `status` | `pass`, `fail`, or `inconclusive`. NULL on a row from a run before result states. |
+| `status` | `pass`, `fail`, or `inconclusive`. |
 | `reason` | NULL for a pass and a fail. The reason token for an inconclusive trial. |
 | `passed` | 1 for a pass, 0 for a fail, NULL for an inconclusive trial. A query such as `AVG(passed)` does not count an inconclusive trial as a fail. |
 | `details` | `pass`, `fail`, or the assertion details. For a failed turn, the text of the CLI `ERROR` record. |
 
 `eval_runs.inconclusive_cases` counts the cases that are inconclusive.
-`passed_cases` counts the cases that pass. `init_db` adds the new columns to a
-`results.db` from an older run. It keeps every row, and an old row keeps its
-`passed` value with a NULL `status`. `results_db.py` binds every value as an SQL
-parameter, so quotes and newlines in a prompt or an error text are safe.
+`passed_cases` counts the cases that pass. A CHECK constraint ties `status` to
+`passed`: `pass` needs `passed` to be 1, `fail` needs 0, and `inconclusive` needs
+NULL. Each run makes a new `results.db` in a new home, so the harness has no
+migration. `results_db.py init` does not change a `results.db` from an older
+harness. `results_db.py` binds every value as an SQL parameter, so quotes and
+newlines in a prompt or an error text are safe.
 
 Requires `sqlite3` CLI — if not available, the script still runs but
 skips persistence.
@@ -531,11 +533,22 @@ A trial has one of three states:
   - `infra:<detail>`: `no_session`, `ambiguous_session`, `crash_log` (a new
     `crash-*.log`), `cli_exit_<code>` (a CLI exit other than 0, 1, and 124), or
     evidence that cannot be read.
-  - `timeout`: the CLI exit is 124, or a turn has no `TURN_COMPLETED` record.
-  - `turn_failed`: the CLI exit is 1. `details` keeps the `ERROR` text.
+  - `timeout`: the CLI exit is 124, or a turn with exit 0 has no
+    `TURN_COMPLETED` record.
+  - `infra:cli_failed`: the CLI exit is 1 and the turn has no `TURN_COMPLETED`
+    record. The channel threw before the turn ended. The deadline did not cut it.
+  - `turn_failed`: the CLI exit is 1 and the turn has a `TURN_COMPLETED` record.
+    `details` keeps the `ERROR` text.
   - the reason of an assertion report that says `inconclusive` (cycle cases).
   - `assertion_exit_<code>`: the assertion exited with a code other than 0 and 1
     (141 for a pipe failure, 127 for a missing command).
+
+**Known limit:** for now, a failed turn is inconclusive. A model behavior
+failure that fails the turn cannot give a FAIL. One example is the tool cycle
+stop, where the model keeps calling tools after the runtime requires a text-only
+reply. The case shows `turn_failed`, and the run exits 3. The CLI must report an
+error category before the harness can tell such a failure from a provider
+outage. A separate .NET change adds the category.
 
 A `CANCELLED` record in `headless-errors.log` is the normal sign of a cut turn.
 It is not an infrastructure fault, so the verdict does not read that file.
@@ -550,7 +563,7 @@ once as a fail:
 Both bounds divide by all trials and compare with the threshold as an exact
 decimal. The score on the case line divides by the conclusive trials only. The
 line shows the inconclusive trials and their reasons, for example
-`[PASS] skill_activation_memory 4/4 (1.00, 1 inconclusive: timeout)`.
+`[PASS] skill_activation_memory 4/4 (1.000, threshold 0.80, 1 inconclusive: timeout)`.
 
 - **Per-category:** GREEN (all pass), INCONCLUSIVE (no case fails, and some are
   inconclusive), YELLOW (>= 80% pass), RED (< 80% pass)

@@ -10,18 +10,23 @@ Trial states, in this order (design 2.4):
   1. infra       No session log, two session logs, a new crash-*.log, a CLI
                  exit other than 0, 1, or 124, or evidence that cannot be
                  read. Reason: "infra:<detail>".
-  2. timeout     A CLI exit of 124, or a turn with no TURN_COMPLETED record in
-                 the CLI session log. Reason: "timeout".
-  3. turn_failed A CLI exit of 1. The CLI writes TURN_COMPLETED for a failed
-                 turn too. The trial says nothing about the product behavior
-                 under test. Reason: "turn_failed", and "error" holds the
-                 text of the ERROR record.
-  4. report      The assertion wrote a report with the status "inconclusive"
+  2. timeout     A CLI exit of 124, or a turn with exit 0 and no
+                 TURN_COMPLETED record in the CLI session log.
+                 Reason: "timeout".
+  3. cli_failed  A CLI exit of 1 and no TURN_COMPLETED record. The channel
+                 threw before the turn ended. The deadline did not cut it.
+                 Reason: "infra:cli_failed".
+  4. turn_failed A CLI exit of 1 with a TURN_COMPLETED record. The CLI writes
+                 TURN_COMPLETED for a failed turn too. For now the trial says
+                 nothing about the product behavior under test. Reason:
+                 "turn_failed", and "error" holds the text of the ERROR
+                 record.
+  5. report      The assertion wrote a report with the status "inconclusive"
                  (cycle cases). Reason: the reason of the report.
-  5. assertion   An assertion exit other than 0 and 1 (141 from a pipe,
+  6. assertion   An assertion exit other than 0 and 1 (141 from a pipe,
                  127 for a missing command). The check broke, so it gave no
                  verdict. Reason: "assertion_exit_<code>".
-  6. pass        The assertion exit is 0.  fail: the assertion exit is 1.
+  7. pass        The assertion exit is 0.  fail: the assertion exit is 1.
 
 headless-errors.log is not evidence here. A normal cut (CANCELLED record)
 writes to it, so a rule on that file would turn every timeout into infra. The
@@ -133,8 +138,17 @@ def failed_turn_error(log, exit_codes):
     return last_error_text(log)
 
 
+def cli_failed_without_turn_end(log, exit_codes):
+    """True when a CLI call that exited 1 wrote no TURN_COMPLETED record."""
+    blocks = log_blocks(log)
+    if len(blocks) != len(exit_codes):
+        return CLI_EXIT_FAILED_TURN in exit_codes
+    return any(code == CLI_EXIT_FAILED_TURN and not TURN_COMPLETED.search(block)
+               for code, block in zip(exit_codes, blocks))
+
+
 def judge_assertion(raw):
-    """Rules 4 to 6. The turn finished, so the assertion result is needed."""
+    """Rules 5 to 7. The turn finished, so the assertion result is needed."""
     code = read_exit_code(raw / "assert.json")
 
     report_path = raw / "assert-report.json"
@@ -168,7 +182,15 @@ def judge_trial(raw):
 
     log = read_text(raw / "cli-session.log")
     finished_turns = len(TURN_COMPLETED.findall(log))
-    if CLI_EXIT_TIMEOUT in exit_codes or finished_turns < len(exit_codes):
+    if CLI_EXIT_TIMEOUT in exit_codes:
+        return verdict(INCONCLUSIVE, "timeout")
+    if finished_turns < len(exit_codes):
+        # Exit 1 with no turn end is not a cut by the deadline. The CLI also
+        # exits 1 for an exception in the channel, for example a failed send
+        # after the daemon connection dropped. Only exit 0 with no turn end
+        # means that the deadline cut the turn.
+        if cli_failed_without_turn_end(log, exit_codes):
+            return infra("cli_failed")
         return verdict(INCONCLUSIVE, "timeout")
     if CLI_EXIT_FAILED_TURN in exit_codes:
         return verdict(INCONCLUSIVE, "turn_failed", failed_turn_error(log, exit_codes))

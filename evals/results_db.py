@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""The eval results database (results.db): schema, migration, and writes.
+"""The eval results database (results.db): schema and writes.
 
 Every value reaches SQLite as a bound parameter. A prompt or an error text
 can hold quotes and newlines, and string formatting would break on them.
 
 eval_results holds one row for each trial:
 
-  status  pass, fail, or inconclusive. NULL on a row from before result states.
+  status  pass, fail, or inconclusive.
   reason  NULL for a pass and a fail. The reason token for an inconclusive trial.
   passed  1 for a pass, 0 for a fail, NULL for an inconclusive trial. NULL keeps
           an old AVG(passed) query from counting an inconclusive trial as a fail.
 
-A CHECK constraint ties the three columns together. A row from before result
-states keeps its passed value and has no status.
+A CHECK constraint ties the three columns together. A harness run makes a new
+results.db, so the schema has no migration.
 
 Commands:
 
-  init   --db FILE    Create the tables. Migrate a results.db from an older run.
+  init   --db FILE    Create the tables.
   store  --db FILE ...  Insert one eval_results row.
 """
 
@@ -65,59 +65,21 @@ RESULTS_COLUMNS = """
     reason      TEXT,
     PRIMARY KEY (run_id, case_name, run_number),
     CHECK (status IS NULL
-           OR (status = 'pass' AND passed = 1)
-           OR (status = 'fail' AND passed = 0)
+           OR (status = 'pass' AND passed IS 1)
+           OR (status = 'fail' AND passed IS 0)
            OR (status = 'inconclusive' AND passed IS NULL))
 """
 
-# The columns that a results.db from before result states already has.
-LEGACY_RESULTS_COLUMNS = "run_id, category, case_name, run_number, prompt_used, passed, details"
-
 PASSED_OF_STATUS = {"pass": 1, "fail": 0, "inconclusive": None}
-
-
-def column_names(database, table):
-    return [row[1] for row in database.execute(f"PRAGMA table_info({table})")]
-
-
-def rebuild_results_table(database):
-    """Move a legacy eval_results table to the new shape. Every row is kept.
-
-    SQLite cannot drop NOT NULL from a column, so the table is copied into a
-    new one. The rows keep their passed value. Their status and reason stay
-    NULL, which means: recorded before result states.
-    """
-    database.execute("BEGIN")
-    try:
-        before = database.execute("SELECT COUNT(*) FROM eval_results").fetchone()[0]
-        database.execute("ALTER TABLE eval_results RENAME TO eval_results_legacy")
-        database.execute(f"CREATE TABLE eval_results ({RESULTS_COLUMNS})")
-        database.execute(
-            f"INSERT INTO eval_results ({LEGACY_RESULTS_COLUMNS}) "
-            f"SELECT {LEGACY_RESULTS_COLUMNS} FROM eval_results_legacy")
-        after = database.execute("SELECT COUNT(*) FROM eval_results").fetchone()[0]
-        if before != after:
-            raise sqlite3.DatabaseError(f"migration kept {after} of {before} eval_results rows")
-        database.execute("DROP TABLE eval_results_legacy")
-    except BaseException:
-        database.execute("ROLLBACK")
-        raise
-    database.execute("COMMIT")
 
 
 def init_db(path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # No implicit transactions: the rebuild runs in one explicit transaction.
-    database = sqlite3.connect(path, isolation_level=None)
+    database = sqlite3.connect(path)
     try:
         database.executescript(TABLES)
-        if not column_names(database, "eval_results"):
-            database.execute(f"CREATE TABLE eval_results ({RESULTS_COLUMNS})")
-        elif "status" not in column_names(database, "eval_results"):
-            rebuild_results_table(database)
-        if "inconclusive_cases" not in column_names(database, "eval_runs"):
-            database.execute("ALTER TABLE eval_runs ADD COLUMN inconclusive_cases INTEGER NOT NULL DEFAULT 0")
+        database.execute(f"CREATE TABLE IF NOT EXISTS eval_results ({RESULTS_COLUMNS})")
     finally:
         database.close()
 
@@ -142,7 +104,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    init = commands.add_parser("init", help="create the tables and migrate an older results.db")
+    init = commands.add_parser("init", help="create the tables")
     init.add_argument("--db", type=Path, required=True)
 
     store = commands.add_parser("store", help="insert one eval_results row")
