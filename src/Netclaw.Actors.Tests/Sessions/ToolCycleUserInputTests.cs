@@ -115,14 +115,15 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
             foreach (var decision in new[] { true, true, false })
                 _client.Inner.PlannedToolCallDecisions.Enqueue(decision);
             _client.ResumeCall.TrySetResult();
-            var terminal = await subscriber.FishForMessageAsync<TextOutput>(
-                message => message.Text.Contains("The result is partial.", StringComparison.Ordinal),
+            var terminal = await subscriber.FishForMessageAsync<ErrorOutput>(
+                message => message.Message.Contains("The result is partial.", StringComparison.Ordinal),
                 TimeSpan.FromSeconds(10), cancellationToken: ct);
             await ExpectTurnCompletedAsync(subscriber);
             await ExpectTurnCompletedAsync(subscriber);
 
             // Assert
-            Assert.Contains("last refused operation did not execute", terminal.Text, StringComparison.Ordinal);
+            Assert.Equal(ErrorCategory.ModelBehavior, terminal.Category);
+            Assert.Contains("last refused operation did not execute", terminal.Message, StringComparison.Ordinal);
             Assert.Equal(3, _executor.Count);
             Assert.Equal(6, _client.Inner.CallCount);
             Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[4]);
@@ -201,11 +202,11 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
             _client.ResumeCall.TrySetResult();
             await subscriber.FishForMessageAsync<object>(message => message is CompactionOutput,
                 TimeSpan.FromSeconds(10), cancellationToken: ct);
-            var texts = new List<string>();
+            var errors = new List<ErrorOutput>();
             await subscriber.FishForMessageAsync<object>(message =>
             {
-                if (message is TextOutput text)
-                    texts.Add(text.Text);
+                if (message is ErrorOutput error)
+                    errors.Add(error);
                 return message is TurnCompleted;
             }, TimeSpan.FromSeconds(10), cancellationToken: ct);
 
@@ -213,7 +214,10 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
             Assert.Equal(newUserInput ? 3 : 2, _executor.Count);
             Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[^1]);
             if (!newUserInput)
-                Assert.Contains(texts, text => text.Contains("The result is partial.", StringComparison.Ordinal));
+            {
+                Assert.Contains(errors, error => error.Category == ErrorCategory.ModelBehavior
+                    && error.Message.Contains("The result is partial.", StringComparison.Ordinal));
+            }
         }
         finally
         {

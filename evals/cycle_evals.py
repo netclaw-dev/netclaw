@@ -259,9 +259,12 @@ def verdict(snapshot, output, actor_log):
             and snapshot["phase"] == 5
             and snapshot["model_requests"] == 0
             and handoff == {})
-        response_text = output.get("response", "")
-        runtime["truthful_partial_result"] = all(
-            sentence in response_text for sentence in (
+        # The settlement is a failed turn with a model category. The stop text is the turn error.
+        runtime["model_failure_category"] = (output.get("errorCategory") == "model"
+                                             and output.get("errorKind") == "ModelBehavior")
+        failures = [line for line in actor_log.splitlines() if "turn_failed category=ModelBehavior" in line]
+        runtime["truthful_partial_result"] = len(failures) == 1 and all(
+            sentence in failures[0] for sentence in (
                 "Netclaw stopped this run after you repeated a tool call that the cycle guard already blocked.",
                 "The result is partial.",
                 "The last refused operation did not execute.",

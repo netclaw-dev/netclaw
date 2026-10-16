@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.109.7"
+  version: "2.109.8"
 ---
 
 # Netclaw Operations
@@ -235,6 +235,7 @@ job lifecycle — is in
 
 Two equal feedback rounds for the same tool and arguments cause a correction before the next dispatch.
 Change the approach after that correction. Another repeat ends the turn without another model request.
+The turn then fails with `kind=ModelBehavior`. A text answer after the correction completes the turn.
 Unrelated calls and context compaction do not erase this evidence.
 An authorized status query for a pending background job can repeat through the normal access checks.
 `MaxToolIterationsPerTurn` is a legacy config field. The runtime no longer enforces its fixed limit.
@@ -269,16 +270,15 @@ fix and re-issue once, do not retry the same shape:
 A repeated action-and-outcome correction means that no requested call ran.
 Choose a different action or finish the task from the available evidence.
 Do not repeat the blocked batch.
-Netclaw disables tools for the turn if the same blocked batch appears again.
+If the same blocked call appears again, Netclaw ends the turn as a `ModelBehavior` failure.
 Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
 A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
-If a text-only response contains tool calls, Netclaw rejects those calls and reports a `ModelBehavior` failure.
+A repeat of a refused call after the correction is a `ModelBehavior` failure.
 Repeated empty replies get the same `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
 An empty reply with no finish reason is `StreamFailure`. A `content_filter` reply is `ProviderFailure`. Both are `infra`.
 A provider outage is not `ModelBehavior`.
-This failure does not prove that the turn exhausted its tool budget.
 
 ## Large tool output
 
