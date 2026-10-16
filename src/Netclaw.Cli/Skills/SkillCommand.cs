@@ -24,7 +24,12 @@ namespace Netclaw.Cli.Skills;
 internal static class SkillCommand
 {
     public static Task<int> RunAsync(
-        string[] args, NetclawPaths paths, DaemonApi? daemonApi = null, TextWriter? output = null)
+        string[] args,
+        NetclawPaths paths,
+        TimeProvider timeProvider,
+        TextReader input,
+        DaemonApi? daemonApi = null,
+        TextWriter? output = null)
     {
         var subcommand = args.Length > 1 ? args[1] : "list";
         var writer = output ?? Console.Out;
@@ -62,7 +67,13 @@ internal static class SkillCommand
             return RunListAsync(daemonApi, writer);
 
         if (subcommand is "sync")
-            return RunSyncAsync(daemonApi, writer);
+            return RunSyncAsync(args, daemonApi, output ?? Console.Out);
+
+        if (subcommand is "plugin")
+        {
+            WriteHelp(writer);
+            return Task.FromResult(2);
+        }
 
         return Task.FromResult(subcommand switch
         {
@@ -171,8 +182,17 @@ internal static class SkillCommand
         return 0;
     }
 
-    private static async Task<int> RunSyncAsync(DaemonApi? daemonApi, TextWriter output)
+    private static async Task<int> RunSyncAsync(
+        string[] args,
+        DaemonApi? daemonApi,
+        TextWriter output)
     {
+        var retryRejected = args.Length == 3 && args[2] == "--retry-rejected";
+        if (args.Length > 2 && !retryRejected)
+        {
+            output.WriteLine("Usage: netclaw skill sync [--retry-rejected]");
+            return 1;
+        }
         if (daemonApi is null)
         {
             output.WriteLine("Daemon unavailable: the daemon API is not configured.");
@@ -192,7 +212,9 @@ internal static class SkillCommand
             try
             {
                 output.WriteLine("Waiting for the daemon's skill sync pass. Press Ctrl+C to stop this wait.");
-                result = await daemonApi.SyncSkillsAsync(cancellation.Token);
+                result = await daemonApi.SyncSkillsAsync(
+                    cancellation.Token,
+                    retryRejected);
             }
             finally
             {
@@ -216,6 +238,8 @@ internal static class SkillCommand
                     $"{source.Name}: {state} changed={source.ChangedCount} unchanged={source.UnchangedCount} rejected={source.RejectedCount} failed={source.FailedCount} sidecar={source.Sidecar}");
                 if (!string.IsNullOrWhiteSpace(source.Error))
                     output.WriteLine($"  Error: {source.Error}");
+                foreach (var notice in source.Notices)
+                    output.WriteLine($"  Notice: {notice}");
             }
 
             output.WriteLine(result.Inventory.Succeeded
@@ -739,6 +763,7 @@ internal static class SkillCommand
         writer.WriteLine("Subcommands:");
         writer.WriteLine("  list                                          List all discovered skills (default)");
         writer.WriteLine("  sync                                          Sync configured external skill sources");
+        writer.WriteLine("  sync --retry-rejected                         Retry known rejected plugin commits");
         writer.WriteLine("  show <name>                                   Show skill details and content");
         writer.WriteLine("  validate <path>                               Validate a SKILL.md file's frontmatter");
         writer.WriteLine("  remove <name>                                 Remove a native skill");

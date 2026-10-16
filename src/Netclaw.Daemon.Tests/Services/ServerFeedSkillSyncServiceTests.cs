@@ -47,7 +47,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             .MigrateAsync(_paths.SqliteDbPath, CancellationToken.None).GetAwaiter().GetResult();
         _pluginStateStore = new ManagedPluginStateStore(_paths, TimeProvider.System);
         _pluginAcquirer = new GitSkillPluginAcquirer(
-            new HttpClient(new HttpClientHandler()), _paths, TimeProvider.System, new NoOpSkillContentScanner());
+             _paths, TimeProvider.System, new NoOpSkillContentScanner());
     }
 
     public void Dispose()

@@ -110,7 +110,7 @@ public sealed class ServerFeedSkillSyncToolIntegrationTests : IDisposable
             }),
             CreatePluginStateStore(),
             new GitSkillPluginAcquirer(
-                new HttpClient(new HttpClientHandler()), _paths, TimeProvider.System, new NoOpSkillContentScanner()),
+                 _paths, TimeProvider.System, new NoOpSkillContentScanner()),
             NullNotificationSink.Instance);
     }
 

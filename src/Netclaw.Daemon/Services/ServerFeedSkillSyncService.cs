@@ -18,7 +18,7 @@ namespace Netclaw.Daemon.Services;
 internal interface IServerFeedSkillSyncRunner
 {
     Task<SkillSyncResult.Response> SyncAsync(
-        bool retryRejected,
+        ServerFeedSkillSyncActor.Run request,
         CancellationToken cancellationToken);
 }
 
@@ -153,8 +153,17 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
     public Task<SkillSyncResult.Response> SyncAsync(CancellationToken cancellationToken)
         => SyncAsync(retryRejected: false, cancellationToken);
 
-    public async Task<SkillSyncResult.Response> SyncAsync(
+    public Task<SkillSyncResult.Response> SyncAsync(
         bool retryRejected,
+        CancellationToken cancellationToken)
+        => SyncAsync(
+            retryRejected
+                ? ServerFeedSkillSyncActor.Run.RetryRejectedCommits
+                : ServerFeedSkillSyncActor.Run.Instance,
+            cancellationToken);
+
+    public async Task<SkillSyncResult.Response> SyncAsync(
+        ServerFeedSkillSyncActor.Run request,
         CancellationToken cancellationToken)
     {
         var passId = Guid.NewGuid().ToString("N");
@@ -167,7 +176,8 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
             if (startupPluginSources is not null)
                 RescanAndUpdateIndex(startupPluginSources);
 
-            foreach (var feed in _feedsConfig.Feeds.Where(static feed => feed.Enabled))
+            foreach (var feed in _feedsConfig.Feeds.Where(
+                         feed => request.Scope == ServerFeedSkillSyncActor.SyncScope.Complete && feed.Enabled))
             {
                 try
                 {
@@ -192,7 +202,7 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
                 }
             }
 
-            var pluginResult = await _pluginSyncParticipant.SyncAsync(retryRejected, cancellationToken);
+            var pluginResult = await _pluginSyncParticipant.SyncAsync(request, cancellationToken);
             sources.AddRange(pluginResult.Rows);
             var managedPluginSources = pluginResult.Sources;
 

@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Daemon.Services;
+using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Services;
@@ -40,5 +42,28 @@ public sealed class DaemonRestartSignalTests
 
         Assert.False(signal.RestartRequested);
         Assert.Equal(1, signal.Generation);
+    }
+
+    [Fact]
+    public void Plugin_config_write_records_a_scoped_startup_pass()
+    {
+        using var temp = new DisposableTempDir();
+        var paths = new NetclawPaths(temp.Path);
+        var signal = new DaemonRestartSignal();
+        signal.TakePluginStartupScope(paths.NetclawConfigPath);
+        var store = new GitSkillPluginConfigStore(paths, signal);
+
+        store.Add(new ManagedPluginSource
+        {
+            Id = "team-tools",
+            Repository = "owner/repository",
+            Format = "codex",
+            ReferenceKind = ManagedPluginReferenceKind.Branch,
+            Reference = "main",
+        });
+
+        var (ids, invalid) = signal.TakePluginStartupScope(paths.NetclawConfigPath);
+        Assert.False(invalid);
+        Assert.Equal(["team-tools"], ids);
     }
 }

@@ -84,7 +84,7 @@ New sources will default to `auto`.
 
 Auto selection will use this order:
 
-1. A root `plugin.json` with the recognized Agent Plugins schema.
+1. A root `plugin.json` whenever the file exists.
 2. A `.codex-plugin/plugin.json` compatibility manifest.
 
 An explicit format will inspect only that format.
@@ -149,9 +149,18 @@ The CLI will expose `netclaw plugin install|list|update|enable|disable|remove`.
 The daemon will expose `/api/plugins` for plugin lifecycle operations.
 The existing authenticated daemon policy will protect every route.
 
-`plugin update` will request the shared sync pass.
+`plugin update <source-id>` will request a source-scoped pass through the shared sync actor.
 It will then report the selected source result.
-`plugin update --all` will report all managed plugin source results.
+`plugin update --all` will request a plugin-only pass and report all managed plugin source results.
+Install, enable, disable, and remove will request a source-scoped pass.
+These plugin passes will not fetch skill servers or unrelated plugin sources.
+The actor will queue requests with a different scope or retry policy.
+It will coalesce only requests with the same scope and retry policy.
+It will cap distinct queued scopes and reject excess requests with a safe 503 response.
+The coordinator will refresh the complete inventory after every pass.
+The process-lifetime restart signal will record the changed plugin source and config hash.
+The next actor will use a scoped startup pass only when the file still matches that hash.
+An unrelated config change will cause a complete startup pass.
 
 The CLI will parse safe RFC 9457 problem details from daemon failures.
 It will use the status code only when the response has no valid safe detail.

@@ -447,16 +447,17 @@ public sealed class DaemonToolPathPolicyFactoryTests
     }
 
     [Fact]
-    public void Managed_git_plugin_skills_are_readable_but_not_writable_or_shell_accessible()
+    public void Managed_git_plugin_skills_are_denied_to_read_write_and_shell()
     {
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-policy-contract"));
         var policy = DaemonToolPathPolicyFactory.Create(
             paths,
-            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux),
+            new SkillFeedsConfig());
         var skillPath = Path.Combine(paths.ManagedGitSkillsDirectory, "fixture", "commit", "SKILL.md");
 
-        Assert.False(policy.IsReadDenied(skillPath));
-        Assert.True(policy.IsDenied(skillPath));
+        Assert.True(policy.FileSystem.IsProtected(skillPath, PathOperation.Write));
+        Assert.True(policy.FileSystem.IsProtected(skillPath, PathOperation.Read));
         Assert.True(policy.CommandReferencesDeniedPath($"cat '{skillPath}'"));
     }
 
