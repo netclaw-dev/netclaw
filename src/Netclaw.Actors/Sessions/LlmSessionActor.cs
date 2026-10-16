@@ -89,10 +89,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     // Per-turn transient counters (tool budget, duplicate detection, empty-response retries)
     private readonly TurnStateTracker _turnState = new();
 
-    private const string TextOnlyResponseViolationMessage =
-        "Netclaw rejected tool calls from a response that required text only. "
-        + "No call from that response executed.";
-
     // Delivery retry handler (eligibility tracking, retry counting, nudge builders)
     private readonly DeliveryRetryHandler _deliveryRetry = new();
 
@@ -654,18 +650,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             analysis.ThinkingChars,
             analysis.ToolCalls.Count,
             response.FinishReason?.ToString() ?? "null");
-
-        if (analysis.Kind == LlmResponseKind.ToolCalls && _turnState.ForceNoToolsActive)
-        {
-            TurnLog().Warning(
-                "turn_force_no_tools_violation toolCallCount={ToolCallCount}",
-                analysis.ToolCalls.Count);
-            FailCurrentTurn(
-                TextOnlyResponseViolationMessage,
-                new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
-                ErrorCategory.ModelBehavior);
-            return;
-        }
 
         if (analysis.Kind == LlmResponseKind.ToolCalls && _toolExecutor is not null)
         {
@@ -2299,7 +2283,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void SetSystemPrompt()
         => _state = _modelContext.RefreshPrompt(_state, CurrentTurnAudience());
 
-    private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false, string? slashCommandSkillContent = null)
+    private void FireLlmCall(string? recallQuery = null, string? slashCommandSkillContent = null)
     {
         var compatibility = ModelInputCompatibility.Evaluate(_model.InputModalities, _state.History);
         if (!compatibility.IsCompatible)
@@ -2330,9 +2314,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _input.ActivateRecoveredInput(null, childContext, _trustContextDeriver);
         }
 
-        _turnState.ForceNoToolsActive |= forceNoTools;
-        forceNoTools = _turnState.ForceNoToolsActive;
-
         var call = _modelContext.StartCall(
             callId,
             _state,
@@ -2341,7 +2322,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _input.Authority.Source,
             _input.Authority.Trust,
             recallQuery,
-            forceNoTools,
             slashCommandSkillContent,
             _turnRestartNotice,
             modelToken);
@@ -2451,10 +2431,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         var (callId, modelToken) = _execution.ModelDispatch();
         _execution.StartModelWatchdog(_config.PrefillTimeout, _config.NoProgressTimeout);
-        TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools} callId={CallId}",
+        TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} callId={CallId}",
             request.Messages.Count,
             request.Options.Tools?.Count > 0,
-            request.ForceNoTools,
             callId);
         _execution.AttachModel(callId, SessionLlmInvoker.InvokeAsync(
             _chatClient,

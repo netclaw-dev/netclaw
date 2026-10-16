@@ -226,8 +226,8 @@ public static partial class SessionProtocol
 
         /// <summary>
         /// The model broke a rule that the runtime enforces: it repeated a tool call after the runtime
-        /// refused that call, it requested tools after a text-only stop, or it kept returning empty
-        /// replies and each stream finished with Stop or Length. The provider
+        /// refused that call, or it kept returning empty replies and each stream finished with Stop or
+        /// Length. The provider
         /// worked. The model did not comply. Empty replies from a stream with no finish reason are
         /// <see cref="StreamFailure"/>.
         /// </summary>

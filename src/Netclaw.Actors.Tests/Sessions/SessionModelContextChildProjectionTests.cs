@@ -66,7 +66,7 @@ public sealed partial class SessionModelContextTests
         var continuation = new ChildContinuation(runId, callId);
         ContextCall StartChild(long generation, SessionState current) => owner.StartCall(
             generation, current, continuation, admittedTurn: null, Source(TrustAudience.Personal),
-            toolTrust: null, recallQuery: null, forceNoTools: false, skillBody: null,
+            toolTrust: null, recallQuery: null, skillBody: null,
             restartNotice: null, CancellationToken.None);
 
         // Act
