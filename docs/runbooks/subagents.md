@@ -95,9 +95,16 @@ first user message is just the raw task, identical to the pre-context protocol.
    supervised child of the session actor and can outlive the parent model call.
 5. A final response completes the child run. An inactivity timeout or
    cancellation can stop it. The runtime sets no fixed tool-iteration ceiling.
-6. After the session records and prepares a terminal result, it selects that
-   result at a safe parent model boundary. Ready results take priority. The
-   session delivers a paired `child_run_result` call and tool result.
+6. Before the session accepts the start, the spawner writes `task.md` in the run
+   folder (`subagents/<run_id>/`). It records the agent, the requester, and the
+   brief. The spawner refuses a start when the requester cannot use `file_read`.
+7. After the session records the terminal result, it reviews the child working
+   context and writes `result.md` in the run folder. It then admits one notice
+   as an ordinary input of the requester that owns the child. The notice names
+   the agent, the run, the outcome, and the path of `result.md`. It holds no child
+   output. The notice joins a running turn of the same requester, or it waits
+   for its own turn, in admission order. The parent model reads the file with a
+   real `file_read` call.
 
 Child creation is marshaled back onto the session actor thread, so supervision
 stays within Akka's actor-thread rules. After durable acceptance, the child can
@@ -344,8 +351,9 @@ The current writer uses `cra-v2`, `cre-v2`, and `ss-v2` for child facts and snap
 Older binaries cannot read these records. Do not downgrade a database in place.
 
 Unresolved historical evidence remains inert and visible through the owner status response.
-Recovery does not relaunch uncertain child work or convert child results into user input.
-An exact settled delivery stays settled. A ready result can resume only its original parent authority.
+Recovery does not relaunch uncertain child work. A result that the parent has not received becomes one notice.
+A result that a deployed build already delivered as a `child_run_result` pair stays delivered, and no notice follows.
+A notice carries only the recorded authority of the child owner.
 
 The restore unit is a complete, consistent pre-upgrade SQLite backup.
 The backup must include the journal and snapshot tables from the same database state.
