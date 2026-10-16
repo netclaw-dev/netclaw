@@ -79,6 +79,7 @@ public static class LlmProviderServiceExtensions
             sp.GetService<TimeProvider>()));
         services.AddSingleton<ProviderOAuthRefreshingProbe>();
         services.AddSingleton<IProviderProbe>(sp => sp.GetRequiredService<ProviderOAuthRefreshingProbe>());
+        services.AddSingleton<IConfiguredProviderProbe>(sp => sp.GetRequiredService<ProviderOAuthRefreshingProbe>());
 
         return services;
     }
