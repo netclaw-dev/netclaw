@@ -18,7 +18,7 @@ Below the threshold, Netclaw SHALL keep a failed one-shot enabled so Akka.Remind
 
 A recurring reminder that reaches the threshold SHALL stay as a definition, disabled, with the `Failed` outcome. Netclaw SHALL NOT delete a recurring reminder on its own. Only an explicit delete command removes it.
 
-The tombstone SHALL hold the id, the title, the audience, the fire time of the ended occurrence, the outcome, the end time, and the last error. It SHALL NOT hold the instructions or the delivery target. Netclaw SHALL delete the history and then the tombstone when the end time is more than 12 days old. It SHALL check at startup reconciliation and every 12 hours.
+The tombstone SHALL hold the id, the title, the audience, the fire time of the ended occurrence, the outcome, the end time, and the last error. A tombstone with the outcome `Failed` SHALL also hold the reminder instructions (the prompt). A tombstone with any other outcome SHALL NOT hold the instructions. No tombstone SHALL hold the delivery target, the delivery instructions, or the boundary. Netclaw SHALL delete the history and then the tombstone when the end time is more than 12 days old. It SHALL check at startup reconciliation and every 12 hours.
 
 The failed count reported by `netclaw stats` SHALL count only enabled reminders with at least one consecutive failure.
 
@@ -37,6 +37,19 @@ The failed count reported by `netclaw stats` SHALL count only enabled reminders 
 - **WHEN** the target session acknowledges the fire
 - **THEN** the one-shot ends with the outcome `Completed`
 - **AND** the end does not wait for the session turn
+
+#### Scenario: A failed end keeps the prompt
+
+- **GIVEN** a one-shot with the instructions "Check PR 42 and tell me when CI is green"
+- **WHEN** the one-shot ends with the outcome `Failed`
+- **THEN** the tombstone holds the instructions
+- **AND** the tombstone does not hold the delivery target
+
+#### Scenario: Other ends do not keep the prompt
+
+- **GIVEN** three one-shots that end as `Completed`, `Cancelled`, and `Expired`
+- **WHEN** Netclaw writes their tombstones
+- **THEN** no tombstone holds the instructions
 
 #### Scenario: Failed one-shot remains enabled for retry
 
@@ -305,6 +318,13 @@ A tombstone outside the caller's audience SHALL block the id. The reply SHALL be
 - **THEN** a new enabled definition with the new time exists
 - **AND** the tombstone and the old history row no longer exist
 
+#### Scenario: Re-arm discards the prompt of a failed one-shot
+
+- **GIVEN** `check-pr-42` ended as `Failed` and its tombstone holds the instructions
+- **WHEN** the agent calls `set_reminder` with the id `check-pr-42`
+- **THEN** the tombstone no longer exists
+- **AND** no file on disk holds the old instructions
+
 #### Scenario: Restart recovery reuses an ended restart-resume id
 
 - **GIVEN** a restart-resume one-shot ended
@@ -331,9 +351,11 @@ Inside the retention period, the read surfaces SHALL report an ended one-shot to
 
 - `list_reminders` and `netclaw reminder list` SHALL NOT show it.
 - `netclaw reminder show <id>` and `GET /api/reminders/{id}` SHALL reply "not found" (HTTP 404, CLI exit code 1). The message SHALL name the outcome, the end time, and the time until which the history stays readable.
-- `netclaw reminder status <id>` and `GET /api/reminders/{id}/status` SHALL reply with the outcome, the end time, the purge time, the durable occurrence status while it exists, and the recent history.
+- `netclaw reminder status <id>` and `GET /api/reminders/{id}/status` SHALL reply with the outcome, the end time, the purge time, the last error, the durable occurrence status while it exists, and the recent history. For the outcome `Failed`, the reply SHALL also hold the reminder prompt. For the other outcomes, the reply SHALL NOT hold a prompt.
 - `netclaw reminder enable|disable <id>` SHALL reply "not found" with the ended message.
 - `run_reminder` SHALL reply with an error that says that the reminder ended.
+
+The prompt of an ended one-shot SHALL be readable only through the status surfaces, and only for a caller inside the tombstone audience. `show`, `history`, `list`, and the agent tools SHALL NOT hold it.
 
 Outside the caller's audience, every surface SHALL reply as for an id that never existed.
 
@@ -356,15 +378,35 @@ Outside the caller's audience, every surface SHALL reply as for an id that never
 - **WHEN** the agent calls `list_reminders` with `filter = all`
 - **THEN** the result shows only the interval reminder
 
+#### Scenario: Status of a failed one-shot shows the prompt
+
+- **GIVEN** `check-pr-42` ended as `Failed` with the instructions "Check PR 42 and tell me when CI is green"
+- **WHEN** a caller inside the audience asks for its status
+- **THEN** the reply holds the outcome `Failed`, the last error, and the instructions
+- **AND** `netclaw reminder status check-pr-42` prints the instructions
+
+#### Scenario: Status of a completed one-shot shows no prompt
+
+- **GIVEN** `check-pr-42` ended as `Completed`
+- **WHEN** a caller inside the audience asks for its status
+- **THEN** the reply holds no instructions
+
 #### Scenario: Status outside the audience
 
 - **GIVEN** a Personal one-shot ended
 - **WHEN** a Team caller asks for its status
 - **THEN** the reply is "not found"
 
+#### Scenario: The prompt of a failed one-shot stays inside its audience
+
+- **GIVEN** a Personal one-shot ended as `Failed` and its tombstone holds the instructions
+- **WHEN** a Team caller asks for its status, its history, or its details
+- **THEN** every reply is "not found"
+- **AND** no reply holds any part of the instructions
+
 ### Requirement: Reconciliation ends leftover one-shots
 
-Startup reconciliation and the 12-hour sweep SHALL end every leftover one-shot definition. A leftover is a one-shot definition with a terminal outcome, or a disabled one-shot whose fire time has passed. The end time SHALL be the last update time of a definition with a terminal outcome. For a disabled one-shot without an outcome, the end time SHALL be the later of the last update time and the fire time. A leftover without a recorded outcome SHALL end as `Cancelled`, and its last error SHALL say that the outcome was not recorded. The same pass SHALL purge each tombstone whose end time is more than 12 days old. The reconciliation log SHALL report the count of ended one-shots and the count of purged tombstones.
+Startup reconciliation and the 12-hour sweep SHALL end every leftover one-shot definition. A leftover is a one-shot definition with a terminal outcome, or a disabled one-shot whose fire time has passed. The end time SHALL be the last update time of a definition with a terminal outcome. For a disabled one-shot without an outcome, the end time SHALL be the later of the last update time and the fire time. A leftover without a recorded outcome SHALL end as `Cancelled`, and its last error SHALL say that the outcome was not recorded. A leftover with the outcome `Failed` SHALL keep its instructions in its tombstone. The same pass SHALL purge each tombstone whose end time is more than 12 days old. The reconciliation log SHALL report the count of ended one-shots and the count of purged tombstones.
 
 #### Scenario: Upgrade cleans old leftovers
 
@@ -372,7 +414,9 @@ Startup reconciliation and the 12-hour sweep SHALL end every leftover one-shot d
 - **WHEN** the new daemon starts
 - **THEN** none of the three definitions exists
 - **AND** the `Completed` and the disabled one-shot have no tombstone and no history
-- **AND** the `Failed` one-shot has a tombstone and its history until its 12 days pass
+- **AND** the `Failed` one-shot has a tombstone that holds its instructions, and its history, until its 12 days pass
+- **AND** the tombstone of a leftover that ended as `Completed` or `Cancelled` holds no instructions
+- **AND** the reconciliation log line reports `ended_oneshots=3` and `purged_tombstones=2` (the leftovers that ended and were purged in the same pass count in both)
 
 #### Scenario: Live reminders are not touched
 

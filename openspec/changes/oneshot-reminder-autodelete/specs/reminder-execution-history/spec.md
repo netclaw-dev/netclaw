@@ -48,7 +48,7 @@ read operations SHALL return an empty result rather than an error.
 
 ### Requirement: Ended one-shot history stays readable through its tombstone
 
-Netclaw SHALL keep the execution history of an ended one-shot for 12 days after its end time, whatever its outcome. The tombstone SHALL supply the audience for every history and status read of an ended one-shot. Netclaw SHALL apply the same audience rule as for a live reminder. A read without a definition and without a tombstone SHALL reply "not found". A tombstone that Netclaw cannot read SHALL count as absent for reads, and Netclaw SHALL log an error and raise an operational alert. Netclaw SHALL NOT expose history without an audience to check.
+Netclaw SHALL keep the execution history of an ended one-shot for 12 days after its end time, whatever its outcome. The tombstone SHALL supply the audience for every history and status read of an ended one-shot. Netclaw SHALL apply the same audience rule as for a live reminder. A read without a definition and without a tombstone SHALL reply "not found". A tombstone that Netclaw cannot read SHALL count as absent for reads, and Netclaw SHALL log an error and raise an operational alert. Netclaw SHALL NOT expose history without an audience to check. The `Failed` tombstone also holds the reminder prompt (see `netclaw-scheduling`), and the same audience rule gates its read.
 
 Recurring reminders keep their history until an explicit delete. The history of an id that never existed is reported as not found.
 

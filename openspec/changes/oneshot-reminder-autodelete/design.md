@@ -38,14 +38,30 @@ The manager writes a **reminder tombstone** for each ended one-shot. The tombsto
 | `id` | The reminder id. |
 | `title` | Text for `show`, `status`, and the tool replies. |
 | `audience` | The audience gate for history, status, cancel, and re-arm. |
-| `fireAt` | The due time of the ended occurrence. It matches the tombstone to a definition (D4). |
+| `fireAtMs` | The due time of the ended occurrence, in Unix milliseconds. It matches the tombstone to a definition (D4). |
 | `outcome` | `Completed`, `Failed`, `Cancelled`, or `Expired`. |
 | `endedAtMs` | The end time from `TimeProvider`. Retention counts from this time. |
 | `lastError` | The failure or denial text, or the reason for a repair. Null for a clean success. |
+| `instructions` | The reminder prompt. Set only when the outcome is `Failed`. Absent for the other outcomes (D1a). |
 
-The tombstone does not keep the instructions, the delivery target, or the boundary. A tombstone never runs, so it does not need them.
+The tombstone never keeps the delivery target, the delivery instructions, or the boundary. A tombstone never runs, so it does not need them.
 
-Where: `{RemindersDirectory}/ended/{escapedId}.json`. `ReminderDefinitionStore` owns the folder, the lock, the path containment check, and the atomic write (temp file, then rename). The folder is a constraint, not a style choice: `List()` reads every top-level `*.json` file. A tombstone at the top level would be parsed as a definition, then deleted as invalid or rejected as legacy. An older binary also enumerates only the top level, so a downgrade ignores the folder.
+The file uses the JSON options of the definition store (web defaults: camel-case names, enum values as names). Example for a `Failed` outcome:
+
+```json
+{
+  "id": "check-pr-42",
+  "title": "Check PR 42",
+  "audience": "Team",
+  "fireAtMs": 1792144800000,
+  "outcome": "Failed",
+  "endedAtMs": 1792144812000,
+  "lastError": "model endpoint is not available",
+  "instructions": "Check PR 42 and tell me when CI is green."
+}
+```
+
+Where: `{RemindersDirectory}/ended/{escapedId}.json`. `ReminderDefinitionStore` owns the folder, the lock, the path containment check, and the atomic write (temp file `{path}.tmp`, then rename; the same temp name as a definition write). The folder is a constraint, not a style choice: `List()` reads every top-level `*.json` file. A tombstone at the top level would be parsed as a definition, then deleted as invalid or rejected as legacy. An older binary also enumerates only the top level, so a downgrade ignores the folder.
 
 Alternatives:
 
@@ -53,6 +69,26 @@ Alternatives:
 - Delete the definition and keep only the history. Rejected: the history has no audience, so no read could be gated. An ungated read is a disclosure; a read that always fails makes the kept history useless.
 - Append a terminal row to the history file. Rejected: `HistoryRecord` is a wire shape for the CLI, REST, and `get_reminder_history`. A row of a different kind changes three consumers.
 - A new store class. Rejected under "reuse before you add": `ReminderDefinitionStore` already has the folder, the lock, the containment check, and the atomic write.
+
+### D1a. Only a `Failed` tombstone keeps the prompt
+
+Owner answer (16 Oct): a `Failed` tombstone keeps the reminder prompt, so an operator can create the reminder again.
+
+- `Failed`: the tombstone keeps `instructions`. The reminder did not do its job, and the operator needs the text to try again.
+- `Completed`, `Cancelled`, `Expired`: the tombstone does not keep the prompt. A `Completed` reminder did its job. A `Cancelled` reminder was unwanted. An `Expired` reminder missed its window on purpose. Nobody needs the text again, so Netclaw does not keep it on disk longer than it has to.
+- The prompt is data of the tombstone audience. Only a caller inside that audience can read it, with the same rule as the history (`CanAccessAudience`). Outside the audience, the reply is "not found" and shows no field of the tombstone.
+- The only read surface for the prompt is `reminder status` (`GET /api/reminders/{id}/status`, field `ended.instructions`). `show`, `history`, `list`, and every agent tool do not show it.
+- The prompt goes away with the tombstone: at the 12-day purge, at a permanent delete, and at a re-arm of the same id (D6).
+- A tombstone that Netclaw cannot read has no prompt for any reader (D7, Risks).
+
+Example, positive: a one-shot ends `Failed` after five failures. `netclaw reminder status check-pr-42` prints the prompt. The operator copies it into a new `set_reminder` call.
+
+Example, negative: a Personal one-shot ends `Failed`. A Team caller asks for its status. The reply is "not found". It does not show the prompt, and it does not show that the id exists.
+
+Alternatives:
+
+- Keep the prompt for every outcome. Rejected: it keeps more text on disk for a use case that only `Failed` has.
+- Keep the prompt in the history file. Rejected: `HistoryRecord` is a wire shape (see D1).
 
 ### D2. Which events end a one-shot, and with which outcome
 
@@ -81,6 +117,7 @@ All events in D2 use one manager routine. Schematic (the audience gate and the l
 ```
 EndOneShot(def, outcome, lastError, endedAt, envelopeAction)      // manager, actor-local call
   1. store.SaveTombstone(tombstone(def, outcome, lastError, endedAt))  // durable: commit point
+       // instructions are copied from def only when outcome = Failed (D1a)
        on I/O error -> alert "reminder.settlement.failed"; stop here.
                        No ack and no delete. The lease expiry is the recovery path.
   2. envelopeAction: ack | nack | none                              // durable in Akka.Reminders
@@ -133,7 +170,7 @@ store.DeleteTombstone(id)                         // durable
 store.Save(newDefinition)                         // durable
 ```
 
-- The old history is discarded, as today for a `Completed` one-shot. A new reminder can have a lower audience than the old one, so the old history must not become readable under the new audience.
+- The old history and the old tombstone (with the `Failed` prompt, if it has one) are discarded, as today for the history of a `Completed` one-shot. A new reminder can have a lower audience than the old one, so the old history must not become readable under the new audience.
 - Today a `Failed` one-shot blocks its id under `CreateOnly`. After this change, no `Failed` one-shot definition exists, so the id is free.
 - A crash after the schedule and before the save leaves an Akka.Reminders schedule with no definition. The caller got no success reply. The reconciliation cancels the orphan schedule, and a fire before that does not run (no definition).
 - A tombstone outside the caller's audience blocks the id until the sweep purges the tombstone. The caller cannot tell this apart from a definition outside its audience. This keeps one rule for the id space.
@@ -144,9 +181,9 @@ store.Save(newDefinition)                         // durable
 |---|---|---|
 | `list_reminders`, `reminder list` | Not shown | Not shown |
 | `reminder show <id>`, `GET /api/reminders/{id}` | 404. The message names the outcome, the end time, and the purge time. The CLI exits with code 1. | 404 "not found" |
-| `reminder status <id>`, `GET .../status` | 200 with `ended` data, the durable occurrence status (until Akka prunes it), and the recent history | 404 |
+| `reminder status <id>`, `GET .../status` | 200 with `ended` data (outcome, end time, purge time, last error, and for `Failed` the prompt), the durable occurrence status (until Akka prunes it), and the recent history | 404 |
 | `reminder history <id>`, `get_reminder_history` | The history rows | 404 / "not found" |
-| `cancel_reminder`, `reminder cancel` | "Reminder 'x' already ended (completed at ...)." Nothing changes. | "not found" |
+| `cancel_reminder`, `reminder cancel`, `DELETE /api/reminders/{id}` | "Reminder 'x' already ended (completed at ...)." Nothing changes. HTTP 200, CLI exit code 0. | "not found" (HTTP 404) |
 | `reminder enable` / `disable` | 404 with the ended message | (operator only) |
 | `reminder delete <id>` | Deletes the history, then the tombstone | (operator only) |
 | `run_reminder` | Error: the reminder ended; set it again to run it | "not found" |
@@ -158,7 +195,33 @@ store.Save(newDefinition)                         // durable
        Its history stays readable until 2026-10-28 10:00:00Z: netclaw reminder history check-pr-42
 ```
 
-Protocol changes (all additive): `GetReminderResponse.Ended`, `ReminderStatusResponse.Ended`, `ReminderCancelledResponse.AlreadyEnded` and `ErrorMessage`, `ReminderHistoryResponse` unchanged (`Found` is true for a tombstone in scope). `ReminderEndedInfo` carries the outcome, `endedAt`, `purgeAt`, and `lastError`.
+Protocol changes (all additive, exact shapes so that the consumers and the tests agree):
+
+```csharp
+public sealed record ReminderEndedInfo(
+    ReminderTerminalOutcome Outcome,   // Completed | Failed | Cancelled | Expired
+    DateTimeOffset EndedAt,
+    DateTimeOffset PurgeAt,            // EndedAt + TerminalRetention
+    string? LastError,
+    string? Instructions);             // non-null only for Failed (D1a)
+
+GetReminderResponse(ReminderInfo? Reminder, ReminderEndedInfo? Ended = null)
+ReminderStatusResponse(..., IReadOnlyList<HistoryRecord> RecentHistory, ReminderEndedInfo? Ended = null)
+ReminderCancelledResponse(ReminderId Id, bool Found, ReminderEndedInfo? AlreadyEnded = null,
+                          string? ErrorMessage = null, bool Deleted = false)
+ReminderStateResponse.ErrorMessage            // the ended message for enable and disable
+```
+
+- `ReminderCancelledResponse.Deleted` is true when this cancel ended a one-shot. The tool, the REST route, and the CLI use it to pick "cancelled and deleted" or "cancelled (disabled)".
+- `ReminderCancelledResponse.AlreadyEnded` is set (with `Found = true`) when the id is an ended one-shot in the caller's audience.
+- `ReminderStatusResponse.Found` is true for an ended one-shot in the caller's audience. `Enabled` is false and `Executing` is false.
+- `ReminderHistoryResponse` is unchanged (`Found` is true for a tombstone in scope).
+- The REST `ReminderStatusDto` gets `ended` (the same fields as `ReminderEndedInfo`, camel-case). The REST `GET /{id}` 404 body keeps the shape `{ "error": "..." }`; the message names the outcome, the end time, and the purge time.
+- REST `ended.outcome` is the outcome name as a string (`"Failed"`). `endedAt` and `purgeAt` are ISO 8601 timestamps.
+- The REST `GET /{id}` 404 message and the CLI `show` text: `Reminder '{id}' ended ({outcome in lower case}) at {EndedAt:u} and its definition was deleted. Its history stays readable until {PurgeAt:u}: netclaw reminder history {id}`.
+- The cancel replies of the tool, the REST route, and the CLI: `Reminder '{id}' cancelled and deleted.` (a one-shot), `Reminder '{id}' cancelled (disabled).` (a recurring reminder), and `Reminder '{id}' already ended ({outcome in lower case} at {EndedAt:u}). Nothing changed.` (an ended one-shot).
+- The CLI `status` text for an ended one-shot has the lines `Ended:               {outcome in lower case} at {EndedAt:u} (history stays until {PurgeAt:u})`, `Last error:          {text}` (when set), and `Prompt:              {text}` (only for `Failed`).
+- The CLI writes `status` and `cancel` output through the `output` and `error` writers of `ReminderCommand.RunAsync`, as `show` and `history` do now. A test can then read it without a change of `Console`.
 
 ### D8. Sweep, reconciliation, and upgrade
 
@@ -187,8 +250,8 @@ Reconcile (startup only) adds, before the sweep:
 
 The same rules repair a crash and migrate an old install:
 
-- An old `Completed` or `Failed` one-shot has `TerminalOutcome`. It ends with that outcome.
-- An old cancelled, denied, or expired one-shot is disabled with a past fire time. It ends as `Cancelled`, and its `lastError` says that the old version did not record the outcome.
+- An old `Completed` or `Failed` one-shot has `TerminalOutcome`. It ends with that outcome. A `Failed` leftover keeps its prompt in the tombstone (D1a). A `Completed` leftover does not.
+- An old cancelled, denied, or expired one-shot is disabled with a past fire time. It ends as `Cancelled`, and its `lastError` reads "The outcome was not recorded." (the tests match the words "not recorded").
 - The end time is the last update time, so a leftover older than 12 days loses its tombstone and its history in the same pass. A newer leftover keeps its history for the rest of the 12 days.
 
 The reconciliation log line gets two counts: `ended_oneshots` and `purged_tombstones`.
@@ -235,13 +298,13 @@ netclaw reminder list --json \
 | A one-shot ends (D2, D3) | `ReminderManagerActor` | durable: tombstone, definition, Akka.Reminders occurrence |
 | Matching tombstone wins (D4) | `ReminderManagerActor` | durable read of two files; call-local result |
 | The settled occurrence is the current one (D5) | `ReminderManagerActor` | actor-local `ActiveReminderExecution.Envelope` and durable definition |
-| Audience gate for an ended id (D6, D7) | `ReminderManagerActor.CanAccessAudience` | durable tombstone audience |
+| Audience gate for an ended id, including the `Failed` prompt (D1a, D6, D7) | `ReminderManagerActor.CanAccessAudience` | durable tombstone audience |
 | Retention purge (D8) | `ReminderManagerActor` sweep | durable; `TimeProvider` time |
 | Skip counts, denied alerts | `ReminderManagerActor` | actor-local, removed at the end |
 
 ## Risks / Trade-offs
 
-- [A `Failed` one-shot loses its prompt] → The alert and the channel notice name the reminder. The session that set it has the prompt in its transcript. See Open Questions.
+- [A `Failed` tombstone holds the prompt on disk for up to 12 days] → The definition held the same text before this change, with no limit. The audience gate protects the read (D1a). The purge, the permanent delete, and the re-arm remove it. Only `Failed` keeps it.
 - [A tombstone outside the caller's audience blocks the id for up to 12 days] → The same rule applies to a live definition. Ids are usually unique per job. A Personal caller can still re-arm it.
 - [A re-arm discards the old history, so a self-re-arming watcher keeps one run of history] → This is the current rule for a `Completed` one-shot. A recurring reminder is the better shape for a watcher; a stop condition for watchers is a separate issue.
 - [`RestartRecoveryService` retries a manifest after a failed delete and re-creates an ended restart reminder] → The id is free after the end, as it is today for a `Completed` one-shot. D2 (#2511) makes a restart-resume message that resumes nothing a no-op.
@@ -256,6 +319,10 @@ netclaw reminder list --json \
 2. Rollback: an older binary ignores `ended/` and the history files without a definition. It does not re-create the deleted definitions. The tombstones and history stay on disk until the new binary runs again, or the operator deletes the `ended/` folder.
 3. Before the release, the operator can clean the live install with the D9 commands.
 
-## Open Questions
+## Resolved Questions
 
-- Should a `Failed` tombstone keep the reminder instructions, so that an operator can re-create the reminder from `reminder status`? The design leaves them out. Adding the field later does not change the flow, the specs, or the tasks.
+Owner answers, 16 Oct 2026:
+
+1. A `Failed` tombstone keeps the prompt, so an operator can create the reminder again. Only `Failed` keeps it (D1a). A caller outside the audience cannot read it.
+2. A run with a denied tool call ends as `Failed` (D2).
+3. No `netclaw reminder prune` command (D9).
