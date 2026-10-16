@@ -57,7 +57,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         _directory.Dispose();
     }
 
-    // Model failures. The runtime asks for text only. The model keeps asking for tools.
+    // Model failures. The runtime stops the tool work. The model keeps asking for the same tools.
     // Planted bug: the product reports ProviderFailure for these, so the harness sees infra.
 
     [Theory]
@@ -81,13 +81,16 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     public async Task Cycle_stop_that_the_model_ignores_is_a_model_failure(bool json)
     {
         // The eval case tool_cycle_terminal. The same call repeats, so the runtime corrects once and
-        // then stops the cycle. The limit of 20 is far away, so only the cycle stop forces text.
+        // then stops the cycle. The limit of 20 is far away, so only the cycle stop ends the turn.
         var model = new ScriptedModel(call => ToolCall(call, query: "same"));
 
         var run = await RunAsync(model, json, maxToolIterations: 20);
 
         AssertFailed(run, json, "model", "ModelBehavior");
-        Assert.Contains("required text only", run.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Netclaw stopped this run", run.Stderr, StringComparison.Ordinal);
+        // Two executed rounds, one corrected round, and the repeat that ends the turn. The runtime asks
+        // the model nothing after the repeat.
+        Assert.Equal(4, model.CallCount);
     }
 
     // Repeated empty replies count against the model only when the stream finished on its own terms:
@@ -228,11 +231,17 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     [InlineData(true)]
     public async Task Cycle_stop_that_the_model_obeys_is_not_a_failure(bool json)
     {
-        var model = new ScriptedModel(call => call.ToolsOffered ? ToolCall(call, query: "same") : Text("Done."));
+        // The model obeys the first runtime intervention that it can see: the tools are gone, or the
+        // runtime replaced the result of its last call.
+        var model = new ScriptedModel(call => call.ToolsOffered && !call.RuntimeIntervened
+            ? ToolCall(call, query: "same")
+            : Text("Done."));
 
         var run = await RunAsync(model, json, maxToolIterations: 20);
 
         AssertSucceeded(run, json);
+        // Proof that the run reached the cycle stop: two executed rounds, one corrected round, and the answer.
+        Assert.Equal(4, model.CallCount);
     }
 
     [Theory]
@@ -321,7 +330,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         var paths = new NetclawPaths(_directory.Path);
         paths.EnsureDirectoriesExist();
         var registry = new ToolRegistry();
-        registry.RegisterCore(AIFunctionFactory.Create(() => "search result", "web_search"), "web_search");
+        registry.RegisterCore(AIFunctionFactory.Create(() => ScriptedModel.FixedToolResult, "web_search"), "web_search");
         var storage = new TestSessionStorageResolver(paths);
 
         var builder = WebApplication.CreateBuilder();
@@ -382,7 +391,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     {
         public Task<string> ExecuteAsync(
             FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default)
-            => Task.FromResult("search result");
+            => Task.FromResult(ScriptedModel.FixedToolResult);
     }
 
     private sealed class FixedWorkingContext : IWorkingContextSnapshotProvider
@@ -397,8 +406,11 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     }
 }
 
-/// <summary>One call to the scripted model.</summary>
-internal sealed record ModelCall(int Number, bool ToolsOffered);
+/// <summary>
+/// One call to the scripted model. <see cref="RuntimeIntervened"/> is true when the last tool result
+/// is not the text that the fixed tool returns, so the runtime replaced it (for example, a cycle correction).
+/// </summary>
+internal sealed record ModelCall(int Number, bool ToolsOffered, bool RuntimeIntervened);
 
 /// <summary>
 /// A model that follows a script. It ignores the tool list unless the script reads
@@ -410,17 +422,20 @@ internal sealed class ScriptedModel(
     Func<ModelCall, IReadOnlyList<AIContent>> script,
     ChatFinishReason? finishReason = null) : IChatClient
 {
+    /// <summary>The text that the fixed test tool returns.</summary>
+    public const string FixedToolResult = "search result";
+
     private int _callCount;
 
     public int CallCount => Volatile.Read(ref _callCount);
 
     public Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-        => Task.FromResult(Next(options));
+        => Task.FromResult(Next(messages, options));
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-        => Replay(Next(options));
+        => Replay(Next(messages, options));
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
@@ -428,9 +443,15 @@ internal sealed class ScriptedModel(
     {
     }
 
-    private ChatResponse Next(ChatOptions? options)
+    private ChatResponse Next(IEnumerable<ChatMessage> messages, ChatOptions? options)
     {
-        var call = new ModelCall(Interlocked.Increment(ref _callCount), options?.Tools is { Count: > 0 });
+        var lastToolResult = messages
+            .SelectMany(message => message.Contents.OfType<FunctionResultContent>())
+            .LastOrDefault();
+        var call = new ModelCall(
+            Interlocked.Increment(ref _callCount),
+            options?.Tools is { Count: > 0 },
+            lastToolResult is not null && lastToolResult.Result?.ToString() != FixedToolResult);
         return new ChatResponse(new ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, script(call).ToList()))
         {
             FinishReason = finishReason
