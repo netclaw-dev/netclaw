@@ -216,17 +216,23 @@ Download failures do not create security alerts. This change does not alter the 
 stdout instead. A script reads stdout, stderr, the exit code, and the session log.
 
 A failed turn or a failed run exits `1`. A turn that completes exits `0`. The exit code does not carry
-the reason. A run that an outside `timeout` kills exits `124` and prints no reason, because the CLI is dead.
+the reason. A run that an outside `timeout` kills exits `124`. `timeout` sends SIGTERM, and the CLI handles
+SIGTERM like SIGINT, so stderr usually also has `[turn:failed] category=infra kind=Cancelled`. A reader must
+check the exit code first: `124` means `timeout`, whatever stderr holds.
 
-For a failed turn or a failed run, stderr has exactly one line after the `[error]` or `[headless:error]`
-line:
+For a failed turn or a failed run, stderr has exactly one line that starts with `[turn:failed]`. It comes
+after the `[error]` or `[headless:error]` line:
 
 ```text
 [turn:failed] category=<model|infra> kind=<Kind>
 ```
 
 - `category` is `model` only for `kind=ModelBehavior`. The model broke a rule that the runtime
-  enforces: it requested tools after a text-only stop, or it returned repeated empty replies.
+  enforces: it requested tools after a text-only stop, or it returned repeated empty replies and each
+  stream finished with the finish reason `stop` or `length`.
+- Repeated empty replies from a stream with no finish reason (the connection closed early) are
+  `kind=StreamFailure`. Repeated empty replies with the finish reason `content_filter`, or any other
+  finish reason, are `kind=ProviderFailure`. Both are `infra`: the model did not get a fair turn.
 - `category` is `infra` for every other kind. A failure with no classification is `infra`. A reader
   must never score an unknown failure as a model failure.
 - `kind` is the `ErrorCategory` name of the last `ErrorOutput` before the failed turn: `ModelBehavior`,
@@ -238,9 +244,17 @@ line:
 - An error that the turn survived (a compaction timeout, a context overflow recovery) does not decide
   the kind. A turn that completes prints no token.
 
+The CLI replaces each line break in the error text with a space before it writes the `[error]` or
+`[headless:error]` line. Error text comes from tools, providers, and models, so a line break in it could
+forge a second `[turn:failed]` line. Only the CLI token writer starts a stderr line with the token.
+
 The session log has one `TURN_FAILED: category=<c> kind=<k>` record before `TURN_COMPLETED`. With
 `--json`, the envelope of a failed turn adds `errorCategory` and `errorKind`. A turn that completes has
 neither key. Stdout never holds the token line.
+
+The session log is not safe against forged lines. A model reply or a tool result can hold a line that
+looks like `TURN_FAILED: ...`. A reader of the session log uses the last `TURN_FAILED` record before the
+final `TURN_COMPLETED`, and only when the exit code is `1`.
 
 Positive example: the model repeats `web_search("same")` after the runtime stop. Stderr ends with
 `[turn:failed] category=model kind=ModelBehavior`. The exit code is `1`.

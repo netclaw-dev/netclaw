@@ -250,7 +250,9 @@ If validation rejects metadata, repair the reported value before the retry.
 A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
 If a text-only response contains tool calls, Netclaw rejects those calls and reports a `ModelBehavior` failure.
-Repeated empty replies get the same `ModelBehavior` kind. A provider outage does not.
+Repeated empty replies get the same `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
+An empty reply with no finish reason is `StreamFailure`. A `content_filter` reply is `ProviderFailure`. Both are `infra`.
+A provider outage is not `ModelBehavior`.
 This failure does not prove that the turn exhausted its tool budget.
 
 ## Large tool output
@@ -943,6 +945,8 @@ Only `kind=ModelBehavior` is `model`: the model broke a rule that Netclaw enforc
 Every other kind is `infra`, including `ProviderFailure`, `Timeout`, `ToolFailure`, and `Unknown`.
 The CLI adds `ChannelFailure` (the daemon was unreachable or refused the prompt) and `Cancelled` (SIGINT or SIGTERM). Both are `infra`.
 A turn that completes prints no token, even after a recovered error.
+A `timeout` kill exits 124. Stderr usually also has `kind=Cancelled`, so read the exit code first.
+In the session log, use the last `TURN_FAILED` record before the final `TURN_COMPLETED`, and only when the exit code is 1.
 Headless `COMPACTION` records expose `summarized` and `tool_results_cleared` phase evidence.
 A true summary flag does not prove that the summary retains every task requirement.
 Older daemon or CLI versions can omit these flags from the transport and report false.

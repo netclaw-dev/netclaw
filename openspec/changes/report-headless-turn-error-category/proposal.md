@@ -4,13 +4,14 @@ The eval harness must tell a model failure from an infrastructure failure. A run
 
 ## What Changes
 
-- Add `ErrorCategory.ModelBehavior`. The session actor uses it for a tool call after a text-only stop and for repeated empty replies.
+- Add `ErrorCategory.ModelBehavior`. The session actor uses it for a tool call after a text-only stop and for repeated empty replies that end with the finish reason Stop or Length. Repeated empty replies with no finish reason are `StreamFailure`. With another finish reason, such as `content_filter`, they are `ProviderFailure`.
 - Print `[turn:failed] category=<model|infra> kind=<Kind>` on stderr for a failed turn or a failed run.
 - Write a `TURN_FAILED: category=... kind=...` record to the session log before `TURN_COMPLETED`.
 - Add `errorCategory` and `errorKind` to the `--json` envelope of a failed turn.
 - Map only `ModelBehavior` to `model`. Map every other kind, and a failed turn with no error, to `infra`.
 - **BREAKING**: A cancelled run (SIGINT or SIGTERM) now exits 1 with `kind=Cancelled`. Before, it exited 0 with no output.
 - Each terminal path sets the exit code first, then stops the host.
+- The CLI replaces line breaks in error text on stderr, so error text cannot forge a token line.
 
 Out of scope: the harness verdict mapping, sub-agent failures, and the Slack and Discord text for `ModelBehavior`.
 

@@ -293,7 +293,7 @@ public static class SessionOutputDtoMapper
                 TimestampMs = dto.TimestampMs,
                 Message = dto.ErrorMessage ?? "Unknown daemon error",
                 CorrelationId = Guid.TryParse(dto.ErrorCorrelationId, out var cid) ? cid : Guid.NewGuid(),
-                Category = Enum.TryParse<ErrorCategory>(dto.ErrorCategory, out var cat) ? cat : ErrorCategory.Unknown,
+                Category = ParseErrorCategory(dto.ErrorCategory),
                 Cause = dto.ErrorDetail is not null
                     ? new Exception(dto.ErrorDetail) : null
             },
@@ -372,6 +372,14 @@ public static class SessionOutputDtoMapper
 
         return success == false ? SubAgentRunOutcome.Failed : SubAgentRunOutcome.Completed;
     }
+
+    // The wire carries a member name. Enum.TryParse also accepts a number and a comma list, and a comma list
+    // such as "StreamFailure, Unknown" can parse to a defined member (ModelBehavior, the model verdict) that
+    // the sender never named. Accept a defined name only. Anything else is Unknown, which is infra.
+    private static ErrorCategory ParseErrorCategory(string? name)
+        => name is not null && Enum.IsDefined(typeof(ErrorCategory), name)
+            ? Enum.Parse<ErrorCategory>(name)
+            : ErrorCategory.Unknown;
 
     private static SubAgentOutput MapSubAgentOutput(SessionOutputDto dto, SessionId sessionId)
     {

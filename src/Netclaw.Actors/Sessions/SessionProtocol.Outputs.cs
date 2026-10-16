@@ -219,7 +219,9 @@ public static partial class SessionProtocol
 
         /// <summary>
         /// The model broke a rule that the runtime enforces: it requested tools after a text-only stop,
-        /// or it kept returning empty replies. The provider worked. The model did not comply.
+        /// or it kept returning empty replies and each stream finished with Stop or Length. The provider
+        /// worked. The model did not comply. Empty replies from a stream with no finish reason are
+        /// <see cref="StreamFailure"/>.
         /// </summary>
         /// <remarks>
         /// New members go last. The wire carries this enum by name, and an older reader maps an

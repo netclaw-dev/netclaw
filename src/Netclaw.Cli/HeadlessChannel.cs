@@ -6,6 +6,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -182,7 +183,7 @@ public sealed class HeadlessChannel : IChannel
             // A cancellation that did not come from shutdown (for example a transport timeout)
             // lands here too. It is a channel failure, not a clean stop.
             _logger.LogError(ex, "Headless channel failed");
-            Console.Error.WriteLine($"[headless:error] {ex.Message}");
+            Console.Error.WriteLine($"[headless:error] {SingleLine(ex.Message)}");
             Console.Error.WriteLine(HeadlessFailure.Channel.ToToken());
             WriteFailureLog("FAILED", ex);
             Environment.ExitCode = 1;
@@ -295,7 +296,7 @@ public sealed class HeadlessChannel : IChannel
 
             case ErrorOutput msg:
                 _lastErrorKind = msg.Category;
-                Console.Error.WriteLine($"[error] {msg.Message}");
+                Console.Error.WriteLine($"[error] {SingleLine(msg.Message)}");
                 Log(log, $"ERROR: {msg.Message}");
                 if (msg.Cause is not null)
                     Log(log, $"EXCEPTION: {msg.Cause}");
@@ -363,6 +364,14 @@ public sealed class HeadlessChannel : IChannel
         }
     }
 
+    // Error text comes from tools, providers, and models. A line break in it would start a new stderr line,
+    // and a forged "[turn:failed]" line would then reach a harness that takes the first match. Only the
+    // token writer may start a line with the token.
+    private static string SingleLine(string text)
+        => LineBreaks.Replace(text, " ");
+
+    private static readonly Regex LineBreaks = new("[\r\n\u0085\u2028\u2029]+", RegexOptions.Compiled);
+
     private void WriteJsonEnvelope(HeadlessFailure? failure)
     {
         // Client-side timing
@@ -405,7 +414,7 @@ public sealed class HeadlessChannel : IChannel
         }
         catch (Exception logEx)
         {
-            Console.Error.WriteLine($"[headless:error] Failed to write failure log: {logEx.Message}");
+            Console.Error.WriteLine($"[headless:error] Failed to write failure log: {SingleLine(logEx.Message)}");
         }
     }
 
@@ -466,12 +475,21 @@ internal readonly record struct HeadlessFailure(HeadlessFailureCategory Category
     public string ToToken() => $"[turn:failed] category={CategoryName} kind={Kind}";
 
     /// <summary>
-    /// Maps the category of the failing <see cref="ErrorOutput"/>. The switch names every member, so a
-    /// reviewer who adds a member sees this decision. The wire parser accepts any number as an
-    /// <see cref="ErrorCategory"/>; a value with no name is unclassified, so it is infra.
+    /// Maps the category of the failing <see cref="ErrorOutput"/>. A value with no name is unclassified, so
+    /// it is <c>infra</c> with kind <c>Unknown</c>.
     /// </summary>
-    public static HeadlessFailure FromSession(ErrorCategory category) => new(
-        category switch
+    /// <remarks>
+    /// The compiler cannot check this switch for a missing member. Without a discard arm it raises CS8524
+    /// for values that have no name, and the build treats warnings as errors. So the guard above the switch
+    /// handles unnamed values, and the last arm handles a member that someone adds later. That member maps
+    /// to <c>infra</c>, the safe side. A new member that should blame the model needs an arm of its own.
+    /// </remarks>
+    public static HeadlessFailure FromSession(ErrorCategory category)
+    {
+        if (!Enum.IsDefined(category))
+            return new(HeadlessFailureCategory.Infra, nameof(ErrorCategory.Unknown));
+
+        var verdict = category switch
         {
             ErrorCategory.ModelBehavior => HeadlessFailureCategory.Model,
             ErrorCategory.ProviderFailure
@@ -481,12 +499,14 @@ internal readonly record struct HeadlessFailure(HeadlessFailureCategory Category
                 or ErrorCategory.InputCompatibility
                 or ErrorCategory.Unknown => HeadlessFailureCategory.Infra,
             _ => HeadlessFailureCategory.Infra
-        },
-        category.ToString());
+        };
+        return new(verdict, category.ToString());
+    }
 }
 
+// Infra is the zero value on purpose. A default(HeadlessFailure) must never blame the model.
 internal enum HeadlessFailureCategory
 {
-    Model,
-    Infra
+    Infra = 0,
+    Model = 1
 }
