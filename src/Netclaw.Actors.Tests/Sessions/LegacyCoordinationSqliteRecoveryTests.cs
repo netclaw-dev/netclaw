@@ -146,11 +146,24 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : RecordedJournalTestB
             message.Role == Microsoft.Extensions.AI.ChatRole.User
             && message.Text.Contains("accepted-run", StringComparison.Ordinal)
             && message.Text.Contains("result.md", StringComparison.Ordinal));
-        var path = System.Text.RegularExpressions.Regex.Match(notice.Text, @"result_file=(\S+)").Groups[1].Value;
+        // The notice contract is that it names the absolute path of result.md. The test does not parse a field name.
         Assert.Contains("The child accepted-run confirmed its result.",
-            await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken), StringComparison.Ordinal);
+            await File.ReadAllTextAsync(ResultPathIn(notice.Text), TestContext.Current.CancellationToken), StringComparison.Ordinal);
         Assert.Empty(_toolExecutor.Calls);
         Assert.Equal(1, _chatClient.CallCount);
+
+        // A later turn does not admit the notice again. The history holds the notice text once, and no legacy pair.
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Continue after the notice."
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.FishForMessageAsync<TurnCompleted>(_ => true, TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var later = _chatClient.ReceivedMessages.Last();
+        Assert.Single(later, message => message.Role == Microsoft.Extensions.AI.ChatRole.User && message.Text == notice.Text);
+        Assert.DoesNotContain(later.SelectMany(static message => message.Contents.OfType<FunctionCallContent>()),
+            static call => call.Name == "child_run_result");
     }
 
     private sealed class SingleClientProvider(IChatClient client) : IChatClientProvider

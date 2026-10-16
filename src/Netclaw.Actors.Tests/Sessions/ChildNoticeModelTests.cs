@@ -184,6 +184,32 @@ public sealed class ChildNoticeModelTests(ITestOutputHelper output) : ChildNotic
         Assert.False(Check(Rule.NoLostResult, model, twice, settle: false).IsValid, "A notice that ran twice must trip the rule.");
     }
 
+    /// <summary>
+    /// The shortest sequence that failed in the review loop: a child of Bob fails, and then the idle session passivates.
+    /// The notice turn of the failed child makes two model calls. The session is idle only after the second call, so the
+    /// passivation must wait for the end of the turn. The sequence runs under every rule.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_child_then_a_passivation_keeps_every_rule()
+    {
+        // Arrange
+        ScriptParent();
+        var journal = await JournalAsync();
+        Op[] sequence =
+        [
+            new Op(Kind.Spawn, Bob, 0, Ending.Success),
+            new Op(Kind.EndChild, string.Empty, 0, Ending.Failure),
+            new Op(Kind.Passivate, string.Empty, 0, Ending.Success)
+        ];
+
+        // Act and assert: each rule runs the sequence in its own session.
+        foreach (var rule in Enum.GetValues<Rule>())
+        {
+            var scenario = new Scenario(this, rule, CreateSpec(rule), journal, new SessionId($"notice/model-shrunk-{rule}"), sequence, Cancellation);
+            await scenario.RunAsync();
+        }
+    }
+
     private void RunProperty(Rule rule)
     {
         // Arrange
@@ -540,6 +566,7 @@ public sealed class ChildNoticeModelTests(ITestOutputHelper output) : ChildNotic
             _test.Clients.A.PlannedResponses.Clear();
             _test.Clients.A.NextResponseGate = null;
             _test.Clients.Parent.NextResponseGate = null;
+            _test.ParentGate.Disarm();
             try
             {
                 for (var index = 0; index < _sequence.Length; index++)
@@ -658,17 +685,22 @@ public sealed class ChildNoticeModelTests(ITestOutputHelper output) : ChildNotic
         private async Task TurnStartAsync(Op op)
         {
             var index = Model.UserInputs.Count;
+            var label = UserLabel(_rule, op, index);
             _lastInputRequester = op.Requester;
             _turnGate = NewGate();
-            _test.Clients.Parent.NextResponseGate = _turnGate;
-            await _test.SendAsync(_sessionId, UserLabel(_rule, op, index), Operator(op.Requester));
-            // The gate is consumed when a model call of the session enters it. From then on the turn stays open.
-            await _test.AwaitAssertAsync(() => Assert.Null(_test.Clients.Parent.NextResponseGate), Wait, cancellationToken: _token);
+            // Only a request that carries this input enters the gate. A notice turn makes two model calls, and its
+            // second call passes the gate, so it cannot take the gate that belongs to this turn.
+            var entered = _test.ParentGate.Arm(request => FreshUserTexts(request).Contains(label), _turnGate);
+            await _test.SendAsync(_sessionId, label, Operator(op.Requester));
+            // From the moment a request of this input enters the gate, the turn stays open.
+            await entered.WaitAsync(Wait, _token);
             Verify(op);
         }
 
         private async Task ApprovalOpenAsync(Op op)
         {
+            // A notice turn of an earlier end can still run. An input behind a running turn would not open its prompt yet.
+            await QuietAsync(endedOnly: true);
             var index = Model.UserInputs.Count;
             await SubscribeAsync();
             _approvalCall = $"probe-p{index}";
@@ -707,6 +739,10 @@ public sealed class ChildNoticeModelTests(ITestOutputHelper output) : ChildNotic
             {
                 await _test.AwaitAssertAsync(() => Assert.Contains(_journal.Committed.OfType<ToolCallRecorded>(),
                     evt => evt.SessionId == _sessionId && evt.ToolResult.ToolCallId?.Value == last), Wait, cancellationToken: _token);
+
+                // The answer releases the inputs that waited behind the prompt, and the notices of results that ended
+                // meanwhile. Their turns run now, and the next operation must not start in the middle of them.
+                await QuietAsync(endedOnly: true);
             }
 
             Verify(op);
@@ -736,6 +772,10 @@ public sealed class ChildNoticeModelTests(ITestOutputHelper output) : ChildNotic
                 _explored.Add(Explored.RestartWithLiveChild);
             if (model.ApprovalOpen)
                 _explored.Add(Explored.RestartWithOpenApproval);
+            // Earlier notice turns must have ended. A drain behind a running turn waits for a model call that nobody holds.
+            if (!model.TurnOpen && !model.ApprovalOpen)
+                await QuietAsync(endedOnly: true);
+            var lostLabels = model.Live.ToArray();
             var session = await _test.ResolveSessionAsync(_sessionId);
             var watcher = _test.CreateTestProbe();
             watcher.Watch(session);
@@ -761,6 +801,14 @@ public sealed class ChildNoticeModelTests(ITestOutputHelper output) : ChildNotic
                     Content = reminder.Instructions,
                     Source = Reminder($"{reminder.Id.Value}:{fire.ToUnixTimeMilliseconds()}")
                 });
+
+                // The recovery ends each live child asynchronously, and each lost child yields a notice turn. The next
+                // operation starts when those turns have ended. A notice that waits behind a parked prompt cannot end yet.
+                await _test.AwaitAssertAsync(() => Assert.All(lostLabels, label => Assert.True(
+                    IsResultReady(_journal, _children.Single(child => child.Label == label).Accepted.Run.RunId),
+                    $"The result of {label} did not become ready after the restart.")), Wait, cancellationToken: _token);
+                if (!model.ApprovalOpen)
+                    await QuietAsync();
             }
 
             Verify(op);
@@ -781,20 +829,25 @@ public sealed class ChildNoticeModelTests(ITestOutputHelper output) : ChildNotic
             Verify(new Op(Kind.TurnEnd, string.Empty, 0, Ending.Success), settle: true);
         }
 
-        // Quiet: every ended run has a notice, and every admitted input has run. A timeout is not an error here. The
-        // facts of the following check name the property that did not hold.
-        private async Task QuietAsync()
+        // Quiet: every ended run has a notice, every admitted input has run, and the last turn has ended. A notice turn
+        // makes two model calls. It consumes its input at the first tool batch and still runs after that, so the
+        // consumption does not show the end of the turn. The session phase does: it is Ready when the turn has ended.
+        // A timeout is not an error here. The facts of the following check name the property that did not hold.
+        private async Task QuietAsync(bool endedOnly = false)
         {
             try
             {
-                await _test.AwaitAssertAsync(() =>
+                await _test.AwaitAssertAsync(async () =>
                 {
                     var facts = ReadFacts();
                     var model = Model;
-                    var ended = model.Ended.Concat(model.Live).Distinct().ToArray();
+                    // At the settle every live child ends as well. In the middle of a sequence a live child has no notice.
+                    var ended = (endedOnly ? model.Ended : model.Ended.Concat(model.Live)).Distinct().ToArray();
                     Assert.All(ended, label => Assert.Contains(facts.Runs, run => run.Label == label && run.Notices.Count > 0));
                     var consumed = facts.Consumptions.SelectMany(item => item.Labels).ToHashSet();
                     Assert.All(facts.Admissions, item => Assert.Contains(item.Label, consumed));
+                    var phase = await _test.PhaseOfAsync(_sessionId);
+                    Assert.True(phase is null or "Ready" or "Passivating", $"The session is in phase {phase}, so a turn still runs.");
                 }, Wait, cancellationToken: _token);
             }
             catch (Exception error) when (error is Xunit.Sdk.XunitException or TimeoutException)
@@ -836,6 +889,7 @@ public sealed class ChildNoticeModelTests(ITestOutputHelper output) : ChildNotic
 
         private void ReleaseEverything()
         {
+            _test.ParentGate.Disarm();
             _turnGate?.TrySetResult();
             foreach (var child in _children)
                 child.Gate.TrySetResult();

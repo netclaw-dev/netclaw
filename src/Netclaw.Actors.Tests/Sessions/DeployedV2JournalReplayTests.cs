@@ -98,10 +98,15 @@ public sealed class DeployedV2JournalReplayTests(ITestOutputHelper output)
         Assert.Contains(ChildOutput, await File.ReadAllTextAsync(resultPath, Cancellation), StringComparison.Ordinal);
         Assert.All(Clients.Parent.ReceivedMessages, request => Assert.DoesNotContain(Calls(request),
             call => call.Name == "child_run_result"));
+        // The notice text is the user message of the first request that carries the notice. The later request holds
+        // that exact text once. The working-context block can name result.md too, so a match by words is not enough.
+        var first = Clients.Parent.ReceivedMessages.First(request => CarriesNoticeFor(request, runId));
+        var noticeText = first.Last(message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                                               && message.Text.Contains(recorded.RunId, StringComparison.Ordinal)
+                                               && message.Text.Contains("result.md", StringComparison.Ordinal)
+                                               && !message.Text.Contains("[working-context]", StringComparison.Ordinal)).Text;
         var last = Clients.Parent.ReceivedMessages.Last();
-        Assert.Single(last, message => message.Role == Microsoft.Extensions.AI.ChatRole.User
-                                       && message.Text.Contains(recorded.RunId, StringComparison.Ordinal)
-                                       && message.Text.Contains("result.md", StringComparison.Ordinal));
+        Assert.Single(last, message => message.Role == Microsoft.Extensions.AI.ChatRole.User && message.Text == noticeText);
     }
 
     private async Task<RecordedScenario> SeedAsync(string scenario)
