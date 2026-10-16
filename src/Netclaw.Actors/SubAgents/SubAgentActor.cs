@@ -1398,22 +1398,25 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                "A no-progress watchdog expiry arrived, but the sub-agent has no no-progress budget.");
 
     internal static string PreviewForLog(string? text, int maxChars)
-        => SecretOutputRedactor.Redact(PreviewText(text, maxChars));
+        => PreviewRedacted(text, maxChars);
 
     // Redaction sees the whole text first. A cut before redaction can leave a prefix of a
-    // secret that no pattern matches. The cut then falls on a text-element boundary, so it
-    // never splits a surrogate pair. The cut can still shorten a secret mask, which is safe.
+    // secret that no pattern matches. The line break escape must come after redaction: an
+    // escaped break puts the letter "n" before a secret at the start of a line, and a rule
+    // that starts with a word boundary then misses it. The cut falls on a text-element
+    // boundary, so it never splits a surrogate pair. The cut can still shorten a secret
+    // mask, which is safe.
     private static string PreviewRedacted(string? text, int maxChars)
     {
         if (string.IsNullOrEmpty(text))
             return "";
 
-        var redacted = SecretOutputRedactor.Redact(text.ReplaceLineEndings("\\n"));
-        if (redacted.Length <= maxChars)
-            return redacted;
+        var escaped = SecretOutputRedactor.Redact(text).ReplaceLineEndings("\\n");
+        if (escaped.Length <= maxChars)
+            return escaped;
 
         var end = 0;
-        var elements = StringInfo.GetTextElementEnumerator(redacted);
+        var elements = StringInfo.GetTextElementEnumerator(escaped);
         while (elements.MoveNext())
         {
             var next = elements.ElementIndex + ((string)elements.Current).Length;
@@ -1422,16 +1425,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             end = next;
         }
 
-        return redacted[..end] + "...";
-    }
-
-    private static string PreviewText(string? text, int maxChars)
-    {
-        if (string.IsNullOrEmpty(text))
-            return "";
-
-        var normalized = text.ReplaceLineEndings("\\n");
-        return normalized.Length <= maxChars ? normalized : normalized[..maxChars] + "...";
+        return escaped[..end] + "...";
     }
 
     internal static bool ContainsUnexecutedToolCallMarkup(string text)
