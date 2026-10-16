@@ -434,12 +434,15 @@ public sealed partial class LlmSessionActor
             return;
 
         // Admission order holds. The repair takes the notices in front of the first pending input of a person. A
-        // notice behind that input waits for the restart resume, which runs the older input first.
+        // notice behind that input waits for the restart resume, which runs the older input first. After a crash no
+        // restart reminder exists and the older input has no turn (issue 2516), so the notice stays unconsumed. The
+        // Warning below makes that loss visible.
         var selected = _input.SelectedInputs.Ids;
+        var candidates = _state.GetExecutablePendingInputs()
+            .Where(input => !selected.Contains(input.InputId))
+            .ToList();
         var restored = 0;
-        foreach (var orphan in _state.GetExecutablePendingInputs()
-                     .Where(input => !selected.Contains(input.InputId))
-                     .TakeWhile(input => input.ChildNotice is not null))
+        foreach (var orphan in candidates.TakeWhile(input => input.ChildNotice is not null))
         {
             try
             {
@@ -455,10 +458,19 @@ public sealed partial class LlmSessionActor
             }
         }
 
+        foreach (var waiting in candidates.SkipWhile(input => input.ChildNotice is not null)
+                     .Where(input => input.ChildNotice is not null))
+        {
+            _log.Warning(
+                "The notice of child run {RunId} waits behind an older input of a person that has no turn. "
+                + "The notice stays unconsumed until that input runs (issue 2516). The result is in the run folder.",
+                waiting.ChildNotice!.RunId);
+        }
+
         if (restored == 0)
             return;
 
-        _log.Info("Resuming {RestoredCount} child notice(s) that a crash left unconsumed", restored);
+        _log.Info("Resuming {RestoredCount} child notice(s) that the previous run left unconsumed", restored);
         StartWaitingInputAfterApproval();
     }
 

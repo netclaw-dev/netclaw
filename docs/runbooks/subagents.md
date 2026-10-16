@@ -360,6 +360,9 @@ Unresolved historical evidence remains inert and visible through the owner statu
 Recovery does not relaunch uncertain child work. A result that the parent has not received becomes one notice.
 A result that a deployed build already delivered as a `child_run_result` pair stays delivered, and no notice follows.
 A notice carries only the recorded authority of the child owner.
+After a crash, a notice can wait behind an older input of a person that has no turn (issue 2516).
+Recovery then logs a Warning that names the run and says the notice waits behind an input.
+The notice stays pending, and `result.md` stays in the run folder. Read it with `file_read`.
 
 The restore unit is a complete, consistent pre-upgrade SQLite backup.
 The backup must include the journal and snapshot tables from the same database state.
