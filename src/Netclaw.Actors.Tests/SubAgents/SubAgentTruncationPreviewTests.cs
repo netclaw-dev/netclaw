@@ -62,6 +62,52 @@ public sealed class SubAgentTruncationPreviewTests(ITestOutputHelper output) : T
         Assert.True(IsValidUtf16(result.Output), "The failed output holds a lone surrogate.");
     }
 
+    // The shapes below are the redactor rules that start with a word boundary. A secret at
+    // the start of a line must still match, so the preview must redact before it escapes
+    // the line break. All values are fake.
+    [Theory]
+    [InlineData("\n", "Here is the token:", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij", "ABCDEFGHIJKLMNOPQRSTUV")]
+    [InlineData("\n", "Config:", "API_KEY=supersecretvalue123", "supersecretvalue123")]
+    [InlineData("\n", "Config:", "PASSWORD=hunter2hunter2", "hunter2hunter2")]
+    [InlineData("\n", "key:", "sk-proj-ABCDEFGHIJKLMNOPQRSTUV", "ABCDEFGHIJKLMNOPQRSTUV")]
+    [InlineData("\r\n", "Here is the token:", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij", "ABCDEFGHIJKLMNOPQRSTUV")]
+    [InlineData("\r\n", "Config:", "API_KEY=supersecretvalue123", "supersecretvalue123")]
+    [InlineData("\r\n", "Config:", "PASSWORD=hunter2hunter2", "hunter2hunter2")]
+    [InlineData("\r\n", "key:", "sk-proj-ABCDEFGHIJKLMNOPQRSTUV", "ABCDEFGHIJKLMNOPQRSTUV")]
+    // Control: the same secret after a space always matched.
+    [InlineData(" ", "Here is the token:", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij", "ABCDEFGHIJKLMNOPQRSTUV")]
+    public async Task Secret_at_the_start_of_a_line_is_not_leaked_in_the_preview(
+        string separator, string lead, string secret, string secretFragment)
+    {
+        var result = await RunTruncatedAsync($"{lead}{separator}{secret}");
+
+        Assert.Equal("output_truncated", result.OutcomeReason?.Value);
+        Assert.DoesNotContain(secretFragment, result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Preview_escapes_line_breaks_after_it_redacts()
+    {
+        var result = await RunTruncatedAsync("first line\r\nsecond line");
+
+        Assert.Contains("first line\\nsecond line", result.Output, StringComparison.Ordinal);
+    }
+
+    // PreviewForLog feeds log sinks that can leave the host, so it needs the same order.
+    [Theory]
+    [InlineData("\n", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij", "ABCDEFGHIJKLMNOPQRSTUV")]
+    [InlineData("\r\n", "API_KEY=supersecretvalue123", "supersecretvalue123")]
+    [InlineData("\n", "PASSWORD=hunter2hunter2", "hunter2hunter2")]
+    [InlineData("\n", "sk-proj-ABCDEFGHIJKLMNOPQRSTUV", "ABCDEFGHIJKLMNOPQRSTUV")]
+    public void Log_preview_does_not_leak_a_secret_at_the_start_of_a_line(
+        string separator, string secret, string secretFragment)
+    {
+        var preview = SubAgentActor.PreviewForLog($"prefix{separator}{secret}", 300);
+
+        Assert.DoesNotContain(secretFragment, preview, StringComparison.Ordinal);
+        Assert.Contains("prefix\\n", preview, StringComparison.Ordinal);
+    }
+
     private async Task<SubAgentResult> RunTruncatedAsync(string cutOffText)
     {
         var client = new FakeChatClient
