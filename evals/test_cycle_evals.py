@@ -14,7 +14,7 @@ from unittest.mock import patch
 from background_fixture import handler_for
 from cycle_evals import CASES, CORRECTION, CycleFixture, main, primary_receipts, verdict
 
-SETTLEMENT = ("Netclaw stopped this run after you repeated a tool call that the cycle guard already blocked. "
+SETTLEMENT = ("Netclaw stopped this turn because the model repeated a tool call that was already refused. "
               "The result is partial. The last refused operation did not execute. "
               "Earlier tool results remain available in the session.")
 
@@ -129,7 +129,12 @@ class CycleVerdictTests(unittest.TestCase):
                 snapshot, output, log = evidence("terminal")
                 snapshot[field] = value
                 self.assert_rejected(snapshot, output, log)
-        for error in (SETTLEMENT.replace("The result is partial.", "The result is complete."),
+        # The model-facing text speaks to "you". A person must not read it as the turn error.
+        model_facing = SETTLEMENT.replace(
+            "Netclaw stopped this turn because the model repeated a tool call that was already refused.",
+            "Netclaw stopped this run after you repeated a tool call that the cycle guard already blocked.")
+        for error in (model_facing,
+                      SETTLEMENT.replace("The result is partial.", "The result is complete."),
                       SETTLEMENT.replace("The last refused operation did not execute.",
                                          "The last refused operation executed."),
                       SETTLEMENT.replace("Earlier tool results remain available in the session.", "")):

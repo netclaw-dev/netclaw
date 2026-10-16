@@ -1022,6 +1022,11 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
         // The repeat after the correction is a model failure. A headless caller reports category=model.
         Assert.Equal(ErrorCategory.ModelBehavior, stop.Category);
+        // A person reads this text in a channel, so it names the model and does not address "you".
+        Assert.StartsWith(
+            "Netclaw stopped this turn because the model repeated a tool call that was already refused.",
+            stop.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("you repeated", stop.Message, StringComparison.Ordinal);
         Assert.Contains("The result is partial.", stop.Message, StringComparison.Ordinal);
         Assert.Equal(TurnOutcome.Failed, completed.Outcome);
         Assert.Equal("same result", results[0].Result);

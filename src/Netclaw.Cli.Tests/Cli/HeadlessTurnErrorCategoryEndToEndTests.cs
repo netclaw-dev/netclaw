@@ -66,13 +66,14 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     public async Task Cycle_stop_that_the_model_ignores_is_a_model_failure(bool json)
     {
         // The eval case tool_cycle_terminal. The same call repeats, so the runtime corrects once and
-        // then stops the cycle. The limit of 20 is far away, so only the cycle stop ends the turn.
+        // then stops the cycle. Only the cycle stop ends the turn.
         var model = new ScriptedModel(call => ToolCall(call, query: "same"));
 
         var run = await RunAsync(model, json, maxToolIterations: 20);
 
         AssertFailed(run, json, "model", "ModelBehavior");
-        Assert.Contains("Netclaw stopped this run", run.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Netclaw stopped this turn because the model repeated a tool call that was already refused.", run.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("you repeated", run.Stderr, StringComparison.Ordinal);
         // Two executed rounds, one corrected round, and the repeat that ends the turn. The runtime asks
         // the model nothing after the repeat.
         Assert.Equal(4, model.CallCount);
