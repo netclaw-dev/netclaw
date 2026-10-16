@@ -22,13 +22,16 @@ Trial states, in this order (design 2.4):
                  "turn_failed", and "error" holds the text of the ERROR
                  record.
   4a. memory     The memory snapshot of the trial failed (the database was
-                 missing or unreadable), so the harness cannot check the
-                 recall. Reason: "infra:memory_snapshot_<status>".
+                 missing or unreadable), or the memory reset did not run (the
+                 curation worker stayed busy), so the harness cannot check
+                 the recall. Reason: "infra:memory_snapshot_<status>".
                  Or: the recall of the session injected a memory that existed
                  before the trial and that the harness did not seed. The
                  harness resets the memory store before each trial, so such a
-                 memory means that the reset failed or that a late write came
-                 after it. The trial does not test the product alone, so it
+                 memory means that a write landed between the reset and the
+                 snapshot. A write after the snapshot is not seen; the idle
+                 wait of the reset prevents the known writer of that kind.
+                 The trial does not test the product alone, so it
                  gives no verdict, even when the assertion passed. Reason:
                  "learned_memory_recalled". A trial folder with no
                  memory-before.json (a run of an older harness) skips both

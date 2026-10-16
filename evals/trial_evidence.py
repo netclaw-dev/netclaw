@@ -256,6 +256,9 @@ def main(argv=None):
     memory = commands.add_parser("memory-ids", help="write the memory snapshot of the database")
     memory.add_argument("--home", type=Path, required=True, help="EVAL_HOME")
     memory.add_argument("--dest", type=Path, required=True)
+    memory.add_argument("--reset-status", default="ok",
+                        help="how the memory reset before the trial ended: ok, or a reason code "
+                             "such as reset_curation_busy. A value other than ok replaces the snapshot.")
 
     seed = commands.add_parser("derive-seed", help="print the seed of one (case, trial)")
     seed.add_argument("--seed", type=int, required=True)
@@ -276,7 +279,13 @@ def main(argv=None):
         sys.stdout.writelines(daemon_session_lines(args.log, args.session))
         return 0
     if args.command == "memory-ids":
-        snapshot = memory_snapshot(args.home / "data" / "netclaw.db")
+        if args.reset_status != "ok":
+            # The reset did not run, so the store can hold a memory of an
+            # earlier trial. A database read would say nothing about that.
+            snapshot = {"status": args.reset_status, "ids": None,
+                        "error": "the memory reset before the trial did not run"}
+        else:
+            snapshot = memory_snapshot(args.home / "data" / "netclaw.db")
         args.dest.write_text(json.dumps(snapshot, indent=2) + "\n")
         if snapshot["status"] != "ok":
             print(f"WARN: memory snapshot failed: {snapshot['status']}. The trial will be inconclusive.",

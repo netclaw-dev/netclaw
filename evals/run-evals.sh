@@ -68,7 +68,11 @@ PROMPT_TIMEOUT="${NETCLAW_EVAL_TIMEOUT:-60}"
 EVAL_PORT="${NETCLAW_EVAL_PORT:-5299}"
 EVAL_CONTAINER_NAME="netclaw-eval-$$"
 # True after seed_eval_memories seeded the store. reset_memory_store acts only then.
+# A failed seed stops the run, so a run never goes on with the reset off.
 EVAL_MEMORY_SEEDED=false
+# How the memory reset before the current trial ended: "ok", or a reason code
+# that snapshot_trial_baseline writes into memory-before.json.
+TRIAL_MEMORY_RESET_STATUS=ok
 NO_BUILD="${NETCLAW_EVAL_NO_BUILD:-0}"
 FILTER_CATEGORY="${NETCLAW_EVAL_CATEGORY:-}"
 FILTER_CASE="${NETCLAW_EVAL_CASE:-}"
@@ -742,19 +746,22 @@ start_eval_daemon() {
 
 # ─── Memory Seeding ──────────────────────────────────────────────────────────
 
+## Seeds the memory store. Any failure stops the run with exit 2. A run that
+## goes on after a failed seed has no memory reset, so its trials would not be
+## independent, and the log would show only a warning.
 seed_eval_memories() {
     local db_path="/home/netclaw/.netclaw/netclaw.db"
     local fixtures_path="$EVAL_ASSET_ROOT/evals/fixtures/eval-memories.json"
     local seed_script="$REPO_ROOT/evals/seed-memories.py"
 
     if [[ ! -f "$fixtures_path" ]]; then
-        echo "WARN: no eval fixtures at $fixtures_path — memory tests may fail" >&2
-        return
+        echo "ERROR: no eval fixtures at $fixtures_path. The memory store cannot be seeded." >&2
+        exit 2
     fi
 
     if [[ ! -f "$seed_script" ]]; then
-        echo "WARN: no seed script at $seed_script — memory tests may fail" >&2
-        return
+        echo "ERROR: no seed script at $seed_script. The memory store cannot be seeded." >&2
+        exit 2
     fi
 
     # If the daemon has not touched memory yet, send one warm-up prompt through
@@ -777,8 +784,8 @@ seed_eval_memories() {
     done
 
     if ! docker exec "$EVAL_CONTAINER_NAME" test -f "$db_path" 2>/dev/null; then
-        echo "WARN: netclaw.db not found in container after 30s — skipping memory seeding" >&2
-        return
+        echo "ERROR: netclaw.db not found in the container after 30 s. The memory store cannot be seeded." >&2
+        exit 2
     fi
 
     if run_memory_seed_script; then
@@ -787,19 +794,22 @@ seed_eval_memories() {
         echo "→ Seeded $count eval memories into container"
         EVAL_MEMORY_SEEDED=true
     else
-        echo "WARN: memory seeding failed — memory tests may fail" >&2
+        echo "ERROR: the memory seed failed. The memory reset would be off, and the trials would not be independent." >&2
+        exit 2
     fi
 }
 
 ## Runs seed-memories.py in the container with the given extra options.
 ## The database belongs to the daemon, so the script must run in the
-## container, not on the host. Each call copies the script and the fixtures
-## again, so the call needs no earlier state.
+## container, not on the host. The script runs as the daemon user, so the
+## -wal and -shm files that it can create keep the owner of the database.
+## Each call copies the script and the fixtures again, so the call needs no
+## earlier state.
 run_memory_seed_script() {
     local db_path="/home/netclaw/.netclaw/netclaw.db"
     docker cp "$REPO_ROOT/evals/seed-memories.py" "$EVAL_CONTAINER_NAME:/tmp/seed-memories.py" || return 1
     docker cp "$EVAL_ASSET_ROOT/evals/fixtures/eval-memories.json" "$EVAL_CONTAINER_NAME:/tmp/eval-memories.json" || return 1
-    docker exec "$EVAL_CONTAINER_NAME" python3 /tmp/seed-memories.py "$@" \
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" python3 /tmp/seed-memories.py "$@" \
         --db-path "$db_path" \
         --fixtures /tmp/eval-memories.json
 }
@@ -808,14 +818,28 @@ run_memory_seed_script() {
 ## their fixture content, and nothing else. A trial can write a memory with
 ## store_memory, and a session can distill one. Without this reset, the next
 ## trial recalls that memory and tests the memory, not the product. The reset
-## is one transaction, so a recall never sees an empty store. A failed reset
-## stops the run, because the next trial would not be independent.
+## is one transaction, so a recall never sees an empty store. The script
+## first waits (30 s) until no curation checkpoint is pending or processing,
+## because a worker that has a checkpoint writes its documents even after the
+## reset deleted the checkpoint row. Exit 3 means that the wait ended. The
+## reset did not run, so the trial is inconclusive: the snapshot records
+## TRIAL_MEMORY_RESET_STATUS. Any other failure stops the run.
 reset_memory_store() {
+    TRIAL_MEMORY_RESET_STATUS=ok
     [[ "$EVAL_MEMORY_SEEDED" == "true" ]] || return 0
-    if ! run_memory_seed_script --reset >/dev/null; then
-        echo "ERROR: the memory reset before the trial failed. The trials would not be independent." >&2
-        exit 2
-    fi
+    local rc=0
+    run_memory_seed_script --reset >/dev/null || rc=$?
+    case "$rc" in
+        0) ;;
+        3)
+            TRIAL_MEMORY_RESET_STATUS=reset_curation_busy
+            echo "WARN: the memory reset waited 30 s for the curation worker and did not run. This trial will be inconclusive." >&2
+            ;;
+        *)
+            echo "ERROR: the memory reset before the trial failed. The trials would not be independent." >&2
+            exit 2
+            ;;
+    esac
 }
 
 # ─── SQLite Setup ─────────────────────────────────────────────────────────────
@@ -1027,10 +1051,14 @@ snapshot_trial_baseline() {
     # The memory snapshot: the ids of every memory that exists now and that the
     # harness did not seed. reset_trial_state ran just before, so the list
     # should be empty. trial_verdict.py makes the trial inconclusive when
-    # recall injects one of these ids, or when this snapshot failed. The file
-    # is always written, so a failed snapshot shows in the evidence.
+    # recall injects one of these ids, or when this snapshot failed or the
+    # reset did not run. The file is always written, so a failure shows in the
+    # evidence. The snapshot catches a write between the reset and this point.
+    # It does not catch a write later in the trial; the idle wait of the reset
+    # prevents the one writer that is known (a curation in progress).
     python3 "$TRIAL_EVIDENCE_PY" memory-ids --home "$EVAL_HOME" \
-        --dest "$TRIAL_RAW/memory-before.json"
+        --dest "$TRIAL_RAW/memory-before.json" \
+        --reset-status "$TRIAL_MEMORY_RESET_STATUS"
 }
 
 ## Writes the agent definitions of the eval fixtures into the daemon home
@@ -1038,17 +1066,25 @@ snapshot_trial_baseline() {
 ## a definition or add one (the parent agent can rewrite an agent file), and
 ## the next trial of the same run must start from the fixtures.
 ## The daemon user (uid 1654) can own a file that the trial replaced. The host
-## user cannot write over such a file. So the restore runs in the container as
-## root, like the other setup functions that change container-owned files.
+## user cannot write over such a file. So the restore runs in the container.
+## It runs as the daemon user (netclaw), not as root: the agent can remove the
+## folder or replace it with a symbolic link, and root would follow the link
+## and change its target. The daemon user owns the folder and each file in it,
+## so it needs no more right. A link to a target that it does not own fails
+## loudly. The folder is rebuilt: rm -rf removes a link and not its target.
+## The daemon creates agents/.server-feeds at start, so the restore makes it
+## too, and the home matches a real install.
 restore_agent_fixtures() {
     local fixtures="$EVAL_ASSET_ROOT/evals/fixtures/agents"
     [[ -d "$fixtures" ]] || return 0
-    # chmod gives the daemon user the right to edit the root-owned copies.
+    # chmod keeps the files editable by the daemon user, as in a real install.
     if ! tar -C "$fixtures" -cf - . \
-        | docker exec --interactive --user root "$EVAL_CONTAINER_NAME" sh -c '
+        | docker exec --interactive --user netclaw "$EVAL_CONTAINER_NAME" sh -c '
             set -e
-            find "$1" -mindepth 1 -delete
+            rm -rf -- "$1"
+            mkdir -m 0777 -- "$1"
             tar -xf - -C "$1" --no-same-owner
+            mkdir -p -- "$1/.server-feeds"
             chmod -R ugo+rwX "$1"' sh /home/netclaw/.netclaw/agents; then
         echo "ERROR: the restore of the agent fixtures failed. The trials would not be independent." >&2
         exit 2
@@ -1882,9 +1918,11 @@ assert_memory_recall_active() {
 # Per the netclaw-agent-memory spec, durable user preferences are memory documents,
 # not identity-file edits. The invariant under test: the preference is routed to
 # memory and NOT written to an identity file (SOUL.md). The eval memory store is
-# shared across runs, so after the first store the model correctly recognizes the
-# fact is already in durable memory rather than re-storing it — both are correct
-# routing. The hard failure we guard against is a SOUL.md (file_edit/file_write) edit.
+# reset to the seeded state before each trial, so each trial starts without the
+# preference and the model should store it. The fallback below also accepts a
+# reply that only names memory, because a model can answer that it keeps the
+# preference in memory without a call. The hard failure we guard against is a
+# SOUL.md (file_edit/file_write) edit.
 assert_memory_identity_preference_routing() {
     # 'memor' not 'memory': correct responses often say "memories", and the
     # plural drops the y — "memories" does not contain the substring "memory".
@@ -2245,10 +2283,14 @@ assert_subagent_specialization_precedence() {
     # The parent must not change the role. Compare the folder with the fixtures
     # after the trial. A change, an added file, or a removed file fails, whatever
     # tool or path form the parent used. A read does not change the folder.
+    # A missing folder or a link is a change by the parent, so it fails. The
+    # daemon makes agents/.server-feeds again, so the diff skips it.
     # diff exits 1 for a difference and 2 for a failure. Exit 2 is an assertion
     # exit that gives an inconclusive trial, not a fail.
+    local agents="$EVAL_HOME/data/agents"
+    [[ -d "$agents" && ! -L "$agents" ]] || return 1
     local agents_diff_rc=0
-    diff -r "$EVAL_ASSET_ROOT/evals/fixtures/agents" "$EVAL_HOME/data/agents" >/dev/null \
+    diff -r -x .server-feeds "$EVAL_ASSET_ROOT/evals/fixtures/agents" "$agents" >/dev/null \
         || agents_diff_rc=$?
     [[ "$agents_diff_rc" -eq 0 ]] || return "$agents_diff_rc"
 

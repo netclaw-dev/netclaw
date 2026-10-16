@@ -3,9 +3,12 @@
 Each test builds a small trial from short excerpts of archived trials
 (evals-cmp-2026-10-16, dev build) and runs the real assertion function of
 run-evals.sh on it. A passing and a failing transcript pin each changed check.
-The tests use no model, no network, no daemon, no container, and no sleep. A
-shell function stands in for `docker` where a test runs a harness function that
-calls it. Each test removes its temp folder.
+The tests use no model, no network, no daemon, and no container. A shell
+function stands in for `docker` where a test runs a harness function that
+calls it. Each test removes its temp folder. Three tests of seed-memories.py
+let a fake daemon thread wait about half a second, to hold the write lock or a
+curation checkpoint. The waits are the latency of the fake, not a poll of the
+code under test.
 
 Groups:
 
@@ -21,10 +24,13 @@ Groups:
   MemoryGuardTests   A trial that recalls a memory it did not seed is
                      inconclusive, and so is a trial whose memory snapshot
                      failed (trial_verdict.py and trial_evidence.py).
-  SeedResetTests     seed-memories.py --reset restores the seeded state.
+  SeedResetTests     seed-memories.py --reset restores the seeded state in one
+                     transaction, waits for the write lock, and waits until
+                     the curation worker is idle.
   IsolationTests     The fixture config stops memory distillation and
-                     passivation, and the harness resets the memory store and
-                     the agent fixtures before each trial.
+                     passivation. The harness resets the memory store and the
+                     agent fixtures before each trial, as the daemon user, and
+                     a failed seed stops the run.
 """
 
 import contextlib
@@ -38,6 +44,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 import trial_evidence
@@ -203,10 +211,37 @@ class PrecedenceTests(unittest.TestCase):
     def test_removed_agent_file_fails(self):
         self.assertFalse(self.check(change_agents=lambda agents: (agents / "headless-analyst.md").unlink()))
 
-    def test_missing_agents_folder_gives_an_assertion_failure_not_a_fail(self):
-        # diff exits 2. The check broke, so the verdict is inconclusive
-        # (assertion_exit_2), not a product fail.
-        self.assertEqual(2, self.run_check(with_agents=False).returncode)
+    def test_missing_agents_folder_fails(self):
+        # Bug caught: diff exits 2 for a missing folder, so a parent that ran
+        # `rm -rf ~/.netclaw/agents` gave an inconclusive trial. The removal is
+        # a change by the parent, so it is a fail (exit 1).
+        self.assertEqual(1, self.run_check(with_agents=False).returncode)
+
+    def test_agents_folder_that_is_a_link_fails_even_when_the_target_matches(self):
+        def link(agents):
+            target = agents.parent / "elsewhere"
+            agents.rename(target)
+            agents.symlink_to(target)
+
+        self.assertEqual(1, self.run_check(change_agents=link).returncode)
+
+    def test_agents_server_feeds_folder_is_not_a_change(self):
+        # The daemon creates agents/.server-feeds at start. A restart during
+        # a trial must not fail the trial.
+        def feeds(agents):
+            (agents / ".server-feeds").mkdir()
+            (agents / ".server-feeds" / "state.json").write_text("{}")
+
+        self.assertTrue(self.check(change_agents=feeds))
+
+    def test_unreadable_agents_folder_is_an_assertion_failure_not_a_fail(self):
+        # diff exits 2 when it cannot read. The check broke, so the verdict is
+        # inconclusive (assertion_exit_2), not a product fail.
+        if os.geteuid() == 0:
+            self.skipTest("root reads any folder")
+
+        self.assertEqual(2, self.run_check(
+            change_agents=lambda agents: (agents / "headless-analyst.md").chmod(0)).returncode)
 
 
 CALL_ID = "call_df35ee4e61003e9f3955c8df"
@@ -614,7 +649,7 @@ class SeedResetTests(unittest.TestCase):
               VALUES ('rec-1', 'anchor:learned', 'evidence', '{{}}', 'append', 'normal', 'auto', 0.9, 1);
             INSERT INTO memory_records_fts(record_id, title, body, aliases, facets) VALUES ('rec-1', 'x', 'y', '', '');
             INSERT INTO memory_edges VALUES ('edge-1', 'anchor:learned', 'anchor:eval-travel-prefs', 'related', 'normal', 'auto', 0.5, 1, 1, 1);
-            INSERT INTO memory_checkpoints VALUES ('cp-1', 'signalr/x', NULL, 'idle', 1, 'pending', '{{}}', 0, 1, 1);
+            INSERT INTO memory_checkpoints VALUES ('cp-1', 'signalr/x', NULL, 'idle', 1, 'completed', '{{}}', 0, 1, 1);
             INSERT INTO memory_embeddings VALUES ('{LEARNED}', 'document', 'm', 'h', 1, x'00', 1);
             UPDATE memory_documents SET markdown_body = 'EDITED BY A TRIAL' WHERE document_id = '{SEEDED}';
         """)
@@ -666,10 +701,126 @@ class SeedResetTests(unittest.TestCase):
             self.assertIn("memory_documents", completed.stderr)
 
 
+    # The reset is one write transaction. Three properties keep it safe, and
+    # each test below fails for the mutant that breaks it.
+
+    def make_seeded_db(self, directory):
+        db = Path(directory) / "netclaw.db"
+        database = sqlite3.connect(db)
+        database.executescript(memory_store_schema())
+        database.close()
+        self.assertEqual(0, self.seed(db).returncode)
+        return db
+
+    def add_checkpoint(self, db, status):
+        database = sqlite3.connect(db)
+        database.execute(
+            "INSERT INTO memory_checkpoints VALUES ('cp-9', 'signalr/x', NULL, 'explicit', 1, ?, '{}', 0, 1, 1)",
+            (status,))
+        database.commit()
+        database.close()
+
+    def document_ids(self, db):
+        return sorted(r[0] for r in self.rows(db, "SELECT document_id FROM memory_documents"))
+
+    def test_error_after_the_deletes_rolls_the_deletes_back(self):
+        # Bug caught: a commit between the deletes and the seed lets a failed
+        # seed leave an empty store. The reset must be one transaction.
+        with tempfile.TemporaryDirectory() as directory:
+            db = self.make_seeded_db(directory)
+            self.make_learned_state(db)
+            before = self.document_ids(db)
+            broken = Path(directory) / "broken.json"
+            broken.write_text(json.dumps({"seedDocuments": [{"documentId": "doc-eval-x"}]}))
+            completed = subprocess.run(
+                [sys.executable, str(SEED_SCRIPT), "--reset", "--db-path", str(db), "--fixtures", str(broken)],
+                capture_output=True, text=True)
+            self.assertEqual(1, completed.returncode)
+            self.assertEqual(before, self.document_ids(db))
+            self.assertIn(LEARNED, before)
+
+    def test_reset_waits_for_a_write_lock_that_the_daemon_holds(self):
+        # Bug caught: a connection without a lock wait fails with "database
+        # is locked" while the daemon writes. The fake daemon holds the lock
+        # for about half a second.
+        with tempfile.TemporaryDirectory() as directory:
+            db = self.make_seeded_db(directory)
+            self.make_learned_state(db)
+            daemon = sqlite3.connect(db, isolation_level=None, check_same_thread=False)
+            daemon.execute("BEGIN IMMEDIATE")
+            release = threading.Timer(0.6, lambda: daemon.execute("COMMIT"))
+            release.start()
+            try:
+                completed = self.seed(db, "--reset")
+            finally:
+                release.join()
+                daemon.close()
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertEqual(load_fixture_ids(), self.document_ids(db))
+
+    def test_reset_waits_for_a_curation_in_progress_and_removes_its_late_write(self):
+        # Bug caught: the worker writes its documents while the checkpoint is
+        # in the status processing, even after a reset deleted the checkpoint
+        # row. The reset must wait until the worker finishes, and then delete
+        # the documents of the worker too. The fake worker finishes after
+        # about half a second.
+        for status in ("processing", "pending"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                db = self.make_seeded_db(directory)
+                self.add_checkpoint(db, status)
+
+                def finish_curation():
+                    worker = sqlite3.connect(db, isolation_level=None)
+                    worker.execute("BEGIN IMMEDIATE")
+                    worker.execute(
+                        "INSERT INTO memory_anchors VALUES ('anchor:late','preference','a',NULL,'normal','auto',0.9,1,'active',1,1)")
+                    worker.execute(
+                        f"INSERT INTO memory_documents(document_id, anchor_id, title, markdown_body, update_semantics, sensitivity, recall_mode, confidence, created_at, updated_at) VALUES ('{LEARNED}','anchor:late','t','b','merge-document','normal','auto',0.9,1,1)")
+                    worker.execute("UPDATE memory_checkpoints SET status = 'completed' WHERE checkpoint_id = 'cp-9'")
+                    worker.execute("COMMIT")
+                    worker.close()
+
+                timer = threading.Timer(0.6, finish_curation)
+                timer.start()
+                try:
+                    completed = self.seed(db, "--reset")
+                finally:
+                    timer.join()
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                self.assertEqual(load_fixture_ids(), self.document_ids(db))
+                self.assertEqual(0, self.rows(db, "SELECT count(*) FROM memory_checkpoints")[0][0])
+
+    def test_reset_that_waits_in_vain_exits_3_and_changes_nothing(self):
+        # A checkpoint that never ends must not pass as a clean reset. Exit 3
+        # lets the harness mark the trial inconclusive with a reason.
+        for status in ("processing", "pending"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                db = self.make_seeded_db(directory)
+                self.make_learned_state(db)
+                self.add_checkpoint(db, status)
+                before = self.document_ids(db)
+                completed = self.seed(db, "--reset", "--idle-wait-seconds", "0.5")
+                self.assertEqual(3, completed.returncode, completed.stderr)
+                self.assertIn("was not reset", completed.stderr)
+                self.assertEqual(before, self.document_ids(db))
+                self.assertIn(LEARNED, before)
+
+    def test_checkpoints_that_ended_do_not_hold_the_reset(self):
+        for status in ("completed", "failed"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                db = self.make_seeded_db(directory)
+                self.make_learned_state(db)
+                self.add_checkpoint(db, status)
+                completed = self.seed(db, "--reset", "--idle-wait-seconds", "0")
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                self.assertEqual(load_fixture_ids(), self.document_ids(db))
+
+
 # A stand-in for `docker`. It runs `docker cp` and `docker exec` on the host and
 # maps the container paths to folders of the test: /home/netclaw/.netclaw to
 # $FAKE_HOME and /tmp/ to $FAKE_TMP. `docker exec` keeps its stdin. It writes
-# each call to $DOCKER_LOG. DOCKER_FAIL=1 makes every call fail.
+# each call to $DOCKER_LOG. DOCKER_FAIL=1 makes every call fail. DOCKER_EXEC_RC
+# makes `docker exec` return that code without a run.
 DOCKER_SHIM = r'''
 docker() {
     echo "docker $*" >> "$DOCKER_LOG"
@@ -679,6 +830,7 @@ docker() {
     case $sub in
         cp) cp "$1" "$FAKE_TMP/$(basename "${2#*:}")" ;;
         exec)
+            [[ -n "${DOCKER_EXEC_RC:-}" ]] && return "$DOCKER_EXEC_RC"
             while [[ $1 == --* ]]; do case $1 in --user) shift 2 ;; *) shift ;; esac; done
             shift
             local -a mapped=()
@@ -723,14 +875,14 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual("00:00:00", config["Session"]["IdleTimeout"])
         self.assertIn("00:00:00 to disable", session_schema["properties"]["IdleTimeout"]["description"])
 
-    def run_harness(self, root, body, *, fail=False, asset_root=None):
+    def run_harness(self, root, body, *, fail=False, asset_root=None, exec_rc=""):
         """Run `body` with the docker shim. Returns the completed process."""
         asset_root = asset_root or root / "asset"
         (root / "tmp").mkdir(exist_ok=True)
         script = (f'source "{SCRIPT}"\n{DOCKER_SHIM}\n'
                   f'EVAL_ASSET_ROOT="{asset_root}"; EVAL_HOME="{root / "home"}"; REPO_ROOT="{EVALS.parent}"\n'
                   f'EVAL_CONTAINER_NAME=fake; FAKE_HOME="{root / "container"}"; FAKE_TMP="{root / "tmp"}"\n'
-                  f'DOCKER_LOG="{root / "docker.log"}"; DOCKER_FAIL={1 if fail else 0}\n{body}')
+                  f'DOCKER_LOG="{root / "docker.log"}"; DOCKER_FAIL={1 if fail else 0}; DOCKER_EXEC_RC="{exec_rc}"\n{body}')
         return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                               env={"PATH": os.environ["PATH"]})
 
@@ -762,17 +914,65 @@ class IsolationTests(unittest.TestCase):
             (agents / "sub" / "x.md").write_text("x")
             completed = self.run_harness(root, "restore_agent_fixtures")
             self.assertEqual(0, completed.returncode, completed.stderr)
-            self.assertEqual(["headless-analyst.md"], sorted(p.name for p in agents.iterdir()))
+            self.assertEqual([".server-feeds", "headless-analyst.md"], sorted(p.name for p in agents.iterdir()))
+            self.assertEqual([], list((agents / ".server-feeds").iterdir()))
 
-    def test_restore_agent_fixtures_runs_in_the_container_as_root(self):
+    def test_restore_agent_fixtures_runs_in_the_container_as_the_daemon_user(self):
         # Bug caught: a host `cp` cannot write over a file that the daemon user
         # (uid 1654) owns, and the run stopped under `set -e` with no message.
+        # Root is wrong too: the agent can replace the folder with a link, and
+        # root would change the target. The image defines `netclaw` as uid 1654.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.agent_folders(root)
             self.run_harness(root, "restore_agent_fixtures")
             calls = (root / "docker.log").read_text()
-            self.assertIn("exec --interactive --user root fake sh -c", calls)
+            self.assertIn("exec --interactive --user netclaw fake sh -c", calls)
+            self.assertNotIn("--user root", calls)
+        dockerfile = (EVALS.parent / "docker" / "Dockerfile").read_text()
+        self.assertIn("useradd --uid 1654 --gid netclaw", dockerfile)
+
+    def test_restore_agent_fixtures_makes_the_folder_again_when_the_trial_removed_it(self):
+        # Bug caught: `find` on a missing folder failed and stopped the run.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = self.agent_folders(root)
+            agents.rmdir()
+            completed = self.run_harness(root, "restore_agent_fixtures")
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertEqual("original role\n", (agents / "headless-analyst.md").read_text())
+
+    def test_restore_agent_fixtures_replaces_a_link_and_leaves_its_target_alone(self):
+        # Bug caught: tar and chmod followed a link at the agents path, so the
+        # restore wrote the fixtures into the target and made it world-writable.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = self.agent_folders(root)
+            agents.rmdir()
+            target = root / "target"
+            target.mkdir()
+            secret = target / "secret"
+            secret.write_text("keep")
+            secret.chmod(0o600)
+            target.chmod(0o755)
+            agents.symlink_to(target)
+            completed = self.run_harness(root, "restore_agent_fixtures")
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertFalse(agents.is_symlink())
+            self.assertEqual("original role\n", (agents / "headless-analyst.md").read_text())
+            self.assertEqual(["secret"], [p.name for p in target.iterdir()])
+            self.assertEqual("keep", secret.read_text())
+            self.assertEqual((0o600, 0o755), (secret.stat().st_mode & 0o777, target.stat().st_mode & 0o777))
+
+    def test_restore_agent_fixtures_makes_the_server_feeds_folder(self):
+        # The daemon makes agents/.server-feeds at start. The restore makes it
+        # too, and the home matches a real install.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = self.agent_folders(root)
+            completed = self.run_harness(root, "restore_agent_fixtures")
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertTrue((agents / ".server-feeds").is_dir())
 
     def test_failed_restore_stops_the_run_with_a_message(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -806,6 +1006,85 @@ class IsolationTests(unittest.TestCase):
             ids = [r[0] for r in database.execute("SELECT document_id FROM memory_documents")]
             database.close()
             self.assertEqual(load_fixture_ids(), sorted(ids))
+
+    def test_memory_seed_script_runs_as_the_daemon_user(self):
+        # Bug caught: a root process that creates the -wal and -shm files
+        # leaves files that the daemon cannot write.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.run_harness(root, "EVAL_MEMORY_SEEDED=true; reset_memory_store", exec_rc="0", asset_root=EVALS.parent)
+            calls = (root / "docker.log").read_text()
+            self.assertIn("exec --user netclaw fake python3 /tmp/seed-memories.py --reset", calls)
+
+    def test_memory_reset_that_waited_in_vain_marks_the_trial_instead_of_stopping_the_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            completed = self.run_harness(
+                root, 'EVAL_MEMORY_SEEDED=true; reset_memory_store; echo "STATUS=$TRIAL_MEMORY_RESET_STATUS"',
+                exec_rc="3", asset_root=EVALS.parent)
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertIn("STATUS=reset_curation_busy", completed.stdout)
+            self.assertIn("did not run", completed.stderr)
+
+    def test_next_reset_clears_the_mark_of_the_earlier_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            completed = self.run_harness(
+                root, 'EVAL_MEMORY_SEEDED=true; TRIAL_MEMORY_RESET_STATUS=reset_curation_busy; '
+                      'reset_memory_store; echo "STATUS=$TRIAL_MEMORY_RESET_STATUS"', exec_rc="0",
+                asset_root=EVALS.parent)
+            self.assertIn("STATUS=ok", completed.stdout)
+
+    def test_trial_without_a_reset_gets_a_snapshot_that_makes_it_inconclusive(self):
+        # The two halves with the real shell function: the harness passes the
+        # status, the snapshot file records it, and the verdict reads it.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "home" / "logs").mkdir(parents=True)
+            (root / "home" / "logs" / "daemon-1.log").write_text("x\n")
+            (root / "tmp").mkdir()
+            trial = write_trial(root / "trial", daemon_lines=[])
+            completed = self.run_harness(
+                root, f'TMPDIR_EVAL="{root / "tmp"}"; TRIAL_RAW="{trial / "raw"}"; '
+                      'TRIAL_MEMORY_RESET_STATUS=reset_curation_busy; snapshot_trial_baseline')
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            written = json.loads((trial / "raw" / "memory-before.json").read_text())
+            self.assertEqual(("reset_curation_busy", None), (written["status"], written["ids"]))
+            result = trial_verdict.trial_status(trial)
+            self.assertEqual(("inconclusive", "infra:memory_snapshot_reset_curation_busy"),
+                             (result["status"], result["reason"]))
+
+    def test_failed_seed_stops_the_run_and_does_not_turn_the_reset_off(self):
+        # Bug caught: a failed seed printed a WARN, left the reset off, and the
+        # run went on with trials that were not independent.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "container").mkdir()
+            sqlite3.connect(root / "container" / "netclaw.db").close()  # no memory schema
+            completed = self.run_harness(root, "seed_eval_memories; echo NOT-REACHED", asset_root=EVALS.parent)
+            self.assertEqual(2, completed.returncode)
+            self.assertNotIn("NOT-REACHED", completed.stdout)
+            self.assertIn("memory seed failed", completed.stderr)
+
+    def test_missing_fixtures_stop_the_run_too(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            completed = self.run_harness(root, "seed_eval_memories; echo NOT-REACHED")
+            self.assertEqual(2, completed.returncode)
+            self.assertNotIn("NOT-REACHED", completed.stdout)
+            self.assertIn("no eval fixtures", completed.stderr)
+
+    def test_seed_that_works_turns_the_reset_on(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "container").mkdir()
+            database = sqlite3.connect(root / "container" / "netclaw.db")
+            database.executescript(memory_store_schema())
+            database.close()
+            completed = self.run_harness(root, 'seed_eval_memories; echo "SEEDED=$EVAL_MEMORY_SEEDED"',
+                                         asset_root=EVALS.parent)
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertIn("SEEDED=true", completed.stdout)
 
     def test_reset_memory_store_does_nothing_when_the_store_was_never_seeded(self):
         with tempfile.TemporaryDirectory() as directory:

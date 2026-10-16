@@ -79,12 +79,24 @@ keeps these rules:
     `store_memory` call or a distilled memory). A seed memory that a trial
     changed is back at its fixture content. The session catalog is not
     touched. A failed reset stops the run with exit 2.
+    A curation that is in progress writes its documents even after the reset
+    deleted its checkpoint row. So the script first waits, for up to 30 s,
+    until no checkpoint is `pending` or `processing`. The wait, the deletes,
+    and the seed run in one write transaction. If the wait ends, the reset does
+    not run and the trial is inconclusive with the reason
+    `infra:memory_snapshot_reset_curation_busy`.
   - `restore_agent_fixtures` writes `evals/fixtures/agents/` into the daemon
-    home again, in the container as root, and removes every other file from the
+    home again, in the container, and removes every other file from the
     agents folder. A parent agent can rewrite or add an agent file during a
     trial. The daemon user (uid 1654) can own such a file, and the host user
-    cannot write over it, so the restore does not run on the host. A failed
-    restore stops the run with exit 2.
+    cannot write over it, so the restore does not run on the host. It runs as
+    the daemon user and not as root, because the agent can remove the folder
+    or replace it with a symbolic link, and root would follow the link. The
+    restore removes the folder (a link is removed, not its target), creates it
+    again, extracts the fixtures, and creates `agents/.server-feeds`, as the
+    daemon does at start. A failed restore stops the run with exit 2.
+  - `seed_eval_memories` runs once at the start of the run. A failed seed
+    stops the run with exit 2, because the reset cannot run without a seed.
 - **Distillation is off in the fixture config.** `Session.IdleTimeout` is
   `00:00:00`, `Session.MemoryObserverIdleSeconds` is 86400, and
   `Session.Tuning.MemoryDistillationTurnInterval` is 0. `IdleTimeout` zero
@@ -93,16 +105,21 @@ keeps these rules:
   run. A case that tests distillation must run in its own invocation with the
   default settings. `NETCLAW_EVAL_CONFIG_FILE` replaces the whole fixture
   config, so a config that you supply does not get these keys (the background
-  evals do not get them either). The reset still protects such a run.
+  evals do not get them either). The reset still removes a memory that an
+  earlier trial wrote. It cannot stop a distillation that lands during a
+  trial, so such a run can see a memory that the trial did not write.
 - **The harness checks that the reset worked.** Before each trial, the harness
   writes `raw/memory-before.json`: the status of the snapshot and the ids of
   every memory that is not a `doc-eval-*` seed. After a reset, the list is
   empty. If recall injects an id from the list, `trial_verdict.py` gives the
   reason `learned_memory_recalled`, even when the assertion passed. A memory
   that the trial itself wrote is not on the list, so it does not count. If
-  `netclaw.db` is missing or locked, the snapshot has a status other than `ok`,
-  and the trial is inconclusive with the reason
+  `netclaw.db` is missing or locked, or if the reset did not run, the snapshot
+  has a status other than `ok`, and the trial is inconclusive with the reason
   `infra:memory_snapshot_<status>`.
+  The check sees only a write that lands between the reset and the snapshot.
+  A write after the snapshot is not on the list. The idle wait of the reset
+  prevents the one known writer of that kind, a curation in progress.
 - **The memory check covers automatic recall.** A reset store also covers a
   `find_memories` or `get_memories` call of the trial, because the store holds
   no memory from an earlier trial.
@@ -491,7 +508,7 @@ while the run goes on. `<nn>` is the trial number, `01` and up.
 | `session.log` | The actor log that `netclaw.db` names for the session |
 | `subagents/<run id>/*.log` | Logs of the sub-agents of the session |
 | `actor-log.json` | How the harness found the actor log. A status other than `ok` means that the log is missing or was refused, and the harness prints a warning. The actor log must resolve under `data/sessions`. A sub-agent log must resolve under the folder of its session. `refused_subagent_logs` lists the sub-agent logs that were refused. |
-| `memory-before.json` | `status` of the memory snapshot (`ok`, `no_memory_db`, or `memory_db_unreadable`), and `ids`: the memories that exist before the trial and that the harness did not seed. `ids` is empty after a clean reset, and `null` when the status is not `ok`. |
+| `memory-before.json` | `status` of the memory snapshot (`ok`, `no_memory_db`, `memory_db_unreadable`, or `reset_curation_busy`), and `ids`: the memories that exist before the trial and that the harness did not seed. `ids` is empty after a clean reset, and `null` when the status is not `ok`. |
 | `daemon-session.log` | Daemon lines with the exact token `session=<id>` or `sessionId=<id>` |
 | `daemon-window.log` | Every daemon line from the start of the trial to the end of the assertion, for people to read. A trial that crosses midnight UTC adds the lines of the new daemon file. A run stops with exit 2 and an error message when `$EVAL_HOME/logs` holds no `daemon-*.log` file. |
 | `assert.json` | `exit_code` of the assertion (141 is a pipe failure, 1 is a missed match), `daemon_log`, `window_lines_before`, `window_lines_after`, `extra_daemon_logs` |
@@ -591,7 +608,8 @@ A trial has one of three states:
     trial and that the harness did not seed (see Trial independence). A trial
     folder with no `memory-before.json` skips this check.
   - `infra:memory_snapshot_<status>`: the memory snapshot of the trial failed
-    (`no_memory_db` or `memory_db_unreadable`), so the recall cannot be checked.
+    (`no_memory_db` or `memory_db_unreadable`), or the reset did not run
+    (`reset_curation_busy`), so the recall cannot be checked.
   - the reason of an assertion report that says `inconclusive` (cycle cases).
   - `assertion_exit_<code>`: the assertion exited with a code other than 0 and 1
     (141 for a pipe failure, 127 for a missing command).
