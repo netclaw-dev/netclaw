@@ -116,6 +116,7 @@ sleep() { :; }
 store_metrics() { :; }
 check_prerequisites() { :; }
 build_local_image() { :; }
+build_coordination_observer() { :; }
 start_eval_daemon() { :; }
 seed_eval_memories() { :; }
 if [[ "${DRIVER_REAL_DAEMON_CHECK:-0}" != 1 ]]; then check_daemon_alive() { :; }; fi
