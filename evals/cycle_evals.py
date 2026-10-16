@@ -265,7 +265,7 @@ def verdict(snapshot, output, actor_log):
         failures = [line for line in actor_log.splitlines() if "turn_failed category=ModelBehavior" in line]
         runtime["truthful_partial_result"] = len(failures) == 1 and all(
             sentence in failures[0] for sentence in (
-                "Netclaw stopped this run after you repeated a tool call that the cycle guard already blocked.",
+                "Netclaw stopped this turn because the model repeated a tool call that was already refused.",
                 "The result is partial.",
                 "The last refused operation did not execute.",
                 "Earlier tool results remain available in the session."))

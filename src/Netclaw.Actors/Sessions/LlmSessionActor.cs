@@ -1347,11 +1347,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         if (prepared is PreparedFreshBatch.Stop)
         {
-            // The model repeated a call after the runtime refused it. The turn settles as a model
-            // failure with no further model request, so a headless caller sees category=model.
+            // The model repeated a call after the runtime refused it. The turn fails as a model
+            // failure with no further model request, in every parent session: Slack, Discord,
+            // Mattermost, and the TUI show the text as a warning, and a headless caller sees
+            // category=model. The text is for a person, so it is not the model-facing stop text.
             RecordIntermediateUsage(usage);
             FailCurrentTurn(
-                ToolCycleMessages.Final,
+                ToolCycleMessages.TurnStopped,
                 new InvalidOperationException("The model repeated a tool call that the recurrence guard already refused."),
                 ErrorCategory.ModelBehavior);
             return;
