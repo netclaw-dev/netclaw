@@ -518,6 +518,96 @@ class ExitCodeTests(StatesCase):
         self.assertNotRegex(summary, r"\b[1-9]\d* inconclusive\b")
 
 
+class CategoryLabelTests(StatesCase):
+    """The label at the end of a category (README: GREEN, INCONCLUSIVE, YELLOW, RED)."""
+
+    def category_line(self, scenario, plan):
+        completed = self.drive("scenario", ["unused"], plan, expect_done=False,
+                               SCENARIO=f'print_category "Mixed"; {scenario}; end_category')
+        found = re.search(r"^\s*Category: (\d+)/(\d+) passed \((\w+)\)$", completed.stdout, re.MULTILINE)
+        self.assertIsNotNone(found, completed.stdout[-600:] + completed.stderr[-400:])
+        return (int(found.group(1)), int(found.group(2)), found.group(3))
+
+    TWO_CASES = 'run_case demo "first" "p1"; run_case other "second" "p2"'
+
+    def test_a_fail_next_to_an_inconclusive_case_is_not_labeled_inconclusive(self):
+        # P1. Planted bug: the label is INCONCLUSIVE when any case is
+        # inconclusive, not only when no case failed. The category line then
+        # hides a real FAIL.
+        for plan in ("ok:fail,cut:pass", "cut:pass,ok:fail"):
+            with self.subTest(plan=plan):
+                self.assertEqual((0, 2, "RED"), self.category_line(self.TWO_CASES, plan))
+
+    def test_a_category_without_a_fail_and_with_an_inconclusive_case_is_labeled_inconclusive(self):
+        # P1 guard. Planted bug: the inconclusive case gets a colour that means "bad".
+        self.assertEqual((1, 2, "INCONCLUSIVE"), self.category_line(self.TWO_CASES, "ok:pass,cut:pass"))
+
+    def test_a_category_of_passing_cases_is_green(self):
+        # P1 guard. Planted bug: the label looks at inconclusive trials before it looks at the pass count.
+        self.assertEqual((2, 2, "GREEN"), self.category_line(self.TWO_CASES, "ok:pass,ok:pass"))
+
+    def test_a_category_with_a_fail_is_yellow_or_red_by_the_pass_share(self):
+        # P1 guard. 1 of 2 cases passed (0.50) is RED. The share for YELLOW is 0.80 or more.
+        self.assertEqual((1, 2, "RED"), self.category_line(self.TWO_CASES, "ok:pass,ok:fail"))
+
+
+class MultiTurnFailDetailsTests(StatesCase):
+    def test_details_of_a_failed_multi_turn_assertion_are_stored(self):
+        # P3. Planted bug: run_multi_turn_case passes the word `fail` to
+        # record_trial and drops EVAL_ASSERTION_DETAILS. The coding-context
+        # case then loses `spawn_agent_not_called` and five other details.
+        scenario = ('assert_demo() { EVAL_ASSERTION_DETAILS="spawn_agent_not_called"; return 1; }; '
+                    'run_multi_turn_case demo "demo case" "turn one" "turn two"')
+        self.drive("scenario", ["unused"], "ok:pass,ok:pass", expect_done=False, SCENARIO=scenario)
+
+        ((number, status, reason, details),) = self.result_rows()
+        self.assertEqual((1, "fail", None), (number, status, reason))
+        self.assertEqual("spawn_agent_not_called", details)
+
+    def test_a_failed_multi_turn_assertion_without_details_stores_a_fail_word(self):
+        # P3 guard. Planted bug: the stored details are empty, so the row says nothing about the fail.
+        scenario = ('assert_demo() { return 1; }; '
+                    'run_multi_turn_case demo "demo case" "turn one" "turn two"')
+        self.drive("scenario", ["unused"], "ok:pass,ok:pass", expect_done=False, SCENARIO=scenario)
+
+        ((_, status, _, details),) = self.result_rows()
+        self.assertEqual("fail", status)
+        self.assertTrue(details, "a fail row needs some details text")
+
+
+class ResultsDatabaseFailureTests(StatesCase):
+    """N3. A failed results_db.py call is a crashed evidence step: exit 2.
+    Exit 1 means that a case failed, and Python's exit code would say so."""
+
+    def run_main(self, scenario):
+        return self.drive("scenario", ["unused"], "ok:pass", expect_done=False, SCENARIO=scenario)
+
+    def test_failed_store_ends_the_run_with_exit_2(self):
+        # Planted bug: `store` runs under `set -e` without a guard, so the
+        # IntegrityError of a duplicate row ends the run with exit 1. The row
+        # for (run, demo, 1) exists before the first trial stores its own.
+        scenario = ('python3 "$RESULTS_DB_PY" store --db "$RESULTS_DB" --run-id "$RUN_ID" --category c '
+                    '--case demo --run-number 1 --prompt x --status pass; '
+                    'run_case demo "only" "p"')
+
+        completed = self.run_main(scenario)
+
+        self.assertEqual(2, completed.returncode, completed.stdout[-400:] + completed.stderr[-600:])
+        self.assertNotIn("Overall:", completed.stdout)
+
+    def test_failed_init_ends_the_run_with_exit_2(self):
+        # Planted bug: `init` runs under `set -e` without a guard, so the
+        # error of a results.db that is not a database ends the run with exit 1.
+        results = self.tmp_eval / "results"
+        results.mkdir()
+        (results / "results.db").write_text("this is not a database\n" * 50)
+
+        completed = self.run_main('run_case demo "only" "p"')
+
+        self.assertEqual(2, completed.returncode, completed.stdout[-400:] + completed.stderr[-600:])
+        self.assertNotIn("Overall:", completed.stdout)
+
+
 class CycleStatusTests(StatesCase):
     """F11: `run_case` stored a cycle report with `"status": "inconclusive"` as a fail."""
 

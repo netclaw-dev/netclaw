@@ -140,6 +140,22 @@ def write_trial(root, *, exit_codes=(0,), log=None, session="ok", assert_rc=0,
     return Path(root)
 
 
+def two_turn_log(error_of_turn_1, error_of_turn_2, ended=(True, True)):
+    """A CLI log of two turns. `ended[i]` False leaves out the TURN_COMPLETED of turn i + 1."""
+    text = ""
+    for turn, error in ((1, error_of_turn_1), (2, error_of_turn_2)):
+        text += record("Headless session started: signalr/t1")
+        text += record(f"PROMPT: question {turn}", 1)
+        text += record("SESSION_JOINED turn_count=0 title=(none)", 2)
+        if error is not None:
+            text += record(f"ERROR: {error}", 4)
+        if ended[turn - 1]:
+            text += record("ASSISTANT_FINAL: an answer", 5)
+            text += record(f"TURN_COMPLETED: turn={turn}", 7)
+            text += record("SESSION_ENDED", 8)
+    return text
+
+
 class VerdictCase(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -264,6 +280,52 @@ class TimeoutTests(VerdictCase):
         self.assert_inconclusive(result, "timeout")
 
 
+class CliFailureWithoutTurnEndTests(VerdictCase):
+    """CLI exit 1 has two causes. A failed turn still writes TURN_COMPLETED
+    (TurnOutcome.Failed). A channel exception after the session log exists
+    (for example a failed send after a dropped daemon connection) writes no
+    TURN_COMPLETED. The second cause is not a cut by the deadline."""
+
+    def test_exit_1_without_a_turn_end_is_a_cli_failure_not_a_timeout(self):
+        # Planted bug: `finished_turns < len(exit_codes)` wins for exit 1, so a
+        # broken hub send shows as `timeout`. The operator then blames the load
+        # of the endpoint, and the PR 3 breaker halts the run for a product fault.
+        for assert_rc in (0, 1):
+            with self.subTest(assert_rc=assert_rc):
+                result = self.status(exit_codes=(1,), assert_rc=assert_rc,
+                                     log=cli_log(completed_turns=0))
+
+                self.assert_inconclusive(result, "infra:cli_failed")
+
+    def test_exit_1_without_a_turn_end_in_any_turn_of_a_multi_turn_trial(self):
+        # Planted bug: the check reads only the first turn, or only the last one.
+        for codes, ended in (((1, 0), (False, True)), ((0, 1), (True, False))):
+            with self.subTest(exit_codes=codes):
+                result = self.status(exit_codes=codes, assert_rc=0,
+                                     log=two_turn_log(None, None, ended))
+
+                self.assert_inconclusive(result, "infra:cli_failed")
+
+    def test_exit_124_without_a_turn_end_stays_a_timeout(self):
+        # Guard. Planted bug: the new rule takes over every cut trial.
+        result = self.status(exit_codes=(124,), assert_rc=1, log=cli_log(completed_turns=0))
+
+        self.assert_inconclusive(result, "timeout")
+
+    def test_exit_0_without_a_turn_end_stays_a_timeout(self):
+        # Guard. The deadline rule for a missing turn end stays for exit 0.
+        result = self.status(exit_codes=(0,), assert_rc=0, log=cli_log(completed_turns=0))
+
+        self.assert_inconclusive(result, "timeout")
+
+    def test_exit_124_in_one_turn_outranks_exit_1_in_another(self):
+        # Planted bug: the cli_failed rule runs before the exit 124 rule. A cut
+        # turn is a timeout, whatever the other turn did.
+        result = self.status(exit_codes=(124, 1), assert_rc=0, log=cli_log(turns=2, completed_turns=0))
+
+        self.assert_inconclusive(result, "timeout")
+
+
 class FailedTurnTests(VerdictCase):
     ERROR = 'Provider returned 500: it\'s "down"); DROP TABLE eval_results; --\nsecond line of the error'
 
@@ -293,6 +355,37 @@ class FailedTurnTests(VerdictCase):
             with self.subTest(assert_rc=assert_rc):
                 result = self.status(exit_codes=(0,), assert_rc=assert_rc, log=cli_log(error="tool denied"))
                 self.assertIsNone(result["error"])
+
+
+class FailedTurnErrorOfTheRightTurnTests(VerdictCase):
+    def test_error_text_is_the_error_of_the_failed_turn_not_of_a_later_turn(self):
+        # P4. Planted bug: take the last ERROR record of the whole log. Turn 1
+        # fails with a provider error (exit 1). Turn 2 finishes (exit 0) and
+        # logs a normal tool error. The stored error must be the provider error.
+        log = two_turn_log("provider unavailable", "tool denied: file_read")
+
+        result = self.status(exit_codes=(1, 0), assert_rc=0, log=log)
+
+        self.assert_inconclusive(result, "turn_failed")
+        self.assertEqual("provider unavailable", result["error"])
+
+    def test_error_text_is_the_error_of_the_failed_turn_not_of_an_earlier_turn(self):
+        # P4, mirror. Planted bug: take the first ERROR record of the whole log.
+        log = two_turn_log("tool denied: file_read", "provider unavailable")
+
+        result = self.status(exit_codes=(0, 1), assert_rc=0, log=log)
+
+        self.assert_inconclusive(result, "turn_failed")
+        self.assertEqual("provider unavailable", result["error"])
+
+    def test_failed_turn_without_an_error_record_does_not_borrow_the_error_of_another_turn(self):
+        # P4. Planted bug: fall back to any ERROR record in the log.
+        log = two_turn_log(None, "tool denied: file_read")
+
+        result = self.status(exit_codes=(1, 0), assert_rc=0, log=log)
+
+        self.assert_inconclusive(result, "turn_failed")
+        self.assertIsNone(result["error"])
 
 
 class InfraTests(VerdictCase):

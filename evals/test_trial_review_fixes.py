@@ -410,6 +410,31 @@ class StartupCheckTests(unittest.TestCase):
 
                 self.assertNotIn("NETCLAW_EVAL_TIMEOUT", done.stderr)
 
+    def test_threshold_outside_0_to_1_stops_the_run_at_startup(self):
+        # Planted bug: delete the startup check of NETCLAW_EVAL_THRESHOLD. A
+        # value such as 80 then passes startup. The run builds the image,
+        # starts the container, runs the first case, and only then stops with
+        # exit 2 from case-status. The check must stop the run before any call.
+        for value in ("80", "1.5", "-0.1", "abc", "0.8x"):
+            with self.subTest(threshold=value):
+                self.marks.unlink(missing_ok=True)
+
+                done = self.run_script(True, NETCLAW_EVAL_THRESHOLD=value)
+
+                self.assertEqual(2, done.returncode, done.stderr[-400:])
+                self.assertIn("NETCLAW_EVAL_THRESHOLD", done.stderr)
+                self.assertEqual("", self.marks_text())
+
+    def test_threshold_from_0_to_1_passes_the_startup_check(self):
+        # Control. Planted bug: reject every value, or reject 1, 0, or a
+        # decimal. The run still ends early here, because the fake docker
+        # fails, but the message must not name the threshold.
+        for value in ("0", "0.8", "0.75", "1", "1.0"):
+            with self.subTest(threshold=value):
+                done = self.run_script(True, NETCLAW_EVAL_THRESHOLD=value)
+
+                self.assertNotIn("NETCLAW_EVAL_THRESHOLD", done.stderr)
+
     def test_python3_that_is_new_enough_passes_the_prerequisite_check(self):
         # S4 guard. Planted bug: invert the version test. Then every real run
         # stops at startup because python3 is "too old". The python3 of the
