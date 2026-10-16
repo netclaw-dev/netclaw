@@ -1,0 +1,8 @@
+Netclaw CLI crash at 2026-10-15T13:16:15.3608630+00:00
+
+System.IO.IOException: No space left on device
+   at System.ConsolePal.Write(SafeFileHandle fd, ReadOnlySpan`1 buffer, Boolean mayChangeCursorPosition)
+   at System.ConsolePal.WriteFromConsoleStream(SafeFileHandle fd, ReadOnlySpan`1 buffer)
+   at System.IO.StreamWriter.Flush(Boolean flushStream, Boolean flushEncoder)
+   at System.IO.StreamWriter.WriteLine(String value)
+   at System.IO.TextWriter.SyncTextWriter.WriteLine(String value)
