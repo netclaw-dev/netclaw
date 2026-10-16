@@ -1397,7 +1397,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
            ?? throw new InvalidOperationException(
                "A no-progress watchdog expiry arrived, but the sub-agent has no no-progress budget.");
 
-    private static string PreviewForLog(string? text, int maxChars)
+    internal static string PreviewForLog(string? text, int maxChars)
         => SecretOutputRedactor.Redact(PreviewText(text, maxChars));
 
     // Redaction sees the whole text first. A cut before redaction can leave a prefix of a
