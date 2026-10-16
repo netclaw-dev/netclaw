@@ -10,6 +10,7 @@ using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Telemetry;
+using Netclaw.Actors.Tests.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
@@ -284,6 +285,10 @@ public class SkillToolTests : IDisposable
     {
         var (skillName, input) = ArrangeSkillLoad(path);
         var logger = new RecordingLogger<SkillLoadTool>();
+        // A routed load starts a child run. The child start needs an owning session and one
+        // tool that the child may use. The fake owner accepts the start and runs nothing.
+        var toolRegistry = new ToolRegistry();
+        toolRegistry.Register(new FakeNetclawTool("inspect_context", "ok"));
         var tool = new SkillLoadTool(
             _registry,
             new NoOpSkillContentScanner(),
@@ -292,12 +297,26 @@ public class SkillToolTests : IDisposable
                 [new McpPromptSkillMessage("user", "Check freshness.")])),
             sessionMetrics: null,
             subAgentRegistry: _subAgentRegistry,
-            subAgentSpawner: CreateSubAgentSpawner(),
+            subAgentSpawner: CreateSubAgentSpawner(toolRegistry),
             logger: logger);
+        await using var sessionDirectory = TestSessionTempDirectory.Create("netclaw-skill-load-log-");
 
         foreach (var sessionId in new[] { "slack/C100-1700000001.000100", "signalr/abc" })
         {
-            var context = TestToolExecutionContext.CreateBound(sessionId, null, TrustAudience.Personal);
+            var context = TestToolExecutionContext.CreateBound(
+                sessionId,
+                sessionDirectory.Path,
+                new TestToolExecutionContextOptions
+                {
+                    Audience = TrustAudience.Personal,
+                    SpawnChildActor = static (request, _, _) =>
+                    {
+                        var prepared = Assert.IsType<PreparedChildStart>(request);
+                        return Task.FromResult<object>(new ChildRunAcceptance(
+                            prepared.RunId,
+                            prepared.Execution.Scope.ScopeId));
+                    }
+                });
             await tool.ExecuteAsync(input, context, TestContext.Current.CancellationToken);
         }
 
@@ -1219,9 +1238,10 @@ public class SkillToolTests : IDisposable
     private ToolPathPolicy CreateProtectedPathPolicy()
         => DaemonToolPathPolicyFactory.Create(_paths, ShellExecutionEnvironmentDefaults.Bash, new SkillFeedsConfig());
 
-    private static SubAgentSpawner CreateSubAgentSpawner()
+    private static SubAgentSpawner CreateSubAgentSpawner() => CreateSubAgentSpawner(new ToolRegistry());
+
+    private static SubAgentSpawner CreateSubAgentSpawner(ToolRegistry registry)
     {
-        var registry = new ToolRegistry();
         var policy = new ToolAccessPolicy(new NetclawPaths(),
             new ToolConfig(),
             new EffectivePolicyDefaults(
