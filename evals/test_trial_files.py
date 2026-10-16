@@ -339,7 +339,7 @@ class TrialFolderTests(HarnessCase):
     def test_assertion_stderr_goes_to_the_trial_folder(self):
         # Planted bug: keep `2>/dev/null` on the assertion call. The cause of a
         # false fail (D4 rows 55 and 147) then stays unknown.
-        for rc, expected in ((1, "0"), (0, "1")):
+        for rc in (1, 0):
             with self.subTest(assertion_rc=rc):
                 shutil.rmtree(self.root / "checkout" / "evals" / "runs", ignore_errors=True)
                 self.results.write_text("")
@@ -347,7 +347,10 @@ class TrialFolderTests(HarnessCase):
                                  ASSERT_RC=rc, ASSERT_STDERR="expected 'x' in reply, found none")
                 self.assertIn("expected 'x' in reply, found none",
                               self.read_text(self.raw("assert-stderr.txt")))
-                self.assertEqual(expected, self.results.read_text().split("|")[2],
+                # The stored trial status also depends on the CLI exit and the
+                # turn end since PR 2. The fake CLI here writes no turn end, so
+                # this test reads the assertion result from assert.json.
+                self.assertEqual(rc, self.read_json(self.raw("assert.json"))["exit_code"],
                                  "the verdict must stay what the assertion returned")
 
     def test_cli_session_log_is_the_log_created_during_the_trial(self):

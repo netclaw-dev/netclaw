@@ -223,10 +223,10 @@ class AssertionEvidenceTests(ReviewHarnessCase):
                 self.results.write_text("")
                 self.run_harness("text", ["p"], FAKE_SESSION=self.SESSION, ASSERT_RC=rc)
 
+                # Since PR 2 the stored trial status also depends on the CLI exit
+                # and the turn end, which this fake CLI does not write. The
+                # assertion result is what assert.json holds.
                 self.assertEqual(rc, self.read_json(self.raw("assert.json"))["exit_code"])
-                passed = self.results.read_text().split("|")[2]
-                self.assertEqual("1" if rc == 0 else "0", passed,
-                                 "the verdict must stay what the assertion returned")
 
     def test_daemon_window_is_copied_after_the_assertion_and_assert_json_gives_its_bounds(self):
         # S3. Planted bug: copy the window before the assertion runs. A line that
@@ -409,6 +409,46 @@ class StartupCheckTests(unittest.TestCase):
                 done = self.run_script(True, NETCLAW_EVAL_TIMEOUT=value)
 
                 self.assertNotIn("NETCLAW_EVAL_TIMEOUT", done.stderr)
+
+    def test_threshold_outside_0_to_1_stops_the_run_at_startup(self):
+        # Planted bug: delete the startup check of NETCLAW_EVAL_THRESHOLD. A
+        # value such as 80 then passes startup. The run builds the image,
+        # starts the container, runs the first case, and only then stops with
+        # exit 2 from case-status. The check must stop the run before any call.
+        for value in ("80", "1.5", "-0.1", "abc", "0.8x"):
+            with self.subTest(threshold=value):
+                self.marks.unlink(missing_ok=True)
+
+                done = self.run_script(True, NETCLAW_EVAL_THRESHOLD=value)
+
+                self.assertEqual(2, done.returncode, done.stderr[-400:])
+                self.assertIn("NETCLAW_EVAL_THRESHOLD", done.stderr)
+                self.assertEqual("", self.marks_text())
+
+    def test_threshold_above_0_to_1_passes_the_startup_check(self):
+        # Control. Planted bug: reject every value, or reject 1 or a
+        # decimal. The run still ends early here, because the fake docker
+        # fails, but the message must not name the threshold.
+        for value in ("0.01", "0.8", "0.75", "1", "1.0"):
+            with self.subTest(threshold=value):
+                done = self.run_script(True, NETCLAW_EVAL_THRESHOLD=value)
+
+                self.assertNotIn("NETCLAW_EVAL_THRESHOLD", done.stderr)
+
+    def test_zero_threshold_stops_the_run_at_startup(self):
+        # Owner decision: the threshold is above 0 and at most 1. Planted bug:
+        # accept 0. A case with only inconclusive trials then passes with a
+        # score of n/a, and an inconclusive result becomes a pass. The check
+        # must stop the run before any call and must name the variable.
+        for value in ("0", "0.0"):
+            with self.subTest(threshold=value):
+                self.marks.unlink(missing_ok=True)
+
+                done = self.run_script(True, NETCLAW_EVAL_THRESHOLD=value)
+
+                self.assertEqual(2, done.returncode, done.stderr[-400:])
+                self.assertIn("NETCLAW_EVAL_THRESHOLD", done.stderr)
+                self.assertEqual("", self.marks_text())
 
     def test_python3_that_is_new_enough_passes_the_prerequisite_check(self):
         # S4 guard. Planted bug: invert the version test. Then every real run

@@ -1,0 +1,3 @@
+[2026-10-15T14:31:52.8796532+00:00] Headless session started: signalr/df6e1107915a41e1bd726150e6e2be8f
+[2026-10-15T14:31:52.8799421+00:00] PROMPT: What schedule type and format does Netclaw use for recurring reminders every 6 hours?
+[2026-10-15T14:31:53.0929808+00:00] SESSION_JOINED turn_count=0 title=(none)
