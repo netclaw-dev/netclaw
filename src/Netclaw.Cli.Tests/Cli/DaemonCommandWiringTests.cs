@@ -164,8 +164,7 @@ public sealed class DaemonCommandWiringTests : IDisposable
     {
         Directory.CreateDirectory(netclawHome);
         var fakeDaemon = Path.Combine(_dir.Path, "netclawd");
-        File.Copy("/bin/sleep", fakeDaemon, overwrite: true);
-        MakeExecutable(fakeDaemon);
+        SleepStandIn.Create(fakeDaemon);
         var psi = new ProcessStartInfo(fakeDaemon, "600") { UseShellExecute = false };
         psi.Environment["NETCLAW_HOME"] = netclawHome; // the home this daemon serves, as the real one's environment says
         var process = Process.Start(psi)!;

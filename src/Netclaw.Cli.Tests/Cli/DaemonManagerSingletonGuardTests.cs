@@ -218,9 +218,7 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
     private System.Diagnostics.Process StartFakeDaemon()
     {
         var fakeDaemon = Path.Combine(_dir.Path, "netclawd");
-        File.Copy("/bin/sleep", fakeDaemon, overwrite: true);
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(fakeDaemon, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        SleepStandIn.Create(fakeDaemon);
         var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(fakeDaemon, "600") { UseShellExecute = false })!;
         _fakeDaemons.Add(process);
         return process;

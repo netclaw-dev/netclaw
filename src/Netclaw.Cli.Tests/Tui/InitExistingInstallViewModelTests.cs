@@ -477,9 +477,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         // The unit's Restart=always would bring a directly killed daemon back under the data
         // being deleted, so the reset has to use the same stop as `netclaw daemon stop`.
         var fakeDaemon = Path.Combine(_dir.Path, "netclawd");
-        File.Copy("/bin/sleep", fakeDaemon, overwrite: true);
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(fakeDaemon, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        SleepStandIn.Create(fakeDaemon);
         using var daemon = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(fakeDaemon, "600") { UseShellExecute = false })!;
         try
         {
