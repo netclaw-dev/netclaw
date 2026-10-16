@@ -1262,7 +1262,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void FinalizePassivation()
     {
         var final = _execution.ClaimFinalStop(
-            _phase.Current, _sessionId, _state.GetExecutablePendingInputs(), _state.GetUnreportedRuns().ToArray());
+            _phase.Current, _sessionId, _state.GetExecutablePendingInputs(), UnreportedRuns().ToArray());
         if (final is null)
             return;
 
@@ -1641,7 +1641,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     // A live child, or an ended child whose notice is still to come. The notice needs this actor, and a passivated
     // session would not admit it until the next join.
-    private bool HasUnreportedChildren => _execution.HasLiveChildren || _state.GetUnreportedTerminalRuns().Any();
+    private bool HasUnreportedChildren => _execution.HasLiveChildren || UnreportedRuns().Any(run => run.Lifecycle is ChildRunLifecycle.Terminal);
 
     private void ApplyBufferedBatch(BufferedInputBatch batch)
     {
@@ -1796,8 +1796,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 CompleteAcceptedInput(cmd, placement);
                 return;
             case AdmissionDecision.Reject rejected:
-                _log.Error("Rejecting input with invalid durable authority: {Reason}", rejected.Reason);
-                TryReplyNack($"Input authority cannot be stored: {rejected.Reason}");
+                _log.Error("Rejecting {InputKind}: {Reason}", cmd.Notice is null ? "input" : "child notice", rejected.Reason);
+                if (cmd.Notice is { } rejectedNotice)
+                    GiveUpOnChildNotice(rejectedNotice.Notice.RunId, rejected.Reason);
+                TryReplyNack($"The session cannot admit the input: {rejected.Reason}");
                 return;
             case AdmissionDecision.Duplicate:
                 TryReplyAck();
@@ -1936,12 +1938,25 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             || !string.Equals(cmd.Content, SessionExecutionLifetime.RestartReminderInstruction, StringComparison.Ordinal))
             return false;
 
+        // The approval check comes before the resume. An open approval owns the next turn: the answer ends the wait,
+        // and the inputs that wait behind it are queued already (RestoreWaitingInputs). A resume now would start a
+        // model turn while the tool batch is parked.
+        if (_toolWorkflow.HasParkedApprovals())
+        {
+            _log.Info(
+                "Restart reminder {ReminderId} woke session {SessionId} behind an open approval; nothing resumes until the approval closes.",
+                reminderId,
+                _sessionId.Value);
+            TryReplyAck();
+            return true;
+        }
+
         var pending = _state.GetExecutablePendingInputs();
         if (pending.Count == 0)
         {
             // A session with only a child run has no input to resume. The reminder woke it, and the recovery now ends
             // the lost child and admits its notice.
-            if (_state.GetUnreportedRuns().Any())
+            if (UnreportedRuns().Any())
             {
                 _log.Info(
                     "Restart reminder {ReminderId} woke session {SessionId}; child runs report through notices.",
@@ -3748,7 +3763,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             // A ready session has no turn to resume. A child run can still owe it a result, and only the restart
             // reminder wakes the session after the restart so that the recovery can report that child.
-            _execution.MarkRestartReminderEligible(0, _state.GetUnreportedRuns().Count(), false, 0, _timeProvider.GetUtcNow());
+            _execution.MarkRestartReminderEligible(0, UnreportedRuns().Count(), false, 0, _timeProvider.GetUtcNow());
             TransitionTo(SessionPhase.Passivating);
         }
         else if (action == RestartAction.StopToolTask)
@@ -3802,7 +3817,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     {
         if (_execution.MarkRestartReminderEligible(
                 _state.GetExecutablePendingInputs().Count,
-                _state.GetUnreportedRuns().Count(),
+                UnreportedRuns().Count(),
                 _input.EmittedText,
                 _input.SelectedCount,
                 _timeProvider.GetUtcNow()) == ReminderEligibility.EmittedText)
@@ -3828,6 +3843,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         _execution.ReleaseTool();
         ClearActiveToolBatchTracking();
+        // The parked approval is durable, but a child run can still owe its result, and an input can wait behind the
+        // approval. Only the restart reminder wakes the session after the restart.
+        RecordRestartReminderEligibility();
         TransitionTo(SessionPhase.Passivating);
     }
 

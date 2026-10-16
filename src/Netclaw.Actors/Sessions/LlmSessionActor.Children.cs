@@ -20,6 +20,8 @@ namespace Netclaw.Actors.Sessions;
 
 public sealed partial class LlmSessionActor
 {
+    private readonly HashSet<SubAgentRunId> _unreportableRuns = [];
+
     private void ApplyLegacyCoordination(LegacyCoordinationEvent evt)
     {
         _state = LegacyCoordinationReplay.Apply(_state, evt);
@@ -325,8 +327,10 @@ public sealed partial class LlmSessionActor
                     ChildRunDocuments.RenderResult(run, terminal, result, storage, warning), CancellationToken.None);
                 owner.Tell(new ChildResultWritten(run.RunId, reviewed, resultPath, null), ActorRefs.NoSender);
             }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
             {
+                // Any failure of the render or the write ends here. The notice says that the file is missing, so the
+                // result is never lost silently and the run is never left without a notice.
                 owner.Tell(new ChildResultWritten(run.RunId, reviewed, resultPath, error), ActorRefs.NoSender);
             }
         }
@@ -353,6 +357,29 @@ public sealed partial class LlmSessionActor
             Content = ChildRunDocuments.RenderNotice(run, terminal.Result.Result, written.ResultPath, written.WriteFailure?.Message),
             Notice = new ChildNoticeInput(notice, context)
         }, ActorRefs.NoSender);
+    }
+
+    // Runs whose result the parent has not received, minus runs whose notice the session cannot admit.
+    private IEnumerable<BackgroundChildRun> UnreportedRuns()
+        => _state.GetUnreportedRuns().Where(run => !_unreportableRuns.Contains(run.RunId));
+
+    // The reducer refused the notice of an ended run, for instance because the recorded authority of the run no
+    // longer parses. A retry cannot succeed. The session reports the loss in the log with the path of the result
+    // file, and it stops counting the run as owed: the run neither pins the session in memory nor drives the restart
+    // reminder. The journal keeps the run as ended, so the next start of the session tries once and logs again.
+    // A durable outcome for this case needs its own spec (follow-up).
+    private void GiveUpOnChildNotice(SubAgentRunId runId, string reason)
+    {
+        if (!_state.ChildRuns.TryGetValue(runId, out var run) || run.Lifecycle is not ChildRunLifecycle.Terminal)
+            return;
+
+        if (_unreportableRuns.Add(runId))
+        {
+            var resultPath = _sessionStorage.ForChild(run.RunId, run.ScopeId).ChildFiles?.ResultFile;
+            _log.Error(
+                "The session cannot report child run {RunId} to the parent: {Reason}. The result file is {ResultFile}.",
+                runId, reason, resultPath ?? "(unknown)");
+        }
     }
 
     private bool ChildTerminated(IActorRef child)
@@ -385,6 +412,7 @@ public sealed partial class LlmSessionActor
     private void RecoverChildren()
     {
         _toolWorkflow.ExpireRecoveredChildApprovals();
+        ResumeOrphanNotices();
         foreach (var run in _state.GetExecutableChildRuns().ToArray())
         {
             if (run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling)
@@ -393,6 +421,29 @@ public sealed partial class LlmSessionActor
             else if (run.Lifecycle is ChildRunLifecycle.Terminal terminal)
                 PrepareChildResult(run, terminal.Result, terminal.LegacyPrepared);
         }
+    }
+
+    // A crash can land between the admission of a notice and the turn that consumes it. The notice then stays in the
+    // journal as a pending input, and the result would reach the parent only by chance. Rebuild the queue entry under
+    // the recorded authority and start its turn, so the notice runs once, ahead of any later input. A person's pending
+    // input is not part of this repair (issue 2516): recovery treats it as before. Behind a parked approval the
+    // recovery queued every pending input already, and the answer ends the wait. An input of the running turn is not
+    // an orphan.
+    private void ResumeOrphanNotices()
+    {
+        if (_toolWorkflow.HasParkedApprovals())
+            return;
+
+        var selected = _input.SelectedInputs.Ids;
+        var orphans = _state.GetExecutablePendingInputs()
+            .Where(input => input.ChildNotice is not null && !selected.Contains(input.InputId))
+            .ToArray();
+        if (orphans.Length == 0)
+            return;
+
+        var restored = _input.RestoreWaitingInputs(orphans, _sessionId);
+        _log.Info("Resuming {RestoredCount} child notice(s) that a crash left unconsumed", restored);
+        StartWaitingInputAfterApproval();
     }
 
     // The notice is admitted input, so the findings review runs once, when the journal accepts it.

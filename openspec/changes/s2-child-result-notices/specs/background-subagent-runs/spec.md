@@ -35,6 +35,27 @@ The notice SHALL carry the recorded requester of the run owner. It SHALL join a 
 - **THEN** exactly one notice is admitted for the run
 - **AND** a replay of the notice adds no second notice
 
+#### Scenario: A notice that a crash left unconsumed runs once
+
+- **GIVEN** the journal holds an admitted notice that no turn consumed, because the session stopped without a drain
+- **WHEN** the session recovers
+- **THEN** the notice runs once under the recorded authority of the run owner
+- **AND** a later message does not leave the notice behind, and a snapshot passes after the notice turn
+- **AND** an unconsumed input of a person is not part of this rule
+
+#### Scenario: A rejected notice does not pin the session
+
+- **GIVEN** the reducer refuses the notice of an ended run
+- **WHEN** the owner handles the refusal
+- **THEN** the log names the real reason and the path of the result file
+- **AND** the session does not count the run as owed, so the run neither keeps the session in memory nor drives the restart reminder
+
+#### Scenario: A failed result write still yields a notice
+
+- **GIVEN** the render or the write of `result.md` fails with any non-fatal error
+- **WHEN** the owner learns of the failure
+- **THEN** the owner admits one notice that says the file does not exist
+
 ### Requirement: A child run folder records the task and the result
 
 The system SHALL write `task.md` in the run folder before the child makes its first model call. It SHALL record the agent, the requester sender and principal, and the brief. The system SHALL remove the run folder when the owner rejects the start. The system SHALL refuse `spawn_agent` when the requester policy does not expose `file_read`, and SHALL start no child in that case.
@@ -57,6 +78,22 @@ The system SHALL write `task.md` in the run folder before the child makes its fi
 - **WHEN** the model calls `spawn_agent`
 - **THEN** the call fails with a reason that names `file_read`
 - **AND** no run is accepted
+
+### Requirement: Child run files stay out of the working context
+
+The system SHALL NOT add a read of `task.md` or `result.md` in a child run folder to the `recent_files` list of the working context. This holds for the envelope layout and for the legacy layout. A project file with the same name, and a file under `artifacts/` of the run, SHALL stay in the list.
+
+#### Scenario: A read of the result file adds nothing
+
+- **GIVEN** a notice for an ended run
+- **WHEN** the model reads `result.md` of the run with `file_read`
+- **THEN** `recent_files` does not name `result.md` or `task.md` of the run
+
+#### Scenario: A project file stays in the list
+
+- **GIVEN** a project file named `result.md` and a file in `artifacts/` of a run
+- **WHEN** the model reads them
+- **THEN** both stay in `recent_files`
 
 ## MODIFIED Requirements
 
