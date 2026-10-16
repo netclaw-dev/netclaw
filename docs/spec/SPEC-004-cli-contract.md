@@ -220,7 +220,9 @@ arrives in a later parent turn. The run ends on the first completed turn that re
 run. See [Waiting for child runs](#waiting-for-child-runs).
 
 A failed turn or a failed run exits `1`. A run whose last turn completes exits `0`. The exit code does not carry
-the reason. A run that an outside `timeout` kills exits `124`. `timeout` sends SIGTERM, and the CLI handles
+the reason. A tool loop has no fixed ceiling: `Session.MaxToolIterationsPerTurn` is a legacy field. A
+model that keeps changing its tool arguments runs until the operator cancels the run or an outside
+`timeout` stops it. A run that an outside `timeout` kills exits `124`. `timeout` sends SIGTERM, and the CLI handles
 SIGTERM like SIGINT, so stderr usually also has `[turn:failed] category=infra kind=Cancelled`. A reader must
 check the exit code first: `124` means `timeout`, whatever stderr holds.
 

@@ -173,30 +173,6 @@ public sealed partial class SessionModelContextTests
     }
 
     [Fact]
-    public async Task Force_no_tools_suppresses_available_tools_but_preserves_session_options()
-    {
-        // Arrange
-        var cache = new DiscoveredToolCache();
-        cache.SeedBaseTools([AIFunctionFactory.Create(() => "ok", "file_search")]);
-        var owner = CreateOwner(new StaticSystemPromptProvider("stable prompt"), discoveredTools: cache);
-        var state = SessionState.Empty.AddUserMessage("search");
-
-        // Act
-        var call = Assert.IsType<ContextCall.Inspect>(Start(owner, 1, state, forceNoTools: true));
-        var reply = Assert.IsType<WorkingContextSnapshotReady>(await call.Work);
-        var restricted = Assert.IsType<PreparedModelRequest>(owner.CompleteInspection(
-            reply, state, childContinuation: null, TrustAudience.Personal, currentToolTrust: null));
-        var permitted = Assert.IsType<ContextCall.Ready>(Start(owner, 2, restricted.State)).Request;
-
-        // Assert
-        Assert.True(restricted.ForceNoTools);
-        Assert.Null(restricted.Options.Tools);
-        Assert.Equal(SessionId.Value, restricted.Options.SessionId);
-        Assert.Single(permitted.Options.Tools!);
-        Assert.Equal(SessionId.Value, permitted.Options.SessionId);
-    }
-
-    [Fact]
     public async Task Missing_trust_context_refuses_a_candidate_tool_under_the_real_access_policy()
     {
         // Arrange
