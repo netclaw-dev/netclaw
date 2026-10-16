@@ -23,7 +23,7 @@ internal sealed record ChildTerminalReturned(SubAgentRunId RunId, SubAgentResult
 internal sealed record ChildTerminalCommitted : INoSerializationVerificationNeeded;
 internal sealed record ChildCheckpointReached(SubAgentRunId RunId, ChildRunCheckpoint Checkpoint, IActorRef Child)
     : INoSerializationVerificationNeeded;
-internal sealed record ChildCheckpointCommitted(bool ForceNoTools) : INoSerializationVerificationNeeded;
+internal sealed record ChildCheckpointCommitted : INoSerializationVerificationNeeded;
 internal sealed record ChildResultPrepared(SubAgentRunId RunId, ChildRunTerminal ExpectedTerminal,
     SerializableChatMessage Call, SerializableChatMessage Result, WorkingContextDelta? ReviewedWorkingContext) : INoSerializationVerificationNeeded;
 internal sealed record ChildPreparationFailed(SubAgentRunId RunId, ChildRunTerminal ExpectedTerminal, Exception Error)

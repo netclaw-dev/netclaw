@@ -435,7 +435,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void Processing()
     {
-        Receive<ChildCheckpointCommitted>(message => FireLlmCall(message.ForceNoTools));
+        Receive<ChildCheckpointCommitted>(_ => FireLlmCall());
         Receive<ChildTerminalCommitted>(_ => Context.Stop(Self));
         Receive<LlmResponseReceived>(msg =>
         {
@@ -447,7 +447,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             var response = msg.Response;
 
             // Record this call's token usage before branching so EVERY call is billed —
-            // tool-call turns, retries, the forced-no-tools final turn, and repair turns
+            // tool-call turns, retries, and repair turns
             // all flow through here exactly once. Mirrors the main session, which records
             // its own per-call usage; without this the sub-agent's tokens never reach the
             // daily-stats pipeline and `netclaw stats` under-counts by the whole sub-run.
@@ -455,14 +455,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
             var lastMessage = response.Messages[^1];
             var analysis = LlmResponseClassifier.Analyze(lastMessage);
-
-            if (analysis.Kind == LlmResponseKind.ToolCalls && _turnState.ForceNoToolsActive)
-            {
-                _log.Warning("SubAgent [{AgentName}] requested tools after a text-only response was required", _definition.Name);
-                Complete(false, "The model requested tools after a text-only response was required.",
-                    SubAgentRunOutcome.Failed, SubAgentOutcomeReason.ToolCycleStopped);
-                return;
-            }
 
             _log.Info(
                 $"SubAgent [{_definition.Name}] LLM response callId={msg.CallId} kind={analysis.Kind} "
@@ -530,7 +522,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         "SubAgent [{AgentName}] emitted unexecuted tool-call markup as final text; retrying with repair nudge",
                         _definition.Name);
                     AddSystemNudge(MalformedFinalOutputNudge);
-                    FireLlmCall(forceNoTools: _turnState.ForceNoToolsActive);
+                    FireLlmCall();
                     return;
                 }
 
@@ -868,18 +860,16 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             cycleDecision.RefusedCallIds);
     }
 
-    private void FireLlmCall(bool forceNoTools = false)
+    private void FireLlmCall()
     {
         if (_ownedRun is { } owned && _turnState.ToolIterationCount > _checkpointRound)
         {
             _checkpointRound = _turnState.ToolIterationCount;
             var checkpoint = new ChildRunCheckpoint(_checkpointRound,
                 $"Completed {_checkpointRound} tool rounds.", _fileActivity.BuildResult());
-            _ = CommitCheckpointAsync(owned, checkpoint, forceNoTools, Self);
+            _ = CommitCheckpointAsync(owned, checkpoint, Self);
             return;
         }
-        _turnState.ForceNoToolsActive |= forceNoTools;
-        forceNoTools = _turnState.ForceNoToolsActive;
         // Each LLM call starts fresh on the generous prefill budget; the watchdog
         // promotes to the inter-delta budget on the first substantive delta. The
         // no-progress deadline is armed alongside it and only real tokens reset it.
@@ -898,20 +888,19 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ChatOptions? options = _parentSessionId is { Length: > 0 } sid
             ? new SessionScopedChatOptions { SessionId = sid, SubSessionId = _subSessionId }
             : null;
-        if (!forceNoTools && _aiTools.Count > 0)
+        if (_aiTools.Count > 0)
         {
             options ??= new ChatOptions();
             options.Tools = [.. _aiTools];
         }
 
         _log.Info(
-            "SubAgent [{AgentName}] LLM call start callId={CallId} iteration={Iteration} messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools}",
+            "SubAgent [{AgentName}] LLM call start callId={CallId} iteration={Iteration} messages={MessageCount} toolsEnabled={ToolsEnabled}",
             _definition.Name,
             callId,
             _turnState.ToolIterationCount,
             messages.Count,
-            options?.Tools?.Count > 0,
-            forceNoTools);
+            options?.Tools?.Count > 0);
         var token = _executionCts?.Token ?? CancellationToken.None;
         if (_ownedRun is { } ownedRun)
             _ = ownedRun.Enter(async () => { await InvokeLlmAsync(client, messages, options, self, callId, token); return true; });
@@ -920,13 +909,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     }
 
     private static async Task CommitCheckpointAsync(ChildRunExecution owned, ChildRunCheckpoint checkpoint,
-        bool forceNoTools, IActorRef self)
+        IActorRef self)
     {
         try
         {
             await owned.Owner.Ask<SessionProtocol.CommandAck>(
                 new ChildCheckpointReached(owned.RunId, checkpoint, self), Timeout.InfiniteTimeSpan, owned.Token);
-            self.Tell(new ChildCheckpointCommitted(forceNoTools));
+            self.Tell(new ChildCheckpointCommitted());
         }
         catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
         { self.Tell(SubAgentCancelled.Instance); }

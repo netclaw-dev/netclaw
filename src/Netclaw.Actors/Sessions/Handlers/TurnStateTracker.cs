@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Sessions.Handlers;
 
 /// <summary>
 /// Owns tool-loop control flow decisions: exact cycle detection,
-/// empty-response retry logic, and force-no-tools state. The actor asks
+/// and empty-response retry logic. The actor asks
 /// "what should I do?" and the tracker answers based on accumulated state.
 /// </summary>
 internal sealed class TurnStateTracker
@@ -57,7 +57,6 @@ internal sealed class TurnStateTracker
 
     public int ToolCallCount { get; private set; }
     public int ToolIterationCount { get; private set; }
-    public bool ForceNoToolsActive { get; set; }
 
     private int _postToolEmptyResponseCount;
     private int _preToolEmptyResponseCount;
@@ -71,7 +70,6 @@ internal sealed class TurnStateTracker
         ToolIterationCount = 0;
         _postToolEmptyResponseCount = 0;
         _preToolEmptyResponseCount = 0;
-        ForceNoToolsActive = false;
         _completedToolCycles.Clear();
         _lastBlockedAction = null;
         _episodes.Clear();
@@ -79,7 +77,7 @@ internal sealed class TurnStateTracker
 
     /// <summary>
     /// Partial reset for mid-turn buffer drain: clears tool counters
-    /// but preserves empty-response and force-no-tools state.
+    /// but preserves empty-response state.
     /// </summary>
     public void ResetToolCounters()
     {
@@ -358,13 +356,13 @@ internal static class ToolCycleMessages
     // Model-facing: the child result that the parent model reads. It stays in the second person.
     public const string ChildStopped =
         "Netclaw stopped this run after you repeated a tool call that the cycle guard already blocked. "
+        + "The result is partial. The last refused operation did not execute. "
+        + "Earlier tool results remain available in the session.";
 
     // Person-facing: the failed-turn text that Slack, Discord, Mattermost, the TUI, and the CLI show
     // to a person. A person did not repeat the call, so this text names the model.
     public const string TurnStopped =
         "Netclaw stopped this turn because the model repeated a tool call that was already refused. "
-        + "The result is partial. The last refused operation did not execute. "
-        + "Earlier tool results remain available in the session.";
         + "The result is partial. The last refused operation did not execute. "
         + "Earlier tool results remain available in the session.";
 }
