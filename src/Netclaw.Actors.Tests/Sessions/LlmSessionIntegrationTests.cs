@@ -404,7 +404,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, error.SessionId);
-        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+        Assert.Equal(ErrorCategory.ModelBehavior, error.Category);
         Assert.Contains("Please try rephrasing", error.Message, StringComparison.OrdinalIgnoreCase);
 
         var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
@@ -455,7 +455,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, error.SessionId);
-        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+        Assert.Equal(ErrorCategory.ModelBehavior, error.Category);
 
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -1016,7 +1016,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         {
             var error = await subscriber.ExpectMsgAsync<ErrorOutput>(
                 TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-            Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+            Assert.Equal(ErrorCategory.ModelBehavior, error.Category);
             Assert.Contains("required text only", error.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("used all available tool iterations", error.Message, StringComparison.Ordinal);
         }
