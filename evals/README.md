@@ -69,21 +69,43 @@ All trials of one invocation share one daemon, one memory database, and one
 home folder. A trial must not change what a later trial sees. The harness
 keeps these rules:
 
-- **Memory distillation is off.** The fixture config sets
-  `Session.MemoryObserverIdleSeconds` to 86400 and
-  `Session.Tuning.MemoryDistillationTurnInterval` to 0. Without this, the
-  daemon distills an idle session into a memory about two minutes after the
-  trial, and a later trial recalls it. The harness seeds only the
-  `doc-eval-*` memories. A case that tests distillation must run in its own
-  invocation with the default settings.
-- **Agent definitions are restored.** Before each trial, `restore_agent_fixtures`
-  writes `evals/fixtures/agents/` into the daemon home again. A parent agent
-  can rewrite an agent file during a trial.
-- **A trial that recalls an unseeded memory is inconclusive.** Before each trial,
-  the harness writes `raw/memory-before.txt`. It lists every memory id that is
-  not a `doc-eval-*` seed. If recall injects one of these ids,
-  `trial_verdict.py` gives the reason `learned_memory_recalled`, even when the
-  assertion passed. This also covers a `memory_store` call of an earlier trial.
+- **The harness resets state before each trial.** `reset_trial_state` runs
+  before the setup function of the case and before the memory snapshot. It
+  does two things:
+  - `reset_memory_store` restores the memory store to the seeded state. It
+    runs `seed-memories.py --reset` in the container. The script deletes every
+    row of every `memory_*` table and seeds the `doc-eval-*` memories again,
+    in one transaction. A memory from an earlier trial is gone (a
+    `store_memory` call or a distilled memory). A seed memory that a trial
+    changed is back at its fixture content. The session catalog is not
+    touched. A failed reset stops the run with exit 2.
+  - `restore_agent_fixtures` writes `evals/fixtures/agents/` into the daemon
+    home again, in the container as root, and removes every other file from the
+    agents folder. A parent agent can rewrite or add an agent file during a
+    trial. The daemon user (uid 1654) can own such a file, and the host user
+    cannot write over it, so the restore does not run on the host. A failed
+    restore stops the run with exit 2.
+- **Distillation is off in the fixture config.** `Session.IdleTimeout` is
+  `00:00:00`, `Session.MemoryObserverIdleSeconds` is 86400, and
+  `Session.Tuning.MemoryDistillationTurnInterval` is 0. `IdleTimeout` zero
+  disables the passivation timer. It does not mean "passivate at once". An idle
+  passivation distills the session, so a session never passivates in an eval
+  run. A case that tests distillation must run in its own invocation with the
+  default settings. `NETCLAW_EVAL_CONFIG_FILE` replaces the whole fixture
+  config, so a config that you supply does not get these keys (the background
+  evals do not get them either). The reset still protects such a run.
+- **The harness checks that the reset worked.** Before each trial, the harness
+  writes `raw/memory-before.json`: the status of the snapshot and the ids of
+  every memory that is not a `doc-eval-*` seed. After a reset, the list is
+  empty. If recall injects an id from the list, `trial_verdict.py` gives the
+  reason `learned_memory_recalled`, even when the assertion passed. A memory
+  that the trial itself wrote is not on the list, so it does not count. If
+  `netclaw.db` is missing or locked, the snapshot has a status other than `ok`,
+  and the trial is inconclusive with the reason
+  `infra:memory_snapshot_<status>`.
+- **The memory check covers automatic recall.** A reset store also covers a
+  `find_memories` or `get_memories` call of the trial, because the store holds
+  no memory from an earlier trial.
 - **A case that keeps other state must reset it.** A case that changes
   reminders, identity files, or workspaces resets them in its `setup_<case>`
   function.
@@ -469,7 +491,7 @@ while the run goes on. `<nn>` is the trial number, `01` and up.
 | `session.log` | The actor log that `netclaw.db` names for the session |
 | `subagents/<run id>/*.log` | Logs of the sub-agents of the session |
 | `actor-log.json` | How the harness found the actor log. A status other than `ok` means that the log is missing or was refused, and the harness prints a warning. The actor log must resolve under `data/sessions`. A sub-agent log must resolve under the folder of its session. `refused_subagent_logs` lists the sub-agent logs that were refused. |
-| `memory-before.txt` | The ids of the memories that exist before the trial and that the harness did not seed, one for each line. It is empty when the daemon has written no memory. |
+| `memory-before.json` | `status` of the memory snapshot (`ok`, `no_memory_db`, or `memory_db_unreadable`), and `ids`: the memories that exist before the trial and that the harness did not seed. `ids` is empty after a clean reset, and `null` when the status is not `ok`. |
 | `daemon-session.log` | Daemon lines with the exact token `session=<id>` or `sessionId=<id>` |
 | `daemon-window.log` | Every daemon line from the start of the trial to the end of the assertion, for people to read. A trial that crosses midnight UTC adds the lines of the new daemon file. A run stops with exit 2 and an error message when `$EVAL_HOME/logs` holds no `daemon-*.log` file. |
 | `assert.json` | `exit_code` of the assertion (141 is a pipe failure, 1 is a missed match), `daemon_log`, `window_lines_before`, `window_lines_after`, `extra_daemon_logs` |
@@ -567,7 +589,9 @@ A trial has one of three states:
     `details` keeps the `ERROR` text.
   - `learned_memory_recalled`: recall injected a memory that existed before the
     trial and that the harness did not seed (see Trial independence). A trial
-    folder with no `memory-before.txt` skips this check.
+    folder with no `memory-before.json` skips this check.
+  - `infra:memory_snapshot_<status>`: the memory snapshot of the trial failed
+    (`no_memory_db` or `memory_db_unreadable`), so the recall cannot be checked.
   - the reason of an assertion report that says `inconclusive` (cycle cases).
   - `assertion_exit_<code>`: the assertion exited with a code other than 0 and 1
     (141 for a pipe failure, 127 for a missing command).

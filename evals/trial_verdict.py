@@ -21,14 +21,18 @@ Trial states, in this order (design 2.4):
                  nothing about the product behavior under test. Reason:
                  "turn_failed", and "error" holds the text of the ERROR
                  record.
-  4a. memory     The recall of the session injected a memory that existed
-                 before the trial and that the harness did not seed. An
-                 earlier trial of the same run caused that memory (a
-                 distilled memory or a memory_store call). The trial does not
-                 test the product alone, so it gives no verdict, even when
-                 the assertion passed. Reason: "learned_memory_recalled".
-                 A trial folder with no memory-before.txt (a run of an older
-                 harness) skips this rule.
+  4a. memory     The memory snapshot of the trial failed (the database was
+                 missing or unreadable), so the harness cannot check the
+                 recall. Reason: "infra:memory_snapshot_<status>".
+                 Or: the recall of the session injected a memory that existed
+                 before the trial and that the harness did not seed. The
+                 harness resets the memory store before each trial, so such a
+                 memory means that the reset failed or that a late write came
+                 after it. The trial does not test the product alone, so it
+                 gives no verdict, even when the assertion passed. Reason:
+                 "learned_memory_recalled". A trial folder with no
+                 memory-before.json (a run of an older harness) skips both
+                 rules.
   5. report      The assertion wrote a report with the status "inconclusive"
                  (cycle cases). Reason: the reason of the report.
   6. assertion   An assertion exit other than 0 and 1 (141 from a pipe,
@@ -76,9 +80,9 @@ TURN_COMPLETED = re.compile(r"^\[[^\]\n]+\] TURN_COMPLETED: turn=\d+", re.MULTIL
 ERROR_RECORD = re.compile(r"^\[[^\]\n]+\] ERROR: ", re.MULTILINE)
 
 # Recall logs one memory_retrieval_final line for each turn. Its items field
-# lists what recall injected: id=score pairs joined by "|". The ids are
+# lists only what recall injected: id=score pairs joined by "|". The ids are
 # doc-<hex> or rec-<hex>, or doc-eval-<name> for a seeded memory.
-RETRIEVAL_FINAL = re.compile(r"memory_retrieval_final session=\S+ .*? injectedCount=(\d+) .*? items=(.*)$")
+RETRIEVAL_FINAL = re.compile(r"memory_retrieval_final session=\S+ .*? items=(.*)$")
 MEMORY_ITEM = re.compile(r"(?:^|\|)((?:doc|rec)-[0-9A-Za-z-]+)=score")
 
 
@@ -166,23 +170,31 @@ def injected_memory_ids(daemon_session_log):
     ids = set()
     for line in daemon_session_log.splitlines():
         found = RETRIEVAL_FINAL.search(line)
-        if found and int(found.group(1)) > 0:
-            ids.update(MEMORY_ITEM.findall(found.group(2)))
+        if found:
+            ids.update(MEMORY_ITEM.findall(found.group(1)))
     return ids
 
 
-def recalled_unseeded_memory(raw):
-    """True when recall injected a memory from memory-before.txt."""
-    before_path = raw / "memory-before.txt"
-    session_log = raw / "daemon-session.log"
+def memory_guard(raw):
+    """Rule 4a. Returns a verdict for a failed snapshot or a leaked memory, else None."""
+    before_path = raw / "memory-before.json"
     if not before_path.exists():
-        return False
+        return None
+    before = read_json(before_path)
+    status = before.get("status")
+    if status != "ok":
+        return infra(f"memory_snapshot_{status}" if isinstance(status, str) and status else "memory_snapshot_unreadable")
+    ids = before.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        raise EvidenceError("memory-before.json ids is not a list of strings")
+    session_log = raw / "daemon-session.log"
     # The harness writes both files for every trial. A missing daemon file
     # means broken evidence, not a clean trial.
     if not session_log.exists():
         raise EvidenceError("daemon-session.log is missing, so the memory recall cannot be checked")
-    before = {line.strip() for line in read_text(before_path).splitlines() if line.strip()}
-    return bool(before & injected_memory_ids(read_text(session_log)))
+    if set(ids) & injected_memory_ids(read_text(session_log)):
+        return verdict(INCONCLUSIVE, "learned_memory_recalled")
+    return None
 
 
 def judge_assertion(raw):
@@ -233,8 +245,9 @@ def judge_trial(raw):
     if CLI_EXIT_FAILED_TURN in exit_codes:
         return verdict(INCONCLUSIVE, "turn_failed", failed_turn_error(log, exit_codes))
 
-    if recalled_unseeded_memory(raw):
-        return verdict(INCONCLUSIVE, "learned_memory_recalled")
+    guarded = memory_guard(raw)
+    if guarded:
+        return guarded
 
     return judge_assertion(raw)
 

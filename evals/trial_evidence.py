@@ -7,7 +7,7 @@ a trial. The commands:
   discover-session  Find the CLI session log that a trial created.
   actor-log         Copy the actor log of a session, and its sub-agent logs.
   daemon-session    Print the daemon lines that carry a session id token.
-  memory-ids        Write the ids of the memories that the harness did not seed.
+  memory-ids        Write the memory snapshot (status and the ids of unseeded memories).
   derive-seed       Derive the seed of one (case, trial) from the run seed.
 """
 
@@ -192,21 +192,23 @@ def daemon_session_lines(log_path, session_id):
 SEEDED_MEMORY_PREFIX = "doc-eval-"
 
 
-def unseeded_memory_ids(db_path):
-    """Return (status, ids): the ids of all memories in the database that the harness did not seed.
+def memory_snapshot(db_path):
+    """Return the memory snapshot of the database as a dict: status, ids, and error.
 
-    The harness takes this list before each trial. A memory that the daemon
-    wrote earlier (a distilled memory, or a memory_store call of an earlier
-    trial) is on it. A memory that the trial itself writes is not. The
-    database is read-only here, because the daemon holds it open.
+    `ids` lists every memory (document and record) that the harness did not
+    seed. The harness takes this list before each trial, after it reset the
+    memory store. On a clean store the list is empty. An id on it means that
+    something wrote a memory after the reset. The database is read-only here,
+    because the daemon holds it open.
 
     Status is "ok", "no_memory_db" (the daemon has not created the file), or
-    "memory_db_unreadable: ...". Like the actor-log findings, the last two
-    leave `ids` as None and the run goes on. A table that does not exist yet
-    holds no memory.
+    "memory_db_unreadable" (`error` holds the SQLite message). Both findings
+    leave `ids` as None. The snapshot is always written, so the trial evidence
+    records a snapshot that failed, and trial_verdict.py gives that trial no
+    verdict. A table that does not exist yet holds no memory.
     """
     if not db_path.is_file():
-        return "no_memory_db", None
+        return {"status": "no_memory_db", "ids": None, "error": None}
     ids = []
     try:
         database = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -218,8 +220,8 @@ def unseeded_memory_ids(db_path):
         finally:
             database.close()
     except sqlite3.Error as error:
-        return f"memory_db_unreadable: {error}", None
-    return "ok", sorted(i for i in ids if not i.startswith(SEEDED_MEMORY_PREFIX))
+        return {"status": "memory_db_unreadable", "ids": None, "error": str(error)}
+    return {"status": "ok", "ids": sorted(i for i in ids if not i.startswith(SEEDED_MEMORY_PREFIX)), "error": None}
 
 
 def derive_seed(run_seed, case_name, trial):
@@ -251,7 +253,7 @@ def main(argv=None):
     daemon.add_argument("--log", type=Path, required=True)
     daemon.add_argument("--session", required=True)
 
-    memory = commands.add_parser("memory-ids", help="write the ids of the memories that the harness did not seed")
+    memory = commands.add_parser("memory-ids", help="write the memory snapshot of the database")
     memory.add_argument("--home", type=Path, required=True, help="EVAL_HOME")
     memory.add_argument("--dest", type=Path, required=True)
 
@@ -274,12 +276,11 @@ def main(argv=None):
         sys.stdout.writelines(daemon_session_lines(args.log, args.session))
         return 0
     if args.command == "memory-ids":
-        status, ids = unseeded_memory_ids(args.home / "data" / "netclaw.db")
-        if ids is None:
-            # The trial then has no memory-before.txt, and its recall is not checked.
-            print(f"WARN: {status}. The memory recall of the trial is not checked.", file=sys.stderr)
-            return 0
-        args.dest.write_text("".join(f"{i}\n" for i in ids))
+        snapshot = memory_snapshot(args.home / "data" / "netclaw.db")
+        args.dest.write_text(json.dumps(snapshot, indent=2) + "\n")
+        if snapshot["status"] != "ok":
+            print(f"WARN: memory snapshot failed: {snapshot['status']}. The trial will be inconclusive.",
+                  file=sys.stderr)
         return 0
     print(derive_seed(args.seed, args.case, args.trial))
     return 0

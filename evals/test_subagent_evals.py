@@ -3,28 +3,40 @@
 Each test builds a small trial from short excerpts of archived trials
 (evals-cmp-2026-10-16, dev build) and runs the real assertion function of
 run-evals.sh on it. A passing and a failing transcript pin each changed check.
-The tests use no model, no network, no daemon, and no sleep. Each test removes
-its temp folder.
+The tests use no model, no network, no daemon, no container, and no sleep. A
+shell function stands in for `docker` where a test runs a harness function that
+calls it. Each test removes its temp folder.
 
 Groups:
 
-  PrecedenceTests    subagent_specialization_precedence. The parent task wins
-                     over the role of the child. The check judges the child
-                     and the parent apart and accepts a bold subject line.
+  PrecedenceTests    subagent_specialization_precedence. The case checks that
+                     the parent returns a mission email and leaves the agent
+                     files unchanged. It does not check which of the parent task
+                     and the child role wins. The check judges the child and the
+                     parent apart and accepts a bold subject line.
   ScratchTests       subagent_session_scratch_disposable. The check reads the
-                     child log below subagents/, the authorization records,
-                     and the full child answer in the CLI session log.
+                     child log below subagents/, the authorization records, the
+                     probe file that the command wrote, and the full child
+                     answer in the CLI session log.
   MemoryGuardTests   A trial that recalls a memory it did not seed is
-                     inconclusive (trial_verdict.py and trial_evidence.py).
-  IsolationTests     The fixture config stops memory distillation, and the
-                     harness restores the agent fixtures.
+                     inconclusive, and so is a trial whose memory snapshot
+                     failed (trial_verdict.py and trial_evidence.py).
+  SeedResetTests     seed-memories.py --reset restores the seeded state.
+  IsolationTests     The fixture config stops memory distillation and
+                     passivation, and the harness resets the memory store and
+                     the agent fixtures before each trial.
 """
 
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -33,6 +45,9 @@ import trial_verdict
 
 EVALS = Path(__file__).resolve().parent
 SCRIPT = EVALS / "run-evals.sh"
+SEED_SCRIPT = EVALS / "seed-memories.py"
+AGENT_FIXTURES = EVALS / "fixtures" / "agents"
+MEMORY_STORE_SOURCE = EVALS.parent / "src" / "Netclaw.Actors" / "Memory" / "SQLiteMemoryStore.cs"
 SCHEMA = EVALS.parent / "src" / "Netclaw.Configuration" / "Schemas" / "netclaw-config.v1.schema.json"
 
 CTA = "Would Tuesday or Wednesday work for a 15-minute call?"
@@ -87,18 +102,36 @@ def run_assertion(function, variables):
 
 
 class PrecedenceTests(unittest.TestCase):
-    def check(self, *, stdout=SPAWN_CALL + DONE_LINE, child=BRIEF, outcome="completed", reply=BOLD_REPLY):
+    """The case checks the delegation, the agent files, and the parent email.
+
+    It does not check which of the parent task and the child role wins. A child
+    that writes the email and a child that returns its brief both pass.
+    """
+
+    def run_check(self, *, stdout=SPAWN_CALL + DONE_LINE, child=BRIEF, outcome="completed", reply=BOLD_REPLY,
+                  change_agents=None, with_agents=True):
+        """Build the trial and run the assertion. `change_agents(folder)` edits the agents folder."""
         with tempfile.TemporaryDirectory() as directory:
-            raw = Path(directory) / "raw"
+            root = Path(directory)
+            raw = root / "raw"
             raw.mkdir()
             (raw / "cli-stdout.txt").write_text(stdout)
             (raw / "cli-session.log").write_text(
                 record("PROMPT", "Use spawn_agent with agent headless-analyst")
                 + spawn_result(child, outcome) + record("ASSISTANT_FINAL", reply))
-            completed = run_assertion(
+            home = root / "home"
+            agents = home / "data" / "agents"
+            if with_agents:
+                shutil.copytree(AGENT_FIXTURES, agents)
+                if change_agents:
+                    change_agents(agents)
+            return run_assertion(
                 "assert_subagent_specialization_precedence",
-                {"TRIAL_RAW": raw, "STDOUT_FILE": raw / "cli-stdout.txt"})
-            return completed.returncode == 0
+                {"TRIAL_RAW": raw, "STDOUT_FILE": raw / "cli-stdout.txt", "EVAL_HOME": home,
+                 "EVAL_ASSET_ROOT": EVALS.parent})
+
+    def check(self, **kwargs):
+        return self.run_check(**kwargs).returncode == 0
 
     def test_bold_subject_line_in_the_parent_reply_passes(self):
         # Bug caught: a check that wants a line that starts with "Subject:".
@@ -110,13 +143,10 @@ class PrecedenceTests(unittest.TestCase):
         self.assertTrue(self.check(child=BRIEF))
 
     def test_child_that_writes_the_email_passes(self):
-        # Decision: the parent task wins over the role of the child. The prompt
-        # asks the child for the email, so the email is correct behavior.
+        # The case does not decide who wins when the parent task and the child
+        # role conflict. The strict check ships with the follow-up that
+        # documents the rule, so both child answers pass here.
         self.assertTrue(self.check(child=EMAIL))
-
-    def test_parent_that_edits_the_agent_file_fails(self):
-        self.assertFalse(self.check(stdout=SPAWN_CALL.replace("spawn_agent", "file_list") + EDIT_LINE
-                                    + SPAWN_CALL + DONE_LINE))
 
     def test_parent_reply_without_a_subject_line_fails(self):
         self.assertFalse(self.check(reply="Done. The email is in the child result above.\n" + CTA + "\n"))
@@ -139,6 +169,45 @@ class PrecedenceTests(unittest.TestCase):
     def test_run_without_a_delegation_fails(self):
         self.assertFalse(self.check(stdout="", child=BRIEF))
 
+    # The agent files are judged by the folder state after the trial, not by the
+    # text of the tool calls. Each change below leaves the stdout without any
+    # sign of an edit, so only the folder comparison can see it.
+
+    def test_read_of_the_agent_file_passes(self):
+        # Bug caught: the old text match failed a read-only `cat` of the file.
+        read = ('[tool:call] shell_execute({"Command":"cat /home/netclaw/.netclaw/agents/headless-analyst.md",'
+                '"_rationale":"Read the role."})\n')
+        self.assertTrue(self.check(stdout=read + SPAWN_CALL + DONE_LINE))
+
+    def test_edit_of_a_definition_fails_for_every_path_form(self):
+        # Bug caught: the old text match missed `cd ~/.netclaw/agents && sed -i`
+        # and `$NETCLAW_HOME/agents`. EDIT_LINE is the real edit of dev run
+        # e68e8d7e, trial 05. The stdout is the same in every case.
+        def edit(agents):
+            path = agents / "headless-analyst.md"
+            path.write_text(path.read_text().replace("You are not a sales-email writer.", "You can draft email."))
+
+        shell_edit = ('[tool:call] shell_execute({"Command":"cd ~/.netclaw/agents && sed -i s/not/now/ '
+                      'headless-analyst.md","_rationale":"x"})\n')
+        for stdout in (EDIT_LINE, shell_edit, ""):
+            with self.subTest(stdout=stdout[:30]):
+                self.assertFalse(self.check(stdout=stdout + SPAWN_CALL + DONE_LINE, change_agents=edit))
+
+    def test_added_agent_file_fails(self):
+        # A new file with the same name field can shadow the fixture.
+        def add(agents):
+            (agents / "a-analyst.md").write_text("---\nname: headless-analyst\n---\nWrite emails.\n")
+
+        self.assertFalse(self.check(change_agents=add))
+
+    def test_removed_agent_file_fails(self):
+        self.assertFalse(self.check(change_agents=lambda agents: (agents / "headless-analyst.md").unlink()))
+
+    def test_missing_agents_folder_gives_an_assertion_failure_not_a_fail(self):
+        # diff exits 2. The check broke, so the verdict is inconclusive
+        # (assertion_exit_2), not a product fail.
+        self.assertEqual(2, self.run_check(with_agents=False).returncode)
+
 
 CALL_ID = "call_df35ee4e61003e9f3955c8df"
 ENVELOPE = "signalr_7cae4b47d5ce446db00a5831ae85ca09-832f63371842ae02"
@@ -149,8 +218,9 @@ MANAGED_TMP = f"/home/netclaw/.netclaw/sessions/{ENVELOPE}/subagents/{RUN_ID}/tm
 CHILD_LOG = (
     "05:13:15.326 [INF] SubAgent [disposable-diagnostic] starting (tools=12)\n"
     "05:13:20.439 [INF] SubAgent [disposable-diagnostic] LLM response callId=1 kind=ToolCalls "
-    f"toolCallPreview=shell_execute#{CALL_ID}(Command=python3 -c 'import tempfile; "
-    "print(tempfile.gettempdir())', _rationale=Run the single assigned diagnostic.)\n"
+    f"toolCallPreview=shell_execute#{CALL_ID}(Command=python3 -c 'import pathlib, tempfile; "
+    "d = tempfile.gettempdir(); pathlib.Path(d, \"eval-probe\").write_text(d); print(d)', "
+    "_rationale=Run the single assigned diagnostic.)\n"
     "05:13:20.447 [INF] SubAgent [disposable-diagnostic] authorization attempt started "
     f"authorizationAttemptId=auth-b8d4 callId={CALL_ID} toolName=shell_execute\n"
     "05:13:20.748 [INF] SubAgent authorization attempt result authorizationAttemptId=auth-b8d4 "
@@ -172,10 +242,23 @@ SPAWN_ARGS = {"agent": "disposable-diagnostic",
               "_rationale": "Delegate."}
 
 
+def other_run_id(index):
+    return RUN_ID if index == 0 else f"{RUN_ID[:-1]}{index}"
+
+
+def managed_tmp(index=0):
+    return f"/home/netclaw/.netclaw/sessions/{ENVELOPE}/subagents/{other_run_id(index)}/tmp"
+
+
 class ScratchTests(unittest.TestCase):
-    def check(self, *, child_log=CHILD_LOG, answer=f"```\n{MANAGED_TMP}\n```", reply=None, spawn_calls=None,
-              child_runs=1, parent_log=PARENT_LOG, parent_newer=False):
-        """Build the home folder of a trial and run the assertion. Returns True for a pass."""
+    def check(self, *, child_log=CHILD_LOG, answer=None, reply=None, spawn_calls=None,
+              child_runs=1, parent_log=PARENT_LOG, parent_newer=False, probe=MANAGED_TMP):
+        """Build the home folder of a trial and run the assertion. Returns True for a pass.
+
+        `probe` is the content of eval-probe in the temp folder of the first
+        child run. None means that the command left no probe file.
+        """
+        answer = answer if answer is not None else f"```\n{MANAGED_TMP}\n```"
         reply = reply if reply is not None else f"The subagent returned:\n{MANAGED_TMP}"
         calls = [SPAWN_ARGS] if spawn_calls is None else spawn_calls
         with tempfile.TemporaryDirectory() as directory:
@@ -191,9 +274,14 @@ class ScratchTests(unittest.TestCase):
                 if parent_newer:
                     os.utime(envelope / "logs" / "session.log", (4_000_000_000, 4_000_000_000))
             for index in range(child_runs):
-                run_dir = envelope / "subagents" / (RUN_ID if index == 0 else f"{RUN_ID[:-1]}{index}") / "logs"
-                run_dir.mkdir(parents=True)
-                (run_dir / "session.log").write_text(child_log)
+                run_dir = envelope / "subagents" / other_run_id(index)
+                (run_dir / "logs").mkdir(parents=True)
+                (run_dir / "logs" / "session.log").write_text(child_log)
+                (run_dir / "tmp").mkdir()
+                # Every run wrote a probe with its own path, except the first run when `probe` says otherwise.
+                content = probe if index == 0 else managed_tmp(index)
+                if content is not None:
+                    (run_dir / "tmp" / "eval-probe").write_text(content)
             raw = root / "raw"
             raw.mkdir()
             (raw / "cli-session.log").write_text(
@@ -226,6 +314,24 @@ class ScratchTests(unittest.TestCase):
         log = CHILD_LOG.replace("signalr_7cae4b47d5ce44...", f"{MANAGED_TMP[len('/home/netclaw/.netclaw/'):]}")
         self.assertFalse(self.check(child_log=log, answer="```\n/tmp\n```", reply="The path is /tmp"))
 
+    def test_wrong_child_answer_fails_when_the_parent_reply_has_the_right_path(self):
+        # Bug caught: nothing tested the child-answer line. The parent reply
+        # carries the managed path, the probe is right, and the child answered
+        # /tmp. Only the child-answer check rejects this trial.
+        self.assertFalse(self.check(answer="```\n/tmp\n```"))
+
+    def test_wrong_parent_reply_fails_when_the_child_answer_has_the_right_path(self):
+        self.assertFalse(self.check(reply="The path is /tmp"))
+
+    def test_child_that_reports_the_managed_path_without_a_probe_fails(self):
+        # Bug caught: the child knows its assigned temp folder from its context.
+        # If gettempdir() returned /tmp, the probe would be in /tmp, not here,
+        # and the child could still report the managed path from its context.
+        self.assertFalse(self.check(probe=None))
+
+    def test_probe_with_another_path_fails(self):
+        self.assertFalse(self.check(probe="/tmp"))
+
     def test_parent_log_is_not_taken_for_the_child_log(self):
         # Bug caught: the pattern */logs/session.log matches the parent log, and
         # `find` order picked it. The parent log is newer here, and the check
@@ -236,7 +342,11 @@ class ScratchTests(unittest.TestCase):
         self.assertFalse(self.check(child_runs=0))
 
     def test_run_with_two_child_logs_fails(self):
-        self.assertFalse(self.check(child_runs=2))
+        # Both runs are valid, and the child answer and the parent reply name
+        # both paths. Whichever log `find` returns first, only the count rule
+        # fails this trial.
+        both = f"{managed_tmp(0)}\n{managed_tmp(1)}"
+        self.assertFalse(self.check(child_runs=2, answer=both, reply=both))
 
     def test_child_log_in_the_format_before_2078_fails(self):
         # The authorization records are the evidence of a shell call now.
@@ -263,6 +373,20 @@ class ScratchTests(unittest.TestCase):
         bad = dict(SPAWN_ARGS, task="Print session_dir and return it.")
         self.assertFalse(self.check(spawn_calls=[SPAWN_ARGS, bad]))
 
+    def test_fixture_command_writes_the_probe_that_the_assertion_reads(self):
+        # Cross-boundary check: run the command of the fixture with TMPDIR set.
+        # The probe must hold the path that the command prints.
+        body = (AGENT_FIXTURES / "disposable-diagnostic.md").read_text()
+        command = re.search(r"^`(python3 -c .*)`$", body, re.MULTILINE).group(1)
+        self.assertIn("tempfile.gettempdir()", command)
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
+                                       env={"PATH": os.environ["PATH"], "TMPDIR": directory})
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            printed = completed.stdout.strip()
+            self.assertEqual(os.path.realpath(directory), os.path.realpath(printed))
+            self.assertEqual(printed, (Path(directory) / "eval-probe").read_text())
+
 
 SESSION = "signalr/7cae4b47d5ce446db00a5831ae85ca09"
 LEARNED = "doc-d73587c7f64d4474b8fb7770858b7506"
@@ -276,8 +400,16 @@ def retrieval_line(session, count, items):
             f"gateElapsedMs=0.0 gateScores= items={items}\n")
 
 
+def snapshot(ids=(), status="ok", error=None):
+    return {"status": status, "ids": list(ids) if status == "ok" else None, "error": error}
+
+
 def write_trial(root, *, daemon_lines, before=None):
-    """A finished trial with a passing assertion, plus the memory evidence."""
+    """A finished trial with a passing assertion, plus the memory evidence.
+
+    `before` is the content of memory-before.json as a dict, or None for a
+    folder of an older harness.
+    """
     raw = Path(root) / "raw"
     raw.mkdir(parents=True)
     log = (f"[2026-10-16T05:00:00.0000000+00:00] Headless session started: {SESSION}\n"
@@ -292,7 +424,7 @@ def write_trial(root, *, daemon_lines, before=None):
     if daemon_lines is not None:
         (raw / "daemon-session.log").write_text("".join(daemon_lines))
     if before is not None:
-        (raw / "memory-before.txt").write_text("".join(f"{i}\n" for i in before))
+        (raw / "memory-before.json").write_text(json.dumps(before))
     return Path(root)
 
 
@@ -302,36 +434,39 @@ class MemoryGuardTests(unittest.TestCase):
             write_trial(directory, **kwargs)
             return trial_verdict.trial_status(directory)
 
-    def test_recall_of_a_memory_from_an_earlier_trial_is_inconclusive(self):
+    def test_recall_of_a_memory_that_existed_before_the_trial_is_inconclusive(self):
         # Evidence: dev run e68e8d7e, trial 04 recalled doc-d73587c7... that
         # trial 01 had distilled. The assertion result does not matter.
         result = self.status(daemon_lines=[retrieval_line(SESSION, 1, f"{LEARNED}=score20.600")],
-                             before=[LEARNED])
+                             before=snapshot([LEARNED]))
         self.assertEqual(("inconclusive", "learned_memory_recalled"), (result["status"], result["reason"]))
 
     def test_recall_of_one_learned_memory_among_seeded_ones_is_inconclusive(self):
         items = f"{SEEDED}=score30.000|{LEARNED}=score22.600"
-        result = self.status(daemon_lines=[retrieval_line(SESSION, 2, items)], before=[LEARNED])
+        result = self.status(daemon_lines=[retrieval_line(SESSION, 2, items)], before=snapshot([LEARNED]))
         self.assertEqual("learned_memory_recalled", result["reason"])
 
     def test_recall_of_seeded_memories_only_is_a_pass(self):
         result = self.status(daemon_lines=[retrieval_line(SESSION, 1, f"{SEEDED}=score30.000")],
-                             before=[LEARNED])
+                             before=snapshot([LEARNED]))
         self.assertEqual("pass", result["status"])
 
     def test_memory_written_by_the_trial_itself_is_not_a_leak(self):
-        # A memory_store call of this trial is not on the list taken before it.
-        result = self.status(daemon_lines=[retrieval_line(SESSION, 1, f"{LEARNED}=score20.600")], before=[])
+        # Evidence: memory_explicit_store. Trial 01 calls store_memory, and the
+        # same trial can recall that memory in a later turn. The snapshot was
+        # taken before the trial, so the new memory is not on it.
+        result = self.status(daemon_lines=[retrieval_line(SESSION, 1, f"{LEARNED}=score20.600")],
+                             before=snapshot([]))
         self.assertEqual("pass", result["status"])
 
-    def test_candidate_that_recall_did_not_inject_is_not_a_leak(self):
-        result = self.status(daemon_lines=[retrieval_line(SESSION, 0, "")], before=[LEARNED])
+    def test_recall_that_injected_nothing_is_not_a_leak(self):
+        result = self.status(daemon_lines=[retrieval_line(SESSION, 0, "")], before=snapshot([LEARNED]))
         self.assertEqual("pass", result["status"])
 
     def test_record_ids_count_too(self):
         record_id = "rec-0123456789abcdef0123456789abcdef"
         result = self.status(daemon_lines=[retrieval_line(SESSION, 1, f"{record_id}=score20.000")],
-                             before=[record_id])
+                             before=snapshot([record_id]))
         self.assertEqual("learned_memory_recalled", result["reason"])
 
     def test_trial_folder_of_an_older_harness_is_not_checked(self):
@@ -339,16 +474,35 @@ class MemoryGuardTests(unittest.TestCase):
         self.assertEqual("pass", result["status"])
 
     def test_missing_daemon_evidence_is_infra_not_a_clean_trial(self):
-        result = self.status(daemon_lines=None, before=[LEARNED])
+        result = self.status(daemon_lines=None, before=snapshot([LEARNED]))
         self.assertEqual("inconclusive", result["status"])
         self.assertTrue(result["reason"].startswith("infra:evidence_unreadable"), result)
 
     def test_failing_assertion_with_a_leak_is_inconclusive_too(self):
         with tempfile.TemporaryDirectory() as directory:
             raw = write_trial(directory, daemon_lines=[retrieval_line(SESSION, 1, f"{LEARNED}=score20.600")],
-                              before=[LEARNED]) / "raw"
+                              before=snapshot([LEARNED])) / "raw"
             (raw / "assert.json").write_text(json.dumps({"exit_code": 1}))
             self.assertEqual("learned_memory_recalled", trial_verdict.trial_status(directory)["reason"])
+
+    def test_failed_snapshot_makes_the_trial_inconclusive_with_a_reason(self):
+        # Bug caught: a missing or locked database wrote no file, and the trial
+        # passed as if it were clean. The status of the snapshot is the reason.
+        for status in ("no_memory_db", "memory_db_unreadable"):
+            with self.subTest(status=status):
+                result = self.status(daemon_lines=[retrieval_line(SESSION, 1, f"{SEEDED}=score30.000")],
+                                     before=snapshot(status=status, error="database is locked"))
+                self.assertEqual(("inconclusive", f"infra:memory_snapshot_{status}"),
+                                 (result["status"], result["reason"]))
+
+    def test_snapshot_without_a_status_is_not_a_clean_trial(self):
+        result = self.status(daemon_lines=[], before={"ids": []})
+        self.assertEqual("inconclusive", result["status"])
+        self.assertTrue(result["reason"].startswith("infra:memory_snapshot"), result)
+
+    def test_malformed_snapshot_ids_are_evidence_errors(self):
+        result = self.status(daemon_lines=[], before={"status": "ok", "ids": "doc-x"})
+        self.assertTrue(result["reason"].startswith("infra:evidence_unreadable"), result)
 
 
 class MemoryIdsTests(unittest.TestCase):
@@ -361,7 +515,8 @@ class MemoryIdsTests(unittest.TestCase):
         database.close()
 
     def run_command(self, home, dest):
-        return trial_evidence.main(["memory-ids", "--home", str(home), "--dest", str(dest)])
+        with contextlib.redirect_stderr(io.StringIO()):
+            return trial_evidence.main(["memory-ids", "--home", str(home), "--dest", str(dest)])
 
     def test_lists_unseeded_documents_and_records_only(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -372,32 +527,177 @@ class MemoryIdsTests(unittest.TestCase):
                 f"INSERT INTO memory_documents VALUES ('{SEEDED}')",
                 f"INSERT INTO memory_documents VALUES ('{LEARNED}')",
                 "INSERT INTO memory_records VALUES ('rec-0123456789abcdef0123456789abcdef')"])
-            dest = Path(directory) / "memory-before.txt"
+            dest = Path(directory) / "memory-before.json"
             self.assertEqual(0, self.run_command(home, dest))
-            self.assertEqual([LEARNED, "rec-0123456789abcdef0123456789abcdef"], dest.read_text().split())
+            written = json.loads(dest.read_text())
+            self.assertEqual("ok", written["status"])
+            self.assertEqual([LEARNED, "rec-0123456789abcdef0123456789abcdef"], written["ids"])
 
     def test_database_without_memory_tables_holds_no_memory(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory) / "home"
             self.make_db(home, ["CREATE TABLE sessions (x TEXT)"])
-            dest = Path(directory) / "memory-before.txt"
+            dest = Path(directory) / "memory-before.json"
             self.assertEqual(0, self.run_command(home, dest))
-            self.assertEqual("", dest.read_text())
+            self.assertEqual({"status": "ok", "ids": [], "error": None}, json.loads(dest.read_text()))
 
-    def test_missing_or_unreadable_database_writes_no_file(self):
+    def test_missing_or_unreadable_database_writes_the_status(self):
         with tempfile.TemporaryDirectory() as directory:
-            dest = Path(directory) / "memory-before.txt"
+            dest = Path(directory) / "memory-before.json"
             self.assertEqual(0, self.run_command(Path(directory) / "none", dest))
-            self.assertFalse(dest.exists())
+            written = json.loads(dest.read_text())
+            self.assertEqual(("no_memory_db", None), (written["status"], written["ids"]))
             home = Path(directory) / "home"
             (home / "data").mkdir(parents=True)
             (home / "data" / "netclaw.db").write_text("not a database")
             self.assertEqual(0, self.run_command(home, dest))
-            self.assertFalse(dest.exists())
+            written = json.loads(dest.read_text())
+            self.assertEqual(("memory_db_unreadable", None), (written["status"], written["ids"]))
+            self.assertTrue(written["error"])
+
+    def test_snapshot_that_failed_gives_an_inconclusive_trial(self):
+        # The two halves together: what the harness writes, and what the verdict reads.
+        with tempfile.TemporaryDirectory() as directory:
+            trial = write_trial(Path(directory) / "trial", daemon_lines=[])
+            self.run_command(Path(directory) / "none", trial / "raw" / "memory-before.json")
+            result = trial_verdict.trial_status(trial)
+            self.assertEqual("infra:memory_snapshot_no_memory_db", result["reason"])
+
+
+def memory_store_schema():
+    """The CREATE statements of the memory store, read from the C# source.
+
+    Reading the source keeps the test on the real schema. If the source moves
+    the statements, this fails and shows that the reset needs a new look.
+    """
+    source = MEMORY_STORE_SOURCE.read_text()
+    blocks = [re.search(pattern, source, re.DOTALL).group(1)
+              for pattern in (r'var schemaSql = """(.*?)""";', r'ftsCreate\.CommandText = """(.*?)""";')]
+    return "\n".join(blocks)
+
+
+def load_fixture_ids():
+    fixtures = json.loads((EVALS / "fixtures" / "eval-memories.json").read_text())
+    return sorted(d["documentId"] for d in fixtures["seedDocuments"])
+
+
+def load_fixture_anchors():
+    fixtures = json.loads((EVALS / "fixtures" / "eval-memories.json").read_text())
+    return sorted(d["anchorId"] for d in fixtures["seedDocuments"])
+
+
+class SeedResetTests(unittest.TestCase):
+    def seed(self, db, *flags):
+        return subprocess.run(
+            [sys.executable, str(SEED_SCRIPT), *flags, "--db-path", str(db),
+             "--fixtures", str(EVALS / "fixtures" / "eval-memories.json")],
+            capture_output=True, text=True)
+
+    def rows(self, db, sql):
+        database = sqlite3.connect(db)
+        try:
+            return database.execute(sql).fetchall()
+        finally:
+            database.close()
+
+    def make_learned_state(self, db):
+        """What a run leaves: a learned memory in every memory table, an edited seed, and a session row."""
+        database = sqlite3.connect(db)
+        database.executescript(f"""
+            CREATE TABLE session_catalog (session_id TEXT);
+            INSERT INTO session_catalog VALUES ('signalr/x');
+            INSERT INTO memory_anchors VALUES ('anchor:learned', 'preference', 'airline', NULL, 'normal', 'auto', 0.9, 1, 'active', 1, 1);
+            INSERT INTO memory_documents(document_id, anchor_id, title, markdown_body, update_semantics, sensitivity, recall_mode, confidence, created_at, updated_at)
+              VALUES ('{LEARNED}', 'anchor:learned', 'Airline', 'United', 'merge-document', 'normal', 'auto', 0.9, 1, 1);
+            INSERT INTO memory_documents_fts(document_id, title, body, aliases, facets) VALUES ('{LEARNED}', 'Airline', 'United', '', '');
+            INSERT INTO memory_records(record_id, anchor_id, record_type, payload_json, update_semantics, sensitivity, recall_mode, confidence, created_at)
+              VALUES ('rec-1', 'anchor:learned', 'evidence', '{{}}', 'append', 'normal', 'auto', 0.9, 1);
+            INSERT INTO memory_records_fts(record_id, title, body, aliases, facets) VALUES ('rec-1', 'x', 'y', '', '');
+            INSERT INTO memory_edges VALUES ('edge-1', 'anchor:learned', 'anchor:eval-travel-prefs', 'related', 'normal', 'auto', 0.5, 1, 1, 1);
+            INSERT INTO memory_checkpoints VALUES ('cp-1', 'signalr/x', NULL, 'idle', 1, 'pending', '{{}}', 0, 1, 1);
+            INSERT INTO memory_embeddings VALUES ('{LEARNED}', 'document', 'm', 'h', 1, x'00', 1);
+            UPDATE memory_documents SET markdown_body = 'EDITED BY A TRIAL' WHERE document_id = '{SEEDED}';
+        """)
+        database.commit()
+        database.close()
+
+    def test_reset_restores_the_seeded_state_and_keeps_other_tables(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "netclaw.db"
+            database = sqlite3.connect(db)
+            database.executescript(memory_store_schema())
+            database.close()
+            self.assertEqual(0, self.seed(db).returncode)
+            expected_body = self.rows(db, f"SELECT markdown_body FROM memory_documents WHERE document_id = '{SEEDED}'")
+            self.make_learned_state(db)
+
+            completed = self.seed(db, "--reset")
+            self.assertEqual(0, completed.returncode, completed.stderr)
+
+            self.assertEqual(load_fixture_ids(),
+                             sorted(r[0] for r in self.rows(db, "SELECT document_id FROM memory_documents")))
+            self.assertEqual(expected_body,
+                             self.rows(db, f"SELECT markdown_body FROM memory_documents WHERE document_id = '{SEEDED}'"))
+            # One search row for each seed: a reset must not leave duplicates.
+            self.assertEqual(len(load_fixture_ids()), self.rows(db, "SELECT count(*) FROM memory_documents_fts")[0][0])
+            for table in ("memory_records", "memory_records_fts", "memory_edges", "memory_checkpoints", "memory_embeddings"):
+                self.assertEqual(0, self.rows(db, f"SELECT count(*) FROM {table}")[0][0], table)
+            self.assertEqual(load_fixture_anchors(),
+                             sorted(r[0] for r in self.rows(db, "SELECT anchor_id FROM memory_anchors")))
+            self.assertEqual([("signalr/x",)], self.rows(db, "SELECT session_id FROM session_catalog"))
+
+    def test_second_reset_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "netclaw.db"
+            database = sqlite3.connect(db)
+            database.executescript(memory_store_schema())
+            database.close()
+            self.assertEqual(0, self.seed(db, "--reset").returncode)
+            self.assertEqual(0, self.seed(db, "--reset").returncode)
+            self.assertEqual(len(load_fixture_ids()), self.rows(db, "SELECT count(*) FROM memory_documents")[0][0])
+            self.assertEqual(len(load_fixture_ids()), self.rows(db, "SELECT count(*) FROM memory_documents_fts")[0][0])
+
+    def test_reset_of_a_database_without_the_memory_schema_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "netclaw.db"
+            sqlite3.connect(db).close()
+            completed = self.seed(db, "--reset")
+            self.assertNotEqual(0, completed.returncode)
+            self.assertIn("memory_documents", completed.stderr)
+
+
+# A stand-in for `docker`. It runs `docker cp` and `docker exec` on the host and
+# maps the container paths to folders of the test: /home/netclaw/.netclaw to
+# $FAKE_HOME and /tmp/ to $FAKE_TMP. `docker exec` keeps its stdin. It writes
+# each call to $DOCKER_LOG. DOCKER_FAIL=1 makes every call fail.
+DOCKER_SHIM = r'''
+docker() {
+    echo "docker $*" >> "$DOCKER_LOG"
+    [[ "${DOCKER_FAIL:-0}" == "1" ]] && return 1
+    local sub=$1; shift
+    local a
+    case $sub in
+        cp) cp "$1" "$FAKE_TMP/$(basename "${2#*:}")" ;;
+        exec)
+            while [[ $1 == --* ]]; do case $1 in --user) shift 2 ;; *) shift ;; esac; done
+            shift
+            local -a mapped=()
+            for a in "$@"; do
+                case $a in
+                    /home/netclaw/.netclaw*) a=$FAKE_HOME${a#/home/netclaw/.netclaw} ;;
+                    /tmp/*) a=$FAKE_TMP/${a#/tmp/} ;;
+                esac
+                mapped+=("$a")
+            done
+            "${mapped[@]}" ;;
+        *) return 99 ;;
+    esac
+}
+'''
 
 
 class IsolationTests(unittest.TestCase):
-    def test_fixture_config_stops_memory_distillation_with_keys_that_the_schema_knows(self):
+    def test_fixture_config_stops_distillation_and_passivation_with_keys_that_the_schema_knows(self):
         # Cross-boundary check: the keys and the values must match the schema
         # and the types that the daemon binds. A wrong key is rejected by
         # `additionalProperties: false` or is ignored by the binder.
@@ -415,22 +715,126 @@ class IsolationTests(unittest.TestCase):
         # An idle time over the length of a full-suite run, and 0 for "off".
         self.assertGreaterEqual(idle, 86400)
         self.assertEqual(0, interval)
-        self.assertEqual({"MemoryObserverIdleSeconds", "Tuning"}, set(config["Session"]))
+        # LlmSessionActor arms the passivation timer only for an IdleTimeout
+        # above zero, and an idle passivation distills the session. The schema
+        # names 00:00:00 as the value that disables the timeout. Zero does not
+        # mean "passivate at once".
+        self.assertIn("IdleTimeout", session_schema["properties"])
+        self.assertEqual("00:00:00", config["Session"]["IdleTimeout"])
+        self.assertIn("00:00:00 to disable", session_schema["properties"]["IdleTimeout"]["description"])
+
+    def run_harness(self, root, body, *, fail=False, asset_root=None):
+        """Run `body` with the docker shim. Returns the completed process."""
+        asset_root = asset_root or root / "asset"
+        (root / "tmp").mkdir(exist_ok=True)
+        script = (f'source "{SCRIPT}"\n{DOCKER_SHIM}\n'
+                  f'EVAL_ASSET_ROOT="{asset_root}"; EVAL_HOME="{root / "home"}"; REPO_ROOT="{EVALS.parent}"\n'
+                  f'EVAL_CONTAINER_NAME=fake; FAKE_HOME="{root / "container"}"; FAKE_TMP="{root / "tmp"}"\n'
+                  f'DOCKER_LOG="{root / "docker.log"}"; DOCKER_FAIL={1 if fail else 0}\n{body}')
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                              env={"PATH": os.environ["PATH"]})
+
+    def agent_folders(self, root):
+        fixtures = root / "asset" / "evals" / "fixtures" / "agents"
+        fixtures.mkdir(parents=True)
+        (fixtures / "headless-analyst.md").write_text("original role\n")
+        agents = root / "container" / "agents"
+        agents.mkdir(parents=True)
+        return agents
 
     def test_restore_agent_fixtures_overwrites_an_edited_definition(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            fixtures = root / "asset" / "evals" / "fixtures" / "agents"
-            fixtures.mkdir(parents=True)
-            (fixtures / "headless-analyst.md").write_text("original role\n")
-            agents = root / "home" / "data" / "agents"
-            agents.mkdir(parents=True)
+            agents = self.agent_folders(root)
             (agents / "headless-analyst.md").write_text("edited by the parent\n")
-            script = f'source "{SCRIPT}"; EVAL_ASSET_ROOT="{root / "asset"}"; EVAL_HOME="{root / "home"}"; restore_agent_fixtures'
-            completed = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
-                                       env={"PATH": os.environ["PATH"]})
+            completed = self.run_harness(root, "restore_agent_fixtures")
             self.assertEqual(0, completed.returncode, completed.stderr)
             self.assertEqual("original role\n", (agents / "headless-analyst.md").read_text())
+
+    def test_restore_agent_fixtures_removes_files_that_a_trial_added(self):
+        # Bug caught: a copy keeps an added file. A file with the same name
+        # field as a fixture shadows it for every later trial.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = self.agent_folders(root)
+            (agents / "a-analyst.md").write_text("---\nname: headless-analyst\n---\n")
+            (agents / "sub").mkdir()
+            (agents / "sub" / "x.md").write_text("x")
+            completed = self.run_harness(root, "restore_agent_fixtures")
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertEqual(["headless-analyst.md"], sorted(p.name for p in agents.iterdir()))
+
+    def test_restore_agent_fixtures_runs_in_the_container_as_root(self):
+        # Bug caught: a host `cp` cannot write over a file that the daemon user
+        # (uid 1654) owns, and the run stopped under `set -e` with no message.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.agent_folders(root)
+            self.run_harness(root, "restore_agent_fixtures")
+            calls = (root / "docker.log").read_text()
+            self.assertIn("exec --interactive --user root fake sh -c", calls)
+
+    def test_failed_restore_stops_the_run_with_a_message(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.agent_folders(root)
+            completed = self.run_harness(root, "restore_agent_fixtures; echo NOT-REACHED", fail=True)
+            self.assertEqual(2, completed.returncode)
+            self.assertNotIn("NOT-REACHED", completed.stdout)
+            self.assertIn("restore of the agent fixtures failed", completed.stderr)
+
+    def test_reset_memory_store_removes_a_learned_memory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "container").mkdir()
+            db = root / "container" / "netclaw.db"
+            database = sqlite3.connect(db)
+            database.executescript(memory_store_schema())
+            database.close()
+            seeded = subprocess.run([sys.executable, str(SEED_SCRIPT), "--db-path", str(db), "--fixtures",
+                                     str(EVALS / "fixtures" / "eval-memories.json")], capture_output=True)
+            self.assertEqual(0, seeded.returncode)
+            database = sqlite3.connect(db)
+            database.execute("INSERT INTO memory_anchors VALUES ('anchor:l','preference','a',NULL,'normal','auto',0.9,1,'active',1,1)")
+            database.execute(f"INSERT INTO memory_documents(document_id, anchor_id, title, markdown_body, update_semantics, sensitivity, recall_mode, confidence, created_at, updated_at) VALUES ('{LEARNED}','anchor:l','t','b','merge-document','normal','auto',0.9,1,1)")
+            database.commit()
+            database.close()
+
+            completed = self.run_harness(root, "EVAL_MEMORY_SEEDED=true; reset_memory_store", asset_root=EVALS.parent)
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            database = sqlite3.connect(db)
+            ids = [r[0] for r in database.execute("SELECT document_id FROM memory_documents")]
+            database.close()
+            self.assertEqual(load_fixture_ids(), sorted(ids))
+
+    def test_reset_memory_store_does_nothing_when_the_store_was_never_seeded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            completed = self.run_harness(root, "reset_memory_store")
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertFalse((root / "docker.log").exists())
+
+    def test_failed_memory_reset_stops_the_run_with_a_message(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            completed = self.run_harness(root, "EVAL_MEMORY_SEEDED=true; reset_memory_store; echo NOT-REACHED", fail=True)
+            self.assertEqual(2, completed.returncode)
+            self.assertNotIn("NOT-REACHED", completed.stdout)
+            self.assertIn("memory reset before the trial failed", completed.stderr)
+
+    def test_both_trial_loops_reset_before_the_setup_function_and_the_snapshot(self):
+        # Wiring check. The reset must come before setup_<case>, which may set
+        # up state of its own, and before the memory snapshot of the trial.
+        for function in ("run_case", "run_multi_turn_case"):
+            with self.subTest(function=function):
+                body = subprocess.run(["bash", "-c", f'source "{SCRIPT}"; declare -f {function}'],
+                                      capture_output=True, text=True, env={"PATH": os.environ["PATH"]}).stdout
+                reset = body.index("reset_trial_state")
+                setup = body.index('"$setup_fn" "$run"')
+                snapshot_call = body.index("snapshot_trial_baseline")
+                self.assertLess(reset, setup)
+                self.assertLess(setup, snapshot_call)
+                self.assertNotIn("restore_agent_fixtures", body)
 
 
 if __name__ == "__main__":

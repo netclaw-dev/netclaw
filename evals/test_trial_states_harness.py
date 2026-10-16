@@ -185,6 +185,10 @@ class StatesCase(unittest.TestCase):
         self.script = copy / "run-evals.sh"
         self.home = self.root / "home"
         (self.home / "logs").mkdir(parents=True)
+        # The daemon creates netclaw.db at start. Without it, the memory
+        # snapshot of each trial fails and every trial is inconclusive.
+        (self.home / "data").mkdir()
+        sqlite3.connect(self.home / "data" / "netclaw.db").close()
         (self.home / "logs" / "daemon-2026-10-15.log").write_text(
             "09:00:00.000 [INF] Netclaw.Boot: before the trial session=signalr/other\n")
         self.tmp_eval = self.root / "tmp-eval"
