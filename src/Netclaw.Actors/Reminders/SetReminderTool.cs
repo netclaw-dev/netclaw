@@ -293,7 +293,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
 
         var scheduleDesc = schedule.Type switch
         {
-            ReminderScheduleType.OneShot => $"Runs once. Next execution: {nextFireStr}.",
+            ReminderScheduleType.OneShot => $"Runs once. Next execution: {nextFireStr}. The reminder deletes itself after it runs or after you cancel it.",
             ReminderScheduleType.Interval => $"Runs every {FormatInterval(schedule.Interval!.Value)}. Next execution: {nextFireStr}.",
             ReminderScheduleType.Cron => $"Runs {CronScheduleHelper.Describe(schedule.CronExpression!)}. Next execution: {nextFireStr}.",
             _ => $"Next execution: {nextFireStr}."

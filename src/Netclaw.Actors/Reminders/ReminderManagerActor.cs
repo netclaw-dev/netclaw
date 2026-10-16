@@ -33,13 +33,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
     internal const int FailurePauseThreshold = 5;
 
     /// <summary>
-    /// How long a completed one-shot keeps its definition and execution history before it
-    /// is pruned. Not configurable. Also handed to Akka.Reminders as its
+    /// How long the tombstone and the execution history of an ended one-shot stay before the sweep
+    /// deletes them. Not configurable. Also handed to Akka.Reminders as its
     /// <c>PruneOlderThan</c> (the library's own default), so both stores agree.
     /// </summary>
     internal static readonly TimeSpan TerminalRetention = TimeSpan.FromDays(12);
 
-    /// <summary>How often completed one-shots past <see cref="TerminalRetention"/> are pruned.</summary>
+    /// <summary>How often the sweep ends leftover one-shots and purges tombstones past <see cref="TerminalRetention"/>.</summary>
     internal static readonly TimeSpan TerminalPruneInterval = TimeSpan.FromHours(12);
 
     internal static readonly object TerminalPruneTimerKey = new();
@@ -110,7 +110,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         ReceiveAsync<ReminderExecutionTerminated>(HandleExecutionTerminatedAsync);
 
         ReceiveAsync<ReconcileReminders>(_ => HandleReconcileAsync());
-        ReceiveAsync<PruneTerminalReminders>(_ => PruneTerminalRemindersAsync());
+        ReceiveAsync<PruneTerminalReminders>(_ => SweepEndedOneShotsAsync());
         Receive<GetReminderHealthQuery>(_ => HandleGetHealth());
         ReceiveAsync<GetReminderStatusQuery>(HandleGetStatusAsync);
     }
@@ -234,6 +234,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
 
         var exists = _definitionStore.Exists(id);
         var existing = exists ? _definitionStore.Get(id) : null;
+        var tombstone = ReadTombstone(id);
 
         // The id collides with a reminder the caller cannot see. Reject the save
         // outright — the same "not found" shape a genuinely missing id gets — for
@@ -253,10 +254,25 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             return;
         }
 
+        // The id of an ended one-shot outside the caller's audience is blocked until the sweep purges its
+        // tombstone. The reply is the same "not found" as for a definition outside the audience.
+        if (existing is null && tombstone is not null && !CanAccessAudience(cmd.Authorization, tombstone.Audience))
+        {
+            LogAudienceDenied("save", id, tombstone.Audience, cmd.Authorization);
+            replyTo.Tell(new ReminderSavedResponse(
+                id,
+                title,
+                Success: false,
+                NextFire: null,
+                Error: ReminderSaveError.NotFound,
+                ErrorMessage: $"Reminder '{id.Value}' was not found."));
+            return;
+        }
+
         switch (cmd.WriteMode)
         {
-            // A retained completed one-shot is history, not a live reminder: its id is free again.
-            case ReminderWriteMode.CreateOnly when exists && existing is not { Enabled: false, TerminalOutcome: ReminderTerminalOutcome.Completed }:
+            // The id of an ended one-shot is free again: only a definition makes an id exist.
+            case ReminderWriteMode.CreateOnly when exists:
                 replyTo.Tell(new ReminderSavedResponse(
                     id,
                     title,
@@ -266,7 +282,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                     ErrorMessage: $"Reminder '{id.Value}' already exists."));
                 return;
 
-            case ReminderWriteMode.Replace when !exists:
+            case ReminderWriteMode.Replace when !exists && tombstone is null:
                 replyTo.Tell(new ReminderSavedResponse(
                     id,
                     title,
@@ -320,11 +336,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         normalized.UpdatedAtMs = now.ToUnixTimeMilliseconds();
 
         if (exists)
-        {
             await CancelScheduleOnlyAsync(id);
-            if (existing is { Enabled: false, TerminalOutcome: ReminderTerminalOutcome.Completed })
-                _historyStore.DeleteHistory(id);
-        }
 
         DateTimeOffset? nextFire = null;
         if (normalized.Enabled)
@@ -360,6 +372,16 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         else
         {
             await CancelScheduleOnlyAsync(id);
+        }
+
+        // A re-arm of an ended id starts a new reminder. The schedule came first, so a failed schedule
+        // keeps the old data. The history goes first: the tombstone is its only audience anchor, and a
+        // new reminder can have a lower audience than the old one. A tombstone file that Netclaw cannot
+        // read counts too, because the history behind it has no audience to check.
+        if (_definitionStore.TombstoneExists(id))
+        {
+            _historyStore.DeleteHistory(id);
+            _definitionStore.DeleteTombstone(id);
         }
 
         _definitionStore.Save(normalized);
@@ -420,13 +442,37 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
     {
         var replyTo = Sender;
         var target = _definitionStore.Get(cmd.Id);
-        if (target is null || !CanAccessAudience(cmd.Authorization, target.Audience))
+        if (target is null)
         {
-            if (target is not null)
-                LogAudienceDenied("cancel", cmd.Id, target.Audience, cmd.Authorization);
+            // An ended one-shot has only a tombstone. A cancel of it changes nothing.
+            var endedTombstone = ReadTombstone(cmd.Id);
+            if (endedTombstone is not null && CanAccessAudience(cmd.Authorization, endedTombstone.Audience))
+            {
+                _log.Info("Cancel reminder '{0}': already ended ({1})", cmd.Id.Value, endedTombstone.Outcome);
+                replyTo.Tell(new ReminderCancelledResponse(
+                    cmd.Id, Found: true, AlreadyEnded: ToEndedInfo(endedTombstone, includeInstructions: false)));
+                return;
+            }
+
+            if (endedTombstone is not null)
+                LogAudienceDenied("cancel", cmd.Id, endedTombstone.Audience, cmd.Authorization);
 
             _log.Info("Cancel reminder '{0}': not found", cmd.Id.Value);
             replyTo.Tell(new ReminderCancelledResponse(cmd.Id, Found: false));
+            return;
+        }
+
+        if (!CanAccessAudience(cmd.Authorization, target.Audience))
+        {
+            LogAudienceDenied("cancel", cmd.Id, target.Audience, cmd.Authorization);
+            _log.Info("Cancel reminder '{0}': not found", cmd.Id.Value);
+            replyTo.Tell(new ReminderCancelledResponse(cmd.Id, Found: false));
+            return;
+        }
+
+        if (target.Schedule.Type == ReminderScheduleType.OneShot)
+        {
+            replyTo.Tell(await CancelOneShotAsync(target));
             return;
         }
 
@@ -436,10 +482,45 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         replyTo.Tell(new ReminderCancelledResponse(cmd.Id, response.Found));
     }
 
+    /// <summary>
+    /// A cancel ends a one-shot with the outcome <c>Cancelled</c>. A run that is active continues, and its
+    /// settlement keeps the tombstone (design D5). A matching tombstone means the one-shot already ended in
+    /// a crash window, so the cancel finishes that end and changes no outcome.
+    /// </summary>
+    private async Task<ReminderCancelledResponse> CancelOneShotAsync(ReminderDefinition target)
+    {
+        var existingTombstone = ReadTombstone(target.Id);
+        if (existingTombstone is not null && TombstoneMatches(existingTombstone, target))
+        {
+            await FinishEndedOneShotAsync(target, envelope: null, EnvelopeAction.None, nackReason: null);
+            _log.Info("Cancel reminder '{0}': already ended ({1})", target.Id.Value, existingTombstone.Outcome);
+            return new ReminderCancelledResponse(
+                target.Id, Found: true, AlreadyEnded: ToEndedInfo(existingTombstone, includeInstructions: false));
+        }
+
+        var ended = await EndOneShotAsync(
+            target,
+            ReminderTerminalOutcome.Cancelled,
+            lastError: null,
+            _timeProvider.GetUtcNow(),
+            envelope: null,
+            EnvelopeAction.None);
+        if (!ended)
+        {
+            return new ReminderCancelledResponse(
+                target.Id,
+                Found: true,
+                ErrorMessage: $"Reminder '{target.Id.Value}' was not cancelled. Netclaw could not write the end record. The reminder did not change.");
+        }
+
+        _log.Info("Cancel reminder '{0}': cancelled and deleted", target.Id.Value);
+        return new ReminderCancelledResponse(target.Id, Found: true, Deleted: true);
+    }
+
     private async Task HandlePermanentDeleteAsync(DeleteReminderCommand cmd)
     {
         var replyTo = Sender;
-        var found = _definitionStore.Exists(cmd.Id);
+        var found = _definitionStore.Exists(cmd.Id) || _definitionStore.TombstoneExists(cmd.Id);
         await DeleteReminderInternalAsync(cmd.Id);
 
         _log.Info("Permanently delete reminder '{0}': {1}", cmd.Id.Value, found ? "deleted" : "not found");
@@ -464,7 +545,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
     {
         var definition = _definitionStore.Get(id);
         if (definition is null)
-            return new ReminderStateResponse(id, Found: false, Enabled: false, ErrorMessage: "Reminder not found.");
+            return NotFoundOrEndedState(id);
 
         if (!definition.Enabled)
             return new ReminderStateResponse(id, Found: true, Enabled: false);
@@ -485,7 +566,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
     }
 
     /// <summary>
-    /// Permanently removes a reminder definition, its schedule, history, and process state.
+    /// Permanently removes a reminder definition, its schedule, history, tombstone, and process state.
     /// Only an explicit delete command uses this path.
     /// </summary>
     private async Task DeleteReminderInternalAsync(ReminderId id)
@@ -504,15 +585,35 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             throw;
         }
 
+        // The history is gone, so the tombstone has nothing left to anchor. Delete it before the
+        // definition so reconciliation can retry a partial cleanup.
+        _definitionStore.DeleteTombstone(id);
+
         // Delete the definition last so reconciliation can retry a partial cleanup.
         _definitionStore.Delete(id);
+    }
+
+    /// <summary>
+    /// The reply of enable and disable for an id without a definition. An ended one-shot has no definition to
+    /// change, and the reply says so. These commands are operator-only, so no audience gate applies.
+    /// </summary>
+    private ReminderStateResponse NotFoundOrEndedState(ReminderId id)
+    {
+        var tombstone = ReadTombstone(id);
+        return new ReminderStateResponse(
+            id,
+            Found: false,
+            Enabled: false,
+            ErrorMessage: tombstone is null
+                ? "Reminder not found."
+                : ToEndedInfo(tombstone, includeInstructions: false).DescribeEnd(id));
     }
 
     private async Task<ReminderStateResponse> EnableReminderInternalAsync(ReminderId id)
     {
         var definition = _definitionStore.Get(id);
         if (definition is null)
-            return new ReminderStateResponse(id, Found: false, Enabled: false, ErrorMessage: "Reminder not found.");
+            return NotFoundOrEndedState(id);
 
         var candidate = definition with
         {
@@ -576,11 +677,26 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         try
         {
             var definition = _definitionStore.Get(cmd.Id);
-            if (definition is null || !CanAccessAudience(cmd.Authorization, definition.Audience))
+            if (definition is null)
             {
-                if (definition is not null)
-                    LogAudienceDenied("get", cmd.Id, definition.Audience, cmd.Authorization);
+                // The prompt of a Failed tombstone has one read surface: status. A get reply never holds it.
+                var ended = ReadTombstone(cmd.Id);
+                if (ended is not null && CanAccessAudience(cmd.Authorization, ended.Audience))
+                {
+                    replyTo.Tell(new GetReminderResponse(null, ToEndedInfo(ended, includeInstructions: false)));
+                    return;
+                }
 
+                if (ended is not null)
+                    LogAudienceDenied("get", cmd.Id, ended.Audience, cmd.Authorization);
+
+                replyTo.Tell(new GetReminderResponse(null));
+                return;
+            }
+
+            if (!CanAccessAudience(cmd.Authorization, definition.Audience))
+            {
+                LogAudienceDenied("get", cmd.Id, definition.Audience, cmd.Authorization);
                 replyTo.Tell(new GetReminderResponse(null));
                 return;
             }
@@ -612,9 +728,28 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
 
         if (definition is null)
         {
-            _log.Error("Reminder fired for missing definition '{0}'. Cancelling orphaned schedule.", reminderId.Value);
+            // A fire after the end is normal after a crash: the end stopped before it cancelled the
+            // schedule, or a re-arm stopped after it scheduled the new occurrence (design D4, D6).
+            if (ReadTombstone(reminderId) is not null)
+            {
+                _log.Info(
+                    "Reminder '{0}' fired after it ended. Cancelling the schedule and acknowledging the occurrence.",
+                    reminderId.Value);
+            }
+            else
+            {
+                _log.Error("Reminder fired for missing definition '{0}'. Cancelling orphaned schedule.", reminderId.Value);
+            }
+
             await CancelScheduleOnlyAsync(reminderId);
             await _client!.AckAsync(envelope);
+            return;
+        }
+
+        // A matching tombstone means the one-shot already ended, so the fire runs nothing (design D4).
+        if (definition.Schedule.Type == ReminderScheduleType.OneShot
+            && await TryFinishMatchedTombstoneAsync(definition, envelope))
+        {
             return;
         }
 
@@ -629,6 +764,21 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         if (definition.ExpiresAt is { } expiresAt
             && expiresAt <= _timeProvider.GetUtcNow())
         {
+            if (definition.Schedule.Type == ReminderScheduleType.OneShot)
+            {
+                // The tombstone comes before the ack. If the ack came first and the process stopped, the
+                // reconciliation would read Delivered and record Completed for a reminder that did not run.
+                _log.Info("Reminder '{0}' has expired (expiresAt={1}), ending it", reminderId.Value, expiresAt);
+                await EndOneShotAsync(
+                    definition,
+                    ReminderTerminalOutcome.Expired,
+                    $"The reminder expired at {expiresAt:u} before it fired.",
+                    _timeProvider.GetUtcNow(),
+                    envelope,
+                    EnvelopeAction.Ack);
+                return;
+            }
+
             _log.Info("Reminder '{0}' has expired (expiresAt={1}), disabling", reminderId.Value, expiresAt);
             await DisableReminderInternalAsync(reminderId);
             await _client!.AckAsync(envelope);
@@ -875,20 +1025,33 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         await AppendHistorySafelyAsync(outcome.Id, outcome.History);
 
         var definition = _definitionStore.Get(outcome.Id);
+
+        // Design D5: a settlement ends only the occurrence that it ran. A definition that another save
+        // replaced during the run, or that a cancel deleted, is not this occurrence's to change.
+        var endsOneShot = definition is { Schedule.Type: ReminderScheduleType.OneShot }
+                          && SettledOccurrenceIsCurrent(definition, execution.Envelope);
+        var supersededOneShot = definition is { Schedule.Type: ReminderScheduleType.OneShot } && !endsOneShot;
+
         if (outcome.Success && outcome.History.ToolDenied)
         {
-            await SettleDeniedExecutionAsync(outcome, execution, definition);
+            await SettleDeniedExecutionAsync(outcome, execution, definition, endsOneShot);
+            return;
+        }
+
+        if (supersededOneShot)
+        {
+            await SettleSupersededOccurrenceAsync(outcome, execution, definition!);
             return;
         }
 
         if (outcome.Success)
         {
             _deniedAlerts.Remove(outcome.Id);
-            await SettleSuccessfulExecutionAsync(outcome, execution, definition);
+            await SettleSuccessfulExecutionAsync(outcome, execution, definition, endsOneShot);
             return;
         }
 
-        await SettleFailedExecutionAsync(outcome, execution, definition);
+        await SettleFailedExecutionAsync(outcome, execution, definition, endsOneShot);
     }
 
     private async Task AppendHistorySafelyAsync(ReminderId id, HistoryRecord history)
@@ -904,15 +1067,43 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
     }
 
     /// <summary>
+    /// A run whose one-shot definition another save replaced during the run. The history row is already
+    /// written. The manager acknowledges the old occurrence and leaves the new definition and its
+    /// schedule alone. A retry of the old occurrence would run the new definition early.
+    /// </summary>
+    private async Task SettleSupersededOccurrenceAsync(
+        ReminderExecutionCompleted outcome,
+        ActiveReminderExecution execution,
+        ReminderDefinition definition)
+    {
+        _log.Warning(
+            "Reminder '{0}' was set again during a run of the occurrence due {1:u}. The run ended with success={2}. The new definition and its schedule stay.",
+            outcome.Id.Value, execution.Envelope.DueTimeUtc, outcome.Success);
+
+        try
+        {
+            var ack = await _client!.AckAsync(execution.Envelope);
+            if (ack.ResponseCode is ReminderAckResponseCode.Error)
+                EmitSettlementFailure(definition, ack.Message ?? $"Reminder acknowledgement returned {ack.ResponseCode}.");
+        }
+        catch (Exception ex)
+        {
+            EmitSettlementFailure(definition, ex.Message, ex);
+        }
+    }
+
+    /// <summary>
     /// A run in which authorization denied a tool call. The denial is deterministic, so the occurrence is
     /// acknowledged: no retry, no failure count, no auto-disable, and a recurring reminder keeps its
     /// schedule. The owner gets one alert per distinct denial until the reminder next records an ok run.
-    /// A spent one-shot is disabled but kept, because its history is the only record of the denial.
+    /// A one-shot ends as <c>Failed</c>: its tombstone keeps the denial text and the prompt, and its history
+    /// keeps the <c>denied</c> row.
     /// </summary>
     private async Task SettleDeniedExecutionAsync(
         ReminderExecutionCompleted outcome,
         ActiveReminderExecution execution,
-        ReminderDefinition? definition)
+        ReminderDefinition? definition,
+        bool endsOneShot)
     {
         var reason = outcome.ErrorMessage ?? "A tool call was denied.";
         _log.Warning("Reminder '{0}' ran with a denied tool call: {1}", outcome.Id.Value, reason);
@@ -936,45 +1127,55 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                 }));
         }
 
+        if (endsOneShot)
+        {
+            await EndOneShotAsync(
+                definition!,
+                ReminderTerminalOutcome.Failed,
+                reason,
+                _timeProvider.GetUtcNow(),
+                execution.Envelope,
+                EnvelopeAction.Ack);
+            return;
+        }
+
         try
         {
             var ack = await _client!.AckAsync(execution.Envelope);
-            if (ack.ResponseCode is ReminderAckResponseCode.Error)
-            {
-                if (definition is not null)
-                    EmitSettlementFailure(definition, ack.Message ?? $"Reminder acknowledgement returned {ack.ResponseCode}.");
-                return;
-            }
+            if (ack.ResponseCode is ReminderAckResponseCode.Error && definition is not null)
+                EmitSettlementFailure(definition, ack.Message ?? $"Reminder acknowledgement returned {ack.ResponseCode}.");
         }
         catch (Exception ex)
         {
             if (definition is not null)
                 EmitSettlementFailure(definition, ex.Message, ex);
-            return;
-        }
-
-        if (definition is { Schedule.Type: ReminderScheduleType.OneShot })
-        {
-            try
-            {
-                _definitionStore.Save(definition with
-                {
-                    Enabled = false,
-                    UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
-                });
-            }
-            catch (Exception ex)
-            {
-                EmitSettlementFailure(definition, ex.Message, ex);
-            }
         }
     }
 
     private async Task SettleSuccessfulExecutionAsync(
         ReminderExecutionCompleted outcome,
         ActiveReminderExecution execution,
-        ReminderDefinition? definition)
+        ReminderDefinition? definition,
+        bool endsOneShot)
     {
+        if (endsOneShot)
+        {
+            // The tombstone comes before the ack (design D3). If the ack fails, the matching tombstone
+            // stops the redelivery from running the reminder again.
+            if (await EndOneShotAsync(
+                    definition!,
+                    ReminderTerminalOutcome.Completed,
+                    lastError: null,
+                    _timeProvider.GetUtcNow(),
+                    execution.Envelope,
+                    EnvelopeAction.Ack))
+            {
+                _log.Info("Reminder '{0}' execution completed successfully", outcome.Id.Value);
+            }
+
+            return;
+        }
+
         if (definition is not null)
         {
             try
@@ -1016,16 +1217,14 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             return;
         }
 
-        if (definition is { Schedule.Type: ReminderScheduleType.OneShot })
-            await RetainCompletedOneShotAsync(definition);
-
         _log.Info("Reminder '{0}' execution completed successfully", outcome.Id.Value);
     }
 
     private async Task SettleFailedExecutionAsync(
         ReminderExecutionCompleted outcome,
         ActiveReminderExecution execution,
-        ReminderDefinition? definition)
+        ReminderDefinition? definition,
+        bool endsOneShot)
     {
         var reason = string.IsNullOrWhiteSpace(outcome.ErrorMessage)
             ? "Reminder execution failed."
@@ -1037,11 +1236,14 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         {
             try
             {
+                // A one-shot that reaches the threshold ends into a tombstone below. It is not saved
+                // as a disabled definition, because its fire time is in the past and enable could never run it.
+                var disables = thresholdReached && !endsOneShot;
                 definition = definition with
                 {
                     ConsecutiveFailures = count,
-                    Enabled = thresholdReached ? false : definition.Enabled,
-                    TerminalOutcome = thresholdReached ? ReminderTerminalOutcome.Failed : definition.TerminalOutcome,
+                    Enabled = disables ? false : definition.Enabled,
+                    TerminalOutcome = disables ? ReminderTerminalOutcome.Failed : definition.TerminalOutcome,
                     UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
                 };
                 _definitionStore.Save(definition);
@@ -1051,6 +1253,22 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                 EmitSettlementFailure(definition, ex.Message, ex);
                 return;
             }
+        }
+
+        if (endsOneShot && thresholdReached)
+        {
+            // The tombstone comes first, then the nack, the schedule cancel, and the delete (design D3).
+            // If the tombstone cannot be written, no nack goes out. The lease expiry redelivers the
+            // occurrence, and the next failure tries again.
+            var ended = await EndOneShotAsync(
+                definition!,
+                ReminderTerminalOutcome.Failed,
+                reason,
+                _timeProvider.GetUtcNow(),
+                execution.Envelope,
+                EnvelopeAction.Nack);
+            ReportExecutionFailure(outcome.Id, definition, count, reason, willDisable: ended);
+            return;
         }
 
         AkkaReminderProtocol.ReminderNackResponse? nack = null;
@@ -1079,6 +1297,22 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                     definition,
                     nack.Message ?? $"Negative acknowledgement returned {nack.ResponseCode}.");
             }
+        }
+
+        if (endsOneShot && occurrenceTerminal)
+        {
+            // Akka.Reminders gave up on the occurrence. The nack reply is the first sign of the end, so
+            // the tombstone follows the nack (design D3). A crash between them leaves an enabled definition with a
+            // past fire time and a terminal durable status, which the startup reconciliation ends.
+            var ended = await EndOneShotAsync(
+                definition!,
+                ReminderTerminalOutcome.Failed,
+                reason,
+                _timeProvider.GetUtcNow(),
+                envelope: null,
+                EnvelopeAction.None);
+            ReportExecutionFailure(outcome.Id, definition, count, reason, willDisable: ended);
+            return;
         }
 
         ReportExecutionFailure(
@@ -1179,13 +1413,16 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         var thresholdReached = count >= FailurePauseThreshold;
         var title = definition.Title;
 
+        // A one-shot that reaches the threshold ends into a tombstone. A recurring reminder is saved
+        // disabled and stays until an explicit delete.
+        var endsOneShot = thresholdReached && definition.Schedule.Type == ReminderScheduleType.OneShot;
         try
         {
             definition = definition with
             {
                 ConsecutiveFailures = count,
-                Enabled = thresholdReached ? false : definition.Enabled,
-                TerminalOutcome = thresholdReached ? ReminderTerminalOutcome.Failed : definition.TerminalOutcome,
+                Enabled = thresholdReached && !endsOneShot ? false : definition.Enabled,
+                TerminalOutcome = thresholdReached && !endsOneShot ? ReminderTerminalOutcome.Failed : definition.TerminalOutcome,
                 UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
             };
             _definitionStore.Save(definition);
@@ -1196,9 +1433,24 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             return;
         }
 
-        // On disable, drop any lingering schedule (there usually is none — that is the failure).
-        if (thresholdReached)
+        if (endsOneShot)
+        {
+            if (!await EndOneShotAsync(
+                    definition,
+                    ReminderTerminalOutcome.Failed,
+                    $"The reminder could not be scheduled: {reason}",
+                    _timeProvider.GetUtcNow(),
+                    envelope: null,
+                    EnvelopeAction.None))
+            {
+                return;
+            }
+        }
+        else if (thresholdReached)
+        {
+            // On disable, drop any lingering schedule (there usually is none — that is the failure).
             await CancelScheduleOnlyAsync(definition.Id);
+        }
 
         _log.Warning("Reminder '{0}' failed to schedule ({1}/{2}): {3}",
             definition.Id.Value, count, FailurePauseThreshold, reason);
@@ -1261,70 +1513,317 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             }));
     }
 
-    /// <summary>
-    /// A delivered one-shot keeps its definition (disabled, <c>Completed</c>) and its
-    /// execution history until <see cref="TerminalRetention"/> has passed.
-    /// </summary>
-    private async Task RetainCompletedOneShotAsync(ReminderDefinition definition)
+    /// <summary>What the manager does with the Akka.Reminders envelope at the end of a one-shot.</summary>
+    private enum EnvelopeAction
     {
-        await CancelScheduleOnlyAsync(definition.Id);
-        _skipCounts.Remove(definition.Id);
-        _definitionStore.Save(definition with
-        {
-            Enabled = false,
-            ConsecutiveFailures = 0,
-            TerminalOutcome = ReminderTerminalOutcome.Completed,
-            UpdatedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
-        });
+        /// <summary>No envelope is open, or the nack already went out.</summary>
+        None,
+        Ack,
+        Nack
     }
 
     /// <summary>
-    /// Removes every completed one-shot (disabled, outcome <c>Completed</c>) whose last update is
-    /// more than <see cref="TerminalRetention"/> ago, with its history. Recurring reminders and
-    /// failed one-shots are never pruned; only an explicit delete removes them. Returns the removed ids.
+    /// Design D4: a tombstone matches a definition when the definition is a one-shot and both fire times are
+    /// equal at millisecond precision. A matching tombstone means the one-shot ended, so it wins over its
+    /// definition. The id is not compared: the store reads a tombstone by the id of its definition.
     /// </summary>
-    private async Task<IReadOnlyList<ReminderId>> PruneTerminalRemindersAsync()
+    internal static bool TombstoneMatches(ReminderTombstone tombstone, ReminderDefinition definition) =>
+        definition.Schedule.Type == ReminderScheduleType.OneShot
+        && tombstone.FireAtMs == definition.Schedule.FireAtMs;
+
+    /// <summary>
+    /// Design D5: the definition is the one that ran when its fire time equals the due time of the settled
+    /// occurrence, at millisecond precision (the precision of <see cref="ReminderFireKey"/>).
+    /// </summary>
+    internal static bool SettledOccurrenceIsCurrent(ReminderDefinition definition, ReminderEnvelope<ReminderPayload> envelope) =>
+        definition.Schedule.FireAtMs == envelope.DueTimeUtc.ToUnixTimeMilliseconds();
+
+    /// <summary>
+    /// Ends a one-shot with one ordered path (design D3). The tombstone is the commit point: it is the only
+    /// step that records the outcome, so it comes first. If Netclaw cannot write it, the end stops here with
+    /// an alert, and the one-shot stays enabled. The lease expiry or the next sweep is the recovery path.
+    /// Each later step is idempotent, and a matching tombstone finishes it after a crash (design D4).
+    /// </summary>
+    /// <returns>True when the tombstone is durable.</returns>
+    private async Task<bool> EndOneShotAsync(
+        ReminderDefinition definition,
+        ReminderTerminalOutcome outcome,
+        string? lastError,
+        DateTimeOffset endedAt,
+        ReminderEnvelope<ReminderPayload>? envelope,
+        EnvelopeAction action)
     {
-        var cutoffMs = _timeProvider.GetUtcNow().Subtract(TerminalRetention).ToUnixTimeMilliseconds();
-        var pruned = new List<ReminderId>();
-        foreach (var definition in _definitionStore.List().Where(d =>
-                     !d.Enabled
-                     && d.Schedule.Type == ReminderScheduleType.OneShot
-                     && d.TerminalOutcome == ReminderTerminalOutcome.Completed
-                     && d.UpdatedAtMs < cutoffMs))
+        if (definition.Schedule.FireAtMs is not { } fireAtMs)
+        {
+            EmitSettlementFailure(definition, "The one-shot has no fire time, so Netclaw cannot write its end record.");
+            return false;
+        }
+
+        var tombstone = new ReminderTombstone
+        {
+            Id = definition.Id,
+            Title = definition.Title,
+            Audience = definition.Audience,
+            FireAtMs = fireAtMs,
+            Outcome = outcome,
+            EndedAtMs = endedAt.ToUnixTimeMilliseconds(),
+            LastError = lastError,
+            // Only a Failed one-shot keeps the prompt, so an operator can set the reminder again (design D1a).
+            Instructions = outcome == ReminderTerminalOutcome.Failed ? definition.Instructions : null
+        };
+
+        try
+        {
+            _definitionStore.SaveTombstone(tombstone);
+        }
+        catch (Exception ex)
+        {
+            EmitSettlementFailure(definition, $"The end record could not be written: {ex.Message}", ex);
+            return false;
+        }
+
+        _log.Info("Reminder '{0}' ended as {1}", definition.Id.Value, outcome);
+        await FinishEndedOneShotAsync(definition, envelope, action, nackReason: lastError);
+        return true;
+    }
+
+    /// <summary>
+    /// Steps 2 to 5 of the end (design D3), also used when a matching tombstone already exists. A failure of
+    /// the envelope action or the delete raises an alert and does not stop the later steps. The tombstone is
+    /// durable, so a redelivery or the next sweep finishes whatever stopped.
+    /// </summary>
+    private async Task FinishEndedOneShotAsync(
+        ReminderDefinition definition,
+        ReminderEnvelope<ReminderPayload>? envelope,
+        EnvelopeAction action,
+        string? nackReason)
+    {
+        if (envelope is not null)
         {
             try
             {
-                await DeleteReminderInternalAsync(definition.Id);
-                pruned.Add(definition.Id);
+                switch (action)
+                {
+                    case EnvelopeAction.Ack:
+                        var ack = await _client!.AckAsync(envelope);
+                        if (ack.ResponseCode is ReminderAckResponseCode.Error)
+                            EmitSettlementFailure(definition, ack.Message ?? $"Reminder acknowledgement returned {ack.ResponseCode}.");
+                        break;
+
+                    case EnvelopeAction.Nack:
+                        var nack = await _client!.NackAsync(envelope, nackReason ?? "The reminder ended.");
+                        if (nack.ResponseCode is ReminderNackResponseCode.Error)
+                            EmitSettlementFailure(definition, nack.Message ?? $"Negative acknowledgement returned {nack.ResponseCode}.");
+                        break;
+                }
             }
             catch (Exception ex)
             {
-                _log.Warning(ex, "Failed to prune completed one-shot '{0}'", definition.Id.Value);
+                EmitSettlementFailure(definition, ex.Message, ex);
             }
         }
 
-        if (pruned.Count > 0)
-            _log.Info("Pruned {0} completed one-shot(s) older than {1}", pruned.Count, TerminalRetention);
+        await CancelScheduleOnlyAsync(definition.Id);
+        _skipCounts.Remove(definition.Id);
+        _deniedAlerts.Remove(definition.Id);
 
-        return pruned;
+        try
+        {
+            _definitionStore.Delete(definition.Id);
+        }
+        catch (Exception ex)
+        {
+            EmitSettlementFailure(definition, $"The definition could not be deleted: {ex.Message}", ex);
+        }
     }
+
+    /// <summary>
+    /// A fire of a one-shot whose tombstone matches it runs nothing. The manager acknowledges the occurrence
+    /// and finishes the end. A tombstone that does not match is stale: the definition is newer (design D4).
+    /// </summary>
+    private async Task<bool> TryFinishMatchedTombstoneAsync(
+        ReminderDefinition definition,
+        ReminderEnvelope<ReminderPayload> envelope)
+    {
+        var tombstone = ReadTombstone(definition.Id);
+        if (tombstone is null)
+            return false;
+
+        if (!TombstoneMatches(tombstone, definition))
+        {
+            DropStaleTombstone(tombstone, definition);
+            return false;
+        }
+
+        _log.Info(
+            "Reminder '{0}' fired after it ended ({1}). Running nothing, and finishing the end.",
+            definition.Id.Value, tombstone.Outcome);
+        await FinishEndedOneShotAsync(definition, envelope, EnvelopeAction.Ack, nackReason: null);
+        return true;
+    }
+
+    private void DropStaleTombstone(ReminderTombstone tombstone, ReminderDefinition definition)
+    {
+        _log.Warning(
+            "Reminder '{0}' has a stale tombstone ({1}, fire time {2}) that does not match its definition ({3}, fire time {4}). Keeping the definition and deleting the tombstone.",
+            definition.Id.Value,
+            tombstone.Outcome,
+            tombstone.FireAtMs,
+            definition.Schedule.Type,
+            definition.Schedule.FireAtMs?.ToString() ?? "none");
+        _definitionStore.DeleteTombstone(definition.Id);
+    }
+
+    private ReminderTombstone? ReadTombstone(ReminderId id)
+    {
+        var tombstone = _definitionStore.GetTombstone(id);
+        ReportInvalidTombstones();
+        return tombstone;
+    }
+
+    /// <summary>
+    /// A tombstone that Netclaw cannot read counts as absent, so no read exposes history without an audience
+    /// to check. The file stays for the operator. The error log and the alert make the fault loud.
+    /// </summary>
+    private void ReportInvalidTombstones()
+    {
+        foreach (var invalid in _definitionStore.ConsumeInvalidTombstones())
+        {
+            _log.Error(
+                "Reminder tombstone for '{0}' cannot be read and counts as absent: {1}",
+                invalid.ReminderId, invalid.Reason);
+            _notificationSink.Emit(OperationalAlert.Create(
+                _timeProvider,
+                "reminder.tombstone.invalid",
+                AlertType.ReminderSchemaDropped,
+                $"The end record of reminder '{invalid.ReminderId}' cannot be read: {invalid.Reason}. Its history is not readable. Repair or delete ended/{Uri.EscapeDataString(invalid.ReminderId)}.json.",
+                AlertSeverity.Warning,
+                source: invalid.ReminderId,
+                context: new Dictionary<string, string>
+                {
+                    ["reminderId"] = invalid.ReminderId,
+                    ["error"] = invalid.Reason
+                }));
+        }
+    }
+
+    private ReminderEndedInfo ToEndedInfo(ReminderTombstone tombstone, bool includeInstructions) => new(
+        tombstone.Outcome,
+        tombstone.EndedAt,
+        tombstone.EndedAt + TerminalRetention,
+        tombstone.LastError,
+        includeInstructions ? tombstone.Instructions : null);
+
+    /// <summary>
+    /// The one sweep of the startup reconciliation and the 12-hour timer (design D8). It finishes the end of
+    /// a definition that has a matching tombstone, drops a stale tombstone, ends every leftover one-shot,
+    /// and purges each tombstone past <see cref="TerminalRetention"/> with its history. The same rules repair a
+    /// crash and migrate an old install.
+    /// </summary>
+    private async Task<SweepResult> SweepEndedOneShotsAsync()
+    {
+        var now = _timeProvider.GetUtcNow();
+        var tombstones = _definitionStore.ListTombstones().ToDictionary(t => t.Id);
+        ReportInvalidTombstones();
+        var endedOneShots = 0;
+
+        foreach (var definition in _definitionStore.List())
+        {
+            if (tombstones.Remove(definition.Id, out var tombstone))
+            {
+                if (TombstoneMatches(tombstone, definition))
+                {
+                    await FinishEndedOneShotAsync(definition, envelope: null, EnvelopeAction.None, nackReason: null);
+                    endedOneShots++;
+                    // The tombstone stays, so the purge below still sees it.
+                    tombstones[tombstone.Id] = tombstone;
+                    continue;
+                }
+
+                DropStaleTombstone(tombstone, definition);
+            }
+
+            if (definition.Schedule.Type != ReminderScheduleType.OneShot)
+                continue;
+
+            if (definition.TerminalOutcome is { } terminalOutcome)
+            {
+                if (await EndOneShotAsync(
+                        definition,
+                        terminalOutcome,
+                        "The outcome was recorded before the definition was deleted. Netclaw repaired it.",
+                        definition.UpdatedAt,
+                        envelope: null,
+                        EnvelopeAction.None))
+                {
+                    endedOneShots++;
+                    RememberTombstone(tombstones, definition.Id);
+                }
+
+                continue;
+            }
+
+            if (!definition.Enabled && definition.Schedule.FireAt is { } fireAt && fireAt <= now)
+            {
+                // A paused one-shot can never run once its fire time has passed.
+                var endedAt = definition.UpdatedAt > fireAt ? definition.UpdatedAt : fireAt;
+                if (await EndOneShotAsync(
+                        definition,
+                        ReminderTerminalOutcome.Cancelled,
+                        "The outcome was not recorded. The one-shot was disabled when its fire time passed.",
+                        endedAt,
+                        envelope: null,
+                        EnvelopeAction.None))
+                {
+                    endedOneShots++;
+                    RememberTombstone(tombstones, definition.Id);
+                }
+            }
+        }
+
+        var cutoffMs = now.Subtract(TerminalRetention).ToUnixTimeMilliseconds();
+        var purgedTombstones = 0;
+        foreach (var tombstone in tombstones.Values.Where(t => t.EndedAtMs < cutoffMs))
+        {
+            try
+            {
+                // The history goes first: the tombstone is its only audience anchor.
+                _historyStore.DeleteHistory(tombstone.Id);
+                _definitionStore.DeleteTombstone(tombstone.Id);
+                purgedTombstones++;
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "Failed to purge the ended one-shot '{0}'", tombstone.Id.Value);
+            }
+        }
+
+        if (purgedTombstones > 0)
+            _log.Info("Purged {0} ended one-shot(s) older than {1}", purgedTombstones, TerminalRetention);
+
+        return new SweepResult(endedOneShots, purgedTombstones);
+    }
+
+    private void RememberTombstone(Dictionary<ReminderId, ReminderTombstone> tombstones, ReminderId id)
+    {
+        if (_definitionStore.GetTombstone(id) is { } written)
+            tombstones[id] = written;
+    }
+
+    private sealed record SweepResult(int EndedOneShots, int PurgedTombstones);
 
     private async Task HandleReconcileAsync()
     {
         var sender = Sender; // capture before any await
         try
         {
+            // The sweep comes first. It ends leftovers and finishes ends that a crash stopped, so the
+            // schedule restore below does not bring a spent one-shot back.
+            var sweep = await SweepEndedOneShotsAsync();
+
             var scheduled = await ListScheduledRemindersAsync();
             var definitions = _definitionStore.List();
             var definitionsById = definitions.ToDictionary(d => d.Id.Value, StringComparer.Ordinal);
-
-            var deletedCompletedOneShots = 0;
-            foreach (var id in await PruneTerminalRemindersAsync())
-            {
-                definitionsById.Remove(id.Value);
-                deletedCompletedOneShots++;
-            }
 
             var cancelledOrphans = 0;
             foreach (var (id, _) in scheduled)
@@ -1366,7 +1865,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
 
             // Issue #1803: a past due time and the absence of a schedule do not prove success.
             var now = _timeProvider.GetUtcNow();
-            var softDeletedOneShots = 0;
+            var endedFromStatus = 0;
             foreach (var definition in definitions.Where(d =>
                          d.Enabled &&
                          d.Schedule.Type == ReminderScheduleType.OneShot &&
@@ -1393,20 +1892,20 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                 if (outcome is null)
                     continue;
 
-                if (outcome == ReminderTerminalOutcome.Completed)
+                var lastError = outcome == ReminderTerminalOutcome.Completed
+                    ? null
+                    : occurrence.LastFailureReason
+                      ?? $"Akka.Reminders ended the occurrence with the status {occurrence.CompletionStatus}.";
+                if (await EndOneShotAsync(
+                        definition,
+                        outcome.Value,
+                        lastError,
+                        occurrence.CompletedAtUtc ?? now,
+                        envelope: null,
+                        EnvelopeAction.None))
                 {
-                    await RetainCompletedOneShotAsync(definition);
-                    continue;
+                    endedFromStatus++;
                 }
-
-                var terminalDefinition = definition with
-                {
-                    Enabled = false,
-                    TerminalOutcome = outcome,
-                    UpdatedAtMs = now.ToUnixTimeMilliseconds()
-                };
-                _definitionStore.Save(terminalDefinition);
-                softDeletedOneShots++;
             }
 
             // Disable expired recurring reminders that haven't fired since expiration.
@@ -1420,20 +1919,21 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                 disabledExpired++;
             }
 
-            if (cancelledOrphans > 0 || restoredSchedules > 0 || softDeletedOneShots > 0
-                || disabledExpired > 0 || deletedCompletedOneShots > 0)
+            var endedOneShots = sweep.EndedOneShots + endedFromStatus;
+            if (cancelledOrphans > 0 || restoredSchedules > 0 || endedOneShots > 0
+                || disabledExpired > 0 || sweep.PurgedTombstones > 0)
             {
-                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, soft_deleted_oneshots={2}, disabled_expired={3}, deleted_completed_oneshots={4}",
+                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, ended_oneshots={2}, disabled_expired={3}, purged_tombstones={4}",
                     cancelledOrphans,
                     restoredSchedules,
-                    softDeletedOneShots,
+                    endedOneShots,
                     disabledExpired,
-                    deletedCompletedOneShots);
+                    sweep.PurgedTombstones);
             }
 
             // Only ack external callers — skip Self.Tell from PreStart
             if (!sender.Equals(Self))
-                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, softDeletedOneShots, disabledExpired));
+                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, endedFromStatus, disabledExpired));
         }
         catch (Exception ex)
         {
@@ -1625,6 +2125,19 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         try
         {
             var definition = _definitionStore.Get(query.Id);
+            if (definition is null)
+            {
+                var ended = ReadTombstone(query.Id);
+                if (ended is not null && CanAccessAudience(query.Authorization, ended.Audience))
+                {
+                    replyTo.Tell(await BuildEndedStatusAsync(ended));
+                    return;
+                }
+
+                if (ended is not null)
+                    LogAudienceDenied("status", query.Id, ended.Audience, query.Authorization);
+            }
+
             if (definition is null || !CanAccessAudience(query.Authorization, definition.Audience))
             {
                 if (definition is not null)
@@ -1646,17 +2159,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             var occurrenceTask = GetOccurrenceStatusAsync(definition);
             await Task.WhenAll(schedulesTask, historyTask, occurrenceTask);
 
-            var occurrence = occurrenceTask.Result is { } status
-                ? new ReminderOccurrenceInfo(
-                    status.DueTimeUtc,
-                    status.NextAttemptAtUtc,
-                    status.AttemptCount,
-                    status.LastFailureReason,
-                    status.CompletionStatus.ToString(),
-                    status.DeliveryDeadlineUtc,
-                    status.AckDeadlineUtc,
-                    status.CompletedAtUtc)
-                : null;
+            var occurrence = ToOccurrenceInfo(occurrenceTask.Result);
 
             replyTo.Tell(new ReminderStatusResponse(
                 query.Id,
@@ -1682,16 +2185,54 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         }
     }
 
+    /// <summary>
+    /// The status of an ended one-shot, from its tombstone. This is the one surface that carries the prompt of a
+    /// <c>Failed</c> tombstone, and the caller passed the audience gate before it got here.
+    /// </summary>
+    private async Task<ReminderStatusResponse> BuildEndedStatusAsync(ReminderTombstone ended)
+    {
+        var historyTask = _historyStore.ReadAsync(ended.Id, RecentHistoryCount);
+        var occurrenceTask = GetOccurrenceStatusAsync(ended.Id, DateTimeOffset.FromUnixTimeMilliseconds(ended.FireAtMs));
+        await Task.WhenAll(historyTask, occurrenceTask);
+
+        return new ReminderStatusResponse(
+            ended.Id,
+            Found: true,
+            Enabled: false,
+            Executing: _activeExecutions.IsExecuting(ended.Id),
+            NextFire: null,
+            ConsecutiveFailures: 0,
+            SkippedDuplicates: _skipCounts.GetValueOrDefault(ended.Id),
+            TerminalOutcome: ended.Outcome,
+            Occurrence: ToOccurrenceInfo(occurrenceTask.Result),
+            RecentHistory: historyTask.Result,
+            Ended: ToEndedInfo(ended, includeInstructions: true));
+    }
+
+    private static ReminderOccurrenceInfo? ToOccurrenceInfo(ReminderOccurrenceStatus? status) => status is null
+        ? null
+        : new ReminderOccurrenceInfo(
+            status.DueTimeUtc,
+            status.NextAttemptAtUtc,
+            status.AttemptCount,
+            status.LastFailureReason,
+            status.CompletionStatus.ToString(),
+            status.DeliveryDeadlineUtc,
+            status.AckDeadlineUtc,
+            status.CompletedAtUtc);
+
     private async Task HandleGetHistoryAsync(GetReminderHistoryQuery query)
     {
         var replyTo = Sender;
         try
         {
+            // An ended one-shot has no definition. Its tombstone supplies the audience for the history.
             var definition = _definitionStore.Get(query.Id);
-            if (definition is null || !CanAccessAudience(query.Authorization, definition.Audience))
+            var audience = definition?.Audience ?? ReadTombstone(query.Id)?.Audience;
+            if (audience is not { } historyAudience || !CanAccessAudience(query.Authorization, historyAudience))
             {
-                if (definition is not null)
-                    LogAudienceDenied("history", query.Id, definition.Audience, query.Authorization);
+                if (audience is { } deniedAudience)
+                    LogAudienceDenied("history", query.Id, deniedAudience, query.Authorization);
 
                 replyTo.Tell(new ReminderHistoryResponse(query.Id, Found: false, Records: []));
                 return;
@@ -1762,17 +2303,18 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             authorization?.SourceDescription ?? "unknown");
     }
 
-    private async Task<ReminderOccurrenceStatus?> GetOccurrenceStatusAsync(ReminderDefinition definition)
+    private Task<ReminderOccurrenceStatus?> GetOccurrenceStatusAsync(ReminderDefinition definition) =>
+        definition.Schedule.Type is not ReminderScheduleType.OneShot || definition.Schedule.FireAt is not { } dueTimeUtc
+            ? Task.FromResult<ReminderOccurrenceStatus?>(null)
+            : GetOccurrenceStatusAsync(definition.Id, dueTimeUtc);
+
+    private async Task<ReminderOccurrenceStatus?> GetOccurrenceStatusAsync(ReminderId id, DateTimeOffset dueTimeUtc)
     {
-        if (_client is null
-            || definition.Schedule.Type is not ReminderScheduleType.OneShot
-            || definition.Schedule.FireAt is not { } dueTimeUtc)
-        {
+        if (_client is null)
             return null;
-        }
 
         var response = await _client.GetOccurrenceStatusAsync(
-            new ReminderKey(definition.Id.Value),
+            new ReminderKey(id.Value),
             dueTimeUtc);
 
         return response.ResponseCode switch
@@ -1823,6 +2365,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
     /// <summary>
     /// Ack sent back to <see cref="ReconcileReminders"/> callers so they can
     /// synchronize on reconcile completion instead of polling.
+    /// <see cref="SoftDeletedOneShots"/> counts the one-shots that the durable occurrence status ended.
     /// </summary>
     internal sealed record ReconcileCompleted(
         int CancelledOrphans,

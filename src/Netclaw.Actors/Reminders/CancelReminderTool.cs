@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Reminders;
 /// LLM tool for cancelling (disabling) a reminder by ID.
 /// </summary>
 [NetclawTool("cancel_reminder",
-    "Cancel a reminder (a scheduled or recurring job) by its ID — disables it and stops future executions. The reminder definition is preserved for diagnosis. Use list_reminders to find reminder IDs.",
+    "Cancel a reminder by its ID. A one-shot reminder is deleted, and its run history stays readable for 12 days. A recurring reminder is disabled and kept. Use list_reminders to find reminder IDs.",
     Grant = "scheduling")]
 public sealed partial class CancelReminderTool : NetclawTool<CancelReminderTool.Params>
 {
@@ -48,8 +48,17 @@ public sealed partial class CancelReminderTool : NetclawTool<CancelReminderTool.
             TimeSpan.FromSeconds(10),
             ct);
 
-        return response.Found
-            ? $"Reminder '{args.ReminderId}' cancelled (disabled). The definition is preserved on disk."
-            : $"Reminder '{args.ReminderId}' not found.";
+        if (response.ErrorMessage is { } failure)
+            return $"Error: {failure}";
+
+        if (response.AlreadyEnded is { } ended)
+            return ended.DescribeAlreadyEnded(id);
+
+        if (!response.Found)
+            return $"Reminder '{args.ReminderId}' not found.";
+
+        return response.Deleted
+            ? $"Reminder '{args.ReminderId}' cancelled and deleted."
+            : $"Reminder '{args.ReminderId}' cancelled (disabled).";
     }
 }
