@@ -1,10 +1,10 @@
 ## Why
 
-The eval harness must tell a model failure from an infrastructure failure. A run of `netclaw chat -p` could not do this. The session actor gave a provider outage and a model that ignores a text-only stop the same category. The CLI kept no category.
+The eval harness must tell a model failure from an infrastructure failure. A run of `netclaw chat -p` could not do this. The session actor gave a provider outage and a model that ignores a runtime stop the same category. The CLI kept no category.
 
 ## What Changes
 
-- Add `ErrorCategory.ModelBehavior`. The session actor uses it for a tool call after a text-only stop and for repeated empty replies that end with the finish reason Stop or Length. Repeated empty replies with no finish reason are `StreamFailure`. With another finish reason, such as `content_filter`, they are `ProviderFailure`.
+- Add `ErrorCategory.ModelBehavior`. The session actor uses it for a repeated tool call after the runtime refused that call (the terminal cycle stop) and for repeated empty replies that end with the finish reason Stop or Length. Repeated empty replies with no finish reason are `StreamFailure`. With another finish reason, such as `content_filter`, they are `ProviderFailure`.
 - Print `[turn:failed] category=<model|infra> kind=<Kind>` on stderr for a failed turn or a failed run.
 - Write a `TURN_FAILED: category=... kind=...` record to the session log before `TURN_COMPLETED`.
 - Add `errorCategory` and `errorKind` to the `--json` envelope of a failed turn.

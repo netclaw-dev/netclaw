@@ -408,6 +408,7 @@ No live deployment or database restore forms part of this source change.
 The parent and child use exact tool identities and actual results to detect repeated work.
 After two equal feedback rounds, the runtime returns a correction for each repeated call.
 A repeat after that correction ends the turn without another model request.
+In a parent session, the turn fails with the error category `ModelBehavior`. A child run ends with a partial result.
 Unrelated calls remain available. Live context compaction preserves this evidence.
 A process restart does not restore a detector checkpoint or repeat tool calls automatically.
 

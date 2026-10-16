@@ -1014,12 +1014,16 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 cancellationToken: TestContext.Current.CancellationToken));
         }
 
-        await subscriber.ExpectMsgAsync<TextOutput>(
+        var stop = await subscriber.ExpectMsgAsync<ErrorOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
 
+        // The repeat after the correction is a model failure. A headless caller reports category=model.
+        Assert.Equal(ErrorCategory.ModelBehavior, stop.Category);
+        Assert.Contains("The result is partial.", stop.Message, StringComparison.Ordinal);
+        Assert.Equal(TurnOutcome.Failed, completed.Outcome);
         Assert.Equal("same result", results[0].Result);
         Assert.Equal("same result", results[1].Result);
         Assert.Contains("repeated action-and-outcome cycle", results[2].Result, StringComparison.Ordinal);
@@ -1149,10 +1153,11 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             }
         }
 
-        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        var stop = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         // Assert
+        Assert.Equal(ErrorCategory.ModelBehavior, stop.Category);
         Assert.Equal(
             ["cycle-3-a", "cycle-3-b", "cycle-3-c"],
             correctionResults.Select(static result => result.CallId.Value)

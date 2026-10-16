@@ -13,7 +13,7 @@ The system SHALL use exact per-call recurrence and the existing adjacent-cycle r
 
 A call identity SHALL use the canonical tool and prepared arguments. It SHALL exclude valid call metadata and correlation IDs, and it SHALL retain rejected metadata. It SHALL count one observation for each call identity per completed model feedback round. Unrelated calls and duplicate call counts SHALL NOT erase recurrence evidence. A distinct actual outcome SHALL reset evidence only for the affected identity.
 
-After two equal completed feedback rounds for one identity, the system SHALL refuse the next matching call before dispatch and return a corrective tool result for every matching call ID. If the model repeats that identity after correction, the system SHALL settle the turn without another model request. The existing adjacent period-one through period-three cycle guard SHALL remain active for eligible complete batches.
+After two equal completed feedback rounds for one identity, the system SHALL refuse the next matching call before dispatch and return a corrective tool result for every matching call ID. If the model repeats that identity after correction, the system SHALL settle the turn without another model request. A parent session SHALL fail the turn with the error category `ModelBehavior`. A child run SHALL end with a partial result. The existing adjacent period-one through period-three cycle guard SHALL remain active for eligible complete batches.
 
 A trusted repeat exception SHALL apply only to an authorized, non-cancel status query for an accessible pending background job. It SHALL NOT apply to cancellation, denied lookup, a different job, or model-authored claims. Every call SHALL pass normal authorization and tool validation.
 
@@ -52,8 +52,9 @@ The live session owner SHALL preserve recurrence evidence and unresolved correct
 
 - **GIVEN** the model received a corrective result for a repeated call
 - **WHEN** it requests the same identity again
-- **THEN** the runtime records a terminal failure or partial result
-- **AND** it makes no further model request
+- **THEN** a parent session fails the turn with the error category `ModelBehavior`
+- **AND** a child run ends with a partial result
+- **AND** the runtime makes no further model request
 
 #### Scenario: Pending job status query uses a narrow exception
 

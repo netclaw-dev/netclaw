@@ -29,18 +29,26 @@ code is 1. With `--json`, the envelope of a failed turn SHALL add
 `errorCategory` and `errorKind`. The envelope of a completed turn SHALL have
 neither key.
 
-The session actor SHALL report a tool call after a text-only stop as
-`ModelBehavior`. It SHALL report repeated empty replies as `ModelBehavior` only
+The session actor SHALL report a repeated tool call after the runtime refused
+that call (the terminal cycle stop) as `ModelBehavior`. A turn where the model
+answers with text after the refusal SHALL complete. It SHALL report repeated empty replies as `ModelBehavior` only
 when the last reply ended with the finish reason Stop or Length. With no finish
 reason it SHALL report `StreamFailure`. With any other finish reason it SHALL
 report `ProviderFailure`.
 
-#### Scenario: Model ignores the text-only stop
+#### Scenario: Model ignores the cycle stop
 
-- **GIVEN** the runtime forced a text-only response
-- **WHEN** the model requests a tool call
-- **THEN** stderr ends with `[turn:failed] category=model kind=ModelBehavior`
+- **GIVEN** the runtime refused a repeated tool call with a correction
+- **WHEN** the model requests the same tool call again
+- **THEN** the runtime makes no further model request
+- **AND** stderr ends with `[turn:failed] category=model kind=ModelBehavior`
 - **AND** the exit code is 1
+
+#### Scenario: Model obeys the cycle stop
+
+- **GIVEN** the runtime refused a repeated tool call with a correction
+- **WHEN** the model answers with text
+- **THEN** the CLI prints no category and exits with code 0
 
 #### Scenario: Empty replies from a broken stream
 

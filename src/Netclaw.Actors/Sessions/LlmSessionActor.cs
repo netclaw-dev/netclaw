@@ -1363,9 +1363,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         if (prepared is PreparedFreshBatch.Stop)
         {
+            // The model repeated a call after the runtime refused it. The turn settles as a model
+            // failure with no further model request, so a headless caller sees category=model.
             RecordIntermediateUsage(usage);
-            HandleTextResponse(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, ToolCycleMessages.Final),
-                usage: null, streamedText: false, streamedThinking: false);
+            FailCurrentTurn(
+                ToolCycleMessages.Final,
+                new InvalidOperationException("The model repeated a tool call that the recurrence guard already refused."),
+                ErrorCategory.ModelBehavior);
             return;
         }
 

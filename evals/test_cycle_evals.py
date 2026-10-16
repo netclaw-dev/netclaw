@@ -57,9 +57,13 @@ def evidence(case="correction"):
               "blocked_attempt_executed": False, "last_result": last_result,
               "recovered_value": recovery_value}
     output = {"sessionId": "unit-session", "toolCalls": calls,
-              "response": SETTLEMENT if case == "terminal" else json.dumps(answer)}
+              "response": "" if case == "terminal" else json.dumps(answer)}
+    if case == "terminal":
+        output.update(errorCategory="model", errorKind="ModelBehavior")
     batch = "turn_tool_call_batch count=1 tools=shell_execute\n"
     actor_log = batch + ("Compaction complete (before=8, after=4)\n" if case == "compaction" else "") + batch
+    if case == "terminal":
+        actor_log += f"turn_failed category=ModelBehavior correlationId=unit message={SETTLEMENT}\n"
     return snapshot, output, actor_log
 
 
@@ -125,14 +129,24 @@ class CycleVerdictTests(unittest.TestCase):
                 snapshot, output, log = evidence("terminal")
                 snapshot[field] = value
                 self.assert_rejected(snapshot, output, log)
-        for response in (SETTLEMENT.replace("The result is partial.", "The result is complete."),
-                         SETTLEMENT.replace("The last refused operation did not execute.",
-                                            "The last refused operation executed."),
-                         SETTLEMENT.replace("Earlier tool results remain available in the session.", "")):
-            with self.subTest(response=response):
+        for error in (SETTLEMENT.replace("The result is partial.", "The result is complete."),
+                      SETTLEMENT.replace("The last refused operation did not execute.",
+                                         "The last refused operation executed."),
+                      SETTLEMENT.replace("Earlier tool results remain available in the session.", "")):
+            with self.subTest(error=error):
                 snapshot, output, log = evidence("terminal")
-                output["response"] = response
+                log = log.replace(SETTLEMENT, error)
                 self.assert_rejected(snapshot, output, log)
+        for field, value in (("errorCategory", "infra"), ("errorKind", "ProviderFailure"), ("errorKind", None)):
+            with self.subTest(field=field, value=value):
+                snapshot, output, log = evidence("terminal")
+                output[field] = value
+                self.assert_rejected(snapshot, output, log)
+        with self.subTest(defect="stop text only in the response"):
+            snapshot, output, log = evidence("terminal")
+            output["response"] = SETTLEMENT
+            log = log.replace(SETTLEMENT, "")
+            self.assert_rejected(snapshot, output, log)
 
     def test_terminal_rejects_any_post_stop_call_or_result(self):
         for defect in ("call", "result"):

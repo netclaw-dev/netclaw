@@ -257,14 +257,14 @@ NETCLAW_EVAL_TIMEOUT=180 \
 | Case | Required evidence |
 |------|-------------------|
 | `tool_cycle_correction` | The third request receives a runtime correction. The model uses `file_read` to complete an alternative. |
-| `tool_cycle_terminal` | After the model repeats the refused action, Netclaw settles the turn without another model request. The final response reports partial work and two completed executions. |
+| `tool_cycle_terminal` | After the model repeats the refused action, Netclaw fails the turn without another model request. The envelope has `errorCategory` `model` and `errorKind` `ModelBehavior`. The turn error reports partial work and two completed executions. |
 | `tool_cycle_compaction` | Normal compaction completes between executions one and two. The third request receives a correction. The model completes an alternative. |
 | `tool_cycle_changed_result` | The same command returns a different result each time. All three executions complete. |
 | `tool_cycle_metadata_repair` | Two requests lack required metadata. The corrected request executes once without a cycle correction. |
 
 The relay scripts the tool requests. Each request has a fresh call ID.
 The daemon executes tools and emits the intervention. The model controls recovery
-after a correction. Netclaw supplies the terminal response after a repeated refusal.
+after a correction. Netclaw fails the turn with `ModelBehavior` after a repeated refusal.
 
 Each trial uses synthetic files in the isolated workspace. A separate counter
 checks actual side effects. Strict assertions require paired runtime results,
