@@ -652,7 +652,7 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
             var selected = _flow.SelectedInputs;
             _state = _state.CloseInputs(selected.Ids);
             _flow.ToolBatchCommitted();
-            var advance = _flow.AdvanceAfterToolBatch(new BatchCompletion.Ready(_state, 1, ToolBudgetStatus.Ok.Instance), compactionDue: false);
+            var advance = _flow.AdvanceAfterToolBatch(new BatchCompletion.Ready(_state, 1), compactionDue: false);
             Verify("ToolBoundary", Unit.Value, Observe("Continue", advance.Batch?.Messages ?? []));
         }
 
