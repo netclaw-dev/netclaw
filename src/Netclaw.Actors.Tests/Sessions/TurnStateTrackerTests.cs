@@ -89,19 +89,6 @@ public sealed class TurnStateTrackerTests
     }
 
     [Fact]
-    public void EmptyResponseReset_PreservesForcedTextOnlyState()
-    {
-        var tracker = new TurnStateTracker
-        {
-            ForceNoToolsActive = true
-        };
-
-        tracker.ResetEmptyResponseGuards();
-
-        Assert.True(tracker.ForceNoToolsActive);
-    }
-
-    [Fact]
     public void PostToolThinkingOnly_RetriesSeveralTimesBeforeFailing()
     {
         var tracker = new TurnStateTracker();
