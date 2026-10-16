@@ -1,6 +1,6 @@
 ---
 name: disposable-diagnostic
-description: Eval fixture subagent that verifies standard managed temporary behavior.
+description: Eval fixture subagent that runs one fixed diagnostic command and reports its output.
 timeoutSeconds: 120
 ---
 

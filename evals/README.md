@@ -63,6 +63,31 @@ edit an interactive trust policy. A companion `tool-approvals.json` trusts Git
 for shell-based coding cases. Tool exposure and command-deny rules still apply,
 and these policies are never copied into an operator's config.
 
+### Trial independence
+
+All trials of one invocation share one daemon, one memory database, and one
+home folder. A trial must not change what a later trial sees. The harness
+keeps these rules:
+
+- **Memory distillation is off.** The fixture config sets
+  `Session.MemoryObserverIdleSeconds` to 86400 and
+  `Session.Tuning.MemoryDistillationTurnInterval` to 0. Without this, the
+  daemon distills an idle session into a memory about two minutes after the
+  trial, and a later trial recalls it. The harness seeds only the
+  `doc-eval-*` memories. A case that tests distillation must run in its own
+  invocation with the default settings.
+- **Agent definitions are restored.** Before each trial, `restore_agent_fixtures`
+  writes `evals/fixtures/agents/` into the daemon home again. A parent agent
+  can rewrite an agent file during a trial.
+- **A trial that recalls an unseeded memory is inconclusive.** Before each trial,
+  the harness writes `raw/memory-before.txt`. It lists every memory id that is
+  not a `doc-eval-*` seed. If recall injects one of these ids,
+  `trial_verdict.py` gives the reason `learned_memory_recalled`, even when the
+  assertion passed. This also covers a `memory_store` call of an earlier trial.
+- **A case that keeps other state must reset it.** A case that changes
+  reminders, identity files, or workspaces resets them in its `setup_<case>`
+  function.
+
 `--network host` is the default because operators often host their LLM on
 a Tailscale node — MagicDNS hostnames like `my-gpu-server.tailnet.ts.net` only
 resolve when the container shares the host's DNS resolver. macOS/Windows
@@ -327,7 +352,7 @@ the missing values. In non-interactive contexts it fails loudly.
 |----------|---------|-------------|
 | `NETCLAW_EVAL_RUNS` | `5` | Runs per case |
 | `NETCLAW_EVAL_THRESHOLD` | `0.80` | Pass threshold, a number above 0 and at most 1. The run stops at startup with exit 2 for any other value, such as `0`. The harness compares it as an exact decimal, so use `0.66` for 2 of 3, not `0.67`. |
-| `NETCLAW_EVAL_TIMEOUT` | `60` | Per-prompt timeout in whole seconds. The run stops at startup with exit 2 for any other value, such as `5m`. |
+| `NETCLAW_EVAL_TIMEOUT` | `60` | Per-prompt timeout in whole seconds. The run stops at startup with exit 2 for any other value, such as `5m`. The Subagents category uses at least 120 seconds, or this value when it is larger. |
 | `NETCLAW_EVAL_SEED` | random | Integer seed for the choice of prompt variants. The harness prints the seed and records it in each trial's `variant.json`. |
 
 ### Examples
@@ -444,6 +469,7 @@ while the run goes on. `<nn>` is the trial number, `01` and up.
 | `session.log` | The actor log that `netclaw.db` names for the session |
 | `subagents/<run id>/*.log` | Logs of the sub-agents of the session |
 | `actor-log.json` | How the harness found the actor log. A status other than `ok` means that the log is missing or was refused, and the harness prints a warning. The actor log must resolve under `data/sessions`. A sub-agent log must resolve under the folder of its session. `refused_subagent_logs` lists the sub-agent logs that were refused. |
+| `memory-before.txt` | The ids of the memories that exist before the trial and that the harness did not seed, one for each line. It is empty when the daemon has written no memory. |
 | `daemon-session.log` | Daemon lines with the exact token `session=<id>` or `sessionId=<id>` |
 | `daemon-window.log` | Every daemon line from the start of the trial to the end of the assertion, for people to read. A trial that crosses midnight UTC adds the lines of the new daemon file. A run stops with exit 2 and an error message when `$EVAL_HOME/logs` holds no `daemon-*.log` file. |
 | `assert.json` | `exit_code` of the assertion (141 is a pipe failure, 1 is a missed match), `daemon_log`, `window_lines_before`, `window_lines_after`, `extra_daemon_logs` |
@@ -539,6 +565,9 @@ A trial has one of three states:
     record. The channel threw before the turn ended. The deadline did not cut it.
   - `turn_failed`: the CLI exit is 1 and the turn has a `TURN_COMPLETED` record.
     `details` keeps the `ERROR` text.
+  - `learned_memory_recalled`: recall injected a memory that existed before the
+    trial and that the harness did not seed (see Trial independence). A trial
+    folder with no `memory-before.txt` skips this check.
   - the reason of an assertion report that says `inconclusive` (cycle cases).
   - `assertion_exit_<code>`: the assertion exited with a code other than 0 and 1
     (141 for a pipe failure, 127 for a missing command).

@@ -1001,6 +1001,21 @@ snapshot_trial_baseline() {
     if [[ -f "$TRIAL_DAEMON_LOG" ]]; then
         TRIAL_DAEMON_LINES_BEFORE=$(wc -l < "$TRIAL_DAEMON_LOG")
     fi
+    # The ids of every memory that exists now and that the harness did not
+    # seed. trial_verdict.py makes the trial inconclusive when recall injects
+    # one of them. When the database is missing or unreadable, the command
+    # warns on stderr and writes no file, and the trial is not checked.
+    python3 "$TRIAL_EVIDENCE_PY" memory-ids --home "$EVAL_HOME" \
+        --dest "$TRIAL_RAW/memory-before.txt"
+}
+
+## Writes the agent definitions of the eval fixtures into the daemon home
+## again. A trial can edit a definition (the parent agent can rewrite an agent
+## file), and the next trial of the same run must start from the fixture.
+restore_agent_fixtures() {
+    if [[ -d "$EVAL_ASSET_ROOT/evals/fixtures/agents" ]]; then
+        cp -r "$EVAL_ASSET_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
+    fi
 }
 
 ## Writes the record of one CLI call: the prompt that the CLI received, how the
@@ -1396,6 +1411,7 @@ run_multi_turn_case() {
         MULTI_TURN_STDERR_FILE=""
         begin_trial "$case_name" "$run"
 
+        restore_agent_fixtures
         local setup_fn="setup_${case_name}"
         if declare -f "$setup_fn" >/dev/null 2>&1; then
             "$setup_fn" "$run"
@@ -2140,12 +2156,66 @@ assert_subagent_headless_ambiguous_task() {
         stdout_response_not_contains 'need.*more.*information'
 }
 
+# Prints the full text of each spawn_agent TOOL_RESULT entry in a CLI
+# session log. An entry continues until the next timestamped record. The
+# child log keeps only a short preview of the child's final text, so read
+# the child's answer here.
+cli_spawn_results() {
+    awk '
+        /^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[^]]*\] / { keep = ($0 ~ /\] TOOL_RESULT: spawn_agent /) }
+        keep { print }
+    ' "$1"
+}
+
+# Prints the text of the last ASSISTANT_FINAL record in a CLI session log.
+cli_final_reply() {
+    awk '
+        /^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[^]]*\] / {
+            keep = ($0 ~ /\] ASSISTANT_FINAL: /)
+            if (keep) { text = ""; sub(/^\[[^]]*\] ASSISTANT_FINAL: /, "") }
+        }
+        keep { text = text $0 "\n" }
+        END { printf "%s", text }
+    ' "$1"
+}
+
+# The parent task wins over the role of the child. The prompt asks the child
+# for an email, so a child that writes the email is correct, and a child that
+# returns its analyst brief is correct too. The case checks three things:
+#   - the delegation ran and the child finished with an answer;
+#   - the parent did not rewrite the agent file to change the role;
+#   - the parent returns an email that follows the deployment mission: a
+#     subject line and the mission call line.
+# The child and the parent are judged apart. The child result is a TOOL_RESULT
+# record. The parent reply is the last ASSISTANT_FINAL record.
 assert_subagent_specialization_precedence() {
-    stdout_tool_called 'spawn_agent' && \
-        stdout_contains '\[subagent:done\] headless-analyst (completed' && \
-        stdout_contains 'SPECIALIZED ANALYST BRIEF' && \
-        stdout_response_contains '^Subject:' && \
-        stdout_response_contains 'Would Tuesday or Wednesday work for a 15-minute call?'
+    local cli_log="$TRIAL_RAW/cli-session.log"
+    stdout_tool_called 'spawn_agent' || return 1
+    stdout_contains '\[subagent:done\] headless-analyst (completed' || return 1
+
+    # The parent must not change the role by editing the fixture.
+    ! grep -aEq '^\[tool:call\] (file_edit|file_write|shell_execute)\(.*\.netclaw/agents/' \
+        "$STDOUT_FILE" || return 1
+
+    # Child side: a completed child result holds text after "Summary:".
+    cli_spawn_results "$cli_log" | awk '
+        function flush() { if (inres && done && text) ok = 1 }
+        /^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[^]]*\] / {
+            flush(); inres = ($0 ~ /\] TOOL_RESULT: spawn_agent /)
+            done = 0; text = 0; insummary = 0
+        }
+        inres && /Outcome: completed/ { done = 1 }
+        inres && insummary && $0 !~ /^[[:space:]]*$/ { text = 1 }
+        inres && /^Summary:/ { insummary = 1 }
+        END { flush(); exit !ok }
+    ' || return 1
+
+    # Parent side: the final reply holds a subject line and the mission call
+    # line. Markdown emphasis such as "**Subject:**" is a subject line too.
+    local reply
+    reply=$(cli_final_reply "$cli_log")
+    grep -aiqE '^[[:space:]]*(\*\*|__)?subject(\*\*|__)?[[:space:]]*:' <<<"$reply" || return 1
+    grep -aFq 'Would Tuesday or Wednesday work for a 15-minute call?' <<<"$reply"
 }
 
 setup_subagent_project_scope_declaration() {
@@ -2299,45 +2369,53 @@ setup_subagent_session_scratch_disposable() {
 assert_subagent_session_scratch_disposable() {
     stdout_json_tool_called 'spawn_agent' || return 1
 
-    local spawn_call child_task child_log
-    spawn_call=$(stdout_json_tool_call_arguments 'spawn_agent' | head -1)
-    child_task=$(jq -r '.Task // .task // ""' <<<"$spawn_call")
-    jq -e '(.Agent // .agent) == "disposable-diagnostic"' <<<"$spawn_call" >/dev/null || return 1
-    [[ -n "$child_task" ]] || return 1
-    ! grep -Eiq 'session_dir|/tmp|temporary|working.?directory|set_working_directory|(^|[^[:alpha:]])cwd([^[:alpha:]]|$)' \
-        <<<"$child_task" || return 1
+    # Every spawn_agent call names the fixture, has a task, has no Context,
+    # and gives the child no hint about where temporary files go.
+    local spawn_call child_task
+    while IFS= read -r spawn_call; do
+        jq -e '(.Agent // .agent) == "disposable-diagnostic"' <<<"$spawn_call" >/dev/null || return 1
+        jq -e '(.Context // .context // "") == ""' <<<"$spawn_call" >/dev/null || return 1
+        child_task=$(jq -r '.Task // .task // ""' <<<"$spawn_call")
+        [[ -n "$child_task" ]] || return 1
+        ! grep -Eiq 'session_dir|/tmp|temporary|working.?directory|set_working_directory|(^|[^[:alpha:]])cwd([^[:alpha:]]|$)' \
+            <<<"$child_task" || return 1
+    done < <(stdout_json_tool_call_arguments 'spawn_agent')
 
-    local child_relative expected_temp_dir
-    child_log=$(find "$EVAL_HOME/data/sessions" -type f \
-        -path '*/logs/session.log' \
-        -newer "$SUBAGENT_SCRATCH_LOG_MARKER" 2>/dev/null | head -1)
-    [[ -n "$child_log" ]] || return 1
+    # Only a child log sits below subagents/. The parent's own
+    # logs/session.log also matches '*/logs/session.log', and `find` order
+    # decides which one a broad pattern returns first.
+    local -a child_logs
+    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
+        -path '*/subagents/*/logs/session.log' \
+        -newer "$SUBAGENT_SCRATCH_LOG_MARKER" 2>/dev/null)
+    [[ "${#child_logs[@]}" -eq 1 ]] || return 1
+    local child_log="${child_logs[0]}"
     grep -aq \
         'SubAgent \[disposable-diagnostic\] completed (success=True, outcome=Completed' \
         "$child_log" || return 1
+
+    local child_relative expected_temp_dir
     child_relative="${child_log#"$EVAL_HOME/data/"}"
     expected_temp_dir="/home/netclaw/.netclaw/${child_relative%/logs/session.log}/tmp"
 
-    local shell_count shell_result_count
-    shell_count=$(grep -ac \
-        'SubAgent \[disposable-diagnostic\] tool start .* name=shell_execute' \
-        "$child_log")
-    shell_result_count=$(grep -ac \
-        'SubAgent \[disposable-diagnostic\] tool \[shell_execute\] result: Exit code: 0' \
-        "$child_log")
-
-    [[ "$shell_count" -eq 1 ]] || return 1
-    [[ "$shell_result_count" -eq 1 ]] || return 1
+    # Since #2078 the child log writes an authorization start and result per
+    # tool call. It no longer writes "tool start" or "tool [...] result" lines.
+    local -a shell_calls
+    mapfile -t shell_calls < <(grep -a \
+        'SubAgent \[disposable-diagnostic\] authorization attempt started .* toolName=shell_execute' \
+        "$child_log" | sed -n 's/.* callId=\([^ ]*\) toolName=shell_execute.*/\1/p')
+    [[ "${#shell_calls[@]}" -eq 1 ]] || return 1
+    grep -aq "callId=${shell_calls[0]} outcomeCategory=Success" "$child_log" || return 1
 
     local -a call_previews
-    mapfile -t call_previews < <(grep -aEo \
-        'shell_execute#[^(]+\([^)]*\)' \
-        "$child_log")
+    mapfile -t call_previews < <(grep -aEo 'shell_execute#[^(]+\([^)]*\)' "$child_log")
     [[ "${#call_previews[@]}" -eq 1 ]] || return 1
     [[ "${call_previews[0]}" == *"tempfile.gettempdir()"* ]] || return 1
-    grep -aFq "$expected_temp_dir" "$child_log" || return 1
-    stdout_response_contains "$expected_temp_dir"
 
+    # The child's answer holds the command output. The parent reply must
+    # return the same path.
+    cli_spawn_results "$TRIAL_RAW/cli-session.log" | grep -aFq "$expected_temp_dir" || return 1
+    jq -r '.response // ""' "$STDOUT_FILE" | grep -aFq "$expected_temp_dir"
 }
 
 setup_coding_context_worktree_handoff() {
@@ -3340,6 +3418,7 @@ run_case() {
         begin_trial "$case_name" "$run"
         record_variant "${#prompts[@]}"
 
+        restore_agent_fixtures
         local setup_fn="setup_${case_name}"
         if declare -f "$setup_fn" >/dev/null 2>&1; then
             "$setup_fn" "$run"
@@ -3650,13 +3729,15 @@ run_all() {
     print_category "Subagents"
 
     local previous_timeout="$PROMPT_TIMEOUT"
-    PROMPT_TIMEOUT=120
+    # A delegated turn takes 40 to 110 s on an idle endpoint. Keep at least
+    # 120 s, but honor a larger NETCLAW_EVAL_TIMEOUT.
+    PROMPT_TIMEOUT=$(( previous_timeout > 120 ? previous_timeout : 120 ))
 
     run_case subagent_headless_ambiguous_task "spawned subagent completes ambiguous task without clarification" \
         "Use spawn_agent with agent headless-analyst. Ask it to prepare final release notes from these candidate changes without asking follow-up questions. Include everything that looks user-facing: fixed arrow-key input decoding; updated an internal test helper; improved file trace listener encoding. Return the subagent's assumptions and final notes." \
         "Delegate this to the headless-analyst subagent using spawn_agent: decide what belongs in release notes from this ambiguous list without asking me for clarification: legacy CSI key decoding fix; private test fixture cleanup; file trace listener writes UTF-8 correctly. Include all user-facing items and return assumptions plus final notes."
 
-    run_case subagent_specialization_precedence "specialized subagent guidance overrides a conflicting deployment playbook" \
+    run_case subagent_specialization_precedence "parent task wins over the child role; parent returns a mission-compliant email and keeps the agent file" \
         "Use spawn_agent with agent headless-analyst to write a prospecting email to Casey, a VP of Engineering interested in reducing operational toil. Return its final email." \
         "Delegate to headless-analyst: draft an outbound email for Jordan, a technology leader evaluating autonomous operations. Return the worker's final email."
 
@@ -3664,7 +3745,7 @@ run_all() {
         "Use spawn_agent with agent project-scope-analyst. Ask it to inspect /home/netclaw/.netclaw/workspaces/project-scope-target with exactly two shell_execute calls: git status --short and git diff --stat. Return the command results, project layout, and build-file summary. Keep the parent project unchanged."
 
     run_case --json subagent_session_scratch_disposable "subagent standard temporary API uses its managed temp directory" \
-        "Use spawn_agent with agent disposable-diagnostic. Ask it to complete its assigned diagnostic and return the exact marker. Do not include a Context argument."
+        "Use spawn_agent with agent disposable-diagnostic. Ask it to complete its assigned diagnostic and return the exact path that it reports. Do not include a Context argument."
 
     PROMPT_TIMEOUT="$previous_timeout"
 
