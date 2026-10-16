@@ -79,7 +79,7 @@ public class SubAgentActorTests : SubAgentActorTestBase
 
         var watcher = CreateTestProbe("child-terminal-watcher");
         watcher.Watch(actor);
-        owner.Send(actor, new ChildCheckpointCommitted(ForceNoTools: false));
+        owner.Send(actor, new ChildCheckpointCommitted());
         owner.Send(actor, new ChildTerminalCommitted());
         await watcher.ExpectTerminatedAsync(actor, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
