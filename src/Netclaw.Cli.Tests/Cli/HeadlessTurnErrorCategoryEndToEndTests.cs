@@ -63,21 +63,6 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Tool_call_limit_that_the_model_ignores_is_a_model_failure(bool json)
-    {
-        // Each call differs, so the cycle guard stays quiet. The limit of 3 forces the text-only turn.
-        var model = new ScriptedModel(call => ToolCall(call, query: $"query-{call.Number}"));
-
-        var run = await RunAsync(model, json, maxToolIterations: 3);
-
-        AssertFailed(run, json, "model", "ModelBehavior");
-        Assert.Contains("required text only", run.Stderr, StringComparison.Ordinal);
-        Assert.Equal(4, model.CallCount);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
     public async Task Cycle_stop_that_the_model_ignores_is_a_model_failure(bool json)
     {
         // The eval case tool_cycle_terminal. The same call repeats, so the runtime corrects once and
@@ -231,11 +216,8 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     [InlineData(true)]
     public async Task Cycle_stop_that_the_model_obeys_is_not_a_failure(bool json)
     {
-        // The model obeys the first runtime intervention that it can see: the tools are gone, or the
-        // runtime replaced the result of its last call.
-        var model = new ScriptedModel(call => call.ToolsOffered && !call.RuntimeIntervened
-            ? ToolCall(call, query: "same")
-            : Text("Done."));
+        // The model obeys the runtime correction: the runtime replaced the result of its last call.
+        var model = new ScriptedModel(call => call.RuntimeIntervened ? Text("Done.") : ToolCall(call, query: "same"));
 
         var run = await RunAsync(model, json, maxToolIterations: 20);
 
@@ -247,13 +229,23 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Tool_call_limit_that_the_model_obeys_is_not_a_failure(bool json)
+    public async Task Distinct_tool_rounds_past_the_legacy_limit_then_an_answer_is_not_a_failure(bool json)
     {
-        var model = new ScriptedModel(call => call.ToolsOffered ? ToolCall(call, query: $"query-{call.Number}") : Text("Done."));
+        // MaxToolIterationsPerTurn is a legacy field with no ceiling. Each call differs, so the cycle guard
+        // stays quiet. The model makes 12 tool rounds against a legacy value of 3, then it answers.
+        const int toolRounds = 12;
+        var toolsWithdrawn = false;
+        var model = new ScriptedModel(call =>
+        {
+            toolsWithdrawn |= !call.ToolsOffered;
+            return call.Number <= toolRounds ? ToolCall(call, query: $"query-{call.Number}") : Text("Done.");
+        });
 
         var run = await RunAsync(model, json, maxToolIterations: 3);
 
         AssertSucceeded(run, json);
+        Assert.Equal(toolRounds + 1, model.CallCount);
+        Assert.False(toolsWithdrawn, "The runtime withdrew the tools before the model answered.");
     }
 
     [Theory]
@@ -413,7 +405,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
 internal sealed record ModelCall(int Number, bool ToolsOffered, bool RuntimeIntervened);
 
 /// <summary>
-/// A model that follows a script. It ignores the tool list unless the script reads
+/// A model that follows a script. It ignores the tool list. A script can read
 /// <see cref="ModelCall.ToolsOffered"/>. The script throws to fail the call. The throw is synchronous,
 /// so the failure reaches the session actor before the send is acknowledged. Every reply carries
 /// <c>finishReason</c>. A null value models a stream that ended with no finish reason.
