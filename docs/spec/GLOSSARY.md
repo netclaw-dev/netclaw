@@ -145,8 +145,7 @@ A tombstone with the outcome `Failed` also keeps the reminder prompt. No tombsto
 The audience gates every history and status read of the ended reminder, and the read of the prompt.
 The manager deletes the history and then the tombstone 12 days after the end time.
 
-**Code anchors:** `ReminderManagerActor`, `ReminderDefinitionStore` (planned in
-`openspec/changes/oneshot-reminder-autodelete`)
+**Code anchors:** `ReminderTombstone`, `ReminderManagerActor`, `ReminderDefinitionStore`
 
 ## Tool Lifecycle Terms
 

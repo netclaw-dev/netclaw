@@ -10,7 +10,7 @@ keywords:
   - reminder approvals
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "1.0.1"
 license: MIT
 compatibility: "netclaw >= 0.27.1"
 ---
@@ -55,6 +55,9 @@ The user message gives the reminder ID. If it is missing, call
 
 ## Pitfalls
 
+- A one-shot reminder deletes itself after it runs or after it is cancelled.
+  Test a one-shot before its fire time. After that, `run_reminder` reports that
+  the reminder ended.
 - Do not use `set_reminder` to make a copy of the reminder for the test. The
   test must use the real reminder's prompt and audience.
 - The test does not change the schedule or the reminder history.

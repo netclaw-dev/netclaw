@@ -88,6 +88,35 @@ Check the daemon logs after upgrade for `predates issue #994` error entries to
 find affected files. There is no automatic backfill and no `doctor` fix for
 this case.
 
+### One-shot reminders delete themselves (issue #2526)
+
+A one-shot reminder now deletes itself after it runs, after its failures reach the
+limit, after it expires, or after you cancel it. Before this change, a spent
+one-shot stayed as a disabled definition.
+
+**What happens at the upgrade:** the daemon ends every leftover one-shot at
+startup. A leftover is a one-shot with a recorded outcome, or a disabled one-shot
+whose fire time has passed. No operator step is needed, and there is no prune
+command. The 12-hour sweep repeats the same work.
+
+**What stays:** a small end record for each ended one-shot, in
+`~/.netclaw/schedules/reminders/ended/`, and its run history. Both stay for 12 days
+after the end. A leftover that ended more than 12 days ago is removed in the same
+pass. `netclaw reminder status <id>` and `netclaw reminder history <id>` work in
+that period. `netclaw reminder list` does not show an ended one-shot.
+
+**What changes for a failed one-shot:** the daemon deletes the definition. The end
+record keeps the reminder prompt for 12 days, and only `netclaw reminder status <id>`
+shows it. Copy the prompt into a new `set_reminder` call to run the reminder again.
+Look for the `reminder.auto_disabled` alert and the channel notice.
+
+**What stays the same:** a paused one-shot (`netclaw reminder disable`) with a future
+fire time stays, and `netclaw reminder enable` can start it again. A recurring
+reminder is never deleted on its own.
+
+**Rollback:** an older binary ignores the `ended/` folder and the history files that
+have no definition. It does not create the deleted definitions again.
+
 ## Release Checklist (Pre-Distribution)
 
 - migration scripts are idempotent and versioned
