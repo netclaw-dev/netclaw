@@ -38,15 +38,15 @@ public sealed partial class SessionModelContextTests
 
         // Act
         var stale = owner.CompleteInspection(
-            firstReply, firstState, childContinuation: null, TrustAudience.Personal, currentToolTrust: null);
+            firstReply, firstState, TrustAudience.Personal, currentToolTrust: null);
         var current = owner.CompleteInspection(
-            secondReply, secondState, childContinuation: null, TrustAudience.Personal, currentToolTrust: null);
+            secondReply, secondState, TrustAudience.Personal, currentToolTrust: null);
         owner.ResetForNewTurn();
         var stoppedCall = Assert.IsType<ContextCall.Inspect>(Start(owner, 43, secondState));
         var stoppedReply = Assert.IsType<WorkingContextSnapshotReady>(await stoppedCall.Work);
         owner.InvalidateInspection();
         var stopped = owner.CompleteInspection(
-            stoppedReply, secondState, childContinuation: null, TrustAudience.Personal, currentToolTrust: null);
+            stoppedReply, secondState, TrustAudience.Personal, currentToolTrust: null);
 
         // Assert
         Assert.Null(stale);
@@ -66,7 +66,7 @@ public sealed partial class SessionModelContextTests
         => owner.StartCall(
             callId,
             state,
-            childContinuation: null,
+           
             admittedTurn: null,
             sourceFallback,
             toolTrust: null,

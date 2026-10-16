@@ -48,7 +48,19 @@ public static partial class SessionProtocol
         /// A buffered input keeps it so that a later drain can choose the turn that the input joins.
         /// </summary>
         internal TurnContext? AdmittedAuthority { get; init; }
+
+        /// <summary>
+        /// Actor-local kind of an input that the session owner produces when a child run ends. The input is
+        /// automated even though its recorded requester is a person, so it never abandons an open approval.
+        /// Null for every other input. Input that comes from outside the session never sets it.
+        /// </summary>
+        internal ChildNoticeInput? Notice { get; init; }
     }
+
+    /// <summary>
+    /// A child result notice and the exact authority to record for it: the context of the run owner with a new turn.
+    /// </summary>
+    internal sealed record ChildNoticeInput(ChildNotice Notice, TurnContextRecord Context);
 
     /// <summary>
     /// Channel-agnostic trusted-turn delivery for Mode B reminder re-entry.

@@ -119,6 +119,9 @@ internal sealed class SessionInputFlow
                 ? new AdmissionDecision.Reject("The legacy input is quarantined and cannot execute.")
                 : new AdmissionDecision.Existing();
 
+        if (command.Notice is { } notice)
+            return PrepareNoticeAdmission(command, notice, state, sessionId, admittedAtMs);
+
         var context = TurnContext.FromMessageSource(
             sessionId,
             command.Source?.TurnId ?? new TurnId(IdGen.ShortId()),
@@ -156,6 +159,38 @@ internal sealed class SessionInputFlow
         return new AdmissionDecision.Persist(evt);
     }
 
+    // The owner built the notice from the state of a run. The reducer validates it against that state before the write,
+    // so a second notice for a run, or a notice with another authority, fails here and never reaches the journal.
+    private static AdmissionDecision PrepareNoticeAdmission(
+        SendUserMessage command,
+        ChildNoticeInput notice,
+        SessionState state,
+        SessionId sessionId,
+        long admittedAtMs)
+    {
+        var evt = new InputAdmitted
+        {
+            SessionId = sessionId,
+            InputId = InputId.New(),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = command.Content ?? string.Empty },
+            TurnContext = notice.Context,
+            ChildNotice = notice.Notice,
+            AdmittedAtMs = admittedAtMs
+        };
+        if (!TurnContext.TryFromRecord(evt.TurnContext, out _, out var reason))
+            return new AdmissionDecision.Reject(reason ?? "invalid stored authority");
+        try
+        {
+            _ = state.Apply(evt);
+        }
+        catch (InvalidOperationException error)
+        {
+            return new AdmissionDecision.Reject(error.Message);
+        }
+
+        return new AdmissionDecision.Persist(evt);
+    }
+
     public SendUserMessage AdmissionCommitted(
         InputAdmitted admitted,
         SendUserMessage command,
@@ -165,7 +200,12 @@ internal sealed class SessionInputFlow
         var authority = RecordedAuthority(admitted);
         _inFlightDedup.ReserveReminder(command.Source?.ReminderId);
         _inFlightDedup.ReserveBackgroundJob(command.Source?.BackgroundJobId);
-        var accepted = command with { AdmittedInputId = admitted.InputId, AdmittedAuthority = authority };
+        var accepted = command with
+        {
+            AdmittedInputId = admitted.InputId,
+            AdmittedAuthority = authority,
+            Source = command.Source ?? (admitted.ChildNotice is null ? null : RecordedSource(admitted, authority))
+        };
         PlaceAccepted(accepted, placement);
         return accepted;
     }
@@ -209,7 +249,9 @@ internal sealed class SessionInputFlow
                 MediaReferences = admitted.UserMessage.MediaReferences,
                 Source = source,
                 AdmittedInputId = admitted.InputId,
-                AdmittedAuthority = authority
+                AdmittedAuthority = authority,
+                // The journal keeps the kind. A rebuilt notice stays automated input.
+                Notice = admitted.ChildNotice is { } notice ? new ChildNoticeInput(notice, admitted.TurnContext) : null
             }, false));
             restored++;
         }
@@ -323,7 +365,8 @@ internal sealed class SessionInputFlow
                 Content = item.UserMessage.Content ?? string.Empty,
                 MediaReferences = item.UserMessage.MediaReferences,
                 AdmittedInputId = item.InputId,
-                AdmittedAuthority = RecordedAuthority(item)
+                AdmittedAuthority = RecordedAuthority(item),
+                Notice = item.ChildNotice is { } notice ? new ChildNoticeInput(notice, item.TurnContext) : null
             }, false));
         }
 

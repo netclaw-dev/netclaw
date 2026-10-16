@@ -122,8 +122,10 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : RecordedJournalTestB
                 && message.Text?.Contains("The child accepted-run confirmed", StringComparison.Ordinal) == true);
     }
 
+    // Intent change of S2: a prepared result that no parent decision consumed is reported as one notice. The
+    // synthetic child_run_result pair is gone. The result text moves to result.md, which the notice names.
     [Fact]
-    public async Task Sqlite_snapshot_cold_restore_delivers_one_prepared_child_pair()
+    public async Task Sqlite_snapshot_cold_restore_reports_one_prepared_child_result_as_a_notice()
     {
         var sessionId = new SessionId(SessionValue);
         var persistenceId = $"session-{sessionId.Value}";
@@ -138,18 +140,15 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : RecordedJournalTestB
             cancellationToken: TestContext.Current.CancellationToken);
 
         var messages = Assert.Single(_chatClient.ReceivedMessages);
-        var childCalls = messages.SelectMany(static message => message.Contents.OfType<FunctionCallContent>())
-            .Where(static call => call.Name == "child_run_result")
-            .ToArray();
-        var childResults = messages.SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
-            .Where(result => childCalls.Any(call => call.CallId == result.CallId))
-            .ToArray();
-        var childCall = Assert.Single(childCalls);
-        Assert.Single(childResults);
-        Assert.Equal(childCall.CallId, childResults[0].CallId);
-        Assert.Equal("accepted-run", childCall.Arguments?["run_id"]?.ToString());
-        Assert.Contains("The child accepted-run confirmed its result.", childResults[0].Result?.ToString(),
-            StringComparison.Ordinal);
+        Assert.DoesNotContain(messages.SelectMany(static message => message.Contents.OfType<FunctionCallContent>()),
+            static call => call.Name == "child_run_result");
+        var notice = Assert.Single(messages, static message =>
+            message.Role == Microsoft.Extensions.AI.ChatRole.User
+            && message.Text.Contains("accepted-run", StringComparison.Ordinal)
+            && message.Text.Contains("result.md", StringComparison.Ordinal));
+        var path = System.Text.RegularExpressions.Regex.Match(notice.Text, @"result_file=(\S+)").Groups[1].Value;
+        Assert.Contains("The child accepted-run confirmed its result.",
+            await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken), StringComparison.Ordinal);
         Assert.Empty(_toolExecutor.Calls);
         Assert.Equal(1, _chatClient.CallCount);
     }

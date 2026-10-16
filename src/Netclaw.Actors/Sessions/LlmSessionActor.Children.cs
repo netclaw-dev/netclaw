@@ -83,25 +83,7 @@ public sealed partial class LlmSessionActor
                 return;
             RecordChildTerminal(message.RunId, message.Result, lost: false, warning: null, Sender);
         });
-        Command<ChildResultPrepared>(message =>
-        {
-            if (!_state.ChildRuns.TryGetValue(message.RunId, out var run) ||
-                run.Lifecycle is not ChildRunLifecycle.Terminal terminal ||
-                !ReferenceEquals(terminal.Result, message.ExpectedTerminal))
-                return;
-            var evt = new ChildRunEvent.ResultPrepared(message.Call, message.Result, message.ReviewedWorkingContext)
-            { SessionId = _sessionId, RunId = message.RunId, RecordedAtMs = NowMs() };
-            _ = _state.Apply(evt);
-            Persist(evt, committed => { _state = _state.Apply(committed); WakeForChild(); });
-        });
-        Command<ChildPreparationFailed>(message =>
-        {
-            _log.Error(message.Error, "Child result preparation failed for {RunId}", message.RunId);
-            var run = _state.ChildRuns.GetValueOrDefault(message.RunId);
-            if (run?.Lifecycle is ChildRunLifecycle.Terminal terminal && ReferenceEquals(terminal.Result, message.ExpectedTerminal))
-                Self.Tell(BuildPreparedChild(run, terminal.Result, terminal.Result.Result,
-                    $"Result evidence preparation failed: {message.Error.Message}", reviewedContext: null));
-        });
+        Command<ChildResultWritten>(HandleChildResultWritten);
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
         Command<RecoverChildRuns>(_ => RecoverChildren());
     }
@@ -114,7 +96,8 @@ public sealed partial class LlmSessionActor
         if (existing is not null)
         {
             if (existing.ArgumentsDigest != prepared.ArgumentsDigest || !HasSameChildAuthority(existing.OriginalContext, message.OriginalContext))
-                replyTo.Tell(new Status.Failure(new InvalidOperationException("The child start identity already names a different request.")));
+                replyTo.Tell(new Status.Failure(new ChildStartRejectedException(SubAgentOutcomeReason.SpawnError,
+                    "The child start identity already names a different request.")));
             else
                 replyTo.Tell(new ChildRunAcceptance(existing.RunId, existing.ScopeId));
             return;
@@ -130,7 +113,8 @@ public sealed partial class LlmSessionActor
         };
         if (RestartDrainRequested || message.Cancellation.IsCancellationRequested || !authorityIsCurrent || !invocationIsCurrent)
         {
-            replyTo.Tell(new Status.Failure(new InvalidOperationException("The child start no longer belongs to an active invocation.")));
+            replyTo.Tell(new Status.Failure(new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable,
+                "The child start no longer belongs to an active invocation.")));
             return;
         }
         var run = new BackgroundChildRun
@@ -238,14 +222,8 @@ public sealed partial class LlmSessionActor
 
     private string ChildStatus(BackgroundChildRun run)
     {
-        var terminal = run.Lifecycle switch
-        {
-            ChildRunLifecycle.Terminal raw => raw.Result,
-            ChildRunLifecycle.Prepared prepared => prepared.Delivery.Terminal,
-            ChildRunLifecycle.Consumed consumed => consumed.Delivery.Terminal,
-            _ => null
-        };
-        var closed = run.Lifecycle as ChildRunLifecycle.Closed;
+        var terminal = (run.Lifecycle as ChildRunLifecycle.Terminal)?.Result;
+        var reported = run.Lifecycle as ChildRunLifecycle.Reported;
         var checkpoint = run.Lifecycle switch
         {
             ChildRunLifecycle.Accepted accepted => accepted.Checkpoint,
@@ -258,9 +236,9 @@ public sealed partial class LlmSessionActor
             source_operation = run.SourceOperation, accepted_at_ms = run.AcceptedAtMs,
             state = run.Lifecycle.GetType().Name.ToLowerInvariant(),
             pending_approval_count = _toolWorkflow.ChildApprovalCount(run.RunId),
-            terminal = terminal is not null || closed is not null,
-            outcome = (terminal?.Result.Outcome ?? closed?.Outcome)?.ToString().ToLowerInvariant(),
-            reason = (terminal?.Result.OutcomeReason ?? closed?.Reason)?.Value,
+            terminal = terminal is not null || reported is not null,
+            outcome = (terminal?.Result.Outcome ?? reported?.Outcome)?.ToString().ToLowerInvariant(),
+            reason = (terminal?.Result.OutcomeReason ?? reported?.Reason)?.Value,
             summary = terminal?.Result.Output ?? checkpoint?.Summary,
             completed_round = checkpoint?.CompletedRound,
             warning = terminal?.EvidenceWarning
@@ -296,65 +274,85 @@ public sealed partial class LlmSessionActor
                 TimestampMs = NowMs(), Duration = TimeSpan.FromMilliseconds(Math.Max(0, NowMs() - run.AcceptedAtMs)),
                 FindingsCount = result.FindingsCount
             }, OutputFilter.ToolCalls);
-            PrepareChildResult(_state.ChildRuns[runId], terminal);
+            PrepareChildResult(_state.ChildRuns[runId], terminal, legacy: null);
         });
     }
 
-    private void PrepareChildResult(BackgroundChildRun run, ChildRunTerminal terminal)
+    // Off the actor thread: review the child working context, then write result.md. The file is a copy of the
+    // terminal event for the model to read. The notice states the outcome from the journal and never from the file.
+    // A run that a deployed runtime prepared keeps its reviewed context and cannot be enriched again, because the
+    // old state dropped the initial snapshot.
+    private void PrepareChildResult(BackgroundChildRun run, ChildRunTerminal terminal, LegacyPreparedResult? legacy)
     {
         var owner = Self;
-        var initialSnapshot = run.InitialWorkingSnapshot
-            ?? throw new InvalidOperationException("A terminal child requires its initial context snapshot before preparation.");
         var spawner = _subAgentSpawner;
-        if (spawner is null)
-        {
-            owner.Tell(BuildPreparedChild(run, terminal, terminal.Result, "Child evidence preparation is unavailable.", reviewedContext: null));
-            return;
-        }
+        var storage = _sessionStorage.ForChild(run.RunId, run.ScopeId);
+        var resultPath = (storage.ChildFiles ?? throw new InvalidOperationException("A child run requires child storage.")).ResultFile;
+        var initialSnapshot = run.InitialWorkingSnapshot;
+        if (legacy is null && initialSnapshot is null)
+            throw new InvalidOperationException("A terminal child requires its initial context snapshot before preparation.");
         _ = PrepareAsync();
         async Task PrepareAsync()
         {
+            var result = terminal.Result;
+            WorkingContextDelta? reviewed = legacy?.ReviewedWorkingContext;
+            var warning = terminal.EvidenceWarning;
+            if (legacy is null)
+            {
+                if (spawner is null)
+                {
+                    warning = "Child evidence preparation is unavailable.";
+                }
+                else
+                {
+                    try
+                    {
+                        result = await spawner.EnrichWorkingContextResultAsync(terminal.Result,
+                            initialSnapshot!, run.OriginalContext.Audience, CancellationToken.None);
+                        reviewed = result.WorkingContext;
+                    }
+                    catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
+                    {
+                        _log.Error(error, "Child result preparation failed for {RunId}", run.RunId);
+                        warning = $"Result evidence preparation failed: {error.Message}";
+                    }
+                }
+            }
+
             try
             {
-                var result = await spawner.EnrichWorkingContextResultAsync(terminal.Result,
-                    initialSnapshot, run.OriginalContext.Audience, CancellationToken.None);
-                if (result.Success)
-                {
-                    var storage = _sessionStorage.ForChild(run.RunId, run.ScopeId);
-                    result = result with { LogPath = storage.LogPath.Value, ArtifactDirectory = storage.ArtifactDirectory.Value };
-                }
-                owner.Tell(BuildPreparedChild(run, terminal, result, terminal.EvidenceWarning, result.WorkingContext));
+                await ChildRunDocuments.WriteAtomicAsync(resultPath,
+                    ChildRunDocuments.RenderResult(run, terminal, result, storage, warning), CancellationToken.None);
+                owner.Tell(new ChildResultWritten(run.RunId, reviewed, resultPath, null), ActorRefs.NoSender);
             }
-            catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
-            { owner.Tell(new ChildPreparationFailed(run.RunId, terminal, error)); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                owner.Tell(new ChildResultWritten(run.RunId, reviewed, resultPath, error), ActorRefs.NoSender);
+            }
         }
     }
 
-    private static ChildResultPrepared BuildPreparedChild(BackgroundChildRun run, ChildRunTerminal terminal,
-        SubAgentResult result, string? warning, WorkingContextDelta? reviewedContext)
+    // The result file is ready, or its write failed. Either way the parent learns that the run ended: the notice says
+    // when the file is missing. The notice goes through the ordinary input path, so it waits behind other inputs,
+    // joins only a turn of the same requester, and never abandons an open approval.
+    private void HandleChildResultWritten(ChildResultWritten written)
     {
-        var callId = new ToolCallId($"child-result-{run.RunId.Value}");
-        var call = new SerializableChatMessage
+        // Another writer can finish first, for instance after an actor restart. The run state decides.
+        if (!_state.ChildRuns.TryGetValue(written.RunId, out var run) ||
+            run.Lifecycle is not ChildRunLifecycle.Terminal terminal)
+            return;
+        if (written.WriteFailure is { } failure)
+            _log.Error(failure, "The result file of child run {RunId} could not be written", run.RunId);
+
+        var notice = new ChildNotice(run.RunId, written.ReviewedWorkingContext);
+        var context = run.OriginalContext with { TurnId = new TurnId(IdGen.ShortId()).Value };
+        // No sender: the owner produces this input, and nobody waits for an acknowledgement.
+        Self.Tell(new SendUserMessage
         {
-            Role = ChatRole.Assistant,
-            ToolCalls = [new SerializableToolCall
-            {
-                CallId = callId, Name = new ToolName("child_run_result"),
-                ArgumentsJson = JsonSerializer.Serialize(new { run_id = run.RunId.Value, source_operation = run.SourceOperation })
-            }]
-        };
-        var body = new SerializableChatMessage
-        {
-            Role = ChatRole.Tool, Name = "child_run_result", ToolCallId = callId,
-            Content = JsonSerializer.Serialize(new
-            {
-                run_id = run.RunId.Value, scope_id = run.ScopeId.Value, source_operation = run.SourceOperation,
-                outcome = result.Outcome.ToString().ToLowerInvariant(), reason = result.OutcomeReason?.Value,
-                output = result.Output, findings = result.Findings, working_context = result.WorkingContext,
-                log_path = result.LogPath, artifact_directory = result.ArtifactDirectory, warning, lost = terminal.Lost
-            })
-        };
-        return new ChildResultPrepared(run.RunId, terminal, call, body, reviewedContext);
+            SessionId = _sessionId,
+            Content = ChildRunDocuments.RenderNotice(run, terminal.Result.Result, written.ResultPath, written.WriteFailure?.Message),
+            Notice = new ChildNoticeInput(notice, context)
+        }, ActorRefs.NoSender);
     }
 
     private bool ChildTerminated(IActorRef child)
@@ -393,20 +391,16 @@ public sealed partial class LlmSessionActor
                 RecordChildTerminal(run.RunId, LostChildResult(run), lost: true,
                     warning: "Recovery does not relaunch uncertain child work.", ActorRefs.Nobody);
             else if (run.Lifecycle is ChildRunLifecycle.Terminal terminal)
-                PrepareChildResult(run, terminal.Result);
+                PrepareChildResult(run, terminal.Result, terminal.LegacyPrepared);
         }
-        WakeForChild();
     }
 
-    private BackgroundChildRun? UnconsumedChild(ChildContinuation? continuation)
-        => continuation is not null && _state.ChildRuns.TryGetValue(continuation.RunId, out var run) &&
-           run.Lifecycle is ChildRunLifecycle.Prepared ? run : null;
-
-    private void ReviewConsumedChildFindings(BackgroundChildRun? run)
+    // The notice is admitted input, so the findings review runs once, when the journal accepts it.
+    private void ReviewChildFindings(BackgroundChildRun? run)
     {
-        if (run?.Lifecycle is not ChildRunLifecycle.Prepared prepared || !prepared.Delivery.Terminal.Result.Success)
+        if (run?.Lifecycle is not ChildRunLifecycle.Terminal terminal || !terminal.Result.Result.Success)
             return;
-        var result = prepared.Delivery.Terminal.Result;
+        var result = terminal.Result.Result;
         var findings = SessionToolExecutionPipeline.ReviewChildFindings(run.RunId, run.AgentName,
             TimeSpan.Zero, result.Findings, _sessionId);
         ProcessChildFindings([new CompletedSubAgentRun
@@ -414,25 +408,5 @@ public sealed partial class LlmSessionActor
             RunId = run.RunId, AgentName = run.AgentName, Completion = result.Completion,
             FindingsCount = result.FindingsCount, Duration = TimeSpan.Zero
         }], findings);
-    }
-
-    private bool HasReadyChildResult => _state.GetExecutableChildRuns().Any(run =>
-        run.Lifecycle is ChildRunLifecycle.Prepared or ChildRunLifecycle.Consumed);
-
-    private void WakeForChild()
-    {
-        if (_phase.Current != SessionPhase.Ready || RestartDrainRequested ||
-            _toolWorkflow.HasPendingApprovals() || !HasReadyChildResult)
-            return;
-        if (_toolWorkflow.HasApprovalHistory(_state))
-        {
-            var abandoned = BuildInterruptedToolBatchAfterRecoveryEvent();
-            Persist(abandoned, evt => { ApplyToolBatchAbandoned(evt); WakeForChild(); });
-            return;
-        }
-        _turnState.ResetForNewTurn();
-        _modelContext.ResetForNewTurn();
-        TransitionTo(SessionPhase.Processing);
-        FireLlmCall();
     }
 }
