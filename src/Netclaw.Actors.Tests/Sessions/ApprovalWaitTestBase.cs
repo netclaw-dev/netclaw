@@ -60,6 +60,9 @@ public abstract class ApprovalWaitTestBase : LlmSessionTestBase
                 SnapshotInterval = 1,
                 TitleGenerationInterval = 0,
                 MaxInlineToolResultChars = 200,
+                // A short history still reaches the summary call, so a spec can hold a compaction open.
+                // Compaction starts only when a spec reports a full context window.
+                KeepRecentMessages = 0,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new AudienceNamingPromptProvider());
@@ -324,6 +327,21 @@ public abstract class ApprovalWaitTestBase : LlmSessionTestBase
             SourceKind = new SourceKind("reminder")
         },
         ReceivedAt = FixedReceivedAt,
+    };
+
+    // Mirrors the source that the restart reminder uses to resume a session after a daemon restart.
+    protected static MessageSource RestartReminderSource(ReminderDefinition reminder) => new()
+    {
+        ChannelType = ChannelType.Slack,
+        SenderId = new SenderId("reminder-system"),
+        MessageId = $"{reminder.Id}:1",
+        TurnId = new TurnId($"{reminder.Id}:1"),
+        Audience = reminder.Audience,
+        Boundary = reminder.Boundary,
+        Principal = PrincipalClassification.VerifiedAutomation,
+        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted),
+        ReceivedAt = new DateTimeOffset(2026, 5, 17, 12, 0, 0, TimeSpan.Zero),
+        ReminderId = new ReminderId($"{reminder.Id}:1")
     };
 
     protected sealed class AudienceNamingPromptProvider : ISystemPromptProvider

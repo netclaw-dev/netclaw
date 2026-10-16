@@ -186,10 +186,10 @@ public sealed record ReminderDefinition
     /// <summary>
     /// When true, a missed delivery fails the execution and emits
     /// <see cref="OperationalAlert.ReminderExecutionFailed"/>. For
-    /// <see cref="DeliveryKind.CurrentSession"/>, this gates envelope ack
-    /// on the <see cref="ReminderDeliveryResult"/> signal. For
     /// <see cref="DeliveryKind.Channel"/>, this gates success on the
-    /// notification tool being called. Ignored for <see cref="DeliveryKind.None"/>.
+    /// notification tool being called. It has no effect for
+    /// <see cref="DeliveryKind.CurrentSession"/>, where the run ends when the
+    /// session admits the fire, and none for <see cref="DeliveryKind.None"/>.
     /// </summary>
     public bool DeliveryRequired { get; init; } = true;
 
@@ -426,44 +426,6 @@ public static partial class ReminderProtocol
     public sealed record GetReminderResponse(ReminderInfo? Reminder) : IReminderResponse, INoSerializationVerificationNeeded;
 
     // ===== Delivery / Health =====
-
-    /// <summary>
-    /// Point-to-point delivery outcome sent by a channel binding actor directly
-    /// back to the dispatching <see cref="ReminderExecutionActor"/> (carried as
-    /// <see cref="Channels.MessageSource.DeliveryObserver"/> on the originating
-    /// <c>DeliverTrustedSessionTurn</c>) when a reminder-sourced turn completes.
-    /// Used for <see cref="DeliveryKind.CurrentSession"/> with
-    /// <see cref="ReminderDefinition.DeliveryRequired"/> = true to gate envelope
-    /// ack on whether the assistant reply actually reached the channel.
-    /// <para>
-    /// Unlike the prior EventStream-broadcast observation, this signal reports
-    /// <see cref="Delivered"/> = false on a failed post, so the execution actor
-    /// can report failure immediately (triggering Akka.Reminders redelivery)
-    /// instead of waiting out the backstop timeout.
-    /// </para>
-    /// </summary>
-    /// <param name="ReminderDeliveryKey">
-    /// Composite key in format "{reminderId}:{fireTimestampMs}".
-    /// </param>
-    /// <param name="ChannelType">
-    /// The channel that attempted the delivery.
-    /// </param>
-    /// <param name="Delivered">
-    /// True when the assistant reply was posted to the channel; false when the
-    /// turn completed without a successful post.
-    /// </param>
-    /// <param name="FailureReason">
-    /// Optional human-readable reason when <see cref="Delivered"/> is false.
-    /// </param>
-    /// <param name="ObservedAtMs">
-    /// Optional timestamp when the outbound delivery outcome was observed.
-    /// </param>
-    public sealed record ReminderDeliveryResult(
-        ReminderId ReminderDeliveryKey,
-        Channels.ChannelType ChannelType,
-        bool Delivered,
-        string? FailureReason = null,
-        long? ObservedAtMs = null) : IReminderResponse, INoSerializationVerificationNeeded;
 
     // ===== Health query =====
 

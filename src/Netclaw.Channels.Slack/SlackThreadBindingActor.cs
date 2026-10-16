@@ -105,8 +105,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             .WithContext("SlackThreadTs", _threadTs);
 
         _outputEngine = new ChannelOutputEngine<PendingApprovalRequest, SlackEventTs>(
-            channelType: ChannelType.Slack,
-            channelName: "Slack",
             cursorComparer: CursorComparer,
             pendingRequests: _pendingApprovalRequests,
             createPendingRequest: request => new PendingApprovalRequest(request),
@@ -128,8 +126,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
             advanceCursor: cursor => AdvanceCursor(new SlackEventTs(cursor)),
             postEmptyTurnFallbackAsync: PostEmptyTurnFallbackAsync,
-            onEmptyTurnSuppressedAsync: NotifyFailedTurnAsync,
-            readObservedAtMs: _ => _dependencies.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+            onEmptyTurnSuppressedAsync: NotifyFailedTurnAsync);
 
         _hydrationEngine = new ThreadGapHydrationEngine(
             sessionId: _sessionId,
@@ -330,15 +327,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             ReminderId = message.Source.ReminderId,
             AckTarget = ackTarget
         };
-
-        // Only delivery-gated (DeliveryRequired) reminders carry a
-        // DeliveryObserver. Key it by the per-fire reminder delivery id so a
-        // second concurrent reminder to this session can't overwrite the
-        // first's observer before its turn reaches TurnCompleted.
-        if (message.Source.DeliveryObserver is { } deliveryObserver
-            && message.Source.ReminderId is { } reminderKey
-            && !string.IsNullOrWhiteSpace(reminderKey.Value))
-            _outputEngine.TrackReminderDeliveryObserver(reminderKey, deliveryObserver);
 
         try
         {
@@ -758,9 +746,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         QueueProcessingIndicatorClearIfActive();
         // Reset the per-turn delivery state: a reinit aborts the in-flight
         // turn, and a stale delivered flag would otherwise leak into the next
-        // turn and falsely report a later reminder as delivered.
+        // turn and suppress its empty-turn fallback.
         _lastFailedPost = null;
-        _outputEngine.ResetForPipelineReinitialize(reason);
+        _outputEngine.ResetForPipelineReinitialize();
         await _handle.ReinitializeAsync(
             reason,
             () => Timers.StartSingleTimer(

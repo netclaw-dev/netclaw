@@ -22,6 +22,13 @@ public static partial class SessionProtocol
     }
 
     /// <summary>
+    /// Acknowledges a restart-resume message that resumes nothing. No turn runs for this message, so a caller that
+    /// waits for a terminal turn must settle at once. An interrupted input can still be pending, for example when
+    /// another turn runs. That input is not part of this message.
+    /// </summary>
+    public sealed record RestartResumeNotNeeded(SessionId SessionId) : CommandAck(SessionId);
+
+    /// <summary>
     /// Reports that a session stopped and supplies any reminder that startup must register.
     /// </summary>
     public sealed record DaemonRestartPrepared(

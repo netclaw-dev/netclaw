@@ -115,8 +115,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             NotifyDeliveryFailedAsync);
 
         _outputEngine = new ChannelOutputEngine<PendingApprovalRequest, DiscordMessageId>(
-            channelType: ChannelType.Discord,
-            channelName: "Discord",
             cursorComparer: CursorComparer,
             pendingRequests: _pendingApprovalRequests,
             createPendingRequest: request => new PendingApprovalRequest(request),
@@ -134,8 +132,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             postEmptyTurnFallbackAsync: () => SafeReplyAsync(EmptyTurnFallbackText),
             // Discord reports a delivery failure inline from SafeReplyAsync, so
             // the session already knows by the time the turn completes.
-            onEmptyTurnSuppressedAsync: _ => Task.CompletedTask,
-            readObservedAtMs: completed => completed.TimestampMs);
+            onEmptyTurnSuppressedAsync: _ => Task.CompletedTask);
 
         if (_dependencies.ThreadHistoryFetcher is { } historyFetcher)
         {
@@ -292,7 +289,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
         CommandAsync<ReinitializePipeline>(async msg =>
         {
-            _outputEngine.ResetForPipelineReinitialize(msg.Reason);
+            _outputEngine.ResetForPipelineReinitialize();
             await _handle.ReinitializeAsync(
                 msg.Reason,
                 () => Timers.StartSingleTimer(
@@ -580,15 +577,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             ReminderId = message.Source.ReminderId,
             AckTarget = ackTarget
         };
-
-        // Only delivery-gated (DeliveryRequired) reminders carry a
-        // DeliveryObserver. Key it by the per-fire reminder delivery id so a
-        // second concurrent reminder to this session can't overwrite the
-        // first's observer before its turn reaches TurnCompleted.
-        if (message.Source.DeliveryObserver is { } deliveryObserver
-            && message.Source.ReminderId is { } reminderKey
-            && !string.IsNullOrWhiteSpace(reminderKey.Value))
-            _outputEngine.TrackReminderDeliveryObserver(reminderKey, deliveryObserver);
 
         try
         {

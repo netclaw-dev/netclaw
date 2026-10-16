@@ -65,20 +65,6 @@ public sealed record SessionState
     public WorkingContext WorkingContext { get; init; } = WorkingContext.Empty;
 
     /// <summary>
-    /// In-memory best-effort dedup ledger for reminder-originated turns.
-    /// Populated by <see cref="Apply(TurnRecorded)"/> from non-null
-    /// <see cref="TurnRecorded.SourceReminderId"/> values and preserved
-    /// across compaction by <see cref="Apply(SessionCompacted)"/>.
-    /// Deliberately NOT persisted to <see cref="SessionSnapshot"/> — on
-    /// snapshot-based recovery the set starts empty and rebuilds from
-    /// post-snapshot journal replay. Duplicates across snapshot recovery
-    /// boundaries are an explicitly accepted tradeoff; see
-    /// <c>reminder-session-reentry</c> design doc D2.
-    /// </summary>
-    public IImmutableSet<ReminderId> ProcessedReminderIds { get; init; } =
-        ImmutableHashSet<ReminderId>.Empty;
-
-    /// <summary>
     /// Background jobs this session is waiting on. Persisted to snapshot
     /// because jobs are long-lived and must survive recovery.
     /// </summary>
@@ -90,8 +76,7 @@ public sealed record SessionState
 
     /// <summary>
     /// In-memory best-effort dedup ledger for background-job-originated turns.
-    /// Same pattern as <see cref="ProcessedReminderIds"/> — not persisted to
-    /// snapshot, rebuilds from event replay.
+    /// Not persisted to snapshot; rebuilds from event replay.
     /// </summary>
     public IImmutableSet<BackgroundJobId> ProcessedBackgroundJobIds { get; init; } =
         ImmutableHashSet<BackgroundJobId>.Empty;
@@ -134,17 +119,12 @@ public sealed record SessionState
     internal SessionState Apply(TurnRecorded evt, bool userAlreadyInHistory)
     {
         var closed = CloseInputs(evt.ConsumedInputIds);
-        var processedReminders = closed.ProcessedReminderIds;
-        if (evt.SourceReminderId is { } reminderId && !string.IsNullOrEmpty(reminderId.Value))
-            processedReminders = processedReminders.Add(reminderId);
-
         // Live history already has the user message. Replay can restore it by input ID.
         var history = userAlreadyInHistory ? closed.History : closed.History.Add(evt.UserMessage);
         return (closed with
         {
             History = history.Add(evt.AssistantReply),
-            TurnCount = closed.TurnCount + 1,
-            ProcessedReminderIds = processedReminders
+            TurnCount = closed.TurnCount + 1
         }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
     }
 
@@ -227,7 +207,6 @@ public sealed record SessionState
         {
             History = builder.ToImmutable(),
             WorkingContext = evt.WorkingContext ?? WorkingContext,
-            ProcessedReminderIds = ProcessedReminderIds,
             ProcessedBackgroundJobIds = ProcessedBackgroundJobIds,
             ActiveBackgroundJobs = ActiveBackgroundJobs,
             AdoptedContextRecords = AdoptedContextRecords

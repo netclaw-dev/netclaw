@@ -41,7 +41,7 @@
       },
       DeliveryRequired: {
         type: boolean,
-        description: Fail execution if delivery doesn't succeed. Default true. Set false for audit/cleanup tasks.
+        description: Fail execution if a channel delivery doesn't succeed. Default true. Set false for audit/cleanup tasks. No effect for current_session delivery.
       },
       DeliveryInstructions: {
         type: string,
