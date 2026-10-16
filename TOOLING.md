@@ -73,7 +73,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `SessionInputFlow.DrainBufferedBatch` (turn owner choice), `SessionInputFlow.JoinsTurn`, and the automation check of `SessionToolWorkflow.PlanNewInputAbandonment` | A turn has one requester: a drain after a turn adopts the authority of the first buffered input, a drain inside a turn keeps the turn's authority, and only inputs of that requester join the batch; automated input waits behind an open approval, and only input from a person closes it; a child result notice is automated input by its kind, although its principal is a person | 11 killed | `./scripts/run-input-one-authority-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
 | `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, and `SessionInputFlow.DrainBufferedBatch` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn | 8 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
-| `TurnContext.HasSameRequester` and `SessionState.RequireNoticeRun` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it; a run gets one notice, only an ended run gets one, and a notice carries the recorded authority of the run owner as a user message | 32 killed | `./scripts/run-child-owner-mutations.sh` |
+| `TurnContext.HasSameRequester`, `SessionState.RequireNoticeRun`, and the requester loop of `SessionExecutionLifetime.ValidateRestartResume` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it; a run gets one notice, only an ended run gets one, and a notice carries the recorded authority of the run owner as a user message; a restart resume takes the leading inputs of one requester and leaves the rest waiting | 36 killed | `./scripts/run-child-owner-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -234,13 +234,16 @@ A later turn of the owner that differs only in per-turn fields must keep the chi
 The script also selects the body of `SessionState.RequireNoticeRun`, the guard of a child result notice.
 The linked `ChildNoticeReducerTests` source must kill all 21 mutants there.
 A run gets one notice, only an ended run gets one, and the notice must be a user message with the recorded authority of the run owner.
+The script also selects the requester loop of `SessionExecutionLifetime.ValidateRestartResume`, from the `HasSameRequester` check to `count++`.
+The linked `RestartResumePartitionTests` source must kill all four mutants there.
+A restart resume takes the leading inputs of one requester, and the inputs of another requester wait in the queue.
 The selector rejects a missing or repeated source marker before Stryker starts.
 The gate fails for a survivor, a changed mutant count, or a compile error in the span.
 
 The span does not include the `HasSameRequester(right) &&` line in `TurnContext.HasSameAuthority` or the call in `ControlChild`.
 Unit tests and actor tests cover those two lines.
 
-The final local run killed 11 of 11 mutants in 1 minute 59 seconds with a warm build cache.
+The final local run killed 36 of 36 mutants in 2 minutes 19 seconds with a warm build cache.
 A review run took 2 minutes 36 seconds with a cold report directory.
 A run on a machine with other builds in progress took 6 minutes 11 seconds.
 CI runs it in the `session-reliability` group of the `mutation-gates` job.

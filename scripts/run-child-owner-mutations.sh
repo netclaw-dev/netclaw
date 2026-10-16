@@ -9,10 +9,14 @@ set -euo pipefail
 # SessionState.ApplyChildNotice: a run gets one notice, only an ended run gets
 # one, and a notice carries the recorded authority of the run owner.
 # ChildNoticeReducerTests must kill every mutant in that guard.
+# The gate also selects the requester loop of SessionExecutionLifetime.ValidateRestartResume: a restart resume
+# takes the leading inputs of one requester and leaves the rest waiting.
+# RestartResumePartitionTests must kill every mutant in that loop.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_file="$repo_root/src/Netclaw.Actors/Channels/TurnContext.cs"
 notice_file="$repo_root/src/Netclaw.Actors/Sessions/SessionState.ChildRuns.cs"
+resume_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionExecutionLifetime.cs"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
 output_path="${1:-$repo_root/artifacts/stryker/child-owner}"
 if [[ "$output_path" != /* ]]; then
@@ -54,6 +58,23 @@ read -r notice_start notice_end notice_first notice_last < <(
   ' "$notice_file"
 )
 
+# The restart resume partition: the loop stops at the first input of another requester and counts the leading inputs.
+read -r resume_start resume_end resume_first resume_last < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $start_marker = "if (!first.HasSameRequester(candidate))";
+    $end_marker = "count++;";
+    $start = index($_, $start_marker);
+    die "The restart resume marker is missing or duplicated.\n"
+      if $start < 0 || index($_, $start_marker, $start + 1) >= 0;
+    $end = index($_, $end_marker, $start);
+    die "The restart resume end marker is missing.\n" if $end < 0;
+    $end += length($end_marker);
+    $first = 1 + (substr($_, 0, $start) =~ tr/\n//);
+    $last = 1 + (substr($_, 0, $end) =~ tr/\n//);
+    print "$start $end $first $last\n";
+  ' "$resume_file"
+)
+
 (
   cd "$test_project"
   dotnet stryker \
@@ -61,6 +82,7 @@ read -r notice_start notice_end notice_first notice_last < <(
     --project Netclaw.Actors.csproj \
     --mutate "Channels/TurnContext.cs{$span_start..$span_end}" \
     --mutate "Sessions/SessionState.ChildRuns.cs{$notice_start..$notice_end}" \
+    --mutate "Sessions/Handlers/SessionExecutionLifetime.cs{$resume_start..$resume_end}" \
     --output "$output_path" \
     --skip-version-check
 )
@@ -68,6 +90,7 @@ read -r notice_start notice_end notice_first notice_last < <(
 report="$output_path/reports/mutation-report.json"
 expected_count=11
 expected_notice_count=21
+expected_resume_count=4
 check_span() {
   local file="$1" first="$2" last="$3" count="$4" name="$5"
   jq -e --arg source "$file" \
@@ -87,8 +110,9 @@ check_span() {
 
 check_span "$source_file" "$first_line" "$last_line" "$expected_count" "requester check"
 check_span "$notice_file" "$notice_first" "$notice_last" "$expected_notice_count" "notice guard"
+check_span "$resume_file" "$resume_first" "$resume_last" "$expected_resume_count" "restart resume partition"
 
-total=$((expected_count + expected_notice_count))
+total=$((expected_count + expected_notice_count + expected_resume_count))
 jq -e --argjson count "$total" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count

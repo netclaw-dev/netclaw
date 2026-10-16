@@ -86,27 +86,44 @@ public sealed class ChildNoticeCrashOrphanSpecs(ITestOutputHelper output) : Chil
         }
     }
 
-    // Ends Alice's child and holds the notice turn in its first model call. Then the actor stops without a drain.
-    // The journal holds the admitted notice and nothing that consumed it.
-    private async Task<(AcceptanceFault Journal, ChildRunAccepted Accepted, InputAdmitted Notice)> CrashWhileTheNoticeTurnWaitsAsync(SessionId sessionId)
+    /// <summary>
+    /// Re-review NS1. In production the message of a person is the message that starts the recovered actor. No join
+    /// comes first. The message waits in the recovery stash, and the orphan notice was admitted before it. The notice
+    /// must run first, and the message must wait behind it.
+    /// Planted bug: the recovery resumes the orphan notice with a message to self after the stash. The stashed message
+    /// then activates first, and the notice runs in the next turn.
+    /// </summary>
+    [Theory]
+    [InlineData(Alice)]
+    [InlineData(Bob)]
+    public async Task A_message_that_wakes_the_recovered_session_runs_after_the_orphan_notice(string sender)
     {
-        var journal = await JournalAsync();
-        ScriptParent();
-        var subscriber = await JoinAsync(sessionId);
-        var (accepted, gate) = await StartChildAsync(sessionId, Alice, "one");
-        await ExpectTurnsAsync(subscriber, 1);
+        // Arrange
+        var sessionId = new SessionId($"notice/crash-orphan-wake-by-{sender}");
+        var (journal, accepted, notice) = await CrashWhileTheNoticeTurnWaitsAsync(sessionId);
 
-        var hold = NewGate();
-        Clients.Parent.NextResponseGate = hold;
-        gate.TrySetResult();
-        await AwaitAssertAsync(() => Assert.Single(NoticesFor(journal, accepted.Run.RunId)), Deadline, cancellationToken: Cancellation);
-        await AwaitAssertAsync(() => Assert.Null(Clients.Parent.NextResponseGate), Deadline, cancellationToken: Cancellation);
-        var notice = Assert.Single(NoticesFor(journal, accepted.Run.RunId));
-        Assert.Equal(0, ConsumptionCount(journal, notice.InputId));
+        // Act: no join. The message starts the actor, so it waits in the recovery stash.
+        await SendAsync(sessionId, "after the crash", Operator(sender));
 
-        await StopAsync(await ResolveSessionAsync(sessionId));
-        hold.TrySetResult();
-        return (journal, accepted, notice);
+        // Assert
+        var later = await AwaitInputAdmittedAsync(journal, "after the crash");
+        await AwaitAssertAsync(() => Assert.True(ConsumptionCount(journal, notice.InputId) > 0,
+            "The orphan notice never ran."), Deadline, cancellationToken: Cancellation);
+        await AwaitAssertAsync(() => Assert.True(ConsumptionCount(journal, later.InputId) > 0,
+            "The message that woke the session never ran."), Deadline, cancellationToken: Cancellation);
+        await AwaitAssertAsync(async () => Assert.True(await IsIdleAsync(sessionId), "The session did not settle."),
+            Deadline, cancellationToken: Cancellation);
+        Assert.Equal(1, ConsumptionCount(journal, notice.InputId));
+        Assert.Equal(1, ConsumptionCount(journal, later.InputId));
+        Assert.Single(NoticesFor(journal, accepted.Run.RunId));
+        Assert.True(ConsumedAt(journal, notice.InputId) <= ConsumedAt(journal, later.InputId),
+            $"The notice was admitted first, but the message that woke the session ran first "
+            + $"(notice at {ConsumedAt(journal, notice.InputId)}, message at {ConsumedAt(journal, later.InputId)}).");
+        if (sender == Bob)
+        {
+            var noticeTurn = journal.Committed.ToArray().Single(evt => ConsumedBy(evt).Contains(notice.InputId));
+            Assert.DoesNotContain(later.InputId, ConsumedBy(noticeTurn));
+        }
     }
 }
 

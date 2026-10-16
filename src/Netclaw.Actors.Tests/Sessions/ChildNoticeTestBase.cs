@@ -198,6 +198,29 @@ public abstract class ChildNoticeTestBase : LlmSessionTestBase
         });
     }
 
+    // Ends Alice's child and holds the notice turn in its first model call. Then the actor stops without a drain.
+    // The journal holds the admitted notice and nothing that consumed it.
+    private protected async Task<(AcceptanceFault Journal, ChildRunAccepted Accepted, InputAdmitted Notice)> CrashWhileTheNoticeTurnWaitsAsync(SessionId sessionId)
+    {
+        var journal = await JournalAsync();
+        ScriptParent();
+        var subscriber = await JoinAsync(sessionId);
+        var (accepted, gate) = await StartChildAsync(sessionId, Alice, "one");
+        await ExpectTurnsAsync(subscriber, 1);
+
+        var hold = NewGate();
+        Clients.Parent.NextResponseGate = hold;
+        gate.TrySetResult();
+        await AwaitAssertAsync(() => Assert.Single(NoticesFor(journal, accepted.Run.RunId)), Deadline, cancellationToken: Cancellation);
+        await AwaitAssertAsync(() => Assert.Null(Clients.Parent.NextResponseGate), Deadline, cancellationToken: Cancellation);
+        var notice = Assert.Single(NoticesFor(journal, accepted.Run.RunId));
+        Assert.Equal(0, ConsumptionCount(journal, notice.InputId));
+
+        await StopAsync(await ResolveSessionAsync(sessionId));
+        hold.TrySetResult();
+        return (journal, accepted, notice);
+    }
+
     protected Task<ISessionResponse> AnswerAsync(SessionId id, ToolCallId callId, string sender) =>
         AskManagerAsync<ISessionResponse>(new ToolInteractionResponse
         {
