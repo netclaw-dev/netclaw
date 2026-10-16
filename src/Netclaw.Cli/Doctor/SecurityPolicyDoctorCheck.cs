@@ -73,6 +73,27 @@ public sealed class SecurityPolicyDoctorCheck(NetclawPaths paths) : IDoctorCheck
             warnings.Add("Personal posture with HostAllowed shell — full host access is enabled.");
         }
 
+        // The daemon reads Tools.ShellMode before Security.ShellExecutionMode (ToolAccessPolicy.ResolveShellMode).
+        // A split between the two means the shell limit and the posture came from different edits.
+        ShellExecutionMode? toolsShellMode;
+        try
+        {
+            toolsShellMode = ReadToolsShellMode(root);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(DoctorCheckResult.Error(
+                "Security Policy",
+                $"Failed to parse Tools.ShellMode: {ex.Message}",
+                "Fix the Tools.ShellMode value or remove it."));
+        }
+
+        if (toolsShellMode.HasValue && toolsShellMode.Value != effective.ShellExecutionMode)
+        {
+            warnings.Add(
+                $"Tools.ShellMode is {toolsShellMode.Value} but Security.ShellExecutionMode is {effective.ShellExecutionMode}. The daemon uses Tools.ShellMode.");
+        }
+
         if (warnings.Count > 0)
         {
             return Task.FromResult(DoctorCheckResult.Warning(
@@ -85,4 +106,11 @@ public sealed class SecurityPolicyDoctorCheck(NetclawPaths paths) : IDoctorCheck
             "Security Policy",
             $"Deployment posture: {effective.DeploymentPosture}, Shell: {effective.ShellExecutionMode}."));
     }
+
+    private static ShellExecutionMode? ReadToolsShellMode(JsonObject root)
+        => root["Tools"] is JsonObject tools
+            ? JsonSerializer.Deserialize<ToolsShellModeSection>(tools, JsonDefaults.ConfigRead)?.ShellMode
+            : null;
+
+    private sealed record ToolsShellModeSection(ShellExecutionMode? ShellMode);
 }
