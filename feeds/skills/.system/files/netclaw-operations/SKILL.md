@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.108.2"
+  version: "2.109.1"
 ---
 
 # Netclaw Operations
@@ -249,7 +249,10 @@ Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
 A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
-If a text-only response contains tool calls, Netclaw rejects those calls and reports a provider failure.
+If a text-only response contains tool calls, Netclaw rejects those calls and reports a `ModelBehavior` failure.
+Repeated empty replies get the same `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
+An empty reply with no finish reason is `StreamFailure`. A `content_filter` reply is `ProviderFailure`. Both are `infra`.
+A provider outage is not `ModelBehavior`.
 This failure does not prove that the turn exhausted its tool budget.
 
 ## Large tool output
@@ -935,6 +938,15 @@ add to it. This applies to `AllowedTools`, `ReadFiles`/`WriteFiles`/`AttachFiles
 
 ## Diagnostics, Kill Switches & Self-Maintenance
 
+A failed `netclaw chat -p` run exits 1. It prints `[turn:failed] category=<model|infra> kind=<Kind>` on stderr.
+The session log has a `TURN_FAILED: category=... kind=...` record before `TURN_COMPLETED`.
+With `--json`, the stdout envelope has `errorCategory` and `errorKind`.
+Only `kind=ModelBehavior` is `model`: the model broke a rule that Netclaw enforces.
+Every other kind is `infra`, including `ProviderFailure`, `Timeout`, `ToolFailure`, and `Unknown`.
+The CLI adds `ChannelFailure` (the daemon was unreachable or refused the prompt) and `Cancelled` (SIGINT or SIGTERM). Both are `infra`.
+A turn that completes prints no token, even after a recovered error.
+A `timeout` kill exits 124. Stderr usually also has `kind=Cancelled`, so read the exit code first.
+In the session log, use the last `TURN_FAILED` record before the final `TURN_COMPLETED`, and only when the exit code is 1.
 Headless `COMPACTION` records expose `summarized` and `tool_results_cleared` phase evidence.
 A true summary flag does not prove that the summary retains every task requirement.
 Older daemon or CLI versions can omit these flags from the transport and report false.

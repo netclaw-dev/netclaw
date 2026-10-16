@@ -143,7 +143,9 @@ public class MaxToolIterationTests : LlmSessionTestBase
         }
 
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+        // The model broke a rule the runtime enforces. A provider outage uses ProviderFailure.
+        // Asserted by name: the error category contract in HeadlessTurnErrorCategoryTests names ModelBehavior.
+        Assert.Equal("ModelBehavior", error.Category.ToString());
         Assert.Contains("required text only", error.Message, StringComparison.Ordinal);
 
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);

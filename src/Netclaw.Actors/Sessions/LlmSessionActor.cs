@@ -668,7 +668,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FailCurrentTurn(
                 TextOnlyResponseViolationMessage,
                 new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
-                ErrorCategory.ProviderFailure);
+                ErrorCategory.ModelBehavior);
             return;
         }
 
@@ -690,13 +690,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     FireLlmCall();
                     return;
                 case EmptyResponseAction.Fail fail:
-                    _log.Warning("LLM produced {Kind} response — failing turn", analysis.Kind);
-                    FailCurrentTurn(fail.ErrorMessage, fail.Cause, ErrorCategory.ProviderFailure);
+                    _log.Warning("LLM produced {Kind} response — failing turn (finishReason={FinishReason})",
+                        analysis.Kind, response.FinishReason?.ToString() ?? "null");
+                    FailCurrentTurn(fail.ErrorMessage, fail.Cause, EmptyReplyFailureCategory(response.FinishReason));
                     return;
             }
         }
 
         HandleTextResponse(lastMessage, response.Usage, msg.StreamedText, msg.StreamedThinking);
+    }
+
+    /// <summary>
+    /// Decides who gets the blame for repeated empty replies. The model gets it only when the stream ended
+    /// on its own terms: finish reason Stop or Length. No finish reason means the stream broke (EOF, a proxy
+    /// cut): that is a stream fault, not model behavior. Any other reason, such as content_filter, is a
+    /// provider result.
+    /// </summary>
+    private static ErrorCategory EmptyReplyFailureCategory(ChatFinishReason? finishReason)
+    {
+        if (finishReason is not { } reason)
+            return ErrorCategory.StreamFailure;
+
+        return reason == ChatFinishReason.Stop || reason == ChatFinishReason.Length
+            ? ErrorCategory.ModelBehavior
+            : ErrorCategory.ProviderFailure;
     }
 
     private void HandleLlmResponseDeltaReceived(LlmResponseDeltaReceived msg)

@@ -6,6 +6,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -45,13 +46,18 @@ public sealed class HeadlessChannel : IChannel
     private JsonUsage? _usage;
     private string? _resolvedSessionId;
 
+    // The kind of the most recent ErrorOutput in the current turn. The error that precedes a failed
+    // TurnCompleted decides the reported kind; an earlier error that the turn survived must not.
+    private ErrorCategory? _lastErrorKind;
+
     // Client-side timing
     private long _promptSentTicks;
     private long _firstDeltaTicks;
 
     /// <summary>
     /// The process exit code for this run: 1 once the session reports a failed turn
-    /// (provider unreachable, timeout, tool failure), otherwise 0.
+    /// (provider unreachable, timeout, tool failure, model behavior), otherwise 0.
+    /// A failed run or a cancelled run also prints the <see cref="HeadlessFailure"/> token.
     /// </summary>
     internal int ExitCode { get; private set; }
 
@@ -163,15 +169,22 @@ public sealed class HeadlessChannel : IChannel
                 Environment.ExitCode = ExitCode;
             _lifetime.StopApplication();
         }
-        catch (OperationCanceledException ex)
+        catch (OperationCanceledException ex) when (stopping.IsCancellationRequested)
         {
+            // SIGINT or SIGTERM. Exit 1: exit 0 with no output reads as a pass to a script.
             _logger.LogDebug(ex, "Headless channel cancelled (shutdown)");
             WriteFailureLog("CANCELLED", ex);
+            Console.Error.WriteLine(HeadlessFailure.Cancelled.ToToken());
+            Environment.ExitCode = 1;
+            _lifetime.StopApplication();
         }
         catch (Exception ex)
         {
+            // A cancellation that did not come from shutdown (for example a transport timeout)
+            // lands here too. It is a channel failure, not a clean stop.
             _logger.LogError(ex, "Headless channel failed");
-            Console.Error.WriteLine($"[headless:error] {ex.Message}");
+            Console.Error.WriteLine($"[headless:error] {SingleLine(ex.Message)}");
+            Console.Error.WriteLine(HeadlessFailure.Channel.ToToken());
             WriteFailureLog("FAILED", ex);
             Environment.ExitCode = 1;
             _lifetime.StopApplication();
@@ -282,24 +295,38 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case ErrorOutput msg:
-                Console.Error.WriteLine($"[error] {msg.Message}");
+                _lastErrorKind = msg.Category;
+                Console.Error.WriteLine($"[error] {SingleLine(msg.Message)}");
                 Log(log, $"ERROR: {msg.Message}");
                 if (msg.Cause is not null)
                     Log(log, $"EXCEPTION: {msg.Cause}");
                 break;
 
             case TurnCompleted msg:
-                if (msg.Outcome == TurnOutcome.Failed)
+                // A failed turn with no ErrorOutput is Unknown, which is infra. Never guess "model".
+                HeadlessFailure? failure = msg.Outcome == TurnOutcome.Failed
+                    ? HeadlessFailure.FromSession(_lastErrorKind ?? ErrorCategory.Unknown)
+                    : null;
+                _lastErrorKind = null;
+
+                if (failure is not null)
                     ExitCode = 1;
 
                 if (_jsonOutput)
                 {
-                    WriteJsonEnvelope();
+                    WriteJsonEnvelope(failure);
                 }
                 else
                 {
                     Console.WriteLine();
                 }
+
+                if (failure is { } failed)
+                {
+                    Console.Error.WriteLine(failed.ToToken());
+                    Log(log, $"TURN_FAILED: category={failed.CategoryName} kind={failed.Kind}");
+                }
+
                 Log(log, $"TURN_COMPLETED: turn={msg.TurnNumber}");
                 Log(log, "SESSION_ENDED");
                 _receivedTextDeltaInCurrentTurn = false;
@@ -337,7 +364,15 @@ public sealed class HeadlessChannel : IChannel
         }
     }
 
-    private void WriteJsonEnvelope()
+    // Error text comes from tools, providers, and models. A line break in it would start a new stderr line,
+    // and a forged "[turn:failed]" line would then reach a harness that takes the first match. Only the
+    // token writer may start a line with the token.
+    private static string SingleLine(string text)
+        => LineBreaks.Replace(text, " ");
+
+    private static readonly Regex LineBreaks = new("[\r\n\u0085\u2028\u2029]+", RegexOptions.Compiled);
+
+    private void WriteJsonEnvelope(HeadlessFailure? failure)
     {
         // Client-side timing
         var now = Stopwatch.GetTimestamp();
@@ -356,6 +391,8 @@ public sealed class HeadlessChannel : IChannel
             Usage = _usage,
             TtftMs = ttftMs.HasValue ? Math.Round(ttftMs.Value, 1) : null,
             TotalMs = totalMs.HasValue ? Math.Round(totalMs.Value, 1) : null,
+            ErrorCategory = failure?.CategoryName,
+            ErrorKind = failure?.Kind,
         };
 
         Console.WriteLine(JsonSerializer.Serialize(envelope, JsonDefaults.CliOutput));
@@ -377,7 +414,7 @@ public sealed class HeadlessChannel : IChannel
         }
         catch (Exception logEx)
         {
-            Console.Error.WriteLine($"[headless:error] Failed to write failure log: {logEx.Message}");
+            Console.Error.WriteLine($"[headless:error] Failed to write failure log: {SingleLine(logEx.Message)}");
         }
     }
 
@@ -391,6 +428,10 @@ public sealed class HeadlessChannel : IChannel
         public JsonUsage? Usage { get; init; }
         public double? TtftMs { get; init; }
         public double? TotalMs { get; init; }
+
+        // Set only for a failed turn. The eval harness reads these two keys.
+        public string? ErrorCategory { get; init; }
+        public string? ErrorKind { get; init; }
     }
 
     private sealed class JsonToolCall
@@ -410,4 +451,62 @@ public sealed class HeadlessChannel : IChannel
         public double? PromptMs { get; init; }
         public double? PredictedPerSecond { get; init; }
     }
+}
+
+/// <summary>
+/// Why a headless run failed, for a script that reads stderr, the JSON envelope, or the session log.
+/// <see cref="Category"/> is the coarse verdict. <see cref="Kind"/> is the finer reason.
+/// </summary>
+/// <remarks>
+/// Only <see cref="HeadlessFailureCategory.Model"/> blames the model. A failure that nobody classified
+/// is <see cref="HeadlessFailureCategory.Infra"/>: an unknown failure is no evidence about the model.
+/// </remarks>
+internal readonly record struct HeadlessFailure(HeadlessFailureCategory Category, string Kind)
+{
+    /// <summary>The daemon was unreachable, rejected the client, or the prompt exceeded the hub frame limit.</summary>
+    public static readonly HeadlessFailure Channel = new(HeadlessFailureCategory.Infra, "ChannelFailure");
+
+    /// <summary>The operator cancelled the run (SIGINT or SIGTERM).</summary>
+    public static readonly HeadlessFailure Cancelled = new(HeadlessFailureCategory.Infra, "Cancelled");
+
+    public string CategoryName => Category == HeadlessFailureCategory.Model ? "model" : "infra";
+
+    /// <summary>The stderr line that the eval harness parses. Stdout never carries it.</summary>
+    public string ToToken() => $"[turn:failed] category={CategoryName} kind={Kind}";
+
+    /// <summary>
+    /// Maps the category of the failing <see cref="ErrorOutput"/>. A value with no name is unclassified, so
+    /// it is <c>infra</c> with kind <c>Unknown</c>.
+    /// </summary>
+    /// <remarks>
+    /// The compiler cannot check this switch for a missing member. Without a discard arm it raises CS8524
+    /// for values that have no name, and the build treats warnings as errors. So the guard above the switch
+    /// handles unnamed values, and the last arm handles a member that someone adds later. That member maps
+    /// to <c>infra</c>, the safe side. A new member that should blame the model needs an arm of its own.
+    /// </remarks>
+    public static HeadlessFailure FromSession(ErrorCategory category)
+    {
+        if (!Enum.IsDefined(category))
+            return new(HeadlessFailureCategory.Infra, nameof(ErrorCategory.Unknown));
+
+        var verdict = category switch
+        {
+            ErrorCategory.ModelBehavior => HeadlessFailureCategory.Model,
+            ErrorCategory.ProviderFailure
+                or ErrorCategory.StreamFailure
+                or ErrorCategory.Timeout
+                or ErrorCategory.ToolFailure
+                or ErrorCategory.InputCompatibility
+                or ErrorCategory.Unknown => HeadlessFailureCategory.Infra,
+            _ => HeadlessFailureCategory.Infra
+        };
+        return new(verdict, category.ToString());
+    }
+}
+
+// Infra is the zero value on purpose. A default(HeadlessFailure) must never blame the model.
+internal enum HeadlessFailureCategory
+{
+    Infra = 0,
+    Model = 1
 }

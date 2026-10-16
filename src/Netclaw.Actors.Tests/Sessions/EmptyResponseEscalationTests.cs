@@ -64,6 +64,8 @@ public class EmptyResponseEscalationTests : LlmSessionTestBase
     {
         // The model never produces a reply — only reasoning. Pre-tool consecutive
         // limit is 5 retries, so the sequence is: 5 Retries then Fail on the 6th.
+        // The stream finishes with Stop. Only then do repeated empty replies blame the model.
+        _fakeChatClient.PlannedFinishReason = ChatFinishReason.Stop;
         for (var i = 0; i < 6; i++)
             _fakeChatClient.PlannedResponses.Enqueue(
                 [new TextReasoningContent($"[fake thinking] still pondering #{i}...")]);
@@ -86,7 +88,9 @@ public class EmptyResponseEscalationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+        // The model broke a rule the runtime enforces. A provider outage uses ProviderFailure.
+        // Asserted by name: the error category contract in HeadlessTurnErrorCategoryTests names ModelBehavior.
+        Assert.Equal("ModelBehavior", error.Category.ToString());
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Six main-model calls: 5 Retries + Fail.
