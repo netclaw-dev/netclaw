@@ -24,8 +24,10 @@ internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
     private readonly TimeSpan _interval;
     private readonly TimeSpan _initialJitter;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
-    private readonly List<IActorRef> _waiters = [];
+    private readonly List<IActorRef> _activeWaiters = [];
+    private readonly List<IActorRef> _queuedRetryWaiters = [];
     private bool _passActive;
+    private bool _activePassRetriesRejected;
 
     public ServerFeedSkillSyncActor(
         IServerFeedSkillSyncRunner runner,
@@ -37,7 +39,7 @@ internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
         _interval = TimeSpan.FromMinutes(feedsConfig.SyncIntervalMinutes);
         _initialJitter = CreateInitialJitter();
 
-        Receive<Run>(_ => HandleRequest(Sender));
+        Receive<Run>(request => HandleRequest(request, Sender));
         Receive<ScheduledRun>(_ => HandleScheduledRun());
         Receive<SyncPassCompleted>(completed => CompletePass(completed.Result));
         Receive<SyncPassFailed>(failed => FailPass(failed.Cause));
@@ -72,25 +74,34 @@ internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
     {
         var unavailable = new Status.Failure(
             new OperationCanceledException("The daemon stopped the active skill sync pass."));
-        foreach (var waiter in _waiters)
+        foreach (var waiter in _activeWaiters.Concat(_queuedRetryWaiters))
             waiter.Tell(unavailable);
-        _waiters.Clear();
+        _activeWaiters.Clear();
+        _queuedRetryWaiters.Clear();
 
         _lifetimeCancellation.Cancel();
         _lifetimeCancellation.Dispose();
         base.PostStop();
     }
 
-    private void HandleRequest(IActorRef replyTo)
+    private void HandleRequest(Run request, IActorRef replyTo)
     {
-        _waiters.Add(replyTo);
-        if (_passActive)
+        if (!_passActive)
         {
+            _activeWaiters.Add(replyTo);
+            StartPass(request.RetryRejected);
+            return;
+        }
+
+        if (!request.RetryRejected || _activePassRetriesRejected)
+        {
+            _activeWaiters.Add(replyTo);
             _logger.LogDebug("Joined the active external skill sync pass.");
             return;
         }
 
-        StartPass();
+        _queuedRetryWaiters.Add(replyTo);
+        _logger.LogDebug("Queued one external skill retry pass after the active pass.");
     }
 
     private void HandleScheduledRun()
@@ -101,13 +112,14 @@ internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
             return;
         }
 
-        StartPass();
+        StartPass(retryRejected: false);
     }
 
-    private void StartPass()
+    private void StartPass(bool retryRejected)
     {
         _passActive = true;
-        _runner.SyncAsync(_lifetimeCancellation.Token).PipeTo(
+        _activePassRetriesRejected = retryRejected;
+        _runner.SyncAsync(retryRejected, _lifetimeCancellation.Token).PipeTo(
             Self,
             success: result => new SyncPassCompleted(result),
             failure: cause => new SyncPassFailed(cause));
@@ -115,32 +127,43 @@ internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
 
     private void CompletePass(SkillSyncResult.Response result)
     {
-        foreach (var waiter in _waiters)
+        foreach (var waiter in _activeWaiters)
             waiter.Tell(result);
-        _waiters.Clear();
-        _passActive = false;
+        _activeWaiters.Clear();
+        StartQueuedRetryOrStop();
     }
 
     private void FailPass(Exception cause)
     {
         _logger.LogError(cause, "External skill sync pass failed.");
         var failure = new Status.Failure(cause);
-        foreach (var waiter in _waiters)
+        foreach (var waiter in _activeWaiters)
             waiter.Tell(failure);
-        _waiters.Clear();
-        _passActive = false;
+        _activeWaiters.Clear();
+        StartQueuedRetryOrStop();
+    }
+
+    private void StartQueuedRetryOrStop()
+    {
+        if (_queuedRetryWaiters.Count == 0)
+        {
+            _passActive = false;
+            _activePassRetriesRejected = false;
+            return;
+        }
+
+        _activeWaiters.AddRange(_queuedRetryWaiters);
+        _queuedRetryWaiters.Clear();
+        StartPass(retryRejected: true);
     }
 
     private static TimeSpan CreateInitialJitter()
         => TimeSpan.FromSeconds(Random.Shared.Next(0, (int)MaximumInitialJitter.TotalSeconds));
 
-    internal sealed class Run : INoSerializationVerificationNeeded
+    internal sealed record Run(bool RetryRejected) : INoSerializationVerificationNeeded
     {
-        public static Run Instance { get; } = new();
-
-        private Run()
-        {
-        }
+        public static Run Instance { get; } = new(false);
+        public static Run RetryRejectedCommits { get; } = new(true);
     }
 
     private sealed class ScheduledRun : INoSerializationVerificationNeeded

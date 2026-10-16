@@ -17,7 +17,9 @@ namespace Netclaw.Daemon.Services;
 
 internal interface IServerFeedSkillSyncRunner
 {
-    Task<SkillSyncResult.Response> SyncAsync(CancellationToken cancellationToken);
+    Task<SkillSyncResult.Response> SyncAsync(
+        bool retryRejected,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -148,7 +150,12 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
     /// <summary>
     /// Runs one complete synchronization pass.
     /// </summary>
-    public async Task<SkillSyncResult.Response> SyncAsync(CancellationToken cancellationToken)
+    public Task<SkillSyncResult.Response> SyncAsync(CancellationToken cancellationToken)
+        => SyncAsync(retryRejected: false, cancellationToken);
+
+    public async Task<SkillSyncResult.Response> SyncAsync(
+        bool retryRejected,
+        CancellationToken cancellationToken)
     {
         var passId = Guid.NewGuid().ToString("N");
         _logger.LogInformation("External skill sync pass started. {PassId}", passId);
@@ -185,7 +192,7 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
                 }
             }
 
-            var pluginResult = await _pluginSyncParticipant.SyncAsync(retryRejected: false, cancellationToken);
+            var pluginResult = await _pluginSyncParticipant.SyncAsync(retryRejected, cancellationToken);
             sources.AddRange(pluginResult.Rows);
             var managedPluginSources = pluginResult.Sources;
 
