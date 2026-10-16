@@ -425,11 +425,11 @@ class StartupCheckTests(unittest.TestCase):
                 self.assertIn("NETCLAW_EVAL_THRESHOLD", done.stderr)
                 self.assertEqual("", self.marks_text())
 
-    def test_threshold_from_0_to_1_passes_the_startup_check(self):
-        # Control. Planted bug: reject every value, or reject 1, 0, or a
+    def test_threshold_above_0_to_1_passes_the_startup_check(self):
+        # Control. Planted bug: reject every value, or reject 1 or a
         # decimal. The run still ends early here, because the fake docker
         # fails, but the message must not name the threshold.
-        for value in ("0", "0.8", "0.75", "1", "1.0"):
+        for value in ("0.01", "0.8", "0.75", "1", "1.0"):
             with self.subTest(threshold=value):
                 done = self.run_script(True, NETCLAW_EVAL_THRESHOLD=value)
 
