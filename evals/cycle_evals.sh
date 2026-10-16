@@ -58,6 +58,9 @@ assert_cycle_case() {
     local snapshot report actor_log headless_log
     snapshot="${STDOUT_FILE%.txt}_cycle-snapshot.json"
     report="${STDOUT_FILE%.txt}_cycle-verdict.txt"
+    # The report says "inconclusive" when the check could not run. The harness
+    # keeps it as assert-report.json, so the trial is not scored as a fail.
+    keep_assertion_report "$report"
     if ! curl -fsS --connect-timeout 5 --max-time 10 -H 'Content-Type: application/json' -d '{}' \
         "http://127.0.0.1:$CYCLE_FIXTURE_PORT/control/snapshot" > "$snapshot"; then
         cycle_inconclusive snapshot_unavailable "$report"
