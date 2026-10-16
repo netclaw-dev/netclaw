@@ -18,14 +18,15 @@ public static partial class SessionProtocol
     /// </summary>
     public record CommandAck(SessionId SessionId) : ISessionResponse
     {
-        /// <summary>
-        /// True when the command was a restart-resume message and nothing was left to resume. No turn will run
-        /// for it, so a caller that waits for a terminal turn must settle at once.
-        /// </summary>
-        public bool RestartResumeNoOp { get; init; }
-
         public static CommandAck For(SessionId sessionId) => new(sessionId);
     }
+
+    /// <summary>
+    /// Acknowledges a restart-resume message that resumes nothing. No turn runs for this message, so a caller that
+    /// waits for a terminal turn must settle at once. An interrupted input can still be pending, for example when
+    /// another turn runs. That input is not part of this message.
+    /// </summary>
+    public sealed record RestartResumeNotNeeded(SessionId SessionId) : CommandAck(SessionId);
 
     /// <summary>
     /// Reports that a session stopped and supplies any reminder that startup must register.

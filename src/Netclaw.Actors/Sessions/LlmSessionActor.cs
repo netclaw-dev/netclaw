@@ -1958,8 +1958,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
            && reminderId.StartsWith(RestartReminderIdPrefix, StringComparison.Ordinal)
            && string.Equals(cmd.Content, SessionExecutionLifetime.RestartReminderInstruction, StringComparison.Ordinal);
 
-    // Akka.Reminders can redeliver the restart reminder. When nothing is left to resume, the work is done, so the
-    // session acknowledges and the reminder run ends in success.
+    // Akka.Reminders can redeliver the restart reminder. This message resumes nothing and no turn runs for it, so the
+    // session acknowledges and the reminder run ends in success. An interrupted input can stay pending (another turn
+    // runs). The session does not resume that input for this message.
     private void AckRestartResumeNoOp(SendUserMessage cmd)
     {
         _log.Info(
@@ -1971,7 +1972,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
 
         // A caller on the Reminder-origin route (#2491) waits for a terminal turn after an ack. No turn will run here.
-        Sender.Tell(CommandAck.For(_sessionId) with { RestartResumeNoOp = true });
+        Sender.Tell(new RestartResumeNotNeeded(_sessionId));
     }
 
     private bool TryResumeInterruptedInput(SendUserMessage cmd)

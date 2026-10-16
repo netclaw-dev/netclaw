@@ -112,7 +112,7 @@ SHALL NOT affect routing.
 - **WHEN** `set_reminder` receives `delivery_kind = current_session`
 - **THEN** the tool rejects the reminder before it sends a save command
 
-#### Scenario: Mattermost post failure does not count as delivery
+#### Scenario: A Mattermost post failure does not fail the reminder
 
 - **GIVEN** a Mattermost current-session reminder with `delivery_required = true`
 - **AND** the session acknowledged the fire
@@ -286,9 +286,10 @@ abandon an open tool batch.
 
 - **GIVEN** a reminder input is stored with the key `weekly:abc` (the time is not digits)
 - **WHEN** a reminder input with the key `weekly:def` arrives
-- **THEN** the session stores it as an input
+- **AND** a reminder input with the key `weekly:1700000000000` arrives
+- **THEN** the session stores both as inputs
 - **AND** it logs no `reminder_fire_dropped`
-- **AND** the stored `weekly:abc` input does not block `weekly:1700000000000`
+- **AND** the stored `weekly:abc` input blocks neither key
 
 #### Scenario: A fire is admitted while the earlier fire runs
 
