@@ -75,9 +75,17 @@ public sealed class ChildNoticeAdmissionSpecs(ITestOutputHelper output) : ChildN
             var notice = Assert.Single(NoticesFor(journal, accepted.Run.RunId));
             await AwaitAssertAsync(() => Assert.True(ConsumedAt(journal, notice.InputId) >= 0,
                 "The notice must reach a turn."), Deadline, cancellationToken: Cancellation);
-            var events = journal.Committed.ToArray();
-            var secondAdmittedAt = Array.FindIndex(events, evt => evt is InputAdmitted admitted && admitted.UserMessage.Content == "probes:two");
-            var secondTurnEnd = Array.FindIndex(events, secondAdmittedAt + 1, evt => evt is TurnRecorded);
+            // The last tool call is recorded before the last model call of the turn. Read the order only after
+            // the journal holds the end of the turn, or the end of the turn reads as -1 and the check is false or void.
+            var secondTurnEnd = -1;
+            await AwaitAssertAsync(() =>
+            {
+                var events = journal.Committed.ToArray();
+                var secondAdmittedAt = Array.FindIndex(events, evt => evt is InputAdmitted admitted && admitted.UserMessage.Content == "probes:two");
+                Assert.True(secondAdmittedAt >= 0, "The journal must hold the second input.");
+                secondTurnEnd = Array.FindIndex(events, secondAdmittedAt + 1, evt => evt is TurnRecorded);
+                Assert.True(secondTurnEnd > secondAdmittedAt, "The journal must hold the end of the second turn.");
+            }, Deadline, cancellationToken: Cancellation);
             var noticeAt = ConsumedAt(journal, notice.InputId);
             if (spawnTurnAdopted)
                 Assert.True(noticeAt <= secondTurnEnd, $"The notice must join the running turn: consumed at {noticeAt}, the turn ended at {secondTurnEnd}.");

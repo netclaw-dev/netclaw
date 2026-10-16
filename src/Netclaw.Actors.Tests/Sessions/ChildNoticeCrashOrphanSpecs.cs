@@ -3,6 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Collections.Concurrent;
+using Akka.Actor;
+using Akka.Event;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Xunit;
@@ -176,5 +179,75 @@ public sealed class ChildNoticeOrphanSnapshotSpecs(ITestOutputHelper output) : C
                 $"The latest snapshot ({snapshot}) is not newer than the admission of the notice ({noticeSequence}). "
                 + "An unconsumed notice blocks every snapshot.");
         }, Deadline, cancellationToken: Cancellation);
+    }
+}
+
+/// <summary>
+/// Re-review R3-S1. After a crash, a notice can wait behind a pending input of a person. The recovery runs a notice only
+/// when no person input is in front of it, so the older input of the person is not skipped. That input has no turn
+/// after a crash (issue #2516), so the notice stays unconsumed. S2 must not lose it in silence: the log names it.
+/// <para>
+/// The full fix, which runs both inputs in admission order after a crash, belongs to issue #2516. This spec states only
+/// the smallest rule for this PR. It does not require the notice to run, and it does not forbid that.
+/// </para>
+/// </summary>
+public sealed class ChildNoticeBehindLostInputSpecs(ITestOutputHelper output) : ChildNoticeTestBase(output)
+{
+    /// <summary>
+    /// Alice's turn waits in its model call. Her child ends, and the notice is admitted behind her input. The actor
+    /// crashes with <c>[Alice input, notice]</c> pending and no restart reminder. After the recovery, the session
+    /// logs one Warning for the notice. The Warning names the run id and says that the notice waits behind an input.
+    /// Warning text contract: it contains the run id, the word "behind", and the word "input".
+    /// Planted bug: the recovery drops the notice from the resume list with no log line.
+    /// </summary>
+    [Fact]
+    public async Task A_notice_that_waits_behind_a_lost_person_input_is_logged_as_a_warning_with_the_run_id()
+    {
+        // Arrange
+        var sessionId = new SessionId("notice/crash-behind-person");
+        var warnings = new ConcurrentQueue<string>();
+        var collector = Sys.ActorOf(Props.Create(() => new WarningCollector(warnings)), "warning-collector");
+        Sys.EventStream.Subscribe(collector, typeof(Warning));
+        var journal = await JournalAsync();
+        ScriptParent();
+        var subscriber = await JoinAsync(sessionId);
+        var (accepted, gate) = await StartChildAsync(sessionId, Alice, "one");
+        await ExpectTurnsAsync(subscriber, 1);
+        var hold = NewGate();
+        Clients.Parent.NextResponseGate = hold;
+        await SendAsync(sessionId, "Alice question.", Operator(Alice));
+        await AwaitAssertAsync(() => Assert.Null(Clients.Parent.NextResponseGate), Deadline, cancellationToken: Cancellation);
+        gate.TrySetResult();
+        await AwaitAssertAsync(() => Assert.Single(NoticesFor(journal, accepted.Run.RunId)), Deadline, cancellationToken: Cancellation);
+        var notice = Assert.Single(NoticesFor(journal, accepted.Run.RunId));
+        var person = Assert.Single(journal.Committed.OfType<InputAdmitted>(), evt => evt.UserMessage.Content == "Alice question.");
+        Assert.True(SequenceIndex(journal, person.InputId) < SequenceIndex(journal, notice.InputId),
+            "The setup needs the notice behind the input of the person.");
+        Assert.Equal(0, ConsumptionCount(journal, person.InputId));
+        Assert.Equal(0, ConsumptionCount(journal, notice.InputId));
+        await StopAsync(await ResolveSessionAsync(sessionId));
+        hold.TrySetResult();
+
+        // Act: the recovery runs on the next join. The join answers after the recovery handler.
+        await JoinAsync(sessionId);
+
+        // Assert
+        var runId = accepted.Run.RunId.Value;
+        await AwaitAssertAsync(() => Assert.True(
+            warnings.Any(text => text.Contains(runId, StringComparison.Ordinal)
+                                 && text.Contains("behind", StringComparison.OrdinalIgnoreCase)
+                                 && text.Contains("input", StringComparison.OrdinalIgnoreCase)),
+            $"No Warning names run {runId} and says that its notice waits behind an input. Warnings seen: "
+            + (warnings.IsEmpty ? "none" : string.Join(" | ", warnings))),
+            Deadline, cancellationToken: Cancellation);
+    }
+
+    private static int SequenceIndex(AcceptanceFault journal, InputId inputId)
+        => Array.FindIndex(journal.Committed.ToArray(), evt => evt is InputAdmitted admitted && admitted.InputId == inputId);
+
+    private sealed class WarningCollector : ReceiveActor
+    {
+        public WarningCollector(ConcurrentQueue<string> warnings)
+            => Receive<Warning>(warning => warnings.Enqueue(warning.Message?.ToString() ?? string.Empty));
     }
 }
