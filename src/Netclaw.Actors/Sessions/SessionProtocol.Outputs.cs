@@ -215,7 +215,17 @@ public static partial class SessionProtocol
         Unknown,
 
         /// <summary>The active model cannot accept the complete session input.</summary>
-        InputCompatibility
+        InputCompatibility,
+
+        /// <summary>
+        /// The model broke a rule that the runtime enforces: it requested tools after a text-only stop,
+        /// or it kept returning empty replies. The provider worked. The model did not comply.
+        /// </summary>
+        /// <remarks>
+        /// New members go last. The wire carries this enum by name, and an older reader maps an
+        /// unknown name to <see cref="Unknown"/>.
+        /// </remarks>
+        ModelBehavior
     }
 
     /// <summary>

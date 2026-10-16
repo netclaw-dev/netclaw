@@ -210,6 +210,46 @@ Download failures do not create security alerts. This change does not alter the 
   logs or emit stack traces
 - exit code `2` for usage and argument errors
 
+## Headless Single-Prompt Output
+
+`netclaw chat -p <text>` sends one prompt and prints the reply. `--json` prints one JSON envelope on
+stdout instead. A script reads stdout, stderr, the exit code, and the session log.
+
+A failed turn or a failed run exits `1`. A turn that completes exits `0`. The exit code does not carry
+the reason. A run that an outside `timeout` kills exits `124` and prints no reason, because the CLI is dead.
+
+For a failed turn or a failed run, stderr has exactly one line after the `[error]` or `[headless:error]`
+line:
+
+```text
+[turn:failed] category=<model|infra> kind=<Kind>
+```
+
+- `category` is `model` only for `kind=ModelBehavior`. The model broke a rule that the runtime
+  enforces: it requested tools after a text-only stop, or it returned repeated empty replies.
+- `category` is `infra` for every other kind. A failure with no classification is `infra`. A reader
+  must never score an unknown failure as a model failure.
+- `kind` is the `ErrorCategory` name of the last `ErrorOutput` before the failed turn: `ModelBehavior`,
+  `ProviderFailure`, `StreamFailure`, `Timeout`, `ToolFailure`, `InputCompatibility`, or `Unknown`.
+  A failed turn with no `ErrorOutput` is `Unknown`.
+- The CLI adds two kinds: `ChannelFailure` (the daemon is unreachable, rejects the client, or the prompt
+  is over the hub frame limit) and `Cancelled` (SIGINT or SIGTERM). A run with one of these kinds has
+  no turn, so it has no JSON envelope and no session log record.
+- An error that the turn survived (a compaction timeout, a context overflow recovery) does not decide
+  the kind. A turn that completes prints no token.
+
+The session log has one `TURN_FAILED: category=<c> kind=<k>` record before `TURN_COMPLETED`. With
+`--json`, the envelope of a failed turn adds `errorCategory` and `errorKind`. A turn that completes has
+neither key. Stdout never holds the token line.
+
+Positive example: the model repeats `web_search("same")` after the runtime stop. Stderr ends with
+`[turn:failed] category=model kind=ModelBehavior`. The exit code is `1`.
+
+Negative example: the provider returns HTTP 503. The kind is `ProviderFailure` and the category is
+`infra`. A harness must not score this run as a model failure.
+
+Owner: `HeadlessChannel` maps the category. `LlmSessionActor` assigns `ModelBehavior`.
+
 ## Safety Rules
 
 - read-only default for all inspection commands

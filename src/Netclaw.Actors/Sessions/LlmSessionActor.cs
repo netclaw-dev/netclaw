@@ -672,7 +672,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FailCurrentTurn(
                 TextOnlyResponseViolationMessage,
                 new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
-                ErrorCategory.ProviderFailure);
+                ErrorCategory.ModelBehavior);
             return;
         }
 
@@ -695,7 +695,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     return;
                 case EmptyResponseAction.Fail fail:
                     _log.Warning("LLM produced {Kind} response — failing turn", analysis.Kind);
-                    FailCurrentTurn(fail.ErrorMessage, fail.Cause, ErrorCategory.ProviderFailure);
+                    FailCurrentTurn(fail.ErrorMessage, fail.Cause, ErrorCategory.ModelBehavior);
                     return;
             }
         }

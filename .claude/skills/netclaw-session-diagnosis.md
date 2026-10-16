@@ -18,6 +18,10 @@ behavior reported from production sessions.
 **Session ID sanitization:** `/` → `_`, `.` → `_`
 Example: `D0AC6CKBK5K/1774023557.531309` → `D0AC6CKBK5K_1774023557_531309`
 
+**Headless failures:** a failed `chat -p` turn writes `TURN_FAILED: category=<model|infra> kind=<Kind>`
+before `TURN_COMPLETED`. `category=model` (`kind=ModelBehavior`) means the model broke a runtime rule.
+Every other kind is `infra`. See `docs/spec/SPEC-004-cli-contract.md`.
+
 **Multiple log files** in a session's `logs/` directory = the session passivated
 (idle timeout or daemon restart) and was rehydrated. Each file is one lifecycle.
 
