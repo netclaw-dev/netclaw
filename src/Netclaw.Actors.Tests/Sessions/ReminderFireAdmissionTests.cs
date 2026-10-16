@@ -22,6 +22,10 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <item>A restart-resume message never becomes an ordinary input.</item>
 /// </list>
 /// A spec that drops nothing (the guards) is green before the change. It stops a cure that drops too much.
+/// <para>
+/// The actor system runs on <see cref="Akka.TestKit.TestScheduler"/>. A restart drain gives a running model call a
+/// 2-second grace period. The specs move virtual time to end it, so no spec waits for real time.
+/// </para>
 /// </summary>
 public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
 {
@@ -32,6 +36,8 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
     public ReminderFireAdmissionTests(ITestOutputHelper output) : base(output)
     {
     }
+
+    protected override bool UseTestScheduler => true;
 
     public enum WaitsBehind
     {
@@ -330,7 +336,7 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
 
         // Act and assert: the same restart message arrives again while the resumed turn runs.
         var duringTurn = await SendRestartMessageAsync(sessionId, reminder);
-        Assert.IsType<CommandAck>(duringTurn);
+        Assert.IsAssignableFrom<CommandAck>(duringTurn);
         Assert.Equal(admittedBefore, await AdmittedCountAsync(sessionId));
 
         resumeGate.TrySetResult();
@@ -344,7 +350,7 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
         await StopSessionAsync(sessionId);
         await JoinNewSubscriberAsync(sessionId);
         var afterRestart = await SendRestartMessageAsync(sessionId, reminder);
-        Assert.IsType<CommandAck>(afterRestart);
+        Assert.IsAssignableFrom<CommandAck>(afterRestart);
         Assert.Equal(admittedBefore, await AdmittedCountAsync(sessionId));
         Assert.Equal(callsBefore, FakeChat.CallCount);
         Assert.DoesNotContain(
@@ -387,7 +393,7 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
         var duringCompaction = await SendRestartMessageAsync(sessionId, reminder);
 
         // Assert: the session acknowledges the message and stores nothing. The compaction ends, and the model never sees the text.
-        Assert.IsType<CommandAck>(duringCompaction);
+        Assert.IsAssignableFrom<CommandAck>(duringCompaction);
         var admittedDuring = await AdmittedCountAsync(sessionId);
         Assert.True(
             admittedDuring == admittedBefore,
@@ -416,9 +422,7 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
         await StartHeldTurnAsync(sessionId, "Finish the interrupted task", RequesterSource(Requester));
         var session = await ResolveSessionAsync(sessionId);
         Watch(session);
-        var drained = await SessionManager.Ask<DaemonRestartPrepared>(
-            new PrepareForDaemonRestart(sessionId, "daemon-stop"),
-            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        var drained = await DrainForRestartAsync(sessionId);
         var reminder = Assert.IsType<ReminderDefinition>(drained.RestartReminder);
         await ExpectTerminatedAsync(session, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -485,7 +489,7 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
                 var reminder = Assert.IsType<ReminderDefinition>(prepared.RestartReminder);
                 await JoinNewSubscriberAsync(sessionId);
                 var held = await StartHeldTurnAsync(sessionId, "Run the build", RequesterSource(Requester));
-                Assert.IsType<CommandAck>(await SendRestartMessageAsync(sessionId, reminder));
+                Assert.IsAssignableFrom<CommandAck>(await SendRestartMessageAsync(sessionId, reminder));
                 return () => held.TrySetResult();
             }
             default:
@@ -498,11 +502,28 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
     {
         var session = await ResolveSessionAsync(sessionId);
         Watch(session);
-        var prepared = await SessionManager.Ask<DaemonRestartPrepared>(
-            new PrepareForDaemonRestart(sessionId, "daemon-stop"),
-            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        var prepared = await DrainForRestartAsync(sessionId);
         await ExpectTerminatedAsync(session, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         return prepared;
+    }
+
+    // The drain gives a running model call 2 seconds before it ends. That timer runs on virtual time, so the spec
+    // moves the clock in 3-second steps until the drain replies.
+    private async Task<DaemonRestartPrepared> DrainForRestartAsync(SessionId sessionId)
+    {
+        var drain = SessionManager.Ask<DaemonRestartPrepared>(
+            new PrepareForDaemonRestart(sessionId, "daemon-stop"),
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await AwaitAssertAsync(
+            () =>
+            {
+                AdvanceScheduler(TimeSpan.FromSeconds(3));
+                Assert.True(drain.IsCompleted, "The restart drain did not finish.");
+                return Task.CompletedTask;
+            },
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        return await drain;
     }
 
     private async Task<ISessionResponse> SendRestartMessageAsync(SessionId sessionId, ReminderDefinition reminder)

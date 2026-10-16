@@ -75,7 +75,7 @@ public sealed class ReminderRestartNoOpAckTests : ApprovalWaitTestBase
         var callsBefore = FakeChat.CallCount;
 
         // Act: the session acknowledges the message and starts the resumed turn. The model call waits.
-        StartExecution(probe, definition, sessionId);
+        var parent = StartExecution(probe, definition, sessionId);
         await AwaitAssertAsync(
             () =>
             {
@@ -86,7 +86,12 @@ public sealed class ReminderRestartNoOpAckTests : ApprovalWaitTestBase
             cancellationToken: TestContext.Current.CancellationToken);
 
         // Assert: an acknowledgement that resumes work is not the end of the run. The resumed turn ends it.
-        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+        // Barrier: the session sends its ack to the execution actor before it starts the model call. An Identify that
+        // the parent sends now queues behind that ack. A run that ended at the ack puts its completion on the probe
+        // before the identity, because the parent forwards in order. No time passes.
+        parent.Tell(Barrier.Instance);
+        var first = await probe.ReceiveOneAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.True(first is ActorIdentity, $"An ack that resumes work must not end the run. First message: {first}");
         resumeGate.TrySetResult();
         var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(
             TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
@@ -147,11 +152,16 @@ public sealed class ReminderRestartNoOpAckTests : ApprovalWaitTestBase
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
     // Plays the reminder manager: it creates the execution actor and accepts its completion.
-    private void StartExecution(Akka.TestKit.TestProbe probe, ReminderDefinition definition, SessionId sessionId)
+    private IActorRef StartExecution(Akka.TestKit.TestProbe probe, ReminderDefinition definition, SessionId sessionId)
     {
         Assert.Equal(sessionId.Value, definition.Delivery.SessionId);
         var pipeline = Host.Services.GetRequiredService<ISessionPipeline>();
-        Sys.ActorOf(Props.Create(() => new AcceptingParent(probe.Ref, definition, pipeline)));
+        return Sys.ActorOf(Props.Create(() => new AcceptingParent(probe.Ref, definition, pipeline)));
+    }
+
+    private sealed class Barrier
+    {
+        public static readonly Barrier Instance = new();
     }
 
     private static MessageSource ReminderChannelSource() => new()
@@ -175,8 +185,10 @@ public sealed class ReminderRestartNoOpAckTests : ApprovalWaitTestBase
                 definition.Schedule.FireAt!.Value,
                 ReminderDeadline.Infinite,
                 new ReminderPayload { Id = definition.Id });
-            Context.ActorOf(ReminderExecutionActor.CreateProps(
+            var child = Context.ActorOf(ReminderExecutionActor.CreateProps(
                 Guid.NewGuid(), definition, pipeline, TimeProvider.System, envelope));
+            Receive<Barrier>(_ => child.Tell(new Identify("barrier")));
+            Receive<ActorIdentity>(identity => probe.Tell(identity));
 
             Receive<ReminderExecutionCompleted>(completed =>
             {
