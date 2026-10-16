@@ -41,7 +41,17 @@ The notice SHALL carry the recorded requester of the run owner. It SHALL join a 
 - **WHEN** the session recovers
 - **THEN** the notice runs once under the recorded authority of the run owner
 - **AND** a later message does not leave the notice behind, and a snapshot passes after the notice turn
+- **AND** the message that wakes the session buffers behind the notice turn and does not run first
 - **AND** an unconsumed input of a person is not part of this rule
+- **AND** a notice with a damaged recorded authority stays unconsumed, the log shows an Error with the run id and the reason, and the recovery of the other notices and of the lost children continues
+
+#### Scenario: A restart reminder does not become input while the session is busy
+
+- **GIVEN** a notice turn runs, either after a crash recovery or for a lost child
+- **WHEN** the restart reminder arrives
+- **THEN** the session acknowledges it and does not admit it as input
+- **AND** when the session is idle and a pending input remains that no turn served, the reminder resumes that input
+- **AND** when no pending input remains, the session drops the reminder and logs that nothing is owed
 
 #### Scenario: A rejected notice does not pin the session
 
@@ -54,7 +64,7 @@ The notice SHALL carry the recorded requester of the run owner. It SHALL join a 
 
 - **GIVEN** the render or the write of `result.md` fails with any non-fatal error
 - **WHEN** the owner learns of the failure
-- **THEN** the owner admits one notice that says the file does not exist
+- **THEN** the owner admits one notice that says the write failed and that the file can be missing or out of date
 
 ### Requirement: A child run folder records the task and the result
 

@@ -351,7 +351,7 @@ The current writer uses `cra-v2`, `cre-v2`, and `ss-v2` for child facts and snap
 The swap that adds child notices is roll-forward only. Build 0.27.1 reads the new rows without an error, and it reads them wrongly:
 
 - It replays a notice as a plain user input.
-- It prepares the result of a reported run again and delivers it a second time, as a `child_run_result` pair.
+- It prepares the result again for a run that the new build already reported and delivers it a second time, as a `child_run_result` pair.
 
 Before the swap, stop the daemon and back up `netclaw.db`. To roll back, stop the daemon and restore that backup.
 Never start 0.27.1 on a database that the new build wrote.
