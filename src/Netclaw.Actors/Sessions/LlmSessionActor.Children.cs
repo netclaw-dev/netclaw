@@ -433,10 +433,13 @@ public sealed partial class LlmSessionActor
         if (_toolWorkflow.HasParkedApprovals())
             return;
 
+        // Admission order holds. The repair takes the notices in front of the first pending input of a person. A
+        // notice behind that input waits for the restart resume, which runs the older input first.
         var selected = _input.SelectedInputs.Ids;
         var restored = 0;
         foreach (var orphan in _state.GetExecutablePendingInputs()
-                     .Where(input => input.ChildNotice is not null && !selected.Contains(input.InputId)))
+                     .Where(input => !selected.Contains(input.InputId))
+                     .TakeWhile(input => input.ChildNotice is not null))
         {
             try
             {
