@@ -268,6 +268,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                         _timeProvider),
                     "memory-observer");
             }
+
+            // Akka.Persistence unstashes the commands that arrived during recovery right after this handler.
+            // The orphan notices must start their turn here, so a message that woke the session buffers behind them
+            // and does not run first.
+            _toolWorkflow.ExpireRecoveredChildApprovals();
+            ResumeOrphanNotices();
         });
     }
 
@@ -294,6 +300,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             case SessionPhase.Ready:
                 Become(Ready);
+                ReplayDeferredRestartReminder();
                 break;
             case SessionPhase.Processing:
                 Become(Processing);
@@ -430,6 +437,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 TryReplyAck();
                 return;
             }
+
+            if (TryDeferRestartReminder(cmd))
+                return;
 
             AdmitInput(cmd, InputPlacement.BufferDuringModel);
         });
@@ -841,6 +851,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 return;
             }
 
+            if (TryDeferRestartReminder(cmd))
+                return;
+
             AdmitInput(cmd, InputPlacement.BufferDuringCompaction);
         });
 
@@ -1076,6 +1089,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     }
 
     private const string RestartReminderIdPrefix = "restart-resume-";
+
+    private SendUserMessage? _deferredRestartReminder;
 
     // Bounds the reap-on-passivation handshake; the Ask always resolves within
     // this window (ack or piped failure), so passivation can never wedge on it.
@@ -1930,13 +1945,55 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         TransitionTo(SessionPhase.Processing);
     }
 
+    private static bool IsRestartReminder(SendUserMessage cmd)
+        => cmd.Source?.ReminderId?.Value is { } reminderId
+           && reminderId.StartsWith(RestartReminderIdPrefix, StringComparison.Ordinal)
+           && string.Equals(cmd.Content, SessionExecutionLifetime.RestartReminderInstruction, StringComparison.Ordinal);
+
+    // A busy session already runs a turn for the work that the restart interrupted (a recovered or a lost-child
+    // notice turn). The reminder is not new input: admitting it would run the interrupted work a second time, with
+    // its external effects. The session acknowledges it and keeps it until the session is idle. Then the Ready path
+    // resumes any pending input that no turn has served, or drops the reminder when nothing remains owed.
+    private bool TryDeferRestartReminder(SendUserMessage cmd)
+    {
+        if (!IsRestartReminder(cmd))
+            return false;
+
+        _log.Info(
+            "Restart reminder {ReminderId} arrived while session {SessionId} is busy; it waits until the session is idle.",
+            cmd.Source!.ReminderId!.Value.Value,
+            _sessionId.Value);
+        _deferredRestartReminder = cmd;
+        TryReplyAck();
+        return true;
+    }
+
+    private void ReplayDeferredRestartReminder()
+    {
+        if (_deferredRestartReminder is not { } reminder)
+            return;
+
+        _deferredRestartReminder = null;
+        if (_state.GetExecutablePendingInputs().Count == 0)
+        {
+            _log.Info(
+                "Deferred restart reminder {ReminderId} found no pending input for session {SessionId}; the busy turn served the interrupted work.",
+                reminder.Source!.ReminderId!.Value.Value,
+                _sessionId.Value);
+            return;
+        }
+
+        // The busy turn ended and left a pending input. The Ready path resumes it. If a follow-up turn starts first,
+        // the reminder reaches the busy path again and waits again.
+        Self.Tell(reminder, ActorRefs.NoSender);
+    }
+
     private bool TryResumeInterruptedInput(SendUserMessage cmd)
     {
-        var reminderId = cmd.Source?.ReminderId?.Value;
-        if (reminderId is null
-            || !reminderId.StartsWith(RestartReminderIdPrefix, StringComparison.Ordinal)
-            || !string.Equals(cmd.Content, SessionExecutionLifetime.RestartReminderInstruction, StringComparison.Ordinal))
+        if (!IsRestartReminder(cmd))
             return false;
+
+        var reminderId = cmd.Source!.ReminderId!.Value.Value;
 
         // The approval check comes before the resume. An open approval owns the next turn: the answer ends the wait,
         // and the inputs that wait behind it are queued already (RestoreWaitingInputs). A resume now would start a

@@ -411,8 +411,6 @@ public sealed partial class LlmSessionActor
 
     private void RecoverChildren()
     {
-        _toolWorkflow.ExpireRecoveredChildApprovals();
-        ResumeOrphanNotices();
         foreach (var run in _state.GetExecutableChildRuns().ToArray())
         {
             if (run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling)
@@ -425,23 +423,38 @@ public sealed partial class LlmSessionActor
 
     // A crash can land between the admission of a notice and the turn that consumes it. The notice then stays in the
     // journal as a pending input, and the result would reach the parent only by chance. Rebuild the queue entry under
-    // the recorded authority and start its turn, so the notice runs once, ahead of any later input. A person's pending
-    // input is not part of this repair (issue 2516): recovery treats it as before. Behind a parked approval the
-    // recovery queued every pending input already, and the answer ends the wait. An input of the running turn is not
-    // an orphan.
+    // the recorded authority and start its turn, so the notice runs once, ahead of any later input. The caller is the
+    // RecoveryCompleted handler: the commands that arrived during recovery run after it, so a message that woke the
+    // session buffers behind the notice turn. A person's pending input is not part of this repair (issue 2516):
+    // recovery treats it as before. Behind a parked approval the recovery queued every pending input already, and the
+    // answer ends the wait. An input of the running turn is not an orphan.
     private void ResumeOrphanNotices()
     {
         if (_toolWorkflow.HasParkedApprovals())
             return;
 
         var selected = _input.SelectedInputs.Ids;
-        var orphans = _state.GetExecutablePendingInputs()
-            .Where(input => input.ChildNotice is not null && !selected.Contains(input.InputId))
-            .ToArray();
-        if (orphans.Length == 0)
+        var restored = 0;
+        foreach (var orphan in _state.GetExecutablePendingInputs()
+                     .Where(input => input.ChildNotice is not null && !selected.Contains(input.InputId)))
+        {
+            try
+            {
+                restored += _input.RestoreWaitingInputs([orphan], _sessionId);
+            }
+            catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
+            {
+                // One damaged record must not stop the recovery of the other notices and of the lost children. The
+                // input stays pending in the journal, so the loss is visible and the next start tries it again.
+                _log.Error(error,
+                    "Cannot resume the notice of child run {RunId}: {Reason}. The notice stays unconsumed.",
+                    orphan.ChildNotice!.RunId, error.Message);
+            }
+        }
+
+        if (restored == 0)
             return;
 
-        var restored = _input.RestoreWaitingInputs(orphans, _sessionId);
         _log.Info("Resuming {RestoredCount} child notice(s) that a crash left unconsumed", restored);
         StartWaitingInputAfterApproval();
     }
