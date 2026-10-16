@@ -46,6 +46,8 @@ The input remains pending until accepted durable progress or explicit closure. `
 
 Child results use the tool-result path. They do not become ordinary user inputs.
 
+Superseded by change `s2-child-result-notices`: a child result is an admitted notice input, and the model reads `result.md` with a real `file_read` call.
+
 ### The existing recurrence owner controls tool loops
 
 Use `TurnStateTracker` and current tool outcome facts for recurrence and cycle rules. Do not add recurrence fields to child state. Keep trusted pending-job exceptions narrow and subject to normal authorization. Do not claim that a fixed iteration limit proves a loop.
