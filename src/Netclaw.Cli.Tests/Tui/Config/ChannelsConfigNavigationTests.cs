@@ -683,7 +683,8 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton<IAnsiTerminal>(terminalInstance);
         services.AddSingleton(tuiNavigation);
-        services.AddTerminaVirtualInput(virtualInput);
+        var pacedInput = new RenderPacedInputSource(virtualInput);
+        services.AddSingleton<IInputSource>(pacedInput);
         services.AddTermina("/config", builder =>
         {
             builder.RegisterRoute<ConfigDashboardPage, ConfigDashboardViewModel>(
@@ -712,6 +713,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         var sp = services.BuildServiceProvider();
         var app = sp.GetRequiredService<TerminaApplication>();
         tuiNavigation.Attach(app);
+        pacedInput.Attach(app);
 
         dashboardVm = capturedDashboardVm!;
         getChannelsVm = () => capturedChannelsVm;
