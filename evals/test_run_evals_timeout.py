@@ -134,50 +134,51 @@ printf 'suite-continued\n' >> "$EVENTS"
 
         completed = subprocess.run(
             ["bash", "-c", script, "timeout-test", str(RUNNER)],
-            env={**os.environ, **env}, capture_output=True, text=True, timeout=10,
+            env={**os.environ, **env}, capture_output=True, text=True, timeout=30,
         )
         return paths, marker, completed
 
-    def assert_timeout_aborts_and_archives(self, kind, status):
+    # A trial prompt that exits with a nonzero status does not stop the suite. The trial
+    # records the exit code, and the trial verdict gives the trial its state (see
+    # test_trial_states_harness.py). Only the memory warm-up prompt stops the suite.
+    CASES = {"prompt": "timeout_case", "resume": "resume_case", "observer": "observer_case"}
+
+    def exit_files(self, paths, kind, run_id="timeout-proof"):
+        case = self.CASES[kind]
+        trials = paths["repo"] / "evals/runs" / run_id / "trials" / case
+        if kind == "resume":
+            return sorted(trials.glob("*/raw/turn-*/cli-exit.json"))
+        return sorted(trials.glob("*/raw/cli-exit.json"))
+
+    def assert_failed_prompt_is_recorded_and_the_suite_continues(self, kind, status):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        paths, marker, completed = self.invoke_prompt(directory.name, kind, status)
-        self.assertEqual(2, completed.returncode, completed.stderr)
-        events = marker.read_text() if marker.exists() else ""
-        self.assertNotIn("assert", events)
-        self.assertNotIn("score", events)
-        self.assertNotIn("suite-continued", events)
-        archive = paths["repo"] / "evals/runs/timeout-proof/stdout"
-        status_files = list(archive.glob("prompt_status_*.txt"))
-        self.assertEqual(1, len(status_files))
-        self.assertEqual(str(status), status_files[0].read_text().strip())
-        stdout_files = list(archive.glob("stdout_*.txt"))
-        stderr_files = list(archive.glob("stderr_*.txt"))
-        self.assertTrue(stdout_files)
-        self.assertTrue(stderr_files)
-        self.assertTrue(any("partial success" in path.read_text() for path in stdout_files))
-        self.assertTrue(any("forced timeout diagnostic" in path.read_text() for path in stderr_files))
-        docker_calls = (paths["logs"] / "docker.log").read_text().splitlines()
-        self.assertIn("stop netclaw-eval-owned", docker_calls)
-        self.assertFalse(any(call.startswith("stop ") and call != "stop netclaw-eval-owned"
-                             for call in docker_calls))
+        paths, marker, completed = self.invoke_prompt(directory.name, kind, status, run_count=2)
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        events = marker.read_text()
+        self.assertIn("suite-continued", events)
+        self.assertEqual(2, events.count("assert"), events)
+        exit_files = self.exit_files(paths, kind)
+        calls_per_trial = 2 if kind == "resume" else 1
+        self.assertEqual(2 * calls_per_trial, len(exit_files))
+        self.assertEqual({status}, {json.loads(path.read_text())["exit_code"] for path in exit_files})
         timeout_calls = (paths["logs"] / "timeout.log").read_text().splitlines()
-        self.assertEqual(1, len(timeout_calls))
-        return paths, events, timeout_calls, completed
+        self.assertEqual(2 * calls_per_trial, len(timeout_calls))
+        stdout_files = [path for exit_file in exit_files for path in exit_file.parent.glob("cli-stdout.*")]
+        self.assertEqual(len(exit_files), len(stdout_files))
+        self.assertTrue(all("partial success" in path.read_text() for path in stdout_files))
+        return paths
 
-    def test_timeout_aborts_before_scoring_or_a_later_trial(self):
-        _, events, timeout_calls, _ = self.assert_timeout_aborts_and_archives("prompt", 124)
-        self.assertEqual("setup:1", events.strip())
-        self.assertEqual(1, len(timeout_calls))
+    def test_trial_prompt_timeout_is_recorded_and_the_suite_continues(self):
+        self.assert_failed_prompt_is_recorded_and_the_suite_continues("prompt", 124)
 
-    def test_other_nonzero_prompt_status_is_retained_and_stops_the_suite(self):
-        _, _, _, completed = self.assert_timeout_aborts_and_archives("prompt", 7)
-        self.assertIn("exited with status 7", completed.stderr)
+    def test_other_nonzero_trial_prompt_status_is_recorded_and_the_suite_continues(self):
+        self.assert_failed_prompt_is_recorded_and_the_suite_continues("prompt", 7)
 
-    def test_resume_and_observer_timeouts_stop_before_the_next_prompt(self):
+    def test_resume_and_observer_failures_are_recorded_like_a_plain_prompt(self):
         for kind in ("resume", "observer"):
             with self.subTest(kind=kind):
-                self.assert_timeout_aborts_and_archives(kind, 124)
+                self.assert_failed_prompt_is_recorded_and_the_suite_continues(kind, 124)
 
     def test_memory_warmup_timeout_uses_the_same_failure_and_cleanup_path(self):
         directory = tempfile.TemporaryDirectory()
@@ -195,20 +196,17 @@ printf 'suite-continued\n' >> "$EVENTS"
         self.assertEqual(1, len([call for call in docker_calls if call.startswith("stop ")]))
         self.assertIn("stop netclaw-eval-owned", docker_calls)
 
-    def test_successful_multi_turn_case_keeps_both_prompts_and_scores(self):
+    def test_successful_multi_turn_case_keeps_both_prompts(self):
         with tempfile.TemporaryDirectory() as directory:
-            # Arrange and act through the same shell caller as the failure cases.
-            paths, marker, completed = self.invoke_prompt(
+            paths, _, completed = self.invoke_prompt(
                 directory, "resume", status=0, run_count=1, run_id="success-proof"
             )
 
-            # Assert both prompts complete, score, and retain successful status.
             self.assertEqual(0, completed.returncode, completed.stderr)
-            self.assertIn("[PASS]", completed.stdout)
-            self.assertIn("score", marker.read_text())
             self.assertEqual(2, len((paths["logs"] / "cli.log").read_text().splitlines()))
-            status_files = list((paths["repo"] / "evals/runs/success-proof/stdout").glob("prompt_status_*.txt"))
-            self.assertEqual(["0", "0"], sorted(path.read_text().strip() for path in status_files))
+            exit_files = self.exit_files(paths, "resume", run_id="success-proof")
+            self.assertEqual(["turn-01", "turn-02"], [path.parent.name for path in exit_files])
+            self.assertEqual({0}, {json.loads(path.read_text())["exit_code"] for path in exit_files})
 
 
 if __name__ == "__main__":
