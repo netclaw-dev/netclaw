@@ -435,6 +435,21 @@ class StartupCheckTests(unittest.TestCase):
 
                 self.assertNotIn("NETCLAW_EVAL_THRESHOLD", done.stderr)
 
+    def test_zero_threshold_stops_the_run_at_startup(self):
+        # Owner decision: the threshold is above 0 and at most 1. Planted bug:
+        # accept 0. A case with only inconclusive trials then passes with a
+        # score of n/a, and an inconclusive result becomes a pass. The check
+        # must stop the run before any call and must name the variable.
+        for value in ("0", "0.0"):
+            with self.subTest(threshold=value):
+                self.marks.unlink(missing_ok=True)
+
+                done = self.run_script(True, NETCLAW_EVAL_THRESHOLD=value)
+
+                self.assertEqual(2, done.returncode, done.stderr[-400:])
+                self.assertIn("NETCLAW_EVAL_THRESHOLD", done.stderr)
+                self.assertEqual("", self.marks_text())
+
     def test_python3_that_is_new_enough_passes_the_prerequisite_check(self):
         # S4 guard. Planted bug: invert the version test. Then every real run
         # stops at startup because python3 is "too old". The python3 of the
