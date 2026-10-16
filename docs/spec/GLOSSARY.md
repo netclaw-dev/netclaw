@@ -136,6 +136,18 @@ The token has no refresh flow, and pairing-code expiration does not affect it.
 
 **Code anchor:** `DeviceRegistry`
 
+### Reminder tombstone
+
+A reminder tombstone is the durable record of an ended one-shot reminder.
+The reminder manager writes it before it deletes the definition.
+It keeps the id, the title, the audience, the fire time, the outcome, the end time, and the last error.
+It does not keep the instructions or the delivery target, and it never runs.
+The audience gates every history and status read of the ended reminder.
+The manager deletes the history and then the tombstone 12 days after the end time.
+
+**Code anchors:** `ReminderManagerActor`, `ReminderDefinitionStore` (planned in
+`openspec/changes/oneshot-reminder-autodelete`)
+
 ## Tool Lifecycle Terms
 
 ### Tool definition or tool schema
