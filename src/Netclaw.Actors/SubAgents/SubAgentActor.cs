@@ -825,7 +825,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         if (cycleDecision.Kind == ToolCycleDecisionKind.Stop)
         {
-            Complete(true, ToolCycleMessages.Final, SubAgentRunOutcome.Partial,
+            Complete(true, ToolCycleMessages.ChildStopped, SubAgentRunOutcome.Partial,
                 SubAgentOutcomeReason.ToolCycleStopped);
             return;
         }

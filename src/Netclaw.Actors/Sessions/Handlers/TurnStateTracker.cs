@@ -355,8 +355,16 @@ internal static class ToolCycleMessages
         "Netclaw stopped this tool call because it would continue a repeated action-and-outcome cycle. "
         + "The same action completed twice without a changed result. This call did not execute.";
 
-    public const string Final =
+    // Model-facing: the child result that the parent model reads. It stays in the second person.
+    public const string ChildStopped =
         "Netclaw stopped this run after you repeated a tool call that the cycle guard already blocked. "
+
+    // Person-facing: the failed-turn text that Slack, Discord, Mattermost, the TUI, and the CLI show
+    // to a person. A person did not repeat the call, so this text names the model.
+    public const string TurnStopped =
+        "Netclaw stopped this turn because the model repeated a tool call that was already refused. "
+        + "The result is partial. The last refused operation did not execute. "
+        + "Earlier tool results remain available in the session.";
         + "The result is partial. The last refused operation did not execute. "
         + "Earlier tool results remain available in the session.";
 }
