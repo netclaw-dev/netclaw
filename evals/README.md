@@ -326,7 +326,7 @@ the missing values. In non-interactive contexts it fails loudly.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NETCLAW_EVAL_RUNS` | `5` | Runs per case |
-| `NETCLAW_EVAL_THRESHOLD` | `0.80` | Pass threshold (0.0-1.0) |
+| `NETCLAW_EVAL_THRESHOLD` | `0.80` | Pass threshold, a number from 0 to 1. The run stops at startup with exit 2 for any other value. |
 | `NETCLAW_EVAL_TIMEOUT` | `60` | Per-prompt timeout in whole seconds. The run stops at startup with exit 2 for any other value, such as `5m`. |
 | `NETCLAW_EVAL_SEED` | random | Integer seed for the choice of prompt variants. The harness prints the seed and records it in each trial's `variant.json`. |
 
@@ -447,7 +447,11 @@ while the run goes on. `<nn>` is the trial number, `01` and up.
 | `daemon-session.log` | Daemon lines with the exact token `session=<id>` or `sessionId=<id>` |
 | `daemon-window.log` | Every daemon line from the start of the trial to the end of the assertion, for people to read. A trial that crosses midnight UTC adds the lines of the new daemon file. A run stops with exit 2 and an error message when `$EVAL_HOME/logs` holds no `daemon-*.log` file. |
 | `assert.json` | `exit_code` of the assertion (141 is a pipe failure, 1 is a missed match), `daemon_log`, `window_lines_before`, `window_lines_after`, `extra_daemon_logs` |
+| `assert-report.json` | Only for an assertion that writes a JSON report (the tool cycle cases). The trial is inconclusive when the report says `"status": "inconclusive"`. |
 | `assert-stderr.txt` | stderr of the assertion function. It is often empty, because the assertion helpers send their own stderr to `/dev/null`. |
+
+After the assertion, `trial_verdict.py trial-status` writes `verdict.json` in the
+trial folder (next to `raw/`). It holds `status`, `reason`, and `error`.
 
 A multi-turn trial keeps `prompt.txt`, `cli-exit.json`, `cli-stdout.*`, and
 `cli-stderr.txt` of each turn in `raw/turn-<nn>/`. It keeps the session files
@@ -463,6 +467,21 @@ full run.
 Windows model-pattern cases remain deferred until sanitized representative
 traffic exists. Windows contract tests remain required for path and process
 behavior. Record the deferred cases as evidence work, not as passed evals.
+
+`eval_results` holds one row for each trial:
+
+| Column | Content |
+|--------|---------|
+| `status` | `pass`, `fail`, or `inconclusive`. NULL on a row from a run before result states. |
+| `reason` | NULL for a pass and a fail. The reason token for an inconclusive trial. |
+| `passed` | 1 for a pass, 0 for a fail, NULL for an inconclusive trial. A query such as `AVG(passed)` does not count an inconclusive trial as a fail. |
+| `details` | `pass`, `fail`, or the assertion details. For a failed turn, the text of the CLI `ERROR` record. |
+
+`eval_runs.inconclusive_cases` counts the cases that are inconclusive.
+`passed_cases` counts the cases that pass. `init_db` adds the new columns to a
+`results.db` from an older run. It keeps every row, and an old row keeps its
+`passed` value with a NULL `status`. `results_db.py` binds every value as an SQL
+parameter, so quotes and newlines in a prompt or an error text are safe.
 
 Requires `sqlite3` CLI — if not available, the script still runs but
 skips persistence.
@@ -504,11 +523,43 @@ skips persistence.
 
 ## Scoring
 
-- **Per-case:** passes / total runs >= threshold → case passes
-- **Per-category:** GREEN (all pass), YELLOW (>= 80%), RED (< 80%)
-- **Overall:** cases passed / total cases
-- **Exit code:** 0 if all cases pass, 1 if any fail, 2 if the eval
-  container died during startup or mid-run
+A trial has one of three states:
+
+- **pass** or **fail**: the turn finished and the assertion exited 0 or 1.
+- **inconclusive**: the trial has no verdict. `reason` tells why. The checks run
+  in this order, and the first match wins:
+  - `infra:<detail>`: `no_session`, `ambiguous_session`, `crash_log` (a new
+    `crash-*.log`), `cli_exit_<code>` (a CLI exit other than 0, 1, and 124), or
+    evidence that cannot be read.
+  - `timeout`: the CLI exit is 124, or a turn has no `TURN_COMPLETED` record.
+  - `turn_failed`: the CLI exit is 1. `details` keeps the `ERROR` text.
+  - the reason of an assertion report that says `inconclusive` (cycle cases).
+  - `assertion_exit_<code>`: the assertion exited with a code other than 0 and 1
+    (141 for a pipe failure, 127 for a missing command).
+
+A `CANCELLED` record in `headless-errors.log` is the normal sign of a cut turn.
+It is not an infrastructure fault, so the verdict does not read that file.
+
+A case uses the same states. Count each inconclusive trial once as a pass and
+once as a fail:
+
+- **PASS**: the case passes even when each inconclusive trial fails.
+- **FAIL**: the case fails even when each inconclusive trial passes.
+- **INCONCLUSIVE**: all other cases.
+
+Both bounds divide by all trials and compare with the threshold as an exact
+decimal. The score on the case line divides by the conclusive trials only. The
+line shows the inconclusive trials and their reasons, for example
+`[PASS] skill_activation_memory 4/4 (1.00, 1 inconclusive: timeout)`.
+
+- **Per-category:** GREEN (all pass), INCONCLUSIVE (no case fails, and some are
+  inconclusive), YELLOW (>= 80% pass), RED (< 80% pass)
+- **Overall:** cases passed / total cases, with the number of failed and
+  inconclusive cases
+- **Exit code:** 0 if all cases pass, 1 if any case fails, 2 if the harness
+  stopped (a bad setting, the eval container died during startup or mid-run, or
+  an evidence step crashed), 3 if no case fails and some case is inconclusive.
+  The order is 2, then 1, then 3.
 
 ## Prerequisites
 

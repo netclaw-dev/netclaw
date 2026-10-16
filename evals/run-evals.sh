@@ -44,6 +44,16 @@
 #     NETCLAW_EVAL_CASE          Run only this specific case name
 #     NETCLAW_EVAL_SEED          Integer seed for prompt variant choice (default: random,
 #                                printed and recorded in each trial's variant.json)
+#
+# A trial is a pass, a fail, or inconclusive (a cut turn, a failed turn, an
+# infrastructure fault, or a broken check). A case uses the same three states.
+# The score counts conclusive trials only.
+#
+# Exit codes:
+#   0  every case passed
+#   1  at least one case failed
+#   2  the harness stopped (bad setting, eval container died, broken evidence step)
+#   3  no case failed, and at least one case is inconclusive
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -75,6 +85,12 @@ if [[ ! "$PROMPT_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     exit 2
 fi
 
+# A number from 0 to 1. The case status rule compares it as an exact decimal.
+if [[ ! "$THRESHOLD" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]]; then
+    echo "ERROR: NETCLAW_EVAL_THRESHOLD must be a number from 0 to 1, got: $THRESHOLD" >&2
+    exit 2
+fi
+
 # Image and CLI binary default to the locally-built artifacts. Evals should
 # always test the current source tree, not a stale published image.
 NETCLAW_IMAGE="${NETCLAW_IMAGE:-ghcr.io/netclaw-dev/netclaw:dev}"
@@ -96,8 +112,10 @@ EVAL_DISABLE_THINKING="${NETCLAW_EVAL_DISABLE_THINKING:-false}"
 TOTAL_CASES=0
 PASSED_CASES=0
 FAILED_CASES=0
+INCONCLUSIVE_CASES=0
 CATEGORY_CASES=0
 CATEGORY_PASSED=0
+CATEGORY_FAILED=0
 CURRENT_CATEGORY=""
 RUN_ID=""
 NETCLAW_VER=""
@@ -127,6 +145,13 @@ TRIAL_DAEMON_LINES_BEFORE=0
 PICKED_VARIANT=""
 PICKED_VARIANT_INDEX=0
 PICKED_TRIAL_SEED=0
+# Path of the JSON report of the assertion that runs now (see keep_assertion_report).
+EVAL_ASSERTION_REPORT=""
+# Tally of the trials of the case that runs now (see record_trial).
+CASE_PASSES=0
+CASE_FAILS=0
+CASE_INCONCLUSIVE=0
+CASE_INCONCLUSIVE_REASONS=()
 
 # ─── Prerequisites ────────────────────────────────────────────────────────────
 
@@ -774,54 +799,19 @@ seed_eval_memories() {
 init_db() {
     [[ -z "$RESULTS_DB" ]] && return
     mkdir -p "$RESULTS_DIR"
-    sqlite3 "$RESULTS_DB" <<'SQL'
-CREATE TABLE IF NOT EXISTS eval_runs (
-    run_id        TEXT PRIMARY KEY,
-    started_at    TEXT NOT NULL,
-    netclaw_ver   TEXT NOT NULL,
-    model_id      TEXT,
-    runs_per_case INTEGER NOT NULL,
-    threshold     REAL NOT NULL,
-    total_cases   INTEGER NOT NULL,
-    passed_cases  INTEGER NOT NULL,
-    overall_score REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS eval_results (
-    run_id      TEXT NOT NULL REFERENCES eval_runs(run_id),
-    category    TEXT NOT NULL,
-    case_name   TEXT NOT NULL,
-    run_number  INTEGER NOT NULL,
-    prompt_used TEXT NOT NULL,
-    passed      INTEGER NOT NULL,
-    details     TEXT,
-    PRIMARY KEY (run_id, case_name, run_number)
-);
-CREATE TABLE IF NOT EXISTS eval_metrics (
-    run_id            TEXT NOT NULL REFERENCES eval_runs(run_id),
-    category          TEXT NOT NULL,
-    case_name         TEXT NOT NULL,
-    run_number        INTEGER NOT NULL,
-    turn_number       INTEGER NOT NULL DEFAULT 1,
-    input_tokens      INTEGER,
-    output_tokens     INTEGER,
-    cached_tokens     INTEGER,
-    prompt_ms         REAL,
-    predicted_tok_s   REAL,
-    PRIMARY KEY (run_id, case_name, run_number, turn_number)
-);
-SQL
+    python3 "$RESULTS_DB_PY" init --db "$RESULTS_DB"
 }
 
+## Stores one trial. The row holds the status and the reason. The passed column
+## is NULL for an inconclusive trial, so an old AVG(passed) query does not count
+## it as a fail. results_db.py binds every value as a parameter. Each option
+## has the form --name=VALUE, so a prompt that starts with a dash is safe.
+## Args: case_name, run_number, prompt, status, reason, details
 store_result() {
     [[ -z "$RESULTS_DB" ]] && return
-    local case_name="$1" run_number="$2" prompt="$3" passed="$4" details="$5"
-    # Escape single quotes for SQL
-    local esc_prompt="${prompt//\'/\'\'}"
-    local esc_details="${details//\'/\'\'}"
-    local esc_category="${CURRENT_CATEGORY//\'/\'\'}"
-    sqlite3 "$RESULTS_DB" \
-        "INSERT INTO eval_results (run_id, category, case_name, run_number, prompt_used, passed, details)
-         VALUES ('$RUN_ID', '$esc_category', '$case_name', $run_number, '$esc_prompt', $passed, '$esc_details');"
+    python3 "$RESULTS_DB_PY" store --db "$RESULTS_DB" --run-id "$RUN_ID" \
+        "--category=$CURRENT_CATEGORY" "--case=$1" "--run-number=$2" "--prompt=$3" \
+        "--status=$4" "--reason=$5" "--details=$6"
 }
 
 ## Parses text or structured JSON usage output and stores performance metrics.
@@ -941,8 +931,8 @@ finalize_db() {
     local esc_ver="${NETCLAW_VER//\'/\'\'}"
     local esc_model="${EVAL_MODEL_ID//\'/\'\'}"
     sqlite3 "$RESULTS_DB" \
-        "INSERT INTO eval_runs (run_id, started_at, netclaw_ver, model_id, runs_per_case, threshold, total_cases, passed_cases, overall_score)
-         VALUES ('$RUN_ID', '$STARTED_AT', '$esc_ver', '$esc_model', $RUNS, $THRESHOLD, $TOTAL_CASES, $PASSED_CASES, $score);"
+        "INSERT INTO eval_runs (run_id, started_at, netclaw_ver, model_id, runs_per_case, threshold, total_cases, passed_cases, overall_score, inconclusive_cases)
+         VALUES ('$RUN_ID', '$STARTED_AT', '$esc_ver', '$esc_model', $RUNS, $THRESHOLD, $TOTAL_CASES, $PASSED_CASES, $score, $INCONCLUSIVE_CASES);"
 }
 
 # ─── Utility Functions ────────────────────────────────────────────────────────
@@ -969,6 +959,8 @@ pick_variant() {
 # daemon-*.log, assert-stderr.txt) always sit in raw/.
 
 TRIAL_EVIDENCE_PY="$REPO_ROOT/evals/trial_evidence.py"
+TRIAL_VERDICT_PY="$REPO_ROOT/evals/trial_verdict.py"
+RESULTS_DB_PY="$REPO_ROOT/evals/results_db.py"
 # Exit codes of `trial_evidence.py discover-session` that are findings, not crashes.
 DISCOVER_NO_SESSION=3
 DISCOVER_AMBIGUOUS_SESSION=4
@@ -1096,11 +1088,124 @@ finish_assertion_evidence() {
                  extra_daemon_logs: $ARGS.positional}' "${new_files[@]}" \
         > "$TRIAL_RAW/assert.json"
 
+    # An assertion that reports "inconclusive" returns 1 like a fail. The report
+    # tells them apart (trial_verdict.py reads assert-report.json). A report
+    # that is gone leaves an empty file, which the verdict reports as infra.
+    if [[ -n "${EVAL_ASSERTION_REPORT:-}" ]]; then
+        cp "$EVAL_ASSERTION_REPORT" "$TRIAL_RAW/assert-report.json" 2>/dev/null \
+            || : > "$TRIAL_RAW/assert-report.json"
+    fi
+
     if [[ -f "$window" && "$(jq -r '.status' "$TRIAL_RAW/session.json")" == "ok" ]]; then
         python3 "$TRIAL_EVIDENCE_PY" daemon-session --log "$window" \
             --session "$(jq -r '.session_id' "$TRIAL_RAW/session.json")" \
             > "$TRIAL_RAW/daemon-session.log"
     fi
+}
+
+# ─── Trial and Case Results ───────────────────────────────────────────────────
+
+## Marks a JSON report as the evidence of the assertion that runs now.
+## Args: report path
+keep_assertion_report() {
+    EVAL_ASSERTION_REPORT="$1"
+}
+
+reset_case_tally() {
+    CASE_PASSES=0
+    CASE_FAILS=0
+    CASE_INCONCLUSIVE=0
+    CASE_INCONCLUSIVE_REASONS=()
+}
+
+## Judges the finished trial, adds it to the tally of the case, and stores its
+## row. Call it after finish_assertion_evidence, because the verdict reads
+## assert.json. trial_verdict.py writes verdict.json in the trial folder.
+## Args: case_name, run_number, prompt, details of a fail
+record_trial() {
+    local case_name="$1" run="$2" prompt="$3" fail_details="$4"
+    local verdict status reason error details
+    if ! verdict=$(python3 "$TRIAL_VERDICT_PY" trial-status --trial-dir "$(dirname "$TRIAL_RAW")"); then
+        echo "ERROR: trial-status failed for $TRIAL_RAW" >&2
+        exit 2
+    fi
+    status=$(jq -r '.status' <<< "$verdict")
+    reason=$(jq -r '.reason // ""' <<< "$verdict")
+    error=$(jq -r '.error // ""' <<< "$verdict")
+    case "$status" in
+        pass)
+            CASE_PASSES=$((CASE_PASSES + 1))
+            details="pass"
+            ;;
+        fail)
+            CASE_FAILS=$((CASE_FAILS + 1))
+            details="$fail_details"
+            ;;
+        inconclusive)
+            CASE_INCONCLUSIVE=$((CASE_INCONCLUSIVE + 1))
+            CASE_INCONCLUSIVE_REASONS+=("$reason")
+            details="${error:-$reason}"
+            ;;
+        *)
+            echo "ERROR: trial-status gave an unknown status: $status" >&2
+            exit 2
+            ;;
+    esac
+    store_result "$case_name" "$run" "$prompt" "$status" "$reason" "$details"
+}
+
+## Prints each distinct reason once, in order of first use, with a count when
+## it repeats: "timeout x2, turn_failed".
+format_reasons() {
+    printf '%s\n' "$@" | awk '
+        { count[$0]++; if (count[$0] == 1) order[++distinct] = $0 }
+        END {
+            for (i = 1; i <= distinct; i++)
+                printf "%s%s%s", (i > 1 ? ", " : ""), order[i], (count[order[i]] > 1 ? " x" count[order[i]] : "")
+        }'
+}
+
+## Gives the case its state from the tally, prints the case line, and updates
+## the counters. The score counts conclusive trials only.
+## Args: case_name, description
+finish_case() {
+    local case_name="$1" description="$2"
+    local result status score conclusive=$((CASE_PASSES + CASE_FAILS))
+    if ! result=$(python3 "$TRIAL_VERDICT_PY" case-status --threshold "$THRESHOLD" \
+        --passes "$CASE_PASSES" --fails "$CASE_FAILS" --inconclusive "$CASE_INCONCLUSIVE"); then
+        echo "ERROR: case-status failed for $case_name" >&2
+        exit 2
+    fi
+    status=$(jq -r '.status' <<< "$result")
+    score="n/a"
+    if [[ "$conclusive" -gt 0 ]]; then
+        score=$(jq -r '.score' <<< "$result" | awk '{printf "%.2f", $1}')
+    fi
+    if [[ "$CASE_INCONCLUSIVE" -gt 0 ]]; then
+        score="$score, $CASE_INCONCLUSIVE inconclusive: $(format_reasons "${CASE_INCONCLUSIVE_REASONS[@]}")"
+    fi
+
+    CATEGORY_CASES=$((CATEGORY_CASES + 1))
+    TOTAL_CASES=$((TOTAL_CASES + 1))
+    case "$status" in
+        pass)
+            CATEGORY_PASSED=$((CATEGORY_PASSED + 1))
+            PASSED_CASES=$((PASSED_CASES + 1))
+            ;;
+        fail)
+            CATEGORY_FAILED=$((CATEGORY_FAILED + 1))
+            FAILED_CASES=$((FAILED_CASES + 1))
+            ;;
+        inconclusive)
+            INCONCLUSIVE_CASES=$((INCONCLUSIVE_CASES + 1))
+            ;;
+        *)
+            echo "ERROR: case-status gave an unknown status: $status" >&2
+            exit 2
+            ;;
+    esac
+    printf "  [%s] %-30s %d/%d (%s)  — %s\n" "${status^^}" "$case_name" \
+        "$CASE_PASSES" "$conclusive" "$score" "$description"
 }
 
 # ─── Prompt Runner ────────────────────────────────────────────────────────────
@@ -1274,7 +1379,7 @@ run_multi_turn_case() {
         return
     fi
 
-    local passes=0
+    reset_case_tally
     local run
     for ((run = 1; run <= RUNS; run++)); do
         # Fresh session per run so runs don't pollute each other.
@@ -1304,40 +1409,17 @@ run_multi_turn_case() {
         done
         finish_trial
 
-        local passed=0
-        local details="fail"
         local assert_rc=0
         EVAL_ASSERTION_DETAILS=""
+        EVAL_ASSERTION_REPORT=""
         $assert_fn 2> "$TRIAL_RAW/assert-stderr.txt" || assert_rc=$?
         finish_assertion_evidence "$assert_rc"
-        if [[ "$assert_rc" -eq 0 ]]; then
-            passed=1
-            passes=$((passes + 1))
-            details="pass"
-        elif [[ -n "${EVAL_ASSERTION_DETAILS:-}" ]]; then
-            details="$EVAL_ASSERTION_DETAILS"
-        fi
 
         # Use the first prompt as the representative prompt_used for eval_results.
-        store_result "$case_name" "$run" "${prompts[0]}" "$passed" "$details"
+        record_trial "$case_name" "$run" "${prompts[0]}" "${EVAL_ASSERTION_DETAILS:-fail}"
     done
 
-    local score
-    score=$(awk "BEGIN {printf \"%.2f\", $passes / $RUNS}")
-    local threshold_met
-    threshold_met=$(awk "BEGIN {print ($score >= $THRESHOLD) ? 1 : 0}")
-
-    CATEGORY_CASES=$((CATEGORY_CASES + 1))
-    TOTAL_CASES=$((TOTAL_CASES + 1))
-
-    if [[ "$threshold_met" == "1" ]]; then
-        CATEGORY_PASSED=$((CATEGORY_PASSED + 1))
-        PASSED_CASES=$((PASSED_CASES + 1))
-        printf "  [PASS] %-30s %d/%d (%s)  — %s\n" "$case_name" "$passes" "$RUNS" "$score" "$description"
-    else
-        FAILED_CASES=$((FAILED_CASES + 1))
-        printf "  [FAIL] %-30s %d/%d (%s)  — %s\n" "$case_name" "$passes" "$RUNS" "$score" "$description"
-    fi
+    finish_case "$case_name" "$description"
 }
 
 # ─── Assertion Helpers ────────────────────────────────────────────────────────
@@ -3175,6 +3257,7 @@ print_category() {
     CURRENT_CATEGORY="$1"
     CATEGORY_CASES=0
     CATEGORY_PASSED=0
+    CATEGORY_FAILED=0
     CATEGORY_SKIPPED=false
 
     # Skip entire category if filter is set and doesn't match
@@ -3201,6 +3284,10 @@ end_category() {
         status="EMPTY"
     elif [[ "$CATEGORY_PASSED" -eq "$CATEGORY_CASES" ]]; then
         status="GREEN"
+    elif [[ "$CATEGORY_FAILED" -eq 0 ]]; then
+        # Nothing failed. The cases that did not pass are inconclusive, and a
+        # colour that means "bad" would say more than the evidence does.
+        status="INCONCLUSIVE"
     else
         local pct
         pct=$(awk "BEGIN {printf \"%.2f\", $CATEGORY_PASSED / $CATEGORY_CASES}")
@@ -3237,7 +3324,7 @@ run_case() {
         return
     fi
 
-    local passes=0
+    reset_case_tally
     local run
     for ((run = 1; run <= RUNS; run++)); do
         pick_variant "$case_name" "$run" "${prompts[@]}"
@@ -3258,37 +3345,16 @@ run_case() {
         run_prompt "$rendered_prompt" "$output_format"
         finish_trial
 
-        local passed=0
-        local details="fail"
         local assert_rc=0
+        EVAL_ASSERTION_REPORT=""
         $assert_fn 2> "$TRIAL_RAW/assert-stderr.txt" || assert_rc=$?
         finish_assertion_evidence "$assert_rc"
-        if [[ "$assert_rc" -eq 0 ]]; then
-            passed=1
-            passes=$((passes + 1))
-            details="pass"
-        fi
 
-        store_result "$case_name" "$run" "$prompt" "$passed" "$details"
+        record_trial "$case_name" "$run" "$prompt" fail
         store_metrics "$case_name" "$run"
     done
 
-    local score
-    score=$(awk "BEGIN {printf \"%.2f\", $passes / $RUNS}")
-    local threshold_met
-    threshold_met=$(awk "BEGIN {print ($score >= $THRESHOLD) ? 1 : 0}")
-
-    CATEGORY_CASES=$((CATEGORY_CASES + 1))
-    TOTAL_CASES=$((TOTAL_CASES + 1))
-
-    if [[ "$threshold_met" == "1" ]]; then
-        CATEGORY_PASSED=$((CATEGORY_PASSED + 1))
-        PASSED_CASES=$((PASSED_CASES + 1))
-        printf "  [PASS] %-30s %d/%d (%s)  — %s\n" "$case_name" "$passes" "$RUNS" "$score" "$description"
-    else
-        FAILED_CASES=$((FAILED_CASES + 1))
-        printf "  [FAIL] %-30s %d/%d (%s)  — %s\n" "$case_name" "$passes" "$RUNS" "$score" "$description"
-    fi
+    finish_case "$case_name" "$description"
 }
 
 # ─── Case Definitions ────────────────────────────────────────────────────────
@@ -3848,7 +3914,7 @@ main() {
 
     echo ""
     echo "─────────────────────────────────────────────────"
-    echo "Overall: $PASSED_CASES/$TOTAL_CASES cases passed ($overall_score%)"
+    echo "Overall: $PASSED_CASES/$TOTAL_CASES cases passed ($overall_score%), $FAILED_CASES failed, $INCONCLUSIVE_CASES inconclusive"
 
     print_metrics_summary
 
@@ -3859,6 +3925,9 @@ main() {
 
     if [[ "$FAILED_CASES" -gt 0 ]]; then
         exit 1
+    fi
+    if [[ "$INCONCLUSIVE_CASES" -gt 0 ]]; then
+        exit 3
     fi
 }
 
