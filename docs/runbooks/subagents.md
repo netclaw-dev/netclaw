@@ -104,6 +104,18 @@ stays within Akka's actor-thread rules. If the parent tool call is cancelled or
 times out, the subagent is cancelled too. The timeout is an inactivity budget: a
 responsive subagent is not stopped merely because wall-clock time has elapsed.
 
+Two more rules end a run with outcome `failed`:
+
+- `output_truncated`: a model reply ended on the output limit
+  (`finishReason=length`) and made no tool call. The text is cut off, so it is
+  never a result. The run does not retry. The `Error:` section holds a preview
+  of the cut-off text. A reply that has a tool call still runs its tools.
+- `thinking_only_timeout`: one model call streamed only thinking, with no text
+  and no tool call, for longer than three times `SubAgents.NoProgressTimeoutSeconds`
+  (default `1200`, so 60 minutes). Thinking counts as progress for the
+  `no_substantive_output_timeout` deadline, so only this cap stops a model that
+  thinks without end. A text delta or a tool-call delta restarts the cap.
+
 ### Observability
 
 Subagent start/complete events are emitted as `SubAgentOutput` session events:

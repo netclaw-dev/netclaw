@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -525,6 +526,26 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
             }
 
+            // A reply that ended on the output limit is cut off. Its text is a stub,
+            // not a result, so it is never a success. A retry would meet the same limit.
+            if (response.FinishReason == ChatFinishReason.Length)
+            {
+                var stub = ExtractText(lastMessage);
+                _log.Warning(
+                    "SubAgent [{AgentName}] reply was truncated (finishReason=length, text={TextChars}ch, thinking={ThinkingChars}ch, toolCalls=0) — reporting failure",
+                    _definition.Name,
+                    analysis.TextChars,
+                    analysis.ThinkingChars);
+                Complete(
+                    false,
+                    "Subagent output was truncated: the model reached its output limit before it finished, "
+                    + "and it made no tool call. The text is cut off and is not a result. "
+                    + $"Cut-off text: {PreviewRedacted(stub, 300)}",
+                    SubAgentRunOutcome.Failed,
+                    SubAgentOutcomeReason.OutputTruncated);
+                return;
+            }
+
             // Final text response — we're done.
             var text = ExtractText(lastMessage);
             if (string.IsNullOrWhiteSpace(text) || text == EmptyResponseMarker)
@@ -688,13 +709,28 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 // approval suppression or grace — it is only armed during an active
                 // LLM stream and is never refreshed by keepalives, so reaching it
                 // means a genuine wedge.
-                var noProgress = _noProgressBudget?.TotalSeconds ?? 0;
+                var noProgress = RequireNoProgressBudget().TotalSeconds;
                 _executionCts?.Cancel();
                 _watchdog.Stop(Timers);
                 _log.Warning(
                     "SubAgent [{AgentName}] timed out: no substantive output for {Budget:F0}s after {Iterations} tool iterations",
                     _definition.Name, noProgress, _turnState.ToolIterationCount);
                 Complete(false, $"Subagent timed out: no substantive output for {noProgress:F0}s.", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.NoSubstantiveOutputTimeout);
+                return;
+            }
+
+            if (msg.ThinkingCap)
+            {
+                // One model call streamed only thinking for the whole cap. Thinking
+                // resets the no-progress deadline, so only this cap stops the call.
+                // Like the no-progress deadline, it gets no approval grace.
+                var cap = RequireNoProgressBudget().TotalSeconds * ProcessingWatchdog.ThinkingCapMultiplier;
+                _executionCts?.Cancel();
+                _watchdog.Stop(Timers);
+                _log.Warning(
+                    "SubAgent [{AgentName}] timed out: one model call streamed only thinking for {Budget:F0}s after {Iterations} tool iterations",
+                    _definition.Name, cap, _turnState.ToolIterationCount);
+                Complete(false, $"Subagent timed out: one model call streamed only thinking for {cap:F0}s, with no text and no tool call.", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.ThinkingOnlyTimeout);
                 return;
             }
 
@@ -785,12 +821,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 + $"text={msg.TextDeltaCount}/{msg.TextChars}ch "
                 + $"thinking={msg.ThinkingDeltaCount}/{msg.ThinkingChars}ch "
                 + $"toolCalls={msg.ToolCallDeltaCount} finishReason={msg.FinishReason ?? "null"} "
-                + $"substantive={msg.IsSubstantive}");
+                + $"activity={msg.Activity}");
 
             // Same two-phase policy as the main session: keepalives refresh the
             // current budget, the first substantive delta promotes off prefill.
             _anyContentStreamed = _watchdog.OnStreamProgress(
-                msg.IsSubstantive,
+                msg.Activity,
                 _anyContentStreamed,
                 _prefillBudget,
                 _interDeltaBudget,
@@ -958,7 +994,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             messages.Count,
             options?.Tools?.Count > 0,
             forceNoTools);
-        _ = InvokeLlmAsync(client, messages, options, self, callId, _executionCts?.Token ?? CancellationToken.None);
+        _ = InvokeLlmAsync(client, messages, options, self, Context.System.Scheduler, callId, _executionCts?.Token ?? CancellationToken.None);
     }
 
     private IReadOnlyList<AITool> ResolveCoreAiTools()
@@ -1293,14 +1329,16 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         List<AiChatMessage> messages,
         ChatOptions? options,
         IActorRef self,
+        ITimeProvider clock,
         CancellationToken ct)
-        => InvokeLlmAsync(client, messages, options, self, callId: 0, ct);
+        => InvokeLlmAsync(client, messages, options, self, clock, callId: 0, ct);
 
     internal static async Task InvokeLlmAsync(
         IChatClient client,
         List<AiChatMessage> messages,
         ChatOptions? options,
         IActorRef self,
+        ITimeProvider clock,
         long callId,
         CancellationToken ct)
     {
@@ -1313,7 +1351,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // TextContent and causing the subagent to report empty "(no response)".
             // The loop, counting, and response assembly are shared with the main
             // session path via StreamingResponseReader.
-            var pingThrottle = Stopwatch.StartNew();
+            var pingGate = new StreamPingGate(clock, StreamPingInterval);
 
             var result = await StreamingResponseReader.ReadAsync(
                 client,
@@ -1325,10 +1363,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     // watchdog can promote off the generous prefill budget;
                     // otherwise throttle pings. Keepalives are forwarded too (the
                     // actor refreshes whichever budget is in force) so a healthy
-                    // slow prefill is never mistaken for a hang.
-                    if (cls.IsFirstSubstantive || pingThrottle.Elapsed >= StreamPingInterval)
+                    // slow prefill is never mistaken for a hang. The gate never
+                    // drops an answer update: that update resets the thinking cap.
+                    if (pingGate.TryPing(cls, out var pingActivity))
                     {
-                        pingThrottle.Restart();
                         self.Tell(new SubAgentStreamPing(
                             callId,
                             diag.UpdateCount,
@@ -1339,7 +1377,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             diag.ThinkingChars,
                             diag.ToolCallDeltaCount,
                             diag.FinishReason,
-                            IsSubstantive: cls.HasSubstantiveContent));
+                            Activity: pingActivity));
                     }
                 },
                 ct);
@@ -1380,8 +1418,40 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         return PreviewForLog(rendered, 500);
     }
 
+    // The no-progress and thinking-cap timers arm only when a budget exists. An expiry
+    // without a budget is a bug, so it must fail loudly and not report a zero-second timeout.
+    private TimeSpan RequireNoProgressBudget()
+        => _noProgressBudget
+           ?? throw new InvalidOperationException(
+               "A no-progress watchdog expiry arrived, but the sub-agent has no no-progress budget.");
+
     private static string PreviewForLog(string? text, int maxChars)
         => SecretOutputRedactor.Redact(PreviewText(text, maxChars));
+
+    // Redaction sees the whole text first. A cut before redaction can leave a prefix of a
+    // secret that no pattern matches. The cut then falls on a text-element boundary, so it
+    // never splits a surrogate pair. The cut can still shorten a secret mask, which is safe.
+    private static string PreviewRedacted(string? text, int maxChars)
+    {
+        if (string.IsNullOrEmpty(text))
+            return "";
+
+        var redacted = SecretOutputRedactor.Redact(text.ReplaceLineEndings("\\n"));
+        if (redacted.Length <= maxChars)
+            return redacted;
+
+        var end = 0;
+        var elements = StringInfo.GetTextElementEnumerator(redacted);
+        while (elements.MoveNext())
+        {
+            var next = elements.ElementIndex + ((string)elements.Current).Length;
+            if (next > maxChars)
+                break;
+            end = next;
+        }
+
+        return redacted[..end] + "...";
+    }
 
     private static string PreviewText(string? text, int maxChars)
     {
@@ -1889,9 +1959,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     /// <summary>
     /// Throttled self-message: the streaming LLM call is still alive.
-    /// <see cref="IsSubstantive"/> is false for content-free keepalives, so the
-    /// watchdog refreshes the current budget on them but only promotes off the
-    /// prefill budget on real output.
+    /// <see cref="Activity"/> is <see cref="StreamActivity.Keepalive"/> for content-free
+    /// keepalives, so the watchdog refreshes the current budget on them but only
+    /// promotes off the prefill budget on real output. It separates thinking from
+    /// answer output so the thinking cap can reset.
     /// </summary>
     private sealed record SubAgentStreamPing(
         long CallId,
@@ -1903,7 +1974,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         int ThinkingChars,
         int ToolCallDeltaCount,
         string? FinishReason,
-        bool IsSubstantive);
+        StreamActivity Activity);
 
     // ── Reuse LlmSessionActor's internal message types ──
     // These are internal to Netclaw.Actors so accessible here.

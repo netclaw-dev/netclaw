@@ -36,8 +36,11 @@ internal readonly record struct StreamDiagnostics(
 /// </para>
 /// </summary>
 internal readonly record struct StreamUpdateClassification(
-    bool HasSubstantiveContent,
-    bool IsFirstSubstantive);
+    StreamActivity Activity,
+    bool IsFirstSubstantive)
+{
+    public bool HasSubstantiveContent => Activity != StreamActivity.Keepalive;
+}
 
 /// <summary>
 /// The fully consumed streaming response plus its accumulated diagnostics.
@@ -168,9 +171,9 @@ internal static class StreamingResponseReader
     /// </summary>
     internal static StreamUpdateClassification Classify(ChatResponseUpdate update, bool anySubstantiveSeen)
     {
-        var hasSubstantive = StreamProgress.IsSubstantive(update);
+        var activity = StreamProgress.Classify(update);
         return new StreamUpdateClassification(
-            HasSubstantiveContent: hasSubstantive,
-            IsFirstSubstantive: hasSubstantive && !anySubstantiveSeen);
+            activity,
+            IsFirstSubstantive: activity != StreamActivity.Keepalive && !anySubstantiveSeen);
     }
 }
