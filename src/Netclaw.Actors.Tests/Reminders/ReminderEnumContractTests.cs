@@ -35,4 +35,16 @@ public sealed class ReminderEnumContractTests
 
         Assert.Empty(missing);
     }
+
+    [Fact]
+    public void The_terminal_outcome_names_stay_and_the_ends_without_a_run_get_their_own()
+    {
+        var names = Enum.GetNames<ReminderTerminalOutcome>();
+
+        // The existing names are on disk and on the wire. The tombstone adds two, for an end by cancel and an end by expiry.
+        Assert.Contains("Completed", names);
+        Assert.Contains("Failed", names);
+        Assert.Contains("Cancelled", names);
+        Assert.Contains("Expired", names);
+    }
 }

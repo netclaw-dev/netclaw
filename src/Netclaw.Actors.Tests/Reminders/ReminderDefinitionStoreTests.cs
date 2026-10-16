@@ -47,6 +47,27 @@ public sealed class ReminderDefinitionStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public void The_ended_folder_is_never_read_as_a_definition_and_never_pruned()
+    {
+        // A tombstone lives in {RemindersDirectory}/ended/. The store lists only top-level files, so a
+        // tombstone is not parsed as a definition, not rejected as legacy, and not deleted as invalid.
+        var endedDirectory = Path.Combine(_paths.RemindersDirectory, "ended");
+        Directory.CreateDirectory(endedDirectory);
+        var tombstone = Path.Combine(endedDirectory, "ended-reminder.json");
+        File.WriteAllText(tombstone, """{ "id": "ended-reminder", "title": "t", "audience": "Team", "fireAtMs": 1, "outcome": "Completed", "endedAtMs": 2 }""");
+        var corrupt = Path.Combine(endedDirectory, "corrupt-tombstone.json");
+        File.WriteAllText(corrupt, "{ this is invalid json }");
+
+        var store = new ReminderDefinitionStore(_paths);
+
+        Assert.Empty(store.List());
+        Assert.Empty(store.ConsumeDroppedInvalidDefinitions());
+        Assert.Empty(store.ConsumeRejectedLegacyDefinitions());
+        Assert.True(File.Exists(tombstone));
+        Assert.True(File.Exists(corrupt));
+    }
+
+    [Fact]
     public void Constructor_keeps_valid_definitions_while_pruning_invalid_files()
     {
         var seededStore = new ReminderDefinitionStore(_paths);
