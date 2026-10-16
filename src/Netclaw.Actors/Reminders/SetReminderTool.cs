@@ -51,7 +51,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string? DeliveryTransport = null,
         [property: Description("Target for channel delivery (e.g., '#general', '@user', '<@discordUserId>', channel ID). Required when delivery_kind='channel'.")]
         string? DeliveryAddress = null,
-        [property: Description("Fail execution if delivery doesn't succeed. Default true. Set false for audit/cleanup tasks.")]
+        [property: Description("Fail execution if a channel delivery doesn't succeed. Default true. Set false for audit/cleanup tasks. No effect for current_session delivery.")]
         bool DeliveryRequired = true,
         [property: Description("Optional guidance for what to include in the delivery to the user. Content guidance only.")]
         string? DeliveryInstructions = null,

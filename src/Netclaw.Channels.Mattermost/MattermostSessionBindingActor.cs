@@ -123,8 +123,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             NotifyDeliveryFailedAsync);
 
         _outputEngine = new ChannelOutputEngine<PendingApprovalRequest, MattermostPostId>(
-            channelType: ChannelType.Mattermost,
-            channelName: "Mattermost",
             // Mattermost post IDs are lexicographically sortable strings.
             cursorComparer: StringComparer.Ordinal,
             pendingRequests: _pendingApprovalRequests,
@@ -143,8 +141,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             postEmptyTurnFallbackAsync: () => SafeReplyAsync(EmptyTurnFallbackText),
             // Mattermost reports a delivery failure inline from SafeReplyAsync,
             // so the session already knows by the time the turn completes.
-            onEmptyTurnSuppressedAsync: _ => Task.CompletedTask,
-            readObservedAtMs: completed => completed.TimestampMs);
+            onEmptyTurnSuppressedAsync: _ => Task.CompletedTask);
 
         if (_dependencies.ThreadHistoryFetcher is { } historyFetcher)
         {
@@ -326,7 +323,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             // pulses here so a lost ProcessingStateOutput(false) cannot leave
             // the thread in the typing state.
             StopTypingPulses();
-            _outputEngine.ResetForPipelineReinitialize(msg.Reason);
+            _outputEngine.ResetForPipelineReinitialize();
             await _handle.ReinitializeAsync(
                 msg.Reason,
                 () => Timers.StartSingleTimer(
@@ -603,15 +600,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             ReminderId = message.Source.ReminderId,
             AckTarget = ackTarget
         };
-
-        // Only delivery-gated (DeliveryRequired) reminders carry a
-        // DeliveryObserver. Key it by the per-fire reminder delivery id so a
-        // second concurrent reminder to this session can't overwrite the
-        // first's observer before its turn reaches TurnCompleted.
-        if (message.Source.DeliveryObserver is { } deliveryObserver
-            && message.Source.ReminderId is { } reminderKey
-            && !string.IsNullOrWhiteSpace(reminderKey.Value))
-            _outputEngine.TrackReminderDeliveryObserver(reminderKey, deliveryObserver);
 
         try
         {

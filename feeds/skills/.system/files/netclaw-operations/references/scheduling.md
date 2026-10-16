@@ -52,7 +52,7 @@ Delivery contract parameters:
 - `delivery_kind`: required, one of `current_session`, `channel`, `none`
 - `delivery_transport`: required when `delivery_kind=channel` (e.g. `slack`, `discord`, `mattermost`)
 - `delivery_address`: required when `delivery_kind=channel` (`#channel`, `@user`, or canonical ID)
-- `delivery_required`: optional bool, default `true`; set `false` only for audit/cleanup tasks
+- `delivery_required`: optional bool, default `true`; set `false` only for audit/cleanup tasks. It applies to `channel` delivery. It has no effect for `current_session`
 - `delivery_instructions`: optional content guidance only (never routing)
 - `expires_in`: optional recurring-reminder expiry duration (for `interval`/`cron` only), e.g. `"24h"`, `"7d"`
 
@@ -68,6 +68,11 @@ Rules:
   Mattermost uses the original channel and thread root ID.
   Omit `delivery_transport` and `delivery_address` for this route.
   Netclaw preserves the stored reminder audience when the reminder executes.
+  The reminder run ends when the session accepts the fire. A later failed post
+  is not a reminder failure, and the reminder system does not retry it.
+  A session keeps one waiting fire per reminder: if a fire arrives while an
+  earlier fire of the same reminder still waits for its turn, Netclaw drops the
+  newer fire and logs `reminder_fire_dropped`.
 - `channel` requires both transport + address and resolves names/handles to
   canonical IDs at set time; unresolved targets fail loud.
 - Discord reminder targets must be explicit because channel IDs and user IDs are

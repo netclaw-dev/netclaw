@@ -20,6 +20,19 @@ spans="$(
       @targets = (
           ["unrelatedTurn.SourceReminderId != expectedKey", 1]
         );
+    } elsif (/class SessionInputFlow/) {
+      @targets = (
+          ["if (TryFindWaitingFire(evt, state, out var fire, out var waiting))\n            return new AdmissionDecision.Dropped(fire, waiting);", 1],
+          ["if (IsBuffered(pending.InputId)\n                && TryReadFireKey(pending, out waiting)\n                && waiting.DefinitionId == fire.DefinitionId)\n                return true;", 5],
+          ["if (!TryReadFireKey(incoming, out fire))\n            return false;", 2],
+          ["return input.TurnContext.SourceKind == ReminderExecutionActor.ReminderSourceKind\n               && ReminderFireKey.TryParse(input.SourceMessageId, out key);", 2]
+        );
+    } elsif (/record struct ReminderFireKey/) {
+      @targets = (
+          ["if (text is null)\n            return false;", 2],
+          ["if (separator <= 0 || text.IndexOf(\x27:\x27, StringComparison.Ordinal) != separator)\n            return false;", 6],
+          ["if (!long.TryParse(text.AsSpan(separator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var fireTimeMs))\n            return false;", 3]
+        );
     } else {
       @targets = (
           ["execution.ExecutionId != outcome.ExecutionId", 1],
@@ -42,7 +55,9 @@ spans="$(
     }
   ' "$repo_root/src/Netclaw.Actors/Reminders/ReminderManagerActor.cs" \
     "$repo_root/src/Netclaw.Actors/Reminders/ActiveExecutionTracker.cs" \
-    "$repo_root/src/Netclaw.Actors/Reminders/ReminderExecutionActor.cs"
+    "$repo_root/src/Netclaw.Actors/Reminders/ReminderExecutionActor.cs" \
+    "$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionInputFlow.cs" \
+    "$repo_root/src/Netclaw.Actors/Reminders/ReminderFireKey.cs"
 )"
 
 mutate_args=()
@@ -65,7 +80,7 @@ report="$output_path/reports/mutation-report.json"
 while read -r file span_start span_end first last count; do
   jq -e --arg source "$repo_root/src/Netclaw.Actors/$file" \
     --argjson first "$first" --argjson last "$last" --argjson count "$count" '
-    [.files[$source].mutants[] | select(.status != "Ignored")
+    [(.files[$source].mutants // [])[] | select(.status != "Ignored" and .status != "CompileError")
       | select(.location.start.line >= $first and .location.start.line <= $last)] as $mutants
     | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
   ' "$report" > /dev/null || {

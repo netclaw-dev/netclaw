@@ -140,11 +140,12 @@ public sealed record MessageSource
     public IReadOnlyList<AdoptedContextEntry> AdoptedContextEntries { get; init; } = [];
 
     /// <summary>
-    /// Ephemeral dedup and forensic key for reminder-originated deliveries.
-    /// Format is <c>"{reminderId}:{fireTimestampMs}"</c>. Null for regular
-    /// user messages. The target session pre-checks this value against its
-    /// in-memory <see cref="Sessions.SessionState.ProcessedReminderIds"/>
-    /// ledger to catch Akka.Reminders redeliveries. Persisted through to
+    /// Dedup and forensic key for reminder-originated deliveries.
+    /// Format is <see cref="ReminderFireKey"/>:
+    /// <c>"{reminderId}:{fireTimestampMs}"</c>. Null for regular
+    /// user messages. The session stores this value as the source message
+    /// id of the admitted input, and admission uses it to catch
+    /// Akka.Reminders redeliveries and to drop a newer fire. Copied to
     /// <see cref="SessionProtocol.TurnRecorded.SourceReminderId"/> when the turn
     /// is recorded. This field is runtime-only — <see cref="MessageSource"/>
     /// is never serialized.
@@ -169,19 +170,4 @@ public sealed record MessageSource
     /// serializable and <see cref="MessageSource"/> is never persisted.
     /// </summary>
     public IActorRef? AckTarget { get; init; }
-
-    /// <summary>
-    /// Optional long-lived reply target for reminder delivery confirmation.
-    /// Unlike <see cref="AckTarget"/> (the dispatcher's <c>Ask</c> temp actor,
-    /// which completes at turn-accept time and is then dead), this is the
-    /// dispatching <c>ReminderExecutionActor</c>'s own ref, alive until the
-    /// turn delivers. When set, the channel binding actor tells it a
-    /// <see cref="Protocol.ReminderDeliveryResult"/> on turn completion,
-    /// reporting whether the assistant reply actually reached the channel.
-    /// Only populated for <c>DeliveryKind.CurrentSession</c> reminders with
-    /// <c>DeliveryRequired = true</c>; null otherwise. Runtime-only — an
-    /// <see cref="IActorRef"/> is not serializable and <see cref="MessageSource"/>
-    /// is never persisted.
-    /// </summary>
-    public IActorRef? DeliveryObserver { get; init; }
 }

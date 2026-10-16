@@ -302,7 +302,7 @@ SHALL NOT affect routing.
 - **WHEN** `set_reminder` receives `delivery_kind = current_session`
 - **THEN** the tool rejects the reminder before it sends a save command
 
-#### Scenario: Mattermost post failure does not count as delivery
+#### Scenario: A Mattermost post failure does not fail the reminder
 
 - **GIVEN** a Mattermost current-session reminder with `delivery_required = true`
 - **WHEN** the Mattermost post API rejects its response

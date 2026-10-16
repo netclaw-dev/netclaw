@@ -72,7 +72,7 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
     private enum Explored
     {
         Activated, Buffered, DuplicateOperator, DuplicateReminder, ReminderBuffered, FollowUpBatch,
-        MixedRequesterBuffer, ToolBoundaryDrain, FailTurnFollowUp, ReminderFiresOfOneReminder
+        MixedRequesterBuffer, ToolBoundaryDrain, FailTurnFollowUp
     }
 
     private sealed record Command(Kind Kind, string Requester, string? SourceMessageId)
@@ -109,10 +109,10 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
     public void Generated_inputs_from_another_requester_never_join_a_running_turn()
         => RunProperty(Rule.RunningTurnKeepsItsAuthority);
 
-    // S6 current behavior, stated as a fact and not as a defect. A key names one fire of a reminder
-    // ("{reminderId}:{fireTimeMs}"). Two fires of one reminder are two inputs today. Coalescing them is a design choice for later.
+    // A key names one fire of a reminder ("{reminderId}:{fireTimeMs}"). A session keeps at most one waiting fire per reminder.
+    // ReminderFireAdmissionAccordantTests checks the full rule. This example fixes the three outcomes.
     [Fact]
-    public void A_redelivered_fire_is_a_duplicate_and_a_second_fire_of_the_same_reminder_is_admitted()
+    public void A_redelivered_fire_is_a_duplicate_and_a_newer_fire_of_a_waiting_reminder_is_dropped()
     {
         // Arrange
         var sessionId = new SessionId("input-flow/reminder-fires");
@@ -127,8 +127,8 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
         // Assert
         Assert.Equal("Admitted", firstFire);
         Assert.Equal("Duplicate", redelivery);
-        Assert.Equal("Admitted", secondFire);
-        Assert.Equal(2, state.PendingInputs.Count);
+        Assert.Equal("Dropped", secondFire);
+        Assert.Single(state.PendingInputs);
 
         static string Admit(SessionInputFlow flow, ref SessionState state, SessionId sessionId, string fireKey)
         {
@@ -138,12 +138,12 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
                 Content = "Run the report",
                 Source = ReminderSource(fireKey)
             };
-            if (flow.IsReminderDuplicate(command.Source!.ReminderId, state))
-                return "Duplicate";
             switch (flow.PrepareAdmission(command, state, sessionId, 1))
             {
                 case AdmissionDecision.Duplicate:
                     return "Duplicate";
+                case AdmissionDecision.Dropped:
+                    return "Dropped";
                 case AdmissionDecision.Persist persist:
                     state = state.Apply(persist.Event);
                     flow.AdmissionCommitted(persist.Event, command, InputPlacement.BufferDuringModel);
@@ -188,7 +188,7 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
             Gen.OneOfConst(Alice, Bob),
             Gen.OneOfConst<string?>(null, "m0", "m1"),
             (requester, messageId) => new Command(Kind.AdmitOperator, requester, messageId));
-        var admitReminder = Gen.OneOfConst("daily:1", "daily:2", "weekly:1")
+        var admitReminder = Gen.OneOfConst("daily:1", "weekly:1", "monthly:1")
             .Select(fire => new Command(Kind.AdmitReminder, Automation, fire));
         var terminal = Gen.OneOfConst(Kind.FinishTurn, Kind.ToolBoundary, Kind.FailTurn)
             .Select(kind => new Command(kind, string.Empty, null));
@@ -362,6 +362,9 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
         Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
         Principal = PrincipalClassification.VerifiedAutomation,
         Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
+        {
+            SourceKind = new SourceKind("reminder")
+        }
     };
 
     // This adapter makes the same calls as the session actor. Only the Accordant model predicts its responses.
@@ -373,7 +376,6 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
         private readonly Command[] _sequence;
         private readonly SessionInputFlow _flow = new();
         private readonly Dictionary<InputId, string> _labelById = [];
-        private readonly List<string> _reminderFireKeys = [];
         private readonly List<string> _trace = [];
         private readonly HashSet<Explored> _explored = [];
         private SessionState _state = SessionState.Empty;
@@ -429,38 +431,23 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
             string outcome;
             string? admittedRequester = null;
 
-            // The actor checks the reminder in-flight and processed sets first, then asks the owner to admit.
-            if (_flow.IsReminderDuplicate(source.ReminderId, _state))
+            switch (_flow.PrepareAdmission(command, _state, SessionId, 1))
             {
-                outcome = "Duplicate";
-            }
-            else
-            {
-                switch (_flow.PrepareAdmission(command, _state, SessionId, 1))
-                {
-                    case AdmissionDecision.Duplicate:
-                        outcome = "Duplicate";
-                        break;
-                    case AdmissionDecision.Persist persist:
-                        _state = _state.Apply(persist.Event);
-                        var accepted = _flow.AdmissionCommitted(persist.Event, command, placement);
-                        if (placement == InputPlacement.Activate)
-                            _flow.ActivateInput(accepted, _state.PendingInputs, null);
-                        _labelById[persist.Event.InputId] = request.Label;
-                        admittedRequester = persist.Event.TurnContext.RequesterSenderId?.Value;
-                        outcome = _turnOpen ? "Buffered" : "Activated";
-                        if (request.ReminderFireKey is { } fire && !_reminderFireKeys.Contains(fire))
-                        {
-                            if (_reminderFireKeys.Any(known => known.Split(':')[0] == fire.Split(':')[0]))
-                                _explored.Add(Explored.ReminderFiresOfOneReminder);
-                            _reminderFireKeys.Add(fire);
-                        }
-
-                        _turnOpen = true;
-                        break;
-                    default:
-                        throw new InvalidOperationException("Unexpected admission decision.");
-                }
+                case AdmissionDecision.Duplicate:
+                    outcome = "Duplicate";
+                    break;
+                case AdmissionDecision.Persist persist:
+                    _state = _state.Apply(persist.Event);
+                    var accepted = _flow.AdmissionCommitted(persist.Event, command, placement);
+                    if (placement == InputPlacement.Activate)
+                        _flow.ActivateInput(accepted, _state.PendingInputs, null);
+                    _labelById[persist.Event.InputId] = request.Label;
+                    admittedRequester = persist.Event.TurnContext.RequesterSenderId?.Value;
+                    outcome = _turnOpen ? "Buffered" : "Activated";
+                    _turnOpen = true;
+                    break;
+                default:
+                    throw new InvalidOperationException("Unexpected admission decision.");
             }
 
             RecordAdmitCoverage(model, request, outcome);
