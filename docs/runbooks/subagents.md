@@ -348,7 +348,13 @@ known-good version.
 The compatibility reader accepts deployed child manifests `cra-v1`, `cre-v1`, and `tta-v1`.
 It translates exact old child delivery correlations before the ordinary parent recovery path.
 The current writer uses `cra-v2`, `cre-v2`, and `ss-v2` for child facts and snapshots.
-Older binaries cannot read these records. Do not downgrade a database in place.
+The swap that adds child notices is roll-forward only. Build 0.27.1 reads the new rows without an error, and it reads them wrongly:
+
+- It replays a notice as a plain user input.
+- It prepares the result of a reported run again and delivers it a second time, as a `child_run_result` pair.
+
+Before the swap, stop the daemon and back up `netclaw.db`. To roll back, stop the daemon and restore that backup.
+Never start 0.27.1 on a database that the new build wrote.
 
 Unresolved historical evidence remains inert and visible through the owner status response.
 Recovery does not relaunch uncertain child work. A result that the parent has not received becomes one notice.
