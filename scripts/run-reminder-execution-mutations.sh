@@ -23,7 +23,7 @@ spans="$(
     } elsif (/class SessionInputFlow/) {
       @targets = (
           ["if (TryFindWaitingFire(evt, state, out var fire, out var waiting))\n            return new AdmissionDecision.Dropped(fire, waiting);", 1],
-          ["if (!_selectedIds.Contains(pending.InputId)\n                && TryReadFireKey(pending, out waiting)\n                && waiting.DefinitionId == fire.DefinitionId)\n                return true;", 6],
+          ["if (IsBuffered(pending.InputId)\n                && TryReadFireKey(pending, out waiting)\n                && waiting.DefinitionId == fire.DefinitionId)\n                return true;", 5],
           ["if (!TryReadFireKey(incoming, out fire))\n            return false;", 2],
           ["return input.TurnContext.SourceKind == ReminderExecutionActor.ReminderSourceKind\n               && ReminderFireKey.TryParse(input.SourceMessageId, out key);", 2]
         );

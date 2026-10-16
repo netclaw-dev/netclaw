@@ -1967,7 +1967,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             cmd.Source?.ReminderId,
             _phase.Current,
             _state.PendingInputs.Count);
-        TryReplyAck();
+        if (Sender.IsNobody() || Equals(Sender, Context.System.DeadLetters))
+            return;
+
+        // A caller on the Reminder-origin route (#2491) waits for a terminal turn after an ack. No turn will run here.
+        Sender.Tell(CommandAck.For(_sessionId) with { RestartResumeNoOp = true });
     }
 
     private bool TryResumeInterruptedInput(SendUserMessage cmd)

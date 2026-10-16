@@ -148,9 +148,11 @@ internal sealed class SessionInputFlow
         return new AdmissionDecision.Persist(evt);
     }
 
-    // Drop rule: the journal's pending list is the only record of what waits, so the rule holds after a restart. An input
-    // that the running turn selected is not waiting. A newer fire of its reminder gets its own turn.
-    // An input whose key is not a fire key has an unknown owner, so it is never dropped and never blocks.
+    // Drop rule: a fire waits only while this flow's queue holds it. Recovery rebuilds that queue for approval waits.
+    // A journal row that nothing will run (a crash, a restart with two requesters, an expired restart reminder) is not
+    // waiting, so it must not block a later fire. An input that a turn selected has left the queue. A newer fire of
+    // its reminder gets its own turn. An input whose key is not a fire key has an unknown owner, so it is never
+    // dropped and never blocks.
     private bool TryFindWaitingFire(
         InputAdmitted incoming,
         SessionState state,
@@ -163,7 +165,7 @@ internal sealed class SessionInputFlow
 
         foreach (var pending in state.PendingInputs)
         {
-            if (!_selectedIds.Contains(pending.InputId)
+            if (IsBuffered(pending.InputId)
                 && TryReadFireKey(pending, out waiting)
                 && waiting.DefinitionId == fire.DefinitionId)
                 return true;

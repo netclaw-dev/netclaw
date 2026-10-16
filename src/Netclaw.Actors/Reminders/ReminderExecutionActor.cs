@@ -360,6 +360,17 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
             return;
 
         _awaitingReminderSessionAck = false;
+        if (ack.RestartResumeNoOp)
+        {
+            // Nothing is left to resume, so no turn will run and no terminal output will come. The work is done.
+            _log.Info(
+                "reminder_restart_noop_settled execution_id={ExecutionId} session_id={SessionId}",
+                _executionId,
+                _sessionIdValue);
+            ReportOutcome(true);
+            return;
+        }
+
         var remaining = ExecutionAttemptTimeout - (_timeProvider.GetUtcNow() - _dispatchedAt);
         if (remaining <= TimeSpan.Zero)
         {

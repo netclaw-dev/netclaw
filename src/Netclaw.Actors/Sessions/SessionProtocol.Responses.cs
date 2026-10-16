@@ -18,6 +18,12 @@ public static partial class SessionProtocol
     /// </summary>
     public record CommandAck(SessionId SessionId) : ISessionResponse
     {
+        /// <summary>
+        /// True when the command was a restart-resume message and nothing was left to resume. No turn will run
+        /// for it, so a caller that waits for a terminal turn must settle at once.
+        /// </summary>
+        public bool RestartResumeNoOp { get; init; }
+
         public static CommandAck For(SessionId sessionId) => new(sessionId);
     }
 

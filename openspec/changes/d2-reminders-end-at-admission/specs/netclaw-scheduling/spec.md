@@ -240,14 +240,18 @@ SHALL reduce duplicate work. Netclaw SHALL not claim exactly-once delivery.
 ### Requirement: A reminder has at most one waiting fire in a session
 
 A session SHALL keep at most one waiting fire for each reminder. A fire waits
-when the session stored it as an input and no turn has selected it. When a newer
+only while the session's in-memory input queue holds it. A turn that selects a
+fire removes it from the queue. When a newer
 fire of the same reminder arrives while an earlier fire waits, the session SHALL
 acknowledge the newer fire and SHALL NOT store it. The session SHALL log
 `reminder_fire_dropped`. The reminder system SHALL see success.
 
-The session SHALL read the stored inputs of its journal to decide, so the rule
-holds after a restart or a passivation. The session SHALL NOT drop a fire while
-the earlier fire runs. The session SHALL NOT drop a fire because another
+Recovery rebuilds the queue for inputs that wait behind an open approval, so
+the rule holds after a restart or a passivation for those inputs. A stored
+input that nothing will run (a crash, a restart with several requesters, an
+expired restart reminder, or a restart message that found another turn running
+left it pending) is not waiting. It SHALL NOT block a later fire. The session
+SHALL NOT drop a fire while the earlier fire runs. The session SHALL NOT drop a fire because another
 reminder has a waiting fire. A key that is not a reminder fire key
 (`{reminderId}:{fireTimeMs}`) SHALL never be dropped and SHALL never block a fire.
 
@@ -266,9 +270,25 @@ abandon an open tool batch.
 #### Scenario: A fire waits behind an approval, also after a restart
 
 - **GIVEN** the 10:00 fire waits behind an open approval
-- **AND** the daemon restarted, so the session rebuilt the waiting fire from the journal
+- **AND** the daemon restarted, so recovery rebuilt the waiting fire from the journal into the queue
 - **WHEN** the 10:12 fire arrives
 - **THEN** the session acknowledges it and stores no input
+
+#### Scenario: A fire that a crash left pending does not block the next fire
+
+- **GIVEN** the 10:00 fire was stored and waited behind a running turn
+- **AND** the daemon crashed, so the new session holds the 10:00 fire in its journal but not in its queue, and no restart reminder exists
+- **WHEN** the 10:12 fire arrives
+- **THEN** the session stores it as an input
+- **AND** the 10:12 fire runs
+
+#### Scenario: A key that is not a fire key is never dropped
+
+- **GIVEN** a reminder input is stored with the key `weekly:abc` (the time is not digits)
+- **WHEN** a reminder input with the key `weekly:def` arrives
+- **THEN** the session stores it as an input
+- **AND** it logs no `reminder_fire_dropped`
+- **AND** the stored `weekly:abc` input does not block `weekly:1700000000000`
 
 #### Scenario: A fire is admitted while the earlier fire runs
 

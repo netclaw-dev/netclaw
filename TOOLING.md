@@ -55,7 +55,7 @@ coverage. They do not replace positive and negative behavior tests.
 | Filesystem authority folder membership, repository identity, repository persistence, the folder of a new grant, and the link target scope | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a word that names a link also has the scope of its final target, and a target after a `..` that leaves a link is unknown (#2375); a new folder grant uses the directory where its occurrence runs | 24 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
-| `SessionInputFlow.PrepareAdmission` drop decision (`TryFindWaitingFire`, `TryReadFireKey`) and `ReminderFireKey.TryParse` | Rule 3: a session drops a newer fire only while an earlier input of the same reminder waits (the definition id matches, the running turn did not select that input, and only reminder-kind inputs count); text that is not a fire key is never dropped and never blocks; the parser refuses any text but `{id}:{digits}` | 22 killed | `./scripts/run-reminder-execution-mutations.sh` |
+| `SessionInputFlow.PrepareAdmission` drop decision (`TryFindWaitingFire`, `TryReadFireKey`) and `ReminderFireKey.TryParse` | Rule 3: a session drops a newer fire only while an earlier input of the same reminder waits (the definition id matches, the flow's own queue holds that input, and only reminder-kind inputs count; a journal row that nothing will run never blocks); text that is not a fire key is never dropped and never blocks; the parser refuses any text but `{id}:{digits}` | 21 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `McpArtifactMaterializer.TryAdmit` | Scanner approval and verified MIME both precede MCP artifact storage | 4 killed | `./scripts/run-mcp-artifact-admission-mutations.sh` |
 | `SkillManageTool.GuardMutationTarget` and the filesystem authority link and protection results | A skill mutation cannot follow a link, write a protected path, or skip the atomic-write temp file | 5 killed | `./scripts/run-skill-manage-guard-mutations.sh` |
 | `ToolAccessPolicy.ReadOnlyOccurrences`, the read relaxation in `ToolAccessPolicy.EnforceKnownShellPaths`, `PathAccessPolicy.EvaluateShellReadPath`, `FileSystemAuthority.HoldsReadProtectedPath`, and the read-operand exemption of the `ToolPathPolicy` text screen | Decision D6: a read-only shell program (`cat`, `head`, `tail`, `wc`, `grep`, `jq`, `diff`) with bounded arguments can read one exact config file; only a write-protected path gets read protection; a redirect that writes keeps write protection; a directory operand that holds a read-protected path, a plain word that names an entry, a glob, a brace or `$'...'` word, a `..`, the config directory itself, and program text that names it in any spelling (`//`, `/./`, `name/../`, split quotes) stay denied | 58 killed | `./scripts/run-shell-config-read-mutations.sh` |
@@ -427,12 +427,12 @@ The script reuses the xUnit 2 harness and selects these spans:
 | Tracker guard cleanup | Remove the dictionary removal | 1 |
 | Reminder terminal identity | Reverse the `SourceReminderId` comparison | 1 |
 | Drop decision call | Negate the drop test | 1 |
-| Drop comparison | Change the selected-input exclusion or the definition-id comparison | 6 |
+| Drop comparison | Change the queue test (`IsBuffered`), the key read, or the definition-id comparison | 5 |
 | Incoming key read | Skip or invert the incoming fire key read | 2 |
 | Reminder-kind check | Change the kind comparison or the parse condition of a stored input | 2 |
 | Fire key parser | Change the null, separator, or digit checks | 11 |
 
-Each location must kill all of its mutants. The report must contain exactly 27 tested mutants.
+Each location must kill all of its mutants. The report must contain exactly 26 tested mutants.
 `ReminderFireDropRuleTests` and `ReminderFireKeyTests` kill the last five locations.
 The gate fails if a target is absent, ignored, survives, exceeds its time limit, or cannot compile.
 The selector rejects absent or duplicate source markers before Stryker starts.
