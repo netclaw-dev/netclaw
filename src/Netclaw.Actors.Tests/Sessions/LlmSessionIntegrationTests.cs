@@ -382,6 +382,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     public async Task Repeated_pre_tool_empty_responses_fail_turn_and_allow_followup_prompt()
     {
         // MaxPreToolEmptyRetries is 5, so 6 empty responses: 5 nudged retries + fail.
+        // The stream finishes with Stop. Only then do repeated empty replies blame the model.
+        _fakeChatClient.PlannedFinishReason = ChatFinishReason.Stop;
         for (var i = 0; i < 6; i++)
             _fakeChatClient.PlannedResponses.Enqueue([]);
 
@@ -430,7 +432,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 new Dictionary<string, object?> { ["query"] = "test" })
         ];
         // MaxPostToolEmptyRetries is 8, so 9 empty responses: 8 nudged
-        // retries + fail.
+        // retries + fail. The stream finishes with Stop, so the model is to blame.
+        _fakeChatClient.PlannedFinishReason = ChatFinishReason.Stop;
         for (var i = 0; i < 9; i++)
             _fakeChatClient.PlannedResponses.Enqueue([]);
 
@@ -2784,6 +2787,12 @@ internal sealed class FakeChatClient : IChatClient
     /// </summary>
     public Queue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
 
+    /// <summary>
+    /// The finish reason of each planned response. Null models a stream that ended with no finish
+    /// reason. A real provider that completes a reply sends one.
+    /// </summary>
+    public ChatFinishReason? PlannedFinishReason { get; set; }
+
     public Action<int>? AfterToolCallResponse { get; set; }
 
     /// <summary>
@@ -2927,7 +2936,10 @@ internal sealed class FakeChatClient : IChatClient
             var plannedContents = PlannedResponses.Dequeue();
             var plannedResponse = new ChatResponse(new ChatMessage(
                 Microsoft.Extensions.AI.ChatRole.Assistant,
-                new List<AIContent>(plannedContents)));
+                new List<AIContent>(plannedContents)))
+            {
+                FinishReason = PlannedFinishReason
+            };
             if (usageOverride is not null)
                 plannedResponse.Usage = usageOverride;
             return plannedResponse;

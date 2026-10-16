@@ -90,12 +90,18 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         Assert.Contains("required text only", run.Stderr, StringComparison.Ordinal);
     }
 
+    // Repeated empty replies count against the model only when the stream finished on its own terms:
+    // finish reason Stop or Length. Planted bug: the finish reason is ignored, so a broken stream blames
+    // the model.
+
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Repeated_empty_replies_before_any_tool_are_a_model_failure(bool json)
+    [InlineData("stop", false)]
+    [InlineData("stop", true)]
+    [InlineData("length", false)]
+    [InlineData("length", true)]
+    public async Task Repeated_empty_replies_before_any_tool_are_a_model_failure(string finishReason, bool json)
     {
-        var model = new ScriptedModel(_ => [new TextReasoningContent("still thinking")]);
+        var model = new ScriptedModel(_ => [new TextReasoningContent("still thinking")], new ChatFinishReason(finishReason));
 
         var run = await RunAsync(model, json);
 
@@ -103,15 +109,74 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     }
 
     [Theory]
+    [InlineData("stop", false)]
+    [InlineData("stop", true)]
+    [InlineData("length", false)]
+    [InlineData("length", true)]
+    public async Task Repeated_empty_replies_after_a_tool_are_a_model_failure(string finishReason, bool json)
+    {
+        var model = new ScriptedModel(
+            call => call.Number == 1 ? ToolCall(call, query: "once") : [],
+            new ChatFinishReason(finishReason));
+
+        var run = await RunAsync(model, json);
+
+        AssertFailed(run, json, "model", "ModelBehavior");
+    }
+
+    // The stream ended with no finish reason: EOF, or a proxy cut the connection. The backend failed. The
+    // model did not get a fair turn, so the failure is infra. The same stream fault feeds the thinking-only
+    // and the empty case.
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Repeated_empty_replies_after_a_tool_are_a_model_failure(bool json)
+    public async Task Repeated_empty_replies_without_a_finish_reason_are_an_infra_failure(bool json)
+    {
+        var model = new ScriptedModel(_ => []);
+
+        var run = await RunAsync(model, json);
+
+        AssertFailed(run, json, "infra", "StreamFailure");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Repeated_thinking_only_replies_without_a_finish_reason_are_an_infra_failure(bool json)
+    {
+        var model = new ScriptedModel(_ => [new TextReasoningContent("still thinking")]);
+
+        var run = await RunAsync(model, json);
+
+        AssertFailed(run, json, "infra", "StreamFailure");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Repeated_empty_replies_after_a_tool_without_a_finish_reason_are_an_infra_failure(bool json)
     {
         var model = new ScriptedModel(call => call.Number == 1 ? ToolCall(call, query: "once") : []);
 
         var run = await RunAsync(model, json);
 
-        AssertFailed(run, json, "model", "ModelBehavior");
+        AssertFailed(run, json, "infra", "StreamFailure");
+    }
+
+    // A content filter blocked the reply. The provider applied its own policy. That is not evidence about
+    // the model. The kind is the implementer's choice, so the test pins the category only.
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Repeated_empty_replies_from_a_content_filter_are_an_infra_failure(bool json)
+    {
+        var model = new ScriptedModel(_ => [], ChatFinishReason.ContentFilter);
+
+        var run = await RunAsync(model, json);
+
+        AssertFailed(run, json, "infra", kind: null);
     }
 
     // Infrastructure failures. Planted bug: the category follows the loudest word in the message, or it
@@ -194,15 +259,21 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         AssertSucceeded(run, json);
     }
 
-    private static void AssertFailed(HeadlessRun run, bool json, string category, string kind)
+    // A null kind means the test pins the category only.
+    private static void AssertFailed(HeadlessRun run, bool json, string category, string? kind)
     {
         Assert.Equal(1, run.ExitCode);
-        Assert.Equal([$"[turn:failed] category={category} kind={kind}"], run.TurnFailedLines);
+        var tokenLine = Assert.Single(run.TurnFailedLines);
+        Assert.StartsWith($"[turn:failed] category={category} kind=", tokenLine, StringComparison.Ordinal);
         Assert.DoesNotContain("[turn:failed]", run.Stdout, StringComparison.Ordinal);
-        Assert.EndsWith(
-            $"TURN_FAILED: category={category} kind={kind}",
-            Assert.Single(run.TurnFailedLogRecords),
-            StringComparison.Ordinal);
+        var logRecord = Assert.Single(run.TurnFailedLogRecords);
+        Assert.Contains($"TURN_FAILED: category={category} kind=", logRecord, StringComparison.Ordinal);
+
+        if (kind is not null)
+        {
+            Assert.Equal($"[turn:failed] category={category} kind={kind}", tokenLine);
+            Assert.EndsWith($"TURN_FAILED: category={category} kind={kind}", logRecord, StringComparison.Ordinal);
+        }
 
         if (!json)
             return;
@@ -210,7 +281,10 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         using var envelope = run.Envelope;
         Assert.NotNull(envelope);
         Assert.Equal(category, envelope.RootElement.GetProperty("errorCategory").GetString());
-        Assert.Equal(kind, envelope.RootElement.GetProperty("errorKind").GetString());
+        var envelopeKind = envelope.RootElement.GetProperty("errorKind").GetString();
+        Assert.Equal(tokenLine.Split("kind=")[1], envelopeKind);
+        if (kind is not null)
+            Assert.Equal(kind, envelopeKind);
     }
 
     private static void AssertSucceeded(HeadlessRun run, bool json)
@@ -329,9 +403,12 @@ internal sealed record ModelCall(int Number, bool ToolsOffered);
 /// <summary>
 /// A model that follows a script. It ignores the tool list unless the script reads
 /// <see cref="ModelCall.ToolsOffered"/>. The script throws to fail the call. The throw is synchronous,
-/// so the failure reaches the session actor before the send is acknowledged.
+/// so the failure reaches the session actor before the send is acknowledged. Every reply carries
+/// <c>finishReason</c>. A null value models a stream that ended with no finish reason.
 /// </summary>
-internal sealed class ScriptedModel(Func<ModelCall, IReadOnlyList<AIContent>> script) : IChatClient
+internal sealed class ScriptedModel(
+    Func<ModelCall, IReadOnlyList<AIContent>> script,
+    ChatFinishReason? finishReason = null) : IChatClient
 {
     private int _callCount;
 
@@ -354,7 +431,10 @@ internal sealed class ScriptedModel(Func<ModelCall, IReadOnlyList<AIContent>> sc
     private ChatResponse Next(ChatOptions? options)
     {
         var call = new ModelCall(Interlocked.Increment(ref _callCount), options?.Tools is { Count: > 0 });
-        return new ChatResponse(new ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, script(call).ToList()));
+        return new ChatResponse(new ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, script(call).ToList()))
+        {
+            FinishReason = finishReason
+        };
     }
 
     private static async IAsyncEnumerable<ChatResponseUpdate> Replay(ChatResponse response)

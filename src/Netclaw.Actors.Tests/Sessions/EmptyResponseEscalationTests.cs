@@ -64,6 +64,8 @@ public class EmptyResponseEscalationTests : LlmSessionTestBase
     {
         // The model never produces a reply — only reasoning. Pre-tool consecutive
         // limit is 5 retries, so the sequence is: 5 Retries then Fail on the 6th.
+        // The stream finishes with Stop. Only then do repeated empty replies blame the model.
+        _fakeChatClient.PlannedFinishReason = ChatFinishReason.Stop;
         for (var i = 0; i < 6; i++)
             _fakeChatClient.PlannedResponses.Enqueue(
                 [new TextReasoningContent($"[fake thinking] still pondering #{i}...")]);

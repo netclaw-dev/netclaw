@@ -777,6 +777,49 @@ public class CompactionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Context_overflow_after_compaction_fails_turn_as_provider_failure()
+    {
+        // Planted bug: the overflow that survives compaction reports ModelBehavior. The context window was
+        // too small for the case. The model did nothing wrong, so a harness must score this as infra.
+        // The first overflow starts recovery. The resent turn overflows again and fails.
+        for (var i = 0; i < 2; i++)
+        {
+            _fakeChatClient.PlannedExceptions.Enqueue(
+                new ProviderException(
+                    "maximum context length exceeded",
+                    "HTTP 400: maximum context length exceeded",
+                    statusCode: 400));
+        }
+
+        var sessionId = new SessionId("test-channel/overflow-after-compaction");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("overflow-after-compaction-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "This message overflows twice"
+        }, TestContext.Current.CancellationToken);
+
+        var recovering = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("compacting session history", recovering.Message, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        var failed = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("even after compaction", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ErrorCategory.ProviderFailure, failed.Category);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Failed, completed.Outcome);
+    }
+
+    [Fact]
     public async Task Emergency_compaction_with_buffered_message_drains_both()
     {
         // First call: context overflow

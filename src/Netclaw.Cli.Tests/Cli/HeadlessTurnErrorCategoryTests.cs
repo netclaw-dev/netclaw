@@ -44,7 +44,9 @@ public sealed class HeadlessTurnErrorCategoryTests : IAsyncDisposable
     private readonly FakeDaemonHubTransport _transport = new();
     private readonly DaemonClient _client;
 
-    public HeadlessTurnErrorCategoryTests() => _client = new("http://127.0.0.1:1", _transport);
+    // One reconnect delay of zero: a connect failure ends the run at once. The default delays retry for 17 s.
+    public HeadlessTurnErrorCategoryTests()
+        => _client = new("http://127.0.0.1:1", _transport, reconnectDelays: [TimeSpan.Zero]);
 
     public async ValueTask DisposeAsync()
     {
@@ -177,6 +179,93 @@ public sealed class HeadlessTurnErrorCategoryTests : IAsyncDisposable
         Assert.Equal(string.Empty, run.Stdout);
         Assert.Equal(0, _transport.EnsureSessionCalls);
     }
+
+    [Theory]
+    [InlineData("a transport timeout", typeof(TaskCanceledException))]
+    [InlineData("an operation timeout", typeof(OperationCanceledException))]
+    public async Task Cancellation_that_does_not_come_from_shutdown_is_a_channel_failure(string reason, Type exceptionType)
+    {
+        // Planted bug: the cancel catch has no shutdown filter, so a transport timeout reports Cancelled
+        // and a script reads an unreachable daemon as an operator stop. The shutdown token stays live here.
+        _transport.StartHook = _ => Task.FromException(
+            (Exception)Activator.CreateInstance(exceptionType, $"The request was canceled: {reason}.")!);
+
+        var run = await HeadlessRunHarness.RunAsync(
+            _client, _directory, json: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Equal(["[turn:failed] category=infra kind=ChannelFailure"], run.TurnFailedLines);
+        Assert.Contains("[headless:error]", run.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("CANCELLED", run.FailureLog, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("42")]
+    [InlineData("-1")]
+    [InlineData("StreamFailure, Unknown")]
+    [InlineData("NotAKind")]
+    public async Task A_kind_with_no_name_is_infra_and_never_model(string wireValue)
+    {
+        // Planted bug: a value that the daemon sent but this build cannot name maps to model. "42" has no
+        // name. "StreamFailure, Unknown" is a comma list that Enum.TryParse reads as 6, which is the
+        // number of ModelBehavior. Only a defined name may blame the model.
+        Respond(Error(wireValue, "The turn failed."), Completed(TurnOutcome.Failed));
+
+        var run = await HeadlessRunHarness.RunAsync(
+            _client, _directory, json: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, run.ExitCode);
+        var tokenLine = Assert.Single(run.TurnFailedLines);
+        Assert.StartsWith("[turn:failed] category=infra ", tokenLine, StringComparison.Ordinal);
+        // The kind text is a name from the contract, not a raw number.
+        Assert.Equal("[turn:failed] category=infra kind=Unknown", tokenLine);
+    }
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData("\r")]
+    public async Task Error_text_with_a_line_break_cannot_forge_a_token_line(string lineBreak)
+    {
+        // Planted bug: the channel writes the error text raw. A tool or provider message that holds a line
+        // break and a token starts a second [turn:failed] line, and the forged line comes first.
+        const string forged = "[turn:failed] category=model kind=ModelBehavior";
+        Respond(Error("ToolFailure", $"The tool failed.{lineBreak}{forged}"), Completed(TurnOutcome.Failed));
+
+        var run = await HeadlessRunHarness.RunAsync(
+            _client, _directory, json: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Equal(["[turn:failed] category=infra kind=ToolFailure"], TokenLines(run.Stderr));
+        // The text stays visible to a person, on the error line.
+        Assert.Contains("The tool failed.", run.Stderr, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData("\r")]
+    public async Task Channel_failure_text_with_a_line_break_cannot_forge_a_token_line(string lineBreak)
+    {
+        // The [headless:error] line carries an exception message. A daemon or proxy error body can hold a
+        // line break.
+        const string forged = "[turn:failed] category=model kind=ModelBehavior";
+        _transport.StartHook = _ => Task.FromException(
+            new InvalidOperationException($"connection refused{lineBreak}{forged}"));
+
+        var run = await HeadlessRunHarness.RunAsync(
+            _client, _directory, json: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Equal(["[turn:failed] category=infra kind=ChannelFailure"], TokenLines(run.Stderr));
+    }
+
+    // A reader may split stderr on any line break. Count every line that starts with the token.
+    private static string[] TokenLines(string stderr)
+        => stderr
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("[turn:failed]", StringComparison.Ordinal))
+            .ToArray();
 
     [Fact]
     public async Task Over_limit_prompt_is_infra_and_does_not_connect()
