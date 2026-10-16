@@ -52,6 +52,7 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
 
+        /// <summary>Read-only. Deployed journal rows carry it. No writer sets it.</summary>
         public ChildContinuation? ChildContinuation { get; init; }
 
         public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
@@ -80,6 +81,12 @@ public static partial class SessionProtocol
 
         public required TurnContextRecord TurnContext { get; init; }
 
+        /// <summary>
+        /// Set when the input reports the end of a child run. The kind is durable, so a rebuilt waiting input
+        /// keeps it and stays automated input even though its context names a person.
+        /// </summary>
+        public ChildNotice? ChildNotice { get; init; }
+
         public long AdmittedAtMs { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(AdmittedAtMs);
@@ -94,6 +101,7 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> InputIds { get; init; } = [];
 
+        /// <summary>Read-only. Deployed journal rows carry it. No writer sets it.</summary>
         public ChildContinuation? ChildContinuation { get; init; }
 
         public BackgroundJobId? SourceBackgroundJobId { get; init; }
@@ -123,6 +131,7 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
 
+        /// <summary>Read-only. Deployed journal rows carry it. No writer sets it.</summary>
         public ChildContinuation? ChildContinuation { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(StartedAtMs);

@@ -47,6 +47,7 @@
     <None Include="Tools/Fixtures/*.html" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Fixtures/CoordinationLegacy/*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures/CoordinationV2/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

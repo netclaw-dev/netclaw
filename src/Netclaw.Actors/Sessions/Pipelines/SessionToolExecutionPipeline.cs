@@ -489,14 +489,22 @@ internal sealed class SessionToolExecutionPipeline
             ?? throw new InvalidOperationException("A session tool batch requires its owner callback.");
         var callScope = batch.RunScope with
         {
-            SpawnChildActor = (request, name, token) => spawnChildActor(request switch
+            SpawnChildActor = async (request, name, token) =>
             {
-                PreparedChildStart prepared => new AcceptChildStart(prepared,
+                if (request is not PreparedChildStart prepared)
+                {
+                    return await spawnChildActor(request is ChildRunControlRequest control
+                        ? new ChildRunControl(control.RunId, control.Cancel, batch.TurnContext.ToRecord())
+                        : request, name, token);
+                }
+
+                // The task file records the requester of this turn. It exists before the owner accepts the start.
+                var requester = batch.TurnContext.ToRecord();
+                await prepared.WriteTaskFileAsync(requester, token);
+                return await spawnChildActor(new AcceptChildStart(prepared,
                     new ChildRunStartKey.Tool(batch.TurnContext.SessionId, batch.TurnContext.TurnId.Value,
-                        new ToolCallId(tc.CallId)), batch.TurnContext.ToRecord(), tc.Name, token),
-                ChildRunControlRequest control => new ChildRunControl(control.RunId, control.Cancel, batch.TurnContext.ToRecord()),
-                _ => request
-            }, name, token),
+                        new ToolCallId(tc.CallId)), requester, tc.Name, token), name, token);
+            },
             InteractiveApproval = approvalBridge is null
                 ? new InteractiveApprovalCapability.Unavailable()
                 : new InteractiveApprovalCapability.Available(approvalBridge)

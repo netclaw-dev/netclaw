@@ -712,7 +712,7 @@ The run ID identifies the child. The original child call ID identifies its concr
 The workflow retains the original requester, authority, and offered options.
 A later user turn cannot replace those facts.
 The status tool exposes the unresolved prompt count only to the original owner.
-Child prompts do not block an unrelated parent turn or another ready child result.
+Child prompts do not block an unrelated parent turn or the notice of another child.
 The snapshot gate still accounts for all unresolved approval evidence.
 
 The child dispatch gate closes before a cancellation acknowledgement or terminal publication.
@@ -745,7 +745,8 @@ Child ownership (status and cancel):
   interactive approval flag. These fields describe one message, and they change between turns of one person.
 - Data: the `OriginalContext` of the run is durable in the session journal. The context of the request is call-local.
 - The child start keeps the full authority check (`HasSameChildAuthority`, `TurnContext.HasSameAuthority`)
-  for start idempotency. Approval recovery and child continuation also keep the full authority check.
+  for start idempotency. Approval recovery also keeps the full authority check. The reducer applies the same
+  check to a child result notice: the notice must carry the recorded authority of the run owner.
 
 A valid example: Alice starts a child in a Slack thread turn that quotes earlier messages.
 In a later turn with no quoted context, Alice asks for status and then cancels. Both calls succeed.
@@ -772,8 +773,25 @@ sequenceDiagram
 
 A valid example is Alice's child request that Alice approves while the parent serves another turn.
 An invalid example is Bob's answer to that prompt. The workflow rejects it before consent or a grant.
-A terminal child result is tool output. It never supplies user authority through `InputAdmitted`.
-The parent retains the child's original authority through subsequent tool calls and approvals.
+A terminal child result reaches the parent as an admitted notice (`InputAdmitted` with a `ChildNotice`).
+The notice names the agent, the run, the outcome, and the path of `result.md`. It never holds the child output.
+The model reads the result with a real `file_read` call under the path authority of its own turn.
+The notice carries the recorded requester of the run owner, and it supplies no authority of its own:
+
+- The notice follows the same rules as any input (see "One authority per turn" in section 3.1). It joins a running
+  turn only when the turn has the same requester. Otherwise it waits and starts its own turn. No code path changes
+  the authority of a running turn.
+- The turn that serves a notice has the recorded authority of the run owner, with a new turn ID.
+  The recorded context is never wider than the context of the run.
+- The text of the child is data. The notice has no child text, so a child cannot put text into the prompt.
+  The model gets the text only as output of `file_read`, with the normal path policy and approval rules.
+- `SessionState.Apply(InputAdmitted)` allows one notice for each ended run. The run state is the guard.
+  A second notice, or a notice with other authority, fails before the journal write.
+- A session profile without `file_read` cannot read a result. `spawn_agent` refuses to start a child in that case.
+
+A valid example: Alice's child ends while Alice's turn runs. The notice joins Alice's turn at the tool boundary,
+and the turn keeps its own authority. An invalid example: Alice's child ends while Bob's turn runs.
+The notice waits for its own turn, and Bob's tool calls keep Bob's authority.
 
 ### 3.7 Advice (support module)
 
@@ -886,7 +904,10 @@ Facts behind the diagram (current code):
 - Automated input never abandons an open approval
   (`SessionToolWorkflow.PlanNewInputAbandonment`). Input with the principal
   `VerifiedAutomation` or `SystemProcess` (a reminder fire, a webhook, a
-  background job completion) waits in the buffer. It runs as its own turn after
+  background job completion) waits in the buffer. A child result notice is also
+  automated input. It carries the principal of the person who owns the child, so the
+  kind of the input decides (`InputAdmitted.ChildNotice`, `SendUserMessage.Notice`),
+  and a rebuilt waiting notice keeps its kind. The waiting input runs as its own turn after
   the turn that closes the approval. If the approval closes with no re-drive,
   the actor starts the waiting turn (`StartWaitingInputAfterApproval`).
 - The session acknowledges a waiting input after the journal stores it

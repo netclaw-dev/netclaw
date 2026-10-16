@@ -2861,14 +2861,14 @@ internal sealed class FakeChatClient : IChatClient
     /// before falling back to <see cref="AlwaysReturnToolCalls"/> or the first-call behavior.
     /// Observation compressor and sidecar calls do not consume this queue.
     /// </summary>
-    public Queue<bool> PlannedToolCallDecisions { get; } = new();
+    public ConcurrentQueue<bool> PlannedToolCallDecisions { get; } = new();
 
     /// <summary>
     /// When populated, usage details are dequeued per main-model response before
     /// falling back to <see cref="UsageOverride"/>. Observation compressor and
     /// sidecar calls do not consume this queue.
     /// </summary>
-    public Queue<UsageDetails?> PlannedUsageOverrides { get; } = new();
+    public ConcurrentQueue<UsageDetails?> PlannedUsageOverrides { get; } = new();
 
     /// <summary>
     /// Holds a compaction observation call until the test releases its response.
@@ -2887,13 +2887,31 @@ internal sealed class FakeChatClient : IChatClient
     /// Number of compaction observation sidecar calls that should ignore cancellation
     /// entirely and never complete. Used to simulate a wedged compaction provider.
     /// </summary>
-    public int StuckObservationCallsRemaining { get; set; }
+    public int StuckObservationCallsRemaining
+    {
+        get => Volatile.Read(ref _stuckObservationCallsRemaining);
+        set => Volatile.Write(ref _stuckObservationCallsRemaining, value);
+    }
+
+    private int _stuckObservationCallsRemaining;
+
+    private bool TakeStuckObservationCall()
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref _stuckObservationCallsRemaining);
+            if (current <= 0)
+                return false;
+            if (Interlocked.CompareExchange(ref _stuckObservationCallsRemaining, current - 1, current) == current)
+                return true;
+        }
+    }
 
     /// <summary>
     /// When populated, responses are dequeued in order before falling back to the
     /// default fake text response. Each entry is used as the assistant message contents.
     /// </summary>
-    public Queue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
+    public ConcurrentQueue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
 
     /// <summary>This fake selects response content from the captured request.</summary>
     public Func<IReadOnlyList<ChatMessage>, IReadOnlyList<AIContent>?>? ResponseContentsSelector { get; set; }
@@ -2905,9 +2923,16 @@ internal sealed class FakeChatClient : IChatClient
     /// response. Used to simulate provider errors (502, 400 context overflow, etc.).
     /// Exceptions are thrown before incrementing <see cref="CallCount"/>.
     /// </summary>
-    public Queue<Exception> PlannedExceptions { get; } = new();
+    public ConcurrentQueue<Exception> PlannedExceptions { get; } = new();
 
-    public TaskCompletionSource? NextResponseGate { get; set; }
+    // One call takes the gate. A second parallel call must not take the same gate, so the take is one atomic exchange.
+    private TaskCompletionSource? _nextResponseGate;
+
+    public TaskCompletionSource? NextResponseGate
+    {
+        get => Volatile.Read(ref _nextResponseGate);
+        set => Volatile.Write(ref _nextResponseGate, value);
+    }
 
     public TaskCompletionSource? StreamCompletionGate { get; set; }
 
@@ -2929,8 +2954,8 @@ internal sealed class FakeChatClient : IChatClient
             // Consume a planned exception before recording so a failed call is not counted
             // (CallCount / recorded-messages contract). Every call path — main model and both
             // sidecars — reaches this on a different thread, so the check+dequeue must be guarded.
-            if (PlannedExceptions.Count > 0)
-                throw PlannedExceptions.Dequeue();
+            if (PlannedExceptions.TryDequeue(out var plannedException))
+                throw plannedException;
 
             _receivedMessages.Add(messageList);
             _receivedOptions.Add(options);
@@ -2942,9 +2967,8 @@ internal sealed class FakeChatClient : IChatClient
         if (Delay > TimeSpan.Zero)
             await Task.Delay(Delay, cancellationToken);
 
-        if (NextResponseGate is { } nextResponseGate)
+        if (Interlocked.Exchange(ref _nextResponseGate, null) is { } nextResponseGate)
         {
-            NextResponseGate = null;
             using var registration = cancellationToken.Register(() => nextResponseGate.TrySetCanceled(cancellationToken));
             await nextResponseGate.Task;
         }
@@ -2990,9 +3014,8 @@ internal sealed class FakeChatClient : IChatClient
 
         if (systemText.Contains("You are a session summarizer", StringComparison.Ordinal))
         {
-            if (StuckObservationCallsRemaining > 0)
+            if (TakeStuckObservationCall())
             {
-                StuckObservationCallsRemaining--;
                 var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 await gate.Task;
             }
@@ -3005,11 +3028,11 @@ internal sealed class FakeChatClient : IChatClient
                 ObservationResponseOverride ?? "- compacted observation"));
         }
 
-        var plannedToolCallDecision = PlannedToolCallDecisions.Count > 0
-            ? PlannedToolCallDecisions.Dequeue()
-            : (bool?)null;
-        var usageOverride = PlannedUsageOverrides.Count > 0
-            ? PlannedUsageOverrides.Dequeue()
+        bool? plannedToolCallDecision = PlannedToolCallDecisions.TryDequeue(out var plannedDecision)
+            ? plannedDecision
+            : null;
+        var usageOverride = PlannedUsageOverrides.TryDequeue(out var plannedUsage)
+            ? plannedUsage
             : UsageOverride;
 
         // Return tool calls if configured
@@ -3046,9 +3069,8 @@ internal sealed class FakeChatClient : IChatClient
             return selectedResponse;
         }
 
-        if (PlannedResponses.Count > 0)
+        if (PlannedResponses.TryDequeue(out var plannedContents))
         {
-            var plannedContents = PlannedResponses.Dequeue();
             var plannedResponse = new ChatResponse(new ChatMessage(
                 Microsoft.Extensions.AI.ChatRole.Assistant,
                 new List<AIContent>(plannedContents)));

@@ -233,7 +233,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Spawn_agent_returns_durable_acceptance_then_wakes_parent_with_fresh_result_pair()
+    public async Task Spawn_agent_returns_durable_acceptance_then_wakes_parent_with_a_result_notice()
     {
         var childGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var parentWakeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -312,18 +312,18 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Equal(0, completed.FindingsCount);
 
         await AwaitAssertAsync(() => Assert.True(_clientProvider.Main.CallCount >= 3,
-            $"Expected a parent wake with the child result pair, saw {_clientProvider.Main.CallCount} calls."),
+            $"Expected a parent wake with the child result notice, saw {_clientProvider.Main.CallCount} calls."),
             cancellationToken: TestContext.Current.CancellationToken);
         var parentWake = _clientProvider.Main.ReceivedMessages[2];
-        var resultCall = Assert.Single(parentWake.SelectMany(message => message.Contents.OfType<FunctionCallContent>()),
+        Assert.DoesNotContain(parentWake.SelectMany(message => message.Contents.OfType<FunctionCallContent>()),
             call => call.Name == "child_run_result");
-        var result = Assert.Single(parentWake.SelectMany(message => message.Contents.OfType<FunctionResultContent>()),
-            item => item.CallId == resultCall.CallId);
-        Assert.NotEqual("call-spawn", resultCall.CallId);
-        Assert.Equal(runId, resultCall.Arguments?["run_id"]?.ToString());
-        Assert.Equal("spawn_agent", resultCall.Arguments?["source_operation"]?.ToString());
-        Assert.Contains(runId, result.Result?.ToString(), StringComparison.Ordinal);
-        Assert.Contains("[fake]", result.Result?.ToString(), StringComparison.Ordinal);
+        var notice = Assert.Single(NoticeTexts(parentWake), text => text.Contains(runId, StringComparison.Ordinal));
+        Assert.Contains("agent=summarizer", notice, StringComparison.Ordinal);
+        Assert.Contains("outcome=completed", notice, StringComparison.Ordinal);
+        Assert.DoesNotContain("[fake]", notice, StringComparison.Ordinal);
+        var resultText = ReadNoticeFile(notice);
+        Assert.Contains(runId, resultText, StringComparison.Ordinal);
+        Assert.Contains("[fake]", resultText, StringComparison.Ordinal);
         Assert.Single(parentWake, message => message.Role == Microsoft.Extensions.AI.ChatRole.User
             && message.Text == "Use a subagent to summarize the file");
         parentWakeGate.TrySetResult();
@@ -1331,18 +1331,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 var resumedRequest = _clientProvider.Main.ReceivedMessages
                     .LastOrDefault(messages => FindDeliveredRunIds(messages).Contains(runId));
                 Assert.NotNull(resumedRequest);
-                var resumedCall = Assert.Single(
-                    resumedRequest!.SelectMany(static message => message.Contents.OfType<FunctionCallContent>()),
-                    call => call.Name == "child_run_result"
-                        && call.Arguments is { } arguments
-                        && arguments.TryGetValue("run_id", out var deliveredRunId)
-                        && string.Equals(deliveredRunId?.ToString(), runId, StringComparison.Ordinal));
-                Assert.NotEqual("call-spawn-approval-expire", resumedCall.CallId);
-                var resumedResult = Assert.Single(resumedRequest
-                    .SelectMany(static message => message.Contents.OfType<FunctionResultContent>()),
-                    result => result.CallId == resumedCall.CallId);
-                Assert.Contains("child owner was lost", resumedResult.Result?.ToString(), StringComparison.OrdinalIgnoreCase);
-                Assert.Contains("uncertain", resumedResult.Result?.ToString(), StringComparison.OrdinalIgnoreCase);
+                var resumedResult = GetChildRunResult(resumedRequest!, runId);
+                Assert.Contains("child owner was lost", resumedResult, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("uncertain", resumedResult, StringComparison.OrdinalIgnoreCase);
 
                 var originalReceipt = Assert.Single(resumedRequest
                     .SelectMany(static message => message.Contents.OfType<FunctionResultContent>()),
@@ -1946,9 +1937,25 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     {
         var acceptedRunIds = FindAcceptedRunIds(request);
         var deliveredRunIds = FindDeliveredRunIds(request);
-        Assert.Equal(deliveredRunIds.Count, FindChildResultCallIds(request).Count);
         Assert.All(deliveredRunIds, runId => Assert.Contains(runId, acceptedRunIds));
         return deliveredRunIds.Count;
+    }
+
+    // A child result reaches the parent as a notice: a user message that names the run and its result file.
+    private static IEnumerable<string> NoticeTexts(IEnumerable<ChatMessage> request)
+        => request
+            .Where(static message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                && message.Text.StartsWith("Child run ended.", StringComparison.Ordinal))
+            .Select(static message => message.Text);
+
+    private static string NoticeRunId(string notice)
+        => System.Text.RegularExpressions.Regex.Match(notice, @"\brun=(\S+)").Groups[1].Value;
+
+    private static string ReadNoticeFile(string notice)
+    {
+        var path = System.Text.RegularExpressions.Regex.Match(notice, @"result_file=(\S+)").Groups[1].Value;
+        Assert.False(string.IsNullOrWhiteSpace(path), "The notice names no result file.");
+        return File.ReadAllText(path);
     }
 
     private static HashSet<string> FindAcceptedRunIds(IEnumerable<ChatMessage> request)
@@ -1978,39 +1985,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     }
 
     private static HashSet<string> FindDeliveredRunIds(IEnumerable<ChatMessage> request)
-    {
-        var contents = request.SelectMany(static message => message.Contents).ToArray();
-        var resultIds = contents
-            .OfType<FunctionResultContent>()
-            .Select(static result => result.CallId)
-            .ToHashSet(StringComparer.Ordinal);
-        return contents
-            .OfType<FunctionCallContent>()
-            .Where(static call => call.Name == "child_run_result")
-            .Where(call => resultIds.Contains(call.CallId))
-            .Select(static call => call.Arguments is { } arguments
-                && arguments.TryGetValue("run_id", out var runId)
-                ? runId?.ToString()
-                : null)
-            .Where(static runId => !string.IsNullOrWhiteSpace(runId))
-            .Select(static runId => runId!)
-            .ToHashSet(StringComparer.Ordinal);
-    }
-
-    private static HashSet<string> FindChildResultCallIds(IEnumerable<ChatMessage> request)
-    {
-        var contents = request.SelectMany(static message => message.Contents).ToArray();
-        var resultIds = contents
-            .OfType<FunctionResultContent>()
-            .Select(static result => result.CallId)
-            .ToHashSet(StringComparer.Ordinal);
-        return contents
-            .OfType<FunctionCallContent>()
-            .Where(static call => call.Name == "child_run_result")
-            .Where(call => resultIds.Contains(call.CallId))
-            .Select(static call => call.CallId)
-            .ToHashSet(StringComparer.Ordinal);
-    }
+        => NoticeTexts(request).Select(NoticeRunId).ToHashSet(StringComparer.Ordinal);
 
     private static string? ParseAcceptedRunId(string? result)
     {
@@ -2103,16 +2078,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     }
 
     private static string GetChildRunResult(IReadOnlyList<ChatMessage> messages, string runId)
-    {
-        var contents = messages.SelectMany(static message => message.Contents).ToArray();
-        var call = Assert.Single(contents.OfType<FunctionCallContent>(), content =>
-            content.Name == "child_run_result"
-            && content.Arguments is { } arguments
-            && arguments.TryGetValue("run_id", out var value)
-            && string.Equals(value?.ToString(), runId, StringComparison.Ordinal));
-        var result = Assert.Single(contents.OfType<FunctionResultContent>(), content => content.CallId == call.CallId);
-        return Assert.IsType<string>(result.Result);
-    }
+        => ReadNoticeFile(Assert.Single(NoticeTexts(messages), text => NoticeRunId(text) == runId));
 
     private sealed record ToolFootprintBaseline(
         int SchemaVersion,

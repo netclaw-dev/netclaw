@@ -126,6 +126,30 @@ public readonly record struct ManagedTemporaryLocation
 }
 
 /// <summary>
+/// The files that the runtime writes into one child run folder. The folder sits beside the artifact,
+/// temporary, and log folders of the run. The spawner writes <see cref="TaskFile"/> before the child starts.
+/// The session owner writes <see cref="ResultFile"/> after the child ends.
+/// </summary>
+public sealed record ChildRunFiles
+{
+    internal ChildRunFiles(string runDirectory)
+    {
+        RunDirectory = SessionStoragePathValue.NormalizeAbsolute(runDirectory, nameof(runDirectory));
+        TaskFile = Path.Combine(RunDirectory, "task.md");
+        ResultFile = Path.Combine(RunDirectory, "result.md");
+    }
+
+    /// <summary>Gets the canonical absolute folder of the run.</summary>
+    public string RunDirectory { get; }
+
+    /// <summary>Gets the path of the file that records the agent, the requester, and the brief.</summary>
+    public string TaskFile { get; }
+
+    /// <summary>Gets the path of the file that records the outcome and the output of the run.</summary>
+    public string ResultFile { get; }
+}
+
+/// <summary>
 /// Immutable paths for one parent or child run. The resolved paths define storage,
 /// but they do not bypass content admission or filesystem authorization.
 /// </summary>
@@ -139,7 +163,8 @@ public sealed record SessionStoragePaths
         ManagedTemporaryLocation managedTemporary,
         WorktreeDirectory worktreeDirectory,
         SessionLogPath logPath,
-        LegacySessionLogsDirectory? legacyLogsBasePath)
+        LegacySessionLogsDirectory? legacyLogsBasePath,
+        ChildRunFiles? childFiles)
     {
         Binding = binding;
         SessionDirectory = sessionDirectory;
@@ -149,6 +174,7 @@ public sealed record SessionStoragePaths
         WorktreeDirectory = worktreeDirectory;
         LogPath = logPath;
         LegacyLogsBasePath = legacyLogsBasePath;
+        ChildFiles = childFiles;
     }
 
     /// <summary>Gets the durable versioned binding. A null value identifies an unchanged legacy layout.</summary>
@@ -166,6 +192,8 @@ public sealed record SessionStoragePaths
     /// <summary>Gets the current run's raw session log path.</summary>
     public SessionLogPath LogPath { get; }
     private LegacySessionLogsDirectory? LegacyLogsBasePath { get; }
+    /// <summary>Gets the runtime-written files of a child run. A parent layout has none.</summary>
+    public ChildRunFiles? ChildFiles { get; }
 
     /// <summary>Creates the version-2 parent layout below one persisted envelope.</summary>
     /// <param name="envelopeRoot">The persisted envelope root.</param>
@@ -180,6 +208,7 @@ public sealed record SessionStoragePaths
             new ManagedTemporaryLocation(envelopeRoot),
             new WorktreeDirectory(envelopeRoot),
             new SessionLogPath(envelopeRoot),
+            null,
             null);
     }
 
@@ -210,7 +239,8 @@ public sealed record SessionStoragePaths
                 normalizedSessionDirectory.Value),
             WorktreeDirectory.FromLegacyPath(Path.Combine(normalizedSessionDirectory.Value, "worktrees")),
             SessionLogPath.FromLegacyPath(Path.Combine(normalizedLogsBase.Value, sanitizedSessionId, "session.log")),
-            normalizedLogsBase);
+            normalizedLogsBase,
+            null);
     }
 
     /// <summary>Derives one child run from the parent layout.</summary>
@@ -233,7 +263,8 @@ public sealed record SessionStoragePaths
                 new ManagedTemporaryLocation(childRoot),
                 WorktreeDirectory,
                 new SessionLogPath(childRoot),
-                null);
+                null,
+                new ChildRunFiles(childRoot.Value));
         }
 
         var childRootLegacy = Path.Combine(SessionDirectory.Value, "subagents", runId.Value);
@@ -252,7 +283,29 @@ public sealed record SessionStoragePaths
                 ?? throw new InvalidOperationException("Legacy storage is missing its log base."),
                 sanitizedScopeId,
                 "session.log")),
-            LegacyLogsBasePath);
+            LegacyLogsBasePath,
+            new ChildRunFiles(childRootLegacy));
+    }
+
+    /// <summary>
+    /// Tells whether a path names <c>task.md</c> or <c>result.md</c> in the run folder of a child of this session. The
+    /// runtime writes these files, and they carry no work of the user.
+    /// </summary>
+    /// <param name="canonicalPath">The canonical absolute path.</param>
+    /// <returns>True for a runtime-written child run file.</returns>
+    public bool IsChildRunFile(string canonicalPath)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var name = Path.GetFileName(canonicalPath);
+        if (!string.Equals(name, "task.md", comparison) && !string.Equals(name, "result.md", comparison))
+            return false;
+
+        var runsRoot = Binding is { } binding
+            ? Path.Combine(binding.EnvelopeRoot.Value, "subagents")
+            : Path.Combine(SessionDirectory.Value, "subagents");
+        var runDirectory = Path.GetDirectoryName(canonicalPath);
+        return runDirectory is not null
+            && string.Equals(Path.GetDirectoryName(runDirectory), runsRoot, comparison);
     }
 
     private static string SanitizePathSegment(string value)

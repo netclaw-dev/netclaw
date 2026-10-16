@@ -110,11 +110,12 @@ public sealed partial record SessionState
         if (keys.Count > 256)
             keys = keys.RemoveRange(0, keys.Count - 256);
 
-        return this with
+        var admitted = this with
         {
             PendingInputs = PendingInputs.Add(evt),
             RecentSourceMessageKeys = keys
         };
+        return evt.ChildNotice is { } notice ? admitted.ApplyChildNotice(evt, notice) : admitted;
     }
 
     public SessionState CloseInputs(IReadOnlyList<InputId> inputIds)
@@ -207,7 +208,7 @@ public sealed partial record SessionState
 
     internal SessionState Apply(TurnRecorded evt, bool userAlreadyInHistory)
     {
-        var closed = CommitChildContinuation(evt.ChildContinuation, close: true)
+        var closed = CloseLegacyContinuation(evt.ChildContinuation, close: true)
             .CloseInputs(evt.ConsumedInputIds);
         var processedReminders = closed.ProcessedReminderIds;
         if (evt.SourceReminderId is { } reminderId && !string.IsNullOrEmpty(reminderId.Value))

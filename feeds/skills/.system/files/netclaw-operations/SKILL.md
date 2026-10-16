@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.109.1"
+  version: "2.110.0"
 ---
 
 # Netclaw Operations
@@ -204,13 +204,15 @@ Use `agent-coordination` for task composition and independent review.
 
 `spawn_agent`, routed `skill_load`, and a routed slash command return after durable acceptance.
 The response contains `run_id` and `scope_id`. Acceptance does not mean completion.
-Continue independent work. A ready child result arrives as tool output at the next safe parent boundary.
-Another child's unfinished work does not delay a ready result.
+Continue independent work. When a child ends, the runtime writes `result.md` in the run folder and admits one notice.
+The notice is a user message. It names the agent, the run, the outcome, and the path of `result.md`. It holds no child output.
+Read `result.md` with `file_read`. The result never arrives as tool output.
+Another child's unfinished work does not delay a ready notice.
 Use `check_agent_run` with the returned `run_id` for a status check.
 The original owner can see `pending_approval_count` and request cancellation with `cancel: true`.
 A cancellation acknowledgement reports intent. Wait for the terminal result before you report that the child stopped.
 Do not poll status in a loop. Use it when the user needs a status update or intervention.
-The terminal result includes authorized log and artifact paths when available.
+`result.md` names the log and the artifact paths. `task.md` in the same folder records what you asked.
 Use normal file tools for those exact paths. Do not derive a broader session path.
 A lost child reports uncertainty. Recovery does not repeat its external work.
 If result evidence preparation fails, do not assume parent context adoption.
