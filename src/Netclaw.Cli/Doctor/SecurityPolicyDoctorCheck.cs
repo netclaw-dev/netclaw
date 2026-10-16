@@ -24,7 +24,7 @@ public sealed class SecurityPolicyDoctorCheck(NetclawPaths paths) : IDoctorCheck
                 "Config file is missing; security policy cannot be evaluated.",
                 "Run `netclaw init` to scaffold a baseline config with security defaults."));
 
-        if (root["Security"] is not JsonObject securityObject)
+        if (FindSection(root, "Security") is not JsonObject securityObject)
         {
             return Task.FromResult(DoctorCheckResult.Error(
                 "Security Policy",
@@ -57,6 +57,7 @@ public sealed class SecurityPolicyDoctorCheck(NetclawPaths paths) : IDoctorCheck
         }
 
         var warnings = new List<string>();
+        var remediations = new List<string>();
 
         if (effective.UsedStrictFallback && !config.DeploymentPosture.HasValue)
         {
@@ -73,6 +74,8 @@ public sealed class SecurityPolicyDoctorCheck(NetclawPaths paths) : IDoctorCheck
             warnings.Add("Personal posture with HostAllowed shell — full host access is enabled.");
         }
 
+        var postureWarningCount = warnings.Count;
+
         // The daemon reads Tools.ShellMode before Security.ShellExecutionMode (ToolAccessPolicy.ResolveShellMode).
         // A split between the two means the shell limit and the posture came from different edits.
         ShellExecutionMode? toolsShellMode;
@@ -88,10 +91,17 @@ public sealed class SecurityPolicyDoctorCheck(NetclawPaths paths) : IDoctorCheck
                 "Fix the Tools.ShellMode value or remove it."));
         }
 
+        if (postureWarningCount > 0)
+        {
+            remediations.Add("Review deployment posture and shell mode. Set explicit values to suppress this warning.");
+        }
+
         if (toolsShellMode.HasValue && toolsShellMode.Value != effective.ShellExecutionMode)
         {
             warnings.Add(
                 $"Tools.ShellMode is {toolsShellMode.Value} but Security.ShellExecutionMode is {effective.ShellExecutionMode}. The daemon uses Tools.ShellMode.");
+            remediations.Add(
+                "Remove Tools.ShellMode so the shell mode of the posture applies, or set Tools.ShellMode and Security.ShellExecutionMode to the same value.");
         }
 
         if (warnings.Count > 0)
@@ -99,7 +109,7 @@ public sealed class SecurityPolicyDoctorCheck(NetclawPaths paths) : IDoctorCheck
             return Task.FromResult(DoctorCheckResult.Warning(
                 "Security Policy",
                 string.Join(" ", warnings),
-                "Review deployment posture and shell mode. Set explicit values to suppress this warning."));
+                string.Join(" ", remediations)));
         }
 
         return Task.FromResult(DoctorCheckResult.Pass(
@@ -107,8 +117,20 @@ public sealed class SecurityPolicyDoctorCheck(NetclawPaths paths) : IDoctorCheck
             $"Deployment posture: {effective.DeploymentPosture}, Shell: {effective.ShellExecutionMode}."));
     }
 
+    // The daemon binds configuration keys without case, so a section named "tools" is live.
+    private static JsonNode? FindSection(JsonObject root, string name)
+    {
+        foreach (var property in root)
+        {
+            if (string.Equals(property.Key, name, StringComparison.OrdinalIgnoreCase))
+                return property.Value;
+        }
+
+        return null;
+    }
+
     private static ShellExecutionMode? ReadToolsShellMode(JsonObject root)
-        => root["Tools"] is JsonObject tools
+        => FindSection(root, "Tools") is JsonObject tools
             ? JsonSerializer.Deserialize<ToolsShellModeSection>(tools, JsonDefaults.ConfigRead)?.ShellMode
             : null;
 
