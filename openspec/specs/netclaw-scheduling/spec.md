@@ -294,7 +294,7 @@ SHALL NOT affect routing.
 - **WHEN** the reminder fires
 - **THEN** the dispatcher uses the Mattermost gateway, conversation, and session binding
 - **AND** the response reaches the original channel and thread
-- **AND** `delivery_required = true` succeeds only after a successful post
+- **AND** the run succeeds when the session acknowledges the fire, whether or not `delivery_required` is set
 
 #### Scenario: Unsupported current-session origin is rejected before persistence
 
@@ -305,9 +305,13 @@ SHALL NOT affect routing.
 #### Scenario: A Mattermost post failure does not fail the reminder
 
 - **GIVEN** a Mattermost current-session reminder with `delivery_required = true`
-- **WHEN** the Mattermost post API rejects its response
-- **THEN** the execution records a failed outcome
-- **AND** a session acknowledgement does not count as a successful post
+- **AND** the session acknowledged the fire
+- **WHEN** the Mattermost post API later rejects the response
+- **THEN** the execution still records a successful outcome
+- **AND** the reminder system does not retry the fire
+- **AND** the session does not retry the post, because a Mattermost or Discord post failure is a `TransportFailure` and the delivery retry covers other failure kinds only
+- **AND** the binding reports `DeliveryFailed` with `TransportFailure` to the session
+- **AND** the session writes an Error log and raises a `reminder.delivery.failed` alert (see the `netclaw-session` requirement "A failed post on a reminder turn is visible to the operator")
 
 ### Requirement: Task management
 
@@ -555,7 +559,7 @@ inline. If no history exists, the tool SHALL return an empty list.
 - **THEN** the tool call is rejected by the ACL policy
 - **AND** the agent receives a permission-denied response
 
-### Requirement: Envelope-ack-gated at-least-once delivery
+### Requirement: Envelope-ack-gated delivery ends at admission
 
 The reminder manager SHALL retain each Akka.Reminders envelope until the attempt
 has a known outcome. This rule SHALL apply to every delivery kind, so `Channel`
@@ -567,35 +571,36 @@ The execution actor SHALL report its outcome to the manager. It SHALL wait for
 The manager SHALL acknowledge only a successful execution with all required
 delivery evidence. It SHALL negatively acknowledge a known failure.
 
-A `CurrentSession` reminder SHALL still use the origin gateway and
-`Ask<CommandAck>`. Required delivery SHALL also wait for
-`ReminderDeliveryResult`, which reports success and failure explicitly.
+A `CurrentSession` reminder SHALL use the origin gateway and
+`Ask<CommandAck>`. The run SHALL end when the session acknowledges the fire
+(admission). The run SHALL NOT wait for a post to the channel, whatever the
+value of `DeliveryRequired`. `DeliveryRequired` SHALL have no effect for a
+`CurrentSession` reminder. A `CommandNack` or an Ask timeout SHALL fail the run.
 
-The target session SHALL keep its best-effort reminder key check. The key SHALL
-use the stable occurrence due time.
+The target session SHALL decide alone what happens to an admitted fire. It
+SHALL use the stable key of the occurrence, which is built from the occurrence
+due time.
 
-#### Scenario: CurrentSession requires observed delivery
+#### Scenario: CurrentSession succeeds at admission
 
 - **GIVEN** a `CurrentSession` reminder has `DeliveryRequired = true`
 - **WHEN** the target session returns `CommandAck`
-- **THEN** the execution remains incomplete
-- **WHEN** a matching successful `ReminderDeliveryResult` arrives
 - **THEN** the child reports success to the manager
 - **AND** the manager acknowledges the occurrence
-
-#### Scenario: CurrentSession delivery fails
-
-- **GIVEN** a `CurrentSession` reminder awaits required delivery
-- **WHEN** the gateway rejects the turn or delivery fails
-- **THEN** the child reports a descriptive failure
-- **AND** the manager sends a negative acknowledgement
+- **AND** no delivery result is awaited
 
 #### Scenario: CurrentSession with DeliveryRequired=false acks on CommandAck alone
 
 - **GIVEN** a `CurrentSession` reminder with `DeliveryRequired = false` fires
 - **WHEN** `CommandAck` is received from the session
 - **THEN** the child reports success to the manager
-- **AND** no `ReminderDeliveryResult` wait is attempted
+
+#### Scenario: CurrentSession refusal fails the run
+
+- **GIVEN** a `CurrentSession` reminder fires
+- **WHEN** the gateway or the session replies `CommandNack`, or the Ask times out
+- **THEN** the child reports a descriptive failure
+- **AND** the manager sends a negative acknowledgement
 
 #### Scenario: Channel execution fails
 
@@ -619,25 +624,23 @@ use the stable occurrence due time.
 
 #### Scenario: Redelivered CurrentSession reminder is deduped on the target session
 
-- **GIVEN** a `CurrentSession` reminder was previously processed by the session,
-  evidenced by a `TurnRecorded` event whose `SourceReminderId` matches the
-  reminder's `{reminderId}:{fireTimestampMs}` key and is present in
-  `ProcessedReminderIds`
+- **GIVEN** a `CurrentSession` fire was admitted by the session, so its journal
+  holds the input with source key `{reminderId}:{fireTimestampMs}`
 - **WHEN** Akka.Reminders redelivers the same envelope after a transient failure
-- **THEN** the session dedup pre-check fires and `TryReplyAck()` returns
-  `CommandAck` without re-processing the turn
+- **THEN** the session acknowledges it without a second input
 - **AND** the manager settles the occurrence once, closing the redelivery loop
 
-### Requirement: Reminder delivery guarantees
+### Requirement: Reminder delivery guarantees end at admission
 
 The reminder pipeline SHALL provide at-least-once attempt delivery until the
-manager confirms execution and required delivery success.
+manager confirms execution. For a `CurrentSession` reminder, execution ends at
+admission by the session.
 
 A crash before acknowledgement SHALL leave the occurrence eligible for retry. A
 crash after acknowledgement SHALL not lose successful work.
 
-The stable occurrence identity and the session reminder key SHALL reduce
-duplicate work. Netclaw SHALL not claim exactly-once delivery.
+The stable occurrence identity and the stored source key of the admitted input
+SHALL reduce duplicate work. Netclaw SHALL not claim exactly-once delivery.
 
 #### Scenario: The daemon stops during execution
 
@@ -648,22 +651,20 @@ duplicate work. Netclaw SHALL not claim exactly-once delivery.
 
 #### Scenario: The daemon stops after acknowledgement
 
-- **GIVEN** execution and required delivery succeeded
+- **GIVEN** execution succeeded
 - **AND** the manager acknowledged the occurrence
 - **WHEN** the daemon stops before one-shot terminal state is saved
 - **THEN** durable occurrence status remains `Delivered`
 - **AND** reconciliation repairs the one-shot terminal state
 
-#### Scenario: Duplicate across snapshot recovery is accepted
+#### Scenario: Duplicate across snapshot recovery is caught
 
-- **GIVEN** a `CurrentSession` reminder was processed and `TurnRecorded` persisted
-- **AND** a subsequent `SessionSnapshot` was taken
-- **AND** the session later recovers from that snapshot, so journal replay skips
-  events before the snapshot
-- **AND** a redelivery of the original reminder arrives via Akka.Reminders
-- **WHEN** the dedup pre-check runs
-- **THEN** the set is empty and the redelivery is processed as a fresh turn
-- **AND** this outcome is an explicit accepted tradeoff
+- **GIVEN** a `CurrentSession` fire was admitted
+- **AND** a `SessionSnapshot` was taken
+- **AND** the session later recovers from that snapshot
+- **WHEN** Akka.Reminders redelivers the original fire
+- **THEN** the snapshot holds the source key of the fire
+- **AND** the session acknowledges the redelivery without a second input
 
 #### Scenario: Delivery guarantees documented in reminder-set confirmation
 
@@ -752,20 +753,79 @@ less confusion for smaller models.
 - **THEN** the prompt includes guidance to call `cancel_reminder`
 - **AND** the guidance includes the reminder's own ID
 
-### Requirement: Delivery observation timeout alignment
+### Requirement: A reminder has at most one waiting fire in a session
 
-The `DeliveryObservedTimeout` for Mode B (current_session) delivery MUST be aligned with the execution timeout. A delivery observation window
-shorter than the execution window causes false failures when LLM turns
-take longer than the observation timeout but complete before the execution
-timeout.
+A session SHALL keep at most one waiting fire for each reminder. A fire waits
+only while the session's in-memory input queue holds it. A turn that selects a
+fire removes it from the queue. When a newer
+fire of the same reminder arrives while an earlier fire waits, the session SHALL
+acknowledge the newer fire and SHALL NOT store it. The session SHALL log
+`reminder_fire_dropped`. The reminder system SHALL see success.
 
-#### Scenario: Delivery observation succeeds for LLM turns taking >30s
+Recovery rebuilds the queue for inputs that wait behind an open approval, so
+the rule holds after a restart or a passivation for those inputs. A stored
+input that nothing will run (a crash, a restart with several requesters, an
+expired restart reminder, or a restart message that found another turn running
+left it pending) is not waiting. It SHALL NOT block a later fire. The session
+SHALL NOT drop a fire while the earlier fire runs. The session SHALL NOT drop a fire because another
+reminder has a waiting fire. A key that is not a reminder fire key
+(`{reminderId}:{fireTimeMs}`) SHALL never be dropped and SHALL never block a fire.
 
-- **GIVEN** a Mode B reminder with `deliveryRequired = true`
-- **AND** the LLM turn takes 45 seconds to produce a delivery
-- **WHEN** the delivery is observed at t=45s
-- **THEN** the execution completes successfully
-- **AND** no failure is recorded
+The decision SHALL cause no side effect. A dropped or duplicate fire SHALL NOT
+abandon an open tool batch.
+
+#### Scenario: A newer fire is dropped while the earlier fire waits
+
+- **GIVEN** a reminder fires every 12 minutes
+- **AND** the 10:00 fire waits behind a running turn
+- **WHEN** the 10:12 fire arrives
+- **THEN** the session acknowledges it and stores no input
+- **AND** the 10:00 fire runs after the turn
+- **AND** the 10:24 fire waits again, and the session admits it
+
+#### Scenario: A fire waits behind an approval, also after a restart
+
+- **GIVEN** the 10:00 fire waits behind an open approval
+- **AND** the daemon restarted, so recovery rebuilt the waiting fire from the journal into the queue
+- **WHEN** the 10:12 fire arrives
+- **THEN** the session acknowledges it and stores no input
+
+#### Scenario: A fire that a crash left pending does not block the next fire
+
+- **GIVEN** the 10:00 fire was stored and waited behind a running turn
+- **AND** the daemon crashed, so the new session holds the 10:00 fire in its journal but not in its queue, and no restart reminder exists
+- **WHEN** the 10:12 fire arrives
+- **THEN** the session stores it as an input
+- **AND** the 10:12 fire runs
+
+#### Scenario: A key that is not a fire key is never dropped
+
+- **GIVEN** a reminder input is stored with the key `weekly:abc` (the time is not digits)
+- **WHEN** a reminder input with the key `weekly:def` arrives
+- **AND** a reminder input with the key `weekly:1700000000000` arrives
+- **THEN** the session stores both as inputs
+- **AND** it logs no `reminder_fire_dropped`
+- **AND** the stored `weekly:abc` input blocks neither key
+
+#### Scenario: A fire is admitted while the earlier fire runs
+
+- **GIVEN** a running turn was started by the 10:00 fire
+- **WHEN** the 10:12 fire arrives
+- **THEN** the session stores it as a waiting input
+- **AND** both fires run
+
+#### Scenario: Different reminders never drop each other
+
+- **GIVEN** the reminders `check-pr` and `standup` both fire during a busy turn
+- **THEN** the session stores both fires
+- **AND** a name prefix (`check` and `check-pr`) does not make two reminders equal
+
+#### Scenario: A redelivered fire is a duplicate, not a drop
+
+- **GIVEN** the session admitted the 10:00 fire
+- **WHEN** Akka.Reminders redelivers the 10:00 fire
+- **THEN** the session acknowledges it and stores no input
+- **AND** a recovered session writes no `ToolBatchAbandoned` for it
 
 ### Requirement: Reminder delivery target validation
 

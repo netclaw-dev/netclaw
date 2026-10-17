@@ -55,7 +55,7 @@ Session.SendUserMessage (every phase)
 
 ## Risks / Trade-offs
 
-- [A failed Mode B post no longer retries at reminder level] -> The session-level delivery retry stays. A TUI reminder with no client runs and the output stays in the transcript. The owner accepted this.
+- [A failed Mode B post no longer retries at reminder level] -> The session does not retry a `TransportFailure` either, so no retry covers the failed post. The session reports the failure instead: an Error log and a `reminder.delivery.failed` alert. A TUI reminder with no client runs and the output stays in the transcript. The owner accepted this.
 - [A first restart-resume message that arrives while another turn runs is a no-op] -> The pending input waits for a later restart. Mixed-requester resume is a separate change.
 - [The D1 change states that the delivery observation timeout stays and that a delivery backstop is out of scope] -> This change deletes both. The D1 sentence is stale. Remove it from the D1 delta when D1 syncs.
 - [Rows without a source key, written before #2209, are not duplicates] -> A redelivered fire from such a row runs again if it arrives after the upgrade. The window is one lease (70 minutes) at upgrade time, so the risk is small.

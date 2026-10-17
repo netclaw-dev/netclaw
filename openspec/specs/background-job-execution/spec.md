@@ -493,7 +493,7 @@ context — neither the previous `Personal` default nor a `Public` fallback.
 
 The session SHALL maintain dedup state for job deliveries to prevent double-
 processing if a delivery is retried. The dedup key SHALL be the job ID. The
-pattern SHALL mirror `SessionState.ProcessedReminderIds`.
+ledger SHALL be an in-memory set that journal replay rebuilds.
 
 #### Scenario: Duplicate delivery ignored
 
