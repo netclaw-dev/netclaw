@@ -31,6 +31,7 @@ public static class SessionOutputTypes
     public const string Compaction = "compaction";
     public const string SessionJoined = "session_joined";
     public const string ToolInteraction = "tool_interaction";
+    public const string SessionDeactivated = "session_deactivated";
     public const string Unknown = "unknown";
 }
 

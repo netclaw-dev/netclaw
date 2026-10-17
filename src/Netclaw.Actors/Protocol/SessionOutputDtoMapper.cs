@@ -94,7 +94,16 @@ public static class SessionOutputDtoMapper
             TimestampMs = msg.TimestampMs,
             TurnNumber = msg.TurnNumber,
             TurnOutcome = msg.Outcome.ToString().ToLowerInvariant(),
-            SourceReminderId = msg.SourceReminderId?.Value
+            SourceReminderId = msg.SourceReminderId?.Value,
+            // Always an array, never null: an absent field means an earlier daemon.
+            OpenChildRunIds = [.. msg.OpenChildRunIds.Select(id => id.Value)]
+        },
+
+        SessionDeactivated msg => new SessionOutputDto
+        {
+            Type = SessionOutputTypes.SessionDeactivated,
+            SessionId = msg.SessionId.Value,
+            TimestampMs = msg.TimestampMs
         },
 
         SessionTitleOutput msg => new SessionOutputDto
@@ -280,7 +289,15 @@ public static class SessionOutputDtoMapper
                 Outcome = Enum.TryParse<TurnOutcome>(dto.TurnOutcome, ignoreCase: true, out var outcome)
                     ? outcome
                     : TurnOutcome.Completed,
-                SourceReminderId = dto.SourceReminderId is null ? null : new ReminderId(dto.SourceReminderId)
+                SourceReminderId = dto.SourceReminderId is null ? null : new ReminderId(dto.SourceReminderId),
+                OpenChildRunIds = dto.OpenChildRunIds is null
+                    ? []
+                    : [.. dto.OpenChildRunIds.Select(id => new SubAgentRunId(id))]
+            },
+            SessionOutputTypes.SessionDeactivated => new SessionDeactivated
+            {
+                SessionId = sessionId,
+                TimestampMs = dto.TimestampMs
             },
             SessionOutputTypes.SessionTitle => new SessionTitleOutput(dto.Title ?? string.Empty)
             {

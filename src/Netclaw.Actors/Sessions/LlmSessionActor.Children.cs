@@ -404,6 +404,29 @@ public sealed partial class LlmSessionActor
         }], findings);
     }
 
+    // The delivery pair enters model history only. Subscribers also get it as tool output, so a channel shows
+    // the child text as it showed the result of a synchronous spawn_agent. It goes out once per delivery: the
+    // caller runs it when the session first selects the result, and not for later calls of the same turn.
+    private void EmitChildResultDelivery(BackgroundChildRun run)
+    {
+        var delivery = run.Lifecycle switch
+        {
+            ChildRunLifecycle.Prepared prepared => prepared.Delivery,
+            ChildRunLifecycle.Consumed consumed => consumed.Delivery,
+            _ => throw new InvalidOperationException("A selected child result requires a prepared delivery.")
+        };
+        var call = delivery.Call.ToolCalls[0];
+        EmitOutput(new ToolCallOutput
+        {
+            SessionId = _sessionId, CallId = call.CallId, ToolName = call.Name, ArgumentsJson = call.ArgumentsJson
+        }, OutputFilter.ToolCalls);
+        EmitOutput(new ToolResultOutput
+        {
+            SessionId = _sessionId, CallId = call.CallId, ToolName = call.Name,
+            Result = delivery.Result.Content ?? string.Empty
+        }, OutputFilter.ToolCalls);
+    }
+
     private bool HasReadyChildResult => _state.GetExecutableChildRuns().Any(run =>
         run.Lifecycle is ChildRunLifecycle.Prepared or ChildRunLifecycle.Consumed);
 

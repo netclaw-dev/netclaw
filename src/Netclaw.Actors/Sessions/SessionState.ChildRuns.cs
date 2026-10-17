@@ -19,6 +19,18 @@ public sealed partial record SessionState
     public IEnumerable<BackgroundChildRun> GetExecutableChildRuns()
         => ChildRuns.Values.Where(run => !TryGetLegacyChildDisposition(run.RunId, out _));
 
+    /// <summary>
+    /// The runs whose result has not yet had its follow-up parent turn: every run that is not <c>Closed</c>.
+    /// A failed follow-up turn closes its run, so it leaves this list. The order is stable: acceptance time,
+    /// then run id. A run that the legacy reader quarantined never gets a delivery turn, so it is not open.
+    /// </summary>
+    public IReadOnlyList<SubAgentRunId> GetOpenChildRunIds()
+        => [.. GetExecutableChildRuns()
+            .Where(run => run.Lifecycle is not ChildRunLifecycle.Closed)
+            .OrderBy(run => run.AcceptedAtMs)
+            .ThenBy(run => run.RunId.Value, StringComparer.Ordinal)
+            .Select(run => run.RunId)];
+
     public SessionState Apply(ChildRunAccepted evt)
     {
         var run = evt.Run;

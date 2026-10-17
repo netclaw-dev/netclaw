@@ -2349,6 +2349,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             {
                 _turnState.ResetForNewTurn();
                 _modelContext.ResetForNewTurn();
+                EmitChildResultDelivery(child);
             }
             if (!TurnContext.TryFromRecord(child.OriginalContext, out var childContext, out var reason) || childContext is null)
                 throw new InvalidOperationException($"Child continuation authority is invalid: {reason}");
@@ -2457,7 +2458,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             SessionId = _sessionId,
             TurnNumber = new TurnNumber(_state.TurnCount),
             Outcome = TurnOutcome.Skipped,
-            SourceReminderId = source?.ReminderId
+            SourceReminderId = source?.ReminderId,
+            OpenChildRunIds = _state.GetOpenChildRunIds()
         });
         TryReplyAck();
         return true;
@@ -2647,7 +2649,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 SessionId = _sessionId,
                 TurnNumber = new TurnNumber(_state.TurnCount),
                 Outcome = TurnOutcome.Skipped,
-                SourceReminderId = _input.Authority.Source?.ReminderId
+                SourceReminderId = _input.Authority.Source?.ReminderId,
+                OpenChildRunIds = _state.GetOpenChildRunIds()
             });
             TryReplyAck();
         }
@@ -2853,7 +2856,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 SessionId = _sessionId,
                 TurnNumber = new TurnNumber(_state.TurnCount),
                 Outcome = TurnOutcome.Completed,
-                SourceReminderId = _input.Authority.Source?.ReminderId
+                SourceReminderId = _input.Authority.Source?.ReminderId,
+                OpenChildRunIds = _state.GetOpenChildRunIds()
             });
 
             MaybeSnapshot();
@@ -3102,7 +3106,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             SessionId = _sessionId,
             TurnNumber = new TurnNumber(_state.TurnCount),
-            SourceReminderId = _input.Authority.Source?.ReminderId
+            SourceReminderId = _input.Authority.Source?.ReminderId,
+            OpenChildRunIds = _state.GetOpenChildRunIds()
         });
     }
 
@@ -3498,7 +3503,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             SessionId = _sessionId,
             TurnNumber = new TurnNumber(_state.TurnCount),
             Outcome = TurnOutcome.Failed,
-            SourceReminderId = _input.Authority.Source?.ReminderId
+            SourceReminderId = _input.Authority.Source?.ReminderId,
+            OpenChildRunIds = _state.GetOpenChildRunIds()
         });
 
         DrainBufferedMessagesOrBecomeReady();

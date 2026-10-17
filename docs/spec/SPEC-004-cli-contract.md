@@ -342,7 +342,8 @@ turn or on a failed turn. It writes no envelope for a signal or for `SessionDeac
   `turnNumber`, `text`, `toolCalls`, and `usage`. A run with one turn has one entry.
 - `toolCalls` holds the tool calls of all turns, in order.
 - `usage` is the sum over all turns of `inputTokens`, `outputTokens`, `totalTokens`,
-  `cachedInputTokens`, and `reasoningTokens`.
+  `cachedInputTokens`, and `reasoningTokens`. `promptMs` and `predictedPerSecond` are rates, so they
+  come from the last turn that reports them.
 - A failed turn is the last entry. The envelope adds `errorCategory` and `errorKind`.
 
 Positive example: turn 1 reports 10 input tokens and turn 2 reports 7. The envelope has

@@ -19,6 +19,7 @@ namespace Netclaw.Actors.SubAgents;
 [NetclawTool("spawn_agent",
     "Delegate a task to a specialist subagent. "
     + "The call returns a durable run ID. The terminal result arrives later as tool output. "
+    + "Do not wait or poll for the child. End the turn. The result arrives in a later turn. "
     + "Use the discovery context layer to see available subagents.",
     Grant = "builtin",
     Liveness = ToolLivenessMode.Opaque)]
