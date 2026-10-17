@@ -56,6 +56,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `SessionInputFlow.PrepareAdmission` drop decision (`TryFindWaitingFire`, `TryReadFireKey`) and `ReminderFireKey.TryParse` | Rule 3: a session drops a newer fire only while an earlier input of the same reminder waits (the definition id matches, the flow's own queue holds that input, and only reminder-kind inputs count; a journal row that nothing will run never blocks); text that is not a fire key is never dropped and never blocks; the parser refuses any text but `{id}:{digits}` | 21 killed | `./scripts/run-reminder-execution-mutations.sh` |
+| `ReminderManagerActor.TombstoneMatches` and `ReminderManagerActor.SettledOccurrenceIsCurrent` | A matching tombstone (a one-shot with the same fire time to the millisecond) wins over its definition, and a tombstone never matches a recurring definition; a settlement ends the definition only when its fire time equals the due time of the settled occurrence to the millisecond, so a definition that another save replaced during the run stays | 4 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `McpArtifactMaterializer.TryAdmit` | Scanner approval and verified MIME both precede MCP artifact storage | 4 killed | `./scripts/run-mcp-artifact-admission-mutations.sh` |
 | `SkillManageTool.GuardMutationTarget` and the filesystem authority link and protection results | A skill mutation cannot follow a link, write a protected path, or skip the atomic-write temp file | 5 killed | `./scripts/run-skill-manage-guard-mutations.sh` |
 | `ToolAccessPolicy.ReadOnlyOccurrences`, the read relaxation in `ToolAccessPolicy.EnforceKnownShellPaths`, `PathAccessPolicy.EvaluateShellReadPath`, `FileSystemAuthority.HoldsReadProtectedPath`, and the read-operand exemption of the `ToolPathPolicy` text screen | Decision D6: a read-only shell program (`cat`, `head`, `tail`, `wc`, `grep`, `jq`, `diff`) with bounded arguments can read one exact config file; only a write-protected path gets read protection; a redirect that writes keeps write protection; a directory operand that holds a read-protected path, a plain word that names an entry, a glob, a brace or `$'...'` word, a `..`, the config directory itself, and program text that names it in any spelling (`//`, `/./`, `name/../`, split quotes) stay denied | 58 killed | `./scripts/run-shell-config-read-mutations.sh` |
@@ -431,9 +432,13 @@ The script reuses the xUnit 2 harness and selects these spans:
 | Incoming key read | Skip or invert the incoming fire key read | 2 |
 | Reminder-kind check | Change the kind comparison or the parse condition of a stored input | 2 |
 | Fire key parser | Change the null, separator, or digit checks | 11 |
+| Tombstone match | Change the one-shot test, the fire-time comparison, or the operator that joins them | 3 |
+| Settled occurrence check | Change the fire-time comparison of the settlement | 1 |
 
-Each location must kill all of its mutants. The report must contain exactly 26 tested mutants.
-`ReminderFireDropRuleTests` and `ReminderFireKeyTests` kill the last five locations.
+Each location must kill all of its mutants. The report must contain exactly 30 tested mutants.
+`ReminderFireDropRuleTests` and `ReminderFireKeyTests` kill the five locations before the last two.
+`OneShotEndMutationTests` kills the tombstone match and the settled occurrence check.
+Each case there reads the files that the manager leaves behind, and none depends on a timer.
 The gate fails if a target is absent, ignored, survives, exceeds its time limit, or cannot compile.
 The selector rejects absent or duplicate source markers before Stryker starts.
 Unrelated compiler errors do not count as tested mutants.
@@ -467,6 +472,7 @@ Thus, the cleanup mutant targets the tracker dictionary, not the manager's `TryR
 An explicit local deletion of that call must also make the cleanup cases fail before this gate changes.
 
 The five-mutant local run took 122 seconds after package restore.
+The thirty-mutant local run took 132 seconds of Stryker time.
 The separate CI job retains a 10-minute timeout and uploads `reminder-execution-mutation-report`.
 Its report directory is `artifacts/stryker/reminder-execution`.
 
