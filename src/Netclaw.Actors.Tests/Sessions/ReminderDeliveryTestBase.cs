@@ -65,6 +65,10 @@ public abstract class ReminderDeliveryTestBase : LlmSessionTestBase
         services.AddSingleton<IOperationalNotificationSink>(Alerts);
     }
 
+    /// <summary>True for the system nudge that <c>DeliveryRetryHandler.BuildNudge</c> writes into the history.</summary>
+    protected static bool IsDeliveryNudge(Microsoft.Extensions.AI.ChatMessage message)
+        => message.Text.Contains("could not be delivered", StringComparison.Ordinal);
+
     protected int AlertCount => Alerts.Alerts.Count(a => a.Type == AlertTypeText);
 
     protected async Task<(Akka.TestKit.TestProbe Subscriber, TurnCompleted Completed)> RunTurnAsync(
