@@ -475,7 +475,9 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
         await ScheduleDirectlyAsync(orphan, Clock.GetUtcNow() + TimeSpan.FromDays(1));
         Assert.True(await IsScheduledAsync(orphan));
         var expired = NewOneShot("expired-of-status-failure");
-        var restorable = NewOneShot("restore-after-status-failure", fireIn: TimeSpan.FromHours(2));
+        // The restored one-shot must fall outside the sweep window below. A due one-shot would run during the
+        // Advance and race the global InvocationCount check.
+        var restorable = NewOneShot("restore-after-status-failure", fireIn: TimeSpan.FromDays(1));
 
         await StopManagerAsync();
         Definitions.Save(restorable);
@@ -502,6 +504,7 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
 
         Assert.Null(Definitions.Get(stuck.Id));
         Assert.Equal("Completed", OutcomeOf(RequireTombstone(stuck.Id)));
+        Assert.Single(await History.ReadAsync(stuck.Id, 10));
         Assert.Equal(1, Pipeline.InvocationCount);
     }
 
