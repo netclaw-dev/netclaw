@@ -102,7 +102,8 @@ public sealed class HeadlessChannelExitCodeTests : IAsyncDisposable
     {
         SessionId = new SessionId("headless/test"),
         TurnNumber = new TurnNumber(1),
-        Outcome = outcome
+        Outcome = outcome,
+        OpenChildRunIds = []
     };
 
     private HeadlessChannel CreateChannel() => new(
