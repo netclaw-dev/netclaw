@@ -180,6 +180,7 @@ Recurring reminders keep their history until an explicit delete. The history of 
 - **WHEN** DeathWatch reports the stop
 - **THEN** the manager appends a failed execution record
 - **AND** the failure record identifies the unexpected stop
+
 ### Requirement: A current-session row records admission
 
 For a `current_session` reminder, the history row SHALL record the admission result. The row says `success = true` when the target session acknowledged the fire. The row says `success = false` when the session or the gateway refused the fire (`CommandNack`) or the acknowledgement timed out.

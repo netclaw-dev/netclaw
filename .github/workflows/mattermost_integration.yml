@@ -10,7 +10,8 @@ name: mattermost_integration
 # It runs:
 #   - nightly, to catch drift in the pinned server image and dependencies;
 #   - on a pull request that touches the Mattermost channel, the shared channel
-#     code, reminders, or sessions.
+#     code, reminders, sessions, the session protocol, or a dependency pin
+#     (Directory.Packages.props, global.json).
 # Nightly runs fire from the default branch only.
 #
 # Do not make this a required check. A path filter on a required check blocks
@@ -30,8 +31,12 @@ on:
       - 'src/Netclaw.Channels.Mattermost.Bootstrap/**'
       - 'src/Netclaw.Channels.Mattermost.IntegrationTests/**'
       - 'src/Netclaw.Channels/**'
+      - 'src/Netclaw.Actors/Channels/**'
+      - 'src/Netclaw.Actors/Protocol/**'
       - 'src/Netclaw.Actors/Reminders/**'
       - 'src/Netclaw.Actors/Sessions/**'
+      - 'Directory.Packages.props'
+      - 'global.json'
       - '.github/workflows/mattermost_integration.yml'
 
 concurrency:
