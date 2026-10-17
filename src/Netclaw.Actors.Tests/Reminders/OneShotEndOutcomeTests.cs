@@ -370,11 +370,23 @@ public sealed class OneShotEndOutcomeTests : OneShotReminderTestBase
         Assert.Equal(1, Envelopes.Count);
 
         // The disk works again. The restart finds the enabled definition with a past fire time and a
-        // Delivered occurrence, and it ends the one-shot as Completed.
+        // Delivered occurrence. It ends the one-shot as Completed. If the last history row is
+        // denied, it ends the one-shot as Failed with the denial text and the prompt.
         Directory.Delete(blocker);
         await RestartManagerAsync();
 
-        await AssertEndedAsync(definition, "Completed");
+        if (mode == RunMode.Deny)
+        {
+            await AssertEndedAsync(definition, "Failed");
+            var tombstone = RequireTombstone(definition.Id);
+            Assert.Contains(DeniedText, Text(tombstone, "lastError"), StringComparison.Ordinal);
+            Assert.Equal(DefaultPrompt, Text(tombstone, "instructions"));
+        }
+        else
+        {
+            await AssertEndedAsync(definition, "Completed");
+        }
+
         Assert.Equal(1, Pipeline.InvocationCount);
         Assert.Single(await History.ReadAsync(definition.Id, 10));
     }
