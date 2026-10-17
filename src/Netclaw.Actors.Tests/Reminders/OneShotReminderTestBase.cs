@@ -592,13 +592,13 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
                             FailureCode = ToolResultOutput.AccessDeniedFailureCode
                         },
                         new TextOutput("Done another way.") { SessionId = id },
-                        new TurnCompleted { SessionId = id, TurnNumber = new TurnNumber(1) }
+                        new TurnCompleted { SessionId = id, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
                     ]).CreateAsync(sessionId, options, materializer, cancellationToken);
                 default:
                     return await new ReminderExecutionActorTests.ScriptedSessionPipeline(id =>
                     [
                         new TextOutput("Done.") { SessionId = id },
-                        new TurnCompleted { SessionId = id, TurnNumber = new TurnNumber(1) }
+                        new TurnCompleted { SessionId = id, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
                     ]).CreateAsync(sessionId, options, materializer, cancellationToken);
             }
         }
