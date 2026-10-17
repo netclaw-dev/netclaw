@@ -9,9 +9,13 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 using Xunit;
+using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -144,26 +148,6 @@ public sealed class ReminderRestartDrainDeliveryTests : ReminderDeliveryTestBase
 
     }
 
-    [Fact]
-    public async Task A_report_that_arrives_while_a_restart_drain_passivates_the_session_raises_one_alert()
-    {
-        // Arrange: the session is idle after the reminder turn. The drain moves it to Passivating.
-        var sessionId = new SessionId("mattermost/chan1/reminder-thread-drain-passivating");
-        var (_, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
-        var session = await ResolveSessionAsync(sessionId);
-
-        // Act: the drain request and the report use one sender, so the report reaches the session in Passivating.
-        await EventFilter.Error(contains: ReminderSlug).ExpectAsync(1, () =>
-        {
-            session.Tell(new PrepareForDaemonRestart(sessionId, "test-restart"));
-            session.Tell(FailedPost(sessionId, completed.TurnNumber));
-            return Task.CompletedTask;
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        // Assert
-        Assert.Equal(1, AlertCount);
-    }
-
     private static DeliveryFailed FailedPost(SessionId sessionId, TurnNumber turn) => new()
     {
         SessionId = sessionId,
@@ -172,4 +156,109 @@ public sealed class ReminderRestartDrainDeliveryTests : ReminderDeliveryTestBase
         FailureKind = DeliveryFailureKind.TransportFailure,
         ErrorMessage = "Unauthorized"
     };
+}
+
+/// <summary>
+/// Review round 3, S1. The <c>Passivating</c> handler of <c>DeliveryFailed</c> has a restart-drain branch. A session
+/// reaches that state and stays there while it waits for the background job manager to confirm a reap. The session
+/// SHALL report a failed reminder post that arrives in that state.
+/// </summary>
+public sealed class ReminderPassivatingDrainDeliveryTests : ReminderDeliveryTestBase
+{
+    public ReminderPassivatingDrainDeliveryTests(ITestOutputHelper output) : base(output)
+    {
+    }
+
+    protected override void ConfigureSessionServices(IServiceCollection services)
+    {
+        base.ConfigureSessionServices(services);
+        services.AddSingleton<IToolExecutor>(new PermissiveToolExecutor());
+
+        var registry = new ToolRegistry();
+        registry.Register(
+            Microsoft.Extensions.AI.AIFunctionFactory.Create((string command) => $"ran {command}", "shell_execute"),
+            "shell_execute");
+        services.AddSingleton(registry);
+    }
+
+    [Fact]
+    public async Task A_report_that_arrives_while_a_restart_drain_waits_for_the_job_reap_raises_one_alert()
+    {
+        // Arrange: the reminder turn starts a background job, so the drain must reap it before the session stops.
+        var jobManagerProbe = CreateTestProbe("job-manager");
+        ActorRegistry.For(Sys).Register<BackgroundJobManagerActorKey>(jobManagerProbe.Ref, overwrite: true);
+        ChatClient.ToolCallsOnFirstCall =
+        [
+            new Microsoft.Extensions.AI.FunctionCallContent("call-bg-1", "shell_execute",
+                new Dictionary<string, object?>
+                {
+                    ["command"] = "jekyll serve",
+                    ["_background"] = true,
+                    ["_rationale"] = "dev server"
+                })
+        ];
+
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-drain-reap");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("drain-reap-subscriber");
+        await JoinAsync(sessionManager, subscriber, sessionId);
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Check the open pull requests",
+            Source = ReminderSource(FireKey)
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        jobManagerProbe.Reply(new BackgroundJobStarted(
+            new BackgroundJobId("drain-reap-job"), "/tmp/jobs/drain-reap-job/output.log"));
+        var completed = await subscriber.FishForMessageAsync<TurnCompleted>(
+            _ => true, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        // The restart drain moves the idle session to Passivating. It waits for the reap reply, which the test holds back.
+        var restart = sessionManager.Ask<DaemonRestartPrepared>(
+            new PrepareForDaemonRestart(sessionId, "test-restart"),
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await jobManagerProbe.ExpectMsgAsync<KillJobsForSession>(
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        try
+        {
+            // Act
+            await EventFilter.Error(contains: ReminderSlug).ExpectAsync(1, () =>
+            {
+                SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+                return Task.CompletedTask;
+            }, cancellationToken: TestContext.Current.CancellationToken);
+
+            // Assert
+            Assert.Equal(1, AlertCount);
+        }
+        finally
+        {
+            jobManagerProbe.Reply(new SessionJobsReaped(sessionId, 1));
+            await restart;
+        }
+    }
+
+    private sealed class PermissiveToolExecutor : IToolExecutor
+    {
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            Microsoft.Extensions.AI.FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+            => Task.FromResult(new ShellProcessLaunch(
+                ToolArgumentHelper.GetString(toolCall.Arguments, "Command")!,
+                context.ResolveShellCwd(ToolArgumentHelper.GetString(toolCall.Arguments, "WorkingDirectory"))
+                    ?? throw new InvalidOperationException("The test launch requires a working directory."),
+                context.Invocation,
+                new Netclaw.Security.ShellCommandPolicy(TestShellEnvironment.Current),
+                new Netclaw.Security.ToolPathPolicy(TestShellEnvironment.Current, []),
+                static _ => Task.CompletedTask));
+
+        public Task AuthorizeAsync(Microsoft.Extensions.AI.FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<string> ExecuteAsync(Microsoft.Extensions.AI.FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+            => Task.FromResult("ok");
+    }
 }
