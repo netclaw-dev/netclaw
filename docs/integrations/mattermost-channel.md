@@ -184,7 +184,8 @@ skipped rather than failed.
 
 The `mattermost_integration` workflow sets the env var on `ubuntu-latest`. It
 runs nightly and on a pull request that changes the Mattermost channel,
-`Netclaw.Channels`, reminders, or sessions. That job fails if a test is skipped.
+`Netclaw.Channels`, reminders, sessions, the session protocol, or a dependency pin
+(`Directory.Packages.props`, `global.json`). That job fails if a test is skipped.
 
 ## Security notes
 

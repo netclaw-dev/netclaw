@@ -134,8 +134,10 @@ and `None` reminders no longer get an eager acknowledgement.
 The execution actor SHALL report its outcome to the manager. It SHALL wait for
 `ReminderExecutionAccepted` before it stops.
 
-The manager SHALL acknowledge only a successful execution with all required
-delivery evidence. It SHALL negatively acknowledge a known failure.
+The manager SHALL acknowledge only a successful execution. For `Channel`
+delivery, it SHALL also require all required delivery evidence. A `CurrentSession`
+run needs no delivery evidence (see below). It SHALL negatively acknowledge a
+known failure.
 
 A `CurrentSession` reminder SHALL use the origin gateway and
 `Ask<CommandAck>`. The run SHALL end when the session acknowledges the fire

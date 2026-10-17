@@ -1056,11 +1056,20 @@ request.
 - **WHEN** it learns a session path
 - **THEN** the storage layout does not claim to block an operating-system file open
 - **AND** a separate containment capability must define that stronger boundary
+
 ### Requirement: A failed post on a reminder turn is visible to the operator
 
-The session SHALL report a reply that it could not deliver when a reminder fire started the turn. The session owns this decision. `LlmSessionActor` makes it in `HandleDeliveryFailedWhenReady`.
+The session SHALL report a reply that it could not deliver when a reminder fire started the turn. `LlmSessionActor` owns this decision. It makes the decision in one method, `ReportReminderPostFailure`. The `Ready` handler (`HandleDeliveryFailedWhenReady`) and the `Processing` handler of `DeliveryFailed` both call that method. No other code raises `reminder.delivery.failed`.
 
-The session SHALL find the reminder from `TurnRecorded.SourceReminderId` of the recorded turn that `DeliveryFailed.TurnNumber` names. This data is durable. A session that recovered from its journal after a restart SHALL find it too. The session SHALL NOT use an in-memory flag for this decision.
+The session SHALL find the reminder from `TurnRecorded.SourceReminderId` of the recorded turn that `DeliveryFailed.TurnNumber` names. The session keeps this link in `DeliveryRetryHandler`, for the latest recorded turn only. This state is actor-local. The session rebuilds it from three sources:
+
+- A live turn. This includes a turn that a routed skill runs in a sub-agent.
+- The journal. Replay of each `TurnRecorded` event gives the same result as the live turn, for every kind of turn.
+- The snapshot. `SessionSnapshot.EligibleDeliveryReminderId` holds the fire key of the eligible turn while that turn has no report. A session that restores from a snapshot does not replay the `TurnRecorded` event, so the snapshot must carry the key.
+
+The session SHALL record a turn as eligible and as the latest recorded turn before it saves a snapshot for that turn. Thus a snapshot that the reminder turn itself triggers keeps both facts. A passivation snapshot keeps them too.
+
+The session SHALL accept feedback only for the eligible turn. A binding SHALL send the number of the turn whose output failed to post (see `channel-binding-parity`, "A failed post reports the turn that it belongs to").
 
 The session gives up on a reply when the failure kind is not retryable, or when the retry budget is spent. A retryable failure with budget left SHALL cause a retry and SHALL NOT raise the alert. On the final failure of a turn that a reminder fire started, the session SHALL do all of the following:
 
@@ -1069,7 +1078,13 @@ The session gives up on a reply when the failure kind is not retryable, or when 
 - Write no reminder history row. The reminder manager owns the history.
 - Not ask for a new fire of the reminder.
 
-The session SHALL NOT raise `reminder.delivery.failed` for a turn that no reminder fire started. `LlmSessionActor` SHALL receive its `IOperationalNotificationSink` as a required dependency.
+The session SHALL report each recorded turn at most once. One reply can fail more than once, for example a text chunk and then a file upload. The first final failure raises the alert. A later report for the same turn raises nothing, in `Ready` and in `Processing`. A new recorded turn, such as a retry turn, starts with no report. A snapshot SHALL NOT hand the key of a reported turn back to a later incarnation of the session.
+
+The session SHALL NOT drop a report in silence. If the report names a turn that is not the latest recorded turn, the session cannot tell whether a reminder started that turn. It SHALL write one Warning that contains `cannot tell whether a reminder started turn {Turn}`. It SHALL NOT raise the alert. An old snapshot (written before `EligibleDeliveryReminderId`) causes this Warning. The session SHALL NOT invent a reminder for it. If the latest recorded turn has no reminder, the session returns quietly, because a person in the thread sees the missing reply.
+
+If the stored source key is not a reminder fire key (`{reminderId}:{fireTimeMs}`), the session SHALL still raise the alert, with the whole key as `Source`, and SHALL write one Warning that contains `not a reminder fire key`.
+
+The session SHALL NOT raise `reminder.delivery.failed` for a turn that no reminder fire started. `LlmSessionActor` SHALL receive its `IOperationalNotificationSink` as a required dependency. The alert reaches the operator only when the operator configured a notification webhook. Without a webhook, only the Error log shows the failure.
 
 #### Scenario: A rejected token on a reminder turn raises the alert
 
@@ -1100,9 +1115,75 @@ The session SHALL NOT raise `reminder.delivery.failed` for a turn that no remind
 - **THEN** the session gives up after the third report
 - **AND** the sink receives one `reminder.delivery.failed` alert
 
+#### Scenario: A report for the second turn of a session is not stale
+
+- **GIVEN** a person started turn 1 and a reminder fire started turn 2
+- **WHEN** the binding sends `DeliveryFailed` with `TurnNumber = 2` and `FailureKind = TransportFailure`
+- **THEN** the sink receives one `reminder.delivery.failed` alert
+
+#### Scenario: Counterexample - a report that names the previous turn raises no alert
+
+- **GIVEN** a person started turn 1 and a reminder fire started turn 2
+- **WHEN** the binding sends `DeliveryFailed` with `TurnNumber = 1`
+- **THEN** the session ignores it as stale feedback
+- **AND** the sink receives no `reminder.delivery.failed` alert
+
+#### Scenario: Two reports for one reminder turn raise one alert
+
+- **GIVEN** the session recorded a reminder turn
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` twice for that turn
+- **THEN** the sink receives exactly one `reminder.delivery.failed` alert after the session handled both reports
+
+#### Scenario: A report while the session processes another input raises no second alert
+
+- **GIVEN** the session raised the alert for turn 1, a reminder turn
+- **AND** a person's message holds the session in `Processing`
+- **WHEN** the binding sends one more `DeliveryFailed` for turn 1
+- **THEN** the sink still holds exactly one `reminder.delivery.failed` alert
+
+#### Scenario: A report for an unknown turn writes a Warning
+
+- **GIVEN** the latest recorded turn is turn 1, and the session is in `Processing`
+- **WHEN** the binding sends `DeliveryFailed` with `TurnNumber = 41`
+- **THEN** the session writes one Warning that contains `cannot tell whether a reminder started turn`
+- **AND** the sink receives no `reminder.delivery.failed` alert
+
 #### Scenario: A recovered session still finds the reminder
 
 - **GIVEN** the session recorded a reminder turn
 - **AND** the session stopped and recovered from its journal
 - **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
 - **THEN** the sink receives one `reminder.delivery.failed` alert with the same reminder id
+
+#### Scenario: A snapshot that the reminder turn triggers keeps the reminder
+
+- **GIVEN** the snapshot interval is 1, so the reminder turn saves a snapshot
+- **AND** the session stopped and recovered from that snapshot, without a replay of the reminder turn
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert with the same reminder id
+
+#### Scenario: A session that passivated still finds the reminder
+
+- **GIVEN** the session recorded a reminder turn, passivated, and saved its final snapshot
+- **WHEN** a new session incarnation restores from that snapshot
+- **AND** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert with the same reminder id
+
+#### Scenario: A reported turn does not alert again after passivation
+
+- **GIVEN** the session raised the alert for a reminder turn and then passivated
+- **WHEN** the new incarnation receives one more `DeliveryFailed` for that turn
+- **THEN** the sink still holds exactly one `reminder.delivery.failed` alert
+
+#### Scenario: A snapshot from before the reminder field loads
+
+- **GIVEN** a stored `SessionSnapshotProto` that has no `eligible_delivery_reminder_id` field
+- **WHEN** the session restores from it
+- **THEN** the snapshot loads, `EligibleDeliveryTurnNumber` keeps its value, and `EligibleDeliveryReminderId` is null
+
+#### Scenario: A routed-skill reminder turn is an ordinary recorded turn
+
+- **GIVEN** a reminder prompt runs a routed skill (`/ops-route ...`) in a sub-agent
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert
+- **AND** a session that replays the journal gives the same result

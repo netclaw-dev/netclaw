@@ -493,7 +493,9 @@ context — neither the previous `Personal` default nor a `Public` fallback.
 
 The session SHALL maintain dedup state for job deliveries to prevent double-
 processing if a delivery is retried. The dedup key SHALL be the job ID. The
-ledger SHALL be an in-memory set that journal replay rebuilds.
+ledger SHALL be `SessionState.ProcessedBackgroundJobIds`, an in-memory set that
+journal replay rebuilds. `InFlightTurnDedup` covers a delivery whose turn is
+still in flight, before the ledger holds its ID.
 
 #### Scenario: Duplicate delivery ignored
 
