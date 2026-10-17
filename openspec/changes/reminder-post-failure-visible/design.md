@@ -50,7 +50,7 @@ Session (Ready or Processing)
 
 **Data: `TurnRecorded.SourceReminderId`.** It holds the fire key `{reminderId}:{fireTimeMs}`. The session reads it for the turn that `DeliveryFailed.TurnNumber` names. `DeliveryRetryHandler` keeps it for the latest recorded turn. Three paths fill it: the live turn, the replay of `TurnRecorded`, and the snapshot restore. One helper, `RecordEligibleTurn`, does `MarkEligible` and `RecordTurn` for the live text turn, the live routed-skill turn, and the replay. One helper stops the paths from drifting apart. Before this change the routed-skill path did neither, so replay and live differed.
 
-**Routed-skill turns are ordinary turns.** `TurnRecorded` has no field that tells replay that a sub-agent produced the reply. Replay could not skip the routed turn without a new journal field. So the live path joins replay: it records the turn as eligible, with its reminder. The effect: a failed post on a routed-skill reminder turn now raises the alert (good: nobody reads the thread). A retryable failure on a routed-skill turn now retries on the main model. Before this change the live session ignored it. This is the smaller change than a journal field, and it removes the replay difference.
+**Routed-skill turns: alert, no retry.** A routed-skill turn is a turn where a sub-agent runs a skill. Before this change the live session recorded it with no delivery state, but replay recorded it as eligible. The owner decided: a failed post on a routed-skill reminder turn raises the alert, and a retryable failure does not run the turn again on the main model, because the main model did not produce that reply. Live and recovered sessions must agree. `TurnRecorded` has no field that tells replay about the sub-agent, so the change adds one: `TurnRecorded.RoutedSkill` (proto3 `bool routed_skill = 8`). The live routed path writes `true`. A journal entry without the field reads as `false`, which is an ordinary turn, so no old journal needs a migration. A turn that is not routed writes the same bytes as before. `RecordEligibleTurn` takes the mark and passes it to `DeliveryRetryHandler.RecordTurn(turn, reminder, routedSkill)`. In `HandleDeliveryFailedWhenReady`, a routed turn skips the retry branch: the first report is the final failure. Alternative: skip the record in replay for routed turns. Rejected: replay cannot tell which turns are routed without the same new field, and the alert would still be lost. The snapshot also carries the mark (`EligibleDeliveryTurnRoutedSkill`, field 13), because a restored session does not replay `TurnRecorded`.
 
 **Snapshot order and field.** `MaybeSnapshot()` ran before `MarkEligible`. A snapshot that the reminder turn triggered stored no eligible turn. The order moves: record first, snapshot second. This alone is not enough. A restore from a snapshot skips the `TurnRecorded` event, so `RecordTurn` never runs and the reminder is lost. A passivation snapshot has the same gap. So `SessionSnapshot` gets `EligibleDeliveryReminderId` (proto field 12, `optional string`, null when absent). `BuildSnapshot` writes it only while the eligible turn is recorded, has a reminder, and has no report. `SnapshotOffer` calls `RecordTurn(eligibleTurn, key)` when the field has a value. When the field is null, the session records nothing, so a report finds `UnknownTurn` and the session writes the Warning. This covers an old snapshot and a reported turn after passivation. Alternative: keep the limit and document it. Rejected: the failure is silent, and a supervisor restart is the realistic case.
 
@@ -72,8 +72,8 @@ Session (Ready or Processing)
 |------|-------|----------|
 | First failed post of a turn (kind, message) | Binding actor | Actor-local, one turn |
 | Latest recorded turn, its reminder key, its reported mark | `DeliveryRetryHandler` in the session | Actor-local, rebuilt on recovery |
-| `TurnRecorded.SourceReminderId` | Session journal | Durable |
-| `SessionSnapshot.EligibleDeliveryReminderId` | Session snapshot | Durable, unreported keys only |
+| `TurnRecorded.SourceReminderId`, `TurnRecorded.RoutedSkill` | Session journal | Durable |
+| `SessionSnapshot.EligibleDeliveryReminderId`, `SessionSnapshot.EligibleDeliveryTurnRoutedSkill` | Session snapshot | Durable; unreported keys only |
 
 ## Risks / Trade-offs
 
@@ -82,8 +82,8 @@ Session (Ready or Processing)
 - [A retry turn may not carry the reminder source] -> The tests require that the final failure of a retried reminder turn still finds the reminder.
 - [A recovered session gets a fresh retry budget for the latest turn] -> `Recover<TurnRecorded>` calls `MarkEligible` with no active chain, so the budget is two retries again. A retry needs a new failure report, and a replayed turn does not resend a delivered reply. Before this change a recovered session had no retry at all. The risk is low.
 - [A partial failure sends no report] -> See "Partial delivery".
-- [A routed-skill turn now retries on the main model after a retryable failure] -> See "Routed-skill turns are ordinary turns".
+- [A routed-skill reminder turn cannot retry] -> The session alerts at the first report instead. The operator sees the failure once.
 
 ## Migration Plan
 
-One optional proto field. An older snapshot loads with no value. Older journals hold `SourceReminderId` already. A rollback leaves the field in stored snapshots, and the older code ignores it, because proto3 skips unknown fields.
+Three new proto fields, all with safe defaults: `SessionSnapshotProto.eligible_delivery_reminder_id` (12), `SessionSnapshotProto.eligible_delivery_turn_routed_skill` (13), and `TurnRecordedProto.routed_skill` (8). An older snapshot or journal entry loads with no value, which reads as no reminder and not routed. Older journals hold `SourceReminderId` already. A rollback leaves the field in stored snapshots, and the older code ignores it, because proto3 skips unknown fields.

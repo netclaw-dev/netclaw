@@ -31,14 +31,19 @@ Tests exist and fail until the product code changes. Do not edit the tests.
 - [ ] 5.1 Give `DeliveryRetryHandler` `ReminderOf` with three answers (`ReminderLookup` with `ReminderLookupKind.UnknownTurn`, `NoReminder`, `Reminder`) and `TryMarkReported(TurnNumber)`. Verify with `DeliveryRetryHandlerReminderTests`.
 - [ ] 5.2 Route both `DeliveryFailed` handlers through `ReportReminderPostFailure`. Write the Warning `cannot tell whether a reminder started turn {Turn}` for an unknown turn. Write a Warning for a fire key that does not parse. Verify with `ReminderTurnDeliveryFailureTests`.
 
-## 6. Review round 1: replay equals live (S2)
+## 6. Review round 1: routed-skill turns (S2, owner decision)
 
-- [ ] 6.1 Add one helper, `RecordEligibleTurn(TurnRecorded)`, and call it from the live text turn, the live routed-skill turn, and `Recover<TurnRecorded>`. Verify with `RoutedSkillReminderDeliveryTests`.
+Tests exist and fail until the product code changes. Do not edit the tests.
+
+- [ ] 6.1 Add `bool RoutedSkill` to `TurnRecorded` (default `false`), `bool routed_skill = 8;` to `TurnRecordedProto`, and the mapper. The live routed-skill path writes `true`. Verify with `SerializationRoundTripTests` (`TurnRecorded_routed_skill_mark_round_trips_as_a_plain_proto_bool`, `TurnRecorded_from_before_the_routed_mark_reads_as_not_routed`).
+- [ ] 6.2 Change `DeliveryRetryHandler.RecordTurn` to `RecordTurn(TurnNumber, ReminderId?, bool routedSkill)` (no default value) and add `IsRoutedSkill(TurnNumber)`. Verify with `DeliveryRetryHandlerReminderTests`.
+- [ ] 6.3 Add one helper, `RecordEligibleTurn(TurnRecorded)`, and call it from the live text turn, the live routed-skill turn, and `Recover<TurnRecorded>`. It passes `evt.RoutedSkill`.
+- [ ] 6.4 In `HandleDeliveryFailedWhenReady`, skip the retry branch for a routed-skill turn: write a Warning, call `ReportReminderPostFailure`, and mark the turn not eligible. Make no model call. Verify with `RoutedSkillReminderDeliveryTests` and `A_recovered_ordinary_reminder_turn_still_retries_a_retryable_failure_on_the_main_model`.
 
 ## 7. Review round 1: snapshot (S3)
 
 - [ ] 7.1 Move `MaybeSnapshot()` after `RecordEligibleTurn` in both live paths. Verify with `ReminderIntervalSnapshotRecoveryTests`.
-- [ ] 7.2 Add `SessionSnapshot.EligibleDeliveryReminderId` and `optional string eligible_delivery_reminder_id = 12;` in `netclaw_messages.proto`, with the mapper. `BuildSnapshot` writes it only for an eligible, recorded, unreported reminder turn. `SnapshotOffer` calls `RecordTurn` when it has a value. Verify with `SerializationRoundTripTests` and the passivation tests in `ReminderTurnDeliveryFailureTests`.
+- [ ] 7.2 Add `SessionSnapshot.EligibleDeliveryReminderId` and `optional string eligible_delivery_reminder_id = 12;` in `netclaw_messages.proto`, with the mapper. `BuildSnapshot` writes it only for an eligible, recorded, unreported reminder turn. `SnapshotOffer` calls `RecordTurn` when the reminder field has a value or the routed mark is true. Add `SessionSnapshot.EligibleDeliveryTurnRoutedSkill` and `bool eligible_delivery_turn_routed_skill = 13;`; `BuildSnapshot` writes the mark of the eligible turn and `SnapshotOffer` restores it, also for a routed turn that a person started. Verify with `SerializationRoundTripTests` and the passivation tests in `ReminderTurnDeliveryFailureTests` and `RoutedSkillReminderDeliveryTests`.
 
 ## 8. Review round 1: mutation target
 
