@@ -177,7 +177,7 @@ jobs:
           - group: approval-and-authorization
             gates: tool-authorization approval-directory skill-manage-guard no-program input-one-authority
           - group: session-reliability
-            gates: tool-batch-readiness
+            gates: tool-batch-readiness reminder-report-once
 
     steps:
       - name: "Checkout"

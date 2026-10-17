@@ -62,6 +62,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ToolApprovalEntryComparer.CoversCommandWords`, `ShellPolicyCoordinator.SelectCommandWordsCorrection`, `ShellApprovalMatcher.TryResolveProgramPath`, `ShellProgramPath.MatchesLegacyRelative`, `ShellApprovalMatcher.ProjectCommandWords`, `ShellGrantFileWords.TryFindEntry`, and `ToolPathPolicy.PlainWordLinkReachesDeniedPath` | A verb grant (two or more words) covers its command words and any later words, and a program-only grant covers its word alone, so a `gh` grant does not cover `gh auth logout`; an empty grant covers nothing; the matcher and the store hygiene use this one rule; Unknown command words get a rewrite correction; a program path names its file (R1), so a `./tool` grant does not cover another file named `tool` or `mytool`; a word after the verb slot that names an existing file or directory leaves the command words and becomes a path scope, while the program word, the verb slot, a link, a word without a file, and a word that is not one entry of the directory stay; a plain word that names a link to a protected path is denied, command word or argument; the store and the doctor use the same rule | 53 detected | `./scripts/run-exact-verb-chain-mutations.sh` |
 | `ShellCommandAnalysis.IsPlainFileTarget` and `ToolAccessPolicy.ScreenNoProgramRedirects` | Owner decision (October 2026): a command that runs no program gets no prompt only when each redirect target is one plain file (`/dev/null` is the only path below `/dev/`, so `/dev/tcp` keeps a prompt); a redirect target that is not proved, an input redirect that the `file_read` rules refuse, and a `Deny` mode of the file tool deny the call | 20 killed | `./scripts/run-no-program-mutations.sh` |
 | `BashLiteralTwinSlices.Apply` and the denial check of `ToolAccessPolicy.ScreenScopedSlices` | Decision F1: the strictest literal twin result decides a call. The candidates of every twin replace the candidates of their source command, an unresolved source keeps its exact answer, twins without their source command fail loudly, and one denied twin denies the call | 9 killed | `./scripts/run-literal-twin-mutations.sh` |
+| `DeliveryRetryHandler.ReminderOf` (turn number check), `DeliveryRetryHandler.TryMarkReported`, and the mark reset of `DeliveryRetryHandler.RecordTurn` | A failed post of a reminder reply raises one alert for the right fire: the handler answers only for the latest recorded turn, so a report that names another turn finds an unknown turn and never a reminder; a turn is reported once, a wrong turn, a turn with no reminder, and a second report get nothing, and a new recorded turn starts with a fresh mark | 10 killed | `./scripts/run-reminder-report-once-mutations.sh` |
 | `SessionInputFlow.DrainBufferedBatch` (turn owner choice), `SessionInputFlow.JoinsTurn`, and the automation check of `SessionToolWorkflow.PlanNewInputAbandonment` | A turn has one requester: a drain after a turn adopts the authority of the first buffered input, a drain inside a turn keeps the turn's authority, and only inputs of that requester join the batch; automated input waits behind an open approval, and only input from a person closes it | 10 killed | `./scripts/run-input-one-authority-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
 | `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, and `SessionExecutionLifetime.ObserveReapReply` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit | 7 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
@@ -408,6 +409,36 @@ The final local run took less than four minutes after package restore.
 The separate CI job retains a 10-minute timeout and uploads `approval-directory-mutation-report`.
 Its report directory is `artifacts/stryker/approval-directory`.
 The durable actor report is below its `actor` directory.
+
+### Reminder Report-Once Gate
+
+Run the reminder report-once gate:
+
+```bash
+./scripts/run-reminder-report-once-mutations.sh
+```
+
+The script reuses the xUnit 2 harness of `Netclaw.Actors.MutationTests` and selects four spans of `DeliveryRetryHandler`:
+
+| Boundary | Expected mutants | Killed |
+|----------|------------------|--------|
+| `ReminderOf` turn check: the answer for a turn that is not the latest recorded turn | Reverse the turn comparison | 1 |
+| `TryMarkReported` guard: wrong turn, no reminder, or already reported | Reverse a comparison, change a logical operator, negate the guard, or return true | 6 |
+| `TryMarkReported` mark: the once-only mark | Set the mark to false, or return false | 2 |
+| `RecordTurn` mark reset: a new recorded turn starts unreported | Set the mark to true | 1 |
+
+Each location must kill all of its mutants. The report must contain exactly 10 tested mutants.
+`DeliveryRetryHandlerReminderTests` kills all of them. The mutation project links that class, and the
+script adds no new test. The gate fails if a target is absent, ignored, survives, or cannot compile.
+The selector rejects absent or duplicate source markers before Stryker starts.
+
+This gate protects an alerting path, not an authority boundary. A mutant that makes `ReminderOf` ignore the
+turn number would let a report for another turn name the wrong fire. A mutant on the mark would raise one alert for
+each failed post of one reply, or none.
+CI runs it in the `session-reliability` group of the `mutation-gates` job. That group has the most headroom.
+Its three latest hosted runs took 3 to 7 minutes, while the other four groups took 10 to 23 minutes.
+The local run selected 10 mutants and took 1 minute 48 seconds in Stryker after the build.
+Its report directory is `artifacts/stryker/reminder-report-once`.
 
 ### Reminder Execution Gate
 
