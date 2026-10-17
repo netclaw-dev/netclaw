@@ -1080,6 +1080,18 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             "Reminder '{0}' was set again during a run of the occurrence due {1:u}. The run ended with success={2}. The new definition and its schedule stay.",
             outcome.Id.Value, execution.Envelope.DueTimeUtc, outcome.Success);
 
+        // The run failed even though the definition is new. The owner still gets the failure alert, but the
+        // failure does not count against the new definition.
+        if (!outcome.Success)
+        {
+            ReportExecutionFailure(
+                outcome.Id,
+                definition,
+                count: 1,
+                string.IsNullOrWhiteSpace(outcome.ErrorMessage) ? "Reminder execution failed." : outcome.ErrorMessage,
+                willDisable: false);
+        }
+
         try
         {
             var ack = await _client!.AckAsync(execution.Envelope);
