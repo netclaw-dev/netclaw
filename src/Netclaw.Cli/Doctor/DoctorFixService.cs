@@ -83,6 +83,9 @@ public sealed class DoctorFixService
         if (TryDeleteDefaultAllowedToolsCopies(obj))
             appliedFixes.Add(LegacyAllowedToolsFixName);
 
+        if (TryRemoveRetiredOAuthExpiryKeys(obj))
+            appliedFixes.Add(RetiredOAuthExpiryFixName);
+
         if (obj["configVersion"] is null)
         {
             obj["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
@@ -160,6 +163,19 @@ public sealed class DoctorFixService
     }
 
     private const string LegacyAllowedToolsFixName = "remove copied default audience tool lists";
+
+    internal const string RetiredOAuthExpiryFixName = "move retired OAuthTokenExpiry keys to oauth-state.json";
+
+    // Applying the fix first copies each date to oauth-state.json (see ApplyAsync). Without an entry
+    // there, a provider has no expiry, and a Copilot token that expires then fails with HTTP 401 and no refresh.
+    private static bool TryRemoveRetiredOAuthExpiryKeys(JsonObject config)
+    {
+        var retired = OAuthStateStore.FindRetiredExpiryKeys(config);
+        foreach (var key in retired)
+            key.Entry.Remove(key.Key);
+
+        return retired.Count > 0;
+    }
 
     /// <summary>
     /// Deletes each Public or Team AllowedTools key that exactly matches a default list that a
@@ -338,7 +354,8 @@ public sealed class DoctorFixService
 
     /// <summary>
     /// The backup files that applying the fix writes: the audience tool list fix, the legacy
-    /// model migration and the property removal each delete or rewrite user data.
+    /// model migration, the retired OAuth expiry removal and the property removal each delete or
+    /// rewrite user data.
     /// </summary>
     public static IReadOnlyList<string> PlannedBackups(DoctorFileFix fix)
     {
@@ -350,6 +367,8 @@ public sealed class DoctorFixService
             backups.Add(NextBackupPath(fix.FilePath, "legacy-models"));
         if (fix.Description.Contains(LegacyAllowedToolsFixName, StringComparison.Ordinal))
             backups.Add(NextBackupPath(fix.FilePath, "legacy-tool-defaults"));
+        if (fix.Description.Contains(RetiredOAuthExpiryFixName, StringComparison.Ordinal))
+            backups.Add(NextBackupPath(fix.FilePath, "retired-oauth-expiry"));
         if (fix.Description.Contains(SchemaFixResolver.RemovedPropertyPrefix, StringComparison.Ordinal))
             backups.Add(NextBackupPath(fix.FilePath, "removed-keys"));
         return backups;
@@ -384,6 +403,12 @@ public sealed class DoctorFixService
 
         foreach (var fix in plan.Fixes)
         {
+            if (fix.Description.Contains(RetiredOAuthExpiryFixName, StringComparison.Ordinal)
+                && JsonNode.Parse(fix.OriginalText, documentOptions: OAuthStateStore.ReadOptions) is JsonObject original)
+            {
+                OAuthStateStore.MoveRetiredExpiries(_paths, original);
+            }
+
             // The grant store has its own lock. The write fails when the store changed after the plan.
             if (string.Equals(fix.FilePath, _paths.ToolApprovalsPath, StringComparison.Ordinal))
             {

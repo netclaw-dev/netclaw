@@ -11,15 +11,16 @@ using Netclaw.Configuration.Secrets;
 namespace Netclaw.Providers.OAuth;
 
 /// <summary>
-/// Helpers for persisting and loading OAuth tokens to/from secrets.json.
+/// Helpers for persisting and loading OAuth tokens to/from secrets.json and oauth-state.json.
 /// Uses <see cref="SecretsFileWriter"/> for encrypted writes and
 /// config-binding-compatible field names matching <see cref="ProviderEntry"/>.
 /// </summary>
 public static class OAuthTokenPersistence
 {
     /// <summary>
-    /// Persist OAuth tokens to secrets.json for the given provider name.
-    /// Merges into existing secrets content, preserving other providers' entries.
+    /// Persist OAuth tokens to secrets.json and the token expiry to oauth-state.json for the
+    /// given provider name. Merges into existing secrets content, preserving other providers'
+    /// entries. This method never writes netclaw.json.
     /// </summary>
     public static void PersistTokens(
         NetclawPaths paths,
@@ -48,7 +49,7 @@ public static class OAuthTokenPersistence
         // result omits them. An OAuth response that doesn't echo refresh_token means
         // "keep using the existing one" (RFC 6749 §5.1), and a partial refresh that
         // lacks the ChatGPT account id must not wipe a value the Codex backend still
-        // requires. (OAuthTokenExpiry below is still cleared on null — a stale expiry
+        // requires. (The expiry is still cleared on null — a stale expiry
         // is worse than an absent one.)
         if (result.RefreshToken is not null)
             providerNode["OAuthRefreshToken"] = result.RefreshToken.Value;
@@ -56,63 +57,16 @@ public static class OAuthTokenPersistence
         if (result.AccountId is not null)
             providerNode["OAuthAccountId"] = result.AccountId.Value;
 
-        // OAuthTokenExpiry is NOT a secret and must NOT go in secrets.json.
-        // SecretsFileWriter encrypts the entire file, and encrypted DateTimeOffset
-        // values break IConfiguration binding (silently drops the provider entry).
-        // Write expiry to netclaw.json instead.
         var json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         SecretsFileWriter.Write(paths.SecretsPath, json, protector);
 
-        PersistTokenExpiry(paths, providerName, result.ExpiresAt);
-    }
-
-    private static void PersistTokenExpiry(NetclawPaths paths, string providerName, DateTimeOffset? expiresAt)
-    {
-        // Never CREATE netclaw.json here: an instance configured purely via
-        // NETCLAW_ environment variables has no config file by design, and a
-        // token refresh silently materializing one turns the deployment
-        // stateful (and throws on a read-only home). Expiry is refresh-timing
-        // metadata, not required state — when there is no file to update, skip.
-        if (!File.Exists(paths.NetclawConfigPath))
-            return;
-
-        var configJson = File.ReadAllText(paths.NetclawConfigPath);
-        var configRoot = JsonNode.Parse(configJson)?.AsObject() ?? [];
-        var configProviders = configRoot["Providers"]?.AsObject();
-
-        if (configProviders is null)
-        {
-            if (!expiresAt.HasValue)
-                return;
-
-            configProviders = [];
-            configRoot["Providers"] = configProviders;
-        }
-
-        var configProvider = configProviders[providerName]?.AsObject();
-        if (configProvider is null)
-        {
-            if (!expiresAt.HasValue)
-                return;
-
-            configProvider = [];
-            configProviders[providerName] = configProvider;
-        }
-
-        if (expiresAt.HasValue)
-            configProvider["OAuthTokenExpiry"] = expiresAt.Value.ToString("o");
-        else
-            configProvider.Remove("OAuthTokenExpiry");
-
-        // Atomic write (temp + rename) so a crash/power-loss between truncate and write cannot leave
-        // netclaw.json empty or partial — IConfiguration silently drops every section on a torn read.
-        // Matches the AtomicFile seam ConfigFileHelper.WriteConfigFile uses for the same file.
-        AtomicFile.WriteAllText(paths.NetclawConfigPath,
-            configRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        // Order matters. A crash between the two writes leaves the new tokens with the old expiry,
+        // which costs one extra refresh. The reverse order could lose a rotated refresh token.
+        OAuthStateStore.SetExpiry(paths, providerName, result.ExpiresAt);
     }
 
     /// <summary>
-    /// Load OAuth tokens from secrets.json for the given provider name.
+    /// Load OAuth tokens from secrets.json, and the token expiry from oauth-state.json, for the given provider name.
     /// Returns null if no OAuth tokens are stored for this provider.
     /// Transparent decryption happens via <see cref="SensitiveStringTypeConverter"/>.
     /// </summary>
@@ -160,8 +114,13 @@ public static class OAuthTokenPersistence
                 accountIdStr = protector.Unprotect(accountIdStr);
         }
 
+        // oauth-state.json owns the expiry. secrets.json can still hold one from an old release.
         DateTimeOffset? expiresAt = null;
-        if (provider.TryGetProperty("OAuthTokenExpiry", out var expiryProp))
+        if (OAuthStateStore.TryGetExpiry(paths, providerName, out var storedExpiry))
+        {
+            expiresAt = storedExpiry;
+        }
+        else if (provider.TryGetProperty("OAuthTokenExpiry", out var expiryProp))
         {
             var expiryStr = expiryProp.GetString();
             if (protector is not null && expiryStr is not null && ISecretsProtector.IsEncrypted(expiryStr))

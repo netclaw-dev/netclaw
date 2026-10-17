@@ -199,12 +199,7 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorJson = await response.Content.ReadAsStringAsync(ct);
-            using var errorDoc = JsonDocument.Parse(errorJson);
-            var error = errorDoc.RootElement.TryGetProperty("error", out var errProp)
-                ? errProp.GetString() : null;
-
-            if (error == "invalid_grant")
+            if (OAuthTokenResponseParser.IsPermanentRefreshError(await response.Content.ReadAsStringAsync(ct)))
                 return null;
 
             response.EnsureSuccessStatusCode();

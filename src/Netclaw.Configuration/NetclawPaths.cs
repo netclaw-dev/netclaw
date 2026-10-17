@@ -106,6 +106,9 @@ public sealed class NetclawPaths
     public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");
     public string DevicesPath => Path.Combine(ConfigDirectory, "devices.json");
     public string BootstrapStatePath => Path.Combine(ConfigDirectory, "bootstrap-state.json");
+
+    /// <summary>The token expiry of each OAuth provider. See <see cref="OAuthStateStore"/>.</summary>
+    public string OAuthStatePath => Path.Combine(ConfigDirectory, "oauth-state.json");
     public string LogsDirectory => Path.Combine(BasePath, "logs");
     public string RuntimeDirectory => Path.Combine(BasePath, "runtime");
     /// <summary>

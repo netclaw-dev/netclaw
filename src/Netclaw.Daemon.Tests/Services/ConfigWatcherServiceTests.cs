@@ -8,8 +8,10 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Services;
 using Netclaw.Providers;
+using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -291,6 +293,47 @@ public sealed class ConfigWatcherServiceTests : IDisposable
 
         Assert.Equal(1, _restartCoordinator.RequestCount);
     }
+
+    [Fact]
+    public async Task OAuth_token_refresh_requests_no_daemon_restart()
+    {
+        File.WriteAllText(
+            _paths.NetclawConfigPath,
+            """{ "Providers": { "copilot": { "Type": "github-copilot", "OAuthTokenExpiry": "2026-06-01T00:00:00.0000000+00:00" } } }""");
+        var before = SnapshotConfigDirectory();
+
+        OAuthTokenPersistence.PersistTokens(
+            _paths,
+            "copilot",
+            new OAuthDeviceFlowResult(
+                new SensitiveString("access-1"),
+                new SensitiveString("refresh-1"),
+                DateTimeOffset.Parse("2026-06-01T01:00:00+00:00")),
+            new NullSecretsProtector());
+
+        var after = SnapshotConfigDirectory();
+        var written = after.Where(file => !before.TryGetValue(file.Key, out var hash) || hash != file.Value)
+            .Select(file => file.Key)
+            .ToList();
+        Assert.Contains("secrets.json", written);
+        foreach (var name in written)
+        {
+            _sut.OnFileRenamed(this, new RenamedEventArgs(
+                WatcherChangeTypes.Renamed, _paths.ConfigDirectory, name, name + ".tmp.0a1b2c3d"));
+        }
+
+        _time.Advance(_sut.DebounceInterval);
+        await _sut.PendingReload;
+
+        Assert.Equal(0, _restartCoordinator.RequestCount);
+        Assert.Null(_rejectedConfig.Reason);
+    }
+
+    private Dictionary<string, string> SnapshotConfigDirectory()
+        => Directory.EnumerateFiles(_paths.ConfigDirectory)
+            .ToDictionary(
+                file => Path.GetFileName(file)!,
+                file => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(file))));
 
     public void Dispose()
     {

@@ -901,8 +901,12 @@ public sealed class ProviderCommandTests : IDisposable
 
         using var config = ReadConfigFile(_paths.NetclawConfigPath);
         var configProviders = config.RootElement.GetProperty("Providers");
-        Assert.True(configProviders.TryGetProperty("openai-codex", out _));
-        Assert.True(configProviders.TryGetProperty("my-copilot", out _));
+        Assert.False(configProviders.GetProperty("openai-codex").TryGetProperty("OAuthTokenExpiry", out _));
+        Assert.False(configProviders.GetProperty("my-copilot").TryGetProperty("OAuthTokenExpiry", out _));
+        Assert.True(OAuthStateStore.TryGetExpiry(_paths, "openai-codex", out var codexExpiry));
+        Assert.NotNull(codexExpiry);
+        Assert.True(OAuthStateStore.TryGetExpiry(_paths, "my-copilot", out var copilotExpiry));
+        Assert.NotNull(copilotExpiry);
 
         using var secrets = ReadConfigFile(_paths.SecretsPath);
         var secretProviders = secrets.RootElement.GetProperty("Providers");
@@ -955,6 +959,128 @@ public sealed class ProviderCommandTests : IDisposable
         Assert.Equal("account-123", providers["my-openai"].OAuthAccountId?.Value);
         Assert.NotNull(providers["my-openai"].OAuthTokenExpiry);
         Assert.Equal(DateTimeOffset.Parse(expiry), providers["my-openai"].OAuthTokenExpiry!.Value);
+    }
+
+    [Fact]
+    public void LoadProviders_reads_the_expiry_from_oauth_state_json_before_the_old_netclaw_json_key()
+    {
+        var stored = DateTimeOffset.Parse("2026-07-01T00:00:00+00:00");
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["new-shape"] = new Dictionary<string, object> { ["Type"] = "github-copilot", ["OAuthTokenExpiry"] = "2026-01-01T00:00:00+00:00" },
+                ["old-shape"] = new Dictionary<string, object> { ["Type"] = "github-copilot", ["OAuthTokenExpiry"] = "2026-01-01T00:00:00+00:00" }
+            }
+        });
+        OAuthStateStore.SetExpiry(_paths, "new-shape", stored);
+
+        var providers = ProviderCommand.LoadProviders(_paths);
+
+        Assert.Equal(stored, providers["new-shape"].OAuthTokenExpiry);
+        Assert.Equal(DateTimeOffset.Parse("2026-01-01T00:00:00+00:00"), providers["old-shape"].OAuthTokenExpiry);
+    }
+
+    [Fact]
+    public void WriteProvider_drops_the_retired_expiry_key_and_keeps_a_backup()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-copilot"] = new Dictionary<string, object> { ["Type"] = "github-copilot", ["OAuthTokenExpiry"] = "2026-01-01T00:00:00+00:00" }
+            }
+        });
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var expiry = DateTimeOffset.Parse("2026-07-01T00:00:00+00:00");
+
+        ProviderCredentialWriter.WriteProvider(
+            _paths, "my-copilot", "github-copilot", AuthMethod.OAuthDevice, endpoint: null,
+            oauthResult: new OAuthDeviceFlowResult(new SensitiveString("access"), null, expiry),
+            apiKey: null, protector: new NullSecretsProtector());
+
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        Assert.False(config.RootElement.GetProperty("Providers").GetProperty("my-copilot").TryGetProperty("OAuthTokenExpiry", out _));
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath + ".retired-oauth-expiry.bak"));
+        Assert.True(OAuthStateStore.TryGetExpiry(_paths, "my-copilot", out var stored));
+        Assert.Equal(expiry, stored);
+    }
+
+    [Fact]
+    public void WriteProvider_without_a_retired_key_writes_no_backup()
+    {
+        ProviderCredentialWriter.WriteProvider(
+            _paths, "my-copilot", "github-copilot", AuthMethod.OAuthDevice, endpoint: null,
+            oauthResult: new OAuthDeviceFlowResult(new SensitiveString("access"), null, DateTimeOffset.Parse("2026-07-01T00:00:00+00:00")),
+            apiKey: null, protector: new NullSecretsProtector());
+
+        Assert.Empty(Directory.GetFiles(_paths.ConfigDirectory, "*.bak"));
+    }
+
+    [Fact]
+    public void WriteProvider_with_an_API_key_removes_the_old_oauth_expiry()
+    {
+        OAuthStateStore.SetExpiry(_paths, "main", DateTimeOffset.Parse("2026-07-01T00:00:00+00:00"));
+
+        ProviderCredentialWriter.WriteProvider(
+            _paths, "main", "openai-compatible", AuthMethod.ApiKey, endpoint: "http://localhost:1",
+            oauthResult: null, apiKey: "key", protector: new NullSecretsProtector());
+
+        Assert.False(OAuthStateStore.TryGetExpiry(_paths, "main", out _));
+    }
+
+    [Fact]
+    public async Task Rename_moves_the_oauth_expiry_and_Remove_deletes_it()
+    {
+        var expiry = DateTimeOffset.Parse("2026-07-01T00:00:00+00:00");
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-copilot"] = new Dictionary<string, object> { ["Type"] = "github-copilot", ["AuthMethod"] = "OAuthDevice" }
+            }
+        });
+        OAuthStateStore.SetExpiry(_paths, "my-copilot", expiry);
+
+        var renamed = await ProviderCommand.RunAsync(["provider", "rename", "my-copilot", "work-copilot"], _paths, output: _output);
+
+        Assert.Equal(0, renamed);
+        Assert.False(OAuthStateStore.TryGetExpiry(_paths, "my-copilot", out _));
+        Assert.True(OAuthStateStore.TryGetExpiry(_paths, "work-copilot", out var moved));
+        Assert.Equal(expiry, moved);
+
+        var removed = await ProviderCommand.RunAsync(["provider", "remove", "work-copilot"], _paths, output: _output);
+
+        Assert.Equal(0, removed);
+        Assert.False(OAuthStateStore.TryGetExpiry(_paths, "work-copilot", out _));
+    }
+
+    [Fact]
+    public async Task Rename_ToANameThatOauthStateJsonHolds_FailsAndChangesNothing()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-copilot"] = new Dictionary<string, object> { ["Type"] = "github-copilot", ["AuthMethod"] = "OAuthDevice" }
+            }
+        });
+        var expiry = DateTimeOffset.Parse("2026-07-01T00:00:00+00:00");
+        OAuthStateStore.SetExpiry(_paths, "my-copilot", expiry);
+        OAuthStateStore.SetExpiry(_paths, "Taken", expiry.AddDays(1));
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var stateBefore = File.ReadAllText(_paths.OAuthStatePath);
+
+        var exitCode = await ProviderCommand.RunAsync(["provider", "rename", "my-copilot", "taken"], _paths, output: _output);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("already exists in oauth-state.json", _output.ToString());
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(stateBefore, File.ReadAllText(_paths.OAuthStatePath));
     }
 
     [Fact]

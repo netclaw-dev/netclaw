@@ -267,6 +267,13 @@ static async Task RunDaemonAsync(
     foreach (var warning in configurationWarnings)
         startupLogger.LogWarning("Configuration warning: {ConfigurationWarning}", warning);
 
+    foreach (var providerName in OAuthStateStore.FindRetiredExpiryInUse(paths))
+    {
+        startupLogger.LogWarning(
+            "Providers:{ProviderName}:OAuthTokenExpiry in netclaw.json is retired. Netclaw reads it until the next token refresh and then keeps the expiry in oauth-state.json. Run `netclaw doctor --fix` to remove the key.",
+            providerName);
+    }
+
     if (shellResolution.FallbackReason is { } fallbackReason)
     {
         startupLogger.LogWarning(

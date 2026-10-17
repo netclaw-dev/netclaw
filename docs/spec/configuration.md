@@ -6,12 +6,13 @@ Source PRDs: PRD-001
 
 Netclaw uses a layered configuration system based on standard
 `Microsoft.Extensions.Configuration`. Daemon runtime settings are loaded from
-three sources in priority order (later sources override earlier ones at the
+four sources in priority order (later sources override earlier ones at the
 same key path):
 
 1. `~/.netclaw/config/netclaw.json` — daemon-only base configuration (optional)
 2. `~/.netclaw/config/secrets.json` — credential overlay (optional)
-3. Environment variables with `NETCLAW_` prefix (highest priority)
+3. `~/.netclaw/config/oauth-state.json` — OAuth token expiry that Netclaw writes (optional)
+4. Environment variables with `NETCLAW_` prefix (highest priority)
 
 Local CLI connection state is stored separately in
 `~/.netclaw/client/config.json`. The daemon does not read this file.
@@ -29,7 +30,8 @@ All configuration lives under `~/.netclaw/`:
 │   └── config.json        # Local CLI endpoint state
 ├── config/
 │   ├── netclaw.json        # Daemon runtime settings
-│   └── secrets.json        # Credentials (chmod 600 recommended)
+│   ├── secrets.json        # Credentials (chmod 600 recommended)
+│   └── oauth-state.json    # OAuth token expiry per provider (written by Netclaw)
 ├── soul/
 │   ├── PERSONALITY.md       # Agent personality (seeded on first run)
 │   ├── INSTRUCTIONS.md      # Operating rules (optional)
@@ -99,7 +101,50 @@ keys used by model references.
 | `Type` | string | `"ollama"` | Provider SDK to use. Supported: `ollama`, `openai-compatible`, `openrouter`, `openai`, `anthropic`, `github-copilot`, `veniceai`. |
 | `Endpoint` | string | `"http://localhost:11434"` | Base URL for the provider API. |
 | `ApiKey` | string? | `null` | API key. Should go in `secrets.json` or an environment variable. |
+| `OAuthTokenExpiry` | string? | `null` | Retired in `netclaw.json`. Netclaw keeps this value in `oauth-state.json`, because the daemon restarts on each write to `netclaw.json`. Netclaw reads an old `netclaw.json` value only while `oauth-state.json` has no entry for the provider. See [OAuth state file](#oauth-state-file). |
 | `VendorOptions` | object? | `null` | Provider-owned non-secret options. For `github-copilot`, `GitHubHost` and `GitHubApiBase` select the GitHub Enterprise host used for OAuth and Copilot token exchange; the Copilot API base remains `Endpoint`. |
+
+### OAuth state file
+
+`oauth-state.json` holds the token expiry of each OAuth provider. Netclaw writes it on each OAuth
+token refresh. The daemon does not watch it, so a refresh does not restart the daemon. The refresh
+token and the access token stay in `secrets.json`, and the daemon reads both files before it spends
+a refresh token. A refresh that the CLI does (`netclaw provider` probes each provider) reaches a
+running daemon through those two files.
+
+- The daemon takes the stored refresh token only when it differs from the last token that the
+  daemon read from or wrote to `secrets.json`. After a failed save, `secrets.json` holds a spent
+  token, so the daemon keeps the live token in memory and never presents the spent one.
+- When the token server rejects a token, the daemon reads `secrets.json` again. If another process
+  saved a new token during the request, the daemon uses that token once. Otherwise it raises the
+  re-authentication alert.
+- The daemon treats `invalid_grant` and the OpenAI codes `refresh_token_reused`,
+  `refresh_token_expired`, and `refresh_token_invalidated` as a rejected token. It treats any other
+  error as a temporary failure and keeps its tokens.
+
+```json
+{ "Providers": { "my-codex": { "OAuthTokenExpiry": "2026-06-01T01:00:00.0000000+00:00" } } }
+```
+
+- The file is a configuration source that comes after `secrets.json`. It holds only
+  `Providers:<name>:OAuthTokenExpiry`. Any other key stops the load with a message that names the
+  file and the key, for example `Couldn't read oauth-state.json: key 'Providers:p:Endpoint' is not allowed.`
+- A value is an ISO 8601 date, `null`, or an empty string. An empty string means no expiry. A value
+  that is not a date stops the load with a message that names the file and the key.
+- The file accepts comments and trailing commas, as `netclaw.json` and `secrets.json` do. Netclaw
+  drops them when it writes the file. Do not edit the file by hand.
+- `netclaw provider remove` and `netclaw provider rename` keep the file in step with the provider.
+  `netclaw provider rename` refuses a new name that the file already holds.
+- `netclaw provider add` replaces the provider entry in `netclaw.json`. When the old entry had the
+  retired `OAuthTokenExpiry` key, the command first copies `netclaw.json` to
+  `netclaw.json.retired-oauth-expiry.bak`, or to the next free `netclaw.json.retired-oauth-expiry.N.bak`,
+  and then writes the entry without the key.
+- `netclaw doctor` reports each retired `Providers.<name>.OAuthTokenExpiry` key in `netclaw.json` as
+  information. The report does not change the exit code. `netclaw doctor --fix` copies `netclaw.json`
+  to the same `.retired-oauth-expiry.bak` name. Then it copies each date to `oauth-state.json` when
+  that file has no entry for the provider, and it deletes the keys from `netclaw.json`. The rest of
+  `netclaw.json` stays. When `netclaw.json` has comments, `doctor --fix` changes nothing, because the CLI
+  would drop the comments. Remove the key by hand in that case.
 
 ### Models
 
@@ -168,7 +213,7 @@ daemon. It rejects these cases:
   `openai` or `anthropic`, an `openai-compatible` provider without `Endpoint`, or a `Providers` entry
   with a value that cannot be read (`AuthMethod`, `VendorOptions`, `OAuthTokenExpiry`). The check builds
   each role's client once and discards it; this makes no network call.
-- a `netclaw.json` or `secrets.json` that the configuration source cannot read: invalid JSON, or a
+- a `netclaw.json`, `secrets.json`, or `oauth-state.json` that the configuration source cannot read: invalid JSON, or a
   key written twice (`Models` and `models`)
 
 At startup the daemon stops with exit code 1. It prints one `error:` line to stderr and writes the
@@ -356,8 +401,8 @@ that result with these rules:
   fails when the current default is not equal to the last row. The tables are closed: from the
   next 0.27.1 build, `netclaw init` writes no lists.
 
-The daemon reads `netclaw.json`, then `secrets.json`, then `NETCLAW_*` variables. A later
-source wins for each key. `netclaw doctor` reads only `netclaw.json`.
+The daemon reads `netclaw.json`, then `secrets.json`, then `oauth-state.json`, then `NETCLAW_*`
+variables. A later source wins for each key. `netclaw doctor` reads only `netclaw.json`.
 
 A later source does not replace a whole list. `IConfiguration` merges list items by index. For
 example, `secrets.json` with `"AllowedTools": ["file_list"]` over `netclaw.json` with

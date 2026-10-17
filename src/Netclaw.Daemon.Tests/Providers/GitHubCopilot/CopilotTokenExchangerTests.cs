@@ -7,6 +7,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -205,9 +206,8 @@ public sealed class CopilotTokenExchangerTests
         Assert.Equal("oauth-new", secretProvider.GetProperty("OAuthAccessToken").GetString());
         Assert.Equal("refresh-new", secretProvider.GetProperty("OAuthRefreshToken").GetString());
 
-        using var configDoc = JsonDocument.Parse(File.ReadAllText(paths.NetclawConfigPath));
-        var configProvider = configDoc.RootElement.GetProperty("Providers").GetProperty("copilot");
-        Assert.Equal(now.AddHours(1), DateTimeOffset.Parse(configProvider.GetProperty("OAuthTokenExpiry").GetString()!));
+        Assert.True(OAuthStateStore.TryGetExpiry(paths, "copilot", out var storedExpiry));
+        Assert.Equal(now.AddHours(1), storedExpiry);
 
         HttpResponseMessage CaptureExchangeRequest(HttpRequestMessage request)
         {
@@ -421,7 +421,7 @@ public sealed class CopilotTokenExchangerTests
             new OAuthDeviceFlowService(httpClient, time),
             new OpenAiDeviceFlowService(httpClient, time));
 
-        return new ProviderOAuthTokenRefreshService(paths, factory, timeProvider: time);
+        return new ProviderOAuthTokenRefreshService(paths, factory, NullLogger<ProviderOAuthTokenRefreshService>.Instance, timeProvider: time);
     }
 
     private static void WriteProviderConfig(NetclawPaths paths, string providerName)

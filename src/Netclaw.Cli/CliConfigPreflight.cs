@@ -36,10 +36,10 @@ internal static class CliConfigPreflight
             return builder.AddNetclawDaemonSources(paths);
 
         // Leave out only the file that cannot be loaded; the other still says where the daemon is.
-        foreach (var file in new[] { paths.NetclawConfigPath, paths.SecretsPath })
+        foreach (var file in new[] { paths.NetclawConfigPath, paths.SecretsPath, paths.OAuthStatePath })
         {
-            if (!TryDescribeUnreadableFile(file, out _, out _))
-                builder.AddJsonFile(file, optional: true, reloadOnChange: false);
+            if (!TryDescribeUnreadableFile(paths, file, out _, out _))
+                builder.AddNetclawConfigFile(paths, file);
         }
 
         return builder.AddEnvironmentVariables("NETCLAW_");
@@ -51,9 +51,9 @@ internal static class CliConfigPreflight
     /// </summary>
     public static bool TryDescribeUnreadableConfig(NetclawPaths paths, out string message, out string fix)
     {
-        foreach (var file in new[] { paths.NetclawConfigPath, paths.SecretsPath })
+        foreach (var file in new[] { paths.NetclawConfigPath, paths.SecretsPath, paths.OAuthStatePath })
         {
-            if (TryDescribeUnreadableFile(file, out message, out fix))
+            if (TryDescribeUnreadableFile(paths, file, out message, out fix))
                 return true;
         }
 
@@ -61,7 +61,7 @@ internal static class CliConfigPreflight
         return false;
     }
 
-    private static bool TryDescribeUnreadableFile(string file, out string message, out string fix)
+    private static bool TryDescribeUnreadableFile(NetclawPaths paths, string file, out string message, out string fix)
     {
         var name = Path.GetFileName(file);
         if (Directory.Exists(file))
@@ -73,7 +73,7 @@ internal static class CliConfigPreflight
 
         try
         {
-            new ConfigurationBuilder().AddJsonFile(file, optional: true, reloadOnChange: false).Build();
+            new ConfigurationBuilder().AddNetclawConfigFile(paths, file).Build();
         }
         catch (Exception ex)
         {
@@ -82,6 +82,9 @@ internal static class CliConfigPreflight
             {
                 UnauthorizedAccessException => $"Fix the permissions on {file}.",
                 FileNotFoundException or DirectoryNotFoundException => $"{file} is a link to a file that is missing: restore the target or remove the link.",
+                _ when string.Equals(file, paths.OAuthStatePath, StringComparison.Ordinal)
+                    => $"Delete {file}. Then run `netclaw doctor --fix` if netclaw.json still has an OAuthTokenExpiry key. That command copies each date back. "
+                        + "Otherwise sign in again with `netclaw provider` for each OAuth provider. A github-copilot provider with no expiry date does not refresh.",
                 _ => $"Fix the JSON in {file} (a duplicate key, or a file that is empty or cut off), or restore it from a backup.",
             };
             return true;

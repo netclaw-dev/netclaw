@@ -502,12 +502,14 @@ internal static class ProviderCommand
         if (secretProviders?.Remove(name) == true)
             ConfigFileHelper.WriteSecretsFile(paths, secrets);
 
+        OAuthStateStore.Remove(paths, name);
+
         writer.WriteLine($"Removed provider '{name}'");
         return 0;
     }
 
     /// <summary>
-    /// Load provider entries from merged config + secrets files.
+    /// Load provider entries from merged config, secrets, and OAuth state files.
     /// </summary>
     internal static Dictionary<string, ProviderEntry> LoadProviders(NetclawPaths paths)
     {
@@ -579,6 +581,12 @@ internal static class ProviderCommand
                         entry.OAuthTokenExpiry = parsed;
                 }
             }
+        }
+
+        foreach (var (name, entry) in result)
+        {
+            if (OAuthStateStore.TryGetExpiry(paths, name, out var storedExpiry))
+                entry.OAuthTokenExpiry = storedExpiry;
         }
 
         foreach (var (name, entry) in result)

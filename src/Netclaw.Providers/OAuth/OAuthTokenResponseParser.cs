@@ -11,6 +11,42 @@ namespace Netclaw.Providers.OAuth;
 
 internal static class OAuthTokenResponseParser
 {
+    // RFC 6749 puts a string code in "error". auth.openai.com puts an object there instead:
+    // {"error":{"code":"refresh_token_reused",...}}. These codes mean the refresh token is dead and only a
+    // new sign-in helps. Any other answer, a body that is not JSON included, can be transient.
+    private static readonly HashSet<string> PermanentRefreshErrors = new(StringComparer.Ordinal)
+    {
+        "invalid_grant",
+        "refresh_token_reused",
+        "refresh_token_expired",
+        "refresh_token_invalidated",
+    };
+
+    public static bool IsPermanentRefreshError(string errorBody)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(errorBody);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("error", out var error))
+            {
+                return false;
+            }
+
+            var code = error.ValueKind switch
+            {
+                JsonValueKind.String => error.GetString(),
+                JsonValueKind.Object when error.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.String => c.GetString(),
+                _ => null,
+            };
+            return code is not null && PermanentRefreshErrors.Contains(code);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     public static OAuthDeviceFlowResult Parse(JsonElement root, TimeProvider timeProvider)
     {
         var accessToken = GetRequiredString(root, "access_token");

@@ -6,6 +6,7 @@
 using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Net;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Providers;
@@ -169,6 +170,7 @@ public sealed class OpenAiCodexTests
                 new DeviceFlowServiceFactory(
                     new OAuthDeviceFlowService(httpClient, time),
                     new OpenAiDeviceFlowService(httpClient, time)),
+                NullLogger<ProviderOAuthTokenRefreshService>.Instance,
                 NullNotificationSink.Instance,
                 time);
             var entry = new ProviderEntry
@@ -228,6 +230,7 @@ public sealed class OpenAiCodexTests
                 new DeviceFlowServiceFactory(
                     new OAuthDeviceFlowService(refreshHttpClient, time),
                     new OpenAiDeviceFlowService(refreshHttpClient, time)),
+                NullLogger<ProviderOAuthTokenRefreshService>.Instance,
                 NullNotificationSink.Instance,
                 time);
 

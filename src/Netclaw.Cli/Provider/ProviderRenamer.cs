@@ -11,7 +11,7 @@ namespace Netclaw.Cli.Provider;
 
 /// <summary>
 /// Renames a provider entry across <c>netclaw.json</c> and
-/// <c>.secrets/netclaw-secrets.json</c>. Swaps the <c>Providers</c>
+/// <c>secrets.json</c>, and moves the token expiry in <c>oauth-state.json</c>. Swaps the <c>Providers</c>
 /// dictionary key and cascades the rename to any
 /// <c>Models.{Main,Fallback,Compaction}.Provider</c> entries that pointed
 /// at the old name, so the daemon never sees a dangling reference after
@@ -43,7 +43,7 @@ internal static class ProviderRenamer
     /// <item><paramref name="oldName"/> must exist in <c>Providers</c> in <c>netclaw.json</c>.</item>
     /// <item><paramref name="newName"/> must be non-empty after trimming.</item>
     /// <item><paramref name="newName"/> must not collide (case-insensitive) with any other
-    /// provider key already present in either file.</item>
+    /// provider key already present in <c>netclaw.json</c>, <c>secrets.json</c>, or <c>oauth-state.json</c>.</item>
     /// <item>A case-only change (e.g. <c>my-vllm</c> → <c>My-Vllm</c>) is permitted and rewrites
     /// the key in place.</item>
     /// </list>
@@ -71,6 +71,9 @@ internal static class ProviderRenamer
         if (secretProviders is not null && HasCollision(secretProviders, oldName, trimmed))
             return RenameResult.Fail($"A provider named '{trimmed}' already exists in secrets.");
 
+        if (!string.Equals(oldName, trimmed, StringComparison.OrdinalIgnoreCase) && OAuthStateStore.Contains(paths, trimmed))
+            return RenameResult.Fail($"A provider named '{trimmed}' already exists in oauth-state.json.");
+
         var entry = providers[oldName];
         providers.Remove(oldName);
         providers[trimmed] = entry;
@@ -85,6 +88,8 @@ internal static class ProviderRenamer
             secretProviders[trimmed] = secretEntry;
             ConfigFileHelper.WriteSecretsFile(paths, secrets);
         }
+
+        OAuthStateStore.Rename(paths, oldName, trimmed);
 
         return RenameResult.Ok(reassigned);
     }

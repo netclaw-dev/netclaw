@@ -490,6 +490,56 @@ public class OpenAiDeviceFlowServiceTests
         Assert.Null(result);
     }
 
+    // auth.openai.com puts an object in "error", not the RFC 6749 string.
+    [Theory]
+    [InlineData("refresh_token_reused")]
+    [InlineData("refresh_token_expired")]
+    [InlineData("refresh_token_invalidated")]
+    [InlineData("invalid_grant")]
+    public async Task RefreshToken_OpenAiErrorObjectWithAPermanentCode_ReturnsNull(string code)
+    {
+        var handler = new FakeHttpMessageHandler(_ => JsonResponse(
+            new { error = new { message = "Please try signing in again.", type = "invalid_request_error", code } },
+            HttpStatusCode.Unauthorized));
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler));
+
+        var result = await service.RefreshTokenAsync(
+            "https://auth.openai.com/oauth/token",
+            "client-id",
+            new SensitiveString("spent-refresh-token"), TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task RefreshToken_OpenAiErrorObjectWithAnotherCode_ThrowsHttpRequestException()
+    {
+        var handler = new FakeHttpMessageHandler(_ => JsonResponse(
+            new { error = new { message = "Try again later.", type = "server_error", code = "server_error" } },
+            HttpStatusCode.InternalServerError));
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => service.RefreshTokenAsync(
+            "https://auth.openai.com/oauth/token",
+            "client-id",
+            new SensitiveString("refresh-token"), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task RefreshToken_ErrorBodyThatIsNotJson_ThrowsHttpRequestException()
+    {
+        var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.BadGateway)
+        {
+            Content = new StringContent("<html>Bad Gateway</html>"),
+        });
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => service.RefreshTokenAsync(
+            "https://auth.openai.com/oauth/token",
+            "client-id",
+            new SensitiveString("refresh-token"), TestContext.Current.CancellationToken));
+    }
+
     [Fact]
     public async Task RefreshToken_StringOverload_RemainsSupported()
     {

@@ -229,6 +229,58 @@ public sealed class ProviderConfigurationLoaderTests : IDisposable
         Assert.Equal("sk-plaintext", providers["openai"].ApiKey?.Value);
     }
 
+    [Fact]
+    public void Load_ReadsOAuthTokenExpiryFromOAuthStateJson()
+    {
+        var expiry = new DateTimeOffset(2026, 7, 4, 12, 30, 0, TimeSpan.FromHours(-4));
+        var paths = NewConfigPaths();
+        File.WriteAllText(paths.NetclawConfigPath, """{ "Providers": { "anthropic": { "Type": "anthropic" } } }""");
+        OAuthStateStore.SetExpiry(paths, "anthropic", expiry);
+
+        var providers = LoadProviders(paths);
+
+        Assert.Equal(expiry, providers["anthropic"].OAuthTokenExpiry);
+    }
+
+    [Fact]
+    public void Load_ReadsTheRetiredOAuthTokenExpiryKeyFromNetclawJson()
+    {
+        var expiry = new DateTimeOffset(2026, 7, 4, 12, 30, 0, TimeSpan.FromHours(-4));
+        var paths = NewConfigPaths();
+        File.WriteAllText(paths.NetclawConfigPath, $$"""{ "Providers": { "anthropic": { "Type": "anthropic", "OAuthTokenExpiry": "{{expiry:o}}" } } }""");
+
+        var providers = LoadProviders(paths);
+
+        Assert.Equal(expiry, providers["anthropic"].OAuthTokenExpiry);
+    }
+
+    [Fact]
+    public void Load_PrefersOAuthStateJsonOverTheRetiredNetclawJsonKey()
+    {
+        var oldExpiry = new DateTimeOffset(2026, 7, 4, 12, 30, 0, TimeSpan.Zero);
+        var newExpiry = oldExpiry.AddHours(6);
+        var paths = NewConfigPaths();
+        File.WriteAllText(paths.NetclawConfigPath, $$"""{ "Providers": { "anthropic": { "Type": "anthropic", "OAuthTokenExpiry": "{{oldExpiry:o}}" } } }""");
+        OAuthStateStore.SetExpiry(paths, "anthropic", newExpiry);
+
+        var providers = LoadProviders(paths);
+
+        Assert.Equal(newExpiry, providers["anthropic"].OAuthTokenExpiry);
+    }
+
+    private NetclawPaths NewConfigPaths()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+        return paths;
+    }
+
+    private static IReadOnlyDictionary<string, ProviderEntry> LoadProviders(NetclawPaths paths)
+    {
+        var configuration = new ConfigurationBuilder().AddNetclawDaemonSources(paths).Build();
+        return ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
+    }
+
     private sealed class TestVendorOptions : IVendorOptions
     {
         public bool DisableThinking { get; set; }

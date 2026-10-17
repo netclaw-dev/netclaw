@@ -146,9 +146,18 @@ and trusted proxies later once the proxy topology is known.
 Config files: `~/.netclaw/config/netclaw.json` (daemon-owned base config,
 including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),
 `~/.netclaw/client/config.json` (local CLI endpoint state),
-`~/.netclaw/config/secrets.json` (credentials — never display API keys), and
+`~/.netclaw/config/secrets.json` (credentials — never display API keys),
+`~/.netclaw/config/oauth-state.json` (the OAuth token expiry of each provider;
+Netclaw writes it and the daemon does not watch it, so a token refresh does not
+restart the daemon; do not edit it), and
 `~/.netclaw/config/editor-state.json` (passive config-editor state for dormant
 mode-specific values).
+
+An older release wrote `Providers.<name>.OAuthTokenExpiry` to `netclaw.json`.
+`netclaw doctor` reports that key as information and does not change its exit
+code. `netclaw doctor --fix` copies the file to `netclaw.json.retired-oauth-expiry.bak`,
+copies each date to `oauth-state.json` when it has no entry for the provider, and removes the key. When `netclaw.json` has comments,
+`doctor --fix` changes nothing, so remove the key by hand.
 
 ## Feature Kill Switches
 

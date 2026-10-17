@@ -706,6 +706,42 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task FixCredentials_Success_RemovesTheOldOauthStateEntry()
+    {
+        _fakeProbe.TypeResults["openrouter"] = new ProviderProbeResult(false, "Unauthorized", []);
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openrouter"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openrouter",
+                    ["Endpoint"] = "https://openrouter.ai/api/v1",
+                    ["AuthMethod"] = "ApiKey"
+                }
+            }
+        });
+        OAuthStateStore.SetExpiry(_paths, "my-openrouter", DateTimeOffset.Parse("2026-07-01T00:00:00+00:00"));
+        OAuthStateStore.SetExpiry(_paths, "other", DateTimeOffset.Parse("2026-07-02T00:00:00+00:00"));
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+        vm.SelectedProviderIndex = vm.DisplayProviders.FindIndex(p => p.ProviderType == "openrouter");
+        vm.ActivateSelectedProvider();
+        _fakeProbe.TypeResults["openrouter"] = new ProviderProbeResult(true, null,
+            [new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-a") }]);
+
+        vm.FixApiKey = "sk-new-key";
+        vm.SubmitFixCredentials();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.False(OAuthStateStore.TryGetExpiry(_paths, "my-openrouter", out _));
+        Assert.True(OAuthStateStore.TryGetExpiry(_paths, "other", out _));
+    }
+
+    [Fact]
     public async Task FixCredentials_ProbeFailure_LeavesStoredSecretUnchanged()
     {
         // An unhealthy provider with an existing, working secret on disk.

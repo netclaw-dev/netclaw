@@ -26,6 +26,7 @@ public sealed class DaemonToolPathPolicyFactoryTests
     [InlineData("daemon.env")]
     [InlineData("devices.json")]
     [InlineData("bootstrap-state.json")]
+    [InlineData("oauth-state.json")]
     public void Config_file_is_readable_but_not_writable(string fileName)
     {
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-policy-contract"));

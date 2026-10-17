@@ -5,7 +5,8 @@
 
 
 Netclaw routes chat completions through configured **provider entries** in
-`secrets.json` / `netclaw.json`. Each entry has a logical name (operator-chosen)
+`secrets.json` / `netclaw.json`. The OAuth token expiry of a provider is not in
+either file: Netclaw keeps it in `oauth-state.json`. Each entry has a logical name (operator-chosen)
 and a `type` (well-known identifier). Manage them with `netclaw provider`:
 
 | Subcommand | Purpose |
@@ -64,7 +65,8 @@ credentials, missing provider `Type`, schema-invalid config, or invalid explicit
 startup loudly.
 
 For OpenAI ChatGPT subscription auth, Netclaw persists the OAuth access token,
-refresh token, and ChatGPT account ID returned by the OpenAI ID token. The
+refresh token, and ChatGPT account ID returned by the OpenAI ID token in
+`secrets.json`. It persists the token expiry in `oauth-state.json`. The
 account ID is required by the Codex backend. If OpenAI OAuth validation reports
 that the account ID is missing, re-authenticate the provider with `netclaw
 provider` or remove and add it again. API-key OpenAI auth does not

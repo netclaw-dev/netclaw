@@ -248,6 +248,36 @@ public class OAuthDeviceFlowServiceTests
     }
 
     [Fact]
+    public async Task RefreshToken_ErrorObjectWithReusedCode_ReturnsNull()
+    {
+        var handler = new FakeHttpMessageHandler(_ => JsonResponse(
+            new { error = new { code = "refresh_token_reused" } }, HttpStatusCode.Unauthorized));
+        var service = new OAuthDeviceFlowService(new HttpClient(handler));
+
+        var result = await service.RefreshTokenAsync(
+            "https://auth.example.com/token",
+            "client-id",
+            new SensitiveString("spent-refresh-token"), TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task RefreshToken_ErrorBodyThatIsNotJson_ThrowsHttpRequestException()
+    {
+        var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.BadGateway)
+        {
+            Content = new StringContent("<html>Bad Gateway</html>"),
+        });
+        var service = new OAuthDeviceFlowService(new HttpClient(handler));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => service.RefreshTokenAsync(
+            "https://auth.example.com/token",
+            "client-id",
+            new SensitiveString("refresh-token"), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task StartDeviceAuthorization_SendsAcceptJsonHeader()
     {
         HttpRequestMessage? capturedRequest = null;

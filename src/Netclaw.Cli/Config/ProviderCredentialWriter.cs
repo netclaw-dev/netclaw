@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -18,9 +19,8 @@ namespace Netclaw.Cli.Config;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>OAuthTokenExpiry</b> must go in <c>netclaw.json</c> (not <c>secrets.json</c>)
-/// because encrypted <see cref="DateTimeOffset"/> values break <c>IConfiguration</c>
-/// binding — the binder silently drops the entire provider entry.
+/// <b>OAuthTokenExpiry</b> goes in <c>oauth-state.json</c> through
+/// <see cref="OAuthTokenPersistence"/>. See <see cref="OAuthStateStore"/>.
 /// </para>
 /// </remarks>
 internal static class ProviderCredentialWriter
@@ -85,10 +85,7 @@ internal static class ProviderCredentialWriter
         if (vendorOptions is not null && vendorOptions.Count > 0)
             providerEntry["VendorOptions"] = vendorOptions;
 
-        // OAuthTokenExpiry goes in netclaw.json (NOT secrets) — see class remarks.
-        if (oauthResult?.ExpiresAt is { } expiresAt)
-            providerEntry["OAuthTokenExpiry"] = expiresAt.ToString("o");
-
+        PreserveRetiredExpiryBackup(paths, providers, providerName);
         providers[providerName] = providerEntry;
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
@@ -102,6 +99,7 @@ internal static class ProviderCredentialWriter
         }
         else if (!string.IsNullOrWhiteSpace(apiKey))
         {
+            OAuthStateStore.Remove(paths, providerName);
             var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
             secretProviders[providerName] = new Dictionary<string, object>
             {
@@ -112,6 +110,7 @@ internal static class ProviderCredentialWriter
         }
         else if (authMethod == AuthMethod.None)
         {
+            OAuthStateStore.Remove(paths, providerName);
             var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
             if (secretProviders?.Remove(providerName) == true)
             {
@@ -119,5 +118,19 @@ internal static class ProviderCredentialWriter
                     options: JsonDefaults.Indented, protector: effectiveProtector);
             }
         }
+    }
+
+    private static void PreserveRetiredExpiryBackup(
+        NetclawPaths paths, Dictionary<string, object> providers, string providerName)
+    {
+        if (!providers.TryGetValue(providerName, out var existing)
+            || ConfigFileHelper.DeserializeSection<Dictionary<string, object>>(existing) is not { } entry
+            || !entry.Keys.Any(static key => string.Equals(key, "OAuthTokenExpiry", StringComparison.OrdinalIgnoreCase))
+            || !File.Exists(paths.NetclawConfigPath))
+        {
+            return;
+        }
+
+        File.Copy(paths.NetclawConfigPath, DoctorFixService.NextBackupPath(paths.NetclawConfigPath, "retired-oauth-expiry"), overwrite: false);
     }
 }

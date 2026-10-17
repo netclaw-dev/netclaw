@@ -431,10 +431,6 @@
             "type": ["string", "null"],
             "description": "OAuth account identifier. Netclaw writes it to secrets.json when you sign in with an OAuth auth method."
           },
-          "OAuthTokenExpiry": {
-            "type": ["string", "null"],
-            "description": "Expiry time of the OAuth access token in ISO 8601 format. Netclaw writes it to netclaw.json when you sign in with an OAuth auth method."
-          },
           "VendorOptions": {
             "type": ["object", "null"],
             "description": "Provider-specific non-secret options, for example GitHubHost and GitHubApiBase for github-copilot.",
