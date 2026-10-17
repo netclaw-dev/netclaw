@@ -183,6 +183,15 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
         await DrainStartupAsync();
     }
 
+    /// <summary>
+    /// Removes the shard region from the resolver. Akka.Reminders then replies <c>ShardRegionNotFound</c> to every
+    /// schedule request, which is a deterministic scheduling failure for any schedule type.
+    /// </summary>
+    protected void MakeShardRegionUnavailable()
+        => Assert.True(
+            _resolver.UnregisterShardRegion(ReminderManagerActor.ShardRegionName),
+            "The shard region was not registered.");
+
     /// <summary>Routes the envelopes that the scheduler delivers to <paramref name="target"/> until a manager starts.</summary>
     protected void RouteEnvelopesTo(IActorRef target) => _tap.Tell(new EnvelopeTap.SetTarget(target));
 

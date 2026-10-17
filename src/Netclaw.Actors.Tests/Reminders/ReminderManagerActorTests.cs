@@ -718,7 +718,7 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         var envelope = new ReminderEnvelope<ReminderPayload>(
             entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
             key: new ReminderKey(definition.Id.Value),
-            dueTimeUtc: now,
+            dueTimeUtc: definition.Schedule.FireAt!.Value,
             deadline: ReminderDeadline.Infinite,
             message: new ReminderPayload { Id = definition.Id });
 
@@ -791,7 +791,7 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         var envelope = new ReminderEnvelope<ReminderPayload>(
             entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
             key: new ReminderKey(definition.Id.Value),
-            dueTimeUtc: now,
+            dueTimeUtc: definition.Schedule.FireAt!.Value,
             deadline: ReminderDeadline.Infinite,
             message: new ReminderPayload { Id = definition.Id });
 
@@ -822,12 +822,16 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
             "auto-ack-stable-key");
         ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
 
-        var definition = CreateCurrentSessionDefinition("stable-key", deliveryRequired: true);
+        // A distinctive fire time far from "now": a key built from the dispatch
+        // wall-clock would not match it. The definition has the same fire time, because a
+        // one-shot fire runs only the occurrence of the current definition.
+        var fireTime = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
+        var definition = CreateCurrentSessionDefinition("stable-key", deliveryRequired: true) with
+        {
+            Schedule = new ReminderSchedule { Type = ReminderScheduleType.OneShot, FireAt = fireTime }
+        };
         _definitionStore.Save(definition);
 
-        // A distinctive fire time far from "now": a key built from the dispatch
-        // wall-clock would not match it.
-        var fireTime = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
         var envelope = new ReminderEnvelope<ReminderPayload>(
             entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
             key: new ReminderKey(definition.Id.Value),
@@ -872,7 +876,7 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         };
         _definitionStore.Save(definition);
 
-        manager.Tell(CreateEnvelope(definition.Id.Value));
+        manager.Tell(CreateEnvelope(definition));
         await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -904,7 +908,7 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         var definition = CreateCurrentSessionDefinition("admission-refused", deliveryRequired: true);
         _definitionStore.Save(definition);
 
-        manager.Tell(CreateEnvelope(definition.Id.Value));
+        manager.Tell(CreateEnvelope(definition));
 
         await AwaitAssertAsync(() =>
         {
@@ -1031,19 +1035,22 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         // Save before dispatch so filesystem latency cannot consume any test
         // timing window while execution slots are being filled.
         _sessionPipeline.HoldSessions("reminder/held-");
+        var held = new List<ReminderDefinition>();
         for (var i = 0; i < 3; i++)
         {
             var id = $"held-{i}";
-            _definitionStore.Save(CreateDefinition("held", "Stay in flight") with
+            var definition = CreateDefinition("held", "Stay in flight") with
             {
                 Id = new ReminderId(id),
                 Title = id,
                 Delivery = new ReminderDelivery { Kind = DeliveryKind.None }
-            });
+            };
+            _definitionStore.Save(definition);
+            held.Add(definition);
         }
 
-        for (var i = 0; i < 3; i++)
-            manager.Tell(CreateEnvelope($"held-{i}"));
+        foreach (var definition in held)
+            manager.Tell(CreateEnvelope(definition));
 
         await AwaitAssertAsync(() =>
         {
@@ -1253,7 +1260,7 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         var definition = CreateCurrentSessionDefinition("dup-guard-test", deliveryRequired: false);
         _definitionStore.Save(definition);
 
-        var envelope = CreateEnvelope(definition.Id.Value);
+        var envelope = CreateEnvelope(definition);
 
         // Both envelopes go into the actor's mailbox before either is processed,
         // so the second always arrives while the first execution is still in flight.
@@ -1884,13 +1891,20 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         };
     }
 
-    private static ReminderEnvelope<ReminderPayload> CreateEnvelope(string reminderId)
+    // A one-shot fire runs only the occurrence of the current definition, so the due time of its envelope
+    // must equal the fire time of the definition.
+    private static ReminderEnvelope<ReminderPayload> CreateEnvelope(ReminderDefinition definition)
+        => CreateEnvelope(
+            definition.Id.Value,
+            definition.Schedule.Type == ReminderScheduleType.OneShot ? definition.Schedule.FireAt : null);
+
+    private static ReminderEnvelope<ReminderPayload> CreateEnvelope(string reminderId, DateTimeOffset? dueTime = null)
     {
         var now = TimeProvider.System.GetUtcNow();
         return new ReminderEnvelope<ReminderPayload>(
             entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
             key: new ReminderKey(reminderId),
-            dueTimeUtc: now,
+            dueTimeUtc: dueTime ?? now,
             deadline: ReminderDeadline.Infinite,
             message: new ReminderPayload { Id = new ReminderId(reminderId) });
     }

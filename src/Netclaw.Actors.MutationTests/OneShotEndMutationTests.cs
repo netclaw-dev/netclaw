@@ -126,10 +126,14 @@ public sealed class OneShotEndMutationTests : IAsyncLifetime
         long deltaMs, bool ends)
     {
         // The due time carries half a millisecond more than the definition: the comparison must be in milliseconds.
+        // The run starts for a definition that matches its occurrence, because a fire runs only the occurrence
+        // of the current definition. Then a save replaces the definition during the run.
         var dueMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var due = DateTimeOffset.FromUnixTimeMilliseconds(dueMs).AddTicks(TimeSpan.TicksPerMillisecond / 2);
-        _definitions.Save(OneShot(DateTimeOffset.FromUnixTimeMilliseconds(dueMs + deltaMs)));
+        _definitions.Save(OneShot(DateTimeOffset.FromUnixTimeMilliseconds(dueMs)));
         var executionId = await DispatchAsync(due);
+        if (deltaMs != 0)
+            _definitions.Save(OneShot(DateTimeOffset.FromUnixTimeMilliseconds(dueMs + deltaMs)));
         var before = _definitions.Get(_id);
 
         await CompleteAsync(executionId, success: true);

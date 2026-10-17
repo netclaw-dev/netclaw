@@ -193,4 +193,52 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
         await BarrierAsync();
         Assert.Equal(0, Pipeline.InvocationCount);
     }
+
+    // ── A tombstone that Netclaw cannot read ──
+
+    // Reads treat an unreadable tombstone as absent. A fire is not a read: it decides whether a one-shot
+    // runs, so it must fail closed. The tombstone may belong to a run that already succeeded.
+    [Fact]
+    public async Task A_corrupt_tombstone_stops_the_fire_and_a_repair_lets_the_run_happen()
+    {
+        await DrainStartupAsync();
+        // A run that started would stay active here, so the status below shows it at once.
+        Pipeline.Mode = RunMode.Hold;
+        var definition = NewOneShot("corrupt-fire");
+        await ScheduleAsync(definition);
+        Directory.CreateDirectory(EndedDirectory);
+        const string damaged = "{ not json";
+        await File.WriteAllTextAsync(TombstonePath(definition.Id), damaged, TestContext.Current.CancellationToken);
+
+        Advance(FirstFireDelay);
+        await AwaitEnvelopesHandledAsync(1);
+
+        var status = await StatusAsync(definition.Id, TeamCaller);
+        Assert.False(status.Executing, "A fire with an unreadable tombstone must not start the run.");
+        Assert.Equal(0, Pipeline.InvocationCount);
+        Assert.NotEqual("Delivered", await OccurrenceStatusAsync(definition.Id, definition.Schedule.FireAt!.Value));
+        var stored = Definitions.Get(definition.Id);
+        Assert.NotNull(stored);
+        Assert.True(stored.Enabled);
+        Assert.Equal(
+            damaged,
+            await File.ReadAllTextAsync(TombstonePath(definition.Id), TestContext.Current.CancellationToken));
+        Assert.Contains(Alerts.Alerts, a => a.Type == "reminder.tombstone.invalid" && a.Source == definition.Id.Value);
+        Assert.NotEmpty(LogsOfLevel(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value));
+
+        // The operator deletes the file. The acknowledgement lease expires, and Akka.Reminders delivers the
+        // occurrence again. The test scheduler runs the timers that Akka.Reminders sets in reaction to the
+        // expiry only when the clock moves again, so each poll moves the clock by one minute.
+        File.Delete(TombstonePath(definition.Id));
+        Pipeline.Mode = RunMode.Succeed;
+        await AwaitAssertAsync(() =>
+        {
+            Advance(TimeSpan.FromMinutes(1));
+            Assert.Equal(1, Pipeline.InvocationCount);
+        }, TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
+        await AwaitSettledRunAsync(definition.Id, 1);
+
+        Assert.Null(Definitions.Get(definition.Id));
+        Assert.Equal("Completed", OutcomeOf(RequireTombstone(definition.Id)));
+    }
 }

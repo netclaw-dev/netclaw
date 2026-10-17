@@ -119,7 +119,11 @@ EndOneShot(def, outcome, lastError, endedAt, envelopeAction)      // manager, ac
   1. store.SaveTombstone(tombstone(def, outcome, lastError, endedAt))  // durable: commit point
        // instructions are copied from def only when outcome = Failed (D1a)
        on I/O error -> alert "reminder.settlement.failed"; stop here.
-                       No ack and no delete. The lease expiry is the recovery path.
+                       No nack, no schedule cancel, and no delete. The lease expiry is the recovery path.
+                       Exception (owner decision, 17 Oct): after a success or a denied run, ack the
+                       envelope anyway and keep the definition. The ack writes the durable status
+                       Delivered. The startup reconciliation ends the one-shot as Completed, and the
+                       run does not repeat. Log an error.
   2. envelopeAction: ack | nack | none                              // durable in Akka.Reminders
   3. CancelScheduleOnly(def.Id)                                     // durable, idempotent
   4. _skipCounts.Remove(id); _deniedAlerts.Remove(id)               // actor-local
@@ -139,6 +143,8 @@ The tombstone comes first because it is the only step that records the outcome. 
 A tombstone **matches** a definition when both have the same id, the definition is a one-shot, and both fire times are equal at millisecond precision. The manager compares `ToUnixTimeMilliseconds()` values, the same precision as `ReminderFireKey`.
 
 - A fire for a definition with a matching tombstone does not run. The manager does steps 3 to 5 and acks the envelope.
+- A fire for a one-shot whose tombstone file exists but cannot be read does not run, because the fire decides whether a run happens (owner decision, 17 Oct). The manager does not ack. It keeps the definition, the schedule, and the file, logs an error, and raises `reminder.tombstone.invalid`. A read still treats the file as absent.
+- A fire whose envelope due time differs from the definition fire time (at millisecond precision) belongs to an earlier definition of the same id. The manager does not run it. It acks the envelope, logs a warning, and does not touch the definition or the schedule.
 - A fire for an id with no definition does not run (current behavior). If a tombstone exists, the manager logs at Info ("fired after it ended"), not at Error.
 - The reconciliation and the sweep finish a definition that has a matching tombstone (steps 3 to 5).
 - A tombstone that does not match its definition is stale. The definition is newer, so it wins. The manager deletes the stale tombstone and logs a warning. Only a manual file edit can make this state, because a re-arm deletes the tombstone before it saves (D6).
@@ -309,7 +315,7 @@ netclaw reminder list --json \
 - [A re-arm discards the old history, so a self-re-arming watcher keeps one run of history] → This is the current rule for a `Completed` one-shot. A recurring reminder is the better shape for a watcher; a stop condition for watchers is a separate issue.
 - [`RestartRecoveryService` retries a manifest after a failed delete and re-creates an ended restart reminder] → The id is free after the end, as it is today for a `Completed` one-shot. D2 (#2511) makes a restart-resume message that resumes nothing a no-op.
 - [A one-shot that is down for more than 12 days loses its Akka occurrence status] → The reconciliation keeps it for operator review, as today.
-- [A corrupt tombstone file] → `GetTombstone` logs an error and raises the `reminder.tombstone.invalid` alert. The id is then treated as having no tombstone, so the audience gate falls back to "no data", not to an open read. The file stays for the operator. A re-arm overwrites the path.
+- [A corrupt tombstone file] → `GetTombstone` logs an error and raises the `reminder.tombstone.invalid` alert. For a read, the id is then treated as having no tombstone, so the audience gate falls back to "no data", not to an open read. For a fire, the one-shot does not run (D4). The file stays for the operator. A re-arm overwrites the path.
 - [A cancel during an active run] → The run continues, as today. The `Cancelled` tombstone stays, and the settlement adds only the history row (D5).
 - [Skill version conflict with the coordination stack] → Rebase this change after the stack, and take the higher version plus one.
 

@@ -83,6 +83,16 @@ public sealed class OneShotSettlementTests : OneShotReminderTestBase
         Assert.True(await IsScheduledAsync(original.Id));
         Assert.False(TombstoneExists(original.Id));
         Assert.Single(await History.ReadAsync(original.Id, 10));
+
+        // A failed run of the old definition still tells the owner, but it does not count against the new one.
+        var failureAlerts = Alerts.Alerts
+            .Where(a => a.Type == "reminder.execution.failed" && a.Source == original.Id.Value)
+            .ToArray();
+        if (outcome == RunOutcome.Failure)
+            Assert.Single(failureAlerts);
+        else
+            Assert.Empty(failureAlerts);
+        Assert.DoesNotContain(Alerts.Alerts, a => a.Type == "reminder.auto_disabled");
     }
 
     [Fact]
@@ -115,6 +125,39 @@ public sealed class OneShotSettlementTests : OneShotReminderTestBase
         Assert.Equal("Cancelled", OutcomeOf(RequireTombstone(definition.Id)));
         Assert.Null(Definitions.Get(definition.Id));
         Assert.Single(await History.ReadAsync(definition.Id, 10));
+    }
+
+    // ── D5 at the fire boundary: a fire runs only the occurrence of the current definition ──
+
+    // A one-shot ends, and its ack and schedule cancel both fail. The id is set again for a later time.
+    // The old occurrence stays in Akka.Reminders, and its lease expires. The test puts that occurrence
+    // in the scheduler directly. The in-memory store keeps one row for each reminder key, so this test
+    // cannot also prove that the schedule of the current definition survives the refusal.
+    [Fact]
+    public async Task A_stale_occurrence_of_an_earlier_definition_is_acknowledged_and_does_not_run_early()
+    {
+        await DrainStartupAsync();
+        // A run that started would stay active here, so the status below shows it at once.
+        Pipeline.Mode = RunMode.Hold;
+        var current = NewOneShot("ci-poll", fireIn: TimeSpan.FromMinutes(10));
+        await ScheduleAsync(current);
+        var staleDue = Clock.GetUtcNow() + FirstFireDelay;
+        await ScheduleDirectlyAsync(current.Id, staleDue);
+
+        Advance(FirstFireDelay);
+        await AwaitEnvelopesHandledAsync(1);
+
+        Assert.False(
+            (await StatusAsync(current.Id, TeamCaller)).Executing,
+            "The occurrence of an earlier definition must not run the new definition early.");
+        Assert.Equal(0, Pipeline.InvocationCount);
+        Assert.Equal("Delivered", await OccurrenceStatusAsync(current.Id, staleDue));
+        var stored = Definitions.Get(current.Id);
+        Assert.NotNull(stored);
+        Assert.True(stored.Enabled);
+        Assert.Equal(current.Schedule.FireAtMs, stored.Schedule.FireAtMs);
+        Assert.False(TombstoneExists(current.Id));
+        Assert.NotEmpty(LogsOfLevel(Akka.Event.LogLevel.WarningLevel, current.Id.Value));
     }
 
     // ── D4: a tombstone that matches its definition wins ──

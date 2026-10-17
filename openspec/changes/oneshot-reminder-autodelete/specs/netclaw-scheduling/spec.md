@@ -125,7 +125,9 @@ Netclaw SHALL save a failed run and its poison count before it sends a negative 
 
 Netclaw SHALL write the tombstone of a one-shot before every other step of its end: before the acknowledgement, the negative acknowledgement after a threshold failure, the schedule cancel, and the definition delete. The only exception is a failure that is terminal only because of the negative acknowledgement reply. Then the tombstone SHALL come right after that reply.
 
-If Netclaw cannot write the tombstone, it SHALL NOT acknowledge the occurrence, cancel the schedule, or delete the definition. It SHALL emit a settlement failure alert. The acknowledgement lease SHALL stay the recovery path.
+If Netclaw cannot write the tombstone of a one-shot after a run that succeeded or had a denied tool call, it SHALL still acknowledge the occurrence. The acknowledgement records the durable status `Delivered`, so Akka.Reminders does not deliver the occurrence again, and the run does not repeat. Netclaw SHALL keep the definition, log an error, and emit the `reminder.settlement.failed` alert. The next startup reconciliation SHALL end the one-shot as `Completed` from the durable status.
+
+If Netclaw cannot write the tombstone of any other end (a cancel, a failure at the threshold, or an expiry), it SHALL NOT acknowledge or negatively acknowledge the occurrence, cancel the schedule, or delete the definition. It SHALL emit a settlement failure alert. The acknowledgement lease SHALL stay the recovery path.
 
 A crash at any step after the tombstone SHALL NOT run the one-shot again and SHALL NOT lose its outcome. Reconciliation SHALL repair one-shot terminal state after a post-acknowledgement process failure.
 
@@ -136,14 +138,23 @@ A crash at any step after the tombstone SHALL NOT run the one-shot again and SHA
 - **THEN** Netclaw does not send a negative acknowledgement
 - **AND** the Akka.Reminders acknowledgement timeout remains the recovery path
 
-#### Scenario: The tombstone cannot be written
+#### Scenario: The tombstone cannot be written after a successful or denied run
 
-- **GIVEN** a one-shot run succeeds
+- **GIVEN** a one-shot run succeeds, or a tool call of the run is denied
 - **WHEN** the tombstone write fails with an I/O error
-- **THEN** Netclaw does not acknowledge the occurrence
+- **THEN** Netclaw acknowledges the occurrence, and the durable status is `Delivered`
 - **AND** the definition stays enabled
+- **AND** Netclaw logs an error and emits the `reminder.settlement.failed` alert
+- **AND** the one-shot does not run again, also after the acknowledgement lease time passes
+- **AND** the next startup reconciliation ends the one-shot as `Completed` and deletes the definition
+
+#### Scenario: The tombstone cannot be written for a cancel
+
+- **GIVEN** a one-shot is scheduled
+- **WHEN** a cancel cannot write the tombstone
+- **THEN** the definition and the schedule stay
 - **AND** Netclaw emits the `reminder.settlement.failed` alert
-- **AND** after the lease expires, Akka.Reminders can deliver the occurrence again
+- **AND** the one-shot is not ended
 
 #### Scenario: Process stops after the tombstone and before the acknowledgement
 
@@ -281,12 +292,33 @@ Before it ends a one-shot, Netclaw SHALL check that the current definition is th
 - **THEN** the tombstone keeps the outcome `Cancelled`
 - **AND** the history has a row for the run
 
+### Requirement: A fire runs only the occurrence of the current definition
+
+Before it runs, expires, or ends a one-shot for a fire, Netclaw SHALL check that the due time of the fire equals the fire time of the current definition, at millisecond precision. If the times differ, the occurrence belongs to an earlier definition of the same id. Netclaw SHALL NOT run it. Netclaw SHALL acknowledge that occurrence and log a warning. Netclaw SHALL NOT change the definition or its tombstone, and SHALL NOT cancel the schedule of the current definition.
+
+#### Scenario: An occurrence of an earlier definition does not run early
+
+- **GIVEN** a one-shot `ci-poll` with the fire time 10:10
+- **AND** Akka.Reminders still holds an occurrence of an earlier `ci-poll` due at 10:00
+- **WHEN** the 10:00 occurrence fires
+- **THEN** no execution starts
+- **AND** Netclaw acknowledges the 10:00 occurrence and logs a warning
+- **AND** the `ci-poll` definition stays enabled, and its 10:10 schedule stays
+- **AND** the run starts once, at 10:10
+
+#### Scenario: An occurrence of the current definition runs
+
+- **GIVEN** a one-shot `ci-poll` with the fire time 10:00
+- **WHEN** the 10:00 occurrence fires
+- **THEN** the execution starts
+
 ### Requirement: A tombstone that matches its definition wins
 
 A tombstone SHALL match a definition when both have the same id, the definition is a one-shot, and both fire times are equal at millisecond precision. A matching tombstone SHALL mean that the one-shot ended.
 
 - A fire for a definition with a matching tombstone SHALL NOT run. Netclaw SHALL acknowledge it, cancel the schedule, and delete the definition.
 - A tombstone that does not match its definition SHALL be stale. Netclaw SHALL keep the definition, delete the stale tombstone, and log a warning.
+- A fire for a one-shot whose tombstone file exists but cannot be read SHALL NOT run. Netclaw SHALL NOT acknowledge the occurrence. It SHALL keep the definition, the schedule, and the file. It SHALL log an error and emit the `reminder.tombstone.invalid` alert. The operator repairs or deletes the file, and the acknowledgement lease then returns the occurrence. A read of history or status still counts the unreadable file as absent (see `reminder-execution-history`).
 
 #### Scenario: A matching tombstone blocks the run
 
@@ -295,6 +327,23 @@ A tombstone SHALL match a definition when both have the same id, the definition 
 - **WHEN** the 10:00 fire arrives
 - **THEN** no execution starts
 - **AND** the definition no longer exists
+
+#### Scenario: An unreadable tombstone stops the run
+
+- **GIVEN** a one-shot definition with the fire time 10:00
+- **AND** a tombstone file for the same id that Netclaw cannot read
+- **WHEN** the 10:00 fire arrives
+- **THEN** no execution starts
+- **AND** Netclaw does not acknowledge the occurrence
+- **AND** the definition, the schedule, and the file stay
+- **AND** Netclaw logs an error and emits the `reminder.tombstone.invalid` alert
+
+#### Scenario: A repaired tombstone lets the run happen
+
+- **GIVEN** an unreadable tombstone stopped the 10:00 fire of a one-shot
+- **WHEN** the operator deletes the file and the acknowledgement lease expires
+- **THEN** Akka.Reminders delivers the occurrence again
+- **AND** the execution starts once
 
 #### Scenario: A stale tombstone does not block a newer definition
 

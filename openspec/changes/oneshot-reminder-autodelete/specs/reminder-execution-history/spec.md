@@ -48,7 +48,7 @@ read operations SHALL return an empty result rather than an error.
 
 ### Requirement: Ended one-shot history stays readable through its tombstone
 
-Netclaw SHALL keep the execution history of an ended one-shot for 12 days after its end time, whatever its outcome. The tombstone SHALL supply the audience for every history and status read of an ended one-shot. Netclaw SHALL apply the same audience rule as for a live reminder. A read without a definition and without a tombstone SHALL reply "not found". A tombstone that Netclaw cannot read SHALL count as absent for reads, and Netclaw SHALL log an error and raise an operational alert. Netclaw SHALL NOT expose history without an audience to check. The `Failed` tombstone also holds the reminder prompt (see `netclaw-scheduling`), and the same audience rule gates its read.
+Netclaw SHALL keep the execution history of an ended one-shot for 12 days after its end time, whatever its outcome. The tombstone SHALL supply the audience for every history and status read of an ended one-shot. Netclaw SHALL apply the same audience rule as for a live reminder. A read without a definition and without a tombstone SHALL reply "not found". A tombstone that Netclaw cannot read SHALL count as absent for reads only, and Netclaw SHALL log an error and raise an operational alert. It does not count as absent when a fire decides whether a one-shot runs (see `netclaw-scheduling`). Netclaw SHALL NOT expose history without an audience to check. The `Failed` tombstone also holds the reminder prompt (see `netclaw-scheduling`), and the same audience rule gates its read.
 
 Recurring reminders keep their history until an explicit delete. The history of an id that never existed is reported as not found.
 
@@ -76,6 +76,14 @@ Recurring reminders keep their history until an explicit delete. The history of 
 - **GIVEN** a Personal one-shot ended
 - **WHEN** a Team caller calls `get_reminder_history` for its id
 - **THEN** the tool replies as for an id that never existed
+
+#### Scenario: An unreadable tombstone hides the history
+
+- **GIVEN** an ended one-shot has a history file and a tombstone file that Netclaw cannot read
+- **WHEN** a caller reads the history or the status of its id
+- **THEN** the reply is "not found" and shows no history
+- **AND** Netclaw logs an error and emits the `reminder.tombstone.invalid` alert
+- **AND** the tombstone file stays on disk
 
 #### Scenario: A history file without a definition or a tombstone
 

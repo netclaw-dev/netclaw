@@ -335,10 +335,16 @@ public sealed class OneShotEndOutcomeTests : OneShotReminderTestBase
 
     // ── Crash window: the tombstone cannot be written ──
 
-    [Fact]
-    public async Task Oneshot_tombstone_write_failure_does_not_ack_or_delete()
+    // A run that succeeded or had a denied tool call must not repeat when the tombstone write fails. The
+    // acknowledgement records the durable status Delivered, so Akka.Reminders does not deliver the occurrence
+    // again. The definition stays, and the startup reconciliation ends it from the durable status.
+    [Theory]
+    [InlineData(RunMode.Succeed)]
+    [InlineData(RunMode.Deny)]
+    public async Task Oneshot_tombstone_write_failure_still_acks_and_never_runs_again(RunMode mode)
     {
         await DrainStartupAsync();
+        Pipeline.Mode = mode;
         var definition = NewOneShot("blocked-oneshot");
         await ScheduleAsync(definition);
         // A folder at the temp-file path makes the atomic write fail, as in the other store failure tests.
@@ -348,26 +354,29 @@ public sealed class OneShotEndOutcomeTests : OneShotReminderTestBase
         Advance(FirstFireDelay);
         await AwaitSettledRunAsync(definition.Id, 1);
 
+        Assert.Equal("Delivered", await OccurrenceStatusAsync(definition.Id, definition.Schedule.FireAt!.Value));
         var stored = Definitions.Get(definition.Id);
         Assert.NotNull(stored);
-        Assert.True(stored.Enabled, "A one-shot whose tombstone cannot be written must stay enabled.");
-        Assert.Null(stored.TerminalOutcome);
+        Assert.True(stored.Enabled, "The definition must stay so that the reconciliation can end the one-shot.");
         Assert.False(TombstoneExists(definition.Id));
-        Assert.NotEqual("Delivered", await OccurrenceStatusAsync(definition.Id, definition.Schedule.FireAt!.Value));
         Assert.Contains(Alerts.Alerts, a => a.Type == "reminder.settlement.failed" && a.Source == definition.Id.Value);
+        Assert.NotEmpty(LogsOfLevel(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value));
 
-        // The acknowledgement lease is the recovery path: after it expires, Akka.Reminders delivers the occurrence again.
+        // The acknowledgement lease is 70 minutes. Move past it: nothing may deliver the occurrence again.
+        for (var step = 0; step < 9; step++)
+            Advance(TimeSpan.FromMinutes(10));
+        await BarrierAsync();
+        Assert.Equal(1, Pipeline.InvocationCount);
+        Assert.Equal(1, Envelopes.Count);
+
+        // The disk works again. The restart finds the enabled definition with a past fire time and a
+        // Delivered occurrence, and it ends the one-shot as Completed.
         Directory.Delete(blocker);
-        // The test scheduler runs the timers that Akka.Reminders sets in reaction to the expiry only when
-        // the clock moves again, so each poll moves the clock by one minute.
-        await AwaitAssertAsync(() =>
-        {
-            Advance(TimeSpan.FromMinutes(1));
-            Assert.Equal(2, Pipeline.InvocationCount);
-        }, TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
-        await AwaitSettledRunAsync(definition.Id, 2);
+        await RestartManagerAsync();
 
         await AssertEndedAsync(definition, "Completed");
+        Assert.Equal(1, Pipeline.InvocationCount);
+        Assert.Single(await History.ReadAsync(definition.Id, 10));
     }
 
     [Fact]
@@ -386,6 +395,72 @@ public sealed class OneShotEndOutcomeTests : OneShotReminderTestBase
         Assert.True(await IsScheduledAsync(definition.Id));
         Assert.False(TombstoneExists(definition.Id));
         Assert.Contains(Alerts.Alerts, a => a.Type == "reminder.settlement.failed" && a.Source == definition.Id.Value);
+    }
+
+    // ── Scheduling failure ──
+
+    // The restore at startup is the only place that can fail to schedule a one-shot. The test removes the
+    // shard region, so Akka.Reminders replies ShardRegionNotFound to the schedule request.
+    private ReminderDefinition NewUnschedulableOneShot(string id, int priorFailures)
+        => NewOneShot(id, fireIn: TimeSpan.FromHours(1)) with { ConsecutiveFailures = priorFailures };
+
+    [Fact]
+    public async Task Oneshot_that_reaches_the_scheduling_failure_threshold_ends_failed()
+    {
+        await DrainStartupAsync();
+        var definition = NewUnschedulableOneShot("unschedulable", ReminderManagerActor.FailurePauseThreshold - 1);
+        Definitions.Save(definition);
+        MakeShardRegionUnavailable();
+
+        await ReconcileAsync();
+
+        await AssertEndedAsync(definition, "Failed");
+        var tombstone = RequireTombstone(definition.Id);
+        Assert.Contains("could not be scheduled", Text(tombstone, "lastError"), StringComparison.Ordinal);
+        Assert.Equal(DefaultPrompt, Text(tombstone, "instructions"));
+        Assert.Single(Alerts.Alerts, a => a.Type == "reminder.schedule.failed" && a.Source == definition.Id.Value);
+        Assert.Single(Alerts.Alerts, a =>
+            a.Type == "reminder.auto_disabled" && a.Severity == AlertSeverity.Critical && a.Source == definition.Id.Value);
+    }
+
+    [Fact]
+    public async Task Oneshot_scheduling_failure_below_the_threshold_keeps_the_definition_and_counts_it()
+    {
+        await DrainStartupAsync();
+        var definition = NewUnschedulableOneShot("unschedulable-once", priorFailures: 0);
+        Definitions.Save(definition);
+        MakeShardRegionUnavailable();
+
+        await ReconcileAsync();
+
+        var stored = Definitions.Get(definition.Id);
+        Assert.NotNull(stored);
+        Assert.True(stored.Enabled);
+        Assert.Equal(1, stored.ConsecutiveFailures);
+        Assert.False(TombstoneExists(definition.Id));
+        Assert.Single(Alerts.Alerts, a => a.Type == "reminder.schedule.failed" && a.Source == definition.Id.Value);
+        Assert.DoesNotContain(Alerts.Alerts, a => a.Type == "reminder.auto_disabled");
+    }
+
+    [Fact]
+    public async Task Oneshot_scheduling_failure_at_the_threshold_with_a_tombstone_write_failure_still_alerts()
+    {
+        await DrainStartupAsync();
+        var definition = NewUnschedulableOneShot("unschedulable-blocked", ReminderManagerActor.FailurePauseThreshold - 1);
+        Definitions.Save(definition);
+        MakeShardRegionUnavailable();
+        Directory.CreateDirectory(Path.Combine(EndedDirectory, $"{Uri.EscapeDataString(definition.Id.Value)}.json.tmp"));
+
+        await ReconcileAsync();
+
+        // The end stopped at the tombstone: the definition stays for the next attempt. The operator must
+        // still learn why the reminder has no schedule.
+        Assert.NotNull(Definitions.Get(definition.Id));
+        Assert.False(TombstoneExists(definition.Id));
+        Assert.Contains(Alerts.Alerts, a => a.Type == "reminder.settlement.failed" && a.Source == definition.Id.Value);
+        Assert.Contains(
+            Alerts.Alerts,
+            a => a.Type == "reminder.schedule.failed" && a.Source == definition.Id.Value);
     }
 
     private sealed class AckGateway : ReceiveActor
