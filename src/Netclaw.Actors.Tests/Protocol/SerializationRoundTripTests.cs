@@ -218,6 +218,52 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void TurnRecorded_routed_skill_mark_round_trips_as_a_plain_proto_bool()
+    {
+        // A routed-skill turn is eligible for the reminder alert but never for a retry on the main model.
+        // The mark must survive the journal, because replay rebuilds the delivery state from it.
+        var original = new TurnRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "/ops-route check" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "done" },
+            RecordedAtMs = 1_700_000_000_000,
+            SourceReminderId = new ReminderId("check-pr:1712000000000"),
+            RoutedSkill = true
+        };
+
+        var expected = NetclawProtoMapper.ToProto(original with { RoutedSkill = false });
+        expected.RoutedSkill = true;
+        Assert.Equal(expected.ToByteArray(), Serialize(original));
+
+        var result = RoundTrip(original);
+        Assert.True(result.RoutedSkill);
+        Assert.Equal(original.SourceReminderId, result.SourceReminderId);
+    }
+
+    [Fact]
+    public void TurnRecorded_from_before_the_routed_mark_reads_as_not_routed()
+    {
+        // An old journal entry has no field 8. It reads as an ordinary turn, and a turn that is not routed
+        // writes the same bytes as before the field existed.
+        // Built from an event that never sets the mark, so the proto holds no field 8.
+        var oldShape = NetclawProtoMapper.ToProto(new TurnRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "hi" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "hello" },
+            RecordedAtMs = 1_700_000_000_000,
+            SourceReminderId = new ReminderId("check-pr:1712000000000")
+        });
+
+        var restored = NetclawProtoMapper.FromProto(oldShape);
+
+        Assert.False(restored.RoutedSkill);
+        Assert.Equal(new ReminderId("check-pr:1712000000000"), restored.SourceReminderId);
+        Assert.Equal(oldShape.ToByteArray(), Serialize(restored));
+    }
+
+    [Fact]
     public void Tool_result_failure_code_round_trips_through_the_transport_DTO()
     {
         var original = new ToolResultOutput
@@ -967,6 +1013,32 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void SessionSnapshot_eligible_turn_routed_mark_round_trips_as_a_plain_proto_bool()
+    {
+        // A session that restores from a snapshot does not replay TurnRecorded, so the snapshot carries the
+        // routed mark of the eligible turn. Without it a restored session would retry a routed turn.
+        var wrapped = new SessionSnapshot
+        {
+            TurnCount = 7,
+            History = [],
+            EligibleDeliveryTurnNumber = new TurnNumber(7),
+            EligibleDeliveryReminderId = new ReminderId("check-pr:1712000000000"),
+            EligibleDeliveryTurnRoutedSkill = true
+        };
+
+        var expected = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 7,
+            EligibleDeliveryTurnNumber = 7,
+            EligibleDeliveryReminderId = "check-pr:1712000000000",
+            EligibleDeliveryTurnRoutedSkill = true
+        }.ToByteArray();
+
+        Assert.Equal(expected, Serialize(wrapped));
+        Assert.True(RoundTrip(wrapped).EligibleDeliveryTurnRoutedSkill);
+    }
+
+    [Fact]
     public void SessionSnapshot_from_before_the_reminder_field_loads_with_no_reminder()
     {
         // Old journals hold snapshots without field 12. They must load, with the eligible turn kept
@@ -984,6 +1056,7 @@ public sealed class SerializationRoundTripTests : TestKit
 
         Assert.Equal(new TurnNumber(4), snapshot.EligibleDeliveryTurnNumber);
         Assert.Null(snapshot.EligibleDeliveryReminderId);
+        Assert.False(snapshot.EligibleDeliveryTurnRoutedSkill);
         Assert.Equal(oldShape, Serialize(snapshot));
     }
 
