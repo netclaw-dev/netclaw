@@ -357,7 +357,7 @@ message SessionSnapshotProto {
   repeated string processed_background_job_ids = 18;
   repeated BackgroundChildRunProto child_runs = 19;
   optional string eligible_delivery_reminder_id = 20;
-  bool eligible_delivery_turn_routed_skill = 21;
+  optional bool eligible_delivery_turn_routed_skill = 21;
 }
 
 // ── Session state ──
