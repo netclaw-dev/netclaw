@@ -1816,6 +1816,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         var tombstones = _definitionStore.ListTombstones().ToDictionary(t => t.Id);
         ReportInvalidTombstones();
         var endedOneShots = 0;
+        var endedFromStatus = 0;
 
         foreach (var definition in _definitionStore.List())
         {
@@ -1868,6 +1869,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                     endedOneShots++;
                     RememberTombstone(tombstones, definition.Id);
                 }
+
+                continue;
+            }
+
+            if (definition.Enabled && definition.Schedule.FireAt is { } dueAt && dueAt <= now
+                && await TryEndFromOccurrenceStatusAsync(definition, now))
+            {
+                endedFromStatus++;
+                RememberTombstone(tombstones, definition.Id);
             }
         }
 
@@ -1891,7 +1901,77 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         if (purgedTombstones > 0)
             _log.Info("Purged {0} ended one-shot(s) older than {1}", purgedTombstones, TerminalRetention);
 
-        return new SweepResult(endedOneShots, purgedTombstones);
+        return new SweepResult(endedOneShots, endedFromStatus, purgedTombstones);
+    }
+
+    /// <summary>
+    /// Ends a past, enabled one-shot from its durable Akka.Reminders occurrence status (issue #1803, design D8).
+    /// A past due time and the absence of a schedule do not prove success. The status pass runs in the startup
+    /// reconciliation and in every 12-hour sweep, so a daemon that runs for weeks does not wait for a restart
+    /// before Akka.Reminders prunes the status.
+    /// </summary>
+    /// <returns>True when the one-shot ended.</returns>
+    private async Task<bool> TryEndFromOccurrenceStatusAsync(ReminderDefinition definition, DateTimeOffset now)
+    {
+        // The status pass never overwrites an unreadable tombstone file. It may hold the real outcome, and the
+        // sweep has already raised reminder.tombstone.invalid for it. The matching and the stale tombstones
+        // are resolved before this call, so a file that still exists here cannot be read.
+        if (_definitionStore.TombstoneExists(definition.Id))
+        {
+            _log.Error(
+                "Past one-shot reminder '{0}' has an end record that cannot be read. The end from the durable occurrence status waits until an operator repairs or deletes the file.",
+                definition.Id.Value);
+            return false;
+        }
+
+        var occurrence = await GetOccurrenceStatusAsync(definition);
+        if (occurrence is null)
+        {
+            _log.Warning(
+                "Past one-shot reminder '{0}' has no durable occurrence status. The definition remains enabled for operator review.",
+                definition.Id.Value);
+            return false;
+        }
+
+        ReminderTerminalOutcome outcome;
+        string? lastError;
+        switch (occurrence.CompletionStatus)
+        {
+            case Akka.Reminders.Storage.ReminderCompletionStatus.Delivered:
+                // Delivered means the manager acknowledged a run. A denied run is a failure (design D1a), and
+                // only its history row, written before the ack, still says so.
+                var runs = await _historyStore.ReadAsync(definition.Id, 1);
+                if (runs.Count > 0 && runs[^1].ToolDenied)
+                {
+                    outcome = ReminderTerminalOutcome.Failed;
+                    lastError = runs[^1].ErrorMessage ?? "A tool call was denied.";
+                }
+                else
+                {
+                    outcome = ReminderTerminalOutcome.Completed;
+                    lastError = null;
+                }
+
+                break;
+            case Akka.Reminders.Storage.ReminderCompletionStatus.Failed:
+            case Akka.Reminders.Storage.ReminderCompletionStatus.Expired:
+            case Akka.Reminders.Storage.ReminderCompletionStatus.Cancelled:
+                outcome = ReminderTerminalOutcome.Failed;
+                lastError = occurrence.LastFailureReason
+                            ?? $"Akka.Reminders ended the occurrence with the status {occurrence.CompletionStatus}.";
+                break;
+            default:
+                // Pending and AwaitingAck: an active or waiting occurrence.
+                return false;
+        }
+
+        return await EndOneShotAsync(
+            definition,
+            outcome,
+            lastError,
+            occurrence.CompletedAtUtc ?? now,
+            envelope: null,
+            EnvelopeAction.None);
     }
 
     private void RememberTombstone(Dictionary<ReminderId, ReminderTombstone> tombstones, ReminderId id)
@@ -1900,7 +1980,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             tombstones[id] = written;
     }
 
-    private sealed record SweepResult(int EndedOneShots, int PurgedTombstones);
+    private sealed record SweepResult(int EndedOneShots, int EndedFromStatus, int PurgedTombstones);
 
     private async Task HandleReconcileAsync()
     {
@@ -1953,50 +2033,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                 }
             }
 
-            // Issue #1803: a past due time and the absence of a schedule do not prove success.
             var now = _timeProvider.GetUtcNow();
-            var endedFromStatus = 0;
-            foreach (var definition in definitions.Where(d =>
-                         d.Enabled &&
-                         d.Schedule.Type == ReminderScheduleType.OneShot &&
-                         d.Schedule.FireAt <= now))
-            {
-                var occurrence = await GetOccurrenceStatusAsync(definition);
-                if (occurrence is null)
-                {
-                    _log.Warning(
-                        "Past one-shot reminder '{0}' has no durable occurrence status. The definition remains enabled for operator review.",
-                        definition.Id.Value);
-                    continue;
-                }
-
-                var outcome = occurrence.CompletionStatus switch
-                {
-                    Akka.Reminders.Storage.ReminderCompletionStatus.Delivered => ReminderTerminalOutcome.Completed,
-                    Akka.Reminders.Storage.ReminderCompletionStatus.Failed => ReminderTerminalOutcome.Failed,
-                    Akka.Reminders.Storage.ReminderCompletionStatus.Expired => ReminderTerminalOutcome.Failed,
-                    Akka.Reminders.Storage.ReminderCompletionStatus.Cancelled => ReminderTerminalOutcome.Failed,
-                    _ => (ReminderTerminalOutcome?)null
-                };
-
-                if (outcome is null)
-                    continue;
-
-                var lastError = outcome == ReminderTerminalOutcome.Completed
-                    ? null
-                    : occurrence.LastFailureReason
-                      ?? $"Akka.Reminders ended the occurrence with the status {occurrence.CompletionStatus}.";
-                if (await EndOneShotAsync(
-                        definition,
-                        outcome.Value,
-                        lastError,
-                        occurrence.CompletedAtUtc ?? now,
-                        envelope: null,
-                        EnvelopeAction.None))
-                {
-                    endedFromStatus++;
-                }
-            }
 
             // Disable expired recurring reminders that haven't fired since expiration.
             var disabledExpired = 0;
@@ -2009,7 +2046,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                 disabledExpired++;
             }
 
-            var endedOneShots = sweep.EndedOneShots + endedFromStatus;
+            var endedOneShots = sweep.EndedOneShots + sweep.EndedFromStatus;
             if (cancelledOrphans > 0 || restoredSchedules > 0 || endedOneShots > 0
                 || disabledExpired > 0 || sweep.PurgedTombstones > 0)
             {
@@ -2023,7 +2060,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
 
             // Only ack external callers — skip Self.Tell from PreStart
             if (!sender.Equals(Self))
-                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, endedFromStatus, disabledExpired));
+                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, sweep.EndedFromStatus, disabledExpired));
         }
         catch (Exception ex)
         {
