@@ -47,6 +47,8 @@
              Link="Sessions/SessionInputFlowTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/ReminderFireDropRuleTests.cs"
              Link="Sessions/ReminderFireDropRuleTests.cs" />
+    <Compile Include="../Netclaw.Actors.Tests/Sessions/DeliveryRetryHandlerReminderTests.cs"
+             Link="Sessions/DeliveryRetryHandlerReminderTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Reminders/ReminderFireKeyTests.cs"
              Link="Reminders/ReminderFireKeyTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Channels/TurnContextRequesterTests.cs"

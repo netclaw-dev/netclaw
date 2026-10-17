@@ -171,9 +171,13 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
     {
         var pendingThrow = _replyClient.ThrowOnPost;
         var pendingUploadThrow = _replyClient.ThrowOnUpload;
+        // Keep the one-shot failure too. Dropping it made every "fail one post" contract test pass
+        // without a failed post.
+        var pendingThrowOnce = _replyClient.ThrowOnceOnPost;
         _replyClient = new RecordingDiscordReplyClient
         {
             ThrowOnPost = pendingThrow,
+            ThrowOnceOnPost = pendingThrowOnce,
             ThrowOnUpload = pendingUploadThrow
         };
     }

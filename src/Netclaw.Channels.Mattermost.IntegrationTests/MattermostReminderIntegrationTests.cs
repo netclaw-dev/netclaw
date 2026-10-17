@@ -166,6 +166,9 @@ public sealed class MattermostReminderIntegrationTests(
             Assert.Equal(sessionId, failed.SessionId);
             Assert.Equal(ChannelType.Mattermost, failed.ChannelType);
             Assert.Equal(DeliveryFailureKind.TransportFailure, failed.FailureKind);
+            // The session accepts feedback only for the turn it recorded. The fake pipeline completes turn 1,
+            // so a report for turn 0 (the last completed turn before the reply) would reach a live session as stale.
+            Assert.Equal(new TurnNumber(1), failed.TurnNumber);
         }
 
         using var reader = new MattermostClient(fixture.ServerUrl, fixture.BotToken);

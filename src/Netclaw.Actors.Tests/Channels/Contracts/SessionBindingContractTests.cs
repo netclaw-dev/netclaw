@@ -788,6 +788,110 @@ public abstract class SessionBindingContractTests : TestKit
         ClearReplyClientThrows();
     }
 
+    // Cross-boundary contract with the session (spec netclaw-session, "A failed post on a reminder turn is
+    // visible to the operator"). The session ignores feedback for a turn that is not its latest eligible turn.
+    // A binding posts text while the turn runs and learns the turn number only from TurnCompleted. It must
+    // report the turn whose output failed to post, once per turn: 2, 3, 4 here. It must not report the last
+    // completed turn (0, 2, 3), and it must not report one failed turn twice. Turn 1 would hide the defect,
+    // because turn 0 is the unset value that the session also treats as "no turn".
+    [Fact]
+    public async Task Failed_post_reports_the_turn_it_belongs_to_once_per_turn()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-failed-post-turn-number");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("turn two reply") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2) },
+            new TextOutput("turn three first part") { SessionId = sid },
+            new TextOutput("turn three second part") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(3) },
+            new TextOutput("turn four reply") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(4) }
+        ]);
+
+        // Every post fails, so each turn has a failed post. Turn 3 has two of them.
+        SetReplyClientThrows(new InvalidOperationException("channel API down"));
+        CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(
+            () => Assert.True(
+                pipeline.RecordedFeedback.OfType<DeliveryFailed>().Count() >= 3,
+                "expected one DeliveryFailed per failed turn"),
+            cancellationToken: ct);
+
+        var reportedTurns = pipeline.RecordedFeedback.OfType<DeliveryFailed>()
+            .Select(f => f.TurnNumber.Value)
+            .ToList();
+        Assert.Equal([2, 3, 4], reportedTurns);
+
+        ClearReplyClientThrows();
+    }
+
+    // A turn with one delivered post and one failed post sends no report. Slack has this rule today: the
+    // reply reached the thread in part, and a retry would post the delivered part twice. Discord and Mattermost
+    // follow the same rule, so the three channels give the session the same signal.
+    [Fact]
+    public async Task Failed_post_in_a_turn_with_a_delivered_post_sends_no_DeliveryFailed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-partial-delivery");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("lost part") { SessionId = sid },
+            new TextOutput("delivered part") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(3) },
+            new TextOutput("barrier reply") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(4) }
+        ]);
+
+        // Only the first post fails. The next two posts succeed.
+        SetReplyClientThrowsOnce(new InvalidOperationException("transient channel error"));
+        CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("barrier reply", StringComparison.Ordinal));
+        }, cancellationToken: ct);
+
+        Assert.Contains(GetPostedTexts(), t => t.Contains("delivered part", StringComparison.Ordinal));
+        Assert.Empty(pipeline.RecordedFeedback.OfType<DeliveryFailed>());
+    }
+
+    // The empty-turn fallback ("I didn't manage to produce a reply") is a post of the turn that it answers.
+    // When it fails, the session must hear about that turn, not about the turn before it.
+    [Fact]
+    public async Task Failed_empty_turn_fallback_post_reports_the_turn_it_answers()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-failed-fallback-turn-number");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(3) },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(4) }
+        ]);
+
+        SetReplyClientThrows(new InvalidOperationException("channel API down"));
+        CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(
+            () => Assert.True(
+                pipeline.RecordedFeedback.OfType<DeliveryFailed>().Count() >= 2,
+                "expected one DeliveryFailed per empty turn whose fallback post failed"),
+            cancellationToken: ct);
+
+        var reportedTurns = pipeline.RecordedFeedback.OfType<DeliveryFailed>()
+            .Select(f => f.TurnNumber.Value)
+            .ToList();
+        Assert.Equal([3, 4], reportedTurns);
+
+        ClearReplyClientThrows();
+    }
+
     [Fact]
     public async Task Feedback_send_failure_faults_the_actor()
     {

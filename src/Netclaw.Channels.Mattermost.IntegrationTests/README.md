@@ -50,4 +50,4 @@ The fixture uses `mattermost/mattermost-preview:latest`.
 The local proof on 2026-10-05 used Mattermost Server 11.11.1.
 Its image digest was `sha256:90319a856c49f0aef1000ab473ad76be3a8a97bef196424764638ee132eb61bc`.
 
-The `mattermost_integration` workflow runs this suite on `ubuntu-latest`. It runs nightly and on a pull request that touches the Mattermost channel, `Netclaw.Channels`, reminders, or sessions. It fails when any test is skipped.
+The `mattermost_integration` workflow runs this suite on `ubuntu-latest`. It runs nightly and on a pull request that touches the Mattermost channel, `Netclaw.Channels`, reminders, sessions, the session protocol, `Directory.Packages.props`, or `global.json`. It fails when any test is skipped.
