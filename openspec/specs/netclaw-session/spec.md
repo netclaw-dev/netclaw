@@ -1087,7 +1087,8 @@ Every phase handles a report. The session SHALL handle `DeliveryFailed` in `Read
 | Phase or state | The session SHALL |
 |----------------|-------------------|
 | `Ready` | Apply the stale check, the routed-skill rule, and the retry rule. On a final failure, call `ReportReminderPostFailure`. |
-| `Processing` and `Compacting` | Make no retry, because the session works on another input. Add the nudge for a kind that is not retryable. Call `ReportReminderPostFailure`. |
+| `Processing` | Make no retry, because the session works on another input. Add the nudge for a kind that is not retryable. Call `ReportReminderPostFailure`. |
+| `Compacting` | Make no retry. Add no nudge, because compaction rebuilds the history from the state that the session saved when compaction started, and the rebuild would discard the nudge. Write one Warning that contains `adds no nudge` for a kind that is not retryable. Call `ReportReminderPostFailure`. The alert and the Error log are the operator signal. |
 | `Passivating`, no restart drain pending | Abort the passivation and handle the report as in `Ready`. |
 | Any phase while a restart drain is pending | Call `ReportReminderPostFailure`. Add no nudge, make no retry, and do not abort the drain. The drain ends the session soon, and the failed post is the only trace of the lost reply. |
 
@@ -1225,6 +1226,7 @@ The session SHALL NOT raise `reminder.delivery.failed` for a turn that no remind
 - **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
 - **THEN** the session writes one Error log that names the reminder
 - **AND** the sink receives one `reminder.delivery.failed` alert before compaction ends
+- **AND** the session adds no nudge, so the next model call holds no delivery-failure message
 
 #### Scenario: A report while a restart drain is pending raises the alert
 

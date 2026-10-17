@@ -23,6 +23,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <summary>
 /// Review round 3, S1. The binding sends <c>DeliveryFailed</c> only after it handled <c>TurnCompleted</c>. That is
 /// the moment a long reminder turn starts to compact. The session SHALL NOT drop the report in this phase.
+/// The session adds no nudge in this phase, because compaction rebuilds the history and discards the nudge.
 /// Spec: <c>netclaw-session</c>, "A failed post on a reminder turn is visible to the operator".
 /// </summary>
 public sealed class ReminderCompactionDeliveryTests : ReminderDeliveryTestBase
@@ -55,7 +56,7 @@ public sealed class ReminderCompactionDeliveryTests : ReminderDeliveryTestBase
     }
 
     [Fact]
-    public async Task A_failed_post_that_the_binding_reports_while_the_session_compacts_raises_one_alert()
+    public async Task A_failed_post_that_the_binding_reports_while_the_session_compacts_raises_one_alert_and_adds_no_nudge()
     {
         // Arrange: the reminder turn crosses the compaction threshold, and the summarizer call waits on a gate,
         // so the session stays in Compacting until the test releases it.
@@ -82,14 +83,20 @@ public sealed class ReminderCompactionDeliveryTests : ReminderDeliveryTestBase
 
             // Act: the report reaches the session in Compacting. The buffered user message is the barrier. The session
             // acknowledges it from Compacting too, and it handles the earlier report first.
-            await EventFilter.Error(contains: ReminderSlug).ExpectAsync(1, async () =>
+            // The Warning "adds no nudge" is the only direct signal of the nudge decision. Compaction discards a nudge
+            // that the session adds to the history, so the model request cannot tell a session that adds none from a
+            // session that adds one and loses it. This assertion fails on a session that adds the nudge.
+            await EventFilter.Warning(contains: "adds no nudge").ExpectAsync(1, async () =>
             {
-                SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
-                await ActorRegistry.Get<SessionManagerActorKey>().Ask<CommandAck>(new SendUserMessage
+                await EventFilter.Error(contains: ReminderSlug).ExpectAsync(1, async () =>
                 {
-                    SessionId = sessionId,
-                    Content = "Buffered while compacting"
-                }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+                    SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+                    await ActorRegistry.Get<SessionManagerActorKey>().Ask<CommandAck>(new SendUserMessage
+                    {
+                        SessionId = sessionId,
+                        Content = "Buffered while compacting"
+                    }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+                }, cancellationToken: TestContext.Current.CancellationToken);
             }, cancellationToken: TestContext.Current.CancellationToken);
 
             // Assert: the alert exists before compaction ends. A session that saved the report for later would fail here.
@@ -104,6 +111,10 @@ public sealed class ReminderCompactionDeliveryTests : ReminderDeliveryTestBase
             _ => true, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
         var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
         Assert.Equal(ReminderSlug, alert.Source);
+
+        // The buffered message and the barrier message each ran a main-model call after compaction.
+        // None of these requests holds a delivery-failure nudge.
+        Assert.DoesNotContain(ChatClient.ReceivedMessages, call => call.Any(IsDeliveryNudge));
     }
 }
 
@@ -126,6 +137,7 @@ public sealed class ReminderRestartDrainDeliveryTests : ReminderDeliveryTestBase
         var sessionId = new SessionId("mattermost/chan1/reminder-thread-drain-processing");
         var (_, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
         var gate = await HoldSessionInProcessingAsync(sessionId);
+        var modelCallsBeforeReport = ChatClient.CallCount;
         var session = await ResolveSessionAsync(sessionId);
         session.Tell(new PrepareForDaemonRestart(sessionId, "test-restart"));
 
@@ -146,6 +158,13 @@ public sealed class ReminderRestartDrainDeliveryTests : ReminderDeliveryTestBase
             gate.TrySetResult();
         }
 
+        // The drain is not aborted: the held turn ends and the session confirms the restart.
+        await ExpectMsgAsync<DaemonRestartPrepared>(
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        // The report made no model call and added no nudge.
+        Assert.Equal(modelCallsBeforeReport, ChatClient.CallCount);
+        Assert.DoesNotContain(ChatClient.ReceivedMessages, call => call.Any(IsDeliveryNudge));
     }
 
     private static DeliveryFailed FailedPost(SessionId sessionId, TurnNumber turn) => new()
@@ -223,6 +242,8 @@ public sealed class ReminderPassivatingDrainDeliveryTests : ReminderDeliveryTest
         await jobManagerProbe.ExpectMsgAsync<KillJobsForSession>(
             TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
+        var modelCallsBeforeReport = ChatClient.CallCount;
+
         try
         {
             // Act
@@ -238,8 +259,14 @@ public sealed class ReminderPassivatingDrainDeliveryTests : ReminderDeliveryTest
         finally
         {
             jobManagerProbe.Reply(new SessionJobsReaped(sessionId, 1));
-            await restart;
         }
+
+        // The drain is not aborted: a session that aborted it would go to Ready and never confirm the restart.
+        await restart;
+
+        // The report made no model call and added no nudge.
+        Assert.Equal(modelCallsBeforeReport, ChatClient.CallCount);
+        Assert.DoesNotContain(ChatClient.ReceivedMessages, call => call.Any(IsDeliveryNudge));
     }
 
     private sealed class PermissiveToolExecutor : IToolExecutor
