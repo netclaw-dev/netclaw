@@ -174,7 +174,7 @@ kill_smoke_daemon_processes() {
 start_daemon() {
   : "${NETCLAW_SMOKE_CLI:?NETCLAW_SMOKE_CLI must be set}"
   # Defense in depth: a daemon orphaned by an earlier tape/scenario would still
-  # hold :5199 and make this start crash on bind. Clear it before launching.
+  # hold the smoke port and make this start crash on bind. Clear it before launching.
   if ! ensure_daemon_port_free; then
     log "ERROR: daemon port not free; refusing to start."
     return 1

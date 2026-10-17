@@ -17,10 +17,14 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
+// The class sets NETCLAW_DAEMON_PATH for the whole process, so it must not run in parallel with a
+// test that starts a daemon.
+[Collection(LegacyModelEnvironmentCollection.Name)]
 public sealed class HealthCheckStepViewModelTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
+    private readonly string? _originalDaemonPath = Environment.GetEnvironmentVariable("NETCLAW_DAEMON_PATH");
 
     public HealthCheckStepViewModelTests()
     {
@@ -30,7 +34,7 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_PATH", null);
+        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_PATH", _originalDaemonPath);
         _dir.Dispose();
     }
 

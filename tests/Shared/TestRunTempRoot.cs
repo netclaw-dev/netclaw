@@ -18,6 +18,10 @@ namespace Netclaw.Tests;
 /// Gives one test process a private temp root. The module initializer points
 /// TMPDIR, TMP, and TEMP at a new folder, so every <c>Path.GetTempPath()</c>
 /// call in the test process and its child processes lands inside it.
+/// It also points NETCLAW_HOME at a folder in that root, so code that
+/// resolves the default Netclaw home never reaches <c>~/.netclaw</c>, the home
+/// of a daemon that can run on the same machine. It removes an inherited daemon
+/// endpoint or port, so no test inherits the address of a daemon from the shell.
 /// The assembly fixture fails the run if a test left anything in the root,
 /// then deletes the root. Other processes that write to the real temp
 /// directory cannot change the result.
@@ -30,6 +34,10 @@ internal static class TestRunTempRoot
     // socket in TMPDIR. A killed child leaves them behind. Verify keeps its own
     // VerifyTempDirectory and VerifyTempFiles. None of these are test output.
     private static readonly string[] RuntimeOwnedPrefixes = ["clr-debug-pipe-", "dotnet-diagnostic-", "VerifyTemp"];
+
+    // The folder is never created here. A test that writes to the default home creates it,
+    // and the fixture then reports it as a leak.
+    private const string DefaultHomeFolder = "default-home";
 
     private static string? _root;
 
@@ -46,9 +54,27 @@ internal static class TestRunTempRoot
         foreach (var name in EnvironmentVariables)
             Environment.SetEnvironmentVariable(name, root);
 
+        Environment.SetEnvironmentVariable("NETCLAW_HOME", Path.Combine(root, DefaultHomeFolder));
+        RemoveInheritedDaemonEndpoint();
+
         // Safety net for a run that ends before the fixture runs. The fixture
         // reports leaks; this handler only deletes.
         AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDeleteRoot();
+    }
+
+    // A shell that points at a daemon (NETCLAW_DAEMON_ENDPOINT, NETCLAW_Daemon__Port) would send the
+    // shutdown notices of the in-process stop paths to that daemon, and the tests would fail only after
+    // the notices left. The configuration binder ignores key case, so compare names without case.
+    // Other NETCLAW_* variables stay: the integration tests read their NETCLAW_RUN_* and NETCLAW_DEMO_* switches.
+    private static void RemoveInheritedDaemonEndpoint()
+    {
+        var names = Environment.GetEnvironmentVariables().Keys
+            .OfType<string>()
+            .Where(static name => name.Equals("NETCLAW_DAEMON_ENDPOINT", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("NETCLAW_DAEMON__", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        foreach (var name in names)
+            Environment.SetEnvironmentVariable(name, null);
     }
 
     internal static string[] FindLeftovers()

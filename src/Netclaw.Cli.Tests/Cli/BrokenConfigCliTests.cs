@@ -182,7 +182,9 @@ public sealed class BrokenConfigCliTests : IDisposable
         File.WriteAllText(ConfigPath, "{\"configVersion\":1,\"Daemon\":{\"Port\":5987}}");
         File.WriteAllText(SecretsPath, "{\"Providers\":{");
 
-        var status = await RunAsync("status");
+        // This test checks that the CLI reads the port from the home config, so it sets no endpoint.
+        // The port in the config is not 5199, so the CLI does not reach the real daemon.
+        var status = await RunAsync(["status"], null, daemonEndpoint: null);
 
         Assert.Contains("127.0.0.1:5987", status.Output);
     }
@@ -332,9 +334,16 @@ public sealed class BrokenConfigCliTests : IDisposable
         Assert.Empty(crashLogs);
     }
 
+    // Port 1 has no listener, so the CLI sees no daemon.
+    private const string NoDaemonEndpoint = "http://127.0.0.1:1";
+    private const string NoDaemonPort = "1";
+
     private Task<(int ExitCode, string Output)> RunAsync(params string[] args) => RunAsync(args, null);
 
-    private async Task<(int ExitCode, string Output)> RunAsync(string[] args, Dictionary<string, string>? environment)
+    private Task<(int ExitCode, string Output)> RunAsync(string[] args, Dictionary<string, string>? environment)
+        => RunAsync(args, environment, NoDaemonEndpoint);
+
+    private async Task<(int ExitCode, string Output)> RunAsync(string[] args, Dictionary<string, string>? environment, string? daemonEndpoint)
     {
         var psi = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
@@ -351,9 +360,22 @@ public sealed class BrokenConfigCliTests : IDisposable
             psi.Environment.Remove(key);
         psi.Environment["HOME"] = _dir.Path;
         psi.Environment["NETCLAW_HOME"] = _home;
+        // The config files of most of these tests are broken, so the port cannot live in them.
+        // Without an endpoint, `mcp list` and `doctor` send requests to port 5199, the port of
+        // the real daemon.
+        // The endpoint variable covers the hub and REST paths. `daemon status`, `daemon stop`, and `pair`
+        // ignore it and read the Daemon config, so the environment also gives a port that nothing listens on.
+        if (daemonEndpoint is not null)
+        {
+            psi.Environment["NETCLAW_DAEMON_ENDPOINT"] = daemonEndpoint;
+            psi.Environment["NETCLAW_Daemon__Port"] = NoDaemonPort;
+        }
+
         psi.Environment["NETCLAW_Daemon__DisableSelfUpdate"] = "true";
         foreach (var (key, value) in environment ?? [])
             psi.Environment[key] = value;
+
+        StandInDaemon.RequireExplicitEndpoint(_home, psi.Environment);
 
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
