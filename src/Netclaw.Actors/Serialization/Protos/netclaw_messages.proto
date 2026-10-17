@@ -96,6 +96,8 @@ message TurnRecordedProto {
   optional string source_background_job_id = 6;
   repeated string consumed_input_ids = 7;
   ChildContinuationProto child_continuation = 8;
+  // proto3 bool: an entry written before this field reads as false (an ordinary turn).
+  bool routed_skill = 10;
 }
 
 message InputAdmittedProto {
@@ -354,6 +356,8 @@ message SessionSnapshotProto {
   repeated string adopted_task_input_ids = 17;
   repeated string processed_background_job_ids = 18;
   repeated BackgroundChildRunProto child_runs = 19;
+  optional string eligible_delivery_reminder_id = 20;
+  bool eligible_delivery_turn_routed_skill = 21;
 }
 
 // ── Session state ──
