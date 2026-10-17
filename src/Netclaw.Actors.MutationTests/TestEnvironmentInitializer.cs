@@ -18,5 +18,16 @@ internal static class TestEnvironmentInitializer
         // mutant repeatedly, so a shared opt-out avoids inotify exhaustion on
         // Linux.
         Environment.SetEnvironmentVariable("DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE", "false");
+
+        // new NetclawPaths() reads NETCLAW_HOME. Without it, some shell mutation tests resolve
+        // ~/.netclaw, the home of a real daemon, and their result depends on that home. The folder
+        // is not created here. The exit handler deletes it if a test creates it.
+        var home = Path.Combine(Path.GetTempPath(), $"netclaw-mutation-default-home-{Guid.NewGuid():N}");
+        Environment.SetEnvironmentVariable("NETCLAW_HOME", home);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            if (Directory.Exists(home))
+                Directory.Delete(home, recursive: true);
+        };
     }
 }

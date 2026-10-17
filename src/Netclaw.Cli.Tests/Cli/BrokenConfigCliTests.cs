@@ -336,6 +336,7 @@ public sealed class BrokenConfigCliTests : IDisposable
 
     // Port 1 has no listener, so the CLI sees no daemon.
     private const string NoDaemonEndpoint = "http://127.0.0.1:1";
+    private const string NoDaemonPort = "1";
 
     private Task<(int ExitCode, string Output)> RunAsync(params string[] args) => RunAsync(args, null);
 
@@ -362,11 +363,19 @@ public sealed class BrokenConfigCliTests : IDisposable
         // The config files of most of these tests are broken, so the port cannot live in them.
         // Without an endpoint, `mcp list` and `doctor` send requests to port 5199, the port of
         // the real daemon.
+        // The endpoint variable covers the hub and REST paths. `daemon status`, `daemon stop`, and `pair`
+        // ignore it and read the Daemon config, so the environment also gives a port that nothing listens on.
         if (daemonEndpoint is not null)
+        {
             psi.Environment["NETCLAW_DAEMON_ENDPOINT"] = daemonEndpoint;
+            psi.Environment["NETCLAW_Daemon__Port"] = NoDaemonPort;
+        }
+
         psi.Environment["NETCLAW_Daemon__DisableSelfUpdate"] = "true";
         foreach (var (key, value) in environment ?? [])
             psi.Environment[key] = value;
+
+        StandInDaemon.RequireExplicitEndpoint(_home, psi.Environment);
 
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);

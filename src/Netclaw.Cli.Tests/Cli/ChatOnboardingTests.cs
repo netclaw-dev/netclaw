@@ -280,6 +280,8 @@ public sealed class ChatOnboardingTests : IDisposable
         info.UseShellExecute = false;
         info.Environment["NETCLAW_HOME"] = _dir.Path;
         info.Environment["NETCLAW_DAEMON_ENDPOINT"] = "http://127.0.0.1:1";
+        info.Environment["NETCLAW_Daemon__Port"] = "1";
+        StandInDaemon.RequireExplicitEndpoint(_dir.Path, info.Environment);
 
         using var process = Process.Start(info)!;
         process.StandardInput.Close();

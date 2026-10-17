@@ -100,7 +100,6 @@ public sealed class DaemonCommandWiringTests : IDisposable
         Dictionary<string, string>? extraEnvironment = null)
     {
         Directory.CreateDirectory(netclawHome);
-        StandInDaemon.RequireExplicitEndpoint(netclawHome);
         var cliAssembly = Path.Combine(AppContext.BaseDirectory, "netclaw.dll");
         var psi = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
@@ -122,6 +121,8 @@ public sealed class DaemonCommandWiringTests : IDisposable
         psi.Environment["FAKE_SYSTEMCTL_DIR"] = _systemctlState;
         foreach (var (key, value) in extraEnvironment ?? [])
             psi.Environment[key] = value;
+
+        StandInDaemon.RequireExplicitEndpoint(netclawHome, psi.Environment);
 
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -368,14 +369,16 @@ public sealed class DaemonCommandWiringTests : IDisposable
         // unit's MainPID matches it, but that process serves the default home (its environment
         // says so), so the scratch home's stop must not go through the unit.
         var unitDaemon = UnitRunsDaemonOf(DefaultNetclawHome);
-        ListenForHome(ScratchHome); // the scratch home needs a port of its own, or its notice goes to port 5199
+        // The scratch home needs a port of its own, or its notice goes to port 5199.
+        var scratchListener = ListenForHome(ScratchHome);
         File.WriteAllText(Path.Combine(ScratchHome, "netclaw.pid"), unitDaemon.Pid.ToString());
 
         var (_, output) = await RunAsync(ScratchHome, ["daemon", "stop"]);
 
         Assert.DoesNotContain("--user stop", SystemctlCalls);
         Assert.DoesNotContain("systemd user service", output);
-        Assert.Empty(unitDaemon.ShutdownNotices); // a notice from the scratch home goes to the scratch home's endpoint
+        Assert.Empty(unitDaemon.ShutdownNotices);
+        AssertOneCliStopNotice(scratchListener); // the notice went to the endpoint of the scratch home, not elsewhere
     }
 
     [SlopwatchSuppress("SW001", "Drives the Linux systemd user-service path through a fake systemctl.")]

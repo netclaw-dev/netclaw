@@ -45,6 +45,7 @@ internal sealed record RecordedRequest(string Method, string Path, string Query)
 internal sealed class StandInDaemon : IDisposable
 {
     private const int BindAttempts = 5;
+    private const int RealDaemonPort = 5199;
 
     private readonly Lock _gate = new();
     private readonly List<RecordedRequest> _requests = [];
@@ -161,23 +162,50 @@ internal sealed class StandInDaemon : IDisposable
     }
 
     /// <summary>
-    /// Throws when a command can send a shutdown notice for <paramref name="home"/> and the
-    /// home has no explicit endpoint. A command reaches the notice when the home has a PID
-    /// file. Without a port, the notice would go to port 5199, the port of the real daemon.
+    /// Throws when a command can send a shutdown notice for <paramref name="home"/> and neither the
+    /// home nor the child environment gives a daemon port. A command reaches the notice when the
+    /// home has a PID file. Without a port, the notice would go to port 5199, the port of the real
+    /// daemon.
     /// </summary>
-    public static void RequireExplicitEndpoint(string home)
+    /// <remarks>
+    /// A port is the proof, not <c>NETCLAW_DAEMON_ENDPOINT</c>. The local-control paths
+    /// (<c>daemon status</c>, <c>daemon stop</c>, <c>pair</c>) ignore that variable and read only the
+    /// <c>Daemon</c> config, so an endpoint variable alone leaves them on port 5199.
+    /// </remarks>
+    /// <param name="home">The Netclaw home that the child process gets.</param>
+    /// <param name="childEnvironment">The environment of the child process, after the test sets it.</param>
+    public static void RequireExplicitEndpoint(string home, IDictionary<string, string?> childEnvironment)
     {
         if (!File.Exists(Path.Combine(home, "netclaw.pid")))
             return;
 
-        if (File.Exists(Path.Combine(home, "client", "config.json")) || ReadDaemonPort(home) is not null)
+        var port = ReadEnvironmentPort(childEnvironment) ?? ReadDaemonPort(home);
+        if (port is not null && port != RealDaemonPort)
             return;
 
         throw new InvalidOperationException(
-            $"The test home '{home}' has a PID file and no daemon port. A shutdown notice from this home would reach "
-            + "port 5199, the port of the real daemon. Start the stand-in with StandInDaemon.Start, "
-            + "or give the home a port with StandInDaemon.ListenOnly.");
+            $"The test home '{home}' has a PID file and no daemon port other than {RealDaemonPort}. A shutdown notice "
+            + "from this home would reach port 5199, the port of the real daemon. Start the stand-in with "
+            + "StandInDaemon.Start, give the home a port with StandInDaemon.ListenOnly, "
+            + "or set NETCLAW_Daemon__Port in the environment of the child process.");
     }
+
+    /// <summary>
+    /// Throws unless the child environment sets <c>NETCLAW_Daemon__Port</c> to a port other than
+    /// 5199. Use it before a test starts the real <c>netclawd</c>. A daemon that passes its startup
+    /// checks by mistake then binds that port, not the port of the real daemon.
+    /// </summary>
+    public static void RequireDaemonBindPort(IDictionary<string, string?> childEnvironment)
+    {
+        var port = ReadEnvironmentPort(childEnvironment);
+        if (port is null || port == RealDaemonPort)
+            throw new InvalidOperationException(
+                $"A test must set NETCLAW_Daemon__Port to a port other than {RealDaemonPort} before it starts netclawd. "
+                + "The real daemon of the machine binds that port.");
+    }
+
+    /// <summary>Finds a free loopback port. Another process can take it before the caller binds it.</summary>
+    public static int GetFreePort() => FreePort();
 
     public void Dispose()
     {
@@ -218,8 +246,17 @@ internal sealed class StandInDaemon : IDisposable
             lock (_gate)
                 _requests.Add(new RecordedRequest(request.HttpMethod, request.Url!.AbsolutePath, request.Url.Query));
 
-            context.Response.StatusCode = (int)HttpStatusCode.OK;
-            context.Response.Close();
+            // The CLI can drop the request at its own timeout on a loaded host. A failed reply must
+            // not fault the loop, or Dispose throws and skips the cleanup of the other stand-ins.
+            try
+            {
+                context.Response.StatusCode = (int)HttpStatusCode.OK;
+                context.Response.Close();
+            }
+            catch (Exception ex) when (ex is IOException or HttpListenerException or ObjectDisposedException) // slopwatch-ignore: SW003 the client left; the request is already recorded
+            {
+                continue;
+            }
         }
     }
 
@@ -250,6 +287,8 @@ internal sealed class StandInDaemon : IDisposable
         return ((IPEndPoint)probe.LocalEndpoint).Port;
     }
 
+    // This rewrites the whole file with JsonNode.ToJsonString(), so it drops the comments of an
+    // existing netclaw.json. No test that uses a stand-in depends on those comments.
     private static void WriteDaemonPort(string home, int port)
     {
         var configDirectory = Path.Combine(home, "config");
@@ -272,11 +311,31 @@ internal sealed class StandInDaemon : IDisposable
         if (!File.Exists(path))
             return null;
 
-        var node = JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions
+        try
         {
-            CommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true,
-        });
-        return node?["Daemon"]?["Port"]?.GetValue<int>();
+            var node = JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+            return node?["Daemon"]?["Port"]?.GetValue<int>();
+        }
+        catch (JsonException) // slopwatch-ignore: SW003 a broken config holds no port; the caller then reports the missing port
+        {
+            return null;
+        }
+    }
+
+    // The configuration binder ignores key case, so the child process accepts any case here.
+    private static int? ReadEnvironmentPort(IDictionary<string, string?> environment)
+    {
+        foreach (var (key, value) in environment)
+        {
+            if (string.Equals(key, "NETCLAW_Daemon__Port", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port))
+                return port;
+        }
+
+        return null;
     }
 }
