@@ -104,13 +104,16 @@ internal static class HeadlessRunHarness
 
             // The channel calls StopApplication as its last act on every path. It writes the console
             // output and sets the exit code first. So this signal means that the channel finished its
-            // own writes.
+            // own writes. StopAsync only marks the channel as disconnected. It does not drain output.
             await stopped.Task.WaitAsync(StopCeiling, TestContext.Current.CancellationToken);
             await channel.StopAsync(CancellationToken.None);
 
-            // The actor system and the host logger write to the console on their own threads. Detach the
-            // capture first, then take the snapshot under the writer lock. A write in flight finishes
-            // before the snapshot. A later write goes to the original console.
+            // The Akka StandardOutLogger reads Console.Out on each call, so it can write to the capture on
+            // its own thread. The ASP.NET console logger keeps the Console.Out that it got before
+            // Console.SetOut, so it never writes to the capture. Detach the capture first, then take the
+            // snapshot under the writer lock. A write in flight finishes before the snapshot. A later write
+            // that reads Console.Out goes to the original console. A writer that kept a reference to the
+            // capture still writes to it, under the lock, after the snapshot.
             Console.SetOut(originalOut);
             Console.SetError(originalError);
             return new HeadlessRun(
