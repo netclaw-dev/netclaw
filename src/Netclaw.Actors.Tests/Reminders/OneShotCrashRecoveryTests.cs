@@ -194,6 +194,163 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
         Assert.Equal(0, Pipeline.InvocationCount);
     }
 
+    // ── 5.2 in a running daemon: the 12-hour sweep ends what the restart ends ──
+
+    // The tombstone write failed after a run, and Netclaw acknowledged the occurrence (design D3). The
+    // durable status Delivered is then the only record of the outcome, and Akka.Reminders deletes it
+    // after 12 days. A daemon that runs for weeks must not wait for a restart.
+    private async Task<ReminderDefinition> RunAckedWithoutTombstoneAsync(string id, RunMode mode)
+    {
+        Pipeline.Mode = mode;
+        var definition = NewOneShot(id);
+        await ScheduleAsync(definition);
+        var blocker = Path.Combine(EndedDirectory, $"{Uri.EscapeDataString(id)}.json.tmp");
+        Directory.CreateDirectory(blocker);
+
+        Advance(FirstFireDelay);
+        await AwaitSettledRunAsync(definition.Id, 1);
+
+        Assert.Equal("Delivered", await OccurrenceStatusAsync(definition.Id, definition.Schedule.FireAt!.Value));
+        Assert.NotNull(Definitions.Get(definition.Id));
+        Assert.False(TombstoneExists(definition.Id));
+        // The disk works again, but the daemon does not restart.
+        Directory.Delete(blocker);
+        return definition;
+    }
+
+    [Fact]
+    public async Task The_sweep_ends_a_oneshot_that_ran_and_was_acknowledged_without_a_tombstone()
+    {
+        await DrainStartupAsync();
+        var definition = await RunAckedWithoutTombstoneAsync("acked-then-swept", RunMode.Succeed);
+
+        Advance(ReminderManagerActor.TerminalPruneInterval);
+        await BarrierAsync();
+
+        Assert.True(
+            Definitions.Get(definition.Id) is null,
+            "The sweep must end a one-shot whose durable occurrence status is Delivered.");
+        Assert.False(await IsScheduledAsync(definition.Id));
+        var tombstone = RequireTombstone(definition.Id);
+        Assert.Equal("Completed", OutcomeOf(tombstone));
+        Assert.Equal(definition.Schedule.FireAtMs, Number(tombstone, "fireAtMs"));
+        Assert.False(TryGet(tombstone, "instructions", out _));
+        Assert.Single(await History.ReadAsync(definition.Id, 10));
+
+        // No further sweep, and no later time, runs it again.
+        Advance(ReminderManagerActor.TerminalPruneInterval);
+        Advance(ReminderManagerActor.TerminalPruneInterval);
+        await BarrierAsync();
+        Assert.Equal(1, Pipeline.InvocationCount);
+        Assert.Equal(1, Envelopes.Count);
+    }
+
+    // The occurrence status of an active run is AwaitingAck. A sweep that ended it would hide the run.
+    [Fact]
+    public async Task The_sweep_leaves_a_oneshot_with_an_active_run_alone()
+    {
+        await DrainStartupAsync();
+        Pipeline.Mode = RunMode.Hold;
+        var definition = NewOneShot("running-while-swept");
+        await ScheduleAsync(definition);
+        Advance(FirstFireDelay);
+        var executionId = await AwaitDispatchAsync();
+
+        await SweepAsync();
+
+        Assert.NotNull(Definitions.Get(definition.Id));
+        Assert.False(TombstoneExists(definition.Id));
+        Assert.True((await StatusAsync(definition.Id, TeamCaller)).Executing);
+
+        await CompleteRunAsync(executionId, definition.Id, RunOutcome.Success);
+        await BarrierAsync();
+
+        Assert.Equal("Completed", OutcomeOf(RequireTombstone(definition.Id)));
+        Assert.Null(Definitions.Get(definition.Id));
+    }
+
+    // A denied run is a failure of the one-shot (design D1a). When the tombstone write failed, the history
+    // row with the status denied is the only durable trace, because the occurrence status is Delivered for
+    // a success and for a denial.
+    [Theory]
+    [InlineData("restart")]
+    [InlineData("sweep")]
+    public async Task A_denied_run_that_was_acknowledged_without_a_tombstone_ends_failed_with_the_denial(string trigger)
+    {
+        await DrainStartupAsync();
+        var definition = await RunAckedWithoutTombstoneAsync("denied-then-ended", RunMode.Deny);
+        Assert.Equal("denied", Assert.Single(await History.ReadAsync(definition.Id, 10)).Status);
+
+        await TriggerAsync(trigger);
+
+        Assert.True(Definitions.Get(definition.Id) is null, "The one-shot must end.");
+        Assert.False(await IsScheduledAsync(definition.Id));
+        var tombstone = RequireTombstone(definition.Id);
+        Assert.Equal("Failed", OutcomeOf(tombstone));
+        Assert.Contains(DeniedText, Text(tombstone, "lastError"), StringComparison.Ordinal);
+        Assert.Equal(DefaultPrompt, Text(tombstone, "instructions"));
+        Assert.Equal(1, Pipeline.InvocationCount);
+    }
+
+    [Theory]
+    [InlineData("restart")]
+    [InlineData("sweep")]
+    public async Task A_successful_run_that_was_acknowledged_without_a_tombstone_still_ends_completed(string trigger)
+    {
+        await DrainStartupAsync();
+        var definition = await RunAckedWithoutTombstoneAsync("ok-then-ended", RunMode.Succeed);
+
+        await TriggerAsync(trigger);
+
+        Assert.True(Definitions.Get(definition.Id) is null, "The one-shot must end.");
+        var tombstone = RequireTombstone(definition.Id);
+        Assert.Equal("Completed", OutcomeOf(tombstone));
+        Assert.Null(Text(tombstone, "lastError"));
+        Assert.False(TryGet(tombstone, "instructions", out _));
+    }
+
+    // The recovery from the durable status must not overwrite a tombstone file that Netclaw cannot read.
+    // The file may hold the real outcome. The end waits for a repair, which must happen within about 12
+    // hours: Akka.Reminders gives up the delivery after ten attempts, and then the fire path cannot help.
+    [Theory]
+    [InlineData("restart")]
+    [InlineData("sweep")]
+    public async Task The_end_from_the_durable_status_skips_a_corrupt_tombstone_and_a_repair_lets_it_end(string trigger)
+    {
+        await DrainStartupAsync();
+        var definition = await RunAckedWithoutTombstoneAsync("acked-corrupt", RunMode.Succeed);
+        const string damaged = "{ not json";
+        await File.WriteAllTextAsync(TombstonePath(definition.Id), damaged, TestContext.Current.CancellationToken);
+
+        await TriggerAsync(trigger);
+
+        var stored = Definitions.Get(definition.Id);
+        Assert.NotNull(stored);
+        Assert.True(stored.Enabled);
+        Assert.Equal(
+            damaged,
+            await File.ReadAllTextAsync(TombstonePath(definition.Id), TestContext.Current.CancellationToken));
+        Assert.Contains(Alerts.Alerts, a => a.Type == "reminder.tombstone.invalid" && a.Source == definition.Id.Value);
+        Assert.Equal(1, Pipeline.InvocationCount);
+
+        // The operator deletes the file. The next pass ends the one-shot.
+        File.Delete(TombstonePath(definition.Id));
+        await TriggerAsync(trigger);
+
+        Assert.True(Definitions.Get(definition.Id) is null, "A repaired file must let the one-shot end.");
+        Assert.Equal("Completed", OutcomeOf(RequireTombstone(definition.Id)));
+        Assert.Equal(1, Pipeline.InvocationCount);
+    }
+
+    private Task TriggerAsync(string trigger)
+    {
+        if (trigger == "restart")
+            return RestartManagerAsync();
+
+        Advance(ReminderManagerActor.TerminalPruneInterval);
+        return BarrierAsync();
+    }
+
     // ── A tombstone that Netclaw cannot read ──
 
     // Reads treat an unreadable tombstone as absent. A fire is not a read: it decides whether a one-shot
@@ -240,5 +397,56 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
 
         Assert.Null(Definitions.Get(definition.Id));
         Assert.Equal("Completed", OutcomeOf(RequireTombstone(definition.Id)));
+    }
+}
+
+/// <summary>
+/// An unreadable tombstone holds the fire, and Akka.Reminders returns the occurrence only while it has
+/// attempts left. The operator must repair the file inside that window (about 12 hours with ten
+/// attempts). This class uses three attempts so that the window is short in virtual time.
+/// </summary>
+[Collection(ReminderActorTestCollection.Name)]
+public sealed class OneShotCorruptTombstoneWindowTests : OneShotReminderTestBase
+{
+    public OneShotCorruptTombstoneWindowTests(ITestOutputHelper output) : base(output) { }
+
+    protected override int MaxDeliveryAttempts => 3;
+
+    [Fact]
+    public async Task A_repair_after_the_attempt_window_ends_the_oneshot_as_failed_and_does_not_run_it()
+    {
+        await DrainStartupAsync();
+        var definition = NewOneShot("late-repair");
+        await ScheduleAsync(definition);
+        Directory.CreateDirectory(EndedDirectory);
+        const string damaged = "{ not json";
+        await File.WriteAllTextAsync(TombstonePath(definition.Id), damaged, TestContext.Current.CancellationToken);
+
+        // Each lease expiry returns the occurrence. The manager holds every attempt. The test scheduler
+        // runs the timers that Akka.Reminders sets in reaction to an expiry only when the clock moves
+        // again, so each poll moves the clock by one minute.
+        Advance(FirstFireDelay);
+        await AwaitAssertAsync(async () =>
+        {
+            Advance(TimeSpan.FromMinutes(1));
+            Assert.Equal("Failed", await OccurrenceStatusAsync(definition.Id, definition.Schedule.FireAt!.Value));
+        }, TimeSpan.FromSeconds(60), TimeSpan.FromMilliseconds(5), TestContext.Current.CancellationToken);
+        await BarrierAsync();
+
+        // The window is over, and the file is still damaged: the pass alerts and ends nothing.
+        await SweepAsync();
+        Assert.NotNull(Definitions.Get(definition.Id));
+        Assert.Equal(
+            damaged,
+            await File.ReadAllTextAsync(TombstonePath(definition.Id), TestContext.Current.CancellationToken));
+
+        File.Delete(TombstonePath(definition.Id));
+        await SweepAsync();
+
+        Assert.True(Definitions.Get(definition.Id) is null, "A repaired file must let the pass end the one-shot.");
+        var tombstone = RequireTombstone(definition.Id);
+        Assert.Equal("Failed", OutcomeOf(tombstone));
+        Assert.Equal(DefaultPrompt, Text(tombstone, "instructions"));
+        Assert.Equal(0, Pipeline.InvocationCount);
     }
 }

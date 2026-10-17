@@ -461,6 +461,8 @@ public sealed class OneShotEndOutcomeTests : OneShotReminderTestBase
         Assert.Contains(
             Alerts.Alerts,
             a => a.Type == "reminder.schedule.failed" && a.Source == definition.Id.Value);
+        // The definition is not disabled, so no alert may say that it is. The next attempt ends it.
+        Assert.DoesNotContain(Alerts.Alerts, a => a.Type == "reminder.auto_disabled");
     }
 
     private sealed class AckGateway : ReceiveActor

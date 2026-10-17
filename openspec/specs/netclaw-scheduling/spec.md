@@ -1118,8 +1118,8 @@ The failed count reported by `netclaw stats` SHALL count only enabled reminders 
 #### Scenario: Reconciliation uses durable occurrence state
 
 - **GIVEN** an enabled one-shot has a past fire time
-- **WHEN** reconciliation finds no active schedule
-- **THEN** reconciliation reads the durable occurrence state
+- **WHEN** reconciliation or the 12-hour sweep finds no active schedule
+- **THEN** the pass reads the durable occurrence state
 - **AND** a terminal state ends the one-shot with the matching outcome
 - **AND** a state that is not terminal leaves the occurrence to Akka.Reminders
 - **AND** a missing state keeps the definition enabled for operator review
@@ -1198,7 +1198,12 @@ Netclaw SHALL save a failed run and its poison count before it sends a negative 
 
 Netclaw SHALL write the tombstone of a one-shot before every other step of its end: before the acknowledgement, the negative acknowledgement after a threshold failure, the schedule cancel, and the definition delete. The only exception is a failure that is terminal only because of the negative acknowledgement reply. Then the tombstone SHALL come right after that reply.
 
-If Netclaw cannot write the tombstone of a one-shot after a run that succeeded or had a denied tool call, it SHALL still acknowledge the occurrence. The acknowledgement records the durable status `Delivered`, so Akka.Reminders does not deliver the occurrence again, and the run does not repeat. Netclaw SHALL keep the definition, log an error, and emit the `reminder.settlement.failed` alert. The next startup reconciliation SHALL end the one-shot as `Completed` from the durable status.
+If Netclaw cannot write the tombstone of a one-shot after a run that succeeded or had a denied tool call, it SHALL still acknowledge the occurrence. The acknowledgement records the durable status `Delivered`, so Akka.Reminders does not deliver the occurrence again, and the run does not repeat. Netclaw SHALL keep the definition, log an error, and emit the `reminder.settlement.failed` alert. The next startup reconciliation or the next 12-hour sweep, whichever comes first, SHALL end the one-shot from the durable status. A running daemon SHALL NOT need a restart. The pass SHALL finish well before Akka.Reminders deletes the completed row, which happens 12 days after the end.
+
+- A one-shot with the durable status `Delivered` ends as `Completed`, with one exception. If the last history row of the one-shot has the status `denied`, the pass SHALL end it as `Failed`. The last error SHALL be the error text of that row, and the tombstone SHALL hold the instructions (the prompt).
+- A one-shot with the durable status `Failed`, `Expired`, or `Cancelled` ends as `Failed`.
+- A one-shot with the status `Pending` or `AwaitingAck` has an active or waiting occurrence. The pass SHALL leave it alone.
+- If the tombstone file of the one-shot exists but cannot be read, the pass SHALL skip that one-shot. It SHALL NOT overwrite the file and SHALL NOT end the one-shot. It SHALL log an error and emit the `reminder.tombstone.invalid` alert. The next pass tries again.
 
 If Netclaw cannot write the tombstone of any other end (a cancel, a failure at the threshold, or an expiry), it SHALL NOT acknowledge or negatively acknowledge the occurrence, cancel the schedule, or delete the definition. It SHALL emit a settlement failure alert. The acknowledgement lease SHALL stay the recovery path.
 
@@ -1219,7 +1224,63 @@ A crash at any step after the tombstone SHALL NOT run the one-shot again and SHA
 - **AND** the definition stays enabled
 - **AND** Netclaw logs an error and emits the `reminder.settlement.failed` alert
 - **AND** the one-shot does not run again, also after the acknowledgement lease time passes
-- **AND** the next startup reconciliation ends the one-shot as `Completed` and deletes the definition
+- **AND** the next startup reconciliation or the next 12-hour sweep ends the one-shot and deletes the definition
+- **AND** the end is `Completed` for a success, and `Failed` for a denied tool call (see the scenarios below)
+
+#### Scenario: The sweep ends the one-shot without a restart
+
+- **GIVEN** a one-shot run succeeded, the tombstone write failed, and Netclaw acknowledged the occurrence
+- **AND** the disk works again, and the daemon does not restart
+- **WHEN** the 12-hour sweep runs
+- **THEN** the one-shot ends as `Completed`, the tombstone exists, and the definition no longer exists
+- **AND** the one-shot does not run again, also at the next sweep
+
+#### Scenario: The sweep leaves an active run alone
+
+- **GIVEN** a one-shot run is active, and its durable status is `AwaitingAck`
+- **WHEN** the 12-hour sweep runs
+- **THEN** the definition stays, and no tombstone exists
+- **AND** when the run succeeds, the one-shot ends as `Completed`
+
+#### Scenario: A denied run ends as `Failed` after the tombstone write failed
+
+- **GIVEN** a tool call of a one-shot run was denied, the tombstone write failed, and Netclaw acknowledged the occurrence
+- **AND** the last history row has the status `denied`
+- **WHEN** the next startup reconciliation or the next 12-hour sweep runs
+- **THEN** the one-shot ends as `Failed`
+- **AND** the last error of the tombstone holds the denial text
+- **AND** the tombstone holds the instructions
+
+#### Scenario: A successful run still ends as `Completed` after the tombstone write failed
+
+- **GIVEN** a one-shot run succeeded, the tombstone write failed, and Netclaw acknowledged the occurrence
+- **AND** the last history row has the status `ok`
+- **WHEN** the next startup reconciliation or the next 12-hour sweep runs
+- **THEN** the one-shot ends as `Completed`
+- **AND** the tombstone holds no instructions and no error
+
+#### Scenario: An unreadable tombstone stops the end from the durable status
+
+- **GIVEN** a one-shot has the durable status `Delivered`, and its definition still exists
+- **AND** a tombstone file for the id exists that Netclaw cannot read
+- **WHEN** the startup reconciliation or the 12-hour sweep runs
+- **THEN** the definition and the file stay unchanged
+- **AND** Netclaw logs an error and emits the `reminder.tombstone.invalid` alert
+- **AND** the one-shot does not run
+
+#### Scenario: A repair after the attempt window ends the one-shot as `Failed`
+
+- **GIVEN** an unreadable tombstone stopped every fire of a one-shot until Akka.Reminders used its last attempt
+- **AND** the durable status is now `Failed`, and the one-shot never ran
+- **WHEN** the operator deletes the file and the next pass runs
+- **THEN** the one-shot ends as `Failed`, and the tombstone holds the instructions
+- **AND** the one-shot did not run
+
+#### Scenario: A repaired tombstone lets the end from the durable status happen
+
+- **GIVEN** an unreadable tombstone stopped the end of a one-shot with the durable status `Delivered`
+- **WHEN** the operator deletes the file and the next pass runs
+- **THEN** the one-shot ends as `Completed`
 
 #### Scenario: The tombstone cannot be written for a cancel
 
@@ -1241,9 +1302,9 @@ A crash at any step after the tombstone SHALL NOT run the one-shot again and SHA
 
 - **GIVEN** Netclaw acknowledged a terminal occurrence
 - **AND** the process stopped before it wrote the tombstone
-- **WHEN** the daemon starts
-- **THEN** reconciliation reads the durable occurrence status
-- **AND** a `Delivered` status ends the one-shot as `Completed`
+- **WHEN** the daemon starts, or the 12-hour sweep runs
+- **THEN** the pass reads the durable occurrence status
+- **AND** a `Delivered` status ends the one-shot as `Completed`, unless the last history row is `denied` (then `Failed`)
 - **AND** a `Failed`, `Expired`, or `Cancelled` status ends the one-shot as `Failed`
 
 #### Scenario: Process stops after the tombstone and before the definition delete
@@ -1438,6 +1499,8 @@ Before it ends a one-shot, Netclaw SHALL check that the current definition is th
 
 Before it runs, expires, or ends a one-shot for a fire, Netclaw SHALL check that the due time of the fire equals the fire time of the current definition, at millisecond precision. If the times differ, the occurrence belongs to an earlier definition of the same id. Netclaw SHALL NOT run it. Netclaw SHALL acknowledge that occurrence and log a warning. Netclaw SHALL NOT change the definition or its tombstone, and SHALL NOT cancel the schedule of the current definition.
 
+Netclaw SHALL apply this check before every other rule for a fire. In particular, it applies before the rule for an unreadable tombstone. An occurrence of an earlier definition SHALL be acknowledged even when the tombstone file of the current definition cannot be read.
+
 #### Scenario: An occurrence of an earlier definition does not run early
 
 - **GIVEN** a one-shot `ci-poll` with the fire time 10:10
@@ -1447,6 +1510,17 @@ Before it runs, expires, or ends a one-shot for a fire, Netclaw SHALL check that
 - **AND** Netclaw acknowledges the 10:00 occurrence and logs a warning
 - **AND** the `ci-poll` definition stays enabled, and its 10:10 schedule stays
 - **AND** the run starts once, at 10:10
+
+#### Scenario: An occurrence of an earlier definition is acknowledged although the tombstone is unreadable
+
+- **GIVEN** a one-shot `ci-poll` with the fire time 10:10
+- **AND** a tombstone file for `ci-poll` that Netclaw cannot read
+- **AND** Akka.Reminders still holds an occurrence of an earlier `ci-poll` due at 10:00
+- **WHEN** the 10:00 occurrence fires
+- **THEN** no execution starts
+- **AND** Netclaw acknowledges the 10:00 occurrence
+- **AND** Netclaw does not emit the `reminder.tombstone.invalid` alert for this fire
+- **AND** the file and the definition stay unchanged
 
 #### Scenario: An occurrence of the current definition runs
 
@@ -1460,7 +1534,7 @@ A tombstone SHALL match a definition when both have the same id, the definition 
 
 - A fire for a definition with a matching tombstone SHALL NOT run. Netclaw SHALL acknowledge it, cancel the schedule, and delete the definition.
 - A tombstone that does not match its definition SHALL be stale. Netclaw SHALL keep the definition, delete the stale tombstone, and log a warning.
-- A fire for a one-shot whose tombstone file exists but cannot be read SHALL NOT run. Netclaw SHALL NOT acknowledge the occurrence. It SHALL keep the definition, the schedule, and the file. It SHALL log an error and emit the `reminder.tombstone.invalid` alert. The operator repairs or deletes the file, and the acknowledgement lease then returns the occurrence. A read of history or status still counts the unreadable file as absent (see `reminder-execution-history`).
+- A fire for a one-shot whose tombstone file exists but cannot be read SHALL NOT run. Netclaw SHALL NOT acknowledge the occurrence. It SHALL keep the definition, the schedule, and the file. It SHALL log an error and emit the `reminder.tombstone.invalid` alert. The operator repairs or deletes the file, and the acknowledgement lease then returns the occurrence. The operator SHALL repair the file within about 12 hours. Akka.Reminders attempts the delivery ten times, with a 70-minute lease each. Then it marks the occurrence `Failed`, and the occurrence does not return. The next reconciliation or sweep then ends the one-shot as `Failed` from the durable status, once the file is readable or gone. That pass never overwrites an unreadable file (see "Settlement write order supports recovery"). A read of history or status still counts the unreadable file as absent (see `reminder-execution-history`).
 
 #### Scenario: A matching tombstone blocks the run
 
@@ -1597,7 +1671,7 @@ Outside the caller's audience, every surface SHALL reply as for an id that never
 
 ### Requirement: Reconciliation ends leftover one-shots
 
-Startup reconciliation and the 12-hour sweep SHALL end every leftover one-shot definition. A leftover is a one-shot definition with a terminal outcome, or a disabled one-shot whose fire time has passed. The end time SHALL be the last update time of a definition with a terminal outcome. For a disabled one-shot without an outcome, the end time SHALL be the later of the last update time and the fire time. A leftover without a recorded outcome SHALL end as `Cancelled`, and its last error SHALL say that the outcome was not recorded. A leftover with the outcome `Failed` SHALL keep its instructions in its tombstone. The same pass SHALL purge each tombstone whose end time is more than 12 days old. The reconciliation log SHALL report the count of ended one-shots and the count of purged tombstones.
+Startup reconciliation and the 12-hour sweep SHALL end every leftover one-shot definition. A leftover is a one-shot definition with a terminal outcome, or a disabled one-shot whose fire time has passed. The end time SHALL be the last update time of a definition with a terminal outcome. For a disabled one-shot without an outcome, the end time SHALL be the later of the last update time and the fire time. A leftover without a recorded outcome SHALL end as `Cancelled`, and its last error SHALL say that the outcome was not recorded. A leftover with the outcome `Failed` SHALL keep its instructions in its tombstone. The same pass SHALL purge each tombstone whose end time is more than 12 days old. The reconciliation log SHALL report the count of ended one-shots and the count of purged tombstones. Both passes SHALL also end an enabled one-shot with a past fire time from its durable occurrence status, under the rules of "Settlement write order supports recovery". A status that Akka.Reminders no longer holds SHALL keep the definition enabled for operator review.
 
 #### Scenario: Upgrade cleans old leftovers
 

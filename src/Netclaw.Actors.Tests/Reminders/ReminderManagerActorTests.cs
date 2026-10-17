@@ -846,6 +846,50 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
         Assert.Equal(new ReminderId($"{definition.Id}:{fireTime.ToUnixTimeMilliseconds()}"), delivered.Source.ReminderId);
     }
 
+    // A recurring reminder has no fire time that the envelope must match, so only the envelope can supply
+    // the key. A key built from the definition would differ between two deliveries of one fire.
+    [Theory]
+    [InlineData(ReminderScheduleType.Interval)]
+    [InlineData(ReminderScheduleType.Cron)]
+    public async Task CurrentSession_delivery_key_of_a_recurring_reminder_is_built_from_envelope_fire_time(
+        ReminderScheduleType type)
+    {
+        var manager = await GetManagerAsync();
+
+        var gatewayProbe = CreateTestProbe($"recurring-key-gateway-{type}");
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            $"auto-ack-recurring-key-{type}");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+        // The envelope time differs from every time that the definition can supply: its anchor, its
+        // next interval time, and "now".
+        var fireTime = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
+        var definition = CreateCurrentSessionDefinition($"recurring-key-{type}", deliveryRequired: true) with
+        {
+            Schedule = type == ReminderScheduleType.Interval
+                ? new ReminderSchedule
+                {
+                    Type = type,
+                    Interval = TimeSpan.FromMinutes(30),
+                    FireAt = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_600_000)
+                }
+                : new ReminderSchedule { Type = type, CronExpression = "0 0 1 1 *" }
+        };
+        _definitionStore.Save(definition);
+
+        manager.Tell(new ReminderEnvelope<ReminderPayload>(
+            entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+            key: new ReminderKey(definition.Id.Value),
+            dueTimeUtc: fireTime,
+            deadline: ReminderDeadline.Infinite,
+            message: new ReminderPayload { Id = definition.Id }));
+
+        var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(new ReminderId($"{definition.Id}:{fireTime.ToUnixTimeMilliseconds()}"), delivered.Source.ReminderId);
+    }
+
     // Rule 3: admission ends the reminder system's job. The session acknowledges the
     // fire once it has stored the input as a pending input. A post that the session
     // makes later is not part of the run. The flag asks for more only for a Channel run.

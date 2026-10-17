@@ -122,8 +122,9 @@ EndOneShot(def, outcome, lastError, endedAt, envelopeAction)      // manager, ac
                        No nack, no schedule cancel, and no delete. The lease expiry is the recovery path.
                        Exception (owner decision, 17 Oct): after a success or a denied run, ack the
                        envelope anyway and keep the definition. The ack writes the durable status
-                       Delivered. The startup reconciliation ends the one-shot as Completed, and the
-                       run does not repeat. Log an error.
+                       Delivered. The startup reconciliation or the 12-hour sweep ends the one-shot,
+                       and the run does not repeat. Log an error. The end is Completed for a success.
+                       It is Failed for a denied run (see "Denied run" below).
   2. envelopeAction: ack | nack | none                              // durable in Akka.Reminders
   3. CancelScheduleOnly(def.Id)                                     // durable, idempotent
   4. _skipCounts.Remove(id); _deniedAlerts.Remove(id)               // actor-local
@@ -132,6 +133,7 @@ EndOneShot(def, outcome, lastError, endedAt, envelopeAction)      // manager, ac
 
 The tombstone comes first because it is the only step that records the outcome. Each later step can fail or stop, and D4 finishes it.
 
+- Denied run, tombstone write failed (round 3, 17 Oct): the ack writes `Delivered` for a success and for a denial, so the status alone cannot tell them apart. The history row is durable before the ack (`AppendHistorySafelyAsync` runs first). The end pass reads the last history row. If its status is `denied`, the pass ends the one-shot as `Failed`. The last error is the error text of the row, and the tombstone keeps the prompt (D1a). This matches the end of a denied run without a write failure.
 - Success: today the manager acks first and saves `Completed` after. If the ack replies `Error`, the definition stays enabled, and the redelivery runs the reminder again. With the tombstone first, the redelivery finds the tombstone and does not run (D4). The rule "save local state before the ack" stays true.
 - Threshold failure: the tombstone replaces the save of the disabled `Failed` definition. Then the nack, then the schedule cancel.
 - A nack that replies `Failed` or `Expired`: the manager learns of the end only from the nack reply, so the nack comes before step 1. A crash between the nack and step 1 leaves an enabled definition with a past fire time and a terminal durable occurrence status. The startup reconciliation already maps that status to an end.
@@ -144,7 +146,10 @@ A tombstone **matches** a definition when both have the same id, the definition 
 
 - A fire for a definition with a matching tombstone does not run. The manager does steps 3 to 5 and acks the envelope.
 - A fire for a one-shot whose tombstone file exists but cannot be read does not run, because the fire decides whether a run happens (owner decision, 17 Oct). The manager does not ack. It keeps the definition, the schedule, and the file, logs an error, and raises `reminder.tombstone.invalid`. A read still treats the file as absent.
+  - The hold lasts only while Akka.Reminders has attempts left: ten attempts with a 70-minute lease, about 12.5 hours. Then Akka.Reminders marks the occurrence `Failed`, and the occurrence does not return. The operator must repair the file inside that window. The runbook says so.
+  - After the window, the end pass (D8) ends the one-shot as `Failed` from the durable status, but only when the file is readable or gone. The pass never overwrites an unreadable file.
 - A fire whose envelope due time differs from the definition fire time (at millisecond precision) belongs to an earlier definition of the same id. The manager does not run it. It acks the envelope, logs a warning, and does not touch the definition or the schedule.
+- The manager checks the stale rule before the unreadable-tombstone rule. A stale occurrence is acked even when the file of the current definition is damaged.
 - A fire for an id with no definition does not run (current behavior). If a tombstone exists, the manager logs at Info ("fired after it ended"), not at Error.
 - The reconciliation and the sweep finish a definition that has a matching tombstone (steps 3 to 5).
 - A tombstone that does not match its definition is stale. The definition is newer, so it wins. The manager deletes the stale tombstone and logs a warning. Only a manual file edit can make this state, because a re-arm deletes the tombstone before it saves (D6).
@@ -247,11 +252,16 @@ Sweep(now)                                                    // manager; reads 
   for each tomb with endedAt + TerminalRetention < now:
     historyStore.DeleteHistory(id); store.DeleteTombstone(id)   // history first: the tomb anchors it
 
-Reconcile (startup only) adds, before the sweep:
+Status pass (startup reconciliation, before the sweep, and every sweep; round 3, 17 Oct):
   enabled one-shot with FireAt <= now and no schedule:
-    durable occurrence status Delivered            -> EndOneShot(Completed, endedAt = CompletedAtUtc ?? now)
+    tombstone file exists but cannot be read       -> skip, alert reminder.tombstone.invalid; never overwrite
+    durable occurrence status Delivered            -> last history row denied ? EndOneShot(Failed, lastError = row error)
+                                                                              : EndOneShot(Completed)   // endedAt = CompletedAtUtc ?? now
     Failed | Expired | Cancelled                   -> EndOneShot(Failed,    endedAt = CompletedAtUtc ?? now)
+    Pending | AwaitingAck                          -> leave alone (an active or waiting occurrence)
     no status                                      -> keep for operator review (current behavior)
+
+The sweep does not restore a schedule. Only the startup reconciliation restores a schedule, and only for a future fire time.
 ```
 
 The same rules repair a crash and migrate an old install:
@@ -315,7 +325,8 @@ netclaw reminder list --json \
 - [A re-arm discards the old history, so a self-re-arming watcher keeps one run of history] → This is the current rule for a `Completed` one-shot. A recurring reminder is the better shape for a watcher; a stop condition for watchers is a separate issue.
 - [`RestartRecoveryService` retries a manifest after a failed delete and re-creates an ended restart reminder] → The id is free after the end, as it is today for a `Completed` one-shot. D2 (#2511) makes a restart-resume message that resumes nothing a no-op.
 - [A one-shot that is down for more than 12 days loses its Akka occurrence status] → The reconciliation keeps it for operator review, as today.
-- [A corrupt tombstone file] → `GetTombstone` logs an error and raises the `reminder.tombstone.invalid` alert. For a read, the id is then treated as having no tombstone, so the audience gate falls back to "no data", not to an open read. For a fire, the one-shot does not run (D4). The file stays for the operator. A re-arm overwrites the path.
+- [A running daemon keeps a ran-but-not-ended definition until the status pass] → The 12-hour sweep runs the status pass, so a daemon that never restarts ends the one-shot within one sweep. The end happens long before Akka.Reminders prunes the `Delivered` row at 12 days.
+- [A corrupt tombstone file] → `GetTombstone` logs an error and raises the `reminder.tombstone.invalid` alert. For a read, the id is then treated as having no tombstone, so the audience gate falls back to "no data", not to an open read. For a fire, the one-shot does not run (D4). The file stays for the operator, who must repair it within about 12 hours (the attempt window of Akka.Reminders). The status pass skips the one-shot and alerts until the file is readable or gone. A re-arm overwrites the path.
 - [A cancel during an active run] → The run continues, as today. The `Cancelled` tombstone stays, and the settlement adds only the history row (D5).
 - [Skill version conflict with the coordination stack] → Rebase this change after the stack, and take the higher version plus one.
 

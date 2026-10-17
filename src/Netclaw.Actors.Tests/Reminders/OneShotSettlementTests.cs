@@ -160,6 +160,34 @@ public sealed class OneShotSettlementTests : OneShotReminderTestBase
         Assert.NotEmpty(LogsOfLevel(Akka.Event.LogLevel.WarningLevel, current.Id.Value));
     }
 
+    // The refusal of a stale occurrence comes before the rule for an unreadable tombstone. A stale
+    // occurrence belongs to an earlier definition, so the file of the current one is not its concern.
+    // Holding it would block the acknowledgement for no reason.
+    [Fact]
+    public async Task A_stale_occurrence_is_acknowledged_before_the_unreadable_tombstone_rule_applies()
+    {
+        await DrainStartupAsync();
+        Pipeline.Mode = RunMode.Hold;
+        var current = NewOneShot("ci-poll-damaged", fireIn: TimeSpan.FromMinutes(10));
+        await ScheduleAsync(current);
+        var staleDue = Clock.GetUtcNow() + FirstFireDelay;
+        await ScheduleDirectlyAsync(current.Id, staleDue);
+        Directory.CreateDirectory(EndedDirectory);
+        const string damaged = "{ not json";
+        await File.WriteAllTextAsync(TombstonePath(current.Id), damaged, TestContext.Current.CancellationToken);
+
+        Advance(FirstFireDelay);
+        await AwaitEnvelopesHandledAsync(1);
+
+        Assert.Equal("Delivered", await OccurrenceStatusAsync(current.Id, staleDue));
+        Assert.Equal(0, Pipeline.InvocationCount);
+        Assert.DoesNotContain(Alerts.Alerts, a => a.Type == "reminder.tombstone.invalid");
+        Assert.Equal(
+            damaged,
+            await File.ReadAllTextAsync(TombstonePath(current.Id), TestContext.Current.CancellationToken));
+        Assert.NotNull(Definitions.Get(current.Id));
+    }
+
     // ── D4: a tombstone that matches its definition wins ──
 
     [Theory]

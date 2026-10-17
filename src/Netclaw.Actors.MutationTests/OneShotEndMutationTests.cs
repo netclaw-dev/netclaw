@@ -161,6 +161,34 @@ public sealed class OneShotEndMutationTests : IAsyncLifetime
         Assert.Single(await _history.ReadAsync(_id, 10));
     }
 
+    // ── Fire path: a stale occurrence does not run ──
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(-1)]
+    [InlineData(600_000)]
+    public async Task A_fire_of_an_earlier_definition_does_not_run_and_changes_nothing(long deltaMs)
+    {
+        // The envelope belongs to an earlier definition: its due time differs from the fire time of the
+        // current definition. The held pipeline would keep a run active, and the status would show it.
+        var dueMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var definition = OneShot(DateTimeOffset.FromUnixTimeMilliseconds(dueMs + deltaMs));
+        _definitions.Save(definition);
+
+        _manager.Tell(new ReminderEnvelope<ReminderPayload>(
+            new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+            new ReminderKey(_id.Value), DateTimeOffset.FromUnixTimeMilliseconds(dueMs),
+            ReminderDeadline.Infinite, new ReminderPayload { Id = _id }));
+        var status = await _manager.Ask<ReminderStatusResponse>(
+            new GetReminderStatusQuery(_id, new ReminderAudienceAuthorizationContext(TrustAudience.Team, "mutation-test")),
+            ReplyTimeout);
+
+        Assert.False(status.Executing, "The occurrence of an earlier definition must not run.");
+        Assert.Equal(definition, _definitions.Get(_id));
+        Assert.False(File.Exists(TombstonePath()));
+        Assert.Empty(await _history.ReadAsync(_id, 10));
+    }
+
     // ── Helpers ──
 
     private static DateTimeOffset FireInOneHour()
