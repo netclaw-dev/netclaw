@@ -38,12 +38,14 @@ Hosted runs of 2026-10-17 measured these gate times (minutes):
 
 | Group | Gates | Hosted time (about) |
 |-------|-------|---------------------|
-| `verb-chain` | `exact-verb-chain` (seven invocations, 53 mutants, 14.5) | 15 |
-| `reminder` | `reminder-execution` (4.3), `literal-twin` (3.2), `stream-commit-gate` (2.6) | 10.5 |
+| `verb-chain` | `exact-verb-chain` (seven invocations, 53 mutants, 9 to 14.5) | 9.5 to 15 |
+| `reminder` | `reminder-execution` (4.4), `literal-twin` (2.9), `stream-commit-gate` (2.5) | 10.3 |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
 The `approval-and-authorization` group took 16.5 to 24.6 minutes on the same day, so it also runs near the timeout.
-Measure a new split on a cold runner and update this table.
+The first CI run of the split took 9 minutes 37 seconds for `verb-chain` and 10 minutes 16 seconds for `reminder`.
+The hosted runner speed varies, so the time of one gate changes by up to 5 minutes between runs.
+Measure a new gate on a cold runner and update this table.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
 Add a gate to the lightest group when its measured cost fits the timeout and the Windows test duration.
 Use another group under the same job definition when no existing group has that capacity.
