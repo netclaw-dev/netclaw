@@ -599,86 +599,56 @@ content budget used for tools without a smaller per-tool override.
 - **WHEN** it reaches the pipeline
 - **THEN** the pipeline stores it as-is without re-clamping
 
-### Requirement: Reminder redelivery best-effort dedup
+### Requirement: Reminder redelivery is deduplicated at admission
 
-`SessionState` SHALL maintain an in-memory
-`ImmutableHashSet<string> ProcessedReminderIds`, folded in the
-`Apply(TurnRecorded)` handler from each recovered or live event's
-`SourceReminderId` when non-null. `Apply(SessionCompacted)` SHALL preserve
-the set across compaction (similar to how `WorkingContext` is preserved).
-The set SHALL NOT be persisted to `SessionSnapshot`: on snapshot-based
-recovery the set starts empty and rebuilds from post-snapshot event replay
-via the normal `Apply(TurnRecorded)` path.
+The session SHALL deduplicate a reminder fire once, at admission, by the source
+key of the stored input. `SessionState.RecentSourceMessageKeys` holds the key,
+and `SessionSnapshot` persists it. The session SHALL NOT keep a separate
+in-memory ledger or in-flight reservation for reminder fires.
 
-`LlmSessionActor` SHALL pre-check `cmd.Source?.ReminderId` against
-`ProcessedReminderIds` at the top of both the `Ready`-phase
-`HandleIncomingUserMessage` method and the `Processing`-phase
-`Command<SendUserMessage>` buffer handler. On a dedup hit, the session
-SHALL reply `CommandAck` to the sender without modifying state,
-persisting events, or dispatching an LLM call.
+The session SHALL make the admission decision before any other side effect. On
+a duplicate, the session SHALL reply `CommandAck` to the sender without
+persisting events, dispatching an LLM call, or abandoning an open tool batch.
+The decision SHALL apply in every phase (`Ready`, `Processing`, `Compacting`).
 
-The dedup check SHALL happen *before* any audience enforcement, ACL
-evaluation, or prompt construction, so that a redelivery from
-Akka.Reminders is handled entirely in memory and cannot trigger spurious
-side effects.
+The check holds across snapshot recovery for the keys that the bounded
+`RecentSourceMessageKeys` list still holds (256 keys).
 
-**Best-effort semantics**: dedup is not guaranteed across snapshot
-recovery boundaries. A reminder processed before a snapshot and
-redelivered after a snapshot-based recovery will be processed as a fresh
-turn. This is an explicitly accepted tradeoff — the LLM itself typically
-recognizes a duplicate prompt in its recent context and responds
-appropriately, and persisting the dedup ledger to snapshot adds
-complexity without proportional value.
+#### Scenario: Redelivered reminder is a duplicate in Ready phase
 
-#### Scenario: Redelivered reminder hits dedup in Ready phase
-
-- **GIVEN** the session is in `Ready` phase with
-  `ProcessedReminderIds = { "check-pr:1712000000000" }` rebuilt from
-  post-snapshot journal replay
+- **GIVEN** the session is in `Ready` phase and its journal holds an input with
+  source key `check-pr:1712000000000`
 - **WHEN** a `SendUserMessage` arrives with
   `MessageSource.ReminderId = "check-pr:1712000000000"`
 - **THEN** the session replies `CommandAck` to the sender
-- **AND** no `TurnRecorded` event is persisted
+- **AND** it persists no event
 - **AND** the LLM is not invoked
-- **AND** a `reminder_mode_b_dedup_hit` log entry is emitted
 
-#### Scenario: Redelivered reminder hits dedup in Processing phase
+#### Scenario: Redelivered reminder is a duplicate in Processing phase
 
-- **GIVEN** the session is in `Processing` phase (LLM call in flight) with
-  a dedup set containing `"nightly-report:1712005000000"`
+- **GIVEN** the session is in `Processing` phase and runs the turn of the fire
+  `nightly-report:1712005000000`
 - **WHEN** a `SendUserMessage` redelivery arrives with the same reminder ID
 - **THEN** the session replies `CommandAck` without buffering the message
 - **AND** the in-flight turn is unaffected
 
-#### Scenario: Dedup set rebuilt from post-snapshot event replay
+#### Scenario: A duplicate survives snapshot recovery
 
-- **GIVEN** a session journal contains three `TurnRecorded` events after
-  the most recent snapshot, two with non-null `SourceReminderId` and one
-  regular user turn
-- **WHEN** the session actor recovers from the snapshot and replays
-  subsequent events
-- **THEN** `ProcessedReminderIds` contains exactly the two reminder IDs
-  from the post-snapshot events
-- **AND** subsequent redeliveries of those reminders are deduped
+- **GIVEN** the session admitted a fire and then recovered from a later snapshot
+- **WHEN** Akka.Reminders redelivers the fire
+- **THEN** the session replies `CommandAck` and stores no second input
 
-#### Scenario: Dedup set starts empty on snapshot-only recovery
+#### Scenario: A duplicate does not abandon an open tool batch
 
-- **GIVEN** a session journal where all `TurnRecorded` events are
-  older than the most recent snapshot
-- **WHEN** the session actor recovers from that snapshot
-- **THEN** `ProcessedReminderIds` starts empty (the snapshot does not
-  carry the set)
-- **AND** a subsequent redelivery of a pre-snapshot reminder (still
-  within `MaxDeliveryWindow`) is NOT deduped and is processed as a fresh
-  turn
-- **AND** the outcome is logged but not treated as an error
+- **GIVEN** a recovered session holds an interrupted tool batch
+- **WHEN** a redelivery of an admitted fire arrives
+- **THEN** the session acknowledges it
+- **AND** the journal gets no `ToolBatchAbandoned` event from it
 
-#### Scenario: Non-reminder user messages are not deduped
+#### Scenario: Non-reminder user messages are not deduped by reminder state
 
-- **GIVEN** a session with a populated `ProcessedReminderIds` set
-- **WHEN** a regular `SendUserMessage` arrives with
-  `MessageSource.ReminderId = null`
-- **THEN** the message is processed normally regardless of the dedup set
+- **GIVEN** a regular `SendUserMessage` arrives with `MessageSource.ReminderId = null`
+- **THEN** the message is processed normally
 
 ### Requirement: Persist adopted-context audit records
 
@@ -1086,3 +1056,53 @@ request.
 - **WHEN** it learns a session path
 - **THEN** the storage layout does not claim to block an operating-system file open
 - **AND** a separate containment capability must define that stronger boundary
+### Requirement: A failed post on a reminder turn is visible to the operator
+
+The session SHALL report a reply that it could not deliver when a reminder fire started the turn. The session owns this decision. `LlmSessionActor` makes it in `HandleDeliveryFailedWhenReady`.
+
+The session SHALL find the reminder from `TurnRecorded.SourceReminderId` of the recorded turn that `DeliveryFailed.TurnNumber` names. This data is durable. A session that recovered from its journal after a restart SHALL find it too. The session SHALL NOT use an in-memory flag for this decision.
+
+The session gives up on a reply when the failure kind is not retryable, or when the retry budget is spent. A retryable failure with budget left SHALL cause a retry and SHALL NOT raise the alert. On the final failure of a turn that a reminder fire started, the session SHALL do all of the following:
+
+- Write one Error log with the reminder id, the session id, the channel, and the failure kind.
+- Emit one alert of type `reminder.delivery.failed` with severity `Warning`. The alert `Source` is the reminder id. The alert context holds `reminderId`, `sessionId`, `channel`, `failureKind`, and `error`.
+- Write no reminder history row. The reminder manager owns the history.
+- Not ask for a new fire of the reminder.
+
+The session SHALL NOT raise `reminder.delivery.failed` for a turn that no reminder fire started. `LlmSessionActor` SHALL receive its `IOperationalNotificationSink` as a required dependency.
+
+#### Scenario: A rejected token on a reminder turn raises the alert
+
+- **GIVEN** the session recorded a turn with `SourceReminderId = "check-pr:1712000000000"`
+- **WHEN** the Mattermost binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the session writes one Error log that names `check-pr`
+- **AND** the sink receives one alert of type `reminder.delivery.failed` with `Source = "check-pr"` and the session id in its context
+- **AND** the reminder history gets no row from the session
+
+#### Scenario: A failed post on an ordinary turn raises no reminder alert
+
+- **GIVEN** the session recorded a turn that a person started, so `SourceReminderId` is empty
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives no `reminder.delivery.failed` alert
+- **AND** the session keeps its Warning log and its nudge for the next turn
+
+#### Scenario: A retry that succeeds raises no alert
+
+- **GIVEN** the session recorded a reminder turn
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected`
+- **AND** the session retries and the new reply posts
+- **THEN** the sink receives no `reminder.delivery.failed` alert
+
+#### Scenario: A spent retry budget raises the alert
+
+- **GIVEN** the session recorded a reminder turn
+- **WHEN** the binding reports `ContentRejected` for the turn and for each of its two retry turns
+- **THEN** the session gives up after the third report
+- **AND** the sink receives one `reminder.delivery.failed` alert
+
+#### Scenario: A recovered session still finds the reminder
+
+- **GIVEN** the session recorded a reminder turn
+- **AND** the session stopped and recovered from its journal
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert with the same reminder id
