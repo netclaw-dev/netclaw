@@ -61,8 +61,7 @@ public sealed partial class SessionModelContextTests
         SessionModelContext owner,
         long callId,
         SessionState state,
-        MessageSource? sourceFallback = null,
-        bool forceNoTools = false)
+        MessageSource? sourceFallback = null)
         => owner.StartCall(
             callId,
             state,
@@ -71,7 +70,6 @@ public sealed partial class SessionModelContextTests
             sourceFallback,
             toolTrust: null,
             recallQuery: null,
-            forceNoTools,
             skillBody: null,
             restartNotice: null,
             CancellationToken.None);

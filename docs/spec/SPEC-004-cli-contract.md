@@ -220,7 +220,9 @@ arrives in a later parent turn. The run ends on the first completed turn that re
 run. See [Waiting for child runs](#waiting-for-child-runs).
 
 A failed turn or a failed run exits `1`. A run whose last turn completes exits `0`. The exit code does not carry
-the reason. A run that an outside `timeout` kills exits `124`. `timeout` sends SIGTERM, and the CLI handles
+the reason. A tool loop has no fixed ceiling: `Session.MaxToolIterationsPerTurn` is a legacy field. A
+model that keeps changing its tool arguments runs until the operator cancels the run or an outside
+`timeout` stops it. A run that an outside `timeout` kills exits `124`. `timeout` sends SIGTERM, and the CLI handles
 SIGTERM like SIGINT, so stderr usually also has `[turn:failed] category=infra kind=Cancelled`. A reader must
 check the exit code first: `124` means `timeout`, whatever stderr holds.
 
@@ -232,8 +234,8 @@ after the `[error]` or `[headless:error]` line:
 ```
 
 - `category` is `model` only for `kind=ModelBehavior`. The model broke a rule that the runtime
-  enforces: it requested tools after a text-only stop, or it returned repeated empty replies and each
-  stream finished with the finish reason `stop` or `length`.
+  enforces: it repeated a tool call after the runtime refused that call (the terminal cycle stop), or it
+  returned repeated empty replies and each stream finished with the finish reason `stop` or `length`.
 - Repeated empty replies from a stream with no finish reason (the connection closed early) are
   `kind=StreamFailure`. Repeated empty replies with the finish reason `content_filter`, or any other
   finish reason, are `kind=ProviderFailure`. Both are `infra`: the model did not get a fair turn.
@@ -261,8 +263,10 @@ The session log is not safe against forged lines. A model reply or a tool result
 looks like `TURN_FAILED: ...`. A reader of the session log uses the last `TURN_FAILED` record before the
 final `TURN_COMPLETED`, and only when the exit code is `1`.
 
-Positive example: the model repeats `web_search("same")` after the runtime stop. Stderr ends with
-`[turn:failed] category=model kind=ModelBehavior`. The exit code is `1`.
+Positive example: the model repeats `web_search("same")` after the runtime refused that call. The
+runtime ends the turn and makes no more model requests. Stderr ends with
+`[turn:failed] category=model kind=ModelBehavior`. The exit code is `1`. If the model answers with text
+after the refusal instead, the turn completes and the exit code is `0`.
 
 Negative example: the provider returns HTTP 503. The kind is `ProviderFailure` and the category is
 `infra`. A harness must not score this run as a model failure.

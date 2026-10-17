@@ -92,14 +92,17 @@ internal sealed class ActiveToolBatchTracker
                 $"Tool-result message for tool '{message.Name ?? "unknown"}' has no ToolCallId.");
         _cycleResults[callId.Value] = new ToolCycleResult(
             result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
-            message.Content ?? string.Empty);
+            message.Content ?? string.Empty)
+        {
+            PendingJob = result.Receipt is ToolInvocationReceipt.PendingBackgroundJob,
+            Synthetic = result.Receipt is ToolInvocationReceipt.Correction { RemediationCode: ToolRemediationCode.BreakToolCycle }
+        };
         return callId;
     }
 
     public BatchCompletion CompleteIfReady(
         SessionState current,
-        TurnStateTracker turn,
-        int maxToolIterations)
+        TurnStateTracker turn)
     {
         if (!CanComplete)
             return BatchCompletion.Pending.Instance;
@@ -108,8 +111,8 @@ internal sealed class ActiveToolBatchTracker
         if (_preparedCycleBatch is { } prepared)
             turn.ObserveCompleted(ToolCycleSignatureFactory.Complete(prepared, _cycleResults));
 
-        var budget = turn.RecordToolCompletion(CompletedCount, maxToolIterations);
-        return new BatchCompletion.Ready(updated, CompletedCount, budget);
+        turn.RecordToolCompletion(CompletedCount);
+        return new BatchCompletion.Ready(updated, CompletedCount);
     }
 
     public void DiscardPendingMedia() => _pendingMedia.Clear();
@@ -185,30 +188,16 @@ internal abstract record BatchCompletion
         public static readonly Pending Instance = new();
     }
 
-    internal sealed record Ready(SessionState State, int ResultCount, ToolBudgetStatus BudgetStatus)
-        : BatchCompletion
+    internal sealed record Ready(SessionState State, int ResultCount) : BatchCompletion
     {
-        public ToolBatchNextAction ChooseNext(bool newUserInputAdmitted, bool compactionDue)
-        {
-            var budget = newUserInputAdmitted ? ToolBudgetStatus.Ok.Instance : BudgetStatus;
-            return budget switch
-            {
-                ToolBudgetStatus.Exhausted exhausted =>
-                    new ToolBatchNextAction.ContinueWithoutTools(exhausted.NudgeText),
-                ToolBudgetStatus.NudgeNeeded nudge when compactionDue =>
-                    new ToolBatchNextAction.RequestCompaction(nudge.NudgeText),
-                ToolBudgetStatus.NudgeNeeded nudge =>
-                    new ToolBatchNextAction.ContinueModel(nudge.NudgeText),
-                _ when compactionDue => new ToolBatchNextAction.RequestCompaction(null),
-                _ => new ToolBatchNextAction.ContinueModel(null)
-            };
-        }
+        public ToolBatchNextAction ChooseNext(bool compactionDue)
+            => compactionDue ? ToolBatchNextAction.RequestCompaction : ToolBatchNextAction.ContinueModel;
     }
+
 }
 
-internal abstract record ToolBatchNextAction
+internal enum ToolBatchNextAction
 {
-    internal sealed record ContinueModel(string? NudgeText) : ToolBatchNextAction;
-    internal sealed record ContinueWithoutTools(string NudgeText) : ToolBatchNextAction;
-    internal sealed record RequestCompaction(string? NudgeText) : ToolBatchNextAction;
+    ContinueModel,
+    RequestCompaction
 }

@@ -87,19 +87,22 @@ first user message is just the raw task, identical to the pre-context protocol.
    policy, then `SubAgentToolPolicy` removes tools that are statically denied to
    subagents (`spawn_agent`). Agent definition `tools:` metadata is advisory and
    does not narrow runtime authorization.
-3. A `SubAgentActor` is spawned as a **child of the session actor** (supervised,
-   lifecycle-managed — stops when the session stops).
-4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
-5. After at most 30 tool iterations, a final response, or an inactivity timeout,
-   the subagent returns a terminal run result.
-6. `spawn_agent` returns the accepted run ID at once. The terminal result arrives
-   in a later parent turn as a `child_run_result` tool result. It holds the agent
-   name, run id, outcome (`completed`, `partial`, or `failed`), optional reason,
-   diagnostics pointer, and the subagent's final text.
+3. The session actor persists child acceptance and the accepted `spawn_agent`
+   tool result before it starts the child actor.
+4. The `spawn_agent` tool returns the durable run ID. The child runs as a
+   supervised child of the session actor and can outlive the parent model call.
+5. A final response completes the child run. An inactivity timeout or
+   cancellation can stop it. The runtime sets no fixed tool-iteration ceiling.
+6. After the session records and prepares a terminal result, it selects that
+   result at a safe parent model boundary. Ready results take priority. The
+   session delivers a paired `child_run_result` call and tool result. The result
+   holds the agent name, run id, outcome (`completed`, `partial`, or `failed`),
+   optional reason, diagnostics pointer, and the subagent's final text.
 
 Child creation is marshaled back onto the session actor thread, so supervision
-stays within Akka's actor-thread rules. If the parent tool call is cancelled or
-times out, the subagent is cancelled too. The timers are inactivity budgets: a
+stays within Akka's actor-thread rules. After durable acceptance, the child can
+continue after the `spawn_agent` call returns. An explicit run cancellation or
+session shutdown stops the child. The timers are inactivity budgets: a
 responsive subagent is not stopped merely because wall-clock time has elapsed.
 
 Every subagent uses the same timers from `netclaw.json`. An agent file does not
@@ -361,8 +364,9 @@ known-good version.
 - Subagents are **single-turn**: they receive a task, run their tool loop, and
   return a result. They do not maintain conversation history or support
   back-and-forth interaction with the user.
-- Subagents have a **maximum of 30 tool iterations** before being forced to
-  produce a text response.
+- Subagents have no fixed maximum number of tool iterations. A final response
+  completes the run; cancellation or an inactivity timeout can stop it.
+  A recurrence refusal can settle the child turn without another model request.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.
@@ -398,3 +402,25 @@ A restore loses later journal facts and does not reverse external effects.
 Use the fixed-byte compatibility and actor recovery checks in `Netclaw.Actors.Tests` for candidate validation.
 Record the exact candidate, test filter, database copy, and results in the release evidence.
 No live deployment or database restore forms part of this source change.
+
+## Repeated tool work
+
+The parent and child use exact tool identities and actual results to detect repeated work.
+After two equal feedback rounds, the runtime returns a correction for each repeated call.
+A repeat after that correction ends the turn without another model request.
+In a parent session, the turn fails with the error category `ModelBehavior`. A child run ends with a partial result.
+Unrelated calls remain available. Live context compaction preserves this evidence.
+A process restart does not restore a detector checkpoint or repeat tool calls automatically.
+
+Authorized status queries for a pending background job can repeat.
+Each query repeats the normal access checks. Cancellation and inaccessible jobs receive no exception.
+
+`MaxToolIterationsPerTurn` remains readable in old configuration files. The runtime does not enforce that value.
+Useful work can exceed the former parent and child iteration limits.
+The runtime still enforces deadlines, cancellation, and authorization.
+Distinct calls can continue indefinitely if no other stop condition applies.
+
+A recurrence refusal executes no tool and grants no authority.
+The result retains the call identity, validation error, and authorization-attempt identity.
+The runtime does not request consent merely to refuse a repeated call.
+Every call that can execute still passes the normal authorization checks.

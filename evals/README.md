@@ -257,15 +257,14 @@ NETCLAW_EVAL_TIMEOUT=180 \
 | Case | Required evidence |
 |------|-------------------|
 | `tool_cycle_correction` | The third request receives a runtime correction. The model uses `file_read` to complete an alternative. |
-| `tool_cycle_terminal` | The repeated blocked request causes a text-only call. The model reports incomplete work and two completed executions. |
+| `tool_cycle_terminal` | After the model repeats the refused action, Netclaw fails the turn without another model request. The envelope has `errorCategory` `model` and `errorKind` `ModelBehavior`. The turn error reports partial work and two completed executions. |
 | `tool_cycle_compaction` | Normal compaction completes between executions one and two. The third request receives a correction. The model completes an alternative. |
 | `tool_cycle_changed_result` | The same command returns a different result each time. All three executions complete. |
 | `tool_cycle_metadata_repair` | Two requests lack required metadata. The corrected request executes once without a cycle correction. |
 
-The relay scripts only the initial tool requests. Each request has a fresh call ID.
-The real daemon executes tools and emits the intervention. The target model then
-controls the response and any alternative tool use. The fixture never supplies a
-successful final answer.
+The relay scripts the tool requests. Each request has a fresh call ID.
+The daemon executes tools and emits the intervention. The model controls recovery
+after a correction. Netclaw fails the turn with `ModelBehavior` after a repeated refusal.
 
 Each trial uses synthetic files in the isolated workspace. A separate counter
 checks actual side effects. Strict assertions require paired runtime results,
@@ -616,10 +615,10 @@ A trial has one of three states:
 
 **Known limit:** for now, a failed turn is inconclusive. A model behavior
 failure that fails the turn cannot give a FAIL. One example is the tool cycle
-stop, where the model keeps calling tools after the runtime requires a text-only
-reply. The case shows `turn_failed`, and the run exits 3. The CLI must report an
-error category before the harness can tell such a failure from a provider
-outage. A separate .NET change adds the category.
+stop (`tool_cycle_terminal`), where the model repeats a tool call that the
+runtime already refused. The case shows `turn_failed`, and the run exits 3. The
+CLI reports `category=model` for this failure, but the harness does not read the
+category yet.
 
 A `CANCELLED` record in `headless-errors.log` is the normal sign of a cut turn.
 It is not an infrastructure fault, so the verdict does not read that file.

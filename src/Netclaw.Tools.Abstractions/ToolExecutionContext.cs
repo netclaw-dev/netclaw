@@ -85,6 +85,14 @@ internal abstract class ToolInvocationReceipt
         public string? DeclaredProjectDirectory { get; }
     }
 
+    // The per-call output sink binds this receipt to the prepared query and its exact job arguments.
+    internal sealed class PendingBackgroundJob : ToolInvocationReceipt
+    {
+        public PendingBackgroundJob() : base(ToolInvocationOutcomeCategory.Success)
+        {
+        }
+    }
+
     internal sealed class Correction : ToolInvocationReceipt
     {
         public Correction(ToolRemediationCode remediationCode) : base(ToolInvocationOutcomeCategory.RecoverableCorrection)

@@ -660,7 +660,7 @@ public sealed class SubAgentSpawnerTests : TestKit, IAsyncDisposable
         probe.Reply(new SubAgentResult
         {
             Completion = partial
-                ? new ChildRunCompletion.Partial(SubAgentOutcomeReason.ToolIterationBudgetExhausted, WorkingContextDelta.Empty)
+                ? new ChildRunCompletion.Partial(SubAgentOutcomeReason.ToolCycleStopped, WorkingContextDelta.Empty)
                 : new ChildRunCompletion.Completed(WorkingContextDelta.Empty),
             Output = "child-summary", AgentName = new AgentName("reader")
         });

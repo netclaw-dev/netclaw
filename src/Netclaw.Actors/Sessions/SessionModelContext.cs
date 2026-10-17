@@ -28,7 +28,6 @@ internal sealed record PreparedModelRequest(
     SessionState State,
     List<AiChatMessage> Messages,
     SessionScopedChatOptions Options,
-    bool ForceNoTools,
     ToolExposureDiagnostic? Exposure);
 
 internal abstract record ContextCall
@@ -65,7 +64,6 @@ internal sealed class SessionModelContext
     private sealed record InspectionIntent(
         long Generation,
         WorkingContext WorkingContext,
-        bool ForceNoTools,
         string? SkillBody,
         string? RestartNotice);
 
@@ -150,14 +148,13 @@ internal sealed class SessionModelContext
         MessageSource? sourceFallback,
         EffectiveTrustContext? toolTrust,
         string? recallQuery,
-        bool forceNoTools,
         string? skillBody,
         string? restartNotice,
         CancellationToken cancellationToken)
     {
         _inspection = null;
         if (_recall.TurnRecallCache is not null)
-            return new ContextCall.Ready(PrepareRequest(state, childContinuation, ResolveAudience(admittedTurn, sourceFallback), toolTrust, forceNoTools, restartNotice));
+            return new ContextCall.Ready(PrepareRequest(state, childContinuation, ResolveAudience(admittedTurn, sourceFallback), toolTrust, restartNotice));
 
         var recallWatch = Stopwatch.StartNew();
         var resolved = _recall.ResolveForTurn(
@@ -166,7 +163,7 @@ internal sealed class SessionModelContext
         resolved = _recall.ApplyProgressiveRecall(resolved, _log);
         var audit = new RecallAudit(resolved, recallWatch.ElapsedMilliseconds);
         var audience = ResolveAudience(admittedTurn, sourceFallback);
-        var intent = new InspectionIntent(callId, state.WorkingContext, forceNoTools, skillBody, restartNotice);
+        var intent = new InspectionIntent(callId, state.WorkingContext, skillBody, restartNotice);
         _inspection = intent;
         return new ContextCall.Inspect(
             CreateInspectionReplyAsync(_snapshots, intent, audience, cancellationToken), audit);
@@ -189,7 +186,7 @@ internal sealed class SessionModelContext
         var updated = string.IsNullOrEmpty(volatileBlock)
             ? currentState
             : currentState.AddVolatileContextNudge(volatileBlock);
-        return PrepareRequest(updated, childContinuation, currentAudience, currentToolTrust, intent.ForceNoTools, intent.RestartNotice);
+        return PrepareRequest(updated, childContinuation, currentAudience, currentToolTrust, intent.RestartNotice);
     }
 
     internal PreparedModelRequest? CompleteInspection(
@@ -216,7 +213,6 @@ internal sealed class SessionModelContext
         ChildContinuation? childContinuation,
         TrustAudience audience,
         EffectiveTrustContext? toolTrust,
-        bool forceNoTools,
         string? restartNotice)
     {
         // The durable parent decision owns the child pair in canonical history.
@@ -232,9 +228,9 @@ internal sealed class SessionModelContext
         var exposed = ResolveExposedTools(toolTrust);
         var exposure = SelectExposureDiagnostic(exposed.Count, toolTrust);
         var options = new SessionScopedChatOptions { SessionId = _sessionId.Value };
-        if (!forceNoTools && exposed.Count > 0)
+        if (exposed.Count > 0)
             options.Tools = [.. exposed];
-        return new PreparedModelRequest(state, messages, options, forceNoTools, exposure);
+        return new PreparedModelRequest(state, messages, options, exposure);
     }
 
     private ContextAssemblyInput BuildAssemblyInput(

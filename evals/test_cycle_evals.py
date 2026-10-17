@@ -12,7 +12,11 @@ import unittest
 from unittest.mock import patch
 
 from background_fixture import handler_for
-from cycle_evals import CASES, CORRECTION, STOP, CycleFixture, main, primary_receipts, verdict
+from cycle_evals import CASES, CORRECTION, CycleFixture, main, primary_receipts, verdict
+
+SETTLEMENT = ("Netclaw stopped this turn because the model repeated a tool call that was already refused. "
+              "The result is partial. The last refused operation did not execute. "
+              "Earlier tool results remain available in the session.")
 
 
 def evidence(case="correction"):
@@ -41,18 +45,25 @@ def evidence(case="correction"):
         calls.append({"callId": "real-recovery", "toolName": recovery["name"],
                       "argumentsJson": recovery["arguments"]})
     snapshot = {"case": case, "effects": expected, "scripted_ids": ids,
-                "main_requests": 6, "sidecar_requests": int(case == "compaction"), "model_requests": 1,
+                "phase": 5 if case == "terminal" else 4,
+                "main_requests": 5 if case == "terminal" else 6,
+                "sidecar_requests": int(case == "compaction"), "model_requests": int(case != "terminal"),
                 "compaction_requests": int(case == "compaction"), "distillation_requests": 0, "context_window": 65536,
-                "handoff": {"tools": [] if case == "terminal" else ["file_read"], "effects": expected,
-                            "correction_ids": list(corrections), "stop_instruction": case == "terminal"},
+                "handoff": {} if case == "terminal" else {"tools": ["file_read"], "effects": expected,
+                            "correction_ids": list(corrections)},
                 "tool_results": tool_results, "observed_calls": observed_calls,
                 "recovery_path": recovery_path, "recovery_value": recovery_value}
-    answer = {"status": "incomplete" if case == "terminal" else "complete", "completed_attempts": expected,
+    answer = {"status": "complete", "completed_attempts": expected,
               "blocked_attempt_executed": False, "last_result": last_result,
-              "recovered_value": "" if case == "terminal" else recovery_value}
-    output = {"sessionId": "unit-session", "toolCalls": calls, "response": json.dumps(answer)}
+              "recovered_value": recovery_value}
+    output = {"sessionId": "unit-session", "toolCalls": calls,
+              "response": "" if case == "terminal" else json.dumps(answer)}
+    if case == "terminal":
+        output.update(errorCategory="model", errorKind="ModelBehavior")
     batch = "turn_tool_call_batch count=1 tools=shell_execute\n"
     actor_log = batch + ("Compaction complete (before=8, after=4)\n" if case == "compaction" else "") + batch
+    if case == "terminal":
+        actor_log += f"turn_failed category=ModelBehavior correlationId=unit message={SETTLEMENT}\n"
     return snapshot, output, actor_log
 
 
@@ -74,7 +85,7 @@ class CycleVerdictTests(unittest.TestCase):
 
     def test_effect_count_must_match_before_and_after_model_handoff(self):
         for case in CASES:
-            for target in ("effects", "handoff"):
+            for target in (("effects",) if case == "terminal" else ("effects", "handoff")):
                 for count in (0, 4):
                     with self.subTest(case=case, target=target, count=count):
                         snapshot, output, log = evidence(case)
@@ -111,12 +122,36 @@ class CycleVerdictTests(unittest.TestCase):
         snapshot["handoff"] = None
         self.assert_rejected(snapshot, output, log)
 
-    def test_terminal_requires_no_tools_and_the_runtime_stop_instruction(self):
-        for field, value in (("tools", ["file_read"]), ("stop_instruction", False)):
+    def test_terminal_requires_exact_request_settlement_and_truthful_partial_result(self):
+        for field, value in (("main_requests", 6), ("phase", 4), ("model_requests", 1),
+                             ("handoff", {"tools": ["file_read"]}), ("effects", 3)):
             with self.subTest(field=field):
                 snapshot, output, log = evidence("terminal")
-                snapshot["handoff"][field] = value
+                snapshot[field] = value
                 self.assert_rejected(snapshot, output, log)
+        # The model-facing text speaks to "you". A person must not read it as the turn error.
+        model_facing = SETTLEMENT.replace(
+            "Netclaw stopped this turn because the model repeated a tool call that was already refused.",
+            "Netclaw stopped this run after you repeated a tool call that the cycle guard already blocked.")
+        for error in (model_facing,
+                      SETTLEMENT.replace("The result is partial.", "The result is complete."),
+                      SETTLEMENT.replace("The last refused operation did not execute.",
+                                         "The last refused operation executed."),
+                      SETTLEMENT.replace("Earlier tool results remain available in the session.", "")):
+            with self.subTest(error=error):
+                snapshot, output, log = evidence("terminal")
+                log = log.replace(SETTLEMENT, error)
+                self.assert_rejected(snapshot, output, log)
+        for field, value in (("errorCategory", "infra"), ("errorKind", "ProviderFailure"), ("errorKind", None)):
+            with self.subTest(field=field, value=value):
+                snapshot, output, log = evidence("terminal")
+                output[field] = value
+                self.assert_rejected(snapshot, output, log)
+        with self.subTest(defect="stop text only in the response"):
+            snapshot, output, log = evidence("terminal")
+            output["response"] = SETTLEMENT
+            log = log.replace(SETTLEMENT, "")
+            self.assert_rejected(snapshot, output, log)
 
     def test_terminal_rejects_any_post_stop_call_or_result(self):
         for defect in ("call", "result"):
@@ -181,6 +216,14 @@ class CycleVerdictTests(unittest.TestCase):
         self.assertTrue(result["groups"]["runtime_contract"]["passed"])
         self.assertFalse(result["groups"]["model_task"]["passed"])
 
+    def test_terminal_rejects_later_intervention_without_losing_the_initial_pair(self):
+        snapshot, output, log = evidence("terminal")
+        snapshot["tool_results"]["later-cycle"] = CORRECTION
+        result = verdict(snapshot, output, log)
+        self.assertFalse(result["passed"])
+        self.assertTrue(result["checks"]["initial_correction_pair"])
+        self.assertFalse(result["checks"]["no_additional_cycle_interventions"])
+
     def test_prose_or_an_ambiguous_status_remains_a_strict_model_failure(self):
         for case, response_change in (("correction", "status"), ("metadata_repair", "prose"),
                                       ("metadata_repair", "blocked_flag")):
@@ -211,9 +254,8 @@ class CycleVerdictTests(unittest.TestCase):
                 self.assert_rejected(snapshot, output, log)
 
     def test_false_final_report_fails(self):
-        for case in CASES:
-            mutations = (("status", "complete" if case == "terminal" else "incomplete"),
-                         ("completed_attempts", 99), ("completed_attempts", True),
+        for case in CASES - {"terminal"}:
+            mutations = (("status", "incomplete"), ("completed_attempts", 99), ("completed_attempts", True),
                          ("blocked_attempt_executed", True), ("recovered_value", "invented"))
             for field, value in mutations:
                 with self.subTest(case=case, field=field, value=value):
@@ -224,7 +266,7 @@ class CycleVerdictTests(unittest.TestCase):
                     self.assert_rejected(snapshot, output, log)
 
     def test_last_result_cannot_be_fabricated_or_absent(self):
-        for case in CASES:
+        for case in CASES - {"terminal"}:
             for absent in (False, True):
                 with self.subTest(case=case, absent=absent):
                     snapshot, output, log = evidence(case)
@@ -352,27 +394,20 @@ class CycleFixtureTests(unittest.TestCase):
             self.fixture.completion(request)
         self.assertEqual(0, self.fixture.model_requests)
 
-    def test_terminal_handoff_requires_no_tools_and_rejects_their_return(self):
+    def test_terminal_repeat_settles_without_a_model_handoff_or_next_request(self):
         request = self.to_correction("terminal")
         repeat = self.fixture.completion(request)
         self.assertEqual("shell_execute", repeat["tool_calls"][0]["function"]["name"])
-        request["messages"].append({"role": "system", "content": STOP})
+        snapshot = self.fixture.snapshot()
+        self.assertEqual(5, snapshot["main_requests"])
+        self.assertEqual(5, snapshot["phase"])
+        self.assertEqual(0, snapshot["model_requests"])
+        self.assertIsNone(snapshot["handoff"])
+        self.assertEqual(5, len(snapshot["scripted_ids"]))
+        before = copy.deepcopy(snapshot)
         with self.assertRaises(ValueError):
             self.fixture.completion(request)
-        request["tools"] = []
-        self.assertIsNone(self.fixture.completion(request))
-        self.assertEqual([], self.fixture.handoff["tools"])
-        request["tools"] = [{"function": {"name": "file_read"}}]
-        with self.assertRaises(ValueError):
-            self.fixture.completion(request)
-
-    def test_terminal_without_the_stop_instruction_is_not_a_sidecar(self):
-        request = self.to_correction("terminal")
-        self.fixture.completion(request)
-        request["tools"] = []
-        with self.assertRaises(ValueError):
-            self.fixture.completion(request)
-        self.assertEqual(0, self.fixture.model_requests)
+        self.assertEqual(before, self.fixture.snapshot())
 
     def test_changed_result_control_executes_three_distinct_outcomes_before_handoff(self):
         request = self.start("changed_result")
@@ -573,9 +608,7 @@ class PrimaryReceiptTests(unittest.TestCase):
     def primary_log(self, case):
         snapshot, _, _ = evidence(case)
         success = "Exit code: 0\ncycle-stalled\n"
-        correction = ("Netclaw stopped this tool batch because it would continue a repeated action-and-outcome cycle. "
-                      "The same sequence completed twice without a changed result. No requested call executed.\n"
-                      "Next action: choose a different action, load a missing tool, or finish the task.")
+        correction = CORRECTION
         rejected = ("Error: Required meta argument '_rationale' must be a non-empty string. "
                     "Supply one sentence that states the tool call intent. The tool was NOT executed.")
         results = ([f"Exit code: 0\n{count}\n" for count in (1, 2, 3)] if case == "changed_result" else
@@ -618,11 +651,10 @@ class PrimaryReceiptTests(unittest.TestCase):
                 extra = self.record("TOOL_RESULT: shell_execute call_id=script-4 result=" + result)
                 self.assertFalse(primary_receipts(snapshot, "".join(records) + extra))
 
-    def test_correction_requires_the_runtime_remediation_suffix(self):
+    def test_correction_must_state_that_the_call_did_not_execute(self):
         snapshot, records = self.primary_log("correction")
-        missing = "".join(records).replace(
-            "\nNext action: choose a different action, load a missing tool, or finish the task.", "")
-        self.assertFalse(primary_receipts(snapshot, missing))
+        false_execution = "".join(records).replace("This call did not execute.", "This call executed.")
+        self.assertFalse(primary_receipts(snapshot, false_execution))
 
     def test_primary_success_claim_in_assistant_text_is_not_a_receipt(self):
         snapshot, records = self.primary_log("correction")
@@ -682,7 +714,9 @@ class CycleCommandTests(unittest.TestCase):
                 code, report = self.invoke(self.documents(case))
                 self.assertEqual(0, code)
                 self.assertTrue(report["passed"])
-                self.assertEqual({"runtime_contract", "post_handoff_safety", "model_task"}, set(report["groups"]))
+                expected_groups = ({"runtime_contract", "post_handoff_safety"} if case == "terminal" else
+                                   {"runtime_contract", "post_handoff_safety", "model_task"})
+                self.assertEqual(expected_groups, set(report["groups"]))
                 self.assertTrue(all(group["passed"] for group in report["groups"].values()))
                 self.assertTrue(report["groups"]["runtime_contract"]["checks"]["primary_receipts"])
                 self.assertTrue(report["groups"]["runtime_contract"]["checks"]["context_window"])
