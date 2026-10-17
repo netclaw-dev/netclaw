@@ -356,6 +356,10 @@ A short network drop therefore fails the run, and the operator resumes the sessi
 prompt, a connection state does not end the run: no output is in flight, and the request that the run
 thread waits for fails with its own reason when the connection cannot be restored.
 
+The CLI marks the prompt as sent just before it sends the prompt. After such a failure, the daemon may
+still run the prompt. Check the session, for example with `netclaw chat --resume <sessionId>` or the session
+log, before you send the prompt again.
+
 The CLI writes one `[headless:error]` line that names the lost connection, then
 `[turn:failed] category=infra kind=ChannelFailure`, then the open-runs line when the run knows an open run.
 With `--json`, it writes no envelope. The CLI does not cancel the child runs. A `Disconnected` or

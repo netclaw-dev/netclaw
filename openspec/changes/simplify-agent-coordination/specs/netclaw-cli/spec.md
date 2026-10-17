@@ -162,6 +162,8 @@ After the CLI sent the prompt, the CLI SHALL end the run on each of these events
 
 A short network drop therefore fails the run. The operator resumes the session. This cost is on purpose: a silent loss of output is worse than a failed run.
 
+The CLI marks the prompt as sent just before it sends the prompt. After such a failure, the daemon may still run the prompt. Check the session, for example with `netclaw chat --resume <sessionId>` or the session log, before you send the prompt again.
+
 Before the CLI sent the prompt, a connection state SHALL NOT end the run. No output is in flight. The request that the run thread waits for fails with its own reason when the connection cannot be restored, and that failure ends the run. A `Disconnected` or `TransportClosed` state after the run ended SHALL NOT change the exit code, the stdout, or the stderr, and the CLI SHALL NOT write to the session log for it. A run that ended with exit `0` stays exit `0`.
 
 A failed run SHALL NOT exit `0`. The CLI sets the exit code `1` in the same step that marks the run ended, on every failure path. When the run thread fails for a reason of its own (for example a bind that fails with an unsupported text admission version), the `[headless:error]` line SHALL name that reason and SHALL NOT say that the connection was lost.

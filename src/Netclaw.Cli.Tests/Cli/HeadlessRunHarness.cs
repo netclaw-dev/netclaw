@@ -206,17 +206,21 @@ internal sealed class HeadlessDrive(LockedCapture stdout, Task stopped, NetclawP
     /// Completes once the channel closed its session log writer. The channel disposes the writer after it
     /// stops the host, and no event signals that. An exclusive open succeeds only when no writer holds the
     /// file, so the loop retries it until it succeeds. Each retry yields, and none waits on a timer.
+    /// The loop has a time ceiling, so that a channel that never closes the writer fails the test with a
+    /// clear message and does not spin until the test run ends.
     /// </summary>
     public async Task SessionLogClosedAsync()
     {
         var log = Assert.Single(
             Directory.GetFiles(paths.LogsDirectory, "*.log"),
             path => !string.Equals(Path.GetFileName(path), "headless-errors.log", StringComparison.Ordinal));
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(SessionLogCloseCeiling);
         while (true)
         {
-            TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
             try
             {
+                ceiling.Token.ThrowIfCancellationRequested();
                 using var exclusive = new FileStream(log, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
                 return;
             }
@@ -224,8 +228,19 @@ internal sealed class HeadlessDrive(LockedCapture stdout, Task stopped, NetclawP
             {
                 await Task.Yield();
             }
+            catch (OperationCanceledException) when (!TestContext.Current.CancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"The channel did not close its session log writer within {SessionLogCloseCeiling}.");
+            }
         }
     }
+
+    /// <summary>
+    /// The longest wait for the channel to close its session log writer. A healthy channel closes it within
+    /// milliseconds after it stops the host.
+    /// </summary>
+    public static readonly TimeSpan SessionLogCloseCeiling = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// The session id, read from the first record of the session log. The channel writes that record before

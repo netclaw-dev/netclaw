@@ -169,8 +169,12 @@ connected, and it does not replay that output after a reconnect. A turn that
 completes during the gap is lost. So the CLI ends the run on `Disconnected` and
 on `TransportClosed` at any time after it sent the prompt, whether or not it
 knows an open child run. A short network drop therefore fails the run. Resume
-the session with `netclaw chat --resume <sessionId>`. A daemon that stops
-without a drain sends no stop signal, so the lost connection ends the run there.
+the session with `netclaw chat --resume <sessionId>`. The CLI marks the prompt
+as sent just before it sends the prompt. After such a failure, the daemon may
+still run the prompt. Check the session, for example with
+`netclaw chat --resume <sessionId>` or the session log, before you send the
+prompt again. A daemon that stops without a drain sends no stop signal, so the
+lost connection ends the run there.
 Run `chat -p` under `timeout` so that an outside limit always bounds the run.
 
 The CLI and the daemon must have the same version. A CLI from before this

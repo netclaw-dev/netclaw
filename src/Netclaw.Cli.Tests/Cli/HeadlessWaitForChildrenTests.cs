@@ -543,6 +543,11 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
         Assert.Contains("Done.", run.Stdout, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The longest time that the clock hook holds the client pump. A healthy channel never reaches it.
+    /// </summary>
+    private static readonly TimeSpan HoldCeiling = TimeSpan.FromSeconds(5);
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -557,7 +562,13 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
         // callback for the connection state that follows the final turn. The run thread then closes the
         // log writer, and the clock lets the pump go on. A channel that writes no log record for that state
         // never reaches the hold.
+        //
+        // The hold has a time ceiling. A channel that writes a record for that state keeps the log lock, and
+        // the run thread cannot close the writer. Without the ceiling, the pump and the run thread wait for
+        // each other until the test run ends. With it, the pump goes on after the ceiling, the write after the
+        // end shows in writeAfterEnd, and the test fails with a clear message.
         var armed = false;
+        var holdTimedOut = false;
         var pumpThread = 0;
         var writeAfterEnd = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var writerClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -567,7 +578,8 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
             if (!Volatile.Read(ref armed) || Environment.CurrentManagedThreadId != Volatile.Read(ref pumpThread))
                 return;
             writeAfterEnd.TrySetResult();
-            writerClosed.Task.Wait(TestContext.Current.CancellationToken);
+            if (!writerClosed.Task.Wait(HoldCeiling, TestContext.Current.CancellationToken))
+                Volatile.Write(ref holdTimedOut, true);
         };
         using var beforeChannel = _client.ConnectionEvents.Subscribe(evt =>
         {
@@ -604,12 +616,17 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
             }
         });
 
+        Assert.False(
+            writeAfterEnd.Task.IsCompleted,
+            "The channel wrote a log record after the run ended. "
+            + (Volatile.Read(ref holdTimedOut)
+                ? $"The log lock stayed held for {HoldCeiling}, because the run thread could not close the writer."
+                : "The write ran after the run thread closed the writer."));
         Assert.Equal(0, run.ExitCode);
         Assert.Empty(run.TurnFailedLines);
         Assert.DoesNotContain("UnhandleException", run.Stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("ObjectDisposedException", run.Stdout + run.Stderr, StringComparison.Ordinal);
         Assert.DoesNotContain("dropped", run.SessionLog, StringComparison.Ordinal);
-        Assert.False(writeAfterEnd.Task.IsCompleted, "The channel wrote a log record after the run ended.");
         if (!json)
             return;
 
