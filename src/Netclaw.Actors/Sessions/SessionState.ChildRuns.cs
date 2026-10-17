@@ -16,6 +16,7 @@ public sealed partial record SessionState
 {
     public ImmutableDictionary<SubAgentRunId, BackgroundChildRun> ChildRuns { get; init; } = [];
 
+    // <open-child-runs>
     public IEnumerable<BackgroundChildRun> GetExecutableChildRuns()
         => ChildRuns.Values.Where(run => !TryGetLegacyChildDisposition(run.RunId, out _));
 
@@ -30,6 +31,7 @@ public sealed partial record SessionState
             .OrderBy(run => run.AcceptedAtMs)
             .ThenBy(run => run.RunId.Value, StringComparer.Ordinal)
             .Select(run => run.RunId)];
+    // </open-child-runs>
 
     public SessionState Apply(ChildRunAccepted evt)
     {

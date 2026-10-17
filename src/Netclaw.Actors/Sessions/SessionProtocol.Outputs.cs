@@ -185,7 +185,7 @@ public static partial class SessionProtocol
         /// from its durable state for every outcome. Empty means no open run, and a client reads an absent
         /// wire field as empty. See the "open child run" term in the engineering glossary.
         /// </summary>
-        public IReadOnlyList<SubAgentRunId> OpenChildRunIds { get; init; } = [];
+        public required IReadOnlyList<SubAgentRunId> OpenChildRunIds { get; init; }
     }
 
     /// <summary>
