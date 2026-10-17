@@ -226,7 +226,26 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
     }
 
     [Fact]
-    public async Task A_routed_skill_turn_that_a_person_started_is_not_retried_and_raises_no_alert_live_or_after_recovery()
+    public async Task A_routed_skill_turn_that_a_person_started_is_not_retried_and_raises_no_alert_live()
+    {
+        // Arrange: no reminder started this turn. A person in the thread sees the missing reply.
+        var sessionId = new SessionId("mattermost/chan1/routed-person-live");
+        var personSource = ReminderSource(FireKey) with { ReminderId = null };
+        var (subscriber, completed) = await RunTurnAsync(sessionId, personSource, RoutedPrompt);
+        Assert.Null(completed.SourceReminderId);
+        var callsBefore = ChatClient.CallCount;
+
+        // Act: the live session reads the routed mark from its own state.
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+        await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
+
+        // Assert
+        Assert.Equal(0, AlertCount);
+        AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    [Fact]
+    public async Task A_routed_skill_turn_that_a_person_started_is_not_retried_and_raises_no_alert_after_recovery()
     {
         // Arrange: no reminder started this turn. A person in the thread sees the missing reply.
         var sessionId = new SessionId("mattermost/chan1/routed-person-recovered");

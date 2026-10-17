@@ -437,7 +437,7 @@ turn number would let a report for another turn name the wrong fire. A mutant on
 each failed post of one reply, or none.
 CI runs it in the `session-reliability` group of the `mutation-gates` job. That group has the most headroom.
 Its three latest hosted runs took 3 to 7 minutes, while the other four groups took 10 to 23 minutes.
-The local run selected 10 mutants and took 1 minute 48 seconds in Stryker after the build.
+The local run selected 10 mutants. The whole script took 326 seconds (5 minutes 26 seconds), which includes the Stryker build.
 Its report directory is `artifacts/stryker/reminder-report-once`.
 
 ### Reminder Execution Gate

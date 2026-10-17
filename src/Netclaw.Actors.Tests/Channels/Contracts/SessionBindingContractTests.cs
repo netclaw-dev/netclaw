@@ -56,6 +56,10 @@ public abstract class SessionBindingContractTests : TestKit
     // while letting a follow-up (e.g. the empty-turn fallback) succeed.
     protected abstract void SetReplyClientThrowsOnce(Exception ex);
 
+    // Fail the next posts in order, one exception per post, and let later posts succeed. Lets a test give two
+    // failed posts of one turn two different error texts.
+    protected abstract void SetReplyClientThrowsInOrder(params Exception[] exceptions);
+
     protected abstract void ClearReplyClientThrows();
 
     protected abstract ChannelType ExpectedChannelType { get; }
@@ -887,6 +891,49 @@ public abstract class SessionBindingContractTests : TestKit
             .Select(f => f.TurnNumber.Value)
             .ToList();
         Assert.Equal([3, 4], reportedTurns);
+
+        ClearReplyClientThrows();
+    }
+
+    // The report names the first failed post of the turn's output. A failed post that is not turn output (here the
+    // warning for a blocked message, which the binding posts between turns) is not output of any turn. It must
+    // not take the place of the failure that the session receives for the next turn. Slack has this rule today.
+    // Discord and Mattermost sent the warning posts through the same failure notifier as the output posts. The
+    // first failure wins, so a failed warning post won over the real failure of the next turn.
+    [Fact]
+    public async Task Failed_post_that_is_not_turn_output_does_not_replace_the_failure_of_the_next_turn()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector((text, _, _) => Task.FromResult(
+            text.Contains("blocked message", StringComparison.Ordinal)
+                ? PromptInjectionResult.Detected(PromptInjectionRisk.High, "injection detected")
+                : PromptInjectionResult.Safe()));
+        var sid = new SessionId("session-warning-then-output");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("turn reply") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(5) }
+        ], reactive: true);
+
+        // The first post is the warning for the blocked message. The second post is the output of the turn.
+        SetReplyClientThrowsInOrder(
+            new InvalidOperationException("warning post rejected"),
+            new InvalidOperationException("output post rejected"));
+        var actor = CreateBindingActor(sid, pipeline, detector);
+        await pipeline.Created.WaitAsync(ct);
+
+        // The actor handles inbound messages one after the other, so the warning post ends before the second message starts.
+        actor.Tell(CreateInboundMessage("blocked message", "user-1"), TestActor);
+        actor.Tell(CreateInboundMessage("hello", "user-1"), TestActor);
+
+        await AwaitAssertAsync(
+            () => Assert.Single(pipeline.RecordedFeedback.OfType<DeliveryFailed>()),
+            cancellationToken: ct);
+
+        var failure = pipeline.RecordedFeedback.OfType<DeliveryFailed>().Single();
+        Assert.Equal(5, failure.TurnNumber.Value);
+        Assert.Contains("output post rejected", failure.ErrorMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("warning post rejected", failure.ErrorMessage, StringComparison.Ordinal);
 
         ClearReplyClientThrows();
     }

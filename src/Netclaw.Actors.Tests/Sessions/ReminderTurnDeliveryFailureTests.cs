@@ -24,6 +24,8 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// </summary>
 public sealed class ReminderTurnDeliveryFailureTests : ReminderDeliveryTestBase
 {
+    private const string UnknownTurnWarning = "cannot tell whether a reminder started turn";
+
     public ReminderTurnDeliveryFailureTests(ITestOutputHelper output) : base(output)
     {
     }
@@ -306,11 +308,108 @@ public sealed class ReminderTurnDeliveryFailureTests : ReminderDeliveryTestBase
         var recovered = CreateTestProbe("reported-passivated-subscriber");
         await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
 
-        // Act: a late second report for the same reply reaches the new incarnation.
-        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+        // Act: a late second report for the same reply reaches the new incarnation. The snapshot is a new-format
+        // snapshot, so the session knows the turn and that it has no unreported reminder. It returns quietly.
+        await EventFilter.Warning(contains: UnknownTurnWarning).ExpectAsync(0, async () =>
+        {
+            SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+            await AwaitSessionHandledEarlierMessagesAsync(sessionId, recovered);
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         // Assert: the snapshot did not hand the reminder back, so the new incarnation raises no second alert.
         await AwaitExactlyOneAlertAsync(sessionId, recovered);
+    }
+
+    // --- N1: a new-format snapshot lets the session recognize a turn that has no reminder ---
+
+    [Fact]
+    public async Task A_person_turn_that_the_session_restored_from_its_snapshot_returns_quietly()
+    {
+        // Arrange: a person started the turn. The session passivates and saves a final snapshot, which the
+        // next incarnation restores. The snapshot names the eligible turn and holds no reminder.
+        var sessionId = new SessionId("mattermost/chan1/person-thread-passivated");
+        var (subscriber, completed) = await RunTurnAsync(sessionId, source: null);
+        var session = await ResolveSessionAsync(sessionId);
+        Watch(session);
+        session.Tell(new LeaveSession(subscriber) { SessionId = sessionId });
+        session.Tell(ReceiveTimeout.Instance);
+        await ExpectTerminatedAsync(session, cancellationToken: TestContext.Current.CancellationToken);
+
+        var recovered = CreateTestProbe("person-passivated-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
+
+        // Act
+        await EventFilter.Warning(contains: UnknownTurnWarning).ExpectAsync(0, async () =>
+        {
+            SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+            await AwaitSessionHandledEarlierMessagesAsync(sessionId, recovered);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Equal(0, AlertCount);
+    }
+
+    [Fact]
+    public async Task A_new_format_snapshot_of_a_turn_with_no_reminder_returns_quietly()
+    {
+        // Arrange: the snapshot carries the routed mark (false), so it is a new-format snapshot. It holds no reminder.
+        var sessionId = new SessionId("mattermost/chan1/seeded-new-format");
+        await SeedSnapshotAsync(sessionId, SnapshotOfOneTurn() with { EligibleDeliveryTurnRoutedSkill = false });
+        var subscriber = CreateTestProbe("seeded-new-format-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), subscriber, sessionId);
+
+        // Act
+        await EventFilter.Warning(contains: UnknownTurnWarning).ExpectAsync(0, async () =>
+        {
+            SendDeliveryFailed(sessionId, new TurnNumber(1), DeliveryFailureKind.TransportFailure);
+            await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Equal(0, AlertCount);
+    }
+
+    [Fact]
+    public async Task An_old_format_snapshot_still_gets_the_unknown_turn_warning()
+    {
+        // Arrange: the snapshot has no routed mark, so it was written before the delivery fields. The session cannot
+        // tell what started the eligible turn, and it must say so. It must not invent a reminder.
+        var sessionId = new SessionId("mattermost/chan1/seeded-old-format");
+        await SeedSnapshotAsync(sessionId, SnapshotOfOneTurn());
+        var subscriber = CreateTestProbe("seeded-old-format-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), subscriber, sessionId);
+
+        // Act
+        await EventFilter.Warning(contains: UnknownTurnWarning).ExpectAsync(1, () =>
+        {
+            SendDeliveryFailed(sessionId, new TurnNumber(1), DeliveryFailureKind.TransportFailure);
+            return Task.CompletedTask;
+        }, cancellationToken: TestContext.Current.CancellationToken);
+
+        // Assert
+        await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
+        Assert.Equal(0, AlertCount);
+    }
+
+    [Fact]
+    public async Task A_new_format_snapshot_of_a_reminder_turn_still_raises_the_alert()
+    {
+        // Arrange: the snapshot carries the reminder and the routed mark.
+        var sessionId = new SessionId("mattermost/chan1/seeded-new-format-reminder");
+        await SeedSnapshotAsync(sessionId, SnapshotOfOneTurn() with
+        {
+            EligibleDeliveryReminderId = new ReminderId(FireKey),
+            EligibleDeliveryTurnRoutedSkill = false
+        });
+        var subscriber = CreateTestProbe("seeded-new-format-reminder-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), subscriber, sessionId);
+
+        // Act
+        SendDeliveryFailed(sessionId, new TurnNumber(1), DeliveryFailureKind.TransportFailure);
+
+        // Assert
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
+        Assert.Equal(ReminderSlug, alert.Source);
     }
 
     [Fact]

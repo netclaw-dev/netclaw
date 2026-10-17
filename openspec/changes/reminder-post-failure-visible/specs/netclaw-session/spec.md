@@ -2,7 +2,7 @@
 
 ### Requirement: A failed post on a reminder turn is visible to the operator
 
-The session SHALL report a reply that it could not deliver when a reminder fire started the turn. `LlmSessionActor` owns this decision. It makes the decision in one method, `ReportReminderPostFailure`. The `Ready` handler (`HandleDeliveryFailedWhenReady`) and the `Processing` handler of `DeliveryFailed` both call that method. No other code raises `reminder.delivery.failed`.
+The session SHALL report a reply that it could not deliver when a reminder fire started the turn. `LlmSessionActor` owns this decision. It makes the decision in one method, `ReportReminderPostFailure`. Every phase that receives `DeliveryFailed` calls that method (see "Every phase handles a report" below). No other code raises `reminder.delivery.failed`.
 
 The session SHALL find the reminder from `TurnRecorded.SourceReminderId` of the recorded turn that `DeliveryFailed.TurnNumber` names. The session keeps this link in `DeliveryRetryHandler`, for the latest recorded turn only. This state is actor-local. The session rebuilds it from three sources:
 
@@ -10,15 +10,31 @@ The session SHALL find the reminder from `TurnRecorded.SourceReminderId` of the 
 - The journal. Replay of each `TurnRecorded` event gives the same result as the live turn, for every kind of turn.
 - The snapshot. `SessionSnapshot.EligibleDeliveryReminderId` holds the fire key of the eligible turn while that turn has no report. `SessionSnapshot.EligibleDeliveryTurnRoutedSkill` holds the routed mark of the eligible turn (see below). A session that restores from a snapshot does not replay the `TurnRecorded` event, so the snapshot must carry both.
 
+Every snapshot that the session builds SHALL carry a value for the routed mark, `true` or `false`. A snapshot that has a value is a new-format snapshot. A snapshot that has no value was written before the delivery fields (an old-format snapshot). When the session restores a new-format snapshot that names an eligible turn, it SHALL record that turn with the reminder key (null for a person's turn or for a reported turn) and the routed mark. When the session restores an old-format snapshot, it records nothing.
+
 The session SHALL record a turn as eligible and as the latest recorded turn before it saves a snapshot for that turn. Thus a snapshot that the reminder turn itself triggers keeps both facts. A passivation snapshot keeps them too.
 
 A routed-skill turn is a turn where a sub-agent runs a skill (`HandleRoutedSkillExecutionCompleted`). The session SHALL record it as eligible, like any other turn, so a failed post on it can raise the alert. The session SHALL mark it as routed, and it SHALL NOT retry a routed-skill turn on the main model. The mark travels as follows:
 
-- `TurnRecorded.RoutedSkill` is a new `bool` on the journal event (proto3 `bool routed_skill = 8`). The session writes `true` for a routed-skill turn. A journal entry written before this field has no value. It SHALL read as `false`, so an old entry is an ordinary turn. A turn that is not routed writes the same bytes as before.
+- `TurnRecorded.RoutedSkill` is a new `bool` on the journal event (proto3 `bool routed_skill = 10`). The session writes `true` for a routed-skill turn. A journal entry written before this field has no value. It SHALL read as `false`, so an old entry is an ordinary turn. A turn that is not routed writes the same bytes as before.
 - `DeliveryRetryHandler` keeps the mark with the latest recorded turn. `RecordTurn` takes it, and `IsRoutedSkill(turn)` returns it for the latest recorded turn only.
-- `SessionSnapshot.EligibleDeliveryTurnRoutedSkill` is a new `bool` (proto3 `bool eligible_delivery_turn_routed_skill = 13`). It reads `false` when absent.
+- `SessionSnapshot.EligibleDeliveryTurnRoutedSkill` is a new `bool?` (`optional bool eligible_delivery_turn_routed_skill = 21`). It is `null` when the snapshot has no value. The explicit presence lets the session tell a new-format snapshot (`true` or `false`) from an old-format snapshot (`null`).
+- `SessionSnapshot.EligibleDeliveryReminderId` is `optional string eligible_delivery_reminder_id = 20`.
+
+The proto field numbers are durable data. Other open work uses the lower numbers: the coordination stack (#2464) uses `TurnRecordedProto` 8 and `SessionSnapshotProto` 13 to 19 and reserves 12, and #1897 uses `TurnRecordedProto` 8 and 9 and `SessionSnapshotProto` 12. The numbers above are free on `dev` and on every open branch that edits these messages. Another change SHALL NOT reuse 8 or 9 of `TurnRecordedProto`, or 12 to 19 of `SessionSnapshotProto`, for a delivery field. A serialization test SHALL decode a hand-built wire message with each number.
 
 When a report names a routed-skill turn, the session SHALL treat the first report as the final failure, even when the failure kind is retryable. It SHALL make no model call for it. It SHALL write a Warning, call `ReportReminderPostFailure`, and mark the turn not eligible. No retry budget applies to a routed turn. A routed-skill turn that a person started raises no alert and makes no retry.
+
+Every phase handles a report. The session SHALL handle `DeliveryFailed` in `Ready`, `Processing`, `Compacting`, and `Passivating`, and it SHALL NOT drop a report in silence in any of them:
+
+| Phase or state | The session SHALL |
+|----------------|-------------------|
+| `Ready` | Apply the stale check, the routed-skill rule, and the retry rule. On a final failure, call `ReportReminderPostFailure`. |
+| `Processing` and `Compacting` | Make no retry, because the session works on another input. Add the nudge for a kind that is not retryable. Call `ReportReminderPostFailure`. |
+| `Passivating`, no restart drain pending | Abort the passivation and handle the report as in `Ready`. |
+| Any phase while a restart drain is pending | Call `ReportReminderPostFailure`. Add no nudge, make no retry, and do not abort the drain. The drain ends the session soon, and the failed post is the only trace of the lost reply. |
+
+A report that arrives during compaction is the common case after a long reminder turn: the binding reports only after it handles `TurnCompleted`, and the session compacts right after that event. `ReminderOf(N)` stays correct during compaction, because compaction records no turn.
 
 The session SHALL accept feedback only for the eligible turn. A binding SHALL send the number of the turn whose output failed to post (see `channel-binding-parity`, "A failed post reports the turn that it belongs to").
 
@@ -31,7 +47,7 @@ The session gives up on a reply when the failure kind is not retryable, or when 
 
 The session SHALL report each recorded turn at most once. One reply can fail more than once, for example a text chunk and then a file upload. The first final failure raises the alert. A later report for the same turn raises nothing, in `Ready` and in `Processing`. A new recorded turn, such as a retry turn, starts with no report. A snapshot SHALL NOT hand the key of a reported turn back to a later incarnation of the session.
 
-The session SHALL NOT drop a report in silence. If the report names a turn that is not the latest recorded turn, the session cannot tell whether a reminder started that turn. It SHALL write one Warning that contains `cannot tell whether a reminder started turn {Turn}`. It SHALL NOT raise the alert. An old snapshot (written before `EligibleDeliveryReminderId`) causes this Warning. The session SHALL NOT invent a reminder for it. If the latest recorded turn has no reminder, the session returns quietly, because a person in the thread sees the missing reply.
+The session SHALL NOT drop a report in silence. If the report names a turn that is not the latest recorded turn, the session cannot tell whether a reminder started that turn. It SHALL write one Warning that contains `cannot tell whether a reminder started turn {Turn}`. It SHALL NOT raise the alert. An old-format snapshot (it has no routed mark) causes this Warning. The session SHALL NOT invent a reminder for it. If the latest recorded turn has no reminder, the session returns quietly, because a person in the thread sees the missing reply. This holds also after a restore from a new-format snapshot: a report for a person's turn, or for a reminder turn that already has a report, SHALL NOT write the Warning.
 
 If the stored source key is not a reminder fire key (`{reminderId}:{fireTimeMs}`), the session SHALL still raise the alert, with the whole key as `Source`, and SHALL write one Warning that contains `not a reminder fire key`.
 
@@ -125,12 +141,40 @@ The session SHALL NOT raise `reminder.delivery.failed` for a turn that no remind
 - **GIVEN** the session raised the alert for a reminder turn and then passivated
 - **WHEN** the new incarnation receives one more `DeliveryFailed` for that turn
 - **THEN** the sink still holds exactly one `reminder.delivery.failed` alert
+- **AND** the session writes no Warning, because the new-format snapshot names the turn and holds no unreported reminder
 
-#### Scenario: A snapshot from before the reminder field loads
+#### Scenario: A snapshot from before the delivery fields loads
 
-- **GIVEN** a stored `SessionSnapshotProto` that has no `eligible_delivery_reminder_id` field
+- **GIVEN** a stored `SessionSnapshotProto` that has no `eligible_delivery_reminder_id` field and no routed mark
 - **WHEN** the session restores from it
-- **THEN** the snapshot loads, `EligibleDeliveryTurnNumber` keeps its value, and `EligibleDeliveryReminderId` is null
+- **THEN** the snapshot loads, `EligibleDeliveryTurnNumber` keeps its value, `EligibleDeliveryReminderId` is null, and `EligibleDeliveryTurnRoutedSkill` is null
+
+#### Scenario: Counterexample - an old-format snapshot still writes the Warning
+
+- **GIVEN** the session restored from a snapshot that names an eligible turn and has no routed mark
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the session writes one Warning that contains `cannot tell whether a reminder started turn`
+- **AND** the sink receives no `reminder.delivery.failed` alert
+
+#### Scenario: A person's turn restored from a new-format snapshot returns quietly
+
+- **GIVEN** a person started the eligible turn, the session passivated, and a new incarnation restored from the final snapshot (routed mark `false`, no reminder)
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the session writes no Warning and the sink receives no `reminder.delivery.failed` alert
+
+#### Scenario: A report while the session compacts raises the alert
+
+- **GIVEN** a reminder turn crossed the compaction threshold, and the session is in `Compacting`
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the session writes one Error log that names the reminder
+- **AND** the sink receives one `reminder.delivery.failed` alert before compaction ends
+
+#### Scenario: A report while a restart drain is pending raises the alert
+
+- **GIVEN** a reminder turn is recorded, and a restart drain is pending while the session is in `Processing` or `Passivating`
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert
+- **AND** the session adds no nudge, makes no model call, and does not abort the drain
 
 #### Scenario: A routed-skill reminder turn raises the alert
 
