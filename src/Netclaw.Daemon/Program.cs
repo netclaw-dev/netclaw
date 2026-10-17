@@ -642,6 +642,9 @@ static IReadOnlyList<string> ConfigureDaemonServices(
     // state file of each feed.
     var skillFeedsConfig = configuration.GetSection("SkillFeeds")
         .Get<SkillFeedsConfig>() ?? new SkillFeedsConfig();
+    if (!ManagedPluginSourceValidator.TryValidateSources(
+            skillFeedsConfig.Plugins, out var pluginSourceError))
+        throw new ModelConfigurationException($"SkillFeeds:Plugins is invalid: {pluginSourceError}");
     services.AddSingleton(skillFeedsConfig);
 
     // Agent tools cannot read or change the control plane. This also protects the
