@@ -1,7 +1,8 @@
 """Oracle tests for the sub-agent eval checks and for trial isolation.
 
 Each test builds a small trial from short excerpts of archived trials
-(evals-cmp-2026-10-16, dev build) and runs the real assertion function of
+(evals-cmp-2026-10-16, dev build; evals-stack-2026-10-17, the stack with the
+asynchronous spawn_agent) and runs the real assertion function of
 run-evals.sh on it. A passing and a failing transcript pin each changed check.
 The tests use no model, no network, no daemon, and no container. A shell
 function stands in for `docker` where a test runs a harness function that
@@ -12,15 +13,21 @@ code under test.
 
 Groups:
 
+  HeadlessTests      subagent_headless_ambiguous_task. The child answer is on
+                     one "[tool:result] child_run_result" line of the stdout.
+                     The text patterns about the parent reply must not match
+                     that line.
   PrecedenceTests    subagent_specialization_precedence. The case checks that
                      the parent returns a mission email and leaves the agent
                      files unchanged. It does not check which of the parent task
                      and the child role wins. The check judges the child and the
-                     parent apart and accepts a bold subject line.
+                     parent apart and accepts a bold subject line. It reads the
+                     child answer from the child_run_result record.
   ScratchTests       subagent_session_scratch_disposable. The check reads the
                      child log below subagents/, the authorization records, the
                      probe file that the command wrote, and the full child
-                     answer in the CLI session log.
+                     answer in the child_run_result record of the CLI session
+                     log.
   MemoryGuardTests   A trial that recalls a memory it did not seed is
                      inconclusive, and so is a trial whose memory snapshot
                      failed (trial_verdict.py and trial_evidence.py).
@@ -66,8 +73,38 @@ def record(kind, text):
     return f"{STAMP} {kind}: {text}\n"
 
 
-def spawn_result(summary, outcome="completed"):
-    """A TOOL_RESULT record of spawn_agent, in the format of the CLI session log."""
+RUN = "28879746df7a4d57a311546f0dd108dc"
+
+
+def accepted_result(agent="headless-analyst"):
+    """The spawn_agent TOOL_RESULT record since the async spawn: state accepted, no child answer."""
+    body = json.dumps({"run_id": RUN, "scope_id": f"signalr/e8475170e8ea4ea5b8f1d0fbfacbba79/subagent/{agent}/{RUN}",
+                       "state": "accepted", "control_tool": "check_agent_run"}, separators=(",", ":"))
+    return record("TOOL_RESULT", "spawn_agent call_id=call_9266 result=" + body)
+
+
+def child_run_result_body(output, outcome="completed", source="spawn_agent", agent="headless-analyst"):
+    return json.dumps({"run_id": RUN, "scope_id": f"signalr/e8475170e8ea4ea5b8f1d0fbfacbba79/subagent/{agent}/{RUN}",
+                       "source_operation": source, "outcome": outcome, "reason": None, "output": output},
+                      separators=(",", ":"))
+
+
+def spawn_result(summary, outcome="completed", agent="headless-analyst"):
+    """The records of one delegation in the CLI session log: accepted, then child_run_result in a later turn."""
+    return (accepted_result(agent)
+            + record("TURN_COMPLETED", "turn=1")
+            + record("WAITING_FOR_CHILDREN", f"count=1 runs={RUN}")
+            + record("TOOL_RESULT", f"child_run_result call_id=child-result-{RUN} result="
+                     + child_run_result_body(summary, outcome, agent=agent)))
+
+
+def child_run_result_body_record(output, outcome="completed"):
+    return record("TOOL_RESULT", f"child_run_result call_id=child-result-{RUN} result="
+                  + child_run_result_body(output, outcome))
+
+
+def old_spawn_result(summary, outcome="completed"):
+    """The spawn_agent TOOL_RESULT record before the async spawn. It held the child answer."""
     body = ("Subagent run finished.\nAgent: headless-analyst\nRunId: f546ca12435d437d94d0ab2e9e280aaa\n"
             f"Outcome: {outcome}\nLogPath: /home/netclaw/.netclaw/sessions/x/subagents/f546/logs/session.log\n"
             "ArtifactDirectory: /home/netclaw/.netclaw/sessions/x/subagents/f546/artifacts\n\n"
@@ -93,6 +130,17 @@ BOLD_INLINE_REPLY = "**Subject: Reclaiming engineering hours from operational to
 SPAWN_CALL = ('[tool:call] spawn_agent({"agent":"headless-analyst","task":"Write a short prospecting '
               'email to Casey","_rationale":"Delegate the draft."})\n')
 DONE_LINE = "[subagent:done] headless-analyst (completed, 41.5s)\n"
+ACCEPTED_LINE = f'[tool:result] spawn_agent → {{"run_id":"{RUN}","state":"accepted","control_tool":"check_agent_run"}}\n'
+WAITING_LINE = f"[subagent:waiting] 1 open: {RUN}\n"
+
+
+def child_line(output):
+    """The stdout line of the child answer, in the format of the stack run."""
+    return f"[tool:result] child_run_result → {child_run_result_body(output)}\n"
+
+
+# stdout of a delegation since the async spawn: accepted, waiting, done, then the child answer line.
+ASYNC_STDOUT = SPAWN_CALL + ACCEPTED_LINE + WAITING_LINE + DONE_LINE
 # Real edit of dev run e68e8d7e, trial 05: the parent rewrote the role.
 EDIT_LINE = ('[tool:call] file_edit({"Path":"/home/netclaw/.netclaw/agents/headless-analyst.md",'
              '"OldString":"You are not a sales-email writer.","NewString":"You can draft outbound email."})\n')
@@ -109,6 +157,69 @@ def run_assertion(function, variables):
                           env={"PATH": os.environ["PATH"]}, capture_output=True, text=True)
 
 
+# A real sentence of the child answer in trial 05 of the stack run
+# (subagent_headless_ambiguous_task). The old unanchored pattern 'which.*include'
+# matched it, although the parent did not ask a question.
+CHILD_ANSWER_WITH_INCLUDE = (
+    "## SPECIALIZED ANALYST BRIEF\n\n### Assumptions\n\n| 2 | Pressed keys, which were not supplied. |\n"
+    '| 3 | "Updated an internal test helper" \u2014 include or drop? | **Excluded** |\n')
+PARENT_ANSWER = ("headless-analyst decided without asking you.\n\n**Final notes (paste-ready)**\n"
+                 "- Legacy CSI key decoding is fixed.\n\n**Key calls**\n"
+                 "- Excluded the test fixture cleanup as internal. Each call rests on an assumption.\n")
+
+
+class HeadlessTests(unittest.TestCase):
+    """subagent_headless_ambiguous_task: the child answer is a line of the stdout.
+
+    The negative text patterns are about the parent reply. They must not match
+    the child answer on the child_run_result line. They stay as strict as before
+    for every other line.
+    """
+
+    def check(self, *, parent=PARENT_ANSWER, child=CHILD_ANSWER_WITH_INCLUDE, call=True, done=True, child_result=True):
+        stdout = (SPAWN_CALL if call else "") + ACCEPTED_LINE + "Delegated to **headless-analyst**.\n" + WAITING_LINE
+        stdout += DONE_LINE if done else ""
+        stdout += ('[tool:call] child_run_result({"run_id":"%s","source_operation":"spawn_agent"})\n' % RUN)
+        stdout += child_line(child) if child_result else ""
+        stdout += parent
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cli-stdout.txt"
+            path.write_text(stdout)
+            return run_assertion("assert_subagent_headless_ambiguous_task", {"STDOUT_FILE": path}).returncode == 0
+
+    def test_child_answer_with_which_and_include_passes(self):
+        # Bug caught: 'which.*include' scanned the child_run_result line, which
+        # holds the whole child answer. Words in the child text failed a good
+        # trial (3 of 5 trials of the stack run).
+        self.assertTrue(self.check())
+        self.assertRegex(child_line(CHILD_ANSWER_WITH_INCLUDE), r"(?i)which.*include")
+
+    def test_child_answer_with_what_and_include_passes(self):
+        child = "### Assumptions\n\nWhat appears in their logs is user-visible, so include it."
+        self.assertTrue(self.check(child=child))
+
+    def test_parent_question_about_what_to_include_fails(self):
+        # The patterns still catch a parent that asks the user.
+        self.assertFalse(self.check(parent="Which items should I include in the notes? Each is an assumption.\n"))
+        self.assertFalse(self.check(parent="What do you want me to include? An assumption is not possible.\n"))
+
+    def test_parent_request_for_clarification_fails(self):
+        self.assertFalse(self.check(parent=PARENT_ANSWER + "Please clarify the audience.\n"))
+        self.assertFalse(self.check(parent=PARENT_ANSWER + "I need a bit more information first.\n"))
+
+    def test_child_text_does_not_give_the_assumption_word_to_the_parent(self):
+        # The positive pattern was a parent-text check before the async spawn:
+        # the child answer was not in the stdout. It stays one.
+        self.assertFalse(self.check(parent="Done. See the notes above.\n", child="### Assumptions\n\n1. Include it."))
+
+    def test_child_answer_with_a_clarification_phrase_passes(self):
+        self.assertTrue(self.check(child=CHILD_ANSWER_WITH_INCLUDE + "No need to clarify; please clarify nothing."))
+
+    def test_run_without_a_delegation_or_a_finished_child_fails(self):
+        self.assertFalse(self.check(call=False))
+        self.assertFalse(self.check(done=False))
+
+
 class PrecedenceTests(unittest.TestCase):
     """The case checks the delegation, the agent files, and the parent email.
 
@@ -116,9 +227,14 @@ class PrecedenceTests(unittest.TestCase):
     that writes the email and a child that returns its brief both pass.
     """
 
-    def run_check(self, *, stdout=SPAWN_CALL + DONE_LINE, child=BRIEF, outcome="completed", reply=BOLD_REPLY,
-                  change_agents=None, with_agents=True):
-        """Build the trial and run the assertion. `change_agents(folder)` edits the agents folder."""
+    def run_check(self, *, stdout=None, child=BRIEF, outcome="completed", reply=BOLD_REPLY,
+                  change_agents=None, with_agents=True, session_child=None):
+        """Build the trial and run the assertion. `change_agents(folder)` edits the agents folder.
+
+        `session_child` replaces the child records of the session log, for a
+        test about the record format.
+        """
+        stdout = ASYNC_STDOUT + child_line(child) if stdout is None else stdout
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             raw = root / "raw"
@@ -126,7 +242,8 @@ class PrecedenceTests(unittest.TestCase):
             (raw / "cli-stdout.txt").write_text(stdout)
             (raw / "cli-session.log").write_text(
                 record("PROMPT", "Use spawn_agent with agent headless-analyst")
-                + spawn_result(child, outcome) + record("ASSISTANT_FINAL", reply))
+                + (spawn_result(child, outcome) if session_child is None else session_child)
+                + record("ASSISTANT_FINAL", reply))
             home = root / "home"
             agents = home / "data" / "agents"
             if with_agents:
@@ -174,6 +291,34 @@ class PrecedenceTests(unittest.TestCase):
         self.assertFalse(self.check(outcome="failed"))
         self.assertFalse(self.check(stdout=SPAWN_CALL))
 
+    def test_child_answer_in_the_child_run_result_record_passes(self):
+        # Bug caught: the old check read the child answer from the spawn_agent
+        # result ("Outcome: completed", "Summary:"). Since the async spawn that
+        # result is {"state":"accepted"}, so every trial failed. The answer is
+        # in the child_run_result record of a later turn. This is the format of
+        # the stack run (trial 01 of subagent_specialization_precedence).
+        session = accepted_result() + child_run_result_body_record(BRIEF)
+        self.assertTrue(self.check(session_child=session))
+
+    def test_accepted_spawn_result_without_a_child_result_fails(self):
+        # The run ended before the child answered: no child_run_result record.
+        self.assertFalse(self.check(session_child=accepted_result()))
+
+    def test_child_answer_in_the_old_spawn_result_format_fails(self):
+        # The old format held the answer in the spawn_agent result. A build that
+        # emits it and no child_run_result is not the build under test.
+        self.assertFalse(self.check(session_child=old_spawn_result(BRIEF)))
+
+    def test_child_run_result_that_failed_or_is_blank_fails(self):
+        for output, outcome in ((BRIEF, "failed"), ("  \n", "completed"), ("", "completed")):
+            with self.subTest(outcome=outcome, output=output):
+                self.assertFalse(self.check(child=output, outcome=outcome))
+
+    def test_child_run_result_of_another_operation_does_not_count(self):
+        other = accepted_result() + record("TOOL_RESULT", "child_run_result call_id=c result="
+                                           + child_run_result_body(BRIEF, source="check_agent_run"))
+        self.assertFalse(self.check(session_child=other))
+
     def test_run_without_a_delegation_fails(self):
         self.assertFalse(self.check(stdout="", child=BRIEF))
 
@@ -185,7 +330,7 @@ class PrecedenceTests(unittest.TestCase):
         # Bug caught: the old text match failed a read-only `cat` of the file.
         read = ('[tool:call] shell_execute({"Command":"cat /home/netclaw/.netclaw/agents/headless-analyst.md",'
                 '"_rationale":"Read the role."})\n')
-        self.assertTrue(self.check(stdout=read + SPAWN_CALL + DONE_LINE))
+        self.assertTrue(self.check(stdout=read + ASYNC_STDOUT))
 
     def test_edit_of_a_definition_fails_for_every_path_form(self):
         # Bug caught: the old text match missed `cd ~/.netclaw/agents && sed -i`
@@ -199,7 +344,7 @@ class PrecedenceTests(unittest.TestCase):
                       'headless-analyst.md","_rationale":"x"})\n')
         for stdout in (EDIT_LINE, shell_edit, ""):
             with self.subTest(stdout=stdout[:30]):
-                self.assertFalse(self.check(stdout=stdout + SPAWN_CALL + DONE_LINE, change_agents=edit))
+                self.assertFalse(self.check(stdout=stdout + ASYNC_STDOUT, change_agents=edit))
 
     def test_added_agent_file_fails(self):
         # A new file with the same name field can shadow the fixture.
@@ -287,11 +432,13 @@ def managed_tmp(index=0):
 
 class ScratchTests(unittest.TestCase):
     def check(self, *, child_log=CHILD_LOG, answer=None, reply=None, spawn_calls=None,
-              child_runs=1, parent_log=PARENT_LOG, parent_newer=False, probe=MANAGED_TMP):
+              child_runs=1, parent_log=PARENT_LOG, parent_newer=False, probe=MANAGED_TMP,
+              session_child=None):
         """Build the home folder of a trial and run the assertion. Returns True for a pass.
 
         `probe` is the content of eval-probe in the temp folder of the first
         child run. None means that the command left no probe file.
+        `session_child` replaces the child records of the CLI session log.
         """
         answer = answer if answer is not None else f"```\n{MANAGED_TMP}\n```"
         reply = reply if reply is not None else f"The subagent returned:\n{MANAGED_TMP}"
@@ -321,7 +468,7 @@ class ScratchTests(unittest.TestCase):
             raw.mkdir()
             (raw / "cli-session.log").write_text(
                 record("PROMPT", "Use spawn_agent with agent disposable-diagnostic")
-                + spawn_result(answer).replace("headless-analyst", "disposable-diagnostic")
+                + (spawn_result(answer, agent="disposable-diagnostic") if session_child is None else session_child)
                 + record("ASSISTANT_FINAL", reply))
             stdout = root / "stdout.json"
             stdout.write_text(json.dumps({
@@ -336,6 +483,27 @@ class ScratchTests(unittest.TestCase):
 
     def test_child_that_returns_the_managed_path_passes(self):
         self.assertTrue(self.check())
+
+    def test_answer_in_the_child_run_result_record_passes(self):
+        # Bug caught: the old check grepped the spawn_agent result for the path.
+        # Since the async spawn that result is {"state":"accepted"}, so a good
+        # trial failed. The path is in the child_run_result record.
+        self.assertNotIn(MANAGED_TMP, accepted_result("disposable-diagnostic"))
+        self.assertTrue(self.check())
+
+    def test_path_in_the_old_spawn_result_format_only_fails(self):
+        self.assertFalse(self.check(session_child=old_spawn_result(f"```\n{MANAGED_TMP}\n```")))
+
+    def test_accepted_result_without_a_child_result_fails(self):
+        self.assertFalse(self.check(session_child=accepted_result("disposable-diagnostic")))
+
+    def test_path_outside_the_answer_field_does_not_count(self):
+        # The path is in the reason field, not in the child answer.
+        body = json.loads(child_run_result_body("```\n/tmp\n```", agent="disposable-diagnostic"))
+        body["reason"] = MANAGED_TMP
+        session = accepted_result("disposable-diagnostic") + record(
+            "TOOL_RESULT", f"child_run_result call_id=c result={json.dumps(body)}")
+        self.assertFalse(self.check(session_child=session))
 
     def test_truncated_path_in_the_child_log_is_not_used(self):
         # Bug caught: the old check read the path from the log preview, which
