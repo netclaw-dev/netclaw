@@ -183,7 +183,7 @@ jobs:
           - group: stop-proof
             gates: stop-proof
           - group: session-reliability
-            gates: tool-batch-readiness headless-stop-rule open-child-runs child-owner
+            gates: tool-batch-readiness headless-stop-rule open-child-runs child-owner reminder-report-once
 
     steps:
       - name: "Checkout"
