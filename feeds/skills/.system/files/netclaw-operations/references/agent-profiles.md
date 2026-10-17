@@ -7,7 +7,8 @@ Physical agent-file inspection here is an operator diagnostic, not a runtime ski
 New installations seed `task-worker.md` from the canonical release asset when the ordinary destination file is absent.
 The seed path preserves existing operator profile files. An upgrade does not automatically replace them.
 The worker requests the existing Main role. Existing provider selection and permitted fallback behavior still apply.
-Its 120-second timeout is an inactivity bound, not a task lifetime budget.
+The profile sets no per-agent timeout. It uses the shared subagent timers.
+These timers are inactivity bounds, not a task lifetime budget.
 
 ## Existing Deployments
 
@@ -20,7 +21,7 @@ Its 120-second timeout is an inactivity bound, not a task lifetime budget.
 7. If the ordinary destination is absent, copy the reviewed asset to `task-worker.md` through authorized file tools.
 8. If a regular file exists, compare it with the asset and preserve its content by default.
 9. Apply a replacement only after explicit operator update authority. Preserve any operator edits that the operator wants to retain.
-10. Inspect the next profile discovery or load result. Verify the name, mission, Main role, visibility, and inactivity timeout.
+10. Inspect the next profile discovery or load result. Verify the name, mission, Main role, and visibility.
 
 There is no dedicated agent-profile installer command.
 Do not repeat `netclaw init` as a profile update procedure. Init can regenerate unrelated identity content.

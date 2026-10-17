@@ -2,7 +2,6 @@
 name: task-worker
 description: Execute a scoped code task or produce a complete artifact
 modelRole: Main
-timeoutSeconds: 120
 visibility: user-facing
 ---
 
