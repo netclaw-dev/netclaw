@@ -5,13 +5,10 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
-using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
-using Netclaw.Actors.Sessions;
-using Netclaw.Actors.Tests.Reminders;
 using Netclaw.Configuration;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -25,38 +22,10 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// does not retry. The session must report the failure itself, and it must find the reminder through the durable
 /// <see cref="TurnRecorded.SourceReminderId"/> of the turn that failed to post.
 /// </summary>
-public sealed class ReminderTurnDeliveryFailureTests : LlmSessionTestBase
+public sealed class ReminderTurnDeliveryFailureTests : ReminderDeliveryTestBase
 {
-    private const string AlertTypeText = "reminder.delivery.failed";
-    private const string ReminderSlug = "check-pr";
-    private const string FireKey = "check-pr:1712000000000";
-
-    private readonly FakeChatClient _chatClient = new();
-    private readonly ReminderManagerActorTests.TestNotificationSink _alerts = new();
-
     public ReminderTurnDeliveryFailureTests(ITestOutputHelper output) : base(output)
     {
-    }
-
-    protected override void ConfigureSessionServices(IServiceCollection services)
-    {
-        services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_chatClient));
-        services.AddSingleton(new ModelCapabilities
-        {
-            ModelId = "fake-model",
-            ContextWindowTokens = 128_000
-        });
-        services.AddSingleton(new SessionConfig
-        {
-            Tuning = new SessionTuning
-            {
-                SnapshotInterval = 50,
-                TitleGenerationInterval = 0
-            }
-        });
-        services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));
-        // Last registration wins. The session and the reminder manager both resolve the sink from DI.
-        services.AddSingleton<IOperationalNotificationSink>(_alerts);
     }
 
     [Fact]
@@ -64,7 +33,7 @@ public sealed class ReminderTurnDeliveryFailureTests : LlmSessionTestBase
     {
         // Arrange: a reminder fire runs and its reply is recorded.
         var sessionId = new SessionId("mattermost/chan1/reminder-thread-1");
-        var (_, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
+        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
         Assert.Equal(new ReminderId(FireKey), completed.SourceReminderId);
 
         // Act: the bot token is bad, so the post fails. Mattermost reports every post failure as TransportFailure.
@@ -75,7 +44,7 @@ public sealed class ReminderTurnDeliveryFailureTests : LlmSessionTestBase
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         // Assert: one alert names the reminder and the session. The session wrote no history row.
-        var alert = await AwaitSingleAlertAsync();
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
         Assert.Equal(AlertTypeText, alert.Type);
         Assert.Equal("ReminderDeliveryFailed", alert.Category.ToString());
         Assert.Equal(AlertSeverity.Warning, alert.Severity);
@@ -102,7 +71,7 @@ public sealed class ReminderTurnDeliveryFailureTests : LlmSessionTestBase
         await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
 
         // Assert
-        Assert.DoesNotContain(_alerts.Alerts, a => a.Type == AlertTypeText);
+        Assert.Equal(0, AlertCount);
         Assert.Empty(await ReadHistoryAsync());
     }
 
@@ -120,7 +89,7 @@ public sealed class ReminderTurnDeliveryFailureTests : LlmSessionTestBase
         await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
 
         // Assert
-        Assert.DoesNotContain(_alerts.Alerts, a => a.Type == AlertTypeText);
+        Assert.Equal(0, AlertCount);
     }
 
     [Fact]
@@ -136,14 +105,14 @@ public sealed class ReminderTurnDeliveryFailureTests : LlmSessionTestBase
             SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
             await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
             completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-            Assert.DoesNotContain(_alerts.Alerts, a => a.Type == AlertTypeText);
+            Assert.Equal(0, AlertCount);
             Assert.Equal(new ReminderId(FireKey), completed.SourceReminderId);
         }
 
         SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
 
         // Assert: the session gave up, so the operator hears about it once.
-        var alert = await AwaitSingleAlertAsync();
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
         Assert.Equal(ReminderSlug, alert.Source);
     }
 
@@ -153,11 +122,7 @@ public sealed class ReminderTurnDeliveryFailureTests : LlmSessionTestBase
         // Arrange: the reminder turn is recorded. The session stops before the post failure arrives.
         var sessionId = new SessionId("mattermost/chan1/reminder-thread-recovered");
         var (_, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
-        var session = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
-            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        Watch(session);
-        Sys.Stop(session);
-        await ExpectTerminatedAsync(session, cancellationToken: TestContext.Current.CancellationToken);
+        await StopSessionAsync(sessionId);
 
         // The new session actor rebuilds its state from the journal. Only TurnRecorded.SourceReminderId survives.
         var recovered = CreateTestProbe("recovered-subscriber");
@@ -167,96 +132,219 @@ public sealed class ReminderTurnDeliveryFailureTests : LlmSessionTestBase
         SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
 
         // Assert
-        var alert = await AwaitSingleAlertAsync();
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
         Assert.Equal(ReminderSlug, alert.Source);
         Assert.Equal(sessionId.Value, alert.Context!["sessionId"]);
     }
 
-    // DeliveryRetryHandler.MaxRetries is internal to the session. The spec fixes the budget at two retries.
-    private const int DeliveryRetryBudget = 2;
+    // --- B1: the turn number that a binding sends is the turn of the failed reply ---
 
-    private async Task<(Akka.TestKit.TestProbe Subscriber, TurnCompleted Completed)> RunTurnAsync(
-        SessionId sessionId, MessageSource? source)
+    [Fact]
+    public async Task A_failed_post_on_a_reminder_turn_after_an_earlier_turn_is_not_stale()
     {
-        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("subscriber-" + Guid.NewGuid().ToString("N"));
-        await JoinAsync(sessionManager, subscriber, sessionId);
+        // Arrange: turn 1 belongs to a person. The reminder fire is turn 2. When N is 1, "N - 1" is 0, so a
+        // single-turn session cannot tell a correct turn number from the previous one.
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-second-turn");
+        var (subscriber, first) = await RunTurnAsync(sessionId, source: null);
+        var second = await RunFollowUpTurnAsync(sessionId, subscriber, ReminderSource(FireKey), "Check the open pull requests");
+        Assert.Equal(first.TurnNumber.Value + 1, second.TurnNumber.Value);
 
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Check the open pull requests",
-            Source = source
-        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        // Act: the binding names the turn of the failed reply.
+        SendDeliveryFailed(sessionId, second.TurnNumber, DeliveryFailureKind.TransportFailure);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        return (subscriber, completed);
+        // Assert
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
+        Assert.Equal(ReminderSlug, alert.Source);
     }
 
-    // Ask keeps the join reply away from the test actor, which must see only the Terminated message.
-    private async Task JoinAsync(IActorRef sessionManager, Akka.TestKit.TestProbe subscriber, SessionId sessionId)
+    [Fact]
+    public async Task A_report_that_names_the_previous_turn_raises_no_alert_for_the_reminder_turn()
     {
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        // Arrange: this is the number that the Mattermost and Discord bindings sent before the fix. The session
+        // must treat it as feedback for the earlier turn. It must not blame the latest reminder turn.
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-previous-turn");
+        var (subscriber, first) = await RunTurnAsync(sessionId, source: null);
+        await RunFollowUpTurnAsync(sessionId, subscriber, ReminderSource(FireKey), "Check the open pull requests");
+
+        // Act
+        SendDeliveryFailed(sessionId, first.TurnNumber, DeliveryFailureKind.TransportFailure);
+        await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
+
+        // Assert
+        Assert.Equal(0, AlertCount);
     }
 
-    private void SendDeliveryFailed(SessionId sessionId, TurnNumber turn, DeliveryFailureKind kind)
-        => ActorRegistry.Get<SessionManagerActorKey>().Tell(new DeliveryFailed
-        {
-            SessionId = sessionId,
-            TurnNumber = turn,
-            ChannelType = ChannelType.Mattermost,
-            FailureKind = kind,
-            ErrorMessage = "Unauthorized"
-        });
+    // --- S1: one reply raises at most one alert ---
 
-    // A later message reaches the session after the earlier DeliveryFailed, because both use the same path and
-    // the mailbox keeps their order. When the new turn completes, the session handled the earlier feedback.
-    private async Task AwaitSessionHandledEarlierMessagesAsync(SessionId sessionId, Akka.TestKit.TestProbe subscriber)
+    [Fact]
+    public async Task Two_non_retryable_reports_for_one_reminder_turn_raise_one_alert()
     {
-        await ActorRegistry.Get<SessionManagerActorKey>().Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Barrier message"
-        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        await subscriber.FishForMessageAsync<TurnCompleted>(
-            _ => true, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        // Arrange
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-twice");
+        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
+
+        // Act: one reply can fail more than once (a text chunk, then a file upload, then an error text).
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+
+        // Assert: the wait helper settles the session before it counts, so it sees a second alert.
+        await AwaitExactlyOneAlertAsync(sessionId, subscriber);
     }
 
-    private async Task<OperationalAlert> AwaitSingleAlertAsync()
+    [Fact]
+    public async Task A_report_while_processing_after_a_report_while_ready_raises_no_second_alert()
     {
-        OperationalAlert? found = null;
+        // Arrange: the first report finds the session Ready and raises the alert.
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-ready-then-processing");
+        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
         await AwaitAssertAsync(() =>
         {
-            found = Assert.Single(_alerts.Alerts, a => a.Type == AlertTypeText);
+            Assert.Equal(1, AlertCount);
             return Task.CompletedTask;
         }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
-        return found!;
+
+        // Act: a person's message holds the session in Processing. The second report for the same turn arrives there.
+        var gate = await HoldSessionInProcessingAsync(sessionId);
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+        gate.SetResult();
+        await subscriber.FishForMessageAsync<TurnCompleted>(
+            _ => true, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Equal(1, AlertCount);
     }
 
-    private async Task<IReadOnlyList<HistoryRecord>> ReadHistoryAsync()
-        => await Host.Services.GetRequiredService<ReminderHistoryStore>()
-            .ReadAsync(new ReminderId(ReminderSlug), 10);
+    // --- S3: the session never drops a report in silence ---
 
-    private static MessageSource ReminderSource(string fireKey) => new()
+    [Fact]
+    public async Task A_source_key_that_is_not_a_fire_key_raises_the_alert_with_the_whole_key_and_a_warning()
     {
-        ChannelType = ChannelType.Mattermost,
-        SenderId = new SenderId("reminder-system"),
-        MessageId = fireKey,
-        TurnId = new TurnId(fireKey),
-        ReminderId = new ReminderId(fireKey),
-        Audience = TrustAudience.Team,
-        Boundary = TrustBoundary.Team,
-        Principal = PrincipalClassification.VerifiedAutomation,
-        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+        // Arrange: every production key comes from ReminderFireKey, so this breaks an invariant. The session
+        // still raises the alert, and it makes the broken invariant visible.
+        const string badKey = "not-a-fire-key";
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-bad-key");
+        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(badKey));
+
+        // Act
+        await EventFilter.Warning(contains: "not a reminder fire key").ExpectAsync(1, () =>
         {
-            SourceKind = new SourceKind("reminder")
-        },
-        ReceivedAt = new DateTimeOffset(2026, 5, 17, 12, 0, 0, TimeSpan.Zero)
-    };
+            SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+            return Task.CompletedTask;
+        }, cancellationToken: TestContext.Current.CancellationToken);
+
+        // Assert
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
+        Assert.Equal(badKey, alert.Source);
+    }
+
+    [Fact]
+    public async Task A_report_for_a_turn_the_session_does_not_know_logs_a_warning_and_raises_no_alert()
+    {
+        // Arrange: the session is Processing, so the report skips the Ready-state stale check.
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-unknown-turn");
+        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
+        var gate = await HoldSessionInProcessingAsync(sessionId);
+
+        // Act: no turn with this number exists, so the session cannot tell whether a reminder started it.
+        var unknownTurn = new TurnNumber(completed.TurnNumber.Value + 40);
+        await EventFilter.Warning(contains: "cannot tell whether a reminder started turn").ExpectAsync(1, () =>
+        {
+            SendDeliveryFailed(sessionId, unknownTurn, DeliveryFailureKind.TransportFailure);
+            return Task.CompletedTask;
+        }, cancellationToken: TestContext.Current.CancellationToken);
+
+        gate.SetResult();
+        await subscriber.FishForMessageAsync<TurnCompleted>(
+            _ => true, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Equal(0, AlertCount);
+    }
+
+    [Fact]
+    public async Task A_reported_turn_does_not_alert_again_after_the_session_passivated()
+    {
+        // Arrange: the session reported the failed reply, then it passivated with a final snapshot.
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-reported-then-passivated");
+        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, AlertCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        var session = await ResolveSessionAsync(sessionId);
+        Watch(session);
+        session.Tell(new LeaveSession(subscriber) { SessionId = sessionId });
+        session.Tell(ReceiveTimeout.Instance);
+        await ExpectTerminatedAsync(session, cancellationToken: TestContext.Current.CancellationToken);
+
+        var recovered = CreateTestProbe("reported-passivated-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
+
+        // Act: a late second report for the same reply reaches the new incarnation.
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+
+        // Assert: the snapshot did not hand the reminder back, so the new incarnation raises no second alert.
+        await AwaitExactlyOneAlertAsync(sessionId, recovered);
+    }
+
+    [Fact]
+    public async Task A_session_that_passivated_still_finds_the_reminder()
+    {
+        // Arrange: the reminder turn is recorded. The session passivates when idle and saves a final snapshot.
+        // The next incarnation restores from that snapshot, so it does not replay the TurnRecorded event.
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-passivated");
+        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
+        var session = await ResolveSessionAsync(sessionId);
+        Watch(session);
+        session.Tell(new LeaveSession(subscriber) { SessionId = sessionId });
+        session.Tell(ReceiveTimeout.Instance);
+        await ExpectTerminatedAsync(session, cancellationToken: TestContext.Current.CancellationToken);
+
+        var recovered = CreateTestProbe("passivated-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
+
+        // Act
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+
+        // Assert
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
+        Assert.Equal(ReminderSlug, alert.Source);
+    }
+}
+
+/// <summary>
+/// S3: a session that saves a snapshot on the reminder turn itself must keep what recovery needs. With a snapshot
+/// after every journal event, the snapshot of the reminder turn is the newest one, and the journal events before
+/// it are not replayed.
+/// </summary>
+public sealed class ReminderIntervalSnapshotRecoveryTests : ReminderDeliveryTestBase
+{
+    public ReminderIntervalSnapshotRecoveryTests(ITestOutputHelper output) : base(output)
+    {
+    }
+
+    protected override int SnapshotInterval => 1;
+
+    [Fact]
+    public async Task A_snapshot_taken_on_the_reminder_turn_keeps_the_turn_eligible_and_the_reminder()
+    {
+        // Arrange
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-interval-snapshot");
+        var (_, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
+        await StopSessionAsync(sessionId);
+
+        var recovered = CreateTestProbe("interval-snapshot-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
+
+        // Act
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+
+        // Assert
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
+        Assert.Equal(ReminderSlug, alert.Source);
+    }
 }

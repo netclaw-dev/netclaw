@@ -136,8 +136,11 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
 
     private void ResetReplyClient()
     {
+        // Keep both armed failures. Dropping the one-shot failure made every "fail one post" contract test
+        // pass on Slack without a failed post.
         var pendingThrow = _replyClient.ThrowOnPost;
-        _replyClient = new RecordingSlackReplyClient { ThrowOnPost = pendingThrow };
+        var pendingThrowOnce = _replyClient.ThrowOnceOnPost;
+        _replyClient = new RecordingSlackReplyClient { ThrowOnPost = pendingThrow, ThrowOnceOnPost = pendingThrowOnce };
     }
 
     private IActorRef CreateActorCore(

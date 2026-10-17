@@ -871,6 +871,54 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void SessionSnapshot_eligible_reminder_id_round_trips_as_an_optional_proto_string()
+    {
+        // The snapshot keeps the fire key of the reminder that started the eligible turn. A session that
+        // restores from this snapshot does not replay the TurnRecorded event, so the key must travel here.
+        var wrapped = new SessionSnapshot
+        {
+            TurnCount = 7,
+            History = [],
+            EligibleDeliveryTurnNumber = new TurnNumber(7),
+            EligibleDeliveryReminderId = new ReminderId("check-pr:1712000000000")
+        };
+
+        var expected = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 7,
+            EligibleDeliveryTurnNumber = 7,
+            EligibleDeliveryReminderId = "check-pr:1712000000000"
+        }.ToByteArray();
+
+        Assert.Equal(expected, Serialize(wrapped));
+
+        var result = RoundTrip(wrapped);
+        Assert.Equal(new ReminderId("check-pr:1712000000000"), result.EligibleDeliveryReminderId);
+        Assert.Equal(new TurnNumber(7), result.EligibleDeliveryTurnNumber);
+    }
+
+    [Fact]
+    public void SessionSnapshot_from_before_the_reminder_field_loads_with_no_reminder()
+    {
+        // Old journals hold snapshots without field 12. They must load, with the eligible turn kept
+        // and no reminder. A session never invents a reminder for such a snapshot.
+        var oldShape = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 4,
+            EligibleDeliveryTurnNumber = 4
+        }.ToByteArray();
+
+        var probe = new SessionSnapshot { TurnCount = 0, History = [] };
+        var serializer = Sys.Serialization.FindSerializerFor(probe);
+        var manifest = serializer is SerializerWithStringManifest swm ? swm.Manifest(probe) : string.Empty;
+        var snapshot = Assert.IsType<SessionSnapshot>(Sys.Serialization.Deserialize(oldShape, serializer.Identifier, manifest));
+
+        Assert.Equal(new TurnNumber(4), snapshot.EligibleDeliveryTurnNumber);
+        Assert.Null(snapshot.EligibleDeliveryReminderId);
+        Assert.Equal(oldShape, Serialize(snapshot));
+    }
+
+    [Fact]
     public void ToolApprovalRequested_round_trips_all_persisted_context()
     {
         var assignmentDigest = new Netclaw.Configuration.ApprovalAssignmentDigest(
