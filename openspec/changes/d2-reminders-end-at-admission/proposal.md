@@ -13,7 +13,7 @@ The session already stores each admitted input in its journal. The session can o
 - A restart-resume message is never an ordinary input. The session resumes pending input, or it acknowledges the message as a no-op and logs `restart_resume_noop`.
 - Add `ReminderFireKey`, a reminder-owned value that parses the existing `"{id}:{ms}"` key. The journal shape does not change.
 - Delete `DeliveryObserver`, `ReminderDeliveryResult`, `DeliveryObservedTimeout`, the delivery backstop, `ProcessedReminderIds`, and the observer code in `ChannelOutputEngine`, the Slack, Discord, and Mattermost binding actors, and `SignalRSessionActor`.
-- **BREAKING**: a failed post for a Mode B reminder is no longer retried by the reminder system. `delivery_required` stays for `channel` delivery and has no effect for `current_session`. The session-level delivery retry stays.
+- **BREAKING**: a failed post for a Mode B reminder is no longer retried by the reminder system. `delivery_required` stays for `channel` delivery and has no effect for `current_session`. The session does not retry a `TransportFailure`. The session raises an alert instead.
 - A dropped fire gets a log line (`reminder_fire_dropped`) only.
 
 ## Capabilities
