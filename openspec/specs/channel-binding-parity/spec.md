@@ -146,6 +146,7 @@ All three bindings SHALL follow these rules:
 - A binding sends no report for a turn that posted at least one output. Part of the reply reached the thread, and a retry would post that part again. Slack follows this rule today. Discord and Mattermost SHALL follow it.
 - A failed post of the empty-turn fallback is a failed post of the turn that the fallback answers. The binding SHALL report it with that turn number.
 - A pipeline reinitialize abandons the turn in flight, so the binding SHALL discard the held failure.
+- The binding SHALL hold only a failed post of the turn's own output: the text, the file, and the error text that the output engine posts for the turn. A failed post of anything else is not output of a turn. This includes a warning post (ingress closed, a blocked or unscanned live message, an attachment warning, the backfill warning, the wrong-requester warning) and an approval-prompt post. Such a failure keeps its Warning log and its counter. The binding SHALL NOT hold it, because it can occur between turns, and the first held failure would then replace the real failure of the next turn. Slack follows this rule today. Discord and Mattermost SHALL follow it.
 
 The shared output engine and the binding actor own this decision. The held failure is actor-local. It lives for one turn.
 
@@ -173,6 +174,14 @@ The shared output engine and the binding actor own this decision. The held failu
 - **GIVEN** turn 3 holds two text outputs
 - **WHEN** the first post fails and the second post succeeds
 - **THEN** the binding sends no `DeliveryFailed` for turn 3
+
+#### Scenario: Counterexample - a failed warning post does not replace the failure of the next turn
+
+- **GIVEN** the warning post for a blocked message fails with the error text `warning post rejected`, between two turns
+- **WHEN** the output post of turn 5 then fails with the error text `output post rejected`
+- **THEN** the binding sends one `DeliveryFailed` with `TurnNumber = 5`
+- **AND** its `ErrorMessage` contains `output post rejected` and not `warning post rejected`
+- **AND** this holds for Slack, Discord, and Mattermost
 
 #### Scenario: A failed fallback post reports the turn it answers
 

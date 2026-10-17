@@ -625,7 +625,7 @@ each failed post of one reply, or none.
 CI runs it in the `session-reliability` group of the `mutation-gates` job, as the fifth gate of that group.
 The gate took 2 to 3 minutes in its hosted runs. The group took 12.2 minutes with four gates, so five gates take about
 15 minutes against the limit of 25.
-The local run selected 10 mutants and took 1 minute 48 seconds in Stryker after the build.
+The local run selected 10 mutants. The whole script took 326 seconds (5 minutes 26 seconds), which includes the Stryker build.
 Its report directory is `artifacts/stryker/reminder-report-once`.
 
 ### Reminder Execution Gate

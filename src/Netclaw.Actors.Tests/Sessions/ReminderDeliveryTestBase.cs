@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
+using Akka.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
@@ -13,6 +14,7 @@ using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tests.Reminders;
 using Netclaw.Configuration;
 using Xunit;
+using AkkaPersistence = Akka.Persistence.Persistence;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -188,6 +190,31 @@ public abstract class ReminderDeliveryTestBase : LlmSessionTestBase
     protected async Task<IReadOnlyList<HistoryRecord>> ReadHistoryAsync()
         => await Host.Services.GetRequiredService<ReminderHistoryStore>()
             .ReadAsync(new ReminderId(ReminderSlug), 10);
+
+    /// <summary>
+    /// Stores a snapshot for a session that does not exist yet, so the session restores from exactly this value.
+    /// The journal stays empty, so the session replays no <c>TurnRecorded</c> event.
+    /// </summary>
+    protected async Task SeedSnapshotAsync(SessionId sessionId, SessionSnapshot snapshot)
+    {
+        var probe = CreateTestProbe("snapshot-seed-" + Guid.NewGuid().ToString("N"));
+        AkkaPersistence.Instance.Apply(Sys).SnapshotStoreFor(null).Tell(
+            new SaveSnapshot(new SnapshotMetadata($"session-{sessionId.Value}", 1, DateTime.UnixEpoch), snapshot),
+            probe.Ref);
+        await probe.ExpectMsgAsync<SaveSnapshotSuccess>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    protected static SessionSnapshot SnapshotOfOneTurn() => new()
+    {
+        TurnCount = 1,
+        History =
+        [
+            new SerializableChatMessage { Role = ChatRole.User, Content = "Check the open pull requests" },
+            new SerializableChatMessage { Role = ChatRole.Assistant, Content = "All open pull requests are green." }
+        ],
+        EligibleDeliveryTurnNumber = new TurnNumber(1)
+    };
 
     protected static MessageSource ReminderSource(string fireKey) => new()
     {

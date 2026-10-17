@@ -46,6 +46,12 @@ internal sealed class RecordingMattermostReplyClient : IMattermostReplyClient
     // post while letting a follow-up (e.g. fallback) succeed and be recorded.
     public Exception? ThrowOnceOnPost { get; set; }
 
+    /// <summary>
+    /// Failures for the next posts, one per post, in order. A test uses it to give two failed posts of one turn
+    /// two different error texts. Posts after the last entry succeed.
+    /// </summary>
+    public System.Collections.Concurrent.ConcurrentQueue<Exception> ThrowInOrderOnPosts { get; } = new();
+
     private int _messageCounter;
 
     public void Clear()
@@ -69,6 +75,9 @@ internal sealed class RecordingMattermostReplyClient : IMattermostReplyClient
             ThrowOnceOnPost = null;
             throw onceEx;
         }
+
+        if (ThrowInOrderOnPosts.TryDequeue(out var orderedEx))
+            throw orderedEx;
 
         lock (_lock) _posts.Add(message);
         var postId = new MattermostPostId($"post-{Interlocked.Increment(ref _messageCounter)}");

@@ -20,6 +20,12 @@ internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
     // post while letting a follow-up (e.g. fallback) succeed and be recorded.
     public Exception? ThrowOnceOnPost { get; set; }
 
+    /// <summary>
+    /// Failures for the next posts, one per post, in order. A test uses it to give two failed posts of one turn
+    /// two different error texts. Posts after the last entry succeed.
+    /// </summary>
+    public System.Collections.Concurrent.ConcurrentQueue<Exception> ThrowInOrderOnPosts { get; } = new();
+
     private int _messageCounter;
 
     public Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
@@ -32,6 +38,9 @@ internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
             ThrowOnceOnPost = null;
             throw onceEx;
         }
+
+        if (ThrowInOrderOnPosts.TryDequeue(out var orderedEx))
+            throw orderedEx;
 
         Posts.Add(message);
 
