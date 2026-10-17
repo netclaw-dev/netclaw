@@ -165,13 +165,13 @@ The runs stay open in the session, and recovery does not repeat their external w
 
 A lost connection also ends the run with `kind=ChannelFailure`, and a
 `[headless:error]` line names it. The hub drops output while no client is
-connected, so the CLI does not wait through a reconnect that has an open run.
-The CLI ends on `Disconnected` at any time, and on `TransportClosed` when it
-knows an open run. If the network drops before the first turn completes, and the
-client reconnects, a lost turn can still leave the run with no output. Run
-`chat -p` under `timeout` so that an outside limit always bounds it. A daemon
-that stops without a drain sends no stop signal, so the lost connection ends the
-run there.
+connected, and it does not replay that output after a reconnect. A turn that
+completes during the gap is lost. So the CLI ends the run on `Disconnected` and
+on `TransportClosed` at any time after it sent the prompt, whether or not it
+knows an open child run. A short network drop therefore fails the run. Resume
+the session with `netclaw chat --resume <sessionId>`. A daemon that stops
+without a drain sends no stop signal, so the lost connection ends the run there.
+Run `chat -p` under `timeout` so that an outside limit always bounds the run.
 
 The CLI and the daemon must have the same version. A CLI from before this
 behavior exits at turn 1 against a new daemon and loses the child result. Upgrade

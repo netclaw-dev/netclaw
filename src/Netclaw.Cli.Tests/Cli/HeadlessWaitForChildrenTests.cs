@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Cli.Daemon;
@@ -34,6 +35,8 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
     private readonly DisposableTempDir _directory = new();
     private readonly FakeDaemonHubTransport _transport = new();
     private readonly TaskCompletionSource _promptSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly ProbeLogger _logger = new();
+    private readonly HookClock _clock = new();
     private readonly DaemonClient _client;
 
     public HeadlessWaitForChildrenTests()
@@ -435,24 +438,55 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
         AssertLostConnection(run, json: false, expectOpenRun: false);
     }
 
-    [Fact]
-    public async Task A_transport_close_before_any_open_run_is_known_does_not_end_the_run()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_transport_close_after_the_prompt_ends_the_run_when_no_open_run_is_known(bool json)
     {
-        // The run knows no open run, and the client reconnect covers the turn in progress. The run keeps its
-        // subscription and ends on the next turn.
-        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var watch = _client.ConnectionEvents.Subscribe(evt =>
+        // Planted bug: the channel ignores a TransportClosed while it knows no open run. The hub drops output
+        // while no client is connected and does not replay it, so the turn in progress can be lost. The run
+        // then waits for ever, or ends with exit 0 and incomplete output. The reconnect here would succeed:
+        // StartHook stays at its default.
+        var run = await RunAsync(json, async drive =>
         {
-            if (evt.State == DaemonConnectionState.Connected
-                && evt.Message.Contains("Reconnected", StringComparison.Ordinal))
-                reconnected.TrySetResult();
+            await _promptSent.Task;
+            // SendAsync returned, so the channel has sent the prompt.
+            await _logger.PromptSent;
+            _transport.RaiseClosed(new IOException("The network dropped."));
         });
+
+        AssertLostConnection(run, json, expectOpenRun: false);
+    }
+
+    [Fact]
+    public async Task A_transport_close_before_the_prompt_does_not_end_the_run()
+    {
+        // The prompt is not sent yet, so no output is in flight. The client reconnects and the run goes on.
+        // The bind is held so that the close reaches the channel before the run thread sends the prompt.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bindEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closedHandled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var afterChannel = new LateSubscription(_client, evt =>
+        {
+            if (evt.State == DaemonConnectionState.TransportClosed)
+                closedHandled.TrySetResult();
+        });
+        _transport.EnsureSessionGate = async _ =>
+        {
+            // The channel subscribed before it connected, so this subscription comes after the channel's.
+            afterChannel.Start();
+            bindEntered.TrySetResult();
+            await release.Task;
+        };
 
         var run = await RunAsync(json: false, async drive =>
         {
-            await _promptSent.Task;
+            await bindEntered.Task;
             _transport.RaiseClosed(new IOException("The network dropped."));
-            await reconnected.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await closedHandled.Task;
+            release.TrySetResult();
+            await _promptSent.Task;
+            await _logger.PromptSent;
             Push(Text("Done."), Turn(1));
         });
 
@@ -460,6 +494,35 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
         Assert.Empty(run.TurnFailedLines);
         Assert.DoesNotContain("[headless:error]", run.Stderr, StringComparison.Ordinal);
         Assert.Contains("Done.", run.Stdout, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_transport_close_after_the_final_turn_does_not_change_a_successful_exit(bool json)
+    {
+        var run = await RunAsync(json, async drive =>
+        {
+            await _promptSent.Task;
+            await _logger.PromptSent;
+            // The client pump delivers the turn before the connection state that follows it.
+            Push(Text("Done."), Turn(1));
+            _transport.RaiseClosed(new IOException("The network dropped."));
+        });
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Empty(run.TurnFailedLines);
+        Assert.DoesNotContain("[headless:error]", run.Stderr, StringComparison.Ordinal);
+        Assert.Empty(OpenRunsLines(run));
+        if (json)
+        {
+            using var envelope = Assert.Single(Envelopes(run));
+            Assert.Equal("Done.", envelope.RootElement.GetProperty("response").GetString());
+        }
+        else
+        {
+            Assert.Contains("Done.", run.Stdout, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -478,6 +541,152 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
         Assert.DoesNotContain("[headless:error]", run.Stderr, StringComparison.Ordinal);
         Assert.Empty(OpenRunsLines(run));
         Assert.Contains("Done.", run.Stdout, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_connection_event_after_the_run_ended_writes_nothing_and_throws_nothing(bool json)
+    {
+        // Planted bug: the connection callback writes to the session log with no check. The turn ended the
+        // run, and the run thread closes the log writer. A write that follows throws ObjectDisposedException
+        // inside the R3 callback. Disposing the R3 subscription does not wait for a callback in progress.
+        // A handler that prints the exception would put a line on stdout after the JSON envelope.
+        //
+        // The channel reads the clock inside the log lock. The clock holds the client pump there, in the
+        // callback for the connection state that follows the final turn. The run thread then closes the
+        // log writer, and the clock lets the pump go on. A channel that writes no log record for that state
+        // never reaches the hold.
+        var armed = false;
+        var pumpThread = 0;
+        var writeAfterEnd = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var writerClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closedHandled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _clock.OnRead = () =>
+        {
+            if (!Volatile.Read(ref armed) || Environment.CurrentManagedThreadId != Volatile.Read(ref pumpThread))
+                return;
+            writeAfterEnd.TrySetResult();
+            writerClosed.Task.Wait(TestContext.Current.CancellationToken);
+        };
+        using var beforeChannel = _client.ConnectionEvents.Subscribe(evt =>
+        {
+            if (evt.State != DaemonConnectionState.TransportClosed)
+                return;
+            Volatile.Write(ref pumpThread, Environment.CurrentManagedThreadId);
+            Volatile.Write(ref armed, true);
+        });
+        using var afterChannel = new LateSubscription(_client, evt =>
+        {
+            if (evt.State == DaemonConnectionState.TransportClosed)
+                closedHandled.TrySetResult();
+        });
+        _transport.EnsureSessionGate = _ =>
+        {
+            afterChannel.Start();
+            return Task.CompletedTask;
+        };
+
+        var run = await RunAsync(json, async drive =>
+        {
+            await _promptSent.Task;
+            await _logger.PromptSent;
+            Push(Text("Done."), Turn(1));
+            _transport.RaiseClosed(new IOException("The network dropped."));
+
+            if (await Task.WhenAny(writeAfterEnd.Task, closedHandled.Task) == writeAfterEnd.Task)
+            {
+                // The run ends on the turn, and the run thread closes the log writer after it stops the host.
+                await drive.Stopped;
+                await drive.SessionLogClosedAsync();
+                writerClosed.TrySetResult();
+                await closedHandled.Task;
+            }
+        });
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Empty(run.TurnFailedLines);
+        Assert.DoesNotContain("UnhandleException", run.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("ObjectDisposedException", run.Stdout + run.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("dropped", run.SessionLog, StringComparison.Ordinal);
+        Assert.False(writeAfterEnd.Task.IsCompleted, "The channel wrote a log record after the run ended.");
+        if (!json)
+            return;
+
+        // The envelope is the last line of stdout.
+        var lines = run.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToArray();
+        Assert.StartsWith("{", lines[^1], StringComparison.Ordinal);
+        using var envelope = Assert.Single(Envelopes(run));
+        Assert.Equal("Done.", envelope.RootElement.GetProperty("response").GetString());
+    }
+
+    // ----- A failure of the run thread while a connection state ends the run -----
+
+    [Fact]
+    public async Task A_bind_failure_names_its_own_reason_when_the_connection_state_comes_first()
+    {
+        // Planted bug: the channel ends the run on the Disconnected state that the failed bind publishes,
+        // and it blames a lost connection. The run thread holds the real reason, so the line must name it.
+        // The logger holds the run thread before it ends the run, until the channel handled the state.
+        UnsupportedAdmission();
+        var disconnectHandled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runMayFail = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _logger.OnError = () => runMayFail.Task.Wait(TestContext.Current.CancellationToken);
+        using var afterChannel = new LateSubscription(_client, evt =>
+        {
+            if (evt.State == DaemonConnectionState.Disconnected)
+                disconnectHandled.TrySetResult();
+        });
+        _transport.EnsureSessionGate = _ =>
+        {
+            afterChannel.Start();
+            return Task.CompletedTask;
+        };
+
+        var run = await RunAsync(json: false, async drive =>
+        {
+            await disconnectHandled.Task;
+            runMayFail.TrySetResult();
+        });
+
+        AssertBindFailure(run);
+    }
+
+    [Fact]
+    public async Task A_bind_failure_names_its_own_reason_when_the_run_thread_comes_first()
+    {
+        // The first observer holds the client pump until the run thread ended the run. The channel then
+        // sees the Disconnected state of a run that already ended and writes nothing more.
+        UnsupportedAdmission();
+        var runEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disconnectHandled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var beforeChannel = _client.ConnectionEvents.Subscribe(evt =>
+        {
+            if (evt.State == DaemonConnectionState.Disconnected)
+                runEnded.Task.Wait(TestContext.Current.CancellationToken);
+        });
+        using var afterChannel = new LateSubscription(_client, evt =>
+        {
+            if (evt.State == DaemonConnectionState.Disconnected)
+                disconnectHandled.TrySetResult();
+        });
+        _transport.EnsureSessionGate = _ =>
+        {
+            afterChannel.Start();
+            return Task.CompletedTask;
+        };
+
+        var run = await RunAsync(json: false, async drive =>
+        {
+            await drive.Stopped;
+            runEnded.TrySetResult();
+            await disconnectHandled.Task;
+        });
+
+        AssertBindFailure(run);
     }
 
     // ----- JSON usage rates -----
@@ -507,6 +716,28 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
 
     // ----- Helpers -----
 
+    // The daemon answers the bind with a text admission version that the client does not support. The
+    // client fails the request of the run thread and then publishes Disconnected.
+    private void UnsupportedAdmission()
+        => _transport.EnsureSessionResponder = _ => new SessionEnsureResultDto(Session, true) { TextAdmissionVersion = 99 };
+
+    // One [headless:error] line from the run thread, with its own reason. No line blames a lost connection.
+    private static void AssertBindFailure(HeadlessRun run)
+    {
+        Assert.Equal(1, run.ExitCode);
+        var errors = run.Stderr
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimEnd('\r'))
+            .Where(line => line.StartsWith("[headless:error]", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Contains("unsupported text admission version 99", Assert.Single(errors), StringComparison.Ordinal);
+        Assert.DoesNotContain("Lost the connection", run.Stderr, StringComparison.Ordinal);
+        Assert.Equal(["[turn:failed] category=infra kind=ChannelFailure"], run.TurnFailedLines);
+        Assert.Empty(OpenRunsLines(run));
+        Assert.Contains("FAILED:", run.FailureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("CONNECTION_LOST", run.FailureLog, StringComparison.Ordinal);
+    }
+
     // One [headless:error] line, one [turn:failed] ChannelFailure line, and the open-runs line when a run is
     // known. A lost connection writes no JSON envelope.
     private static void AssertLostConnection(HeadlessRun run, bool json, bool expectOpenRun)
@@ -523,7 +754,7 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
 
     private Task<HeadlessRun> RunAsync(bool json, Func<HeadlessDrive, Task> script, CancellationTokenSource? stop = null)
         => HeadlessRunHarness.RunAsync(
-            _client, _directory, json, stop?.Token ?? TestContext.Current.CancellationToken, drive: script);
+            _client, _directory, json, stop?.Token ?? TestContext.Current.CancellationToken, drive: script, logger: _logger, timeProvider: _clock);
 
     private void Push(params SessionOutputDto[] outputs)
     {
@@ -624,4 +855,70 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
         {
             OpenChildRunIds = null
         };
+}
+
+/// <summary>
+/// A logger that lets a test see or hold a point on the run thread. It signals once the channel sent the
+/// prompt (the channel logs the session start after <c>SendAsync</c> returns), and it can hold the run
+/// thread at the error record that the channel logs before it ends the run for a failure.
+/// </summary>
+internal sealed class ProbeLogger : ILogger<HeadlessChannel>
+{
+    private readonly TaskCompletionSource _promptSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Completes after the channel sent the prompt.</summary>
+    public Task PromptSent => _promptSent.Task;
+
+    /// <summary>Runs on the run thread, at the error record. A test sets it to hold that thread.</summary>
+    public Action? OnError { get; set; }
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        if (logLevel == LogLevel.Information
+            && formatter(state, exception).StartsWith("Headless session started", StringComparison.Ordinal))
+            _promptSent.TrySetResult();
+        else if (logLevel == LogLevel.Error)
+            OnError?.Invoke();
+    }
+}
+
+/// <summary>
+/// A connection observer that a test starts after the channel subscribed. The client pump calls observers in
+/// subscription order, so this one runs after the channel for the same event. The test then knows that the
+/// channel handled the event.
+/// </summary>
+internal sealed class LateSubscription(DaemonClient client, Action<DaemonConnectionEvent> observe) : IDisposable
+{
+    private IDisposable? _subscription;
+
+    public void Start()
+    {
+        // The test calls this from a hook that can run more than once. Only the first call subscribes.
+        var subscription = client.ConnectionEvents.Subscribe(observe);
+        if (Interlocked.CompareExchange(ref _subscription, subscription, null) is not null)
+            subscription.Dispose();
+    }
+
+    public void Dispose() => _subscription?.Dispose();
+}
+
+/// <summary>
+/// A clock that lets a test hold a thread at the moment the channel reads the time. The channel reads the
+/// clock inside the log lock, as the first step of a log write.
+/// </summary>
+internal sealed class HookClock : TimeProvider
+{
+    /// <summary>Runs on the thread that reads the clock. A test sets it to hold that thread.</summary>
+    public Action? OnRead { get; set; }
+
+    public override DateTimeOffset GetUtcNow()
+    {
+        OnRead?.Invoke();
+        return base.GetUtcNow();
+    }
 }

@@ -315,8 +315,8 @@ operator resumes the session with `netclaw chat --resume <sessionId>`.
 | Last turn completes with no open child run | `0` | none |
 | A turn fails (with or without open runs) | `1` | `[turn:failed] ... kind=<Kind>`, plus the open-runs line |
 | `SessionDeactivated` before the run ends | `1` | `kind=ChannelFailure`, plus the open-runs line |
-| Connection state `Disconnected` before the run ends | `1` | `[headless:error]`, `kind=ChannelFailure`, plus the open-runs line when a run is known |
-| Connection state `TransportClosed` while the run knows an open run | `1` | `[headless:error]`, `kind=ChannelFailure`, plus the open-runs line |
+| Connection state `Disconnected` after the prompt, before the run ends | `1` | `[headless:error]`, `kind=ChannelFailure`, plus the open-runs line when a run is known |
+| Connection state `TransportClosed` after the prompt, before the run ends | `1` | `[headless:error]`, `kind=ChannelFailure`, plus the open-runs line when a run is known |
 | SIGINT or SIGTERM before the run ends | `1` | `kind=Cancelled`, plus the open-runs line |
 | An outside `timeout` ends the run | `124` | `kind=Cancelled` (usually), plus the open-runs line |
 
@@ -343,24 +343,33 @@ turn. An operator upgrades the CLI with the daemon.
 #### A lost connection
 
 The hub drops session output while no client is connected, and it does not replay that output after a
-reconnect. A turn that completes during a gap is lost. A client that only waited would wait for a turn that
-never comes. The CLI therefore ends the run with exit `1` on these connection states:
+reconnect. A client that reconnects receives only the output that comes after the reconnect. A turn that
+completes during a gap is lost. A client that only waited would wait for a turn that never comes, or it would
+end with exit `0` and incomplete output. After the CLI sent the prompt, it therefore ends the run with exit
+`1` on these connection states:
 
 - `Disconnected`. The client reached it after its reconnect attempts failed.
-- `TransportClosed`, when the run knows at least one open child run. The client reconnects after this
+- `TransportClosed`, whether or not the run knows an open child run. The client reconnects after this
   state, but the reconnect cannot restore a lost turn.
+
+A short network drop therefore fails the run, and the operator resumes the session. Before the CLI sent the
+prompt, a connection state does not end the run: no output is in flight, and the request that the run
+thread waits for fails with its own reason when the connection cannot be restored.
 
 The CLI writes one `[headless:error]` line that names the lost connection, then
 `[turn:failed] category=infra kind=ChannelFailure`, then the open-runs line when the run knows an open run.
-With `--json`, it writes no envelope. The CLI does not cancel the child runs. A `TransportClosed` state
-when the run knows no open run does not end the run. A `Disconnected` or `TransportClosed` state after the
-run ended changes nothing: a run that ended with exit `0` stays `0`.
+With `--json`, it writes no envelope. The CLI does not cancel the child runs. A `Disconnected` or
+`TransportClosed` state after the run ended changes nothing, and it writes no log record: a run that ended
+with exit `0` stays `0`.
+
+A failed run never exits `0`. The channel sets exit code `1` in the same step that marks the run ended. When
+the run thread fails for its own reason, for example a bind that fails with an unsupported text admission
+version, the `[headless:error]` line names that reason and does not say that the connection was lost.
 
 The true bound of a run is the first of these events: a failed turn; a turn that reports no open child run;
-`SessionDeactivated`; `Disconnected`; `TransportClosed` with an open run; SIGINT or SIGTERM; an outside
-`timeout`. The CLI has no timer of its own. One case is outside the bound. The transport drops before the
-first `TurnCompleted`, the client reconnects, and the hub dropped the output of the turn in progress. Only
-SIGINT or an outside `timeout` ends that run. A script SHOULD run `chat -p` under `timeout`.
+`SessionDeactivated`; `Disconnected` or `TransportClosed` after the prompt; SIGINT or SIGTERM; an outside
+`timeout`. The CLI has no timer of its own. A script SHOULD run `chat -p` under `timeout`, so that an outside
+limit always bounds the run.
 
 Positive example: the run waits with one open run. The network drops. The CLI exits `1`, and stderr holds
 `[turn:failed] category=infra kind=ChannelFailure` and `[headless:open-runs] session=<id> runs=<run>`.

@@ -6,6 +6,7 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
@@ -78,13 +79,22 @@ internal static class HeadlessRunHarness
     /// Optional script that runs while the channel runs. It waits on events (a stdout line, the stop of the
     /// run), never on a delay. The harness awaits it after the run stops, so a failed step in it fails the test.
     /// </param>
+    /// <param name="logger">
+    /// Optional logger for the channel. A test uses it to see or hold a point on the run thread.
+    /// </param>
+    /// <param name="timeProvider">
+    /// Optional clock for the channel. The channel reads it inside the log lock, so a test can hold a thread
+    /// at a log write.
+    /// </param>
     public static async Task<HeadlessRun> RunAsync(
         DaemonClient client,
         DisposableTempDir directory,
         bool json,
         CancellationToken stopping,
         string prompt = "Do the task.",
-        Func<HeadlessDrive, Task>? drive = null)
+        Func<HeadlessDrive, Task>? drive = null,
+        ILogger<HeadlessChannel>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         var paths = new NetclawPaths(directory.Path);
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -92,9 +102,9 @@ internal static class HeadlessRunHarness
             client,
             paths,
             new SignalingLifetime(stopped, stopping),
-            TimeProvider.System,
+            timeProvider ?? TimeProvider.System,
             new HeadlessOptions(prompt) { JsonOutput = json },
-            NullLogger<HeadlessChannel>.Instance);
+            logger ?? NullLogger<HeadlessChannel>.Instance);
 
         var stdout = new LockedCapture();
         var stderr = new LockedCapture();
@@ -191,6 +201,31 @@ internal sealed class HeadlessDrive(LockedCapture stdout, Task stopped, NetclawP
 
     /// <summary>The stdout text so far.</summary>
     public string Stdout => stdout.Snapshot();
+
+    /// <summary>
+    /// Completes once the channel closed its session log writer. The channel disposes the writer after it
+    /// stops the host, and no event signals that. An exclusive open succeeds only when no writer holds the
+    /// file, so the loop retries it until it succeeds. Each retry yields, and none waits on a timer.
+    /// </summary>
+    public async Task SessionLogClosedAsync()
+    {
+        var log = Assert.Single(
+            Directory.GetFiles(paths.LogsDirectory, "*.log"),
+            path => !string.Equals(Path.GetFileName(path), "headless-errors.log", StringComparison.Ordinal));
+        while (true)
+        {
+            TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                using var exclusive = new FileStream(log, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                return;
+            }
+            catch (IOException)
+            {
+                await Task.Yield();
+            }
+        }
+    }
 
     /// <summary>
     /// The session id, read from the first record of the session log. The channel writes that record before

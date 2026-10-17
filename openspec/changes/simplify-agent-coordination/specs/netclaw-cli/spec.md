@@ -153,30 +153,34 @@ The CLI SHALL NOT cancel child runs. The session owns them. An operator reads th
 
 ### Requirement: A lost connection ends a headless run loudly
 
-The CLI SHALL end a headless run with exit `1` when the daemon connection is lost in a way that can lose output. The hub drops session output while no client is connected, and nothing replays it after a reconnect. A run that waits for a turn that the hub dropped would hang with no output.
+The CLI SHALL end a headless run with exit `1` when the daemon connection is lost in a way that can lose output. The hub drops session output while no client is connected, and nothing replays it after a reconnect. A client that reconnects receives only the output that comes after the reconnect. A turn that completes during the gap is lost. A run that waits for it hangs, or it ends with exit `0` and incomplete output.
 
-The CLI SHALL end the run on each of these events, before the run ends in any other way:
+After the CLI sent the prompt, the CLI SHALL end the run on each of these events, before the run ends in any other way:
 
 - the connection state `Disconnected`. The client reaches it after its reconnect attempts fail. No more output can arrive.
-- the connection state `TransportClosed` while the run knows at least one open child run (from the most recent `TurnCompleted`). The client reconnects after a `TransportClosed`, but the turn that completes in the gap is lost, so the wait cannot trust the reconnect.
+- the connection state `TransportClosed`, whether or not the run knows an open child run. The client reconnects after a `TransportClosed`, but output that the hub dropped during the gap is not replayed, so the run cannot trust the reconnect.
 
-A `TransportClosed` state when the run knows no open child run SHALL NOT end the run. The run has no open run to lose, and the client reconnect covers the turn in progress. A `Disconnected` or `TransportClosed` state after the run ended SHALL NOT change the exit code, the stdout, or the stderr. A run that ended with exit `0` stays exit `0`.
+A short network drop therefore fails the run. The operator resumes the session. This cost is on purpose: a silent loss of output is worse than a failed run.
 
-On such an end the CLI SHALL write one `[headless:error]` line that names the lost connection, then `[turn:failed] category=infra kind=ChannelFailure`, then the `[headless:open-runs]` line when the run knows an open child run. With `--json`, the CLI SHALL NOT write an envelope. The CLI SHALL NOT cancel the child runs. An operator resumes with `netclaw chat --resume <sessionId>`.
+Before the CLI sent the prompt, a connection state SHALL NOT end the run. No output is in flight. The request that the run thread waits for fails with its own reason when the connection cannot be restored, and that failure ends the run. A `Disconnected` or `TransportClosed` state after the run ended SHALL NOT change the exit code, the stdout, or the stderr, and the CLI SHALL NOT write to the session log for it. A run that ended with exit `0` stays exit `0`.
 
-The true bound of a headless run is the first of these events: a failed turn, a turn that reports no open child run, `SessionDeactivated`, `Disconnected`, `TransportClosed` with an open child run, SIGINT or SIGTERM, or an outside `timeout`. The CLI has no timer of its own. One case stays outside the bound: the transport drops before the first `TurnCompleted`, the client reconnects, and the hub dropped the output of the turn in progress. Only SIGINT or an outside `timeout` ends that run. A script SHOULD run `chat -p` under `timeout`.
+A failed run SHALL NOT exit `0`. The CLI sets the exit code `1` in the same step that marks the run ended, on every failure path. When the run thread fails for a reason of its own (for example a bind that fails with an unsupported text admission version), the `[headless:error]` line SHALL name that reason and SHALL NOT say that the connection was lost.
+
+On a lost connection the CLI SHALL write one `[headless:error]` line that names the lost connection, then `[turn:failed] category=infra kind=ChannelFailure`, then the `[headless:open-runs]` line when the run knows an open child run. With `--json`, the CLI SHALL NOT write an envelope. The CLI SHALL NOT cancel the child runs. An operator resumes with `netclaw chat --resume <sessionId>`.
+
+The true bound of a headless run is the first of these events: a failed turn, a turn that reports no open child run, `SessionDeactivated`, `Disconnected` or `TransportClosed` after the prompt, SIGINT or SIGTERM, or an outside `timeout`. The CLI has no timer of its own. A script SHOULD run `chat -p` under `timeout`, so that an outside limit always bounds the run.
 
 Schematic flow (it omits logs and JSON detail):
 
 ```text
 on connection state s:
-    if run ended                                    -> ignore
-    if s is Disconnected                            -> end the run, exit 1
-    if s is TransportClosed and open runs known     -> end the run, exit 1
+    if run ended                                    -> ignore, write no log record
+    if prompt not sent                              -> ignore (the run thread reports its own failure)
+    if s is Disconnected or TransportClosed         -> end the run, exit 1
     otherwise                                       -> ignore
 ```
 
-Owner: `DaemonClient` publishes the connection state (call-local to the client). `HeadlessChannel` decides when the run ends (call-local state).
+Owner: `DaemonClient` publishes the connection state (call-local to the client). `HeadlessChannel` decides when the run ends (call-local state). The channel sets the exit code and the ended mark under one lock.
 
 #### Scenario: A terminal disconnect during the wait ends the run
 
@@ -200,11 +204,28 @@ Owner: `DaemonClient` publishes the connection state (call-local to the client).
 - **THEN** the CLI exits `1` with `kind=ChannelFailure`
 - **AND** stderr holds no `[headless:open-runs]` line
 
-#### Scenario: A transport close with no open run does not end the run
+#### Scenario: A transport close after the prompt ends the run when no open run is known
 
 - **GIVEN** the CLI sent the prompt and turn 1 has not completed
+- **WHEN** the client reports `TransportClosed`, and the reconnect would succeed
+- **THEN** the CLI exits `1` with `kind=ChannelFailure` and one `[headless:error]` line
+- **AND** stderr holds no `[headless:open-runs]` line
+- **AND** with `--json`, stdout holds no envelope
+
+#### Scenario: A transport close before the prompt does not end the run
+
+- **GIVEN** the CLI created the session and has not sent the prompt
 - **WHEN** the client reports `TransportClosed` and then reconnects
-- **THEN** the CLI keeps its subscription and waits for the next `TurnCompleted`
+- **THEN** the CLI sends the prompt and waits for the turn
+- **AND** a run whose turn completes with no open child run exits `0`
+
+#### Scenario: A bind failure names its own reason
+
+- **GIVEN** the daemon answers the session bind with an unsupported text admission version
+- **WHEN** the client fails the request of the run thread and publishes `Disconnected` at the same time
+- **THEN** the CLI exits `1` with one `[headless:error]` line that names the unsupported version
+- **AND** stderr does not say that the connection was lost
+- **AND** the result is the same in each order of the two events
 
 #### Scenario: A disconnect after the final turn does not change the exit code
 
@@ -212,6 +233,8 @@ Owner: `DaemonClient` publishes the connection state (call-local to the client).
 - **WHEN** the client reports `Disconnected` or `TransportClosed` afterwards
 - **THEN** the exit code stays `0`
 - **AND** stderr holds no `[turn:failed]` line
+- **AND** the CLI writes no record to the session log, and no exception reaches stdout or stderr
+- **AND** with `--json`, the envelope is the last line of stdout
 
 ### Requirement: The JSON envelope covers every turn of the run
 
