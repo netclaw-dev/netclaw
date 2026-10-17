@@ -144,7 +144,8 @@ public abstract class SessionBindingContractTests : TestKit
         var turnCompleted = new TurnCompleted
         {
             SessionId = new SessionId("session-safe"),
-            TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
+            TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
+            OpenChildRunIds = []
         };
         var pipeline = new RecordingSessionPipeline(_ => [textOutput, turnCompleted]);
         var sid = new SessionId("session-safe");
@@ -171,7 +172,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("hello from LLM") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateBindingActor(sid, pipeline, detector);
@@ -191,7 +192,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new ErrorOutput { SessionId = sid, Message = "something broke" },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateBindingActor(sid, pipeline, detector);
@@ -212,7 +213,7 @@ public abstract class SessionBindingContractTests : TestKit
         [
             new TextOutput("file context") { SessionId = sid },
             new FileOutput { SessionId = sid, FilePath = "/tmp/report.pdf", FileName = "report.pdf", MimeType = new Netclaw.Media.MimeType("application/pdf") },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var actor = CreateBindingActor(sid, pipeline, detector);
@@ -240,7 +241,7 @@ public abstract class SessionBindingContractTests : TestKit
         var sid = new SessionId("session-empty-turn");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateBindingActor(sid, pipeline, detector);
@@ -261,7 +262,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("real reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateBindingActor(sid, pipeline, detector);
@@ -295,9 +296,9 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("real reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] },
             new TextOutput("barrier reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), OpenChildRunIds = [] }
         ]);
 
         // Fail only the first post (the real reply); the fallback, if attempted,
@@ -730,7 +731,7 @@ public abstract class SessionBindingContractTests : TestKit
                     new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var actor = CreateBindingActor(sid, pipeline, detector);
@@ -770,7 +771,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("this will fail to post") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         SetReplyClientThrows(new InvalidOperationException("channel API down"));
@@ -800,7 +801,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("this will fail to post") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ])
         {
             FeedbackException = new InvalidOperationException("feedback pipe down")
@@ -845,7 +846,7 @@ public abstract class SessionBindingContractTests : TestKit
         var sid = new SessionId("session-stash");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ], reactive: true);
 
         var actor = CreateBindingActor(sid, pipeline, detector);
@@ -1126,7 +1127,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("hydrated reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1168,7 +1169,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("hydrated reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1212,7 +1213,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("hydrated reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1241,7 +1242,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1278,7 +1279,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1324,7 +1325,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1335,7 +1336,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline2 = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply 2") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), OpenChildRunIds = [] }
         ]);
         CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
         await pipeline2.Created.WaitAsync(ct);
@@ -1374,7 +1375,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1414,7 +1415,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("partial") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), Outcome = TurnOutcome.Failed }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), Outcome = TurnOutcome.Failed, OpenChildRunIds = [] }
         ], reactive: true);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1442,7 +1443,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline2 = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply 2") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), Outcome = TurnOutcome.Completed }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), Outcome = TurnOutcome.Completed, OpenChildRunIds = [] }
         ]);
 
         CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
@@ -1473,7 +1474,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1525,7 +1526,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("hydrated reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1557,7 +1558,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply without history") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1608,7 +1609,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput($"reply {Interlocked.Increment(ref turnNumber)}") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(turnNumber), Outcome = TurnOutcome.Completed }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(turnNumber), Outcome = TurnOutcome.Completed, OpenChildRunIds = [] }
         ], reactive: true);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1645,7 +1646,7 @@ public abstract class SessionBindingContractTests : TestKit
         pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply after restart") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), Outcome = TurnOutcome.Completed }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), Outcome = TurnOutcome.Completed, OpenChildRunIds = [] }
         ], reactive: true);
 
         var actor2 = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1691,7 +1692,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline1 = new RecordingSessionPipeline(_ =>
         [
             new TextOutput($"reply {Interlocked.Increment(ref turnNumber)}") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(turnNumber), Outcome = TurnOutcome.Completed }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(turnNumber), Outcome = TurnOutcome.Completed, OpenChildRunIds = [] }
         ], reactive: true);
 
         var actor1 = CreateBindingActorWithHydration(sid, pipeline1, detector, historyFetcher);
@@ -1766,7 +1767,8 @@ public abstract class SessionBindingContractTests : TestKit
                     {
                         SessionId = sid,
                         TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
-                        Outcome = TurnOutcome.Completed
+                        Outcome = TurnOutcome.Completed,
+                        OpenChildRunIds = []
                     }
                 ]);
 

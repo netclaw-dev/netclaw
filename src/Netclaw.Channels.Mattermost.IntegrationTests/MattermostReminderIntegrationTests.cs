@@ -224,7 +224,8 @@ public sealed class MattermostReminderIntegrationTests(
                 await queue.OfferAsync(new TextOutput(ReplyText) { SessionId = sessionId });
                 await queue.OfferAsync(new TurnCompleted
                 {
-                    SessionId = sessionId, TurnNumber = new TurnNumber(1), SourceReminderId = message.ReminderId
+                    SessionId = sessionId, TurnNumber = new TurnNumber(1), SourceReminderId = message.ReminderId,
+                    OpenChildRunIds = []
                 });
             }).MapMaterializedValue(_ => NotUsed.Instance);
             var killSwitch = KillSwitches.Shared("reminder-proof");

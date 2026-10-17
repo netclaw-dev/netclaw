@@ -206,7 +206,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         [
             new ProcessingStateOutput(true) { SessionId = sid },
             new ProcessingStateOutput(false) { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, detector);
@@ -242,7 +242,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         [
             new ProcessingStateOutput(true) { SessionId = sid },
             new ProcessingStateOutput(false) { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, detector, channelRegistry: registry);
@@ -272,7 +272,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         [
             new ProcessingStateOutput(true) { SessionId = sid },
             new TextOutput("First turn completed; continuing with buffered input.") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, detector);
@@ -351,7 +351,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         [
             new ProcessingStateOutput(true) { SessionId = sid },
             new TextOutput("visible after status failure") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, detector, channelRegistry: registry);

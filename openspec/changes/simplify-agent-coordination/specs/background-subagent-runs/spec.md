@@ -200,6 +200,8 @@ The wire form is `openChildRunIds`, an array of run IDs. A daemon SHALL write th
 
 Owner: `LlmSessionActor` assigns the value from `SessionState.ChildRuns`. The value is durable state, read at the time of the output. `SessionOutputDtoMapper` carries it.
 
+The `TurnCompleted` type SHALL make the open runs a required property. A site that builds a `TurnCompleted` SHALL name the value, and the compiler SHALL reject a site that omits it. A default of an empty list would let a new site, or an edit that drops the line, end a headless run early with no signal. An empty list is a valid value only when the session has no open run. The mapper that reads a wire form without the field names the empty list itself.
+
 Schematic example (it omits all other outputs):
 
 ```text
@@ -247,6 +249,33 @@ turn 2 completes: it consumed R1's result              -> TurnCompleted(2, open=
 - **GIVEN** a child run is open and the session rejects an input before a model call
 - **WHEN** the skipped `TurnCompleted` is emitted
 - **THEN** it lists the open run
+
+#### Scenario: A rejected slash command reports the open runs
+
+- **GIVEN** a child run is open
+- **AND** the user sends an unknown slash command, so the session rejects it before a model call
+- **WHEN** the skipped `TurnCompleted` is emitted
+- **THEN** it lists the open run
+
+#### Scenario: A routed skill turn reports the open runs
+
+- **GIVEN** a child run from an earlier turn is open
+- **AND** the user sends a slash command that routes to a subagent, and that routed run finishes
+- **WHEN** the completed `TurnCompleted` of the routed turn is emitted
+- **THEN** it lists the earlier open run, not an empty list
+
+#### Scenario: The type requires the value
+
+- **GIVEN** the `TurnCompleted` type
+- **WHEN** a site builds a `TurnCompleted` without the open runs
+- **THEN** the code does not compile
+
+#### Scenario: A follow-up turn with its own tool batch emits the delivery pair once
+
+- **GIVEN** the follow-up turn that delivers a child result calls a tool of its own
+- **WHEN** the tool batch finishes and the next model call starts
+- **THEN** subscribers saw exactly one `child_run_result` tool call and one tool result for that delivery
+- **AND** the next model call does not emit the pair again
 
 #### Scenario: A session with no child reports an empty list
 
