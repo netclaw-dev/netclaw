@@ -1557,6 +1557,25 @@ stdout_response_not_contains() {
     return 0
 }
 
+# The parent's own text. A headless run prints the child's whole answer on one
+# "[tool:result] child_run_result" line. That text is the child's, not the
+# parent's. A pattern about the parent reply must not match it. Tool call lines
+# stay excluded as in stdout_response_contains.
+stdout_parent_text() {
+    grep -av -e '^\[tool:call\]' -e '^\[tool:result\] child_run_result ' "$STDOUT_FILE" 2>/dev/null
+}
+
+stdout_parent_text_contains() {
+    stdout_parent_text | grep -qia "$1"
+}
+
+stdout_parent_text_not_contains() {
+    if stdout_parent_text | grep -qia "$1"; then
+        return 1
+    fi
+    return 0
+}
+
 ## The daemon runs inside the container on its own clock (UTC), so a host
 ## date computation can name a log file the daemon never writes — every
 ## daemon_log_contains then fails silently for the whole run (observed when a
@@ -2236,22 +2255,27 @@ assert_deployment_mission_sales_email() {
 assert_subagent_headless_ambiguous_task() {
     stdout_tool_called 'spawn_agent' && \
         stdout_contains '\[subagent:done\] headless-analyst (completed' && \
-        stdout_response_contains 'assumption' && \
-        stdout_response_not_contains 'which.*include' && \
-        stdout_response_not_contains 'what.*include' && \
-        stdout_response_not_contains 'please.*clarify' && \
-        stdout_response_not_contains 'need.*more.*information'
+        stdout_parent_text_contains 'assumption' && \
+        stdout_parent_text_not_contains 'which.*include' && \
+        stdout_parent_text_not_contains 'what.*include' && \
+        stdout_parent_text_not_contains 'please.*clarify' && \
+        stdout_parent_text_not_contains 'need.*more.*information'
 }
 
-# Prints the full text of each spawn_agent TOOL_RESULT entry in a CLI
-# session log. An entry continues until the next timestamped record. The
-# child log keeps only a short preview of the child's final text, so read
-# the child's answer here.
-cli_spawn_results() {
-    awk '
-        /^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[^]]*\] / { keep = ($0 ~ /\] TOOL_RESULT: spawn_agent /) }
-        keep { print }
-    ' "$1"
+# Prints the JSON body of each child_run_result TOOL_RESULT entry in a CLI
+# session log, one line for each entry. spawn_agent returns only
+# state "accepted". The child's answer arrives in a later turn as a
+# child_run_result record with the fields run_id, scope_id, source_operation,
+# outcome, reason, and output. The child log keeps only a short preview of the
+# child's final text, so read the child's answer here.
+cli_child_run_results() {
+    sed -nE 's/^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[^]]*\] TOOL_RESULT: child_run_result call_id=[^ ]+ result=//p' "$1"
+}
+
+# Prints the answer text ("output") of each child run that spawn_agent started.
+cli_child_answers() {
+    cli_child_run_results "$1" \
+        | jq -Rr 'fromjson? | select(.source_operation == "spawn_agent") | .output // empty'
 }
 
 # Prints the text of the last ASSISTANT_FINAL record in a CLI session log.
@@ -2271,7 +2295,7 @@ cli_final_reply() {
 #   - the parent did not change an agent file, by any tool or path form;
 #   - the parent returns an email that follows the deployment mission: a
 #     subject line and the mission call line.
-# The child and the parent are judged apart. The child result is a TOOL_RESULT
+# The child and the parent are judged apart. The child result is a child_run_result
 # record. The parent reply is the last ASSISTANT_FINAL record.
 #
 # This case does NOT test which one wins when the parent task and the child role
@@ -2299,18 +2323,15 @@ assert_subagent_specialization_precedence() {
         || agents_diff_rc=$?
     [[ "$agents_diff_rc" -eq 0 ]] || return "$agents_diff_rc"
 
-    # Child side: a completed child result holds text after "Summary:".
-    cli_spawn_results "$cli_log" | awk '
-        function flush() { if (inres && done && text) ok = 1 }
-        /^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[^]]*\] / {
-            flush(); inres = ($0 ~ /\] TOOL_RESULT: spawn_agent /)
-            done = 0; text = 0; insummary = 0
-        }
-        inres && /Outcome: completed/ { done = 1 }
-        inres && insummary && $0 !~ /^[[:space:]]*$/ { text = 1 }
-        inres && /^Summary:/ { insummary = 1 }
-        END { flush(); exit !ok }
-    ' || return 1
+    # Child side: a completed child_run_result holds a non-blank answer. The
+    # spawn_agent result is only "accepted" and holds no answer.
+    local completed_children
+    completed_children=$(cli_child_run_results "$cli_log" | jq -Rr '
+        fromjson?
+        | select(.source_operation == "spawn_agent" and .outcome == "completed"
+                 and ((.output // "") | test("\\S")))
+        | .run_id')
+    [[ -n "$completed_children" ]] || return 1
 
     # Parent side: the final reply holds a subject line and the mission call
     # line. Markdown emphasis such as "**Subject:**" is a subject line too.
@@ -2524,7 +2545,9 @@ assert_subagent_session_scratch_disposable() {
     [[ "$(< "$probe")" == "$expected_temp_dir" ]] || return 1
 
     # The child answer and the parent reply must both return the probed path.
-    cli_spawn_results "$TRIAL_RAW/cli-session.log" | grep -aFq "$expected_temp_dir" || return 1
+    local child_answers
+    child_answers=$(cli_child_answers "$TRIAL_RAW/cli-session.log")
+    grep -aFq "$expected_temp_dir" <<<"$child_answers" || return 1
     jq -r '.response // ""' "$STDOUT_FILE" | grep -aFq "$expected_temp_dir"
 }
 
