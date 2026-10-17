@@ -11,6 +11,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -55,6 +56,9 @@ internal sealed record ToolInteractionRequestDispatch(
     bool PersistApprovalState) : INoSerializationVerificationNeeded
 {
     internal string? ManagedTemporaryDirectory { get; init; }
+    internal SubAgentRunId? SourceChildRunId { get; init; }
+    internal ToolCallId? OriginalChildCallId { get; init; }
+    internal TurnContext? ChildContext { get; init; }
 }
 
 internal enum ApprovalTurnPhase
@@ -132,7 +136,8 @@ internal sealed partial class SessionToolWorkflow
 
     public SessionState ApplyBatchStarted(SessionState state, ToolBatchStarted started)
     {
-        if (state.FindLastUserMessage() != started.UserMessage)
+        state = state.CommitChildContinuation(started.ChildContinuation, close: false);
+        if (started.ChildContinuation is null && state.FindLastUserMessage() != started.UserMessage)
             state = state with { History = state.History.Add(started.UserMessage) };
         if (!state.History.Contains(started.AssistantMessage))
             state = state with { History = state.History.Add(started.AssistantMessage) };
@@ -218,8 +223,7 @@ internal sealed partial class SessionToolWorkflow
         => _activeBatch.HasOnlyPendingDurableApprovals(HasRecoverablePending);
 
     public bool AllowsSnapshot(SessionState state)
-        => PendingCount == 0
-           && ResolvedCount == 0
+        => _calls.Count == 0
            && ParkedToolBatchHistory.FindRedrivableAssistantMessage(state.History, null) is null;
 
     public void ClearApprovalTurn()
@@ -254,9 +258,9 @@ internal sealed partial class SessionToolWorkflow
         MarkRunningAfterRedrive();
     }
 
-    private int PendingCount => _calls.Values.Count(static call => call is PendingToolApproval);
+    private int PendingParentCount => _calls.Values.Count(static call => call is PendingToolApproval && call.Pending.Request.SourceChildRunId is null);
 
-    private int ResolvedCount => _calls.Values.Count(static call => call is ResolvedToolApproval);
+    private int ResolvedParentCount => _calls.Values.Count(static call => call is ResolvedToolApproval && call.Pending.Request.SourceChildRunId is null);
 
     private ApprovalTurnPhase TurnPhase { get; set; }
 
@@ -268,7 +272,7 @@ internal sealed partial class SessionToolWorkflow
         var pending = PendingToolInteraction.From(evt, persistApprovalState);
         _calls[evt.CallId] = new PendingToolApproval(pending);
 
-        if (persistApprovalState && pending.TurnContext is not null)
+        if (evt.SourceChildRunId is null && persistApprovalState && pending.TurnContext is not null)
         {
             TurnPhase = recovered
                 ? ApprovalTurnPhase.RecoveredWaiting
@@ -328,7 +332,7 @@ internal sealed partial class SessionToolWorkflow
             return false;
 
         _calls[callId] = new ResolvedToolApproval(pending, answer);
-        if (PendingCount == 0 && pending.TurnContext is not null)
+        if (pending.Request.SourceChildRunId is null && PendingParentCount == 0 && pending.TurnContext is not null)
         {
             TurnPhase = ApprovalTurnPhase.Running;
         }
@@ -392,7 +396,12 @@ internal sealed partial class SessionToolWorkflow
         return builder.Build();
     }
 
-    private void ClearCalls() => _calls.Clear();
+    private void ClearCalls()
+    {
+        foreach (var key in _calls.Where(pair => pair.Value.Pending.Request.SourceChildRunId is null)
+                     .Select(pair => pair.Key).ToArray())
+            _calls.Remove(key);
+    }
 
     private void ClearTurn() => TurnPhase = ApprovalTurnPhase.None;
 

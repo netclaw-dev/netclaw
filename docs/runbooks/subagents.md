@@ -92,10 +92,10 @@ first user message is just the raw task, identical to the pre-context protocol.
 4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
 5. After at most 30 tool iterations, a final response, or an inactivity timeout,
    the subagent returns a terminal run result.
-6. The main agent receives the `spawn_agent` tool result as an explicit text
-   envelope: agent name, run id, outcome (`completed`, `partial`, or `failed`),
-   optional reason, diagnostics pointer, and either a `Summary:` or `Error:`
-   section containing the subagent's final text.
+6. `spawn_agent` returns the accepted run ID at once. The terminal result arrives
+   in a later parent turn as a `child_run_result` tool result. It holds the agent
+   name, run id, outcome (`completed`, `partial`, or `failed`), optional reason,
+   diagnostics pointer, and the subagent's final text.
 
 Child creation is marshaled back onto the session actor thread, so supervision
 stays within Akka's actor-thread rules. If the parent tool call is cancelled or
@@ -130,6 +130,38 @@ Subagent start/complete events are emitted as `SubAgentOutput` session events:
 The start event reports the number of tools exposed for that parent audience and
 profile. These events appear in the headless CLI output and session logs. They
 are suppressed in Slack.
+
+### Headless runs
+
+`netclaw chat -p` waits for the child result. The run ends on the first
+completed turn that reports no open child run. The session reports its open
+runs in each `TurnCompleted`. A background shell job is not a child run.
+
+- While the run waits, stdout shows `[subagent:waiting] <n> open: <run ids>`.
+  With `--json`, stdout shows no such line.
+- The delivered result prints as `[tool:result] child_run_result`, so the child
+  text reaches stdout.
+- With `--json`, stdout holds one envelope. `response` is the text of the last
+  turn. `turnResponses` holds each turn. `usage` is the sum over all turns.
+- The run has no timeout of its own. Each child has its daemon timeouts. Use an
+  outside `timeout` to bound the run.
+
+A failed turn, SIGINT, SIGTERM, or a stopped session ends the run with exit `1`.
+The CLI does not cancel the child runs. Stderr then names them:
+
+```
+[headless:open-runs] session=<sessionId> runs=<runId>[,<runId>...]
+```
+
+To read the result after such a stop, resume the session:
+
+```bash
+netclaw chat --resume <sessionId>
+```
+
+The session still owns the open runs. It starts a parent turn for each result.
+A daemon restart during the wait ends the run with `kind=ChannelFailure`. The
+runs stay open in the session, and recovery does not repeat their external work.
 
 Completion events are emitted for every finished subagent run, even when the
 subagent returns no structured findings. In that case `FindingsCount` is `0`
@@ -344,3 +376,25 @@ known-good version.
   three-slot `NetclawChatClientProvider` role system, which currently resolves
   to a single configured model for most installs. Per-agent model selection
   is tracked in a follow-on issue pending a multi-model provider architecture.
+
+## Coordination journal migration and restore
+
+The compatibility reader accepts deployed child manifests `cra-v1`, `cre-v1`, and `tta-v1`.
+It translates exact old child delivery correlations before the ordinary parent recovery path.
+The current writer uses `cra-v2`, `cre-v2`, and `ss-v2` for child facts and snapshots.
+Older binaries cannot read these records. Do not downgrade a database in place.
+
+Unresolved historical evidence remains inert and visible through the owner status response.
+Recovery does not relaunch uncertain child work or convert child results into user input.
+An exact settled delivery stays settled. A ready result can resume only its original parent authority.
+
+The restore unit is a complete, consistent pre-upgrade SQLite backup.
+The backup must include the journal and snapshot tables from the same database state.
+Retain its hash, source revision, and backup procedure receipt before an upgrade.
+Restore a copied backup with the intended binary and prove actor recovery before an operational rollback.
+A serializer round-trip alone does not prove database restore or runtime recovery.
+A restore loses later journal facts and does not reverse external effects.
+
+Use the fixed-byte compatibility and actor recovery checks in `Netclaw.Actors.Tests` for candidate validation.
+Record the exact candidate, test filter, database copy, and results in the release evidence.
+No live deployment or database restore forms part of this source change.

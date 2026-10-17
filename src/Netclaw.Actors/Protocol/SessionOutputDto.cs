@@ -31,6 +31,7 @@ public static class SessionOutputTypes
     public const string Compaction = "compaction";
     public const string SessionJoined = "session_joined";
     public const string ToolInteraction = "tool_interaction";
+    public const string SessionDeactivated = "session_deactivated";
     public const string Unknown = "unknown";
 }
 
@@ -84,6 +85,10 @@ public sealed record SessionOutputDto
     public TurnNumber? TurnNumber { get; init; }
     public string? TurnOutcome { get; init; }
     public string? SourceReminderId { get; init; }
+
+    // Wire name: openChildRunIds. Written for every TurnCompleted, as an empty array when no run is open.
+    // Absent or null comes from an earlier daemon and reads as an empty list.
+    public List<string>? OpenChildRunIds { get; init; }
 
     // Error
     public string? ErrorMessage { get; init; }

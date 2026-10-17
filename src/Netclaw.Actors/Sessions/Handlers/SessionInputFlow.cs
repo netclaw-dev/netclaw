@@ -106,8 +106,10 @@ internal sealed class SessionInputFlow
         SessionId sessionId,
         long admittedAtMs)
     {
-        if (command.AdmittedInputId is not null)
-            return new AdmissionDecision.Existing();
+        if (command.AdmittedInputId is { } admittedId)
+            return state.IsLegacyInputQuarantined(admittedId)
+                ? new AdmissionDecision.Reject("The legacy input is quarantined and cannot execute.")
+                : new AdmissionDecision.Existing();
 
         var context = TurnContext.FromMessageSource(
             sessionId,
@@ -117,6 +119,7 @@ internal sealed class SessionInputFlow
         {
             SessionId = sessionId,
             InputId = InputId.New(),
+            SourceBackgroundJobId = command.Source?.BackgroundJobId,
             SourceMessageId = command.Source?.MessageId
                 ?? command.Source?.ReminderId?.Value
                 ?? command.Source?.BackgroundJobId?.Value,

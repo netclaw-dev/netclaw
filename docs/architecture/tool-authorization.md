@@ -688,7 +688,7 @@ Leaks today:
 | Classes | Approval part of [`LlmSessionActor`](../../src/Netclaw.Actors/Sessions/LlmSessionActor.cs), [`SessionToolWorkflow`](../../src/Netclaw.Actors/Sessions/SessionToolWorkflow.cs), [`IApprovalChannel`](../../src/Netclaw.Actors/Sessions/IApprovalChannel.cs), [`ParentSessionApprovalBridge`](../../src/Netclaw.Actors/Sessions/ParentSessionApprovalBridge.cs), [`IParentApprovalBridge`](../../src/Netclaw.Tools.Abstractions/IParentApprovalBridge.cs), the approval loop in [`SubAgentActor`](../../src/Netclaw.Actors/SubAgents/SubAgentActor.cs), [`ApprovalResponseFlow`](../../src/Netclaw.Channels/ApprovalResponseFlow.cs), [`PendingApprovalLookup`](../../src/Netclaw.Channels/PendingApprovalLookup.cs), [`ApprovalButtonValueCodec`](../../src/Netclaw.Actors/Protocol/ApprovalButtonValueCodec.cs), [`ApprovalOptionKeys`](../../src/Netclaw.Actors/Protocol/ApprovalOptionKeys.cs), the Slack, Discord, and Mattermost prompt builders |
 | Published contract | Output `ToolInteractionRequest` and input `ToolInteractionResponse` ([`SessionProtocol.Outputs.cs`](../../src/Netclaw.Actors/Sessions/SessionProtocol.Outputs.cs)). Journal events `ToolApprovalRequested` and `ToolApprovalResolved`. Option key strings such as `approve_once`. |
 | Must not know | Policy rules. It renders the options that Consent offers. |
-| Data | Durable session journal. Actor-local state for an unanswered request. A subagent request is live-only. |
+| Data | Durable session journal. Actor-local state for an unanswered request. Durable child requests use the same journal events. |
 | Rules | [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-consent-prompts-offer-only-safe-options), [TA-11](../../openspec/specs/tool-authorization/spec.md#requirement-ta-11-an-unanswered-consent-request-survives-restart), [TA-12](../../openspec/specs/tool-authorization/spec.md#requirement-ta-12-subagent-consent-goes-through-the-parent-session) |
 
 Leaks today:
@@ -707,7 +707,38 @@ The actor writes grants, persists events, and emits outputs. The lifetime owner 
 
 The workflow releases a claimed live wait only after the actor completes the required grant and journal steps.
 The journal retains durable parent-session approval requests so a UI answer can safely resume interrupted work.
-Live-only child prompts have no journal record and expire after restart.
+Durable child prompts use the same approval owner and request/resolution events.
+The run ID identifies the child. The original child call ID identifies its concrete tool action.
+The workflow retains the original requester, authority, and offered options.
+A later user turn cannot replace those facts.
+The status tool exposes the unresolved prompt count only to the original owner.
+Child prompts do not block an unrelated parent turn or another ready child result.
+The snapshot gate still accounts for all unresolved approval evidence.
+
+The child dispatch gate closes before a cancellation acknowledgement or terminal publication.
+The acknowledgement reports durable cancellation intent. It does not report terminal completion.
+Recovery settles an uncertain child as lost and does not launch a replacement actor.
+A stale answer cannot dispatch a recovered child or grant authority for another child.
+
+```mermaid
+sequenceDiagram
+    participant Child
+    participant Workflow as SessionToolWorkflow
+    participant Journal
+    participant Owner
+    Child->>Workflow: Concrete call and original authority
+    Workflow->>Journal: ToolApprovalRequested with child correlation
+    Workflow->>Owner: Original options and requester
+    Owner->>Workflow: Answer for this prompt
+    Workflow->>Workflow: Validate requester, options, and live wait
+    Workflow->>Journal: ToolApprovalResolved
+    Workflow->>Child: Exact-call consent
+```
+
+A valid example is Alice's child request that Alice approves while the parent serves another turn.
+An invalid example is Bob's answer to that prompt. The workflow rejects it before consent or a grant.
+A terminal child result is tool output. It never supplies user authority through `InputAdmitted`.
+The parent retains the child's original authority through subsequent tool calls and approvals.
 
 ### 3.7 Advice (support module)
 

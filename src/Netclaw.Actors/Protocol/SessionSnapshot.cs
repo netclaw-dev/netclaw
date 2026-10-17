@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
 
@@ -53,6 +54,8 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     public IReadOnlyList<SerializableChatMessage> History { get; init; } =
         Array.Empty<SerializableChatMessage>();
 
+    public IReadOnlyList<BackgroundChildRun> ChildRuns { get; init; } = [];
+
     public int TurnCount { get; init; }
 
     public string? Title { get; init; }
@@ -78,8 +81,15 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     public IReadOnlyList<ActiveJobInfo> ActiveBackgroundJobs { get; init; } =
         Array.Empty<ActiveJobInfo>();
 
+    /// <summary>Background job IDs that the session already accepted.</summary>
+    public IReadOnlyList<BackgroundJobId> ProcessedBackgroundJobIds { get; init; } =
+        [];
+
     public IReadOnlyList<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; init; } =
         Array.Empty<AdoptedContextSnapshotRecord>();
+
+    public IReadOnlyList<LegacyCoordinationEvidence> LegacyCoordinationEvidence { get; init; } =
+        Array.Empty<LegacyCoordinationEvidence>();
 
     public IReadOnlyList<SessionProtocol.InputAdmitted> PendingInputs { get; init; } =
         Array.Empty<SessionProtocol.InputAdmitted>();

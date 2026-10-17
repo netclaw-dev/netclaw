@@ -27,6 +27,15 @@
 | `scripts/Add-FileHeaders.ps1 -Verify` | CI: check all files have headers (exit 1 if missing) |
 | `scripts/Add-FileHeaders.ps1 -WhatIf` | Preview which files need headers |
 
+## Tool Execution Test Fixtures
+
+Tests that use `DispatchingToolExecutor` must pass the same argument validation as a model call.
+Supply `_rationale` when the test needs a valid call. Omit it only when the test checks rejection.
+Use the test's private paths in both the execution context and the access policy.
+Before testing a later effect, assert the required receipt or result from the real executor.
+An error string can expose an invalid fixture before the intended tool runs.
+A `FakeToolExecutor` result does not prove that the real executor accepts those arguments.
+
 ## Focused Mutation Tests
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
@@ -64,7 +73,8 @@ coverage. They do not replace positive and negative behavior tests.
 | `BashLiteralTwinSlices.Apply` and the denial check of `ToolAccessPolicy.ScreenScopedSlices` | Decision F1: the strictest literal twin result decides a call. The candidates of every twin replace the candidates of their source command, an unresolved source keeps its exact answer, twins without their source command fail loudly, and one denied twin denies the call | 9 killed | `./scripts/run-literal-twin-mutations.sh` |
 | `SessionInputFlow.DrainBufferedBatch` (turn owner choice), `SessionInputFlow.JoinsTurn`, and the automation check of `SessionToolWorkflow.PlanNewInputAbandonment` | A turn has one requester: a drain after a turn adopts the authority of the first buffered input, a drain inside a turn keeps the turn's authority, and only inputs of that requester join the batch; automated input waits behind an open approval, and only input from a person closes it | 10 killed | `./scripts/run-input-one-authority-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
-| `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, and `SessionExecutionLifetime.ObserveReapReply` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit | 7 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
+| `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, and `SessionInputFlow.DrainBufferedBatch` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn | 8 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
+| `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run, a turn with one of two open runs, and a turn from an earlier daemon without the field each get the right decision (SPEC-004, "Waiting for child runs") | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -192,7 +202,7 @@ Stryker changes `!item.IsReplay` to `item.IsReplay`.
 The linked `SessionInputFlowTests` source kills this mutant when fresh buffered input must start a new turn.
 The linked `ProcessingWatchdogTests` source supplies the existing timer fake without an actor test host.
 The selectors reject missing or repeated source markers before Stryker starts.
-The gate requires one killed mutant in each single-expression span and two killed history mutants.
+The gate requires one killed mutant in each of six single-expression spans and two killed history mutants.
 It fails for no mutant, a survivor, or a compile error in a selected span.
 
 The combined local calibration took 1 minute 56 seconds with a warm build cache.
@@ -204,9 +214,56 @@ The seven-mutant local run took 1 minute 48 seconds with a warm build cache.
 The eight-mutant combined local run took 2 minutes 6 seconds with a warm build cache.
 Hosted run `38448179312` took 15 to 21 minutes for the four existing matrix groups.
 Its Windows test took 16 minutes 6 seconds. A target in any of those four groups would extend that critical path.
-All seven targets run in one Stryker invocation in the existing `session-reliability` group.
+All seven source spans produce eight expected mutants in one Stryker invocation in the existing `session-reliability` group.
 Hosted CI must measure the combined gate on a cold runner.
 Its report directory is `artifacts/stryker/tool-batch-readiness`.
+
+### Headless Stop Rule Gate
+
+Run the headless stop rule gate:
+
+```bash
+./scripts/run-headless-stop-rule-mutations.sh
+```
+
+The script selects the stop decision in `HeadlessChannel`. The source marks it with
+`// <headless-stop-rule>` and `// </headless-stop-rule>`. The selector rejects a missing or repeated
+marker before Stryker starts. The gate expects the decision in this form:
+
+```csharp
+// <headless-stop-rule>
+internal static bool EndsRun(TurnCompleted turn)
+{
+    if (turn.Outcome == TurnOutcome.Failed)
+        return true;
+
+    return !turn.OpenChildRunIds.Any();
+}
+// </headless-stop-rule>
+```
+
+Stryker makes three mutants in that form: `==` to `!=`, `true` to `false`, and the removal of `!`.
+A different form (for example one expression with `||`) gives a different mutant count, and the gate
+fails until the owner of the gate reviews the new count.
+
+`netclaw chat -p` sends one prompt, and a turn that calls `spawn_agent` returns `accepted` before the
+child finishes. A wrong stop rule has two failures. The run exits at the first turn and loses the child
+result, or it waits for a turn that never comes. The gate guards the rule with the real channel and a
+fake daemon transport. `Netclaw.Cli.MutationTests` holds the tests. They cover these cases:
+
+- an open run keeps the wait, and a turn that reports none ends the run
+- one open run of two keeps the wait
+- a failed turn ends the run even when a run is open
+- a skipped turn with an open run keeps the wait
+- a turn from an earlier daemon, without the field, ends the run
+
+A mutant that makes the run wait for ever hits the fault ceiling of the tests. Stryker reports it as a
+timeout. The gate counts a timeout as a detection. It fails for a survivor, a compile error, or a mutant
+outside the selected span.
+
+The local run took 10 minutes 30 seconds from a cold Release build. Stryker took 1 minute 59 seconds.
+Hosted CI must measure the gate on a cold runner. CI runs it in the `session-reliability` group of the
+`mutation-gates` job. Its report directory is `artifacts/stryker/headless-stop-rule`.
 
 ### Tool Authorization Gate
 

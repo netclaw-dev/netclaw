@@ -63,7 +63,7 @@ public sealed partial class SessionModelContextTests
         var firstInspection = Assert.IsType<ContextCall.Inspect>(Start(owner, 1, firstState));
         var firstReply = Assert.IsType<WorkingContextSnapshotReady>(await firstInspection.Work);
         var first = Assert.IsType<PreparedModelRequest>(owner.CompleteInspection(
-            firstReply, firstState, TrustAudience.Personal, currentToolTrust: null));
+            firstReply, firstState, childContinuation: null, TrustAudience.Personal, currentToolTrust: null));
         var loop = Assert.IsType<ContextCall.Ready>(Start(owner, 2, first.State)).Request;
 
         owner.ResetForNewTurn();
@@ -71,7 +71,7 @@ public sealed partial class SessionModelContextTests
         var nextInspection = Assert.IsType<ContextCall.Inspect>(Start(owner, 3, nextState));
         var nextReply = Assert.IsType<WorkingContextSnapshotReady>(await nextInspection.Work);
         var next = Assert.IsType<PreparedModelRequest>(owner.CompleteInspection(
-            nextReply, nextState, TrustAudience.Personal, currentToolTrust: null));
+            nextReply, nextState, childContinuation: null, TrustAudience.Personal, currentToolTrust: null));
 
         // Assert
         Assert.Equal(1, NudgeCount(first.State));
@@ -102,7 +102,7 @@ public sealed partial class SessionModelContextTests
         var firstCall = Assert.IsType<ContextCall.Inspect>(Start(owner, 1, firstState, source));
         var firstReply = Assert.IsType<WorkingContextSnapshotReady>(await firstCall.Work);
         var first = Assert.IsType<PreparedModelRequest>(owner.CompleteInspection(
-            firstReply, firstState, TrustAudience.Personal, currentToolTrust: null));
+            firstReply, firstState, childContinuation: null, TrustAudience.Personal, currentToolTrust: null));
         var loop = Assert.IsType<ContextCall.Ready>(Start(owner, 2, first.State, source));
 
         owner.ResetForNewTurn();
@@ -110,14 +110,14 @@ public sealed partial class SessionModelContextTests
         var secondCall = Assert.IsType<ContextCall.Inspect>(Start(owner, 3, secondState, source));
         var secondReply = Assert.IsType<WorkingContextSnapshotReady>(await secondCall.Work);
         var second = Assert.IsType<PreparedModelRequest>(owner.CompleteInspection(
-            secondReply, secondState, TrustAudience.Personal, currentToolTrust: null));
+            secondReply, secondState, childContinuation: null, TrustAudience.Personal, currentToolTrust: null));
 
         owner.ResetAfterCompaction();
         var thirdState = second.State.AddUserMessage("third question");
         var thirdCall = Assert.IsType<ContextCall.Inspect>(Start(owner, 4, thirdState, source));
         var thirdReply = Assert.IsType<WorkingContextSnapshotReady>(await thirdCall.Work);
         var third = Assert.IsType<PreparedModelRequest>(owner.CompleteInspection(
-            thirdReply, thirdState, TrustAudience.Personal, currentToolTrust: null));
+            thirdReply, thirdState, childContinuation: null, TrustAudience.Personal, currentToolTrust: null));
 
         // Assert
         Assert.Equal(3, recall.Requests.Count);
@@ -157,7 +157,7 @@ public sealed partial class SessionModelContextTests
         var call = Assert.IsType<ContextCall.Inspect>(Start(owner, 1, state, Source(TrustAudience.Public)));
         var reply = Assert.IsType<WorkingContextSnapshotReady>(await call.Work);
         var prepared = Assert.IsType<PreparedModelRequest>(owner.CompleteInspection(
-            reply, state, TrustAudience.Public, currentToolTrust: null));
+            reply, state, childContinuation: null, TrustAudience.Public, currentToolTrust: null));
         var wire = string.Join("\n", prepared.Messages.Select(message => message.Text));
 
         // Assert
@@ -185,7 +185,7 @@ public sealed partial class SessionModelContextTests
         var call = Assert.IsType<ContextCall.Inspect>(Start(owner, 1, state, forceNoTools: true));
         var reply = Assert.IsType<WorkingContextSnapshotReady>(await call.Work);
         var restricted = Assert.IsType<PreparedModelRequest>(owner.CompleteInspection(
-            reply, state, TrustAudience.Personal, currentToolTrust: null));
+            reply, state, childContinuation: null, TrustAudience.Personal, currentToolTrust: null));
         var permitted = Assert.IsType<ContextCall.Ready>(Start(owner, 2, restricted.State)).Request;
 
         // Assert
@@ -219,7 +219,7 @@ public sealed partial class SessionModelContextTests
         var call = Assert.IsType<ContextCall.Inspect>(Start(owner, 1, state));
         var reply = Assert.IsType<WorkingContextSnapshotReady>(await call.Work);
         var prepared = Assert.IsType<PreparedModelRequest>(owner.CompleteInspection(
-            reply, state, TrustAudience.Personal, currentToolTrust: null));
+            reply, state, childContinuation: null, TrustAudience.Personal, currentToolTrust: null));
 
         // Assert
         Assert.Single(cache.AvailableTools);
@@ -239,7 +239,7 @@ public sealed partial class SessionModelContextTests
         var call = Assert.IsType<ContextCall.Inspect>(Start(owner, 1, state));
         var reply = Assert.IsType<WorkingContextSnapshotFailed>(await call.Work);
         var prepared = Assert.IsType<PreparedModelRequest>(owner.CompleteInspection(
-            reply, state, TrustAudience.Personal, currentToolTrust: null));
+            reply, state, childContinuation: null, TrustAudience.Personal, currentToolTrust: null));
         var wire = string.Join("\n", prepared.Messages.Select(message => message.Text));
 
         // Assert

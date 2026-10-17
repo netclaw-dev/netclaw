@@ -25,6 +25,6 @@
 
 ## 5. Open items
 
-- [ ] 5.1 After the stack rebase, change `docs/prd/PRD-001-netclaw-mvp.md` FR-017. Replace "Ordinary user inputs SHALL retain their existing ordered batch and authority." with "Ordinary user inputs SHALL run in ordered batches of one requester, each under its own recorded authority." Verify with `grep -n "FR-017" docs/prd/PRD-001-netclaw-mvp.md`.
+- [x] 5.1 After the stack rebase, change `docs/prd/PRD-001-netclaw-mvp.md` FR-017. Replace "Ordinary user inputs SHALL retain their existing ordered batch and authority." with "Ordinary user inputs SHALL run in ordered batches of one requester, each under its own recorded authority." Verify with `grep -n "FR-017" docs/prd/PRD-001-netclaw-mvp.md`.
 - [ ] 5.2 After the stack rebase, count only parent approvals as open approvals in `PlanNewInputAbandonment`, `HasParkedApprovals`, and `PendingDiagnosticCount`; verify a child approval does not hold a reminder
 - [ ] 5.3 Sync the delta specs into `openspec/specs/` with `/opsx-sync`, then archive the change
