@@ -249,14 +249,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     _deliveryRetry.MarkEligible(eligibleTurn);
 
                     // A restore from a snapshot does not replay the TurnRecorded event of the eligible turn,
-                    // so the snapshot carries what the event would give. A snapshot without either value
-                    // records nothing. A report for that turn then finds an unknown turn and writes a Warning.
-                    if (snapshot.EligibleDeliveryReminderId is not null || snapshot.EligibleDeliveryTurnRoutedSkill)
+                    // so the snapshot carries what the event would give. Every new snapshot writes the routed
+                    // mark, so its presence tells a new snapshot from an old one. An old snapshot records nothing,
+                    // and a report for that turn then finds an unknown turn and writes a Warning.
+                    if (snapshot.EligibleDeliveryTurnRoutedSkill is { } routedMark)
                     {
-                        _deliveryRetry.RecordTurn(
-                            eligibleTurn,
-                            snapshot.EligibleDeliveryReminderId,
-                            snapshot.EligibleDeliveryTurnRoutedSkill);
+                        _deliveryRetry.RecordTurn(eligibleTurn, snapshot.EligibleDeliveryReminderId, routedMark);
                     }
                 }
 
@@ -464,33 +462,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             AdmitInput(cmd, InputPlacement.BufferDuringModel);
         });
 
-        Command<DeliveryFailed>(msg =>
-        {
-            if (RestartDrainRequested)
-            {
-                _log.Info("Ignoring delivery feedback while restart drain is pending");
-                return;
-            }
-
-            if (!DeliveryRetryHandler.IsRetryable(msg))
-            {
-                _log.Warning(
-                    "Non-retryable delivery feedback while processing channel={Channel} turn={Turn} kind={FailureKind}; injecting context",
-                    msg.ChannelType,
-                    msg.TurnNumber,
-                    msg.FailureKind);
-                _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
-                ReportReminderPostFailure(msg);
-                return;
-            }
-
-            // The session does not retry while it processes another input, so this reply stays undelivered.
-            _log.Warning(
-                "Ignoring retryable delivery feedback while processing channel={Channel} turn={Turn}",
-                msg.ChannelType,
-                msg.TurnNumber);
-            ReportReminderPostFailure(msg);
-        });
+        Command<DeliveryFailed>(msg => HandleDeliveryFailedWithoutRetry(msg, "processing"));
 
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
@@ -906,6 +878,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ProcessingWatchdogExpired>(HandleCompactionWatchdogExpired);
 
+        Command<DeliveryFailed>(msg => HandleDeliveryFailedWithoutRetry(msg, "compacting"));
+
         Command<CompactionTriggered>(HandleCompactionTriggered);
 
         Command<CompactionWorkCompleted>(HandleCompactionWorkCompleted);
@@ -1250,7 +1224,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             if (RestartDrainRequested)
             {
-                _log.Info("Ignoring delivery feedback while restart passivation is in progress");
+                _log.Info("Reporting delivery feedback while restart passivation is in progress");
+                ReportReminderPostFailure(msg);
                 return;
             }
 
@@ -1825,6 +1800,42 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _modelContext.ResetForNewTurn(); // Delivery feedback changed context — resolve recall fresh
         FireLlmCall();
         TransitionTo(SessionPhase.Processing);
+    }
+
+    /// <summary>
+    /// Handles delivery feedback while the session is busy (processing or compacting). The session does not
+    /// retry in these phases. A restart drain adds no nudge, because the session is about to stop. In every case
+    /// the feedback reaches <see cref="ReportReminderPostFailure"/>, so a failed reminder reply is never dropped.
+    /// </summary>
+    private void HandleDeliveryFailedWithoutRetry(DeliveryFailed msg, string phase)
+    {
+        if (RestartDrainRequested)
+        {
+            _log.Info("Reporting delivery feedback while restart drain is pending");
+            ReportReminderPostFailure(msg);
+            return;
+        }
+
+        if (!DeliveryRetryHandler.IsRetryable(msg))
+        {
+            _log.Warning(
+                "Non-retryable delivery feedback while {Phase} channel={Channel} turn={Turn} kind={FailureKind}; injecting context",
+                phase,
+                msg.ChannelType,
+                msg.TurnNumber,
+                msg.FailureKind);
+            _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
+            ReportReminderPostFailure(msg);
+            return;
+        }
+
+        // The session does not retry while it handles another input, so this reply stays undelivered.
+        _log.Warning(
+            "Ignoring retryable delivery feedback while {Phase} channel={Channel} turn={Turn}",
+            phase,
+            msg.ChannelType,
+            msg.TurnNumber);
+        ReportReminderPostFailure(msg);
     }
 
     /// <summary>

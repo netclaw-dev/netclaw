@@ -60,6 +60,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     // TurnCompleted, with the number of the turn that the post belongs to.
     // Actor-local; it lives for one turn.
     private (DeliveryFailureKind Kind, string Message)? _heldFailedPost;
+    // True only while a post of turn output runs. Actor-local.
+    private bool _holdOutputFailures;
     private readonly SafeTransportCall _safeCall;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
@@ -135,8 +137,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             isApprovalRequest: request => string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase),
             renderTextOutput: textOutput => textOutput.Text,
             renderErrorOutput: error => $":warning: {error.Message}",
-            postTextAsync: SafeReplyAsync,
-            uploadFileAsync: SafeUploadFileAsync,
+            postTextAsync: PostOutputTextAsync,
+            uploadFileAsync: UploadOutputFileAsync,
             postApprovalPromptAsync: SafeReplyWithApprovalPromptAsync,
             readPromptIdValue: promptPostId => promptPostId.Value,
             onApprovalPromptFailedAsync: SendApprovalPromptUnavailableAsync,
@@ -878,11 +880,12 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     /// number only when <c>TurnCompleted</c> arrives, so it reports the failure
     /// then (see <see cref="ReportHeldFailedPostAsync"/>). A report now would
     /// carry the number of the previous turn, and the session would drop it as
-    /// stale feedback.
+    /// stale feedback. A failed post that is not turn output is not held.
     /// </summary>
     private Task HoldFailedPostAsync(DeliveryFailureKind failureKind, string errorMessage)
     {
-        _heldFailedPost ??= (failureKind, errorMessage);
+        if (_holdOutputFailures)
+            _heldFailedPost ??= (failureKind, errorMessage);
         return Task.CompletedTask;
     }
 
@@ -901,13 +904,34 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     }
 
     /// <summary>
+    /// Posts turn output text for the shared engine. Only a failed post of turn
+    /// output is held for the turn report (see <see cref="HoldFailedPostAsync"/>).
+    /// A failed post of any other kind, such as a warning or an approval prompt,
+    /// only logs, so it cannot replace the failure of the next turn.
+    /// </summary>
+    private async Task<bool> PostOutputTextAsync(string text)
+    {
+        _holdOutputFailures = true;
+        try { return await SafeReplyAsync(text); }
+        finally { _holdOutputFailures = false; }
+    }
+
+    /// <summary>Uploads turn output for the shared engine. See <see cref="PostOutputTextAsync"/>.</summary>
+    private async Task<bool> UploadOutputFileAsync(FileOutput file)
+    {
+        _holdOutputFailures = true;
+        try { return await SafeUploadFileAsync(file); }
+        finally { _holdOutputFailures = false; }
+    }
+
+    /// <summary>
     /// Posts the empty-turn fallback. A failed fallback post is a failed post
     /// of the turn that the fallback answers, so it reports that turn.
     /// </summary>
     private async Task PostEmptyTurnFallbackAsync(TurnCompleted completed)
     {
         _heldFailedPost = null;
-        await SafeReplyAsync(EmptyTurnFallbackText);
+        await PostOutputTextAsync(EmptyTurnFallbackText);
         await ReportHeldFailedPostAsync(completed);
     }
 

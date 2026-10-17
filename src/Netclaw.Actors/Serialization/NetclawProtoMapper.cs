@@ -610,7 +610,8 @@ internal static class NetclawProtoMapper
             proto.EligibleDeliveryTurnNumber = snap.EligibleDeliveryTurnNumber.Value.Value;
         if (snap.EligibleDeliveryReminderId is { } eligibleReminderId)
             proto.EligibleDeliveryReminderId = eligibleReminderId.Value;
-        proto.EligibleDeliveryTurnRoutedSkill = snap.EligibleDeliveryTurnRoutedSkill;
+        if (snap.EligibleDeliveryTurnRoutedSkill is { } routedMark)
+            proto.EligibleDeliveryTurnRoutedSkill = routedMark;
         if (snap.WorkingContext is not null)
             proto.WorkingContext = ToProto(snap.WorkingContext);
         proto.History.AddRange(snap.History.Select(ToProto));
@@ -631,7 +632,9 @@ internal static class NetclawProtoMapper
         EligibleDeliveryReminderId = proto.HasEligibleDeliveryReminderId
             ? new ReminderId(proto.EligibleDeliveryReminderId)
             : null,
-        EligibleDeliveryTurnRoutedSkill = proto.EligibleDeliveryTurnRoutedSkill,
+        EligibleDeliveryTurnRoutedSkill = proto.HasEligibleDeliveryTurnRoutedSkill
+            ? proto.EligibleDeliveryTurnRoutedSkill
+            : null,
         WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
         History = proto.History.Select(FromProto).ToArray(),
         ActiveBackgroundJobs = proto.ActiveBackgroundJobs.Select(FromProto).ToArray(),

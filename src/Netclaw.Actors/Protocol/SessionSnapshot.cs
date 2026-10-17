@@ -78,7 +78,7 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     /// True when a sub-agent ran a routed skill for the eligible turn. The session never retries such a
     /// turn on the main model, and a restored session must agree with a live one. False for an old snapshot.
     /// </summary>
-    public bool EligibleDeliveryTurnRoutedSkill { get; init; }
+    public bool? EligibleDeliveryTurnRoutedSkill { get; init; }
 
     /// <summary>
     /// Durable working-context state (recent files). Null when the session
