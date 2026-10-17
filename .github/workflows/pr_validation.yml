@@ -176,8 +176,10 @@ jobs:
             gates: exact-verb-chain
           - group: reminder
             gates: reminder-execution literal-twin stream-commit-gate
-          - group: approval-and-authorization
-            gates: tool-authorization approval-directory skill-manage-guard no-program input-one-authority
+          - group: authorization-and-directory
+            gates: tool-authorization approval-directory
+          - group: guard-and-authority
+            gates: skill-manage-guard no-program input-one-authority
           - group: session-reliability
             gates: tool-batch-readiness
 
