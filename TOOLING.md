@@ -93,6 +93,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
 | `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, and `SessionInputFlow.DrainBufferedBatch` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn | 8 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
 | `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run and a turn with one of two open runs each get the right decision (SPEC-004, "Waiting for child runs"). The gate does not cover the missing-field case: `SessionOutputDtoMapper.FromDto` maps a missing field to an empty list, outside the mutated span, and ordinary tests cover it | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
+| `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that is not `Closed`, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -282,6 +283,38 @@ outside the selected span.
 The local run took 10 minutes 30 seconds from a cold Release build. Stryker took 1 minute 59 seconds.
 Hosted CI must measure the gate on a cold runner. CI runs it in the `session-reliability` group of the
 `mutation-gates` job. Its report directory is `artifacts/stryker/headless-stop-rule`.
+
+### Open Child Runs Gate
+
+Run the open child runs gate:
+
+```bash
+./scripts/run-open-child-runs-mutations.sh
+```
+
+The script selects the producer of `TurnCompleted.OpenChildRunIds` in `SessionState.ChildRuns.cs`. The source marks
+it with `// <open-child-runs>` and `// </open-child-runs>`. The span holds `GetExecutableChildRuns` and
+`GetOpenChildRunIds`. The selector rejects a missing or repeated marker before Stryker starts.
+
+Stryker makes four mutants in the span. The gate fails for a survivor, a compile error, or a mutant outside the
+selected span. A different form of the span gives a different mutant count, and the gate fails until the owner of
+the gate reviews the new count.
+
+A headless run waits while the list is not empty. A wrong list has two failures. A run that is missing from the
+list ends the run early and loses the child result. A run that stays in the list makes the run wait for a turn that
+never comes. `OpenChildRunsMutationTests` in `Netclaw.Actors.MutationTests` builds a `SessionState` directly. It
+uses no actor, no timer, and no delay. It covers these cases:
+
+- a run in each lifecycle before `Closed` is open
+- a `Closed` run is not open
+- a run that the legacy reader quarantined is not open, and evidence that is not an unresolved child does not quarantine
+- the list keeps acceptance order, then run id order
+
+The local Stryker run took 1 minute 52 seconds. CI runs the gate in the `session-reliability` group of the
+`mutation-gates` job, because that group has the most headroom. Two gates took 5 minutes 20 seconds on CI, so the
+third gate should bring the group to about 8 minutes. The group will also hold the child owner and the report-once
+gates, which gives an expected total of 15 to 16 minutes against the limit of 25. Hosted CI must measure the
+group on a cold runner. Its report directory is `artifacts/stryker/open-child-runs`.
 
 ### Tool Authorization Gate
 

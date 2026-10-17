@@ -135,6 +135,7 @@ public sealed class HeadlessChannel : IChannel
                 var lw = Volatile.Read(ref logWriter);
                 if (lw is not null)
                     Log(lw, $"CONNECTION: {evt.Message}");
+                EndRunOnLostConnection(evt, lw);
             });
 
             using var subscription = _daemonClient.SessionOutput.Subscribe(output =>
@@ -164,8 +165,8 @@ public sealed class HeadlessChannel : IChannel
             var logPath = Path.Combine(_paths.LogsDirectory, logFileName);
             Volatile.Write(ref logWriter, new StreamWriter(logPath, append: true) { AutoFlush = true });
 
-            logWriter!.WriteLine($"[{_timeProvider.GetUtcNow():o}] Headless session started: {sessionId}");
-            logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] PROMPT: {_prompt}");
+            Log(logWriter, $"Headless session started: {sessionId}");
+            Log(logWriter, $"PROMPT: {_prompt}");
 
             _promptSentTicks = Stopwatch.GetTimestamp();
 
@@ -234,6 +235,41 @@ public sealed class HeadlessChannel : IChannel
             _ended = true;
             return true;
         }
+    }
+
+    // The hub drops session output while no client is connected, and a reconnect does not replay it. A turn
+    // that completes in that gap is lost, so the run would wait for ever. The run ends loudly instead, and the
+    // operator resumes the session with `netclaw chat --resume`.
+    //   Disconnected: the client spent its whole retry budget. The run always ends.
+    //   TransportClosed: the client starts to reconnect. The run ends only when it knows an open child run,
+    //     because only then does it wait for a turn that a gap can swallow. With no open run, the turn in
+    //     progress is still the one that the run waits for, and the reconnect covers it.
+    // After the run ended, both states change nothing: a disconnect after the final turn keeps the exit code.
+    private void EndRunOnLostConnection(DaemonConnectionEvent evt, StreamWriter? log)
+    {
+        if (evt.State == DaemonConnectionState.TransportClosed)
+        {
+            lock (_gate)
+            {
+                if (_openRuns.RunIds.Count == 0)
+                    return;
+            }
+        }
+        else if (evt.State != DaemonConnectionState.Disconnected)
+        {
+            return;
+        }
+
+        if (!TryBeginStop(out var openRuns))
+            return;
+
+        var detail = $"Lost the connection to the daemon before the run ended: {evt.Message}";
+        ExitCode = 1;
+        Console.Error.WriteLine($"[headless:error] {SingleLine(detail)}");
+        Console.Error.WriteLine(HeadlessFailure.Channel.ToToken());
+        openRuns.WriteLine();
+        WriteFailureLog("CONNECTION_LOST", detail);
+        EndRun(log, "CONNECTION_LOST");
     }
 
     internal void HandleOutput(SessionOutput output, StreamWriter? log)
@@ -520,9 +556,15 @@ public sealed class HeadlessChannel : IChannel
         Console.WriteLine(JsonSerializer.Serialize(envelope, JsonDefaults.CliOutput));
     }
 
+    // The connection subscription, the output pump, and the run thread all write the session log. A
+    // StreamWriter is not thread safe, so an unlocked write can drop a line.
     private void Log(StreamWriter? log, string message)
     {
-        log?.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
+        if (log is null)
+            return;
+
+        lock (log)
+            log.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
     }
 
     private void WriteFailureLog(string kind, string detail)
@@ -582,8 +624,8 @@ public sealed class HeadlessChannel : IChannel
         public double? PromptMs { get; init; }
         public double? PredictedPerSecond { get; init; }
 
-        // The token counts add up over the turns. A rate does not add up, so the last turn that reports
-        // one decides promptMs and predictedPerSecond. A run with one turn gives that turn's usage.
+        // The token counts add up over the turns. A rate does not add up, so the last turn that has a usage
+        // record decides promptMs and predictedPerSecond. A run with one turn gives that turn's usage.
         public static JsonUsage? Sum(IEnumerable<JsonUsage?> perTurn)
         {
             var turns = perTurn.OfType<JsonUsage>().ToArray();
