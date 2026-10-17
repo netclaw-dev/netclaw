@@ -79,6 +79,38 @@ public sealed class LifecycleEndpointRouteBuilderExtensionsTests : IAsyncDisposa
         Assert.Empty(_sink.Emitted);
     }
 
+    [Theory]
+    [InlineData("http://evil.example")]
+    [InlineData("null")]
+    public async Task Shutdown_returns_401_for_loopback_request_with_foreign_origin(string origin)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/lifecycle/shutdown?reason=probe");
+        request.Headers.TryAddWithoutValidation("Origin", origin);
+        var response = await client.SendAsync(request, ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(_sink.Emitted);
+    }
+
+    [Fact]
+    public async Task Shutdown_returns_401_for_loopback_request_with_foreign_host()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/lifecycle/shutdown?reason=probe");
+        request.Headers.Host = "rebind.example:5199";
+        var response = await client.SendAsync(request, ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(_sink.Emitted);
+    }
+
     [Fact]
     public async Task Shutdown_returns_400_when_reason_is_missing()
     {

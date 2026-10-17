@@ -174,6 +174,62 @@ public sealed class SessionHubAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public async Task Loopback_negotiate_with_foreign_origin_receives_401()
+    {
+        await using var app = await CreateAppAsync(spoofedRemoteIp: IPAddress.Loopback);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/hub/session/negotiate?negotiateVersion=1");
+        request.Headers.TryAddWithoutValidation("Origin", "http://evil.example");
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Loopback_negotiate_with_matching_origin_passes_authorization()
+    {
+        await using var app = await CreateAppAsync(spoofedRemoteIp: IPAddress.Loopback);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/hub/session/negotiate?negotiateVersion=1");
+        request.Headers.TryAddWithoutValidation("Origin", "http://localhost");
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Loopback_websocket_upgrade_with_foreign_origin_is_refused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(spoofedRemoteIp: IPAddress.Loopback);
+        var webSocketClient = app.GetTestServer().CreateWebSocketClient();
+        webSocketClient.ConfigureRequest = request => request.Headers["Origin"] = "http://evil.example";
+
+        var exception = await Assert.ThrowsAnyAsync<Exception>(
+            () => webSocketClient.ConnectAsync(new Uri("ws://localhost/hub/session?id=probe"), ct));
+
+        Assert.Contains("401", exception.ToString());
+    }
+
+    [Fact]
+    public async Task Loopback_connection_with_foreign_host_receives_401()
+    {
+        await using var app = await CreateAppAsync(spoofedRemoteIp: IPAddress.Loopback);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/hub/session/negotiate?negotiateVersion=1");
+        request.Headers.Host = "rebind.example:5199";
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Remote_connection_with_valid_bearer_token_passes_authorization()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -193,6 +249,27 @@ public sealed class SessionHubAuthorizationTests : IDisposable
 
         Assert.NotEqual(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.NotEqual(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Loopback_connection_with_valid_bearer_token_and_public_host_passes_authorization()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (rawToken, device) = MakeDevice("proxy-laptop", _time.GetUtcNow());
+        await _deviceRegistry.AddAsync(device, ct);
+
+        await using var app = await CreateAppAsync(spoofedRemoteIp: IPAddress.Loopback);
+        var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", rawToken);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/hub/session/negotiate?negotiateVersion=1");
+        request.Headers.Host = "app.example.com";
+        request.Headers.TryAddWithoutValidation("Origin", "https://app.example.com");
+
+        var response = await client.SendAsync(request, ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]

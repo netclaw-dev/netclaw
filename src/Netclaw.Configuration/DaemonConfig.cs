@@ -297,9 +297,11 @@ public static class DaemonExposureValidator
             return false;
 
         var trimmed = host.Trim();
-        if (string.Equals(trimmed, "localhost", StringComparison.OrdinalIgnoreCase))
+        if (LoopbackHostName.IsStrictLoopback(trimmed))
             return true;
 
+        // Bind-only leniency: a bind value may use a legacy spelling such as "127.1" or "[::1]".
+        // Request admission does not use this rule.
         return IPAddress.TryParse(trimmed, out var address) && IPAddress.IsLoopback(address);
     }
 

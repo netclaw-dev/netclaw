@@ -34,10 +34,20 @@ public sealed class LoopbackAuthenticationHandlerTests
         return (sp, sp.GetRequiredService<IAuthenticationService>());
     }
 
-    private static DefaultHttpContext BuildContext(IPAddress remoteIp, IServiceProvider sp)
+    private const string AllowedHost = "localhost:5199";
+
+    private static DefaultHttpContext BuildContext(
+        IPAddress remoteIp,
+        IServiceProvider sp,
+        string? host = AllowedHost,
+        string? origin = null)
     {
         var ctx = new DefaultHttpContext { RequestServices = sp };
         ctx.Connection.RemoteIpAddress = remoteIp;
+        if (host is not null)
+            ctx.Request.Headers.Host = host;
+        if (origin is not null)
+            ctx.Request.Headers.Origin = origin;
         return ctx;
     }
 
@@ -67,6 +77,123 @@ public sealed class LoopbackAuthenticationHandlerTests
     }
 
     [Theory]
+    [InlineData("localhost:5199")]
+    [InlineData("LOCALHOST:5199")]
+    [InlineData("localhost")]
+    [InlineData("127.0.0.1:5199")]
+    [InlineData("127.0.0.1")]
+    [InlineData("[::1]:5199")]
+    [InlineData("[::1]")]
+    [InlineData("127.0.0.2:5199")]
+    [InlineData("127.255.255.254")]
+    public async Task Allowed_host_names_receive_operator_claims(string host)
+    {
+        var (sp, authService) = BuildAuthService();
+        var ctx = BuildContext(IPAddress.Loopback, sp, host);
+
+        var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Theory]
+    [InlineData("rebind.example:5199")]
+    [InlineData("127.0.0.1.evil.example:5199")]
+    [InlineData("localhost.evil.example")]
+    [InlineData("localhost.:5199")]
+    [InlineData("192.168.1.10:5199")]
+    [InlineData("[::2]:5199")]
+    [InlineData("localhost:5199,rebind.example")]
+    [InlineData("localhost:abc")]
+    [InlineData("localhost:")]
+    [InlineData("localhost:1234567")]
+    [InlineData("127.1:5199")]
+    [InlineData("0x7f.1:5199")]
+    [InlineData("2130706433:5199")]
+    [InlineData("0.0.0.0:5199")]
+    [InlineData("[::ffff:127.0.0.1]:5199")]
+    [InlineData("[localhost]:5199")]
+    [InlineData("::1")]
+    [InlineData(" localhost")]
+    [InlineData("[127.0.0.1]:5199")]
+    [InlineData("127.0.0.1 ")]
+    [InlineData("")]
+    public async Task Foreign_or_missing_host_is_refused(string host)
+    {
+        var (sp, authService) = BuildAuthService();
+        var ctx = BuildContext(IPAddress.Loopback, sp, host);
+
+        var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
+
+        Assert.False(result.Succeeded);
+        Assert.NotNull(result.Failure);
+    }
+
+    [Theory]
+    [InlineData("127.0.0.2")]
+    [InlineData("127.10.20.30")]
+    [InlineData("::1")]
+    [InlineData("0:0:0:0:0:0:0:1")]
+    public async Task Cli_request_to_a_config_valid_local_bind_is_admitted(string bindHost)
+    {
+        var config = new DaemonConfig { ExposureMode = ExposureMode.Local, Host = bindHost, Port = 5199 };
+        Assert.Null(DaemonExposureValidator.GetLoopbackViolationIssue(config));
+        var cliHost = new Uri(DaemonControlPlaneEndpointResolver.ResolveFallbackEndpoint(config)).Authority;
+        var (sp, authService) = BuildAuthService(config);
+        var ctx = BuildContext(IPAddress.Loopback, sp, cliHost);
+
+        var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
+
+        Assert.True(result.Succeeded, $"Host {cliHost} was refused: {result.Failure?.Message}");
+    }
+
+    [Fact]
+    public async Task Request_without_a_host_header_is_refused()
+    {
+        var (sp, authService) = BuildAuthService();
+        var ctx = BuildContext(IPAddress.Loopback, sp, host: null);
+
+        var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
+
+        Assert.False(result.Succeeded);
+        Assert.NotNull(result.Failure);
+    }
+
+    [Theory]
+    [InlineData("localhost:5199", "http://localhost:5199")]
+    [InlineData("LOCALHOST:5199", "http://localhost:5199")]
+    [InlineData("127.0.0.1:5199", "http://127.0.0.1:5199")]
+    [InlineData("[::1]:5199", "http://[::1]:5199")]
+    [InlineData("localhost", "http://localhost")]
+    public async Task Origin_equal_to_http_scheme_plus_host_is_accepted(string host, string origin)
+    {
+        var (sp, authService) = BuildAuthService();
+        var ctx = BuildContext(IPAddress.Loopback, sp, host, origin);
+
+        var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1:5199", "http://evil.example")]
+    [InlineData("localhost:5199", "null")]
+    [InlineData("localhost:5199", "http://localhost:3000")]
+    [InlineData("localhost:5199", "https://localhost:5199")]
+    [InlineData("localhost:5199", "http://localhost:5199/path")]
+    [InlineData("localhost:5199", "")]
+    public async Task Origin_that_differs_from_http_scheme_plus_host_is_refused(string host, string origin)
+    {
+        var (sp, authService) = BuildAuthService();
+        var ctx = BuildContext(IPAddress.Loopback, sp, host, origin);
+
+        var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
+
+        Assert.False(result.Succeeded);
+        Assert.NotNull(result.Failure);
+    }
+
+    [Theory]
     [InlineData("192.168.1.1")]
     [InlineData("10.0.0.1")]
     [InlineData("203.0.113.1")]
@@ -80,6 +207,30 @@ public sealed class LoopbackAuthenticationHandlerTests
         Assert.False(result.Succeeded);
         Assert.Null(result.Failure);   // NoResult, not Fail
         Assert.Null(result.Principal);
+    }
+
+    [Fact]
+    public async Task Non_loopback_ip_with_foreign_host_and_origin_still_returns_no_result()
+    {
+        var (sp, authService) = BuildAuthService();
+        var ctx = BuildContext(IPAddress.Parse("203.0.113.1"), sp, "rebind.example", "http://evil.example");
+
+        var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Failure);
+    }
+
+    [Fact]
+    public async Task Reverse_proxy_mode_with_foreign_host_still_returns_no_result()
+    {
+        var (sp, authService) = BuildAuthService(new DaemonConfig { ExposureMode = ExposureMode.ReverseProxy });
+        var ctx = BuildContext(IPAddress.Loopback, sp, "app.example.com", "https://app.example.com");
+
+        var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Failure);
     }
 
     [Fact]
