@@ -67,6 +67,7 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit, IAsyncDisposable
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_chatClient));
         services.AddSingleton(_paths);
+        services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
         services.AddSingleton<Netclaw.Actors.Jobs.BackgroundJobDefinitionStore>();
         services.AddSingleton(new ModelCapabilities
         {

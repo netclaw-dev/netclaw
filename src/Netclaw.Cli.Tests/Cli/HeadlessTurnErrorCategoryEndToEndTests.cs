@@ -333,6 +333,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
                 LoopbackAuthenticationHandler.SchemeName, _ => { });
         builder.Services.AddAuthorization();
         builder.Services.AddSingleton(paths);
+        builder.Services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
         builder.Services.AddSingleton<ISessionStorageResolver>(storage);
         builder.Services.AddSingleton(new SessionConfig
         {
