@@ -38,6 +38,7 @@ spans="$(
           ["execution.ExecutionId != outcome.ExecutionId", 1],
           ["definition.Schedule.Type == ReminderScheduleType.OneShot\n        && tombstone.FireAtMs == definition.Schedule.FireAtMs;", 3],
           ["definition.Schedule.FireAtMs == envelope.DueTimeUtc.ToUnixTimeMilliseconds();", 1],
+          ["if (SettledOccurrenceIsCurrent(definition, envelope))\n            return false;", 2],
           ["finally\n        {\n            _activeExecutions.TryRemove(outcome.Id, outcome.ExecutionId, out _);\n            replyTo.Tell(new ReminderExecutionAccepted(outcome.ExecutionId));\n        }", 1]
         );
     }

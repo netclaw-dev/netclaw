@@ -114,6 +114,11 @@ Look for the `reminder.auto_disabled` alert and the channel notice.
 fire time stays, and `netclaw reminder enable` can start it again. A recurring
 reminder is never deleted on its own.
 
+**An end record that the daemon cannot read:** the daemon raises the `reminder.tombstone.invalid`
+alert. A read shows no history for that id. A fire of a one-shot with that id does not run, and
+the daemon does not acknowledge it. Repair or delete the file in `ended/`. Akka.Reminders then
+delivers the occurrence again, after the acknowledgement lease expires.
+
 **Rollback:** an older binary ignores the `ended/` folder and the history files that
 have no definition. It does not create the deleted definitions again.
 

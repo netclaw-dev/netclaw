@@ -746,11 +746,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             return;
         }
 
-        // A matching tombstone means the one-shot already ended, so the fire runs nothing (design D4).
-        if (definition.Schedule.Type == ReminderScheduleType.OneShot
-            && await TryFinishMatchedTombstoneAsync(definition, envelope))
+        if (definition.Schedule.Type == ReminderScheduleType.OneShot)
         {
-            return;
+            // The occurrence of an earlier definition of this id runs nothing (design D4, fire boundary of D5).
+            if (await TryRefuseStaleOccurrenceAsync(definition, envelope))
+                return;
+
+            // A matching tombstone means the one-shot already ended, so the fire runs nothing (design D4).
+            if (await TryFinishMatchedTombstoneAsync(definition, envelope))
+                return;
         }
 
         if (!definition.Enabled)
@@ -1141,13 +1145,17 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
 
         if (endsOneShot)
         {
-            await EndOneShotAsync(
-                definition!,
-                ReminderTerminalOutcome.Failed,
-                reason,
-                _timeProvider.GetUtcNow(),
-                execution.Envelope,
-                EnvelopeAction.Ack);
+            if (!await EndOneShotAsync(
+                    definition!,
+                    ReminderTerminalOutcome.Failed,
+                    reason,
+                    _timeProvider.GetUtcNow(),
+                    execution.Envelope,
+                    EnvelopeAction.Ack))
+            {
+                await AckRunWithoutEndRecordAsync(definition!, execution.Envelope);
+            }
+
             return;
         }
 
@@ -1183,6 +1191,10 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                     EnvelopeAction.Ack))
             {
                 _log.Info("Reminder '{0}' execution completed successfully", outcome.Id.Value);
+            }
+            else
+            {
+                await AckRunWithoutEndRecordAsync(definition!, execution.Envelope);
             }
 
             return;
@@ -1428,6 +1440,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         // A one-shot that reaches the threshold ends into a tombstone. A recurring reminder is saved
         // disabled and stays until an explicit delete.
         var endsOneShot = thresholdReached && definition.Schedule.Type == ReminderScheduleType.OneShot;
+        var ended = true;
         try
         {
             definition = definition with
@@ -1447,16 +1460,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
 
         if (endsOneShot)
         {
-            if (!await EndOneShotAsync(
-                    definition,
-                    ReminderTerminalOutcome.Failed,
-                    $"The reminder could not be scheduled: {reason}",
-                    _timeProvider.GetUtcNow(),
-                    envelope: null,
-                    EnvelopeAction.None))
-            {
-                return;
-            }
+            // If the tombstone cannot be written, the definition stays for the next attempt. The operator
+            // must still learn why the reminder has no schedule, so the alerts below go out in both cases.
+            ended = await EndOneShotAsync(
+                definition,
+                ReminderTerminalOutcome.Failed,
+                $"The reminder could not be scheduled: {reason}",
+                _timeProvider.GetUtcNow(),
+                envelope: null,
+                EnvelopeAction.None);
         }
         else if (thresholdReached)
         {
@@ -1481,7 +1493,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                 ["error"] = reason
             }));
 
-        if (!thresholdReached)
+        // The auto-disable alert says that the reminder stopped. It did not stop when the end record failed.
+        if (!thresholdReached || !ended)
             return;
 
         _notificationSink.Emit(OperationalAlert.Create(
@@ -1554,7 +1567,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
     /// Ends a one-shot with one ordered path (design D3). The tombstone is the commit point: it is the only
     /// step that records the outcome, so it comes first. If Netclaw cannot write it, the end stops here with
     /// an alert, and the one-shot stays enabled. The lease expiry or the next sweep is the recovery path.
-    /// Each later step is idempotent, and a matching tombstone finishes it after a crash (design D4).
+    /// A run that succeeded or had a denied tool call is the one exception: its caller still acks the
+    /// occurrence (<see cref="AckRunWithoutEndRecordAsync"/>). Each later step is idempotent, and a matching tombstone finishes it after a crash (design D4).
     /// </summary>
     /// <returns>True when the tombstone is durable.</returns>
     private async Task<bool> EndOneShotAsync(
@@ -1650,16 +1664,80 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
     }
 
     /// <summary>
+    /// The run of a one-shot succeeded or had a denied tool call, but Netclaw could not write the tombstone
+    /// (design D3, owner decision). A repeat of the run is worse than a late tombstone, so the manager still
+    /// acknowledges the occurrence. The ack records the durable status Delivered, and the definition stays.
+    /// The startup reconciliation ends the one-shot as Completed from that status. A cancel, a threshold
+    /// failure, and an expiry do not use this path: they keep the lease as the recovery path.
+    /// </summary>
+    private async Task AckRunWithoutEndRecordAsync(
+        ReminderDefinition definition,
+        ReminderEnvelope<ReminderPayload> envelope)
+    {
+        _log.Error(
+            "Reminder '{0}' ran, but its end record was not written. Acknowledging the occurrence so that the run does not repeat. The definition stays until the next reconciliation.",
+            definition.Id.Value);
+
+        try
+        {
+            var ack = await _client!.AckAsync(envelope);
+            if (ack.ResponseCode is ReminderAckResponseCode.Error)
+                EmitSettlementFailure(definition, ack.Message ?? $"Reminder acknowledgement returned {ack.ResponseCode}.");
+        }
+        catch (Exception ex)
+        {
+            EmitSettlementFailure(definition, ex.Message, ex);
+        }
+    }
+
+    /// <summary>
+    /// Design D5 at the fire boundary: a fire runs only the occurrence of the current definition. When the
+    /// envelope due time differs from the fire time of the definition, the occurrence belongs to an earlier
+    /// definition of the same id. The manager acknowledges it and logs a warning.
+    /// This path must not cancel the schedule: the schedule of the key belongs to the current definition,
+    /// and the only calls here are the log and the ack of this one envelope.
+    /// </summary>
+    /// <returns>True when the manager handled the fire and nothing may run.</returns>
+    private async Task<bool> TryRefuseStaleOccurrenceAsync(
+        ReminderDefinition definition,
+        ReminderEnvelope<ReminderPayload> envelope)
+    {
+        if (SettledOccurrenceIsCurrent(definition, envelope))
+            return false;
+
+        _log.Warning(
+            "Reminder '{0}' fired for the occurrence due {1:u}, but its definition fires at {2}. The occurrence belongs to an earlier definition. Running nothing, and acknowledging the occurrence.",
+            definition.Id.Value,
+            envelope.DueTimeUtc,
+            definition.Schedule.FireAtMs?.ToString() ?? "none");
+        await _client!.AckAsync(envelope);
+        return true;
+    }
+
+    /// <summary>
     /// A fire of a one-shot whose tombstone matches it runs nothing. The manager acknowledges the occurrence
     /// and finishes the end. A tombstone that does not match is stale: the definition is newer (design D4).
+    /// A tombstone file that Netclaw cannot read also stops the fire, without an ack.
     /// </summary>
+    /// <returns>True when the fire is handled and nothing may run.</returns>
     private async Task<bool> TryFinishMatchedTombstoneAsync(
         ReminderDefinition definition,
         ReminderEnvelope<ReminderPayload> envelope)
     {
         var tombstone = ReadTombstone(definition.Id);
         if (tombstone is null)
-            return false;
+        {
+            if (!_definitionStore.TombstoneExists(definition.Id))
+                return false;
+
+            // The file exists, but Netclaw cannot read it. It may be the record of a run that succeeded, so the
+            // fire fails closed: no run and no ack. The lease returns the occurrence after the operator repairs
+            // or deletes the file. ReadTombstone has already raised the reminder.tombstone.invalid alert.
+            _log.Error(
+                "Reminder '{0}' fired, but its end record cannot be read. Running nothing, and not acknowledging the occurrence. Repair or delete the file.",
+                definition.Id.Value);
+            return true;
+        }
 
         if (!TombstoneMatches(tombstone, definition))
         {
@@ -1702,13 +1780,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         foreach (var invalid in _definitionStore.ConsumeInvalidTombstones())
         {
             _log.Error(
-                "Reminder tombstone for '{0}' cannot be read and counts as absent: {1}",
+                "Reminder tombstone for '{0}' cannot be read. A read counts it as absent, and a fire of the one-shot does not run: {1}",
                 invalid.ReminderId, invalid.Reason);
             _notificationSink.Emit(OperationalAlert.Create(
                 _timeProvider,
                 "reminder.tombstone.invalid",
                 AlertType.ReminderSchemaDropped,
-                $"The end record of reminder '{invalid.ReminderId}' cannot be read: {invalid.Reason}. Its history is not readable. Repair or delete ended/{Uri.EscapeDataString(invalid.ReminderId)}.json.",
+                $"The end record of reminder '{invalid.ReminderId}' cannot be read: {invalid.Reason}. Its history is not readable, and the one-shot does not run. Repair or delete ended/{Uri.EscapeDataString(invalid.ReminderId)}.json.",
                 AlertSeverity.Warning,
                 source: invalid.ReminderId,
                 context: new Dictionary<string, string>
