@@ -116,7 +116,15 @@ reminder is never deleted on its own.
 
 **An end record that the daemon cannot read:** the daemon raises the `reminder.tombstone.invalid`
 alert. A read shows no history for that id. A fire of a one-shot with that id does not run, and
-the daemon does not acknowledge it. Repair or delete the file in `ended/` within about 12 hours.
+the daemon does not acknowledge it.
+
+Caution: the damaged file can hold a `Completed` record. Before you delete the file, read
+`<id>.history.jsonl`. If it has an `ok` row for this fire time, repair the file with
+`outcome: Completed` and do not delete it. A delete inside the window lets Akka.Reminders
+deliver the occurrence again, and the one-shot runs again. A delete after the window ends the
+one-shot as `Failed` with its prompt, although it ran.
+
+Repair or delete the file in `ended/` within about 12 hours.
 Akka.Reminders delivers the occurrence again after each acknowledgement lease (70 minutes), but
 it stops after ten attempts. After that, the next sweep or restart ends the one-shot as `Failed`,
 and the one-shot does not run. The daemon never overwrites an unreadable file. It skips the
@@ -127,6 +135,11 @@ one-shot and alerts again until the file is readable or gone.
 so that it does not run again. Free the disk space. The next 12-hour sweep or the next restart
 ends the one-shot. A restart is not needed. Do this within 12 days of the run, because
 Akka.Reminders deletes the occurrence status after 12 days.
+
+**A failed status query:** the `reminder.status.query_failed` alert reads "occurrence status".
+The 12-hour sweep or the startup reconciliation could not read the Akka.Reminders status of a
+past one-shot. The daemon leaves that one-shot as it is and does not restart. Check the
+Akka.Reminders storage. The next sweep tries again. A one-shot that runs at that time gets no query.
 
 **Rollback:** an older binary ignores the `ended/` folder and the history files that
 have no definition. It does not create the deleted definitions again.

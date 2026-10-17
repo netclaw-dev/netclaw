@@ -24,6 +24,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
     public const string ShardRegionName = "netclaw-reminders";
     public const string EntityId = "manager";
 
+    /// <summary>The denial text for a denied run whose outcome carries none. The live settlement and the status pass share it.</summary>
+    private const string DeniedToolCallMessage = "A tool call was denied.";
+
     /// <summary>
     /// Consecutive execution failures after which a reminder is auto-paused.
     /// Not configurable. Must stay strictly below Akka.Reminders'
@@ -1121,7 +1124,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         ReminderDefinition? definition,
         bool endsOneShot)
     {
-        var reason = outcome.ErrorMessage ?? "A tool call was denied.";
+        var reason = outcome.ErrorMessage ?? DeniedToolCallMessage;
         _log.Warning("Reminder '{0}' ran with a denied tool call: {1}", outcome.Id.Value, reason);
 
         if (!_deniedAlerts.TryGetValue(outcome.Id, out var alerted) || alerted != reason)
@@ -1514,6 +1517,29 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
         PostFailureNoticeToChannel(
             definition,
             $"Reminder \"{title}\" was automatically disabled after {count} consecutive scheduling failures. Last error: {reason}");
+    }
+
+    private void ReportStatusQueryFailure(ReminderDefinition definition, Exception exception)
+    {
+        _log.Error(
+            exception,
+            "The occurrence status query for one-shot reminder '{0}' failed. The pass leaves the one-shot unchanged, and the next pass tries again: {1}",
+            definition.Id.Value,
+            exception.Message);
+
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "reminder.status.query_failed",
+            AlertType.ReminderExecutionFailed,
+            $"The occurrence status of reminder '{definition.Title}' cannot be read: {exception.Message}. The one-shot stays as it is, and the next pass tries again.",
+            AlertSeverity.Warning,
+            source: definition.Id.Value,
+            context: new Dictionary<string, string>
+            {
+                ["reminderId"] = definition.Id.Value,
+                ["title"] = definition.Title,
+                ["error"] = exception.Message
+            }));
     }
 
     private void EmitSettlementFailure(ReminderDefinition definition, string reason, Exception? exception = null)
@@ -1913,6 +1939,11 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
     /// <returns>True when the one-shot ended.</returns>
     private async Task<bool> TryEndFromOccurrenceStatusAsync(ReminderDefinition definition, DateTimeOffset now)
     {
+        // An active run settles itself, and its occurrence is open. A status query adds nothing for it and
+        // can only fail while the run is in flight.
+        if (_activeExecutions.IsExecuting(definition.Id))
+            return false;
+
         // The status pass never overwrites an unreadable tombstone file. It may hold the real outcome, and the
         // sweep has already raised reminder.tombstone.invalid for it. The matching and the stale tombstones
         // are resolved before this call, so a file that still exists here cannot be read.
@@ -1924,7 +1955,20 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
             return false;
         }
 
-        var occurrence = await GetOccurrenceStatusAsync(definition);
+        ReminderOccurrenceStatus? occurrence;
+        try
+        {
+            occurrence = await GetOccurrenceStatusAsync(definition);
+        }
+        catch (Exception ex)
+        {
+            // An uncaught throw here restarts the manager. The restart stops every execution actor, and an
+            // open occurrence can then run again after the acknowledgement lease. Leave this one-shot alone
+            // and let the next pass try again.
+            ReportStatusQueryFailure(definition, ex);
+            return false;
+        }
+
         if (occurrence is null)
         {
             _log.Warning(
@@ -1941,10 +1985,27 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                 // Delivered means the manager acknowledged a run. A denied run is a failure (design D1a), and
                 // only its history row, written before the ack, still says so.
                 var runs = await _historyStore.ReadAsync(definition.Id, 1);
-                if (runs.Count > 0 && runs[^1].ToolDenied)
+
+                // The newest row counts only when it belongs to this occurrence. A re-arm keeps the history
+                // of an earlier run when no tombstone exists.
+                var thisRun = runs.Count > 0
+                              && definition.Schedule.FireAt is { } fireAt
+                              && runs[^1].FiredAt >= fireAt
+                    ? runs[^1]
+                    : null;
+
+                if (thisRun is null)
+                {
+                    // ReminderHistoryStore.ReadAsync returns no rows for a damaged file, so a denial could hide here.
+                    _log.Warning(
+                        "Reminder '{0}' has no readable history row for its last run, so the history cannot be read and the denial check could not run. The one-shot ends from the occurrence status.",
+                        definition.Id.Value);
+                }
+
+                if (thisRun is { ToolDenied: true })
                 {
                     outcome = ReminderTerminalOutcome.Failed;
-                    lastError = runs[^1].ErrorMessage ?? "A tool call was denied.";
+                    lastError = thisRun.ErrorMessage ?? DeniedToolCallMessage;
                 }
                 else
                 {
