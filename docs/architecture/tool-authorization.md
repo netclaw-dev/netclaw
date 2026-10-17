@@ -719,6 +719,41 @@ The child dispatch gate closes before a cancellation acknowledgement or terminal
 The acknowledgement reports durable cancellation intent. It does not report terminal completion.
 Recovery settles an uncertain child as lost and does not launch a replacement actor.
 A stale answer cannot dispatch a recovered child or grant authority for another child.
+An answer for a call with no open prompt grants nothing and runs nothing.
+Owner: `SessionToolWorkflow.RejectClosedCall`, on the live route and on the idle or recovered route.
+It selects only the nack reason and the notice:
+
+- A second answer to a prompt that has an answer gets reason `approval_already_answered` and an
+  "already has an answer" notice. It does not say "expired", because the prompt did not expire.
+- During the turn, the answer is actor-local in the workflow table. After the turn ends, and after a restart,
+  the durable fact is the tool result of the call in session history.
+- A synthetic abandonment result (text starts with `ParkedToolBatchHistory.AbandonedResultPrefix`) is not an answer.
+- An answer for a call that never existed, a call that recovery removed, or a call that an abandonment
+  closed gets reason `approval_prompt_expired` and the "expired" notice.
+- After a restart, an old child prompt is expired (TA-12), because child calls are not in the parent history.
+
+A valid example: Alice denies a prompt, the turn ends, and her second click on "approve once" gets
+"already has an answer". An invalid example: a forged answer for an unknown call ID gets "expired" and grants nothing.
+
+Child ownership (status and cancel):
+
+- Owner: `LlmSessionActor.ControlChild`. It answers `check_agent_run` for status and for cancel.
+- Check: `HasSameChildRequester`, which calls `TurnContext.HasSameRequester`.
+  The check compares the [requester](../spec/GLOSSARY.md#requester): session, audience, boundary,
+  channel type, sender ID, and principal classification.
+- The check ignores the turn ID, provenance, delivery targets, adopted-context fields, and the
+  interactive approval flag. These fields describe one message, and they change between turns of one person.
+- Data: the `OriginalContext` of the run is durable in the session journal. The context of the request is call-local.
+- The child start keeps the full authority check (`HasSameChildAuthority`, `TurnContext.HasSameAuthority`)
+  for start idempotency. Approval recovery and child continuation also keep the full authority check.
+
+A valid example: Alice starts a child in a Slack thread turn that quotes earlier messages.
+In a later turn with no quoted context, Alice asks for status and then cancels. Both calls succeed.
+An invalid example: Bob asks for the status of Alice's child in the same thread.
+The check denies the request, and Bob does not see the pending approval count.
+A focused mutation gate (`./scripts/run-child-owner-mutations.sh`) guards the requester check.
+The testable rule is "Status enforces run ownership" in
+[background-subagent-runs](../../openspec/specs/background-subagent-runs/spec.md).
 
 ```mermaid
 sequenceDiagram

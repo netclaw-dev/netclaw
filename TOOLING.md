@@ -75,6 +75,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
 | `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, and `SessionInputFlow.DrainBufferedBatch` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn | 8 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
 | `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run, a turn with one of two open runs, and a turn from an earlier daemon without the field each get the right decision (SPEC-004, "Waiting for child runs") | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
+| `TurnContext.HasSameRequester` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it | 11 killed | `./scripts/run-child-owner-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -264,6 +265,33 @@ outside the selected span.
 The local run took 10 minutes 30 seconds from a cold Release build. Stryker took 1 minute 59 seconds.
 Hosted CI must measure the gate on a cold runner. CI runs it in the `session-reliability` group of the
 `mutation-gates` job. Its report directory is `artifacts/stryker/headless-stop-rule`.
+
+### Child Owner Gate
+
+Run the child owner gate:
+
+```bash
+./scripts/run-child-owner-mutations.sh
+```
+
+The script selects the body of `TurnContext.HasSameRequester`.
+`LlmSessionActor.ControlChild` uses this check for child status and cancel.
+Stryker inverts each of the six field comparisons and changes each of the five `&&` operators to `||`.
+The linked `TurnContextRequesterTests` source must kill all 11 mutants.
+A stranger that differs in one requester field must not own the child.
+A later turn of the owner that differs only in per-turn fields must keep the child.
+The selector rejects a missing or repeated source marker before Stryker starts.
+The gate fails for a survivor, a changed mutant count, or a compile error in the span.
+
+The span does not include the `HasSameRequester(right) &&` line in `TurnContext.HasSameAuthority` or the call in `ControlChild`.
+Unit tests and actor tests cover those two lines.
+
+The final local run killed 11 of 11 mutants in 1 minute 59 seconds with a warm build cache.
+A review run took 2 minutes 36 seconds with a cold report directory.
+A run on a machine with other builds in progress took 6 minutes 11 seconds.
+CI runs it in the `session-reliability` group of the `mutation-gates` job.
+That group now holds two gates. Hosted CI must measure the group time on a cold runner.
+Its report directory is `artifacts/stryker/child-owner`.
 
 ### Tool Authorization Gate
 

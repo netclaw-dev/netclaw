@@ -184,16 +184,28 @@ public sealed partial class LlmSessionActor
         });
     }
 
+    // Start idempotency: a repeated start key names the same request only under the same full turn authority.
     private static bool HasSameChildAuthority(TurnContextRecord left, TurnContextRecord right)
+        => CompareChildContexts(left, right, static (original, candidate) => original.HasSameAuthority(candidate));
+
+    // Status and cancel: the requester that started the child owns it in each later turn.
+    private static bool HasSameChildRequester(TurnContextRecord left, TurnContextRecord right)
+        => CompareChildContexts(left, right, static (original, candidate) => original.HasSameRequester(candidate));
+
+    // A record that cannot be read matches nothing.
+    private static bool CompareChildContexts(
+        TurnContextRecord left,
+        TurnContextRecord right,
+        Func<TurnContext, TurnContext, bool> matches)
         => TurnContext.TryFromRecord(left, out var original, out _) && original is not null &&
            TurnContext.TryFromRecord(right, out var candidate, out _) && candidate is not null &&
-           original.HasSameAuthority(candidate);
+           matches(original, candidate);
 
     private void ControlChild(ChildRunControl command)
     {
         var replyTo = Sender;
         if (_state.TryGetLegacyChildDisposition(command.RunId, out var legacy) &&
-            legacy.AdoptedContext is { } original && HasSameChildAuthority(original, command.Requester))
+            legacy.AdoptedContext is { } original && HasSameChildRequester(original, command.Requester))
         {
             replyTo.Tell(JsonSerializer.Serialize(new
             {
@@ -202,7 +214,7 @@ public sealed partial class LlmSessionActor
             }));
             return;
         }
-        if (!_state.ChildRuns.TryGetValue(command.RunId, out var run) || !HasSameChildAuthority(run.OriginalContext, command.Requester))
+        if (!_state.ChildRuns.TryGetValue(command.RunId, out var run) || !HasSameChildRequester(run.OriginalContext, command.Requester))
         {
             replyTo.Tell("Error: This child run is not available to the requester.");
             return;
