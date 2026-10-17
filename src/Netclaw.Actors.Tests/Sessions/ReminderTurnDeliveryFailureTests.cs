@@ -137,6 +137,28 @@ public sealed class ReminderTurnDeliveryFailureTests : ReminderDeliveryTestBase
         Assert.Equal(sessionId.Value, alert.Context!["sessionId"]);
     }
 
+    [Fact]
+    public async Task A_recovered_ordinary_reminder_turn_still_retries_a_retryable_failure_on_the_main_model()
+    {
+        // Arrange: a turn that is not routed has RoutedSkill = false. An old journal entry has the same value,
+        // because it has no routed mark. Replay must keep the retry for it.
+        var sessionId = new SessionId("mattermost/chan1/reminder-thread-recovered-retry");
+        var (_, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
+        await StopSessionAsync(sessionId);
+
+        var recovered = CreateTestProbe("recovered-retry-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
+
+        // Act
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+
+        // Assert: the session asks the model again, and the retry reply posts, so there is no alert.
+        await recovered.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var retried = await recovered.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(completed.TurnNumber.Value + 1, retried.TurnNumber.Value);
+        Assert.Equal(0, AlertCount);
+    }
+
     // --- B1: the turn number that a binding sends is the turn of the failed reply ---
 
     [Fact]

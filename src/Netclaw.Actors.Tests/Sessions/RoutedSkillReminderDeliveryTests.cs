@@ -24,9 +24,10 @@ namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
 /// S2: a reminder whose prompt is a routed slash command (<c>/ops-route ...</c>) runs the skill in a sub-agent and
-/// records the turn in <c>HandleRoutedSkillExecutionCompleted</c>. The live session and a session that replays the
-/// journal must treat that turn the same way. The spec <c>netclaw-session</c> says a routed-skill turn is an
-/// ordinary recorded turn: the session finds the reminder and reports a failed post once.
+/// records the turn in <c>HandleRoutedSkillExecutionCompleted</c> with <c>TurnRecorded.RoutedSkill = true</c>.
+/// The spec <c>netclaw-session</c> says the session reports a failed post on that turn once, and it never
+/// re-runs the turn on the main model. A live session, a session that replays the journal, and a session that
+/// restores from a snapshot must all do the same.
 /// </summary>
 public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
 {
@@ -126,10 +127,43 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
     }
 
     [Fact]
+    public async Task A_retryable_failure_on_a_routed_skill_reminder_turn_alerts_and_does_not_retry_on_the_main_model()
+    {
+        // Arrange
+        var sessionId = new SessionId("mattermost/chan1/routed-reminder-retryable");
+        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
+        var callsBefore = ChatClient.CallCount;
+
+        // Act: ContentRejected is retryable for an ordinary turn. A routed turn has no retry budget to spend.
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+
+        // Assert: the session gave up at the first report, so the operator hears about it once.
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
+        Assert.Equal(ReminderSlug, alert.Source);
+        AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    [Fact]
+    public async Task Two_retryable_reports_for_a_routed_skill_reminder_turn_raise_one_alert_and_no_retry()
+    {
+        // Arrange
+        var sessionId = new SessionId("mattermost/chan1/routed-reminder-retryable-twice");
+        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
+        var callsBefore = ChatClient.CallCount;
+
+        // Act
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+
+        // Assert
+        await AwaitExactlyOneAlertAsync(sessionId, subscriber);
+        AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    [Fact]
     public async Task A_recovered_session_treats_a_routed_skill_reminder_turn_like_the_live_session()
     {
-        // Arrange: the live session above raises one alert for this turn. A session that replays the journal
-        // must raise the same single alert, not more and not fewer.
+        // Arrange: a session that replays the journal reads the routed mark of the TurnRecorded event.
         var sessionId = new SessionId("mattermost/chan1/routed-reminder-recovered");
         var (_, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
         await StopSessionAsync(sessionId);
@@ -143,6 +177,87 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
         // Assert
         var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
         Assert.Equal(ReminderSlug, alert.Source);
+    }
+
+    [Fact]
+    public async Task A_recovered_session_alerts_and_does_not_retry_a_retryable_failure_on_a_routed_skill_reminder_turn()
+    {
+        // Arrange
+        var sessionId = new SessionId("mattermost/chan1/routed-reminder-recovered-retryable");
+        var (_, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
+        await StopSessionAsync(sessionId);
+
+        var recovered = CreateTestProbe("routed-recovered-retryable-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
+        var callsBefore = ChatClient.CallCount;
+
+        // Act
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+
+        // Assert: the replayed session behaves like the live session in the test above.
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
+        Assert.Equal(ReminderSlug, alert.Source);
+        AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    [Fact]
+    public async Task A_session_that_passivated_alerts_and_does_not_retry_a_retryable_failure_on_a_routed_skill_reminder_turn()
+    {
+        // Arrange: the restored session does not replay TurnRecorded, so the snapshot carries the routed mark.
+        var sessionId = new SessionId("mattermost/chan1/routed-reminder-passivated-retryable");
+        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
+        var session = await ResolveSessionAsync(sessionId);
+        Watch(session);
+        session.Tell(new LeaveSession(subscriber) { SessionId = sessionId });
+        session.Tell(ReceiveTimeout.Instance);
+        await ExpectTerminatedAsync(session, cancellationToken: TestContext.Current.CancellationToken);
+
+        var recovered = CreateTestProbe("routed-passivated-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
+        var callsBefore = ChatClient.CallCount;
+
+        // Act
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+
+        // Assert
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
+        Assert.Equal(ReminderSlug, alert.Source);
+        AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    [Fact]
+    public async Task A_routed_skill_turn_that_a_person_started_is_not_retried_and_raises_no_alert_live_or_after_recovery()
+    {
+        // Arrange: no reminder started this turn. A person in the thread sees the missing reply.
+        var sessionId = new SessionId("mattermost/chan1/routed-person-recovered");
+        var personSource = ReminderSource(FireKey) with { ReminderId = null };
+        var (_, completed) = await RunTurnAsync(sessionId, personSource, RoutedPrompt);
+        Assert.Null(completed.SourceReminderId);
+        await StopSessionAsync(sessionId);
+
+        var recovered = CreateTestProbe("routed-person-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
+        var callsBefore = ChatClient.CallCount;
+
+        // Act
+        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+        await AwaitSessionHandledEarlierMessagesAsync(sessionId, recovered);
+
+        // Assert
+        Assert.Equal(0, AlertCount);
+        AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    // The first model call after the report must belong to the barrier message. A retry would make its own
+    // call first, with the original prompt and the delivery nudge, and the barrier call would follow it.
+    private void AssertNextModelCallIsTheBarrier(int callsBefore)
+    {
+        var calls = ChatClient.ReceivedMessages;
+        Assert.True(calls.Count > callsBefore, "The barrier message made no model call.");
+        var lastUserMessage = calls[callsBefore]
+            .Last(m => m.Role == Microsoft.Extensions.AI.ChatRole.User)
+            .Text;
+        Assert.Contains("Barrier message", lastUserMessage, StringComparison.Ordinal);
     }
 
     // The sub-agent profile needs one tool that the audience policy exposes. The model never calls it.
