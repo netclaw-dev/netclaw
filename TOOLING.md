@@ -30,8 +30,20 @@
 ## Focused Mutation Tests
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
-The job has five Linux matrix groups that run in parallel with the normal test matrix.
+The job has six Linux matrix groups that run in parallel with the normal test matrix.
 The job timeout is 25 minutes.
+Each Stryker invocation builds the test project and runs the initial test run again. That fixed cost is about 1.5 to 2 minutes per invocation.
+The mutant run itself takes under 1 minute for most spans. Group time is mostly the sum of the invocations of its gates.
+Hosted runs of 2026-10-17 measured these gate times (minutes):
+
+| Group | Gates | Hosted time (about) |
+|-------|-------|---------------------|
+| `verb-chain` | `exact-verb-chain` (seven invocations, 53 mutants, 14.5) | 15 |
+| `reminder` | `reminder-execution` (4.3), `literal-twin` (3.2), `stream-commit-gate` (2.6) | 10.5 |
+
+The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
+The `approval-and-authorization` group took 16.5 to 24.6 minutes on the same day, so it also runs near the timeout.
+Measure a new split on a cold runner and update this table.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
 Add a gate to the lightest group when its measured cost fits the timeout and the Windows test duration.
 Use another group under the same job definition when no existing group has that capacity.
@@ -159,7 +171,7 @@ load-bearing invariant in the retry and failover clients, not a security or
 authority check.
 
 The local run took about 2 minutes after package restore. CI runs it in the
-`verb-chain-and-reminder` group of the `mutation-gates` job. Its report
+`reminder` group of the `mutation-gates` job. Its report
 directory is `artifacts/stryker/stream-commit-gate`.
 
 ### Session Reliability Gate
@@ -344,7 +356,8 @@ argument, and the program word does not count. `ExactVerbChainMutationTests` and
 duplicated span fails before Stryker starts.
 
 The local run took about 1 minute after package restore. CI runs it in the
-`verb-chain-and-reminder` group of the `mutation-gates` job. Its report
+`verb-chain` group of the `mutation-gates` job. It takes about 14.5 minutes there,
+because its seven Stryker invocations each build and run the initial tests. Its report
 directory is `artifacts/stryker/exact-verb-chain`.
 
 ### Approval Directory Gate
@@ -475,7 +488,7 @@ An explicit local deletion of that call must also make the cleanup cases fail be
 
 The five-mutant local run took 122 seconds after package restore.
 The thirty-mutant local run took 132 seconds of Stryker time.
-The separate CI job retains a 10-minute timeout and uploads `reminder-execution-mutation-report`.
+CI runs it in the `reminder` group of the `mutation-gates` job. It takes about 4.3 minutes there.
 Its report directory is `artifacts/stryker/reminder-execution`.
 
 ### Skill Manage Guard Gate
