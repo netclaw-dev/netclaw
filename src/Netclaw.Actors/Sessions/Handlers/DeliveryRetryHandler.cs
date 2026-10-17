@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 
 namespace Netclaw.Actors.Sessions.Handlers;
 
@@ -18,6 +19,8 @@ internal sealed class DeliveryRetryHandler
     private TurnNumber? _eligibleTurnNumber;
     private int _retryCount;
     private bool _chainActive;
+    private TurnNumber? _recordedTurnNumber;
+    private ReminderId? _recordedTurnReminder;
 
     public TurnNumber? EligibleTurnNumber => _eligibleTurnNumber;
     public int RetryCount => _retryCount;
@@ -43,6 +46,24 @@ internal sealed class DeliveryRetryHandler
         if (!_chainActive)
             _retryCount = 0;
     }
+
+    /// <summary>
+    /// Remember which reminder fire, if any, started the latest recorded turn. <see cref="Clear"/> keeps it.
+    /// A new recorded turn replaces it, so the session always knows the source of the latest turn that
+    /// delivery feedback can name. The session calls this for a live turn and for a turn it replays from the journal.
+    /// </summary>
+    public void RecordTurn(TurnNumber turnNumber, ReminderId? sourceReminder)
+    {
+        _recordedTurnNumber = turnNumber;
+        _recordedTurnReminder = sourceReminder;
+    }
+
+    /// <summary>
+    /// The fire key of the reminder that started the given turn. Null when the turn is not the latest
+    /// recorded turn or when no reminder started it.
+    /// </summary>
+    public ReminderId? ReminderOf(TurnNumber turnNumber)
+        => _recordedTurnNumber == turnNumber ? _recordedTurnReminder : null;
 
     /// <summary>
     /// Record a retry attempt. Sets the chain active flag.

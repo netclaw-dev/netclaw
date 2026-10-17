@@ -70,6 +70,10 @@ Rules:
   Netclaw preserves the stored reminder audience when the reminder executes.
   The reminder run ends when the session accepts the fire. A later failed post
   is not a reminder failure, and the reminder system does not retry it.
+  The history row records the acceptance and stays `ok`. When the session gives
+  up on the reply, it writes an Error log that names the reminder and raises a
+  `reminder.delivery.failed` alert. The alert `Source` is the reminder ID. Look
+  there, not in the history, for a reply that did not arrive.
   A session keeps one waiting fire per reminder: if a fire arrives while an
   earlier fire of the same reminder still waits for its turn, Netclaw drops the
   newer fire and logs `reminder_fire_dropped`.
