@@ -51,6 +51,7 @@ Hosted runs of 2026-10-17 measured these gate times (minutes):
 | `reminder` | `reminder-execution` (4.4), `literal-twin` (2.9), `stream-commit-gate` (2.5) | 10.3 |
 | `authorization-and-directory` | `tool-authorization` (5.8), `approval-directory` (5.2) | 11.3 |
 | `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2) | 13.3 |
+| `session-reliability` | `tool-batch-readiness` (2.4 to 3.2), `headless-stop-rule` (2.2 to 3.2), `open-child-runs` (1.8 to 2.8) | 6.4 to 9.2 |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
 The `authorization-and-directory` and `guard-and-authority` groups were one group, `approval-and-authorization`. That group took 16.5 to 24.6 minutes on the same day and ran near the timeout.
