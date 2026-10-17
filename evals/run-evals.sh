@@ -1070,8 +1070,12 @@ snapshot_trial_baseline() {
 ## It runs as the daemon user (netclaw), not as root: the agent can remove the
 ## folder or replace it with a symbolic link, and root would follow the link
 ## and change its target. The daemon user owns the folder and each file in it,
-## so it needs no more right. A link to a target that it does not own fails
-## loudly. The folder is rebuilt: rm -rf removes a link and not its target.
+## so it needs no more right. The restore removes a link and not its target,
+## and then it rebuilds the folder from the fixtures. A trial can also remove
+## the write right from the folder or a subfolder (chmod -R a-w). rm -rf would
+## fail on such a folder, so the restore gives the owner the right back first.
+## The guard skips a link at the top, and chmod -R does not follow a link
+## inside the tree.
 ## The daemon creates agents/.server-feeds at start, so the restore makes it
 ## too, and the home matches a real install.
 restore_agent_fixtures() {
@@ -1081,6 +1085,7 @@ restore_agent_fixtures() {
     if ! tar -C "$fixtures" -cf - . \
         | docker exec --interactive --user netclaw "$EVAL_CONTAINER_NAME" sh -c '
             set -e
+            if [ -d "$1" ] && [ ! -L "$1" ]; then chmod -R u+rwx -- "$1"; fi
             rm -rf -- "$1"
             mkdir -m 0777 -- "$1"
             tar -xf - -C "$1" --no-same-owner

@@ -964,6 +964,39 @@ class IsolationTests(unittest.TestCase):
             self.assertEqual("keep", secret.read_text())
             self.assertEqual((0o600, 0o755), (secret.stat().st_mode & 0o777, target.stat().st_mode & 0o777))
 
+    def test_restore_agent_fixtures_repairs_a_folder_that_a_trial_made_unwritable(self):
+        # Bug caught: a trial that ran `chmod -R a-w` or `chmod 000` on the
+        # agents folder made `rm -rf` fail as the daemon user. The run then
+        # stopped with exit 2. Root ignored the mode, but the restore no longer
+        # runs as root. Run as a normal user: root would pass without the fix.
+        if os.geteuid() == 0:
+            self.skipTest("root ignores file modes")
+        modes = {
+            "no write right on the tree": lambda agents: [
+                p.chmod(0o555 if p.is_dir() else 0o444)
+                for p in [*agents.rglob("*"), agents]],
+            "no right at all on the folder": lambda agents: agents.chmod(0o000),
+            "no right at all on a subfolder": lambda agents: (agents / "sub").chmod(0o000),
+            "no write right on a subfolder": lambda agents: (agents / "sub").chmod(0o555),
+        }
+        for name, break_folder in modes.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                agents = self.agent_folders(root)
+                (agents / "headless-analyst.md").write_text("edited by the parent\n")
+                (agents / "sub").mkdir()
+                (agents / "sub" / "x.md").write_text("x")
+                break_folder(agents)
+                try:
+                    completed = self.run_harness(root, "restore_agent_fixtures")
+                    self.assertEqual(0, completed.returncode, completed.stderr)
+                    self.assertEqual([".server-feeds", "headless-analyst.md"],
+                                     sorted(p.name for p in agents.iterdir()))
+                    self.assertEqual("original role\n", (agents / "headless-analyst.md").read_text())
+                finally:
+                    # Let the temp folder cleanup work if the restore failed.
+                    subprocess.run(["chmod", "-R", "u+rwx", "--", str(agents)], capture_output=True)
+
     def test_restore_agent_fixtures_makes_the_server_feeds_folder(self):
         # The daemon makes agents/.server-feeds at start. The restore makes it
         # too, and the home matches a real install.
