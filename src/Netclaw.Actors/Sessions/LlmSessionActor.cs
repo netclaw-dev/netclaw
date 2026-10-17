@@ -1767,8 +1767,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     /// <summary>
     /// Handles delivery feedback while the session is busy (processing or compacting). The session does not
-    /// retry in these phases. A restart drain adds no nudge, because the session is about to stop. In every case
-    /// the feedback reaches <see cref="ReportReminderPostFailure"/>, so a failed reminder reply is never dropped.
+    /// retry in these phases. A restart drain adds no nudge, because the session is about to stop. Compaction adds
+    /// no nudge either, because it discards one. In every case the feedback reaches
+    /// <see cref="ReportReminderPostFailure"/>, so a failed reminder reply is never dropped.
     /// </summary>
     private void HandleDeliveryFailedWithoutRetry(DeliveryFailed msg, string phase)
     {
@@ -1781,6 +1782,20 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         if (!DeliveryRetryHandler.IsRetryable(msg))
         {
+            if (_phase.Current == SessionPhase.Compacting)
+            {
+                // Apply(SessionCompacted) builds the history again from the state saved when compaction started.
+                // A nudge added now would vanish, so the alert and the Error log are the only signal here.
+                _log.Warning(
+                    "Non-retryable delivery feedback while {Phase} channel={Channel} turn={Turn} kind={FailureKind}; adds no nudge, because compaction rebuilds the history",
+                    phase,
+                    msg.ChannelType,
+                    msg.TurnNumber,
+                    msg.FailureKind);
+                ReportReminderPostFailure(msg);
+                return;
+            }
+
             _log.Warning(
                 "Non-retryable delivery feedback while {Phase} channel={Channel} turn={Turn} kind={FailureKind}; injecting context",
                 phase,
