@@ -8,9 +8,17 @@ The session SHALL find the reminder from `TurnRecorded.SourceReminderId` of the 
 
 - A live turn. This includes a turn that a routed skill runs in a sub-agent.
 - The journal. Replay of each `TurnRecorded` event gives the same result as the live turn, for every kind of turn.
-- The snapshot. `SessionSnapshot.EligibleDeliveryReminderId` holds the fire key of the eligible turn while that turn has no report. A session that restores from a snapshot does not replay the `TurnRecorded` event, so the snapshot must carry the key.
+- The snapshot. `SessionSnapshot.EligibleDeliveryReminderId` holds the fire key of the eligible turn while that turn has no report. `SessionSnapshot.EligibleDeliveryTurnRoutedSkill` holds the routed mark of the eligible turn (see below). A session that restores from a snapshot does not replay the `TurnRecorded` event, so the snapshot must carry both.
 
 The session SHALL record a turn as eligible and as the latest recorded turn before it saves a snapshot for that turn. Thus a snapshot that the reminder turn itself triggers keeps both facts. A passivation snapshot keeps them too.
+
+A routed-skill turn is a turn where a sub-agent runs a skill (`HandleRoutedSkillExecutionCompleted`). The session SHALL record it as eligible, like any other turn, so a failed post on it can raise the alert. The session SHALL mark it as routed, and it SHALL NOT retry a routed-skill turn on the main model. The mark travels as follows:
+
+- `TurnRecorded.RoutedSkill` is a new `bool` on the journal event (proto3 `bool routed_skill = 8`). The session writes `true` for a routed-skill turn. A journal entry written before this field has no value. It SHALL read as `false`, so an old entry is an ordinary turn. A turn that is not routed writes the same bytes as before.
+- `DeliveryRetryHandler` keeps the mark with the latest recorded turn. `RecordTurn` takes it, and `IsRoutedSkill(turn)` returns it for the latest recorded turn only.
+- `SessionSnapshot.EligibleDeliveryTurnRoutedSkill` is a new `bool` (proto3 `bool eligible_delivery_turn_routed_skill = 13`). It reads `false` when absent.
+
+When a report names a routed-skill turn, the session SHALL treat the first report as the final failure, even when the failure kind is retryable. It SHALL make no model call for it. It SHALL write a Warning, call `ReportReminderPostFailure`, and mark the turn not eligible. No retry budget applies to a routed turn. A routed-skill turn that a person started raises no alert and makes no retry.
 
 The session SHALL accept feedback only for the eligible turn. A binding SHALL send the number of the turn whose output failed to post (see `channel-binding-parity`, "A failed post reports the turn that it belongs to").
 
@@ -124,9 +132,31 @@ The session SHALL NOT raise `reminder.delivery.failed` for a turn that no remind
 - **WHEN** the session restores from it
 - **THEN** the snapshot loads, `EligibleDeliveryTurnNumber` keeps its value, and `EligibleDeliveryReminderId` is null
 
-#### Scenario: A routed-skill reminder turn is an ordinary recorded turn
+#### Scenario: A routed-skill reminder turn raises the alert
 
-- **GIVEN** a reminder prompt runs a routed skill (`/ops-route ...`) in a sub-agent
+- **GIVEN** a reminder prompt runs a routed skill (`/ops-route ...`) in a sub-agent, and the session recorded the turn with `RoutedSkill = true`
 - **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
 - **THEN** the sink receives one `reminder.delivery.failed` alert
 - **AND** a session that replays the journal gives the same result
+
+#### Scenario: A retryable failure on a routed-skill reminder turn alerts and makes no retry
+
+- **GIVEN** the session recorded a routed-skill reminder turn
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected` once or twice for that turn
+- **THEN** the sink receives exactly one `reminder.delivery.failed` alert
+- **AND** the session makes no model call for the report
+- **AND** a session that replayed the journal, or restored from a snapshot, gives the same result
+
+#### Scenario: Counterexample - an ordinary reminder turn still retries after recovery
+
+- **GIVEN** the session recorded a reminder turn with `RoutedSkill = false`, or from a journal entry with no `routed_skill` field
+- **AND** the session recovered from its journal
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected` for that turn
+- **THEN** the session asks the model again, and it raises no alert when the retry reply posts
+
+#### Scenario: Counterexample - a routed-skill turn that a person started raises no alert and makes no retry
+
+- **GIVEN** a person ran a routed skill, so `SourceReminderId` is empty and `RoutedSkill = true`
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected` for that turn, before or after recovery
+- **THEN** the sink receives no `reminder.delivery.failed` alert
+- **AND** the session makes no model call for the report
