@@ -342,6 +342,278 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
         Assert.Equal(1, Pipeline.InvocationCount);
     }
 
+    // ── Review round 4: a failed status query must not restart the manager (SF-A) ──
+
+    private const string StatusQueryAlert = "reminder.status.query_failed";
+
+    // An Akka.Reminders query that throws would restart the manager. A restart stops every execution
+    // actor, and the one-shot would run again after the 70-minute lease. The pass has no reason to ask
+    // about a one-shot that has an active run, because the occurrence of an active run is open.
+    [Fact]
+    public async Task A_failed_status_query_during_a_sweep_cannot_stop_an_active_run()
+    {
+        await DrainStartupAsync();
+        Pipeline.Mode = RunMode.Hold;
+        var definition = NewOneShot("status-fails-during-run");
+        await ScheduleAsync(definition);
+        Advance(FirstFireDelay);
+        var executionId = await AwaitDispatchAsync();
+
+        ReminderStorage.FailNextStatusQueries(int.MaxValue);
+        await SweepAsync();
+        ReminderStorage.FailNextStatusQueries(0);
+
+        // A restart of the manager stops the execution actor and clears the active run.
+        Assert.True(
+            (await StatusAsync(definition.Id, TeamCaller)).Executing,
+            "A failed status query must not restart the manager. The run must stay active.");
+        Assert.NotNull(Definitions.Get(definition.Id));
+        Assert.False(TombstoneExists(definition.Id));
+        Assert.DoesNotContain(Alerts.Alerts, a => a.Type == StatusQueryAlert);
+
+        await CompleteRunAsync(executionId, definition.Id, RunOutcome.Success);
+        await BarrierAsync();
+
+        Assert.Equal("Completed", OutcomeOf(RequireTombstone(definition.Id)));
+        Assert.Null(Definitions.Get(definition.Id));
+        Assert.Single(await History.ReadAsync(definition.Id, 10));
+
+        // The lease of the occurrence ends and more sweeps run. The one-shot does not run again.
+        Advance(TimeSpan.FromMinutes(71));
+        Advance(ReminderManagerActor.TerminalPruneInterval);
+        await BarrierAsync();
+        Assert.Equal(1, Pipeline.InvocationCount);
+        Assert.Equal(1, Envelopes.Count);
+    }
+
+    // The test above proves the outcome. This test pins the cause: the sweep sends no query for the one-shot.
+    [Fact]
+    public async Task The_sweep_asks_for_no_status_while_a_run_is_active()
+    {
+        await DrainStartupAsync();
+        Pipeline.Mode = RunMode.Hold;
+        var definition = NewOneShot("active-run-no-query");
+        await ScheduleAsync(definition);
+        Advance(FirstFireDelay);
+        await AwaitDispatchAsync();
+
+        var queriesBefore = ReminderStorage.StatusQueryCount;
+        await SweepAsync();
+
+        Assert.Equal(queriesBefore, ReminderStorage.StatusQueryCount);
+    }
+
+    [Fact]
+    public async Task A_failed_status_query_skips_that_oneshot_raises_an_alert_and_a_later_sweep_ends_it()
+    {
+        await DrainStartupAsync();
+        var definition = await RunAckedWithoutTombstoneAsync("status-fails-idle", RunMode.Succeed);
+
+        ReminderStorage.FailNextStatusQueries(int.MaxValue);
+        await SweepAsync();
+
+        // The sweep reached the end without a restart: the manager answers and the alert exists.
+        Assert.Contains(
+            Alerts.Alerts,
+            a => a.Type == StatusQueryAlert && a.Source == definition.Id.Value);
+        // The earlier settlement failure also logged an error for this id, so the text must say what failed here.
+        await AwaitAssertAsync(
+            () => Assert.Contains(
+                LogsOfLevel(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value),
+                e => e.Message!.ToString()!.Contains("occurrence status", StringComparison.OrdinalIgnoreCase)),
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        var stored = Definitions.Get(definition.Id);
+        Assert.NotNull(stored);
+        Assert.True(stored.Enabled);
+        Assert.False(TombstoneExists(definition.Id));
+        Assert.Equal(1, Pipeline.InvocationCount);
+
+        // The store works again. The next sweep ends the one-shot, and nothing ran twice.
+        ReminderStorage.FailNextStatusQueries(0);
+        Advance(ReminderManagerActor.TerminalPruneInterval);
+        await BarrierAsync();
+
+        Assert.True(Definitions.Get(definition.Id) is null, "The next sweep must end the one-shot.");
+        Assert.Equal("Completed", OutcomeOf(RequireTombstone(definition.Id)));
+        Assert.Equal(1, Pipeline.InvocationCount);
+        Assert.Equal(1, Envelopes.Count);
+    }
+
+    // The first query of the pass fails, whichever one-shot it belongs to. The pass must go on to the other.
+    [Fact]
+    public async Task A_failed_status_query_does_not_stop_the_pass_for_the_next_oneshot()
+    {
+        await DrainStartupAsync();
+        var first = await RunAckedWithoutTombstoneAsync("status-fails-one", RunMode.Succeed);
+        var second = await RunAckedWithoutTombstoneAsync("status-fails-two", RunMode.Succeed);
+
+        ReminderStorage.FailNextStatusQueries(1);
+        await SweepAsync();
+
+        var both = new[] { first, second };
+        var kept = Assert.Single(both, d => Definitions.Get(d.Id) is not null);
+        var ended = Assert.Single(both, d => Definitions.Get(d.Id) is null);
+        Assert.Equal("Completed", OutcomeOf(RequireTombstone(ended.Id)));
+        var alert = Assert.Single(Alerts.Alerts, a => a.Type == StatusQueryAlert);
+        Assert.Equal(kept.Id.Value, alert.Source);
+
+        Advance(ReminderManagerActor.TerminalPruneInterval);
+        await BarrierAsync();
+
+        Assert.Null(Definitions.Get(kept.Id));
+        Assert.Equal("Completed", OutcomeOf(RequireTombstone(kept.Id)));
+        Assert.Equal(2, Pipeline.InvocationCount);
+    }
+
+    // The startup reconcile has more work than the status pass. A failed query must not cancel it.
+    [Fact]
+    public async Task A_failed_status_query_at_startup_still_cancels_orphans_restores_schedules_and_purges()
+    {
+        await DrainStartupAsync();
+        var stuck = await RunAckedWithoutTombstoneAsync("status-fails-at-start", RunMode.Succeed);
+        var orphan = new ReminderId("orphan-of-status-failure");
+        await ScheduleDirectlyAsync(orphan, Clock.GetUtcNow() + TimeSpan.FromDays(1));
+        Assert.True(await IsScheduledAsync(orphan));
+        var expired = NewOneShot("expired-of-status-failure");
+        var restorable = NewOneShot("restore-after-status-failure", fireIn: TimeSpan.FromHours(2));
+
+        await StopManagerAsync();
+        Definitions.Save(restorable);
+        await SeedEndedAsync(expired, "Completed", endedAt: Clock.GetUtcNow() - TimeSpan.FromDays(13));
+        Assert.True(TombstoneExists(expired.Id));
+        ReminderStorage.FailNextStatusQueries(int.MaxValue);
+
+        StartManagerWithoutDrain();
+        await ReconcileOrFailAsync();
+        await ReconcileOrFailAsync();
+
+        Assert.False(await IsScheduledAsync(orphan), "The reconcile must cancel the orphan schedule.");
+        Assert.True(await IsScheduledAsync(restorable.Id), "The reconcile must restore the schedule.");
+        Assert.False(TombstoneExists(expired.Id), "The reconcile must purge the expired tombstone.");
+        Assert.Empty(await History.ReadAsync(expired.Id, 10));
+        Assert.NotNull(Definitions.Get(stuck.Id));
+        Assert.Contains(
+            Alerts.Alerts,
+            a => a.Type == StatusQueryAlert && a.Source == stuck.Id.Value);
+
+        ReminderStorage.FailNextStatusQueries(0);
+        Advance(ReminderManagerActor.TerminalPruneInterval);
+        await BarrierAsync();
+
+        Assert.Null(Definitions.Get(stuck.Id));
+        Assert.Equal("Completed", OutcomeOf(RequireTombstone(stuck.Id)));
+        Assert.Equal(1, Pipeline.InvocationCount);
+    }
+
+    private async Task ReconcileOrFailAsync()
+    {
+        object reply;
+        try
+        {
+            reply = await Akka.Actor.Futures.Ask<object>(
+                Manager, ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"The reconcile must not fail when a status query fails. It failed with: {ex.Message}");
+        }
+
+        Assert.IsType<ReminderManagerActor.ReconcileCompleted>(reply);
+    }
+
+    // ── Review round 4: the denied check reads the row of this occurrence (N1) and says when it cannot (N2) ──
+
+    // A denied run is left without a tombstone, and an agent re-arms the one-shot. The new run is
+    // acknowledged but its history row is missing (the disk was full again). The newest row on disk is
+    // then the denial of the earlier run. It belongs to another occurrence, so the pass ignores it.
+    [Fact]
+    public async Task A_denied_row_of_an_earlier_run_does_not_fail_a_rearmed_oneshot_that_ran_ok()
+    {
+        await DrainStartupAsync();
+        var first = await RunAckedWithoutTombstoneAsync("rearmed-after-denial", RunMode.Deny);
+        var denied = Assert.Single(await History.ReadAsync(first.Id, 10));
+        Assert.Equal("denied", denied.Status);
+
+        var rearmed = first with
+        {
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = Clock.GetUtcNow() + TimeSpan.FromHours(1)
+            }
+        };
+        var saved = await SaveAsync(rearmed);
+        Assert.True(saved.Success, saved.ErrorMessage);
+        Assert.True(denied.FiredAt < rearmed.Schedule.FireAt, "The denied row must be older than the re-armed fire time.");
+
+        // The new occurrence is acknowledged, and no history row is written for it.
+        await StopManagerAsync();
+        var probe = CreateTestProbe("stopped-process-after-rearm");
+        RouteEnvelopesTo(probe.Ref);
+        Advance(TimeSpan.FromHours(1));
+        var envelope = await probe.ExpectMsgAsync<ReminderEnvelope<ReminderPayload>>(
+            AskTimeout, cancellationToken: TestContext.Current.CancellationToken);
+        await AckAsync(envelope);
+        Assert.Equal("Delivered", await OccurrenceStatusAsync(first.Id, rearmed.Schedule.FireAt!.Value));
+
+        await StartManagerAsync();
+
+        Assert.True(Definitions.Get(first.Id) is null, "The one-shot must end.");
+        var tombstone = RequireTombstone(first.Id);
+        Assert.Equal("Completed", OutcomeOf(tombstone));
+        Assert.Null(Text(tombstone, "lastError"));
+        Assert.False(TryGet(tombstone, "instructions", out _));
+        Assert.Equal(rearmed.Schedule.FireAtMs, Number(tombstone, "fireAtMs"));
+        Assert.Equal(1, Pipeline.InvocationCount);
+    }
+
+    private string HistoryPath(ReminderId id)
+        => Path.Combine(Paths.RemindersDirectory, $"{Uri.EscapeDataString(id.Value)}.history.jsonl");
+
+    // A full disk can leave a partial last line, and ReminderHistoryStore.ReadAsync then returns no row.
+    // The outcome stays the one from the occurrence status, but the operator must learn that the denial
+    // check could not run.
+    [Theory]
+    [InlineData("restart")]
+    [InlineData("sweep")]
+    public async Task A_damaged_history_file_ends_the_oneshot_as_completed_and_logs_a_warning(string trigger)
+    {
+        await DrainStartupAsync();
+        var definition = await RunAckedWithoutTombstoneAsync("history-damaged", RunMode.Succeed);
+        await File.AppendAllTextAsync(HistoryPath(definition.Id), "{\"firedAt\":", TestContext.Current.CancellationToken);
+        var warningsBefore = LogsOfLevel(Akka.Event.LogLevel.WarningLevel, definition.Id.Value).Count;
+
+        await TriggerAsync(trigger);
+
+        Assert.True(Definitions.Get(definition.Id) is null, "The one-shot must end.");
+        var tombstone = RequireTombstone(definition.Id);
+        Assert.Equal("Completed", OutcomeOf(tombstone));
+        Assert.Null(Text(tombstone, "lastError"));
+        await AwaitAssertAsync(
+            () => Assert.Contains(
+                LogsOfLevel(Akka.Event.LogLevel.WarningLevel, definition.Id.Value).Skip(warningsBefore),
+                e => e.Message!.ToString()!.Contains("history", StringComparison.OrdinalIgnoreCase)),
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData("restart")]
+    [InlineData("sweep")]
+    public async Task A_readable_history_ends_the_oneshot_without_a_history_warning(string trigger)
+    {
+        await DrainStartupAsync();
+        var definition = await RunAckedWithoutTombstoneAsync("history-readable", RunMode.Succeed);
+        var warningsBefore = LogsOfLevel(Akka.Event.LogLevel.WarningLevel, definition.Id.Value).Count;
+
+        await TriggerAsync(trigger);
+
+        Assert.Equal("Completed", OutcomeOf(RequireTombstone(definition.Id)));
+        Assert.DoesNotContain(
+            LogsOfLevel(Akka.Event.LogLevel.WarningLevel, definition.Id.Value).Skip(warningsBefore),
+            e => e.Message!.ToString()!.Contains("history", StringComparison.OrdinalIgnoreCase));
+    }
+
     private Task TriggerAsync(string trigger)
     {
         if (trigger == "restart")

@@ -12,6 +12,7 @@ using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
 using Akka.Reminders;
 using Akka.Reminders.Sharding;
+using Akka.Reminders.Storage;
 using Akka.Streams;
 using Akka.TestKit;
 using Microsoft.Extensions.Time.Testing;
@@ -26,6 +27,7 @@ using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Reminders.ReminderProtocol;
 using static Netclaw.Actors.Sessions.SessionProtocol;
+using AkkaReminderProtocol = Akka.Reminders.ReminderProtocol;
 using TestKit = Akka.Hosting.TestKit.TestKit;
 
 namespace Netclaw.Actors.Tests.Reminders;
@@ -71,6 +73,9 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
     protected FakeTimeProvider Clock { get; } = new();
     private protected ReminderManagerActorTests.TestNotificationSink Alerts { get; } = new();
     protected RunModePipeline Pipeline { get; } = new();
+
+    /// <summary>The Akka.Reminders storage. A test can make its occurrence status query fail.</summary>
+    protected FaultableReminderStorage ReminderStorage { get; } = new();
     protected EnvelopeTapProbe Envelopes { get; } = new();
     protected ReminderDefinitionStore Definitions { get; private set; } = null!;
     protected ReminderHistoryStore History { get; private set; } = null!;
@@ -109,7 +114,7 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
 
         builder.WithLocalReminders(reminders =>
         {
-            reminders.WithInMemoryStorage();
+            reminders.WithStorage(ReminderStorage);
             reminders.WithResolver(_ => _resolver);
             reminders.WithSettings(new ReminderSettings
             {
@@ -178,9 +183,15 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
 
     protected async Task StartManagerAsync()
     {
+        StartManagerWithoutDrain();
+        await DrainStartupAsync();
+    }
+
+    /// <summary>Starts a manager and returns at once, so a test can read the reply of the first reconcile.</summary>
+    protected void StartManagerWithoutDrain()
+    {
         Manager = StartManager(Sys);
         ActorRegistry.For(Sys).Register<ReminderManagerActorKey>(Manager, overwrite: true);
-        await DrainStartupAsync();
     }
 
     /// <summary>
@@ -597,6 +608,88 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
 
         public Task<ISessionResponse> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default) =>
             Task.FromResult<ISessionResponse>(CommandAck.For(feedback.SessionId));
+    }
+
+    /// <summary>
+    /// The in-memory Akka.Reminders storage with one fault: a test makes the occurrence status query fail.
+    /// The scheduler then replies <c>Error</c>, as it does for a damaged SQLite file or a storage timeout.
+    /// Every other call goes to the real in-memory storage.
+    /// </summary>
+    protected sealed class FaultableReminderStorage : IConditionalReminderMutationStorage
+    {
+        private readonly InMemoryReminderStorage _inner = new();
+        private int _failuresLeft;
+        private int _statusQueries;
+
+        /// <summary>The number of occurrence status queries that reached the storage.</summary>
+        public int StatusQueryCount => Volatile.Read(ref _statusQueries);
+
+        /// <summary>The next <paramref name="count"/> status queries fail. Zero makes them work again.</summary>
+        public void FailNextStatusQueries(int count) => Volatile.Write(ref _failuresLeft, count);
+
+        public Task<ReminderOccurrenceStatus?> GetReminderOccurrenceStatusAsync(
+            ReminderEntity entity, ReminderKey key, DateTimeOffset dueTimeUtc, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _statusQueries);
+            if (Volatile.Read(ref _failuresLeft) > 0)
+            {
+                if (Interlocked.Decrement(ref _failuresLeft) >= 0)
+                    throw new InvalidOperationException("The test made the occurrence status query fail.");
+            }
+
+            return _inner.GetReminderOccurrenceStatusAsync(entity, key, dueTimeUtc, ct);
+        }
+
+        public Task<AkkaReminderProtocol.ReminderScheduled> ScheduleReminderAsync(ScheduledReminder reminder, CancellationToken ct = default)
+            => _inner.ScheduleReminderAsync(reminder, ct);
+
+        public Task<bool> UpsertReminderOccurrencesAsync(IEnumerable<ScheduledReminder> reminders, CancellationToken ct = default)
+            => _inner.UpsertReminderOccurrencesAsync(reminders, ct);
+
+        public Task<bool> CommitReminderMutationsAsync(ReminderMutationBatch mutationBatch, CancellationToken ct = default)
+            => _inner.CommitReminderMutationsAsync(mutationBatch, ct);
+
+        public Task<AkkaReminderProtocol.RemindersCancelled> CancelReminderAsync(ReminderEntity entity, ReminderKey key, CancellationToken ct = default)
+            => _inner.CancelReminderAsync(entity, key, ct);
+
+        public Task<IReadOnlyList<ScheduledReminder>> GetRemindersForEntityAsync(ReminderEntity entity, int take = 10, int skip = 0, CancellationToken ct = default)
+            => _inner.GetRemindersForEntityAsync(entity, take, skip, ct);
+
+        public Task<AkkaReminderProtocol.RemindersCancelled> CancelAllRemindersForEntityAsync(ReminderEntity entity, CancellationToken ct = default)
+            => _inner.CancelAllRemindersForEntityAsync(entity, ct);
+
+        public Task<ReminderOverview> GetRemindersOverviewAsync(DateTimeOffset now, CancellationToken ct = default)
+            => _inner.GetRemindersOverviewAsync(now, ct);
+
+        public Task<PendingRemindersWithSummary> GetNextRemindersAsync(DateTimeOffset untilDeadline, DateTimeOffset now, ReminderBatchSize maxCount, CancellationToken ct = default)
+            => _inner.GetNextRemindersAsync(untilDeadline, now, maxCount, ct);
+
+        public Task<bool> MarkRemindersAsCompletedAsync(IEnumerable<CompletedReminder> keys, CancellationToken ct = default)
+            => _inner.MarkRemindersAsCompletedAsync(keys, ct);
+
+        public Task<bool> CleanUpCompletedRemindersAsync(DateTimeOffset olderThan, CancellationToken ct = default)
+            => _inner.CleanUpCompletedRemindersAsync(olderThan, ct);
+
+        public Task<int> ExpireRemindersAsync(DateTimeOffset now, CancellationToken ct = default)
+            => _inner.ExpireRemindersAsync(now, ct);
+
+        public Task<bool> MarkRemindersAsAwaitingAckAsync(IEnumerable<AwaitingAckReminder> reminders, CancellationToken ct = default)
+            => _inner.MarkRemindersAsAwaitingAckAsync(reminders, ct);
+
+        public Task<IReadOnlyList<ScheduledReminder>> GetTimedOutAckRemindersAsync(DateTimeOffset now, ReminderBatchSize maxCount, CancellationToken ct = default)
+            => _inner.GetTimedOutAckRemindersAsync(now, maxCount, ct);
+
+        public Task<ScheduledReminder?> GetAwaitingAckReminderAsync(ReminderEntity entity, ReminderKey key, DateTimeOffset dueTimeUtc, CancellationToken ct = default)
+            => _inner.GetAwaitingAckReminderAsync(entity, key, dueTimeUtc, ct);
+
+        public Task<DateTimeOffset?> GetNextAwaitingAckDeadlineAsync(CancellationToken ct = default)
+            => _inner.GetNextAwaitingAckDeadlineAsync(ct);
+
+        public Task<AckResult> AcknowledgeReminderAsync(ReminderEntity entity, ReminderKey key, DateTimeOffset dueTimeUtc, DateTimeOffset ackedAt, CancellationToken ct = default)
+            => _inner.AcknowledgeReminderAsync(entity, key, dueTimeUtc, ackedAt, ct);
+
+        public Task<IReadOnlyList<AckResult>> AcknowledgeRemindersAsync(IEnumerable<ReminderAcknowledgement> acknowledgements, CancellationToken ct = default)
+            => _inner.AcknowledgeRemindersAsync(acknowledgements, ct);
     }
 
     /// <summary>The envelopes that the scheduler delivered, in order.</summary>

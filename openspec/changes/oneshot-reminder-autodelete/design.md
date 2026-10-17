@@ -252,11 +252,16 @@ Sweep(now)                                                    // manager; reads 
   for each tomb with endedAt + TerminalRetention < now:
     historyStore.DeleteHistory(id); store.DeleteTombstone(id)   // history first: the tomb anchors it
 
-Status pass (startup reconciliation, before the sweep, and every sweep; round 3, 17 Oct):
+Status pass (inside the sweep, for each one-shot definition; the startup reconciliation runs the sweep first; rounds 3 and 4, 17 Oct):
+  The pass runs after the tombstone match and the stale drop. The SF2 rule below depends on that order.
   enabled one-shot with FireAt <= now and no schedule:
+    active run in the manager                      -> skip; send no status query
     tombstone file exists but cannot be read       -> skip, alert reminder.tombstone.invalid; never overwrite
-    durable occurrence status Delivered            -> last history row denied ? EndOneShot(Failed, lastError = row error)
-                                                                              : EndOneShot(Completed)   // endedAt = CompletedAtUtc ?? now
+    status query fails (Error response, Ask fail) -> skip, log error, alert reminder.status.query_failed; go on to the next one-shot
+    durable occurrence status Delivered            -> row = newest history row, used only when row.FiredAt >= def.FireAt
+                                                      row denied ? EndOneShot(Failed, lastError = row error)
+                                                                 : EndOneShot(Completed)   // endedAt = CompletedAtUtc ?? now
+                                                      no readable row of this occurrence -> Completed, and log a warning (history cannot be read)
     Failed | Expired | Cancelled                   -> EndOneShot(Failed,    endedAt = CompletedAtUtc ?? now)
     Pending | AwaitingAck                          -> leave alone (an active or waiting occurrence)
     no status                                      -> keep for operator review (current behavior)
@@ -326,6 +331,9 @@ netclaw reminder list --json \
 - [`RestartRecoveryService` retries a manifest after a failed delete and re-creates an ended restart reminder] → The id is free after the end, as it is today for a `Completed` one-shot. D2 (#2511) makes a restart-resume message that resumes nothing a no-op.
 - [A one-shot that is down for more than 12 days loses its Akka occurrence status] → The reconciliation keeps it for operator review, as today.
 - [A running daemon keeps a ran-but-not-ended definition until the status pass] → The 12-hour sweep runs the status pass, so a daemon that never restarts ends the one-shot within one sweep. The end happens long before Akka.Reminders prunes the `Delivered` row at 12 days.
+- [A failed status query in the 12-hour sweep] → The query is a call to Akka.Reminders, and it can throw (a storage error or an Ask timeout). An uncaught throw restarts the manager. The restart stops every execution actor, and an open occurrence can run again after the 70-minute lease. The status pass therefore skips a one-shot with an active run, and it catches a failed query: it logs an error, raises `reminder.status.query_failed`, leaves that one-shot alone, and goes on. The next sweep tries again.
+- [A damaged tombstone file can hold a `Completed` record] → The operator reads `<id>.history.jsonl` before a delete. An `ok` row for the fire time means the operator repairs the file with `outcome: Completed`. A delete inside the window lets the redelivery run the one-shot again. A delete after the window ends it as `Failed`, although it ran.
+- [A history file that Netclaw cannot read hides a denial] → `ReminderHistoryStore.ReadAsync` returns no rows for a damaged file. The status pass then ends a `Delivered` one-shot as `Completed` and logs a warning that names the reminder.
 - [A corrupt tombstone file] → `GetTombstone` logs an error and raises the `reminder.tombstone.invalid` alert. For a read, the id is then treated as having no tombstone, so the audience gate falls back to "no data", not to an open read. For a fire, the one-shot does not run (D4). The file stays for the operator, who must repair it within about 12 hours (the attempt window of Akka.Reminders). The status pass skips the one-shot and alerts until the file is readable or gone. A re-arm overwrites the path.
 - [A cancel during an active run] → The run continues, as today. The `Cancelled` tombstone stays, and the settlement adds only the history row (D5).
 - [Skill version conflict with the coordination stack] → Rebase this change after the stack, and take the higher version plus one.
