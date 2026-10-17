@@ -74,6 +74,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `SessionInputFlow.DrainBufferedBatch` (turn owner choice), `SessionInputFlow.JoinsTurn`, and the automation check of `SessionToolWorkflow.PlanNewInputAbandonment` | A turn has one requester: a drain after a turn adopts the authority of the first buffered input, a drain inside a turn keeps the turn's authority, and only inputs of that requester join the batch; automated input waits behind an open approval, and only input from a person closes it | 10 killed | `./scripts/run-input-one-authority-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
 | `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, and `SessionInputFlow.DrainBufferedBatch` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn | 8 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
+| `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run, a turn with one of two open runs, and a turn from an earlier daemon without the field each get the right decision (SPEC-004, "Waiting for child runs") | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -216,6 +217,53 @@ Its Windows test took 16 minutes 6 seconds. A target in any of those four groups
 All seven source spans produce eight expected mutants in one Stryker invocation in the existing `session-reliability` group.
 Hosted CI must measure the combined gate on a cold runner.
 Its report directory is `artifacts/stryker/tool-batch-readiness`.
+
+### Headless Stop Rule Gate
+
+Run the headless stop rule gate:
+
+```bash
+./scripts/run-headless-stop-rule-mutations.sh
+```
+
+The script selects the stop decision in `HeadlessChannel`. The source marks it with
+`// <headless-stop-rule>` and `// </headless-stop-rule>`. The selector rejects a missing or repeated
+marker before Stryker starts. The gate expects the decision in this form:
+
+```csharp
+// <headless-stop-rule>
+internal static bool EndsRun(TurnCompleted turn)
+{
+    if (turn.Outcome == TurnOutcome.Failed)
+        return true;
+
+    return !turn.OpenChildRunIds.Any();
+}
+// </headless-stop-rule>
+```
+
+Stryker makes three mutants in that form: `==` to `!=`, `true` to `false`, and the removal of `!`.
+A different form (for example one expression with `||`) gives a different mutant count, and the gate
+fails until the owner of the gate reviews the new count.
+
+`netclaw chat -p` sends one prompt, and a turn that calls `spawn_agent` returns `accepted` before the
+child finishes. A wrong stop rule has two failures. The run exits at the first turn and loses the child
+result, or it waits for a turn that never comes. The gate guards the rule with the real channel and a
+fake daemon transport. `Netclaw.Cli.MutationTests` holds the tests. They cover these cases:
+
+- an open run keeps the wait, and a turn that reports none ends the run
+- one open run of two keeps the wait
+- a failed turn ends the run even when a run is open
+- a skipped turn with an open run keeps the wait
+- a turn from an earlier daemon, without the field, ends the run
+
+A mutant that makes the run wait for ever hits the fault ceiling of the tests. Stryker reports it as a
+timeout. The gate counts a timeout as a detection. It fails for a survivor, a compile error, or a mutant
+outside the selected span.
+
+The local run took 10 minutes 30 seconds from a cold Release build. Stryker took 1 minute 59 seconds.
+Hosted CI must measure the gate on a cold runner. CI runs it in the `session-reliability` group of the
+`mutation-gates` job. Its report directory is `artifacts/stryker/headless-stop-rule`.
 
 ### Tool Authorization Gate
 

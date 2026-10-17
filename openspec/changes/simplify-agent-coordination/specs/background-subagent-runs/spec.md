@@ -189,3 +189,87 @@ The path SHALL preserve accepted identities, terminal results, authority, pendin
 - **WHEN** the candidate starts a session with those records
 - **THEN** it does not write the new child journal format to that session
 - **AND** it reports the compatibility failure clearly
+
+### Requirement: Each completed turn reports the open child runs
+
+The session SHALL report its open child runs in every `TurnCompleted` output. This covers each outcome (`Completed`, `Failed`, and `Skipped`) and each emit site. A child run is open from durable acceptance until its result has had its follow-up parent turn. A run is closed when the parent records that turn. A failed follow-up turn also closes the run, because the session records the failure as the parent decision for that result and does not deliver it again.
+
+The value SHALL come from session state after the turn event applies. The `TurnCompleted` of the follow-up turn SHALL NOT list the run that the turn consumed. The session SHALL publish the value on `TurnCompleted`. A client SHALL NOT need a direct ask to the session.
+
+The wire form is `openChildRunIds`, an array of run IDs. A daemon SHALL write the array for every `TurnCompleted`, and it SHALL write an empty array when no run is open. A reader that finds the field absent or null reads "unknown" and uses an empty list. Use the [engineering glossary](../../../../../docs/spec/GLOSSARY.md) for the term "open child run".
+
+Owner: `LlmSessionActor` assigns the value from `SessionState.ChildRuns`. The value is durable state, read at the time of the output. `SessionOutputDtoMapper` carries it.
+
+Schematic example (it omits all other outputs):
+
+```text
+turn 1 completes: spawn_agent accepted run R1          -> TurnCompleted(1, open=[R1])
+R1 finishes, its result is ready                       -> turn 2 starts at once
+turn 2 completes: it consumed R1's result              -> TurnCompleted(2, open=[])
+```
+
+#### Scenario: A turn that starts a child reports it open
+
+- **GIVEN** the parent calls `spawn_agent` in turn 1 and the child still runs
+- **WHEN** turn 1 completes
+- **THEN** its `TurnCompleted` lists the accepted run ID
+- **AND** the `TurnCompleted` of the follow-up turn lists no run
+
+#### Scenario: A child that finishes inside the turn still counts as open
+
+- **GIVEN** a child finishes while turn 1 still runs
+- **AND** the session starts turn 2 right after `TurnCompleted` of turn 1
+- **WHEN** turn 1 completes
+- **THEN** its `TurnCompleted` lists the run, because the parent has not yet had the follow-up turn
+- **AND** a report that omitted the run would let a headless caller exit before turn 2
+
+#### Scenario: Two ready results give two follow-up turns
+
+- **GIVEN** two children have ready results
+- **WHEN** turn 1, turn 2, and turn 3 complete in order
+- **THEN** the lists hold two runs, then one run, then no run
+
+#### Scenario: A failed turn still reports the open runs
+
+- **GIVEN** turn 1 starts a child, and a provider error fails turn 1
+- **WHEN** the failed `TurnCompleted` is emitted
+- **THEN** it lists the open run
+
+#### Scenario: A failed follow-up turn closes the run
+
+- **GIVEN** the follow-up turn that delivers a child result fails
+- **WHEN** the failed `TurnCompleted` is emitted
+- **THEN** it lists no run, because the session closed that run and will not deliver the result again
+- **AND** a client that waits for the run would otherwise wait for ever
+
+#### Scenario: A skipped turn reports the open runs
+
+- **GIVEN** a child run is open and the session rejects an input before a model call
+- **WHEN** the skipped `TurnCompleted` is emitted
+- **THEN** it lists the open run
+
+#### Scenario: A session with no child reports an empty list
+
+- **GIVEN** a session that never started a child
+- **WHEN** any turn completes
+- **THEN** the `TurnCompleted` has an empty list
+- **AND** the wire form holds an empty array, not an absent field
+
+#### Scenario: An earlier daemon sends no field
+
+- **GIVEN** a `TurnCompleted` DTO without `openChildRunIds`
+- **WHEN** a client maps it
+- **THEN** the mapped output has an empty list
+- **AND** no error occurs
+
+### Requirement: A delivered child result appears as tool output
+
+When the session selects a ready child result for a model call, it SHALL emit one `ToolCallOutput` and one `ToolResultOutput` for the delivery pair. The tool name is `child_run_result`. The call ID is the delivery call ID, not the acceptance call ID. The session SHALL emit each delivery call ID once for the life of the session actor. The result text SHALL hold the child output. The model history SHALL NOT change.
+
+#### Scenario: The delivery pair reaches subscribers once
+
+- **GIVEN** a child result is ready and a subscriber uses `OutputFilter.Full`
+- **WHEN** the parent turn that delivers the result runs
+- **THEN** the subscriber gets one `ToolCallOutput` and one `ToolResultOutput` named `child_run_result`
+- **AND** the result text holds the child output
+- **AND** the call ID differs from the call ID of `spawn_agent`

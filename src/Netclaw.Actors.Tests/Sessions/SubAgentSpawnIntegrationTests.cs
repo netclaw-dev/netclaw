@@ -327,6 +327,13 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Single(parentWake, message => message.Role == Microsoft.Extensions.AI.ChatRole.User
             && message.Text == "Use a subagent to summarize the file");
         parentWakeGate.TrySetResult();
+        // The delivered pair also reaches subscribers as tool output (background-subagent-runs).
+        var deliveredCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("child_run_result", deliveredCall.ToolName.Value);
+        Assert.Equal(resultCall.CallId, deliveredCall.CallId.Value);
+        var deliveredResult = await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(resultCall.CallId, deliveredResult.CallId.Value);
+        Assert.Contains(runId, deliveredResult.Result, StringComparison.Ordinal);
         var finalText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", finalText.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
