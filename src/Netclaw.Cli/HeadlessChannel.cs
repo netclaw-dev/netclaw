@@ -55,6 +55,14 @@ public sealed class HeadlessChannel : IChannel
     private readonly TaskCompletionSource _runEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _ended;
 
+    // True once the run thread is about to send the prompt. Only then can the hub hold output for this run.
+    // A connection state before that point does not end the run: the request that the run thread waits for
+    // fails with its own reason when the connection cannot be restored.
+    private volatile bool _promptSent;
+
+    // Set under the log lock when the run thread closes the log writer. A late write then does nothing.
+    private bool _logClosed;
+
     // The open child runs of the most recent completed turn. Empty before the first one. The channel stores
     // them before it prints the waiting line, so a signal that follows that line finds them.
     private OpenRunsSnapshot _openRuns = OpenRunsSnapshot.None;
@@ -71,6 +79,7 @@ public sealed class HeadlessChannel : IChannel
     /// The process exit code for this run: 1 once the session reports a failed turn
     /// (provider unreachable, timeout, tool failure, model behavior), otherwise 0.
     /// A failed run or a cancelled run also prints the <see cref="HeadlessFailure"/> token.
+    /// The channel writes it under the gate, in the same step that marks the run ended.
     /// </summary>
     internal int ExitCode { get; private set; }
 
@@ -132,10 +141,7 @@ public sealed class HeadlessChannel : IChannel
 
             using var connectionSubscription = _daemonClient.ConnectionEvents.Subscribe(evt =>
             {
-                var lw = Volatile.Read(ref logWriter);
-                if (lw is not null)
-                    Log(lw, $"CONNECTION: {evt.Message}");
-                EndRunOnLostConnection(evt, lw);
+                OnConnectionEvent(evt, Volatile.Read(ref logWriter));
             });
 
             using var subscription = _daemonClient.SessionOutput.Subscribe(output =>
@@ -169,6 +175,7 @@ public sealed class HeadlessChannel : IChannel
             Log(logWriter, $"PROMPT: {_prompt}");
 
             _promptSentTicks = Stopwatch.GetTimestamp();
+            _promptSent = true;
 
             await _daemonClient.SendAsync(_prompt, stopping);
 
@@ -186,7 +193,6 @@ public sealed class HeadlessChannel : IChannel
                 WriteFailureLog("CANCELLED", ex.ToString());
                 Console.Error.WriteLine(HeadlessFailure.Cancelled.ToToken());
                 openRuns.WriteLine();
-                ExitCode = 1;
             }
 
             FinishRun();
@@ -202,15 +208,22 @@ public sealed class HeadlessChannel : IChannel
                 Console.Error.WriteLine(HeadlessFailure.Channel.ToToken());
                 openRuns.WriteLine();
                 WriteFailureLog("FAILED", ex.ToString());
-                ExitCode = 1;
             }
 
             FinishRun();
         }
         finally
         {
+            // A callback on the client pump can still write while the run thread leaves. The lock makes the
+            // close wait for a write in progress, and the flag makes a later write do nothing.
             if (logWriter is not null)
-                await logWriter.DisposeAsync();
+            {
+                lock (logWriter)
+                {
+                    _logClosed = true;
+                    logWriter.Dispose();
+                }
+            }
         }
     }
 
@@ -218,13 +231,18 @@ public sealed class HeadlessChannel : IChannel
     // only passes the exit code on, whichever path ended the run.
     private void FinishRun()
     {
-        if (ExitCode != 0)
-            Environment.ExitCode = ExitCode;
+        // Read under the gate: the thread that ended the run wrote the code under the same lock.
+        int exitCode;
+        lock (_gate)
+            exitCode = ExitCode;
+        if (exitCode != 0)
+            Environment.ExitCode = exitCode;
         _lifetime.StopApplication();
     }
 
-    // Marks the run ended for a signal or a channel failure. Returns false when a turn already ended the run:
-    // that turn's result stands, and the caller prints nothing more.
+    // Marks the run ended for a signal or a channel failure, and sets exit code 1 in the same step. Every caller
+    // is a failure path, and a thread that loses the race must still see the code. Returns false when another
+    // path already ended the run: that result stands, and the caller prints nothing more.
     private bool TryBeginStop(out OpenRunsSnapshot openRuns)
     {
         lock (_gate)
@@ -233,38 +251,41 @@ public sealed class HeadlessChannel : IChannel
             if (_ended)
                 return false;
             _ended = true;
+            ExitCode = 1;
             return true;
         }
     }
 
     // The hub drops session output while no client is connected, and a reconnect does not replay it. A turn
-    // that completes in that gap is lost, so the run would wait for ever. The run ends loudly instead, and the
-    // operator resumes the session with `netclaw chat --resume`.
-    //   Disconnected: the client spent its whole retry budget. The run always ends.
-    //   TransportClosed: the client starts to reconnect. The run ends only when it knows an open child run,
-    //     because only then does it wait for a turn that a gap can swallow. With no open run, the turn in
-    //     progress is still the one that the run waits for, and the reconnect covers it.
-    // After the run ended, both states change nothing: a disconnect after the final turn keeps the exit code.
-    private void EndRunOnLostConnection(DaemonConnectionEvent evt, StreamWriter? log)
+    // that completes in that gap is lost, so the run would wait for ever or end with incomplete output. After
+    // the prompt, both Disconnected and TransportClosed therefore end the run loudly, with or without a known
+    // open child run. The operator resumes the session with `netclaw chat --resume`.
+    //   Disconnected: the client spent its whole retry budget, or a bind failed. No more output can arrive.
+    //   TransportClosed: the client starts to reconnect, but a reconnect restores no output from the gap.
+    // Before the prompt, nothing is in flight. The request that the run thread waits for fails with its own
+    // reason, and the run thread ends the run with that reason. After the run ended, both states change
+    // nothing and write nothing: a disconnect after the final turn keeps exit 0, and the log writer may be
+    // closed. One lock holds the end check, the log write, and the mark, so the callback and the run thread
+    // cannot both end the run.
+    private void OnConnectionEvent(DaemonConnectionEvent evt, StreamWriter? log)
     {
-        if (evt.State == DaemonConnectionState.TransportClosed)
+        OpenRunsSnapshot openRuns;
+        lock (_gate)
         {
-            lock (_gate)
-            {
-                if (_openRuns.RunIds.Count == 0)
-                    return;
-            }
-        }
-        else if (evt.State != DaemonConnectionState.Disconnected)
-        {
-            return;
-        }
+            if (_ended)
+                return;
 
-        if (!TryBeginStop(out var openRuns))
-            return;
+            Log(log, $"CONNECTION: {evt.Message}");
+            if (evt.State is not (DaemonConnectionState.TransportClosed or DaemonConnectionState.Disconnected)
+                || !_promptSent)
+                return;
+
+            _ended = true;
+            ExitCode = 1;
+            openRuns = _openRuns;
+        }
 
         var detail = $"Lost the connection to the daemon before the run ended: {evt.Message}";
-        ExitCode = 1;
         Console.Error.WriteLine($"[headless:error] {SingleLine(detail)}");
         Console.Error.WriteLine(HeadlessFailure.Channel.ToToken());
         openRuns.WriteLine();
@@ -556,15 +577,21 @@ public sealed class HeadlessChannel : IChannel
         Console.WriteLine(JsonSerializer.Serialize(envelope, JsonDefaults.CliOutput));
     }
 
-    // The connection subscription, the output pump, and the run thread all write the session log. A
-    // StreamWriter is not thread safe, so an unlocked write can drop a line.
+    // Two threads write the session log. The client pump thread runs the output and the connection callbacks
+    // (DaemonClient.EventPumpAsync reads one channel for both). The run thread writes the two start records
+    // while SessionJoined and the first outputs already arrive. A StreamWriter is not thread safe, so an
+    // unlocked write can drop a line. The run thread closes the writer under the same lock.
     private void Log(StreamWriter? log, string message)
     {
         if (log is null)
             return;
 
         lock (log)
+        {
+            if (_logClosed)
+                return;
             log.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
+        }
     }
 
     private void WriteFailureLog(string kind, string detail)
