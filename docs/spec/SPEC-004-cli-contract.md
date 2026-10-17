@@ -215,7 +215,11 @@ Download failures do not create security alerts. This change does not alter the 
 `netclaw chat -p <text>` sends one prompt and prints the reply. `--json` prints one JSON envelope on
 stdout instead. A script reads stdout, stderr, the exit code, and the session log.
 
-A failed turn or a failed run exits `1`. A turn that completes exits `0`. The exit code does not carry
+A run can span more than one turn. `spawn_agent` returns `accepted` in turn 1, and the child result
+arrives in a later parent turn. The run ends on the first completed turn that reports no open child
+run. See [Waiting for child runs](#waiting-for-child-runs).
+
+A failed turn or a failed run exits `1`. A run whose last turn completes exits `0`. The exit code does not carry
 the reason. A run that an outside `timeout` kills exits `124`. `timeout` sends SIGTERM, and the CLI handles
 SIGTERM like SIGINT, so stderr usually also has `[turn:failed] category=infra kind=Cancelled`. A reader must
 check the exit code first: `124` means `timeout`, whatever stderr holds.
@@ -239,8 +243,9 @@ after the `[error]` or `[headless:error]` line:
   `ProviderFailure`, `StreamFailure`, `Timeout`, `ToolFailure`, `InputCompatibility`, or `Unknown`.
   A failed turn with no `ErrorOutput` is `Unknown`.
 - The CLI adds two kinds: `ChannelFailure` (the daemon is unreachable, rejects the client, or the prompt
-  is over the hub frame limit) and `Cancelled` (SIGINT or SIGTERM). A run with one of these kinds has
-  no turn, so it has no JSON envelope and no session log record.
+  is over the hub frame limit) and `Cancelled` (SIGINT or SIGTERM). The daemon restart during a wait
+  also gives `ChannelFailure`. A run with one of these kinds has no JSON envelope. It has a session log
+  record only for the turns that finished before the stop.
 - An error that the turn survived (a compaction timeout, a context overflow recovery) does not decide
   the kind. A turn that completes prints no token.
 
@@ -263,6 +268,88 @@ Negative example: the provider returns HTTP 503. The kind is `ProviderFailure` a
 `infra`. A harness must not score this run as a model failure.
 
 Owner: `HeadlessChannel` maps the category. `LlmSessionActor` assigns `ModelBehavior`.
+
+### Waiting for child runs
+
+Every `TurnCompleted` output carries `OpenChildRunIds`. The session owns this fact (see the
+[glossary](GLOSSARY.md#open-child-run)). The wire field is `openChildRunIds`. A new daemon always writes
+it, as an empty array when no run is open. A `TurnCompleted` without the field comes from an earlier
+daemon that runs `spawn_agent` inside one turn. The CLI reads the missing field as "unknown", maps it to
+an empty list, and ends the run on that turn. This keeps the earlier behavior.
+
+```text
+on TurnCompleted t:                       (schematic: it omits logs and JSON detail)
+    if t.Outcome is Failed         -> print [turn:failed]; end the run; exit 1
+    if t.OpenChildRunIds is empty  -> end the run; exit 0
+    otherwise                      -> print [subagent:waiting]; wait for the next TurnCompleted
+```
+
+- While the run waits, text mode prints one line on stdout after each turn that reports open runs:
+  `[subagent:waiting] <n> open: <runId>[,<runId>...]`. JSON mode prints no such line on stdout.
+- The delivered child result prints as tool output: `[tool:result] child_run_result → <result>`. Stdout
+  therefore holds the child text, as it did when `spawn_agent` waited inside one turn.
+- A background shell job is not a child run. The run does not wait for it.
+- A failed turn ends the run at once, with or without open runs. Stderr holds exactly one
+  `[turn:failed]` line. The CLI ignores every output that arrives after the run ends, so the failed
+  run prints one failure line and a JSON run prints one envelope.
+- The CLI records the open runs of a turn before it prints the waiting line.
+- The session log gets `WAITING_FOR_CHILDREN: count=<n> runs=<ids>` for each turn that reports open runs.
+  It gets `SESSION_ENDED` once, at the end of the run.
+- The run has no timeout of its own. The daemon bounds each child with its child timeouts. The operator
+  (SIGINT) or an outside `timeout` bounds the run.
+
+On each failure or stop path, stderr names the open runs. The paths are a failed turn, SIGINT, SIGTERM
+(including an outside `timeout`), and `SessionDeactivated`. The CLI writes one line after the
+`[turn:failed]` line:
+
+```text
+[headless:open-runs] session=<sessionId> runs=<runId>[,<runId>...]
+```
+
+The CLI takes the runs from the most recent `TurnCompleted`. It writes no line when that list is empty,
+and it writes none before the first `TurnCompleted`. The CLI does not cancel the child runs. The
+operator resumes the session with `netclaw chat --resume <sessionId>`.
+
+| Case | Exit | Stderr |
+|------|------|--------|
+| Last turn completes with no open child run | `0` | none |
+| A turn fails (with or without open runs) | `1` | `[turn:failed] ... kind=<Kind>`, plus the open-runs line |
+| `SessionDeactivated` before the run ends | `1` | `kind=ChannelFailure`, plus the open-runs line |
+| SIGINT or SIGTERM before the run ends | `1` | `kind=Cancelled`, plus the open-runs line |
+| An outside `timeout` ends the run | `124` | `kind=Cancelled` (usually), plus the open-runs line |
+
+The daemon forwards `SessionDeactivated` to the client as the wire type `session_deactivated`. A daemon
+restart during the wait then ends the run with exit `1`. The run never hangs. The CLI writes a
+`[headless:error]` line that says the session stopped, before the `[turn:failed]` line.
+
+Positive example: turn 1 starts one child and reports one open run. The child finishes. Turn 2 reports
+none. Stdout holds the status text, `[subagent:done]`, the `child_run_result` line, and the turn 2 text.
+The exit code is `0`.
+
+Negative example: turn 1 fails with a provider error while a child runs. The CLI does not wait. It prints
+one `[turn:failed] category=infra kind=ProviderFailure` line and the open-runs line, and it exits `1`.
+A run that ends on turn 1 with exit `0` and only a status line, while a child runs, is a defect.
+
+Owner: `LlmSessionActor` assigns `OpenChildRunIds`. `HeadlessChannel` decides when the run ends.
+
+#### JSON envelope for several turns
+
+With `--json`, stdout holds exactly one envelope. The CLI writes it when the run ends on a completed
+turn or on a failed turn. It writes no envelope for a signal or for `SessionDeactivated`.
+
+- `response` is the text of the last turn.
+- `turnResponses` is an array with one entry for each completed turn, in order. An entry holds
+  `turnNumber`, `text`, `toolCalls`, and `usage`. A run with one turn has one entry.
+- `toolCalls` holds the tool calls of all turns, in order.
+- `usage` is the sum over all turns of `inputTokens`, `outputTokens`, `totalTokens`,
+  `cachedInputTokens`, and `reasoningTokens`.
+- A failed turn is the last entry. The envelope adds `errorCategory` and `errorKind`.
+
+Positive example: turn 1 reports 10 input tokens and turn 2 reports 7. The envelope has
+`usage.inputTokens` `17`, two `turnResponses`, and `response` equal to the turn 2 text.
+
+Negative example: a run with no child. The envelope has one `turnResponses` entry, and `response`,
+`toolCalls`, and `usage` match the single-turn envelope that the CLI wrote before this contract.
 
 ## Safety Rules
 

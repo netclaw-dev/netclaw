@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj" />
+    <ProjectReference Include="../Netclaw.Cli/Netclaw.Cli.csproj" />
+    <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
+    <ProjectReference Include="../Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The same fake transport as Netclaw.Cli.Tests. It has no xUnit dependency. -->
+    <Compile Include="../Netclaw.Cli.Tests/Cli/FakeDaemonHubTransport.cs"
+             Link="Cli/FakeDaemonHubTransport.cs" />
+  </ItemGroup>
+
+</Project>

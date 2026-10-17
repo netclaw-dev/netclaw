@@ -85,6 +85,10 @@ public sealed record SessionOutputDto
     public string? TurnOutcome { get; init; }
     public string? SourceReminderId { get; init; }
 
+    // Wire name: openChildRunIds. Written for every TurnCompleted, as an empty array when no run is open.
+    // Absent or null comes from an earlier daemon and reads as an empty list.
+    public List<string>? OpenChildRunIds { get; init; }
+
     // Error
     public string? ErrorMessage { get; init; }
     public string? ErrorDetail { get; init; }

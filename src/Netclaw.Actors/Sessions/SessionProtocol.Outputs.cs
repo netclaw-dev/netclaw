@@ -179,6 +179,13 @@ public static partial class SessionProtocol
         /// Null for non-reminder turns.
         /// </summary>
         public ReminderId? SourceReminderId { get; init; }
+
+        /// <summary>
+        /// The child runs whose result has not yet had its follow-up parent turn. The session assigns it
+        /// from its durable state for every outcome. Empty means no open run, and a client reads an absent
+        /// wire field as empty. See the "open child run" term in the engineering glossary.
+        /// </summary>
+        public IReadOnlyList<SubAgentRunId> OpenChildRunIds { get; init; } = [];
     }
 
     /// <summary>

@@ -6,6 +6,14 @@ Use the [canonical plan](../../../.systematize/plans/coordination-replacement/pl
 - [ ] 1.2 Implement validated durable child acceptance, idempotent start, cancellation, approval correlation, status, and recovery through the current session owners; verify actor-level positive, failure, and restart cases.
 - [ ] 1.3 Deliver prepared results at the next safe boundary without child-finish ordering; verify ordinary input order, model-call and tool-batch safety, result consumption, and no child user-input admission.
 
+- [ ] 1.4 Report the open child runs in every `TurnCompleted` through one helper at all five emit sites, and map `openChildRunIds` in `SessionOutputDtoMapper` in both directions; verify `OpenChildRunsOnTurnCompletedTests` and the mapper round trip, with the field absent from an earlier daemon.
+- [ ] 1.5 Emit one `ToolCallOutput` and one `ToolResultOutput` for each delivered `child_run_result` pair, once per delivery call ID; verify the subscriber sees the child text.
+- [ ] 1.6 Make `HeadlessChannel` end a run on the first completed turn that reports no open child run, print `[subagent:waiting]`, and write the `[headless:open-runs]` line on every failure and stop path; verify `HeadlessAsyncChildEndToEndTests` in text and `--json` mode.
+- [ ] 1.7 Write one JSON envelope per run with `turnResponses`, a summed `usage`, and all `toolCalls`; verify the success, failed-turn, and no-child cases.
+- [ ] 1.8 Forward `SessionDeactivated` through the hub (`session_deactivated`) so a daemon restart ends a waiting headless run with exit `1`; verify the mapper round trip and the end-to-end deactivation case.
+- [ ] 1.9 Add the two `spawn_agent` description sentences; update the `netclaw-operations` skill (the `chat -p` wait, `[subagent:waiting]`, `[headless:open-runs]`) and bump its `metadata.version`; update `docs/runbooks/subagents.md` (resume a session after a stopped run); run the eval suite for the description change.
+- [ ] 1.10 Write the headless stop decision as `EndsRun(TurnCompleted)` in the form that `TOOLING.md` shows, between `// <headless-stop-rule>` and `// </headless-stop-rule>` comments; run `./scripts/run-headless-stop-rule-mutations.sh`, which expects three killed mutants.
+
 ## 2. PR 2: Recurrence rules
 
 - [ ] 2.1 Apply exact per-call recurrence, adjacent-cycle checks, and the trusted pending-job exception through the existing recurrence owner; verify generated operation sequences and productive changes.

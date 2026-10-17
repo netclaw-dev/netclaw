@@ -40,3 +40,23 @@ The session SHALL validate state transitions before it appends their events. A r
 - **WHEN** the parent accepts that result
 - **THEN** the session does not persist it as an ordinary user input
 - **AND** the result follows the correlated tool-result path
+
+### Requirement: The hub forwards session deactivation to every client
+
+The session hub SHALL forward `SessionDeactivated` to the connected client as the wire type `session_deactivated`. `SessionOutputDtoMapper` SHALL map it in both directions. A client SHALL NOT read it as an unknown type or as an error output.
+
+A client with a wait in progress, such as a headless run, needs this output. A daemon restart then ends the wait with a clear failure. Without it, the client waits for a turn that never comes.
+
+#### Scenario: A daemon restart reaches a waiting client
+
+- **GIVEN** a CLI client waits on a session that has an open child run
+- **WHEN** the daemon prepares for restart and the session emits `SessionDeactivated`
+- **THEN** the client receives `SessionDeactivated`
+- **AND** the headless run ends with exit `1`
+
+#### Scenario: The mapper does not turn deactivation into an unknown error
+
+- **GIVEN** a `SessionDeactivated` output
+- **WHEN** it goes through `ToDto` and `FromDto`
+- **THEN** the result is a `SessionDeactivated` output for the same session
+- **AND** it is not an `ErrorOutput` with the text "Unknown output type"

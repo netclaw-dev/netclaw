@@ -70,6 +70,19 @@ model requests, tool exposure set, and ephemeral working context.
 
 **Code anchors:** `SubAgentActor`, `SubAgentSpawner`
 
+### Open child run
+
+An open child run is a child run whose result has not yet had its follow-up
+parent turn. It becomes open at durable acceptance. It closes when the parent
+records the turn that consumes its result. A failed follow-up turn also closes
+it, because the session records the failure as the decision for that result.
+The session reports its open child runs in each `TurnCompleted`.
+A headless run ends only on a completed turn that reports none. A background
+shell job is not a child run.
+
+**Code anchors:** `TurnCompleted.OpenChildRunIds`, `ChildRunLifecycle`,
+`HeadlessChannel`
+
 ### Working context
 
 The working context is actor-local state that helps later model turns. It
