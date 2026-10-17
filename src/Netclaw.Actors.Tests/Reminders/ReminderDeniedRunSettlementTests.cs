@@ -145,8 +145,7 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
     private int DeniedAlerts(ReminderId id)
         => _sink.Alerts.Count(a => a.Category == AlertType.ReminderExecutionFailed && a.Source == id.Value);
 
-    [Fact]
-    public async Task A_denied_one_shot_runs_once_and_is_kept_as_denied()
+    private async Task<ReminderDefinition> RunDeniedOneShotToTheEndAsync()
     {
         var manager = ActorRegistry.For(Sys).Get<ReminderManagerActorKey>();
         var definition = CreateDefinition(new ReminderSchedule
@@ -160,6 +159,17 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
         Assert.True(saved.Success, saved.ErrorMessage);
 
         await AwaitHistoryAsync(definition.Id, 1);
+        // The manager appends the history row and then ends the one-shot in the same message.
+        await AwaitAssertAsync(
+            () => Assert.NotNull(_definitionStore.GetTombstone(definition.Id)),
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        return definition;
+    }
+
+    [Fact]
+    public async Task A_denied_one_shot_runs_once_and_ends_failed_as_denied()
+    {
+        var definition = await RunDeniedOneShotToTheEndAsync();
         // The retry backoff here is 25 ms: a nack would have run the model again long before this.
         await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(1500), TestContext.Current.CancellationToken);
 
@@ -167,45 +177,46 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
         var row = Assert.Single(history);
         Assert.Equal("denied", row.Status);
         Assert.Equal(1, _pipeline.InvocationCount);
-        var stored = _definitionStore.Get(definition.Id);
-        Assert.NotNull(stored); // kept: the history is the only record of the denial
-        Assert.Equal(0, stored!.ConsecutiveFailures);
-        Assert.Null(stored.TerminalOutcome);
+
+        // The one-shot did not do its job, so it ends as Failed. The definition is gone, and the tombstone
+        // keeps the denial and the prompt so an operator can create the reminder again.
+        Assert.Null(_definitionStore.Get(definition.Id));
+        var tombstone = _definitionStore.GetTombstone(definition.Id);
+        Assert.NotNull(tombstone);
+        Assert.Equal(ReminderTerminalOutcome.Failed, tombstone!.Outcome);
+        Assert.Contains(DeniedText, tombstone.LastError, StringComparison.Ordinal);
+        Assert.Equal(definition.Instructions, tombstone.Instructions);
         Assert.Equal(1, DeniedAlerts(definition.Id));
+        // A denial does not reach the failure threshold, so it raises no auto-disable alert.
         Assert.DoesNotContain(_sink.Alerts, a => a.Category == AlertType.ReminderAutoDisabled);
     }
 
     [Fact]
-    public async Task A_denied_one_shot_is_not_counted_as_failed_and_is_never_pruned()
+    public async Task A_denied_one_shot_is_not_counted_as_failed_and_its_tombstone_is_purged_after_the_retention_period()
     {
         var manager = ActorRegistry.For(Sys).Get<ReminderManagerActorKey>();
-        var definition = CreateDefinition(new ReminderSchedule
-        {
-            Type = ReminderScheduleType.OneShot,
-            FireAt = TimeProvider.System.GetUtcNow().AddMilliseconds(100)
-        });
-        var saved = await manager.Ask<ReminderSavedResponse>(
-            new SaveReminderCommand(definition, Authorization: new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test")),
-            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        Assert.True(saved.Success, saved.ErrorMessage);
-        await AwaitHistoryAsync(definition.Id, 1);
-        await AwaitAssertAsync(
-            () => Assert.False(_definitionStore.Get(definition.Id)!.Enabled),
-            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        var definition = await RunDeniedOneShotToTheEndAsync();
 
-        // Age the disabled one-shot well past the retention period, then prune.
-        var stored = _definitionStore.Get(definition.Id)!;
-        _definitionStore.Save(stored with
+        async Task<ReminderHealthResponse> SweepAsync()
         {
-            UpdatedAtMs = _timeProvider.GetUtcNow().Subtract(ReminderManagerActor.TerminalRetention + TimeSpan.FromDays(30)).ToUnixTimeMilliseconds()
-        });
-        manager.Tell(ReminderManagerActor.PruneTerminalReminders.Instance);
-        var health = await manager.Ask<ReminderHealthResponse>(
-            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            manager.Tell(ReminderManagerActor.PruneTerminalReminders.Instance);
+            // The manager handles messages one at a time, so the health reply proves the sweep finished.
+            return await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }
 
-        Assert.NotNull(_definitionStore.Get(definition.Id));
+        Assert.Equal(0, (await SweepAsync()).FailedCount);
+        Assert.NotNull(_definitionStore.GetTombstone(definition.Id));
         Assert.Single(await _historyStore.ReadAsync(definition.Id, 50));
+
+        // A tombstone lives for the retention period and no longer. Then the sweep deletes it with the history.
+        _timeProvider.Advance(ReminderManagerActor.TerminalRetention + TimeSpan.FromDays(1));
+        var health = await SweepAsync();
+
         Assert.Equal(0, health.FailedCount);
+        Assert.Null(_definitionStore.Get(definition.Id));
+        Assert.Null(_definitionStore.GetTombstone(definition.Id));
+        Assert.Empty(await _historyStore.ReadAsync(definition.Id, 50));
     }
 
     [Fact]
