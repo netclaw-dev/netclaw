@@ -11,6 +11,9 @@ namespace Netclaw.Configuration;
 /// </summary>
 public static class SkillSyncResult
 {
+    public const string ServerFeedSourceKind = "server-feed";
+    public const string GitPluginSourceKind = "git-plugin";
+
     /// <summary>Result data for one pass.</summary>
     public sealed class Response : IWireType
     {
@@ -25,6 +28,9 @@ public static class SkillSyncResult
     public sealed class SourceRow : IWireType
     {
         public required string Name { get; init; }
+
+        /// <summary>The source type that owns this result.</summary>
+        public string SourceKind { get; init; } = ServerFeedSourceKind;
 
         public int ChangedCount { get; init; }
 
@@ -45,6 +51,9 @@ public static class SkillSyncResult
 
         /// <summary>The declared plugin version, when available.</summary>
         public string? Version { get; init; }
+
+        /// <summary>Safe package diagnostics that do not stop this source.</summary>
+        public IReadOnlyList<string> Notices { get; init; } = [];
     }
 
     /// <summary>Result data for the inventory publication owned by this pass.</summary>
