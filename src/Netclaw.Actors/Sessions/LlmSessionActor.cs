@@ -65,6 +65,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly MemoryProposalGate _memoryProposalGate = new();
     private readonly MemoryConfig _memoryConfig;
     private readonly TimeProvider _timeProvider;
+    private readonly IOperationalNotificationSink _notificationSink;
     private readonly SessionStoragePaths _sessionStorage;
     private readonly ISessionLifecycleObserver? _lifecycleObserver;
     private readonly Memory.SQLiteMemoryStore? _memoryStore;
@@ -143,6 +144,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         ModelCapabilities modelCapabilities,
         SessionConfig config,
         SessionServices services,
+        IOperationalNotificationSink notificationSink,
         SessionToolServices? tools = null,
         SessionMemoryServices? memory = null,
         SessionObservability? observability = null)
@@ -172,6 +174,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _memoryVectorIndexHolder = memory?.VectorIndexHolder;
         _memoryConfig = memory?.MemoryConfig ?? new MemoryConfig();
         _timeProvider = services.TimeProvider;
+        _notificationSink = notificationSink;
         _sessionStorage = services.StorageResolver.Resolve(_sessionId);
         _trustContextDeriver = tools?.TrustDeriver;
         PersistenceId = $"session-{entityId}";
@@ -206,6 +209,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _state = _state.Apply(evt, userAlreadyInHistory);
             _toolWorkflow.CompleteTurn();
             _input.ClearTurnContext();
+
+            // A session that recovers without a snapshot has no eligible turn. Mirror the live path so that
+            // late delivery feedback for the latest turn finds the turn and the reminder that started it.
+            var recoveredTurn = new TurnNumber(_state.TurnCount);
+            _deliveryRetry.MarkEligible(recoveredTurn);
+            _deliveryRetry.RecordTurn(recoveredTurn, evt.SourceReminderId);
         });
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
         Recover<SessionBackgroundJobsReaped>(evt => _state = _state.Apply(evt));
@@ -220,7 +229,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             RestoreConsumedInputs(evt.ConsumedInputIds, evt.UserMessage);
             ApplyToolBatchStarted(evt);
         });
-        Recover<InputAdmitted>(evt => _state = _state.Apply(evt));
+        Recover<InputAdmitted>(evt =>
+        {
+            _state = _state.Apply(evt);
+            // Live admission of a new input clears the delivery state of the earlier turn. Replay does the same.
+            _deliveryRetry.Clear();
+        });
         Recover<InputClosed>(evt => _state = _state.CloseInputs(evt.InputIds));
         Recover<ToolCallRecorded>(ApplyToolCallRecorded);
         Recover<ToolApprovalRequested>(ApplyToolApprovalRequested);
@@ -454,13 +468,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     msg.TurnNumber,
                     msg.FailureKind);
                 _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
+                ReportReminderPostFailure(msg);
                 return;
             }
 
+            // The session does not retry while it processes another input, so this reply stays undelivered.
             _log.Warning(
                 "Ignoring retryable delivery feedback while processing channel={Channel} turn={Turn}",
                 msg.ChannelType,
                 msg.TurnNumber);
+            ReportReminderPostFailure(msg);
         });
 
         Command<CompactionWorkCompleted>(_ => { });
@@ -1628,7 +1645,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             MaybeSnapshot();
             MaybeGenerateTitle();
 
-            _deliveryRetry.MarkEligible(new TurnNumber(_state.TurnCount));
+            var recordedTurn = new TurnNumber(_state.TurnCount);
+            _deliveryRetry.MarkEligible(recordedTurn);
+            _deliveryRetry.RecordTurn(recordedTurn, evt.SourceReminderId);
 
             // Check if compaction should trigger
             if (ShouldCompact())
@@ -1739,6 +1758,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.TurnNumber,
                 msg.FailureKind);
             _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
+            ReportReminderPostFailure(msg);
             return;
         }
 
@@ -1750,6 +1770,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.TurnNumber,
                 msg.FailureKind);
             _deliveryRetry.Exhaust();
+            ReportReminderPostFailure(msg);
             return;
         }
 
@@ -1766,6 +1787,48 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _modelContext.ResetForNewTurn(); // Delivery feedback changed context — resolve recall fresh
         FireLlmCall();
         TransitionTo(SessionPhase.Processing);
+    }
+
+    /// <summary>
+    /// The session gave up on a reply. When a reminder fire started that turn, nobody reads the thread, so the
+    /// history row (which records admission) and the channel cannot show the failure. This is the only place
+    /// that reports it: an Error log and one alert. The reminder manager owns the history, so no row is written here.
+    /// An ordinary turn raises nothing, because a person in the thread sees that no reply arrived.
+    /// </summary>
+    private void ReportReminderPostFailure(DeliveryFailed msg)
+    {
+        if (_deliveryRetry.ReminderOf(msg.TurnNumber) is not { } fireKey)
+            return;
+
+        // A fire key that does not parse still gets an alert. The whole key then names the reminder.
+        var reminderId = ReminderFireKey.TryParse(fireKey.Value, out var parsed)
+            ? parsed.DefinitionId.Value
+            : fireKey.Value;
+
+        _log.Error(
+            "Reminder {ReminderId} reply was not delivered session={SessionId} channel={Channel} turn={Turn} kind={FailureKind} error={Error}",
+            reminderId,
+            _sessionId.Value,
+            msg.ChannelType,
+            msg.TurnNumber,
+            msg.FailureKind,
+            msg.ErrorMessage);
+
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "reminder.delivery.failed",
+            AlertType.ReminderDeliveryFailed,
+            $"Reminder '{reminderId}' ran, but its reply did not reach {msg.ChannelType}. Failure kind: {msg.FailureKind}.",
+            AlertSeverity.Warning,
+            source: reminderId,
+            context: new Dictionary<string, string>
+            {
+                ["reminderId"] = reminderId,
+                ["sessionId"] = _sessionId.Value,
+                ["channel"] = msg.ChannelType.ToString(),
+                ["failureKind"] = msg.FailureKind.ToString(),
+                ["error"] = msg.ErrorMessage
+            }));
     }
 
     private void HandleIncomingUserMessage(SendUserMessage cmd)
