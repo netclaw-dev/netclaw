@@ -2,10 +2,17 @@
 """Loopback fixture for scripted setup and an OpenAI-compatible eval target."""
 
 import json
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.error
 import urllib.request
+
+
+CHILD_INSPECTION_HINT = (
+    ". For a focused evidence question, consider a permitted child profile. Give it this CallId "
+    "and ask it to inspect bounded tool_output_read windows. Do not repeat the source action")
+SPILL_CONTINUATION = "continue with tool_output_read using CallId='"
 
 
 def message_text(value):
@@ -33,6 +40,9 @@ class Fixture:
         self.model_requests = 0
         self.tool_results = {}
         self.forward_timeout = 300
+        self.strip_child_inspection_hint = False
+        self.child_hint_observations = []
+        self.child_hint_call_ids = set()
 
     def control(self, action, data):
         with self.condition:
@@ -45,6 +55,13 @@ class Fixture:
                 if data["mode"] not in {"model", "quiet"}:
                     raise ValueError("Unknown fixture mode.")
                 self.mode = data["mode"]
+            elif action == "spill-hint":
+                strip_hint = data["strip_child_inspection_hint"]
+                if type(strip_hint) is not bool:
+                    raise ValueError("The spill hint control needs a Boolean value.")
+                self.strip_child_inspection_hint = strip_hint
+                self.child_hint_observations = []
+                self.child_hint_call_ids = set()
             elif action == "release":
                 self.released.add(data["nonce"])
                 self.condition.notify_all()
@@ -55,7 +72,8 @@ class Fixture:
             elif action != "snapshot":
                 raise ValueError("Unknown fixture control.")
             return {"ready": self.ready.copy(),
-                    "model_requests": self.model_requests, "tool_results": self.tool_results.copy()}
+                    "model_requests": self.model_requests, "tool_results": self.tool_results.copy(),
+                    "child_hint_observations": self.child_hint_observations.copy()}
 
     def arrive(self, data, hold):
         key = f'{data["nonce"]}-{data["slot"]}'
@@ -71,8 +89,24 @@ class Fixture:
     def completion(self, request):
         with self.condition:
             for message in request.get("messages", []):
-                text = message_text(message.get("content"))
                 if message.get("role") == "tool":
+                    call_id = message.get("tool_call_id", "")
+                    content = message.get("content")
+                    text = message_text(content)
+                    found = CHILD_INSPECTION_HINT in text
+                    updated, removed = self._strip_hint_content(content) if self.strip_child_inspection_hint else (content, 0)
+                    message["content"] = updated
+                    updated_text = message_text(updated)
+                    continuation = SPILL_CONTINUATION in updated_text and call_id in re.findall(
+                        r"CallId='([^']+)'", updated_text)
+                    if found:
+                        self.child_hint_call_ids.add(call_id)
+                    if found or call_id in self.child_hint_call_ids:
+                        self.child_hint_observations.append({
+                            "call_id": call_id, "hint_seen": found, "hint_removed": removed,
+                            "continuation_preserved": continuation,
+                            "tool_call_id_preserved": message.get("tool_call_id") == call_id})
+                    text = updated_text
                     self.tool_results[message["tool_call_id"]] = text
             if self.mode == "model":
                 self.model_requests += 1
@@ -96,6 +130,25 @@ class Fixture:
                         "Command": command, "WorkingDirectory": "/home/netclaw/.netclaw/workspaces",
                         "_background": self.background, "_timeout_seconds": 600})
             return {"role": "assistant", "content": "Fixture setup complete."}
+
+    def _strip_hint_content(self, content):
+        if isinstance(content, str):
+            return content.replace(CHILD_INSPECTION_HINT, ""), content.count(CHILD_INSPECTION_HINT)
+        if isinstance(content, list):
+            updated = []
+            removed = 0
+            for item in content:
+                value, count = self._strip_hint_content(item)
+                updated.append(value)
+                removed += count
+            return updated, removed
+        if isinstance(content, dict):
+            updated = dict(content)
+            removed = 0
+            if isinstance(updated.get("text"), (str, list, dict)):
+                updated["text"], removed = self._strip_hint_content(updated["text"])
+            return updated, removed
+        return content, 0
 
     def tool_call(self, key, name, arguments):
         return {"role": "assistant", "content": None, "tool_calls": [{

@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.5.1"
+  version: "1.5.2"
 ---
 
 # Subagent Authoring
@@ -151,11 +151,18 @@ After two equal feedback rounds, the runtime refuses the next matching call and 
 A repeat after that correction ends the turn. Use a different approach after a correction.
 Useful work can exceed the former iteration limits. Deadlines, cancellation, and tool policy still apply.
 
-The parent-facing `spawn_agent` result is an explicit terminal text envelope:
-agent name, run id, outcome (`completed`, `partial`, or `failed`), optional
-reason, diagnostics pointer, and a `Summary:` or `Error:` section. Structured
-findings, when enabled, are a separate parent-reviewed memory-candidate path;
-do not rely on them as the visible result returned to the parent model.
+`spawn_agent` and routed skills return a durable accepted run ID before child completion.
+Continue independent parent work. A ready terminal result arrives later as tool output.
+Its fresh tool call ID differs from the accepted start call ID.
+Acceptance does not prove success. The terminal result carries outcome, evidence, and authorized artifact paths.
+Use `check_agent_run` for necessary status or cancellation. Do not poll in a loop.
+The original owner retains authority. An unrelated child approval does not block parent progress.
+A cancellation acknowledgement does not mean completion. Wait for the terminal result.
+Recovery reports uncertain child loss without an automatic repeat of external work.
+A failed evidence review cannot adopt the raw child context.
+
+Use `agent-coordination` for task composition, worktree ownership, and independent review.
+Load it by canonical name. Read its optional workflow resources through `skill_read_resource`.
 
 ## Fail-loud loader behavior
 

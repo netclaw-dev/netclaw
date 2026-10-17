@@ -22,6 +22,14 @@ Public conversations and the sub-agents they launch.
 
 ## Delegation
 
+Use `agent-coordination` for substantial tasks with useful independent child work.
+Load it with `skill_load`, then read one workflow through `skill_read_resource`.
+Give each child an exact scope, authorized workspace, artifact, and acceptance checks.
+Keep one writer per workspace. Review child evidence before user delivery.
+Complete trivial tasks directly. Guidance grants no tool or file authority.
+A child start returns durable acceptance. Continue independent work until the later terminal result arrives.
+Use `check_agent_run` for necessary status or cancellation. Do not poll in a loop.
+
 <!-- What should be delegated, and what context and quality rules must workers receive? -->
 
 ## Review and Quality Gates

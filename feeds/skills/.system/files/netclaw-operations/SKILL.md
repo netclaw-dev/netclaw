@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.109.4"
+  version: "2.109.5"
 ---
 
 # Netclaw Operations
@@ -196,6 +196,9 @@ explicit unavailable status rather than invented repository state. Subagents
 receive a read-only project/recent-file snapshot. Successful and partial runs
 return only file edits confirmed through their own tools; failed or cancelled
 runs contribute no parent working-context changes.
+
+For an explicit task-worker profile install or update, read `references/agent-profiles.md` through `skill_read_resource`.
+Use `agent-coordination` for task composition and independent review.
 
 ## Child agent runs
 

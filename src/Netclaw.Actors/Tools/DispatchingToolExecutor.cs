@@ -66,6 +66,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
             logger);
     }
 
+    private bool CanSuggestChildInspection(ToolInvocationContext context)
+    {
+        if (context.SpawnChildActor is null)
+            return false;
+        var tools = _registry.GetAllRegistrations().Select(registration => registration.Tool)
+            .Where(tool => tool.Name is "spawn_agent" or ToolOutputReadTool.ToolName);
+        var visible = _policy.FilterDiscoverableTools(tools, context);
+        return visible.Any(tool => tool.Name == "spawn_agent") &&
+               visible.Any(tool => tool.Name == ToolOutputReadTool.ToolName);
+    }
+
     /// <inheritdoc />
     public ToolArgumentRejection? ValidateToolCall(FunctionCallContent toolCall)
         => _registry.GetByName(toolCall.Name) is { } registered
@@ -233,7 +244,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
             // to a session file and steer the model to read a slice. Tools only
             // bound their own capture for memory safety; they do not window or spill.
             result = await ToolOutputSpill.BoundAndSpillAsync(
-                modelFacing, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context.Invocation, _logger, ct);
+                modelFacing, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context.Invocation, _logger, ct, CanSuggestChildInspection(context.Invocation));
 
             sw.Stop();
             _logger.LogInformation(
@@ -353,7 +364,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                     var redacted = SecretOutputRedactor.Redact(completed.Result);
                     var modelResult = tool.SuppressOutputRedaction ? completed.Result : redacted;
                     modelResult = await ToolOutputSpill.BoundAndSpillAsync(
-                        modelResult, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context.Invocation, _logger, ct);
+                        modelResult, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context.Invocation, _logger, ct, CanSuggestChildInspection(context.Invocation));
                     _logger.LogInformation(
                         "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars) " +
                         "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",

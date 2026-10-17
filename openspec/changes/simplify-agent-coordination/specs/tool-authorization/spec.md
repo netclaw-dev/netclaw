@@ -45,4 +45,3 @@ parent.
 - **GIVEN** Alice owns a child consent request
 - **WHEN** Bob answers that request
 - **THEN** the system rejects the answer before a grant or tool dispatch
-
