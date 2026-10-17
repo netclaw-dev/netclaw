@@ -48,6 +48,13 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
 
+        /// <summary>
+        /// True when a sub-agent ran a routed skill and produced this turn's reply, so the main model did not.
+        /// Replay needs it to treat the turn as the live session did: a failed post alerts but never retries
+        /// on the main model. A journal entry written before this field reads as false (an ordinary turn).
+        /// </summary>
+        public bool RoutedSkill { get; init; }
+
         public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 
         public DateTimeOffset Timestamp => RecordedAt;

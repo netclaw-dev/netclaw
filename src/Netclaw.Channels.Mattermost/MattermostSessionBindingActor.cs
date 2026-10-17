@@ -55,6 +55,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
     private readonly ApprovalResponseFlow<PendingApprovalRequest, MattermostPostId> _approvalFlow;
     private readonly ChannelOutputEngine<PendingApprovalRequest, MattermostPostId> _outputEngine;
+
+    // The first failed post of the turn in flight. The binding reports it once at
+    // TurnCompleted, with the number of the turn that the post belongs to.
+    // Actor-local; it lives for one turn.
+    private (DeliveryFailureKind Kind, string Message)? _heldFailedPost;
     private readonly SafeTransportCall _safeCall;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
@@ -120,7 +125,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         _safeCall = new SafeTransportCall(
             ChannelType.Mattermost,
             _dependencies.TimeProvider,
-            NotifyDeliveryFailedAsync);
+            HoldFailedPostAsync);
 
         _outputEngine = new ChannelOutputEngine<PendingApprovalRequest, MattermostPostId>(
             // Mattermost post IDs are lexicographically sortable strings.
@@ -138,10 +143,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
             handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
             advanceCursor: AdvanceCursor,
-            postEmptyTurnFallbackAsync: () => SafeReplyAsync(EmptyTurnFallbackText),
-            // Mattermost reports a delivery failure inline from SafeReplyAsync,
-            // so the session already knows by the time the turn completes.
-            onEmptyTurnSuppressedAsync: _ => Task.CompletedTask);
+            postEmptyTurnFallbackAsync: PostEmptyTurnFallbackAsync,
+            onEmptyTurnSuppressedAsync: ReportHeldFailedPostAsync);
 
         if (_dependencies.ThreadHistoryFetcher is { } historyFetcher)
         {
@@ -323,6 +326,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             // pulses here so a lost ProcessingStateOutput(false) cannot leave
             // the thread in the typing state.
             StopTypingPulses();
+            _heldFailedPost = null;
             _outputEngine.ResetForPipelineReinitialize();
             await _handle.ReinitializeAsync(
                 msg.Reason,
@@ -638,6 +642,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
 
         var clearedPrompts = await _outputEngine.HandleOutputAsync(msg.Output);
+        if (msg.Output is TurnCompleted)
+            _heldFailedPost = null;
         if (clearedPrompts.Count > 0)
             PersistAll(clearedPrompts, ApplyPendingApprovalPromptCleared);
     }
@@ -807,7 +813,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     /// <summary>
     /// Posts <paramref name="text"/> (chunked) to Mattermost. Returns true only
     /// when every chunk posted successfully; false if any chunk failed (after
-    /// notifying the session of the delivery failure). Callers that gate
+    /// holding the failure for the session). Callers that gate
     /// reminder delivery confirmation on real delivery must honor the result.
     /// </summary>
     private Task<bool> SafeReplyAsync(string text)
@@ -835,7 +841,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         if (!File.Exists(file.FilePath))
         {
             _log.Warning("File not found for upload: {Path}", file.FilePath);
-            await NotifyDeliveryFailedAsync(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
+            await HoldFailedPostAsync(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
             return false;
         }
 
@@ -867,14 +873,52 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         return uploaded;
     }
 
-    private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)
+    /// <summary>
+    /// Keeps the first failed post of the turn. The binding learns the turn
+    /// number only when <c>TurnCompleted</c> arrives, so it reports the failure
+    /// then (see <see cref="ReportHeldFailedPostAsync"/>). A report now would
+    /// carry the number of the previous turn, and the session would drop it as
+    /// stale feedback.
+    /// </summary>
+    private Task HoldFailedPostAsync(DeliveryFailureKind failureKind, string errorMessage)
+    {
+        _heldFailedPost ??= (failureKind, errorMessage);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Tells the session about the held failure with the number of the
+    /// completed turn. The engine runs this only for a turn with a failed post
+    /// and no posted output.
+    /// </summary>
+    private async Task ReportHeldFailedPostAsync(TurnCompleted completed)
+    {
+        if (_heldFailedPost is not { } held)
+            return;
+
+        _heldFailedPost = null;
+        await SendDeliveryFailedAsync(completed.TurnNumber, held.Kind, held.Message);
+    }
+
+    /// <summary>
+    /// Posts the empty-turn fallback. A failed fallback post is a failed post
+    /// of the turn that the fallback answers, so it reports that turn.
+    /// </summary>
+    private async Task PostEmptyTurnFallbackAsync(TurnCompleted completed)
+    {
+        _heldFailedPost = null;
+        await SafeReplyAsync(EmptyTurnFallbackText);
+        await ReportHeldFailedPostAsync(completed);
+    }
+
+    private async Task SendDeliveryFailedAsync(TurnNumber turnNumber, DeliveryFailureKind failureKind, string errorMessage)
     {
         try
         {
             await _dependencies.Pipeline.SendFeedbackAsync(new DeliveryFailed
             {
                 SessionId = _sessionId,
-                TurnNumber = _outputEngine.LastCompletedTurnNumber,
+                TurnNumber = turnNumber,
                 ChannelType = ChannelType.Mattermost,
                 FailureKind = failureKind,
                 ErrorMessage = errorMessage

@@ -46,7 +46,7 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
     private readonly Action<PendingApprovalPromptTracked> _persistPromptTracked;
     private readonly Func<SessionOutput, Task> _handleChannelSpecificOutputAsync;
     private readonly Action<string> _advanceCursor;
-    private readonly Func<Task> _postEmptyTurnFallbackAsync;
+    private readonly Func<TurnCompleted, Task> _postEmptyTurnFallbackAsync;
     private readonly Func<TurnCompleted, Task> _onEmptyTurnSuppressedAsync;
 
     private bool _deliveredThisTurn;
@@ -102,11 +102,15 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
     /// A channel without the capability ignores the output here.
     /// </param>
     /// <param name="advanceCursor">Persists the cursor a completed turn confirmed.</param>
-    /// <param name="postEmptyTurnFallbackAsync">Posts the channel's empty-turn fallback text.</param>
+    /// <param name="postEmptyTurnFallbackAsync">
+    /// Posts the channel's empty-turn fallback text. It receives the completed
+    /// turn, so a failed fallback post can report the turn that it answers.
+    /// </param>
     /// <param name="onEmptyTurnSuppressedAsync">
     /// Runs instead of the fallback when the turn produced output that failed
-    /// to post. Discord and Mattermost already told the session inline, so
-    /// their hook does nothing more; Slack tells the session here.
+    /// to post and no output posted. Every channel tells the session about the
+    /// failure here, with the number of the completed turn. The engine does not
+    /// run it for a turn with a posted output.
     /// </param>
     public ChannelOutputEngine(
         IComparer<string> cursorComparer,
@@ -123,7 +127,7 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
         Action<PendingApprovalPromptTracked> persistPromptTracked,
         Func<SessionOutput, Task> handleChannelSpecificOutputAsync,
         Action<string> advanceCursor,
-        Func<Task> postEmptyTurnFallbackAsync,
+        Func<TurnCompleted, Task> postEmptyTurnFallbackAsync,
         Func<TurnCompleted, Task> onEmptyTurnSuppressedAsync)
     {
         _cursorComparer = cursorComparer;
@@ -166,12 +170,6 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
     /// cursor only when the turn completes.
     /// </summary>
     public string? PendingCursor { get; private set; }
-
-    /// <summary>
-    /// Turn number of the most recently completed turn. Channels that report a
-    /// delivery failure outside a turn boundary use it as the failure's turn.
-    /// </summary>
-    public TurnNumber LastCompletedTurnNumber { get; private set; }
 
     /// <summary>Records that the journal replayed an approval prompt.</summary>
     public void MarkApprovalRequestObserved() => HasObservedApprovalRequest = true;
@@ -291,16 +289,13 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
             // Only post the empty-turn fallback when the turn genuinely
             // produced nothing. A failed post means a reply WAS produced, so
             // "I didn't manage to produce a reply" would mislead and would
-            // double up with the redelivered one. The channel decides what to
-            // do instead, because the channels differ on when they tell the
-            // session about the failure.
+            // double up with the redelivered one. The channel tells the session
+            // about the failure, with this turn's number.
             if (_postFailedThisTurn)
                 await _onEmptyTurnSuppressedAsync(completed);
             else
-                await _postEmptyTurnFallbackAsync();
+                await _postEmptyTurnFallbackAsync(completed);
         }
-
-        LastCompletedTurnNumber = completed.TurnNumber;
 
         var clearedPrompts = _pendingRequests
             .Select(pending => new PendingApprovalPromptCleared { CallId = pending.CallId.Value })

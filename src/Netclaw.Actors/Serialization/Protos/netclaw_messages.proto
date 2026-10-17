@@ -95,6 +95,8 @@ message TurnRecordedProto {
   optional string source_reminder_id = 5;
   optional string source_background_job_id = 6;
   repeated string consumed_input_ids = 7;
+  // proto3 bool: an entry written before this field reads as false (an ordinary turn).
+  bool routed_skill = 8;
 }
 
 message InputAdmittedProto {
@@ -295,6 +297,8 @@ message SessionSnapshotProto {
   reserved 9;
   repeated InputAdmittedProto pending_inputs = 10;
   repeated string recent_source_message_keys = 11;
+  optional string eligible_delivery_reminder_id = 12;
+  bool eligible_delivery_turn_routed_skill = 13;
 }
 
 // ── Session state ──

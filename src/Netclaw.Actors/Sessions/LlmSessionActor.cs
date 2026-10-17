@@ -211,10 +211,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _input.ClearTurnContext();
 
             // A session that recovers without a snapshot has no eligible turn. Mirror the live path so that
-            // late delivery feedback for the latest turn finds the turn and the reminder that started it.
-            var recoveredTurn = new TurnNumber(_state.TurnCount);
-            _deliveryRetry.MarkEligible(recoveredTurn);
-            _deliveryRetry.RecordTurn(recoveredTurn, evt.SourceReminderId);
+            // late delivery feedback for the latest turn finds the turn, the reminder that started it, and
+            // the routed mark.
+            RecordEligibleTurn(evt);
         });
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
         Recover<SessionBackgroundJobsReaped>(evt => _state = _state.Apply(evt));
@@ -246,7 +245,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _state = SessionState.FromSnapshot(snapshot);
                 if (snapshot.EligibleDeliveryTurnNumber is { } eligibleTurn)
+                {
                     _deliveryRetry.MarkEligible(eligibleTurn);
+
+                    // A restore from a snapshot does not replay the TurnRecorded event of the eligible turn,
+                    // so the snapshot carries what the event would give. A snapshot without either value
+                    // records nothing. A report for that turn then finds an unknown turn and writes a Warning.
+                    if (snapshot.EligibleDeliveryReminderId is not null || snapshot.EligibleDeliveryTurnRoutedSkill)
+                    {
+                        _deliveryRetry.RecordTurn(
+                            eligibleTurn,
+                            snapshot.EligibleDeliveryReminderId,
+                            snapshot.EligibleDeliveryTurnRoutedSkill);
+                    }
+                }
 
                 _log.Info("Recovered from snapshot (turns={TurnCount})", _state.TurnCount);
             }
@@ -1642,12 +1654,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _input.TurnCommitted(evt);
 
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
+
+            // Record the turn before the snapshot, so a snapshot that this turn triggers keeps the delivery state.
+            RecordEligibleTurn(evt);
             MaybeSnapshot();
             MaybeGenerateTitle();
-
-            var recordedTurn = new TurnNumber(_state.TurnCount);
-            _deliveryRetry.MarkEligible(recordedTurn);
-            _deliveryRetry.RecordTurn(recordedTurn, evt.SourceReminderId);
 
             // Check if compaction should trigger
             if (ShouldCompact())
@@ -1738,6 +1749,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _toolRegistry);
     }
 
+    /// <summary>
+    /// Makes the turn that <paramref name="evt"/> recorded the eligible turn and the latest recorded turn.
+    /// The live text turn, the live routed-skill turn, and the journal replay all call this, so the three
+    /// paths cannot drift apart.
+    /// </summary>
+    private void RecordEligibleTurn(TurnRecorded evt)
+    {
+        var turn = new TurnNumber(_state.TurnCount);
+        _deliveryRetry.MarkEligible(turn);
+        _deliveryRetry.RecordTurn(turn, evt.SourceReminderId, evt.RoutedSkill);
+    }
+
     private void HandleDeliveryFailedWhenReady(DeliveryFailed msg)
     {
         if (_deliveryRetry.EligibleTurnNumber != msg.TurnNumber)
@@ -1747,6 +1770,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.ChannelType,
                 msg.TurnNumber,
                 _deliveryRetry.EligibleTurnNumber?.ToString() ?? "none");
+            return;
+        }
+
+        // A sub-agent produced the reply of a routed-skill turn. A retry would ask the main model for a
+        // reply that it never wrote, so the first report is the final failure. This holds live, after
+        // replay, and after a snapshot restore, because the mark is part of all three.
+        if (DeliveryRetryHandler.IsRetryable(msg) && _deliveryRetry.IsRoutedSkill(msg.TurnNumber))
+        {
+            _log.Warning(
+                "Not retrying routed-skill turn channel={Channel} turn={Turn} kind={FailureKind}",
+                msg.ChannelType,
+                msg.TurnNumber,
+                msg.FailureKind);
+            _deliveryRetry.Exhaust();
+            ReportReminderPostFailure(msg);
             return;
         }
 
@@ -1797,13 +1835,33 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </summary>
     private void ReportReminderPostFailure(DeliveryFailed msg)
     {
-        if (_deliveryRetry.ReminderOf(msg.TurnNumber) is not { } fireKey)
+        var lookup = _deliveryRetry.ReminderOf(msg.TurnNumber);
+        if (lookup.Kind == ReminderLookupKind.UnknownTurn)
+        {
+            // The session does not hold the source of this turn. A quiet return would hide a lost link.
+            _log.Warning(
+                "Session cannot tell whether a reminder started turn {Turn} channel={Channel} kind={FailureKind}",
+                msg.TurnNumber,
+                msg.ChannelType,
+                msg.FailureKind);
+            return;
+        }
+
+        // The mark makes one reply raise one alert, even when the reply fails more than once.
+        if (lookup.FireKey is not { } fireKey || !_deliveryRetry.TryMarkReported(msg.TurnNumber))
             return;
 
         // A fire key that does not parse still gets an alert. The whole key then names the reminder.
-        var reminderId = ReminderFireKey.TryParse(fireKey.Value, out var parsed)
-            ? parsed.DefinitionId.Value
-            : fireKey.Value;
+        string reminderId;
+        if (ReminderFireKey.TryParse(fireKey.Value, out var parsed))
+        {
+            reminderId = parsed.DefinitionId.Value;
+        }
+        else
+        {
+            reminderId = fireKey.Value;
+            _log.Warning("Source key {SourceKey} is not a reminder fire key; the alert names the whole key", fireKey.Value);
+        }
 
         _log.Error(
             "Reminder {ReminderId} reply was not delivered session={SessionId} channel={Channel} turn={Turn} kind={FailureKind} error={Error}",
@@ -2839,6 +2897,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Content = msg.Result.Output
             },
             RecordedAtMs = NowMs(),
+            RoutedSkill = true,
             SourceReminderId = selected.ReminderId,
             SourceBackgroundJobId = selected.BackgroundJobId,
             ConsumedInputIds = selected.Ids
@@ -2862,6 +2921,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SourceReminderId = _input.Authority.Source?.ReminderId
             });
 
+            RecordEligibleTurn(evt);
             MaybeSnapshot();
             MaybeGenerateTitle();
             DrainBufferedMessagesOrBecomeReady();
@@ -2938,7 +2998,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         return _state.ToSnapshot() with
         {
-            EligibleDeliveryTurnNumber = _deliveryRetry.EligibleTurnNumber
+            EligibleDeliveryTurnNumber = _deliveryRetry.EligibleTurnNumber,
+            EligibleDeliveryReminderId = _deliveryRetry.UnreportedEligibleReminder,
+            EligibleDeliveryTurnRoutedSkill = _deliveryRetry.EligibleTurnIsRoutedSkill
         };
     }
 

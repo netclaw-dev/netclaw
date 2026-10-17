@@ -163,7 +163,8 @@ internal static class NetclawProtoMapper
             SessionId = ToProto(evt.SessionId),
             UserMessage = ToProto(evt.UserMessage),
             AssistantReply = ToProto(evt.AssistantReply),
-            RecordedAtMs = evt.RecordedAtMs
+            RecordedAtMs = evt.RecordedAtMs,
+            RoutedSkill = evt.RoutedSkill
         };
         // Value objects map to the existing string proto fields, so the on-disk
         // form is byte-identical to the pre-value-object representation.
@@ -183,7 +184,8 @@ internal static class NetclawProtoMapper
         RecordedAtMs = proto.RecordedAtMs,
         SourceReminderId = proto.HasSourceReminderId ? new ReminderId(proto.SourceReminderId) : (ReminderId?)null,
         SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : (BackgroundJobId?)null,
-        ConsumedInputIds = proto.ConsumedInputIds.Select(static id => new InputId(id)).ToArray()
+        ConsumedInputIds = proto.ConsumedInputIds.Select(static id => new InputId(id)).ToArray(),
+        RoutedSkill = proto.RoutedSkill
     };
 
     internal static Proto.InputAdmittedProto ToProto(InputAdmitted evt)
@@ -606,6 +608,9 @@ internal static class NetclawProtoMapper
             proto.Title = snap.Title;
         if (snap.EligibleDeliveryTurnNumber is not null)
             proto.EligibleDeliveryTurnNumber = snap.EligibleDeliveryTurnNumber.Value.Value;
+        if (snap.EligibleDeliveryReminderId is { } eligibleReminderId)
+            proto.EligibleDeliveryReminderId = eligibleReminderId.Value;
+        proto.EligibleDeliveryTurnRoutedSkill = snap.EligibleDeliveryTurnRoutedSkill;
         if (snap.WorkingContext is not null)
             proto.WorkingContext = ToProto(snap.WorkingContext);
         proto.History.AddRange(snap.History.Select(ToProto));
@@ -623,6 +628,10 @@ internal static class NetclawProtoMapper
         EligibleDeliveryTurnNumber = proto.HasEligibleDeliveryTurnNumber
             ? new TurnNumber(proto.EligibleDeliveryTurnNumber)
             : null,
+        EligibleDeliveryReminderId = proto.HasEligibleDeliveryReminderId
+            ? new ReminderId(proto.EligibleDeliveryReminderId)
+            : null,
+        EligibleDeliveryTurnRoutedSkill = proto.EligibleDeliveryTurnRoutedSkill,
         WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
         History = proto.History.Select(FromProto).ToArray(),
         ActiveBackgroundJobs = proto.ActiveBackgroundJobs.Select(FromProto).ToArray(),
