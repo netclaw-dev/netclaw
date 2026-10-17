@@ -336,7 +336,7 @@ public sealed class HeadlessAsyncChildEndToEndTests : IAsyncDisposable
             new ShellCommandPolicy(), new ToolPathPolicy([]));
         var prompt = new StaticSystemPromptProvider("You are a test assistant with subagents.");
         var spawner = new SubAgentSpawner(models, registry, policy, null, prompt,
-            new FixedWorkingContext(), NullLogger<SubAgentSpawner>.Instance);
+            new FixedWorkingContext(), NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
         registry.RegisterCore(new SpawnAgentTool(profiles, spawner, paths));
         var storage = new TestSessionStorageResolver(paths);
 
