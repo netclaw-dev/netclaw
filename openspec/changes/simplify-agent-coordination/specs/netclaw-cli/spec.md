@@ -82,6 +82,15 @@ Owners: `LlmSessionActor` decides which runs are open (durable state). `Headless
 - **THEN** the CLI ends the run on that turn
 - **AND** it does not wait
 
+#### Scenario: An earlier CLI against a new daemon loses the child result
+
+- **GIVEN** a CLI from before this change connects to a daemon from after it
+- **AND** turn 1 starts a child run
+- **WHEN** the earlier CLI receives `TurnCompleted` of turn 1
+- **THEN** the earlier CLI ignores `openChildRunIds` and exits at turn 1
+- **AND** the child result and the follow-up turn never reach its stdout
+- **AND** this is a known limit: an operator upgrades the CLI with the daemon
+
 #### Scenario: Output after the end of the run is ignored
 
 - **GIVEN** turn 2, a follow-up turn, fails and ends the run
@@ -99,7 +108,7 @@ On every failure or stop path, the CLI SHALL write one line on stderr after the 
 [headless:open-runs] session=<sessionId> runs=<runId>[,<runId>...]
 ```
 
-The failure or stop paths are: a failed turn, SIGINT, SIGTERM (including an outside `timeout`), and `SessionDeactivated`. The run knows the open runs from the most recent `TurnCompleted`. Before the first `TurnCompleted`, the run knows none, so the CLI writes no such line.
+The failure or stop paths are: a failed turn, SIGINT, SIGTERM (including an outside `timeout`), `SessionDeactivated`, a terminal `Disconnected` connection state, and a `TransportClosed` connection state while a run is open. The run knows the open runs from the most recent `TurnCompleted`. Before the first `TurnCompleted`, the run knows none, so the CLI writes no such line.
 
 The CLI SHALL NOT cancel child runs. The session owns them. An operator reads the session ID and resumes with `netclaw chat --resume <sessionId>`.
 
@@ -142,6 +151,68 @@ The CLI SHALL NOT cancel child runs. The session owns them. An operator reads th
 - **AND** stderr holds the `[headless:open-runs]` line
 - **AND** the run does not hang
 
+### Requirement: A lost connection ends a headless run loudly
+
+The CLI SHALL end a headless run with exit `1` when the daemon connection is lost in a way that can lose output. The hub drops session output while no client is connected, and nothing replays it after a reconnect. A run that waits for a turn that the hub dropped would hang with no output.
+
+The CLI SHALL end the run on each of these events, before the run ends in any other way:
+
+- the connection state `Disconnected`. The client reaches it after its reconnect attempts fail. No more output can arrive.
+- the connection state `TransportClosed` while the run knows at least one open child run (from the most recent `TurnCompleted`). The client reconnects after a `TransportClosed`, but the turn that completes in the gap is lost, so the wait cannot trust the reconnect.
+
+A `TransportClosed` state when the run knows no open child run SHALL NOT end the run. The run has no open run to lose, and the client reconnect covers the turn in progress. A `Disconnected` or `TransportClosed` state after the run ended SHALL NOT change the exit code, the stdout, or the stderr. A run that ended with exit `0` stays exit `0`.
+
+On such an end the CLI SHALL write one `[headless:error]` line that names the lost connection, then `[turn:failed] category=infra kind=ChannelFailure`, then the `[headless:open-runs]` line when the run knows an open child run. With `--json`, the CLI SHALL NOT write an envelope. The CLI SHALL NOT cancel the child runs. An operator resumes with `netclaw chat --resume <sessionId>`.
+
+The true bound of a headless run is the first of these events: a failed turn, a turn that reports no open child run, `SessionDeactivated`, `Disconnected`, `TransportClosed` with an open child run, SIGINT or SIGTERM, or an outside `timeout`. The CLI has no timer of its own. One case stays outside the bound: the transport drops before the first `TurnCompleted`, the client reconnects, and the hub dropped the output of the turn in progress. Only SIGINT or an outside `timeout` ends that run. A script SHOULD run `chat -p` under `timeout`.
+
+Schematic flow (it omits logs and JSON detail):
+
+```text
+on connection state s:
+    if run ended                                    -> ignore
+    if s is Disconnected                            -> end the run, exit 1
+    if s is TransportClosed and open runs known     -> end the run, exit 1
+    otherwise                                       -> ignore
+```
+
+Owner: `DaemonClient` publishes the connection state (call-local to the client). `HeadlessChannel` decides when the run ends (call-local state).
+
+#### Scenario: A terminal disconnect during the wait ends the run
+
+- **GIVEN** the CLI waits with one open child run after turn 1
+- **WHEN** the client reports `Disconnected` after its reconnect attempts fail
+- **THEN** the CLI exits `1` and stderr holds `[turn:failed] category=infra kind=ChannelFailure`
+- **AND** stderr holds a `[headless:error]` line and the `[headless:open-runs]` line with the session ID and the run ID
+- **AND** the run does not hang
+
+#### Scenario: A transport close during the wait ends the run
+
+- **GIVEN** the CLI waits with one open child run after turn 1
+- **WHEN** the client reports `TransportClosed`, and the reconnect would succeed
+- **THEN** the CLI exits `1` with `kind=ChannelFailure` and the `[headless:open-runs]` line
+- **AND** the CLI does not wait for the reconnect
+
+#### Scenario: A disconnect before any open run is known still ends the run
+
+- **GIVEN** the CLI sent the prompt and turn 1 has not completed
+- **WHEN** the client reports `Disconnected`
+- **THEN** the CLI exits `1` with `kind=ChannelFailure`
+- **AND** stderr holds no `[headless:open-runs]` line
+
+#### Scenario: A transport close with no open run does not end the run
+
+- **GIVEN** the CLI sent the prompt and turn 1 has not completed
+- **WHEN** the client reports `TransportClosed` and then reconnects
+- **THEN** the CLI keeps its subscription and waits for the next `TurnCompleted`
+
+#### Scenario: A disconnect after the final turn does not change the exit code
+
+- **GIVEN** a turn completed with no open child run, and the CLI ended the run with exit `0`
+- **WHEN** the client reports `Disconnected` or `TransportClosed` afterwards
+- **THEN** the exit code stays `0`
+- **AND** stderr holds no `[turn:failed]` line
+
 ### Requirement: The JSON envelope covers every turn of the run
 
 With `--json`, the CLI SHALL write exactly one envelope on stdout, when the run ends by a completed turn or by a failed turn. The CLI SHALL NOT write an envelope for a signal or a session deactivation. An envelope that omits earlier turns would hide the child result.
@@ -151,7 +222,7 @@ The envelope SHALL hold:
 - `response`: the text of the last turn
 - `turnResponses`: an array with one entry for each completed turn, in order. Each entry holds `turnNumber`, `text`, `toolCalls`, and `usage`.
 - `toolCalls`: the tool calls of all turns, in order
-- `usage`: the sum of the token counts of all turns (`inputTokens`, `outputTokens`, `totalTokens`, `cachedInputTokens`, `reasoningTokens`)
+- `usage`: the sum of the token counts of all turns (`inputTokens`, `outputTokens`, `totalTokens`, `cachedInputTokens`, `reasoningTokens`). The rates `promptMs` and `predictedPerSecond` do not add up. They come from the last turn that has a usage record, and they are `null` when that record has no rate. A turn with no usage record does not count.
 
 A run with one turn has one entry in `turnResponses`. Its `response`, `toolCalls`, and `usage` equal the values of the earlier single-turn envelope. A failed turn adds `errorCategory` and `errorKind` and counts as the last turn.
 

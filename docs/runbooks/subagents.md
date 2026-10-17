@@ -146,7 +146,7 @@ runs in each `TurnCompleted`. A background shell job is not a child run.
 - The run has no timeout of its own. Each child has its daemon timeouts. Use an
   outside `timeout` to bound the run.
 
-A failed turn, SIGINT, SIGTERM, or a stopped session ends the run with exit `1`.
+A failed turn, SIGINT, SIGTERM, a stopped session, or a lost connection ends the run with exit `1`.
 The CLI does not cancel the child runs. Stderr then names them:
 
 ```
@@ -160,8 +160,22 @@ netclaw chat --resume <sessionId>
 ```
 
 The session still owns the open runs. It starts a parent turn for each result.
-A daemon restart during the wait ends the run with `kind=ChannelFailure`. The
-runs stay open in the session, and recovery does not repeat their external work.
+A drained daemon restart during the wait ends the run with `kind=ChannelFailure`.
+The runs stay open in the session, and recovery does not repeat their external work.
+
+A lost connection also ends the run with `kind=ChannelFailure`, and a
+`[headless:error]` line names it. The hub drops output while no client is
+connected, so the CLI does not wait through a reconnect that has an open run.
+The CLI ends on `Disconnected` at any time, and on `TransportClosed` when it
+knows an open run. If the network drops before the first turn completes, and the
+client reconnects, a lost turn can still leave the run with no output. Run
+`chat -p` under `timeout` so that an outside limit always bounds it. A daemon
+that stops without a drain sends no stop signal, so the lost connection ends the
+run there.
+
+The CLI and the daemon must have the same version. A CLI from before this
+behavior exits at turn 1 against a new daemon and loses the child result. Upgrade
+the CLI with the daemon.
 
 Completion events are emitted for every finished subagent run, even when the
 subagent returns no structured findings. In that case `FindingsCount` is `0`

@@ -89,8 +89,8 @@ turn. A headless caller SHALL stay subscribed until that turn ends. See `netclaw
 
 #### Scenario: Subagent completion event emitted
 
-- **GIVEN** a subagent completes (success or failure)
-- **WHEN** the result is received by the calling tool
+- **GIVEN** a child run reaches a terminal result (success or failure)
+- **WHEN** the owning session commits that terminal result, before it hands the result to the parent in a follow-up turn
 - **THEN** a `SubAgentOutput` event with `Phase = Completed` is emitted
 - **AND** the event includes success status and duration
 

@@ -231,7 +231,7 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
                 FileName = "report.txt",
                 MimeType = new Netclaw.Media.MimeType("text/plain")
             },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()));

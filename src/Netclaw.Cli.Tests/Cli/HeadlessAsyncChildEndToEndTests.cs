@@ -54,8 +54,10 @@ public sealed class HeadlessAsyncChildEndToEndTests : IAsyncDisposable
     private const string StartedText = "I started the child.";
     private const string FinalText = "The child reported: CHILD-OUTPUT-42.";
 
-    private static readonly Regex WaitingLine = new(@"^\[subagent:waiting\] 1 open: (?<run>\S+)$", RegexOptions.Multiline);
-    private static readonly Regex OpenRunsLine = new(@"^\[headless:open-runs\] session=(?<session>\S+) runs=(?<runs>\S+)$", RegexOptions.Multiline);
+    // The channel writes each line with WriteLine, so the line ending is "\r\n" on Windows. Multiline mode
+    // matches "$" before "\n" only, so each pattern accepts an optional "\r" before it.
+    private static readonly Regex WaitingLine = new(@"^\[subagent:waiting\] 1 open: (?<run>\S+)\r?$", RegexOptions.Multiline);
+    private static readonly Regex OpenRunsLine = new(@"^\[headless:open-runs\] session=(?<session>\S+) runs=(?<runs>\S+)\r?$", RegexOptions.Multiline);
 
     private readonly DisposableTempDir _directory = new();
     private readonly TaskCompletionSource _childGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -99,7 +101,7 @@ public sealed class HeadlessAsyncChildEndToEndTests : IAsyncDisposable
         Assert.Contains("[subagent:done] child-a (completed", run.Stdout, StringComparison.Ordinal);
         // The child text reaches stdout as tool output, as it did when spawn_agent waited inside one turn.
         var resultLine = Assert.Single(
-            run.Stdout.Split('\n'), line => line.StartsWith("[tool:result] child_run_result", StringComparison.Ordinal));
+            run.Stdout.Split(['\r', '\n']), line => line.StartsWith("[tool:result] child_run_result", StringComparison.Ordinal));
         Assert.Contains(ChildText, resultLine, StringComparison.Ordinal);
         Assert.Contains(waiting.Groups["run"].Value, resultLine, StringComparison.Ordinal);
         Assert.Contains(FinalText, run.Stdout, StringComparison.Ordinal);

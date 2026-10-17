@@ -242,8 +242,8 @@ after the `[error]` or `[headless:error]` line:
 - `kind` is the `ErrorCategory` name of the last `ErrorOutput` before the failed turn: `ModelBehavior`,
   `ProviderFailure`, `StreamFailure`, `Timeout`, `ToolFailure`, `InputCompatibility`, or `Unknown`.
   A failed turn with no `ErrorOutput` is `Unknown`.
-- The CLI adds two kinds: `ChannelFailure` (the daemon is unreachable, rejects the client, or the prompt
-  is over the hub frame limit) and `Cancelled` (SIGINT or SIGTERM). The daemon restart during a wait
+- The CLI adds two kinds: `ChannelFailure` (the daemon is unreachable, rejects the client, the prompt
+  is over the hub frame limit, or the connection is lost during a wait) and `Cancelled` (SIGINT or SIGTERM). A drained daemon restart during a wait
   also gives `ChannelFailure`. A run with one of these kinds has no JSON envelope. It has a session log
   record only for the turns that finished before the stop.
 - An error that the turn survived (a compaction timeout, a context overflow recovery) does not decide
@@ -299,8 +299,8 @@ on TurnCompleted t:                       (schematic: it omits logs and JSON det
   (SIGINT) or an outside `timeout` bounds the run.
 
 On each failure or stop path, stderr names the open runs. The paths are a failed turn, SIGINT, SIGTERM
-(including an outside `timeout`), and `SessionDeactivated`. The CLI writes one line after the
-`[turn:failed]` line:
+(including an outside `timeout`), `SessionDeactivated`, and a lost connection (see
+[A lost connection](#a-lost-connection)). The CLI writes one line after the `[turn:failed]` line:
 
 ```text
 [headless:open-runs] session=<sessionId> runs=<runId>[,<runId>...]
@@ -315,12 +315,15 @@ operator resumes the session with `netclaw chat --resume <sessionId>`.
 | Last turn completes with no open child run | `0` | none |
 | A turn fails (with or without open runs) | `1` | `[turn:failed] ... kind=<Kind>`, plus the open-runs line |
 | `SessionDeactivated` before the run ends | `1` | `kind=ChannelFailure`, plus the open-runs line |
+| Connection state `Disconnected` before the run ends | `1` | `[headless:error]`, `kind=ChannelFailure`, plus the open-runs line when a run is known |
+| Connection state `TransportClosed` while the run knows an open run | `1` | `[headless:error]`, `kind=ChannelFailure`, plus the open-runs line |
 | SIGINT or SIGTERM before the run ends | `1` | `kind=Cancelled`, plus the open-runs line |
 | An outside `timeout` ends the run | `124` | `kind=Cancelled` (usually), plus the open-runs line |
 
-The daemon forwards `SessionDeactivated` to the client as the wire type `session_deactivated`. A daemon
-restart during the wait then ends the run with exit `1`. The run never hangs. The CLI writes a
-`[headless:error]` line that says the session stopped, before the `[turn:failed]` line.
+The daemon forwards `SessionDeactivated` to the client as the wire type `session_deactivated`. A drained
+daemon restart during the wait sends it, and the run then ends with exit `1`. The CLI writes a
+`[headless:error]` line that says the session stopped, before the `[turn:failed]` line. A daemon that
+stops without a drain sends nothing. [A lost connection](#a-lost-connection) covers that case.
 
 Positive example: turn 1 starts one child and reports one open run. The child finishes. Turn 2 reports
 none. Stdout holds the status text, `[subagent:done]`, the `child_run_result` line, and the turn 2 text.
@@ -332,6 +335,40 @@ A run that ends on turn 1 with exit `0` and only a status line, while a child ru
 
 Owner: `LlmSessionActor` assigns `OpenChildRunIds`. `HeadlessChannel` decides when the run ends.
 
+Compatibility: the CLI and the daemon must have the same version. A CLI from before this contract ignores
+`openChildRunIds`. Against a new daemon, it exits at turn 1 with exit `0` and loses the child result and the
+follow-up turn. A new CLI against an earlier daemon works as before: the missing field ends the run on that
+turn. An operator upgrades the CLI with the daemon.
+
+#### A lost connection
+
+The hub drops session output while no client is connected, and it does not replay that output after a
+reconnect. A turn that completes during a gap is lost. A client that only waited would wait for a turn that
+never comes. The CLI therefore ends the run with exit `1` on these connection states:
+
+- `Disconnected`. The client reached it after its reconnect attempts failed.
+- `TransportClosed`, when the run knows at least one open child run. The client reconnects after this
+  state, but the reconnect cannot restore a lost turn.
+
+The CLI writes one `[headless:error]` line that names the lost connection, then
+`[turn:failed] category=infra kind=ChannelFailure`, then the open-runs line when the run knows an open run.
+With `--json`, it writes no envelope. The CLI does not cancel the child runs. A `TransportClosed` state
+when the run knows no open run does not end the run. A `Disconnected` or `TransportClosed` state after the
+run ended changes nothing: a run that ended with exit `0` stays `0`.
+
+The true bound of a run is the first of these events: a failed turn; a turn that reports no open child run;
+`SessionDeactivated`; `Disconnected`; `TransportClosed` with an open run; SIGINT or SIGTERM; an outside
+`timeout`. The CLI has no timer of its own. One case is outside the bound. The transport drops before the
+first `TurnCompleted`, the client reconnects, and the hub dropped the output of the turn in progress. Only
+SIGINT or an outside `timeout` ends that run. A script SHOULD run `chat -p` under `timeout`.
+
+Positive example: the run waits with one open run. The network drops. The CLI exits `1`, and stderr holds
+`[turn:failed] category=infra kind=ChannelFailure` and `[headless:open-runs] session=<id> runs=<run>`.
+The operator runs `netclaw chat --resume <id>`.
+
+Negative example: the run waits, the network drops for 10 seconds, the follow-up turn completes in the gap,
+and the CLI waits with no output until SIGINT. That is a defect.
+
 #### JSON envelope for several turns
 
 With `--json`, stdout holds exactly one envelope. The CLI writes it when the run ends on a completed
@@ -342,8 +379,9 @@ turn or on a failed turn. It writes no envelope for a signal or for `SessionDeac
   `turnNumber`, `text`, `toolCalls`, and `usage`. A run with one turn has one entry.
 - `toolCalls` holds the tool calls of all turns, in order.
 - `usage` is the sum over all turns of `inputTokens`, `outputTokens`, `totalTokens`,
-  `cachedInputTokens`, and `reasoningTokens`. `promptMs` and `predictedPerSecond` are rates, so they
-  come from the last turn that reports them.
+  `cachedInputTokens`, and `reasoningTokens`. `promptMs` and `predictedPerSecond` are rates, so they do
+  not add up. They come from the last turn that has a usage record. If that record has no rate, the
+  rate is `null`. A turn with no usage record does not count.
 - A failed turn is the last entry. The envelope adds `errorCategory` and `errorKind`.
 
 Positive example: turn 1 reports 10 input tokens and turn 2 reports 7. The envelope has

@@ -54,7 +54,8 @@ public sealed class SessionSubscriberManagerTests : TestKit
         manager.Emit(new TurnCompleted
         {
             SessionId = sessionId,
-            TurnNumber = new TurnNumber(1)
+            TurnNumber = new TurnNumber(1),
+            OpenChildRunIds = []
         });
 
         await textOnly.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);

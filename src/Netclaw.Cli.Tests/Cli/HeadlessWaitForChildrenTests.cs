@@ -9,6 +9,7 @@ using Netclaw.Actors.SubAgents;
 using Netclaw.Cli.Daemon;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
+using R3;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -379,7 +380,146 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
         Assert.Empty(OpenRunsLines(run));
     }
 
+    // ----- A lost connection (SPEC-004, "A lost connection") -----
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_terminal_disconnect_during_the_wait_ends_the_run_loudly(bool json)
+    {
+        // Planted bug: the channel only logs the Disconnected state. The hub drops output while no client
+        // is connected, so no turn comes and the run waits for ever with no stderr line.
+        var run = await RunAsync(json, async drive =>
+        {
+            await _promptSent.Task;
+            Push(Text("Started."), Turn(1, "run-1"));
+            // The client pump keeps the order of the turn and the connection states. In text mode the waiting
+            // line proves that the channel handled turn 1. JSON mode prints no such line.
+            if (!json && !await drive.StdoutShowsAsync("[subagent:waiting]"))
+                return;
+
+            // Every reconnect attempt fails. The zero delay runs the whole budget at once.
+            _transport.StartHook = _ => throw new InvalidOperationException("connection refused");
+            _transport.RaiseClosed(new IOException("The network dropped."));
+        });
+
+        AssertLostConnection(run, json, expectOpenRun: true);
+    }
+
+    [Fact]
+    public async Task A_transport_close_during_the_wait_ends_the_run_without_waiting_for_the_reconnect()
+    {
+        // Planted bug: the channel waits through the reconnect. A turn that completed in the gap is lost, so
+        // the run waits for ever. The reconnect here would succeed: StartHook stays at its default.
+        var run = await RunAsync(json: false, async drive =>
+        {
+            await _promptSent.Task;
+            Push(Text("Started."), Turn(1, "run-1"));
+            if (await drive.StdoutShowsAsync("[subagent:waiting]"))
+                _transport.RaiseClosed(new IOException("The network dropped."));
+        });
+
+        AssertLostConnection(run, json: false, expectOpenRun: true);
+    }
+
+    [Fact]
+    public async Task A_terminal_disconnect_before_the_first_turn_ends_the_run_and_names_no_open_run()
+    {
+        var run = await RunAsync(json: false, async drive =>
+        {
+            await _promptSent.Task;
+            _transport.StartHook = _ => throw new InvalidOperationException("connection refused");
+            _transport.RaiseClosed(new IOException("The network dropped."));
+        });
+
+        AssertLostConnection(run, json: false, expectOpenRun: false);
+    }
+
+    [Fact]
+    public async Task A_transport_close_before_any_open_run_is_known_does_not_end_the_run()
+    {
+        // The run knows no open run, and the client reconnect covers the turn in progress. The run keeps its
+        // subscription and ends on the next turn.
+        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watch = _client.ConnectionEvents.Subscribe(evt =>
+        {
+            if (evt.State == DaemonConnectionState.Connected
+                && evt.Message.Contains("Reconnected", StringComparison.Ordinal))
+                reconnected.TrySetResult();
+        });
+
+        var run = await RunAsync(json: false, async drive =>
+        {
+            await _promptSent.Task;
+            _transport.RaiseClosed(new IOException("The network dropped."));
+            await reconnected.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Push(Text("Done."), Turn(1));
+        });
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Empty(run.TurnFailedLines);
+        Assert.DoesNotContain("[headless:error]", run.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Done.", run.Stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_disconnect_after_the_final_turn_does_not_change_a_successful_exit()
+    {
+        var run = await RunAsync(json: false, async drive =>
+        {
+            await _promptSent.Task;
+            Push(Text("Done."), Turn(1));
+            _transport.StartHook = _ => throw new InvalidOperationException("connection refused");
+            _transport.RaiseClosed(new IOException("The network dropped."));
+        });
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Empty(run.TurnFailedLines);
+        Assert.DoesNotContain("[headless:error]", run.Stderr, StringComparison.Ordinal);
+        Assert.Empty(OpenRunsLines(run));
+        Assert.Contains("Done.", run.Stdout, StringComparison.Ordinal);
+    }
+
+    // ----- JSON usage rates -----
+
+    [Fact]
+    public async Task The_usage_rates_come_from_the_last_turn_with_usage_even_when_that_rate_is_null()
+    {
+        // SPEC-004: the counts add up. A rate does not, so the last turn with a usage record decides it.
+        // That record has no rate here, so the rate is null. An earlier rate does not fill it in.
+        var run = await RunAsync(json: true, async drive =>
+        {
+            await _promptSent.Task;
+            Push(Text("Started."), Usage(10, 5, promptMs: 120, perSecond: 40), Turn(1, "run-1"));
+            Push(Text("Result."), Usage(7, 3), Turn(2));
+        });
+
+        using var envelope = Assert.Single(Envelopes(run));
+        var usage = envelope.RootElement.GetProperty("usage");
+        Assert.Equal(17, usage.GetProperty("inputTokens").GetInt64());
+        Assert.False(
+            usage.TryGetProperty("promptMs", out var promptMs) && promptMs.ValueKind != JsonValueKind.Null,
+            "The rate of an earlier turn must not fill in a null rate.");
+        Assert.False(
+            usage.TryGetProperty("predictedPerSecond", out var perSecond) && perSecond.ValueKind != JsonValueKind.Null,
+            "The rate of an earlier turn must not fill in a null rate.");
+    }
+
     // ----- Helpers -----
+
+    // One [headless:error] line, one [turn:failed] ChannelFailure line, and the open-runs line when a run is
+    // known. A lost connection writes no JSON envelope.
+    private static void AssertLostConnection(HeadlessRun run, bool json, bool expectOpenRun)
+    {
+        Assert.Equal(1, run.ExitCode);
+        Assert.Equal(["[turn:failed] category=infra kind=ChannelFailure"], run.TurnFailedLines);
+        Assert.Contains("[headless:error]", run.Stderr, StringComparison.Ordinal);
+        Assert.Equal(
+            expectOpenRun ? [$"[headless:open-runs] session={Session} runs=run-1"] : Array.Empty<string>(),
+            OpenRunsLines(run));
+        if (json)
+            Assert.Empty(Envelopes(run));
+    }
 
     private Task<HeadlessRun> RunAsync(bool json, Func<HeadlessDrive, Task> script, CancellationTokenSource? stop = null)
         => HeadlessRunHarness.RunAsync(
@@ -438,13 +578,15 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
             ArgumentsJson = "{}"
         });
 
-    private static SessionOutputDto Usage(long input, long output)
+    private static SessionOutputDto Usage(long input, long output, double? promptMs = null, double? perSecond = null)
         => SessionOutputDtoMapper.ToDto(new UsageOutput
         {
             SessionId = new SessionId(Session),
             InputTokens = input,
             OutputTokens = output,
-            TotalTokens = input + output
+            TotalTokens = input + output,
+            PromptMs = promptMs,
+            PredictedPerSecond = perSecond
         });
 
     private static SessionOutputDto Error(string kind, string message)
@@ -476,7 +618,8 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
         {
             SessionId = new SessionId(Session),
             TurnNumber = new TurnNumber(number),
-            Outcome = outcome
+            Outcome = outcome,
+            OpenChildRunIds = []
         }) with
         {
             OpenChildRunIds = null

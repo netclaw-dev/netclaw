@@ -159,7 +159,8 @@ public sealed class HeadlessStopRuleMutationTests
         {
             SessionId = new SessionId(Session),
             TurnNumber = new TurnNumber(number),
-            Outcome = outcome
+            Outcome = outcome,
+            OpenChildRunIds = []
         }) with
         {
             OpenChildRunIds = open is null ? null : [.. open]

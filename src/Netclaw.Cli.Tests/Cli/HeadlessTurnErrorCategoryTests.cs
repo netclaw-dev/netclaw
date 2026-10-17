@@ -324,6 +324,7 @@ public sealed class HeadlessTurnErrorCategoryTests : IAsyncDisposable
         {
             SessionId = new SessionId(SessionId),
             TurnNumber = new TurnNumber(1),
-            Outcome = outcome
+            Outcome = outcome,
+            OpenChildRunIds = []
         });
 }

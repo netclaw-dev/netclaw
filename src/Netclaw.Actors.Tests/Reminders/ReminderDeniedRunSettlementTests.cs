@@ -77,12 +77,12 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
                     FailureCode = ToolResultOutput.AccessDeniedFailureCode
                 },
                 new TextOutput("Done another way.") { SessionId = sessionId },
-                new TurnCompleted { SessionId = sessionId, TurnNumber = new TurnNumber(1) }
+                new TurnCompleted { SessionId = sessionId, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
             ]
             :
             [
                 new TextOutput("Done.") { SessionId = sessionId },
-                new TurnCompleted { SessionId = sessionId, TurnNumber = new TurnNumber(1) }
+                new TurnCompleted { SessionId = sessionId, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
             ]);
 
         builder.WithLocalReminders(reminders =>

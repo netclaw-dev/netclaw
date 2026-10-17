@@ -74,7 +74,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `SessionInputFlow.DrainBufferedBatch` (turn owner choice), `SessionInputFlow.JoinsTurn`, and the automation check of `SessionToolWorkflow.PlanNewInputAbandonment` | A turn has one requester: a drain after a turn adopts the authority of the first buffered input, a drain inside a turn keeps the turn's authority, and only inputs of that requester join the batch; automated input waits behind an open approval, and only input from a person closes it | 10 killed | `./scripts/run-input-one-authority-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
 | `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, and `SessionInputFlow.DrainBufferedBatch` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn | 8 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
-| `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run, a turn with one of two open runs, and a turn from an earlier daemon without the field each get the right decision (SPEC-004, "Waiting for child runs") | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
+| `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run and a turn with one of two open runs each get the right decision (SPEC-004, "Waiting for child runs"). The gate does not cover the missing-field case: `SessionOutputDtoMapper.FromDto` maps a missing field to an empty list, outside the mutated span, and ordinary tests cover it | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -255,7 +255,7 @@ fake daemon transport. `Netclaw.Cli.MutationTests` holds the tests. They cover t
 - one open run of two keeps the wait
 - a failed turn ends the run even when a run is open
 - a skipped turn with an open run keeps the wait
-- a turn from an earlier daemon, without the field, ends the run
+- a turn from an earlier daemon, without the field, ends the run (the test passes through the mapper default `dto.OpenChildRunIds is null ? [] : ...` in `SessionOutputDtoMapper.FromDto`; that default is outside the mutated span, so no `EndsRun` mutant depends on this test)
 
 A mutant that makes the run wait for ever hits the fault ceiling of the tests. Stryker reports it as a
 timeout. The gate counts a timeout as a detection. It fails for a survivor, a compile error, or a mutant

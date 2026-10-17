@@ -338,7 +338,7 @@ public sealed class ChatPageTests
             ToolCall("web_fetch"),
             ToolResult("web_fetch", WebFetchSummary),
             new TextDeltaOutput("Done fetching") { SessionId = new SessionId("tui/test") },
-            new TurnCompleted { SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1) });
+            new TurnCompleted { SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1), OpenChildRunIds = [] });
 
         var rows = ChatRows(screen);
         var toolRow = Assert.Single(rows, r => r.Contains("✓ web_fetch", StringComparison.Ordinal));
@@ -408,7 +408,7 @@ public sealed class ChatPageTests
             ToolCall("web_fetch"),
             ToolResult("web_fetch", "Fetched: ok"),
             new TextDeltaOutput("All done") { SessionId = new SessionId("tui/test") },
-            new TurnCompleted { SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1) });
+            new TurnCompleted { SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1), OpenChildRunIds = [] });
 
         var rows = ChatRows(screen);
         var toolRow = Assert.Single(rows, r => r.Contains("✓ web_fetch", StringComparison.Ordinal));
@@ -431,7 +431,7 @@ public sealed class ChatPageTests
             ToolResult("web_search", "Found: ok", "call-2"),
             new TextDeltaOutput("Done") { SessionId = sid },
             new TextOutput("Done") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) });
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] });
 
         var rows = ChatRows(screen);
         Assert.Single(rows, r => r == "Netclaw: Let me check");
@@ -543,7 +543,7 @@ public sealed class ChatPageTests
             new SessionJoined { SessionId = new SessionId("tui/test"), Title = "rejoined" },
             ToolResult("tool_b", "result of two", "call-2"),
             ToolResult("tool_a", "result of one", "call-1"),
-            new TurnCompleted { SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1) });
+            new TurnCompleted { SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1), OpenChildRunIds = [] });
 
         var rows = ChatRows(screen);
         var a = Array.FindIndex(rows, r => r.Contains("✓ tool_a → result of one", StringComparison.Ordinal));
@@ -603,7 +603,7 @@ public sealed class ChatPageTests
         var sid = new SessionId("tui/test");
         SessionOutput ender = kind switch
         {
-            "turn" => new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) },
+            "turn" => new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] },
             "error" => new ErrorOutput { SessionId = sid, Message = "boom" },
             "delta" => new TextDeltaOutput("moving on") { SessionId = sid },
             _ => new TextOutput("moving on") { SessionId = sid }

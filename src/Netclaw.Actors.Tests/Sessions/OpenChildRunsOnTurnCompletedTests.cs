@@ -10,6 +10,7 @@ using Akka.TestKit;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Xunit;
@@ -281,6 +282,66 @@ public sealed class OpenChildRunsOnTurnCompletedTests : ChildLifetimeTestBase
         }
     }
 
+    [Fact]
+    public async Task A_follow_up_turn_with_its_own_tool_batch_emits_the_delivery_pair_once()
+    {
+        // The continuingChild guard: the delivery turn runs a tool of its own, and the model call after that
+        // batch must not select the child again and emit the pair a second time.
+        // Planned parent calls: spawn, start text, then the delivery turn (a probe call, then the final text).
+        var sessionId = new SessionId("boundary/open-runs-follow-up-tool-batch");
+        var childGate = NewGate();
+        Clients.Child.NextResponseGate = childGate;
+        FakeChat.PlannedResponses.Enqueue([Spawn("spawn-1", "child-a")]);
+        FakeChat.PlannedResponses.Enqueue([new Microsoft.Extensions.AI.TextContent("Started.")]);
+        FakeChat.PlannedResponses.Enqueue([Probe("probe-1", FirstTool)]);
+        FakeChat.PlannedResponses.Enqueue([new Microsoft.Extensions.AI.TextContent("Done.")]);
+        var subscriber = await JoinFullAsync(sessionId);
+
+        try
+        {
+            await SendRequesterAsync(sessionId, "Start the child run.");
+            var seen = new List<SessionOutput>();
+            var first = await NextTurnAsync(subscriber, seen);
+            Assert.Single(first.OpenChildRunIds);
+
+            // The child finishes. The delivery turn starts, calls the probe, and waits for its approval.
+            childGate.TrySetResult();
+            var approval = (ToolInteractionRequest)await PumpAsync(
+                subscriber, seen, output => output is ToolInteractionRequest);
+            Assert.Equal(FirstTool, approval.ToolName.Value);
+            Assert.IsType<CommandAck>(await ApproveAsync(sessionId, approval.CallId));
+            var second = await NextTurnAsync(subscriber, seen);
+
+            Assert.Equal(TurnOutcome.Completed, second.Outcome);
+            Assert.Empty(second.OpenChildRunIds);
+            Assert.Equal(1, First.Runs);
+            // The probe ran inside the delivery turn: one pair before it, and no second pair after it.
+            var call = Assert.Single(seen.OfType<ToolCallOutput>(), output => output.ToolName.Value == "child_run_result");
+            var result = Assert.Single(seen.OfType<ToolResultOutput>(), output => output.ToolName.Value == "child_run_result");
+            Assert.Equal(call.CallId, result.CallId);
+            var request = Assert.Single(seen.OfType<ToolInteractionRequest>());
+            Assert.True(
+                seen.IndexOf(call) < seen.IndexOf(request),
+                "The delivery pair must come before the probe approval of the same turn.");
+        }
+        finally
+        {
+            childGate.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public void TurnCompleted_makes_the_open_runs_a_required_property()
+    {
+        // The compiler must reject a site that forgets the value. A default of an empty list would let a new
+        // emit site, or an edit that drops the line, end a headless run early with no signal.
+        var property = typeof(TurnCompleted).GetProperty(nameof(TurnCompleted.OpenChildRunIds));
+        Assert.NotNull(property);
+        Assert.True(
+            property.IsDefined(typeof(System.Runtime.CompilerServices.RequiredMemberAttribute), inherit: false),
+            "TurnCompleted.OpenChildRunIds must be a required property.");
+    }
+
     // ----- Helpers -----
 
     private static async Task<TurnCompleted> NextTurnAsync(TestProbe subscriber, List<SessionOutput> seen)
@@ -385,5 +446,135 @@ public sealed class OpenChildRunsSkippedTurnTests : ChildLifetimeTestBase
     }
 
     private static async Task<TurnCompleted> NextTurnAsync(TestProbe subscriber)
+        => await subscriber.FishForMessageAsync<TurnCompleted>(_ => true, Deadline, cancellationToken: Cancellation);
+}
+
+/// <summary>
+/// The slash-rejection site of <see cref="TurnCompleted"/>: the session rejects an unknown slash command
+/// before a model call and reports a skipped turn. A child run that is open must stay in the list.
+/// </summary>
+public sealed class OpenChildRunsRejectedSlashCommandTests : ChildLifetimeTestBase
+{
+    public OpenChildRunsRejectedSlashCommandTests(ITestOutputHelper output) : base(output)
+    {
+    }
+
+    protected override void ConfigureSessionServices(IServiceCollection services)
+    {
+        base.ConfigureSessionServices(services);
+        // A registry must exist for the session to dispatch a slash command. It holds no skill.
+        services.AddSingleton(new SkillRegistry());
+    }
+
+    [Fact]
+    public async Task An_unknown_slash_command_reports_the_open_run()
+    {
+        // Planted bug: RejectSlashCommand builds its TurnCompleted without the open runs. A headless caller
+        // that sends an unknown command while a child runs then exits at that turn and loses the result.
+        var sessionId = new SessionId("boundary/open-runs-unknown-slash");
+        var childGate = NewGate();
+        Clients.Child.NextResponseGate = childGate;
+        FakeChat.ToolCallsOnFirstCall = [Spawn("spawn-1", "child-a")];
+        var subscriber = await JoinFullAsync(sessionId);
+
+        try
+        {
+            await SendRequesterAsync(sessionId, "Start the child run.");
+            var first = await NextTurnAsync(subscriber);
+            var runId = Assert.Single(first.OpenChildRunIds).Value;
+
+            await SendRequesterAsync(sessionId, "/no-such-command now");
+            var rejected = await NextTurnAsync(subscriber);
+
+            Assert.Equal(TurnOutcome.Skipped, rejected.Outcome);
+            Assert.Equal([runId], rejected.OpenChildRunIds.Select(id => id.Value).ToArray());
+        }
+        finally
+        {
+            childGate.TrySetResult();
+        }
+    }
+
+    private static async Task<TurnCompleted> NextTurnAsync(Akka.TestKit.TestProbe subscriber)
+        => await subscriber.FishForMessageAsync<TurnCompleted>(_ => true, Deadline, cancellationToken: Cancellation);
+}
+
+/// <summary>
+/// The routed-turn site of <see cref="TurnCompleted"/>: a slash command that routes to a subagent runs the
+/// subagent as a child run. A child run from an earlier turn is still open when that turn completes.
+/// </summary>
+public sealed class OpenChildRunsRoutedSkillTurnTests : ChildLifetimeTestBase
+{
+    private const string RoutedSkill = "routed-skill";
+
+    public OpenChildRunsRoutedSkillTurnTests(ITestOutputHelper output) : base(output)
+    {
+    }
+
+    protected override void ConfigureSessionServices(IServiceCollection services)
+    {
+        base.ConfigureSessionServices(services);
+        var skillDir = Path.Combine(TestPaths.BasePath, RoutedSkill);
+        Directory.CreateDirectory(skillDir);
+        var skillFile = Path.Combine(skillDir, "SKILL.md");
+        File.WriteAllText(skillFile, """
+            ---
+            name: routed-skill
+            description: Route to child-a.
+            metadata:
+              subagent: child-a
+            ---
+
+            # Routed
+
+            Do the routed work.
+            """);
+        var registry = new SkillRegistry();
+        registry.Register(new SkillEntry(RoutedSkill, "Routed", "Route to child-a.", skillFile, skillDir, null)
+        {
+            HasSubagentRoutingMetadata = true,
+            Subagent = "child-a"
+        });
+        services.AddSingleton(registry);
+    }
+
+    [Fact]
+    public async Task A_routed_skill_turn_reports_the_open_run_from_an_earlier_turn()
+    {
+        // Planted bug: HandleRoutedSkillExecutionCompleted builds its TurnCompleted without the open runs.
+        var sessionId = new SessionId("boundary/open-runs-routed-skill");
+        var childGate = NewGate();
+        Clients.Child.NextResponseGate = childGate;
+        FakeChat.ToolCallsOnFirstCall = [Spawn("spawn-1", "child-a")];
+        var subscriber = await JoinFullAsync(sessionId);
+
+        try
+        {
+            await SendRequesterAsync(sessionId, "Start the child run.");
+            var first = await NextTurnAsync(subscriber);
+            var runId = Assert.Single(first.OpenChildRunIds).Value;
+
+            // The first child call took the gate. The routed run then needs no gate.
+            await Clients.Child.FirstCallEntered.Task.WaitAsync(Deadline, Cancellation);
+            await AwaitAssertAsync(
+                () => Assert.Null(Clients.Child.NextResponseGate), Deadline, cancellationToken: Cancellation);
+
+            await SendRequesterAsync(sessionId, $"/{RoutedSkill} do it");
+            var routed = await NextTurnAsync(subscriber);
+
+            // The routed run is a child run too: the session accepts it in this turn and delivers its result in
+            // a later turn. So the list holds the earlier run and the routed run.
+            Assert.Equal(TurnOutcome.Completed, routed.Outcome);
+            var open = routed.OpenChildRunIds.Select(id => id.Value).ToArray();
+            Assert.Equal(2, open.Length);
+            Assert.Contains(runId, open);
+        }
+        finally
+        {
+            childGate.TrySetResult();
+        }
+    }
+
+    private static async Task<TurnCompleted> NextTurnAsync(Akka.TestKit.TestProbe subscriber)
         => await subscriber.FishForMessageAsync<TurnCompleted>(_ => true, Deadline, cancellationToken: Cancellation);
 }

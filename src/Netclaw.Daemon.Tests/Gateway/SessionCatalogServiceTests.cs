@@ -424,7 +424,8 @@ public sealed class SessionCatalogServiceTests : IDisposable
         {
             SessionId = sessionId,
             TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(0),
-            Outcome = TurnOutcome.Skipped
+            Outcome = TurnOutcome.Skipped,
+            OpenChildRunIds = []
         });
 
         var stats = service.GetStats();
@@ -445,7 +446,8 @@ public sealed class SessionCatalogServiceTests : IDisposable
         {
             SessionId = sessionId,
             TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
-            Outcome = TurnOutcome.Failed
+            Outcome = TurnOutcome.Failed,
+            OpenChildRunIds = []
         });
 
         var stats = service.GetStats();
@@ -465,7 +467,8 @@ public sealed class SessionCatalogServiceTests : IDisposable
         service.OnOutput(new TurnCompleted
         {
             SessionId = sessionId,
-            TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
+            TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
+            OpenChildRunIds = []
         });
 
         var beforeResume = service.ListRecent().Single().LastActivity;

@@ -142,7 +142,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
                 ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
                 Result = "Error: 'text' parameter is required."
             },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("notify-fail-test");
@@ -193,7 +193,8 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
             {
                 SessionId = sessionId,
                 TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
-                SourceReminderId = occurrenceKey
+                SourceReminderId = occurrenceKey,
+                OpenChildRunIds = []
             });
         var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -252,7 +253,8 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
                 {
                     SessionId = sessionId,
                     TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
-                    SourceReminderId = occurrenceKey
+                    SourceReminderId = occurrenceKey,
+                    OpenChildRunIds = []
                 });
         }
         else
@@ -262,7 +264,8 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
                 {
                     SessionId = sessionId,
                     TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
-                    SourceReminderId = foreignKey
+                    SourceReminderId = foreignKey,
+                    OpenChildRunIds = []
                 },
                 new ErrorOutput { SessionId = sessionId, Message = "The resumed turn failed." },
                 new TurnCompleted
@@ -270,7 +273,8 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
                     SessionId = sessionId,
                     TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2),
                     Outcome = TurnOutcome.Failed,
-                    SourceReminderId = occurrenceKey
+                    SourceReminderId = occurrenceKey,
+                    OpenChildRunIds = []
                 });
         }
         var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(
@@ -332,7 +336,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
                 FailureCode = ToolResultOutput.AccessDeniedFailureCode
             },
             new TextOutput("I could not run the command.") { SessionId = sessionId },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("denied-tool-test") with { DeliveryRequired = false };
@@ -372,7 +376,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
                 ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
                 Result = "Message sent to channel C1. Thread: C1/1234567890.000001"
             },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("denied-then-recovered");
@@ -400,7 +404,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
                 Result = "Tool access denied: approval_required_unattended",
                 FailureCode = ToolResultOutput.AccessDeniedFailureCode
             },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("denied-and-undelivered");
@@ -428,7 +432,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
                 ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
                 Result = "Message sent to channel C1. Thread: C1/1234567890.000001"
             },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("notify-success-test");
@@ -450,7 +454,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
             new TextOutput("No new opportunities found.") { SessionId = sessionId },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("conditional-no-notify") with
@@ -474,7 +478,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
             new TextOutput("Some output.") { SessionId = sessionId },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         // Default policy is Required — should fail when no notification tool is invoked
@@ -502,7 +506,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
                 ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
                 Result = "Error: channel not found"
             },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("conditional-notify-error") with
@@ -526,7 +530,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("filter-check") with { DeliveryInstructions = string.Empty };
@@ -881,7 +885,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("audience-override") with
@@ -905,7 +909,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var target = new ChannelDeliveryTargetInfo(
@@ -947,7 +951,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("audience-team-default") with
@@ -971,7 +975,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         var definition = CreateDefinition("boundary-preserved") with
@@ -998,7 +1002,7 @@ public class ReminderExecutionActorTests : TestKit, IAsyncDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         // Use Kind = None so success is not gated on send_channel_message

@@ -192,14 +192,16 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
                 SessionId = new SessionId("origin-session"),
                 TurnNumber = new TurnNumber(1),
                 Outcome = TurnOutcome.Failed,
-                SourceReminderId = new ReminderId("different-reminder:1")
+                SourceReminderId = new ReminderId("different-reminder:1"),
+                OpenChildRunIds = []
             },
             new TurnCompleted
             {
                 SessionId = new SessionId("origin-session"),
                 TurnNumber = new TurnNumber(2),
                 Outcome = TurnOutcome.Completed,
-                SourceReminderId = expectedKey
+                SourceReminderId = expectedKey,
+                OpenChildRunIds = []
             }
         ]);
         var executionId = Guid.NewGuid();
