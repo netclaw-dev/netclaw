@@ -18,6 +18,7 @@ namespace Netclaw.Cli.Tests.Cli;
 /// <c>netclaw chat -p</c> reports a failed turn through its exit code, so a script can tell a
 /// model that answered from one that could not be reached.
 /// </summary>
+[Collection(HeadlessProcessStateCollection.Name)]
 public sealed class HeadlessChannelExitCodeTests : IAsyncDisposable
 {
     private readonly FakeDaemonHubTransport _transport = new();
@@ -67,16 +68,18 @@ public sealed class HeadlessChannelExitCodeTests : IAsyncDisposable
             TimeProvider.System,
             new HeadlessOptions(new string('a', 600_000)),
             NullLogger<HeadlessChannel>.Instance);
-        var stderr = new StringWriter();
+        var stderr = new LockedCapture();
         var original = Console.Error;
         Console.SetError(stderr);
         try
         {
             await channel.StartAsync(TestContext.Current.CancellationToken);
+            // The channel writes stderr and sets the exit code before it calls StopApplication.
             await stopped.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Console.SetError(original);
 
             Assert.Equal(1, Environment.ExitCode);
-            Assert.Contains("Message is too large to send", stderr.ToString());
+            Assert.Contains("Message is too large to send", stderr.Snapshot());
             Assert.Equal(0, _transport.StartAttempts);
             Assert.Equal(0, _transport.EnsureSessionCalls);
         }
