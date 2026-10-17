@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.109.1"
+  version: "2.111.0"
 ---
 
 # Netclaw Operations
@@ -958,6 +958,43 @@ can be backfilled with `netclaw memory backfill-embeddings [--force]` (a no-op w
 `Memory.Embeddings.Enabled` is false); doctor checks
 memory embedding availability. Full guidance:
 `skill_read_resource('netclaw-operations', 'references/diagnostics.md')`.
+
+The systemd service reads `<home>/config/daemon.env`. `netclaw daemon install` and
+`netclaw doctor --fix` change only the `PATH=` line. They keep every other line. They set the file
+mode to 0600 because the values are plain text. If `daemon.env` is a symbolic link, they write to
+the file that the link names, and the link stays. `netclaw doctor` reports a file that other users
+can read, and `netclaw doctor --fix` sets mode 0600 and changes nothing else.
+
+Add a line with `netclaw daemon install --env KEY=VALUE`. A key starts with `NETCLAW_` and uses
+`__` as the section separator. Repeat `--env` for more lines. The command accepts a key only when the
+`netclaw.json` schema declares the property. The name of a provider, a model, or an MCP server can be
+any name that holds only letters, digits, and `_`. A log category works with a log level as its value
+(`NETCLAW_Logging__LogLevel__Akka=Debug`). A list in a keyed map works with an index
+(`NETCLAW_Tools__AudienceProfiles__Team__McpServerToolGrants__github__0=read_file`). A key under `EnvironmentVariables`, `Headers`, or `VendorOptions` is refused, because the
+command cannot tell a credential from a setting there. A property that holds a credential, for example
+`ApiKey`, is refused too, and so is a URL with user info under any key. Set such a value in
+`netclaw.json`, and store a credential with `netclaw secrets set`. The command also refuses a value
+that holds a backslash, a quote, or a space at its start or end, because systemd reads these in a
+different way. `netclaw daemon install` refuses an argument that it does not know.
+
+If `daemon.env` is a link to a file that another user owns, or to a file that does not exist, install,
+`doctor --fix`, and uninstall stop and print both paths. `netclaw doctor` reports a link to a missing
+file, or a link loop, as a warning in the `Daemon Env File Mode` check, and `doctor --fix` plans no fix
+for it. When one fix of `doctor --fix` fails, the other fixes still apply, and the command exits with
+code 1. Only `daemon.env`, `secrets.json`, and `devices.json` get mode 0600. A `netclaw.json` keeps the
+default mode of a new file, so a container that runs the daemon as another user can read a bind mount.
+
+`netclaw daemon uninstall` deletes `daemon.env` only when every line is one of these: a blank
+line, a comment line that starts with `#` or `;`, or a line that starts with `PATH=`. Leading
+spaces do not count. Any other line, for example `export PATH=...` or `NETCLAW_HOME=...`, keeps the
+file. The command then prints the path and sets mode 0600. When uninstall cannot delete a file that
+holds only the `PATH=` line, it says that it could not delete the file.
+
+The install scripts (`install.sh` and `install.ps1`) read `NETCLAW_HOME` for the config directory.
+`install.sh` uses `<home>/bin` and `<home>/env` for a fresh install. When `INSTALL_DIR` is not set, it
+upgrades an install that sits in `<home>/bin`. Else, if `~/.netclaw/bin` holds `netclaw` or
+`netclawd`, it upgrades there, keeps the env script at `~/.netclaw/env`, and prints that directory.
+`CONFIG_DIR` and `NETCLAW_CONFIG_DIR` no longer work.
 
 ## Identity
 

@@ -44,6 +44,7 @@ public sealed class DoctorFixService
         // evaluated even when the app config file is absent, so it runs before the
         // config-file early-return below.
         TryAddDaemonPathEnvironmentFix(fixes);
+        TryAddDaemonEnvironmentModeFix(fixes);
         TryAddToolApprovalHygieneFix(fixes);
 
         if (!File.Exists(_paths.NetclawConfigPath))
@@ -296,7 +297,7 @@ public sealed class DoctorFixService
             return;
 
         var captured = DaemonPathEnvironmentFile.CaptureCurrentPath();
-        var updated = DaemonPathEnvironmentFile.Render(installDir, captured);
+        var updated = DaemonPathEnvironmentFile.Merge(existing, installDir, captured, assignments: []);
 
         fixes.Add(new DoctorFileFix(
             FilePath: envPath,
@@ -304,6 +305,34 @@ public sealed class DoctorFixService
                 + "Run `systemctl --user restart netclaw` afterward for the daemon to pick it up.",
             OriginalText: existing ?? string.Empty,
             UpdatedText: updated));
+    }
+
+    // The PATH fix already rewrites the file with mode 0600. This fix covers a file whose PATH is
+    // healthy, or one that uninstall kept, and it changes the mode only.
+    private void TryAddDaemonEnvironmentModeFix(List<DoctorFileFix> fixes)
+    {
+        var envPath = _paths.DaemonEnvironmentFilePath;
+        if (fixes.Any(fix => string.Equals(fix.FilePath, envPath, StringComparison.Ordinal))
+            || !DaemonPathEnvironmentFile.HasLooseMode(envPath))
+        {
+            return;
+        }
+
+        string text;
+        try
+        {
+            text = File.ReadAllText(envPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        fixes.Add(new DoctorFileFix(
+            FilePath: envPath,
+            Description: "Set the mode of daemon.env to 0600. The file holds plain-text values and no other user needs access.",
+            OriginalText: text,
+            UpdatedText: text));
     }
 
     // Removes the grants that add nothing. The store text of the plan comes from
@@ -366,9 +395,10 @@ public sealed class DoctorFixService
     /// <summary>
     /// Writes every fix in the plan. A fix that deletes user data first copies the original file
     /// to a backup. All backups are written before the first file changes, so a failed backup
-    /// leaves every file as it was. Returns the backup paths.
+    /// leaves every file as it was. A fix that cannot be written does not stop the others: the result
+    /// lists it with the reason. Returns the backup paths and the failed fixes.
     /// </summary>
-    public Task<IReadOnlyList<string>> ApplyAsync(DoctorFixPlan plan, CancellationToken cancellationToken = default)
+    public Task<DoctorFixApplyResult> ApplyAsync(DoctorFixPlan plan, CancellationToken cancellationToken = default)
     {
         var backups = new List<string>();
         foreach (var fix in plan.Fixes)
@@ -382,38 +412,54 @@ public sealed class DoctorFixService
             }
         }
 
+        var failures = new List<DoctorFixFailure>();
         foreach (var fix in plan.Fixes)
         {
-            // The grant store has its own lock. The write fails when the store changed after the plan.
-            if (string.Equals(fix.FilePath, _paths.ToolApprovalsPath, StringComparison.Ordinal))
+            try
             {
-                var change = ToolApprovalHygieneDoctorCheck.CreateStore(_paths).TryApplyHygiene(
-                    new ApprovalHygieneReport([], fix.OriginalText, fix.UpdatedText));
-                if (change is ApprovalStoreChangeResult.Unavailable unavailable)
-                {
-                    throw new InvalidOperationException(
-                        $"The grant store changed or is unavailable ({unavailable.Failure}). Run `netclaw doctor --fix` again.");
-                }
-
-                continue;
+                ApplyFix(fix, cancellationToken);
             }
-
-            // Ensure the parent directory exists before writing. The daemon-PATH fix can
-            // target ~/.netclaw/config even after that directory has been removed, so a bare
-            // File.WriteAllTextAsync would throw DirectoryNotFoundException and abort the run.
-            var dir = Path.GetDirectoryName(fix.FilePath);
-            if (!string.IsNullOrEmpty(dir))
-                Directory.CreateDirectory(dir);
-
-            cancellationToken.ThrowIfCancellationRequested();
-            // The rewrite keeps the file's mode: a netclaw.json that holds a token and is
-            // owner-only must not come back readable by others.
-            AtomicFile.WriteAllText(fix.FilePath, fix.UpdatedText, temp => CopyFileMode(fix.FilePath, temp));
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failures.Add(new DoctorFixFailure(fix.FilePath, fix.Description, ex.Message));
+            }
         }
 
-        return Task.FromResult<IReadOnlyList<string>>(backups);
+        return Task.FromResult(new DoctorFixApplyResult(backups, failures));
     }
 
+    private void ApplyFix(DoctorFileFix fix, CancellationToken cancellationToken)
+    {
+        if (string.Equals(fix.FilePath, _paths.ToolApprovalsPath, StringComparison.Ordinal))
+        {
+            var change = ToolApprovalHygieneDoctorCheck.CreateStore(_paths).TryApplyHygiene(
+                new ApprovalHygieneReport([], fix.OriginalText, fix.UpdatedText));
+            if (change is ApprovalStoreChangeResult.Unavailable unavailable)
+            {
+                throw new InvalidOperationException(
+                    $"The grant store changed or is unavailable ({unavailable.Failure}). Run `netclaw doctor --fix` again.");
+            }
+
+            return;
+        }
+
+        if (string.Equals(fix.FilePath, _paths.DaemonEnvironmentFilePath, StringComparison.Ordinal))
+        {
+            if (string.Equals(fix.OriginalText, fix.UpdatedText, StringComparison.Ordinal))
+                DaemonPathEnvironmentFile.RestrictToOwner(fix.FilePath);
+            else
+                DaemonPathEnvironmentFile.Write(fix.FilePath, fix.UpdatedText);
+
+            return;
+        }
+
+        var dir = Path.GetDirectoryName(fix.FilePath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        AtomicFile.WriteAllText(fix.FilePath, fix.UpdatedText, temp => CopyFileMode(fix.FilePath, temp));
+    }
 }
 
 /// <summary>
@@ -484,6 +530,10 @@ public sealed record DoctorFixPlan(IReadOnlyList<DoctorFileFix> Fixes)
 {
     public bool HasChanges => Fixes.Count > 0;
 }
+
+public sealed record DoctorFixApplyResult(IReadOnlyList<string> Backups, IReadOnlyList<DoctorFixFailure> Failures);
+
+public sealed record DoctorFixFailure(string FilePath, string Description, string Message);
 
 public sealed record DoctorFileFix(
     string FilePath,

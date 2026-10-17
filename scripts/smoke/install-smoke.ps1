@@ -91,6 +91,8 @@ $Serve = Join-Path $Work "serve"
 $BinDir = Join-Path $Work "bin"
 $OriginalUserPath = Get-UserPathRegistryState
 $OriginalProcessPath = $env:PATH
+$RealUserProfile = $env:USERPROFILE
+$env:NETCLAW_HOME = $null
 New-Item -ItemType Directory -Path $Serve, $BinDir -Force | Out-Null
 
 $ServerProc = $null
@@ -365,67 +367,103 @@ try {
         Fail "channel: unknown value should fail (exit=$LASTEXITCODE)"
     }
     # 9. Config channel persistence
+    # NETCLAW_HOME is the only variable that moves the config directory, the same way
+    # it moves NetclawPaths in the CLI and the daemon. NETCLAW_CONFIG_DIR is a decoy
+    # that the installer must ignore. USERPROFILE points at a temporary directory so a
+    # wrong directory shows up there and never in the real profile.
     Write-Host ""
     Write-Host "=== config channel persistence ==="
 
-    # 9a. Fresh install with -Channel beta seeds a config file
-    $freshDir = Join-Path $Work "fresh-beta"
-    $freshConfigDir = Join-Path $Work "fresh-beta-config"
-    $env:NETCLAW_CONFIG_DIR = $freshConfigDir
-    & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $freshDir -Channel beta -SkipShell 2>&1 | Out-Null
-    $freshConfig = Join-Path $freshConfigDir "netclaw.json"
-    if ((Test-Path $freshConfig)) {
+    $env:NETCLAW_CONFIG_DIR = Join-Path $Work "decoy-config-dir"
+    function Invoke-HomeInstall([string]$fakeProfile, [AllowNull()][string]$netclawHome, [string]$installDir, [string[]]$installArgs) {
+        New-Item -ItemType Directory -Path $fakeProfile -Force | Out-Null
+        $env:USERPROFILE = $fakeProfile
+        $env:NETCLAW_HOME = $netclawHome
+        try {
+            & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $installDir -SkipShell @installArgs 2>&1 | Out-String
+        } finally {
+            $env:USERPROFILE = $RealUserProfile
+            $env:NETCLAW_HOME = $null
+        }
+    }
+
+    # 9a. Fresh install with -Channel beta seeds a config file under NETCLAW_HOME
+    $freshHome = Join-Path $Work "fresh-beta-home"
+    $freshProfile = Join-Path $Work "fresh-beta-user"
+    $freshOut = Invoke-HomeInstall $freshProfile $freshHome (Join-Path $Work "fresh-beta") @("-Channel", "beta")
+    $freshConfig = Join-Path (Join-Path $freshHome "config") "netclaw.json"
+    if ((Test-Path $freshConfig) -and -not (Test-Path (Join-Path $freshProfile ".netclaw")) `
+        -and -not (Test-Path $env:NETCLAW_CONFIG_DIR)) {
         $c = Get-Content -Raw $freshConfig | ConvertFrom-Json
-        if ($c.Daemon.UpdateChannel -eq "beta") {
-            Pass "config: fresh -Channel beta seeds config with UpdateChannel=beta"
+        if ($c.Daemon.UpdateChannel -eq "beta" -and $freshOut -match [regex]::Escape("Created $freshConfig with UpdateChannel 'beta'")) {
+            Pass "config: fresh -Channel beta seeds NETCLAW_HOME\config and ignores NETCLAW_CONFIG_DIR"
         } else {
             Fail "config: fresh -Channel beta wrote UpdateChannel='$($c.Daemon.UpdateChannel)'"
         }
     } else {
-        Fail "config: fresh -Channel beta did not create config file"
+        Fail "config: fresh -Channel beta did not seed NETCLAW_HOME\config"
+        Write-Host ($freshOut.TrimEnd())
     }
 
-    # 9b. -Channel beta on existing config patches UpdateChannel
-    $existDir = Join-Path $Work "exist-beta"
-    $existConfigDir = Join-Path $Work "exist-beta-config"
-    New-Item -ItemType Directory -Path $existConfigDir -Force | Out-Null
+    # 9b. -Channel beta on existing config patches only the file under NETCLAW_HOME
+    $existHome = Join-Path $Work "exist-beta-home"
+    $existProfile = Join-Path $Work "exist-beta-user"
+    $existConfigDir = Join-Path $existHome "config"
+    $decoyConfigDir = Join-Path (Join-Path $existProfile ".netclaw") "config"
+    New-Item -ItemType Directory -Path $existConfigDir, $decoyConfigDir -Force | Out-Null
     '{"configVersion":1,"Daemon":{"ExposureMode":"local"}}' | Set-Content -Path (Join-Path $existConfigDir "netclaw.json") -Encoding UTF8
-    $env:NETCLAW_CONFIG_DIR = $existConfigDir
-    & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $existDir -Channel beta -SkipShell 2>&1 | Out-Null
+    '{"configVersion":1,"Daemon":{"ExposureMode":"public"}}' | Set-Content -Path (Join-Path $decoyConfigDir "netclaw.json") -Encoding UTF8
+    $decoyHash = (Get-FileHash (Join-Path $decoyConfigDir "netclaw.json")).Hash
+    Invoke-HomeInstall $existProfile $existHome (Join-Path $Work "exist-beta") @("-Channel", "beta") | Out-Null
     $c = Get-Content -Raw (Join-Path $existConfigDir "netclaw.json") | ConvertFrom-Json
     if ($c.Daemon.UpdateChannel -eq "beta" -and $c.Daemon.ExposureMode -eq "local") {
         Pass "config: -Channel beta patches existing config, preserves other Daemon keys"
     } else {
         Fail "config: -Channel beta patch (UpdateChannel='$($c.Daemon.UpdateChannel)', ExposureMode='$($c.Daemon.ExposureMode)')"
     }
+    if ((Get-FileHash (Join-Path $decoyConfigDir "netclaw.json")).Hash -eq $decoyHash) {
+        Pass "config: -Channel beta leaves the profile .netclaw config alone when NETCLAW_HOME is set"
+    } else {
+        Fail "config: -Channel beta changed the profile .netclaw config"
+    }
 
     # 9c. Plain upgrade (no -Channel) leaves existing beta config alone
-    $noflagDir = Join-Path $Work "noflag"
-    $noflagConfigDir = Join-Path $Work "noflag-config"
-    New-Item -ItemType Directory -Path $noflagConfigDir -Force | Out-Null
-    '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}' | Set-Content -Path (Join-Path $noflagConfigDir "netclaw.json") -Encoding UTF8
-    $env:NETCLAW_CONFIG_DIR = $noflagConfigDir
-    & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $noflagDir -SkipShell 2>&1 | Out-Null
-    $c = Get-Content -Raw (Join-Path $noflagConfigDir "netclaw.json") | ConvertFrom-Json
-    if ($c.Daemon.UpdateChannel -eq "beta") {
-        Pass "config: plain upgrade preserves existing beta channel"
+    $noflagHome = Join-Path $Work "noflag-home"
+    New-Item -ItemType Directory -Path (Join-Path $noflagHome "config") -Force | Out-Null
+    '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}' | Set-Content -Path (Join-Path (Join-Path $noflagHome "config") "netclaw.json") -Encoding UTF8
+    $noflagHash = (Get-FileHash (Join-Path (Join-Path $noflagHome "config") "netclaw.json")).Hash
+    Invoke-HomeInstall (Join-Path $Work "noflag-user") $noflagHome (Join-Path $Work "noflag") @() | Out-Null
+    if ((Get-FileHash (Join-Path (Join-Path $noflagHome "config") "netclaw.json")).Hash -eq $noflagHash) {
+        Pass "config: plain upgrade changes no config file"
     } else {
-        Fail "config: plain upgrade changed UpdateChannel to '$($c.Daemon.UpdateChannel)'"
+        Fail "config: plain upgrade changed the config file"
     }
 
-    # 9d. -Channel stable on existing beta overwrites to stable
-    $downDir = Join-Path $Work "downgrade"
-    $downConfigDir = Join-Path $Work "downgrade-config"
-    New-Item -ItemType Directory -Path $downConfigDir -Force | Out-Null
-    '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}' | Set-Content -Path (Join-Path $downConfigDir "netclaw.json") -Encoding UTF8
-    $env:NETCLAW_CONFIG_DIR = $downConfigDir
-    & $PowerShellExecutable -NoProfile -File $InstallPs1 -InstallDir $downDir -Channel stable -SkipShell 2>&1 | Out-Null
-    $c = Get-Content -Raw (Join-Path $downConfigDir "netclaw.json") | ConvertFrom-Json
-    if ($c.Daemon.UpdateChannel -eq "stable") {
-        Pass "config: -Channel stable overwrites existing beta"
+    # 9d. -Channel stable on existing beta overwrites to stable and keeps other keys
+    $downHome = Join-Path $Work "downgrade-home"
+    New-Item -ItemType Directory -Path (Join-Path $downHome "config") -Force | Out-Null
+    '{"configVersion":1,"Daemon":{"UpdateChannel":"beta","ExposureMode":"local"}}' | Set-Content -Path (Join-Path (Join-Path $downHome "config") "netclaw.json") -Encoding UTF8
+    Invoke-HomeInstall (Join-Path $Work "downgrade-user") $downHome (Join-Path $Work "downgrade") @("-Channel", "stable") | Out-Null
+    $c = Get-Content -Raw (Join-Path (Join-Path $downHome "config") "netclaw.json") | ConvertFrom-Json
+    if ($c.Daemon.UpdateChannel -eq "stable" -and $c.Daemon.ExposureMode -eq "local") {
+        Pass "config: -Channel stable overwrites existing beta and keeps other Daemon keys"
     } else {
-        Fail "config: -Channel stable wrote UpdateChannel='$($c.Daemon.UpdateChannel)'"
+        Fail "config: -Channel stable wrote UpdateChannel='$($c.Daemon.UpdateChannel)', ExposureMode='$($c.Daemon.ExposureMode)'"
     }
+
+    # 9e. NETCLAW_HOME forms land where NetclawPaths puts them
+    function Test-HomeForm([string]$desc, [string]$slug, [AllowNull()][string]$value, [string]$expectedConfigRelativeToProfile) {
+        $fakeProfile = Join-Path $Work "forms-$slug"
+        Invoke-HomeInstall $fakeProfile $value (Join-Path $Work "forms-$slug-bin") @("-Channel", "beta") | Out-Null
+        $expected = Join-Path (Join-Path $fakeProfile $expectedConfigRelativeToProfile) "netclaw.json"
+        if (Test-Path $expected) { Pass "home: $desc" } else { Fail "home: $desc (expected $expected)" }
+    }
+    Test-HomeForm "NETCLAW_HOME unset seeds USERPROFILE\.netclaw\config" "unset" $null ".netclaw\config"
+    Test-HomeForm "blank NETCLAW_HOME means unset" "blank" "   " ".netclaw\config"
+    Test-HomeForm "NETCLAW_HOME=~\nc" "tilde" '~\nc' "nc\config"
+    Test-HomeForm "NETCLAW_HOME=`$HOME\nc" "dollar" '$HOME\nc' "nc\config"
+    Test-HomeForm "NETCLAW_HOME=`${HOME}\nc" "brace" '${HOME}\nc' "nc\config"
+    Test-HomeForm "NETCLAW_HOME=%USERPROFILE%\nc" "percent" '%USERPROFILE%\nc' "nc\config"
 }
 finally {
     if ($ServerProc -and -not $ServerProc.HasExited) { $ServerProc.Kill() }
@@ -433,6 +471,8 @@ finally {
     $env:PATH = $OriginalProcessPath
     $env:MANIFEST_URL = $null
     $env:NETCLAW_CONFIG_DIR = $null
+    $env:NETCLAW_HOME = $null
+    if ($RealUserProfile) { $env:USERPROFILE = $RealUserProfile }
     $env:NETCLAW_SMOKE_INSTALL_DIR = $null
     Remove-Item -Path $Work -Recurse -Force -ErrorAction SilentlyContinue
 }

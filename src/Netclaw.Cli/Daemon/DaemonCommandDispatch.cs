@@ -39,4 +39,36 @@ internal static class DaemonCommandDispatch
     public static bool ShouldShowDevicesHelp(string[] args)
         => CliArgsParser.IsHelpToken(args.Length > 2 ? args[2] : "list")
            || CliArgsParser.HasTrailingHelpToken(args, startIndex: 3, includeBareHelp: false);
+
+    /// <summary>
+    /// Collects the <c>--env KEY=VALUE</c> entries of <c>netclaw daemon install</c>. The parser
+    /// does not check an entry. <see cref="DaemonManager.InstallAsync"/> checks them all before
+    /// it changes anything. A flag with no value and any other argument are refused, so no
+    /// argument is dropped without notice.
+    /// </summary>
+    public static bool TryParseInstallArguments(string[] args, out IReadOnlyList<string> envEntries, out string error)
+    {
+        var entries = new List<string>();
+        envEntries = entries;
+        error = string.Empty;
+
+        for (var i = 2; i < args.Length; i++)
+        {
+            if (args[i] != "--env")
+            {
+                error = $"Unknown argument '{args[i]}' for `netclaw daemon install`. Run `netclaw daemon install --help`.";
+                return false;
+            }
+
+            if (i + 1 >= args.Length)
+            {
+                error = "The --env flag needs a KEY=VALUE argument.";
+                return false;
+            }
+
+            entries.Add(args[++i]);
+        }
+
+        return true;
+    }
 }

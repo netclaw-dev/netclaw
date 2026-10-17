@@ -80,7 +80,7 @@ public static class SecretsFileWriter
 
         // Atomic rename, with owner-only perms applied to the temp BEFORE it becomes the
         // destination so secrets.json is never momentarily world-readable.
-        AtomicFile.WriteAllText(secretsPath, json, hardenTempPermissions: SetOwnerOnlyPermissions);
+        AtomicFile.WriteAllTextOwnerOnly(secretsPath, json);
     }
 
     /// <summary>
@@ -249,11 +249,6 @@ public static class SecretsFileWriter
                 break;
         }
     }
-
-    /// <summary>
-    /// Set owner-only permissions (chmod 600) on Unix. No-op on Windows.
-    /// </summary>
-    internal static void SetOwnerOnlyPermissions(string path) => AtomicFile.HardenOwnerOnly(path);
 
     /// <summary>
     /// Serializes read-modify-write against one secrets file <em>within this process</em>.

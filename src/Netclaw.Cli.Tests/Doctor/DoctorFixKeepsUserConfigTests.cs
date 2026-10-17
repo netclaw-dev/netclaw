@@ -54,7 +54,7 @@ public sealed class DoctorFixKeepsUserConfigTests : IDisposable
 
         var service = Service(paths);
         var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
-        var backups = await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+        var backups = (await service.ApplyAsync(plan, TestContext.Current.CancellationToken)).Backups;
 
         var fix = Assert.Single(plan.Fixes);
         Assert.Contains("Removed disallowed property /Slack/Comment", fix.Description);
@@ -107,7 +107,7 @@ public sealed class DoctorFixKeepsUserConfigTests : IDisposable
 
         var service = Service(paths);
         var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
-        var backups = await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+        var backups = (await service.ApplyAsync(plan, TestContext.Current.CancellationToken)).Backups;
 
         var backup = Assert.Single(backups);
         Assert.EndsWith(".legacy-models.bak", backup);
@@ -182,7 +182,7 @@ public sealed class DoctorFixKeepsUserConfigTests : IDisposable
         var service = Service(paths);
         var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
         var planned = DoctorFixService.PlannedBackups(Assert.Single(plan.Fixes));
-        var written = await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+        var written = (await service.ApplyAsync(plan, TestContext.Current.CancellationToken)).Backups;
 
         Assert.Equal(written, planned);
     }

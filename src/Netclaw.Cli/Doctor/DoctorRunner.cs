@@ -21,7 +21,7 @@ public sealed class DoctorRunner(IEnumerable<IDoctorCheck> checks)
 
         foreach (var check in checks)
         {
-            if (configLoad is not null && check is not (ImageProcessingDoctorCheck or SqliteProvisioningDoctorCheck or SystemdUnitPathDoctorCheck))
+            if (configLoad is not null && check is not (ImageProcessingDoctorCheck or SqliteProvisioningDoctorCheck or SystemdUnitPathDoctorCheck or DaemonEnvironmentFileModeDoctorCheck))
             {
                 skipped++;
                 continue;
@@ -48,4 +48,8 @@ public sealed class DoctorRunner(IEnumerable<IDoctorCheck> checks)
     }
 }
 
-public sealed record DoctorRunResult(IReadOnlyList<DoctorCheckResult> Results, int ExitCode);
+public sealed record DoctorRunResult(IReadOnlyList<DoctorCheckResult> Results, int ExitCode)
+{
+    /// <summary>A fix that could not be written is a failed run (exit 1), also when the checks found only warnings (exit 2).</summary>
+    public int ExitCodeAfterFix(bool fixFailed) => fixFailed ? 1 : ExitCode;
+}

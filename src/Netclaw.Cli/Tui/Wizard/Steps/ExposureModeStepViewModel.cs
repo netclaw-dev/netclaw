@@ -388,7 +388,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
     private static void WritePairedDevices(NetclawPaths paths, IReadOnlyList<PairedDevice> devices)
     {
         var json = JsonSerializer.Serialize(devices, DevicesJsonOptions);
-        AtomicFile.WriteAllText(paths.DevicesPath, json, AtomicFile.HardenOwnerOnly);
+        AtomicFile.WriteAllTextOwnerOnly(paths.DevicesPath, json);
     }
 
     private static bool TryComputeTokenHash(string rawToken, string saltHex, out string tokenHash)
@@ -466,7 +466,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
             return;
 
         var json = JsonSerializer.Serialize(new[] { _bootstrapDevice }, DevicesJsonOptions);
-        AtomicFile.WriteAllText(paths.DevicesPath, json, AtomicFile.HardenOwnerOnly);
+        AtomicFile.WriteAllTextOwnerOnly(paths.DevicesPath, json);
     }
 
     /// <summary>The raw bootstrap token, exposed for testing.</summary>

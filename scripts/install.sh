@@ -17,7 +17,13 @@
 #   --skip-shell            — Skip automatic shell profile modification.
 #
 # Environment variables:
-#   INSTALL_DIR     — Install directory (default: ~/.netclaw/bin)
+#   NETCLAW_HOME    — Netclaw home (default: ~/.netclaw). Holds config/, bin/, and env.
+#                     The CLI and the daemon read the same variable. config/ always
+#                     follows it. A fresh install also puts bin/ and env under it.
+#   INSTALL_DIR     — Install directory (default: $NETCLAW_HOME/bin). When INSTALL_DIR is
+#                     not set, the installer upgrades an install that already sits in
+#                     $NETCLAW_HOME/bin. Else it upgrades one in ~/.netclaw/bin and keeps the
+#                     env script at ~/.netclaw/env.
 #   NETCLAW_VERSION — Specific version to install (overrides --channel; e.g. 0.19.0-beta.1)
 #   FEED_BASE_URL   — Release feed URL (default: https://releases.netclaw.dev)
 
@@ -136,16 +142,95 @@ validate_install_dir_for_path() {
     fi
 }
 
+# ── Netclaw home ──
+# Mirrors how NetclawPaths resolves NETCLAW_HOME so the installer and the CLI agree on
+# the directory: trim the value, expand ~, $HOME, ${HOME}, %USERPROFILE% (case-insensitive),
+# treat a blank value as unset, and resolve a relative path against the working directory.
+replace_ignore_case() {
+    local value="$1" token="$2" replacement="$3"
+    local lower_token lower_value prefix result=""
+    lower_token="$(printf '%s' "$token" | tr '[:upper:]' '[:lower:]')"
+    while :; do
+        lower_value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+        case "$lower_value" in
+            *"$lower_token"*) ;;
+            *) break ;;
+        esac
+        prefix="${lower_value%%"$lower_token"*}"
+        result="$result${value:0:${#prefix}}$replacement"
+        value="${value:$((${#prefix} + ${#token}))}"
+    done
+    printf '%s' "$result$value"
+}
+
+resolve_netclaw_home() {
+    local value="${NETCLAW_HOME:-}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    if [ -z "$value" ]; then
+        printf '%s' "$HOME/.netclaw"
+        return
+    fi
+
+    case "$value" in
+        "~") value="$HOME" ;;
+        "~"*)
+            local rest="${value#\~}"
+            while [ "${rest#[/\\]}" != "$rest" ]; do rest="${rest#[/\\]}"; done
+            value="$HOME/$rest"
+            ;;
+    esac
+
+    # The tokens are literal text that NetclawPaths expands. The shell must not expand them here.
+    # shellcheck disable=SC2016
+    value="$(replace_ignore_case "$value" '$HOME' "$HOME")"
+    # shellcheck disable=SC2016
+    value="$(replace_ignore_case "$value" '${HOME}' "$HOME")"
+    value="$(replace_ignore_case "$value" '%USERPROFILE%' "$HOME")"
+
+    case "$value" in
+        /*) ;;
+        *) value="$PWD/$value" ;;
+    esac
+    printf '%s' "$value"
+}
+
 # ── Main ──
 check_deps
 
 RID=$(detect_platform)
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.netclaw/bin}"
+NETCLAW_HOME_DIR="$(resolve_netclaw_home)"
+
+# An upgrade must not move an existing install. The order of the rules:
+#   1. INSTALL_DIR names the directory: use it.
+#   2. $NETCLAW_HOME/bin holds netclaw or netclawd: upgrade there.
+#   3. Releases before NETCLAW_HOME support put the binaries in ~/.netclaw/bin and the env script
+#      in ~/.netclaw/env, and the operator's shell profile sources that env script. When that
+#      directory holds netclaw or netclawd, upgrade there. A new location would leave the old
+#      binary first on PATH.
+#   4. Otherwise it is a fresh install: bin/ and env go under $NETCLAW_HOME.
+LEGACY_HOME_DIR="$HOME/.netclaw"
+ENV_HOME_DIR="$NETCLAW_HOME_DIR"
+IN_PLACE_NOTE=""
+if [ -n "${INSTALL_DIR:-}" ]; then
+    :
+elif [ -f "$NETCLAW_HOME_DIR/bin/netclaw" ] || [ -f "$NETCLAW_HOME_DIR/bin/netclawd" ]; then
+    INSTALL_DIR="$NETCLAW_HOME_DIR/bin"
+elif [ -f "$LEGACY_HOME_DIR/bin/netclaw" ] || [ -f "$LEGACY_HOME_DIR/bin/netclawd" ]; then
+    INSTALL_DIR="$LEGACY_HOME_DIR/bin"
+    ENV_HOME_DIR="$LEGACY_HOME_DIR"
+    IN_PLACE_NOTE="Existing install found at $INSTALL_DIR. Upgrading in place; the env script stays at $ENV_HOME_DIR/env."
+else
+    INSTALL_DIR="$NETCLAW_HOME_DIR/bin"
+fi
 validate_install_dir_for_path "$INSTALL_DIR"
 
 echo "Netclaw installer"
 echo "  Platform: $RID"
 echo "  Install dir: $INSTALL_DIR"
+if [ -n "$IN_PLACE_NOTE" ]; then
+    echo "  $IN_PLACE_NOTE"
+fi
 echo "  Channel: $CHANNEL"
 if [ "$DRY_RUN" = true ]; then
     echo "  Mode: dry run (no changes will be made)"
@@ -301,7 +386,7 @@ fi
 # upgrade (`install.sh` with no flags) would silently overwrite an existing
 # beta channel to stable — a silent fallback the project prohibits.
 if [ "$CHANNEL_EXPLICIT" = true ]; then
-    CONFIG_DIR="${CONFIG_DIR:-$HOME/.netclaw/config}"
+    CONFIG_DIR="$NETCLAW_HOME_DIR/config"
     CONFIG_FILE="$CONFIG_DIR/netclaw.json"
     if [ -f "$CONFIG_FILE" ]; then
         if command -v jq >/dev/null 2>&1; then
@@ -330,7 +415,7 @@ fi
 # ── Shell integration ─────────────────────────────────────────────────────
 # Bash and zsh source a small POSIX env file. Fish gets native syntax in its
 # dedicated conf.d file; fish cannot source POSIX `case ... esac` syntax.
-ENV_SCRIPT="$HOME/.netclaw/env"
+ENV_SCRIPT="$ENV_HOME_DIR/env"
 
 shell_quote() {
     printf "'"

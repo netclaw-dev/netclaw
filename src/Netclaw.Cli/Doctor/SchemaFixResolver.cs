@@ -221,7 +221,7 @@ public static class SchemaFixResolver
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Looks through objects and arrays: a credential nested anywhere under the key keeps the key.
-    private static bool HoldsCredential(string name, JsonNode? value)
+    internal static bool HoldsCredential(string name, JsonNode? value)
         => SecretOutputRedactor.IsSecretKey(name)
            || CredentialNames.Contains(name.Replace("_", "", StringComparison.Ordinal).Replace("-", "", StringComparison.Ordinal))
            || IsCredentialUrl(name, value)
@@ -231,6 +231,8 @@ public static class SchemaFixResolver
                JsonArray array => array.Any(item => HoldsCredential(name, item)),
                _ => false,
            };
+
+    internal static bool HasUrlUserInfo(string text) => UrlWithUserInfo.IsMatch(text);
 
     private static bool IsCredentialUrl(string name, JsonNode? value)
     {
@@ -327,38 +329,65 @@ public static class SchemaFixResolver
             current = FollowRef(schemaRoot, current);
             if (current is null) return null;
 
-            // Try named property first
-            if (current["properties"] is JsonObject props && props[segment] is JsonNode propNode)
-            {
-                current = FollowRef(schemaRoot, propNode as JsonObject);
-                continue;
-            }
-
-            // Try additionalProperties (for dynamic keys like MCP server names)
-            if (current["additionalProperties"] is JsonObject addProps)
-            {
-                current = FollowRef(schemaRoot, addProps);
-                continue;
-            }
-
-            // Try array items
-            if (current["items"] is JsonObject items
-                && int.TryParse(segment, out _))
-            {
-                current = FollowRef(schemaRoot, items);
-                continue;
-            }
-
-            return null; // can't resolve further
+            current = StepInto(schemaRoot, current, segment, ignoreCase: false)?.Schema;
         }
 
         return current is not null ? FollowRef(schemaRoot, current) : null;
     }
 
+    internal enum SchemaChildKind
+    {
+        Property,
+        MapEntry,
+        Item,
+    }
+
+    /// <param name="Schema">The child schema, with its <c>$ref</c> followed.</param>
+    /// <param name="Kind">How the schema reaches the child.</param>
+    /// <param name="Name">The declared property name (<see cref="SchemaChildKind.Property"/>), else the segment.</param>
+    internal readonly record struct SchemaChild(JsonObject Schema, SchemaChildKind Kind, string Name);
+
+    /// <summary>
+    /// One step down the schema: the named property, else the <c>additionalProperties</c> entry schema
+    /// (a keyed map such as an MCP server name), else the <c>items</c> schema for an array index.
+    /// Returns <c>null</c> when the schema declares none of them. <paramref name="ignoreCase"/> matches a
+    /// property name the way the configuration binder does; the config validator is case-sensitive.
+    /// </summary>
+    internal static SchemaChild? StepInto(JsonObject schemaRoot, JsonObject node, string segment, bool ignoreCase)
+    {
+        if (node["properties"] is JsonObject properties)
+        {
+            var name = properties.Select(property => property.Key).FirstOrDefault(key =>
+                string.Equals(key, segment, ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+            if (name is not null)
+            {
+                return properties[name] is JsonObject declared && FollowRef(schemaRoot, declared) is { } property
+                    ? new SchemaChild(property, SchemaChildKind.Property, name)
+                    : null;
+            }
+        }
+
+        if (node["additionalProperties"] is JsonObject entry)
+        {
+            return FollowRef(schemaRoot, entry) is { } entrySchema
+                ? new SchemaChild(entrySchema, SchemaChildKind.MapEntry, segment)
+                : null;
+        }
+
+        if (node["items"] is JsonObject items && segment.Length > 0 && segment.All(char.IsAsciiDigit))
+        {
+            return FollowRef(schemaRoot, items) is { } itemSchema
+                ? new SchemaChild(itemSchema, SchemaChildKind.Item, segment)
+                : null;
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Resolve <c>$ref</c> to the referenced schema object. Only handles local <c>#/</c> references.
     /// </summary>
-    private static JsonObject? FollowRef(JsonObject root, JsonObject? schema)
+    internal static JsonObject? FollowRef(JsonObject root, JsonObject? schema)
     {
         if (schema is null) return null;
         if (schema["$ref"]?.GetValue<string>() is not { } refStr) return schema;

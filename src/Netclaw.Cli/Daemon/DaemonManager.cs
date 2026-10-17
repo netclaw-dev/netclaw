@@ -307,9 +307,10 @@ public sealed partial class DaemonManager
     }
 
     /// <summary>
-    /// Installs daemon as a systemd user service (Linux only).
+    /// Installs daemon as a systemd user service (Linux only). <paramref name="envEntries"/> are the
+    /// <c>--env KEY=VALUE</c> arguments. They are checked before the first command runs or file changes.
     /// </summary>
-    public async Task<DaemonResult> InstallAsync()
+    public async Task<DaemonResult> InstallAsync(IReadOnlyList<string> envEntries)
     {
         if (!OperatingSystem.IsLinux())
             return new DaemonResult(false,
@@ -319,6 +320,9 @@ public sealed partial class DaemonManager
                       "https://github.com/netclaw-dev/netclaw/issues/1015"
                     : "Service installation is currently Linux-only (systemd). " +
                       "See https://github.com/netclaw-dev/netclaw/issues for Windows service support.");
+
+        if (!DaemonEnvAssignment.TryParseAll(envEntries, out var envAssignments, out var envError))
+            return new DaemonResult(false, envError);
 
         var binaryPath = FindDaemonBinary();
         if (binaryPath is null)
@@ -355,7 +359,37 @@ public sealed partial class DaemonManager
         var envFilePath = _paths.DaemonEnvironmentFilePath;
         var capturedPath = DaemonPathEnvironmentFile.CaptureCurrentPath();
         Directory.CreateDirectory(Path.GetDirectoryName(envFilePath)!);
-        await File.WriteAllTextAsync(envFilePath, DaemonPathEnvironmentFile.Render(installDir, capturedPath));
+
+        // File.Exists is true for a link to a missing file, so the link check must run before the read.
+        string? existingEnvText = null;
+        try
+        {
+            DaemonPathEnvironmentFile.EnsureLinkIsSafe(envFilePath);
+            if (File.Exists(envFilePath))
+                existingEnvText = await File.ReadAllTextAsync(envFilePath);
+        }
+        catch (UnsafeEnvFileLinkException ex)
+        {
+            return new DaemonResult(false, ex.Message);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new DaemonResult(false, $"Cannot read {envFilePath}: {ex.Message}");
+        }
+
+        // The file keeps the lines the operator wrote. Its mode is 0600 because the values are
+        // plain text, unlike the encrypted values in secrets.json. A symbolic link stays a link.
+        try
+        {
+            DaemonPathEnvironmentFile.Write(
+                envFilePath,
+                DaemonPathEnvironmentFile.Merge(existingEnvText, installDir, capturedPath, envAssignments));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new DaemonResult(false,
+                $"Cannot write {DaemonPathEnvironmentFile.ResolveTarget(envFilePath)} (the daemon environment file at {envFilePath}): {ex.Message}");
+        }
 
         var unitPath = SystemdUserUnitFilePath;
         var isUpgrade = File.Exists(unitPath);
@@ -399,16 +433,72 @@ public sealed partial class DaemonManager
 
     /// <summary>
     /// Deletes the netclaw-owned PATH env file written at install so uninstall leaves no
-    /// orphan behind. Idempotent. Separated from <see cref="UninstallAsync"/> (which is
-    /// coupled to real <c>systemctl</c>/<c>loginctl</c> and cannot be driven in-process
-    /// without mutating the developer's live service) so the deletion contract is
-    /// unit-testable on its own.
+    /// orphan behind. A file that holds a line other than a blank line, a comment, or the
+    /// <c>PATH=</c> line stays, and the result holds its path. A step that fails does not throw:
+    /// the result holds a sentence that names the file and says which step failed. Idempotent.
+    /// Separated from <see cref="UninstallAsync"/> (which is coupled to real
+    /// <c>systemctl</c>/<c>loginctl</c> and cannot be driven in-process without mutating the
+    /// developer's live service) so the deletion contract is unit-testable on its own.
     /// </summary>
-    internal void RemoveDaemonEnvironmentFile()
+    internal DaemonEnvCleanup RemoveDaemonEnvironmentFile()
     {
         var envFilePath = _paths.DaemonEnvironmentFilePath;
-        if (File.Exists(envFilePath))
+        if (DaemonPathEnvironmentFile.FindLinkProblem(envFilePath) is { } linkProblem)
+            return DaemonEnvCleanup.Failed($"netclaw left {envFilePath} in place. {linkProblem}");
+
+        if (!File.Exists(envFilePath))
+            return DaemonEnvCleanup.Removed;
+
+        string content;
+        try
+        {
+            content = File.ReadAllText(envFilePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return DaemonEnvCleanup.Failed($"netclaw could not read {envFilePath}: {ex.Message}");
+        }
+
+        if (DaemonPathEnvironmentFile.HasOperatorLines(content))
+        {
+            // The kept lines are plain text that the operator wrote, so the mode must be 0600 even
+            // when an older install or a hand edit left the file open to others.
+            try
+            {
+                DaemonPathEnvironmentFile.RestrictToOwner(envFilePath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return DaemonEnvCleanup.Failed(
+                    $"netclaw could not secure {envFilePath}: {ex.Message}\n"
+                    + "The file holds lines that you wrote. Set its mode to 0600 by hand, or delete it when you do not need it.");
+            }
+
+            return DaemonEnvCleanup.Kept(envFilePath);
+        }
+
+        try
+        {
             File.Delete(envFilePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return DaemonEnvCleanup.Failed(
+                $"netclaw could not delete {envFilePath}: {ex.Message}\n"
+                + "The file holds only the PATH line that netclaw wrote. Delete it by hand.");
+        }
+
+        return DaemonEnvCleanup.Removed;
+    }
+
+    /// <summary>The result of <see cref="RemoveDaemonEnvironmentFile"/>: the file is gone, it stays, or a step failed.</summary>
+    internal readonly record struct DaemonEnvCleanup(string? KeptPath, string? Failure)
+    {
+        internal static DaemonEnvCleanup Removed => new(null, null);
+
+        internal static DaemonEnvCleanup Kept(string path) => new(path, null);
+
+        internal static DaemonEnvCleanup Failed(string failure) => new(null, failure);
     }
 
     /// <summary>
@@ -468,11 +558,17 @@ public sealed partial class DaemonManager
         if (File.Exists(unitPath))
             File.Delete(unitPath);
 
-        RemoveDaemonEnvironmentFile();
+        var envCleanup = RemoveDaemonEnvironmentFile();
 
         await RunCommandAsync("systemctl", "--user daemon-reload");
 
-        return new DaemonResult(true, "Service uninstalled.");
+        if (envCleanup.Failure is not null)
+            return new DaemonResult(false, $"Service uninstalled, but {envCleanup.Failure}");
+
+        var keptEnvFile = envCleanup.KeptPath;
+        return new DaemonResult(true, keptEnvFile is null
+            ? "Service uninstalled."
+            : $"Service uninstalled.\nKept {keptEnvFile} because it holds lines that you wrote. Delete it by hand when you do not need them.");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

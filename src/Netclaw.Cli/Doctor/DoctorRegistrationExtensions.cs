@@ -44,5 +44,6 @@ public static class DoctorRegistrationExtensions
         services.AddSingleton<IDoctorCheck, InboundWebhookRoutesDoctorCheck>();
         services.AddSingleton<IDoctorCheck, ExposureModeDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SystemdUnitPathDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, DaemonEnvironmentFileModeDoctorCheck>();
     }
 }

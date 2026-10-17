@@ -264,6 +264,7 @@ static async Task RunAsync(string[] args)
         try
         {
             DoctorFixPlan? fixPlan = null;
+            var fixFailed = false;
             var fixBlocked = configProblem
                 ?? (doctorOptions!.Fix && CliConfigPreflight.TryDescribeUneditableConfig(new NetclawPaths(), out var uneditable) ? uneditable : null);
             if (doctorOptions!.Fix && fixBlocked is not null)
@@ -281,8 +282,14 @@ static async Task RunAsync(string[] args)
                     {
                         try
                         {
-                            foreach (var backup in await fixService.ApplyAsync(fixPlan))
+                            var applied = await fixService.ApplyAsync(fixPlan);
+                            foreach (var backup in applied.Backups)
                                 Console.WriteLine($"Backed up the original to {backup}");
+
+                            foreach (var failure in applied.Failures)
+                                Console.Error.WriteLine($"Error: could not apply the fix for {failure.FilePath}: {failure.Message}");
+
+                            fixFailed = applied.Failures.Count > 0;
                         }
                         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                         {
@@ -312,7 +319,7 @@ static async Task RunAsync(string[] args)
                     Console.WriteLine("hint: Some issues may be auto-fixable. Run `netclaw doctor --fix --dry-run` to preview.");
             }
 
-            Environment.ExitCode = result.ExitCode;
+            Environment.ExitCode = result.ExitCodeAfterFix(fixFailed);
             return;
         }
         catch (ModelConfigurationException ex)
@@ -595,7 +602,13 @@ static async Task RunAsync(string[] args)
             }
 
             case "install":
-                var installResult = await manager.InstallAsync();
+                if (!DaemonCommandDispatch.TryParseInstallArguments(args, out var installEnvEntries, out var installArgError))
+                {
+                    WriteDaemonResult(new DaemonResult(false, installArgError));
+                    return;
+                }
+
+                var installResult = await manager.InstallAsync(installEnvEntries);
                 WriteDaemonResult(installResult);
                 return;
 
@@ -1442,7 +1455,9 @@ static void WriteDaemonHelp()
     Console.WriteLine("  start                        Start daemon as a background process");
     Console.WriteLine("  stop                         Stop daemon gracefully");
     Console.WriteLine("  status                       Show daemon process status (exit 1 if not running or not ready)");
-    Console.WriteLine("  install                      Install systemd user service (Linux)");
+    Console.WriteLine("  install [--env KEY=VALUE]    Install systemd user service (Linux). Repeat --env to add NETCLAW_* lines");
+    Console.WriteLine("                               to daemon.env. A key must name a netclaw.json setting. It refuses a credential:");
+    Console.WriteLine("                               use `netclaw secrets set` for that.");
     Console.WriteLine("  uninstall                    Remove systemd user service (Linux)");
     Console.WriteLine("  pair                         Generate a pairing code for remote device access");
     Console.WriteLine("  devices                      List paired devices");

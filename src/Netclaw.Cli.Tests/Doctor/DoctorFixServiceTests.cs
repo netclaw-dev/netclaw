@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Tests.Utilities;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Tests.Cli;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Netclaw.Cli.Config;
@@ -19,6 +20,8 @@ namespace Netclaw.Cli.Tests.Doctor;
 [Collection(Netclaw.Cli.Tests.LegacyModelEnvironmentCollection.Name)]
 public sealed class DoctorFixServiceTests : IDisposable
 {
+    public static bool IsLinux => OperatingSystem.IsLinux();
+
     private readonly DisposableTempDir _temp = new();
 
     public void Dispose() => _temp.Dispose();
@@ -261,6 +264,202 @@ public sealed class DoctorFixServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Fix_keeps_operator_lines_in_daemon_env()
+    {
+        var paths = NewPaths();
+        var unitPath = WriteWiredUnit(paths);
+        const string original =
+            "NETCLAW_HOME=/x/home\n# proxy\nHTTP_PROXY=http://proxy.example:3128\nPATH=/usr/bin\n";
+        await File.WriteAllTextAsync(paths.DaemonEnvironmentFilePath, original, TestContext.Current.CancellationToken);
+
+        var service = new DoctorFixService(paths, unitPath, systemdEnabled: true);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        var fix = Assert.Single(plan.Fixes, f => f.FilePath == paths.DaemonEnvironmentFilePath);
+        var before = fix.OriginalText.Split('\n');
+        var after = fix.UpdatedText.Split('\n');
+        Assert.Equal(before.Length, after.Length);
+        var changed = before.Zip(after).Where(pair => pair.Item1 != pair.Item2).ToArray();
+        var line = Assert.Single(changed);
+        Assert.StartsWith("PATH=", line.Item1, StringComparison.Ordinal);
+        Assert.StartsWith($"PATH={InstallDir}:", line.Item2, StringComparison.Ordinal);
+        Assert.Equal(
+            fix.UpdatedText,
+            await File.ReadAllTextAsync(paths.DaemonEnvironmentFilePath, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Fix_writes_daemon_env_with_mode_0600()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var paths = NewPaths();
+        var unitPath = WriteWiredUnit(paths);
+        await File.WriteAllTextAsync(paths.DaemonEnvironmentFilePath, "PATH=/usr/bin\n", TestContext.Current.CancellationToken);
+        File.SetUnixFileMode(
+            paths.DaemonEnvironmentFilePath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        var service = new DoctorFixService(paths, unitPath, systemdEnabled: true);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(paths.DaemonEnvironmentFilePath));
+    }
+
+    [Fact]
+    public async Task Fix_sets_mode_0600_on_a_loose_daemon_env_and_changes_nothing_else()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var paths = NewPaths();
+        var unitPath = WriteWiredUnit(paths);
+        var healthy = "NETCLAW_HOME=/x/home\n# note\n" + DaemonPathEnvironmentFile.Render(InstallDir, "/usr/bin");
+        await File.WriteAllTextAsync(paths.DaemonEnvironmentFilePath, healthy, TestContext.Current.CancellationToken);
+        File.SetUnixFileMode(
+            paths.DaemonEnvironmentFilePath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        var service = new DoctorFixService(paths, unitPath, systemdEnabled: true);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        var fix = Assert.Single(plan.Fixes, f => f.FilePath == paths.DaemonEnvironmentFilePath);
+        Assert.Contains("0600", fix.Description, StringComparison.Ordinal);
+        Assert.Equal(healthy, fix.UpdatedText);
+        Assert.Equal(
+            healthy,
+            await File.ReadAllTextAsync(paths.DaemonEnvironmentFilePath, TestContext.Current.CancellationToken));
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(paths.DaemonEnvironmentFilePath));
+    }
+
+    [SlopwatchSuppress("SW001", "The owner lookup is Linux-only.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "The owner lookup is Linux-only.")]
+    public async Task Apply_reports_a_failed_fix_and_still_applies_the_other_fixes()
+    {
+        Assert.SkipWhen(UnixOwnership.CurrentUserId() == 0, "Root owns the target, so the target is not foreign.");
+        var paths = NewPaths();
+        const string foreign = "/etc/passwd";
+        File.CreateSymbolicLink(paths.DaemonEnvironmentFilePath, foreign);
+        await File.WriteAllTextAsync(
+            paths.NetclawConfigPath,
+            """{"configVersion":1,"Slack":{"Enabled":false,"Comment":"mine"}}""",
+            TestContext.Current.CancellationToken);
+        var service = new DoctorFixService(paths, Path.Combine(paths.BasePath, "unused.service"), systemdEnabled: false);
+
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        var result = await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        Assert.Contains(plan.Fixes, fix => fix.FilePath == paths.DaemonEnvironmentFilePath);
+        var failure = Assert.Single(result.Failures);
+        Assert.Equal(paths.DaemonEnvironmentFilePath, failure.FilePath);
+        Assert.Contains("another user", failure.Message, StringComparison.Ordinal);
+        Assert.Contains(foreign, failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Comment", await File.ReadAllTextAsync(paths.NetclawConfigPath, TestContext.Current.CancellationToken), StringComparison.Ordinal);
+        Assert.Single(result.Backups);
+        Assert.Equal(foreign, new FileInfo(paths.DaemonEnvironmentFilePath).LinkTarget);
+    }
+
+    [SlopwatchSuppress("SW001", "The owner lookup is Linux-only.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "The owner lookup is Linux-only.")]
+    public async Task Apply_reports_a_dangling_daemon_env_link_with_both_paths_and_does_not_create_the_target()
+    {
+        var paths = NewPaths();
+        var target = Path.Combine(_temp.Path, "later", "daemon.env");
+        File.CreateSymbolicLink(paths.DaemonEnvironmentFilePath, target);
+        var service = new DoctorFixService(paths, Path.Combine(paths.BasePath, "unused.service"), systemdEnabled: false);
+        var plan = new DoctorFixPlan([new DoctorFileFix(paths.DaemonEnvironmentFilePath, "Rewrite daemon.env.", "PATH=/old\n", "PATH=/new\n")]);
+
+        var result = await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        var failure = Assert.Single(result.Failures);
+        Assert.Contains(paths.DaemonEnvironmentFilePath, failure.Message, StringComparison.Ordinal);
+        Assert.Contains(target, failure.Message, StringComparison.Ordinal);
+        Assert.Contains("missing", failure.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(target));
+    }
+
+    [Fact]
+    public async Task Fix_sets_mode_0600_on_a_kept_daemon_env_when_no_unit_is_installed()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.DaemonEnvironmentFilePath, "NETCLAW_HOME=/x/home\n", TestContext.Current.CancellationToken);
+        File.SetUnixFileMode(
+            paths.DaemonEnvironmentFilePath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);
+
+        var service = new DoctorFixService(paths, Path.Combine(paths.ConfigDirectory, "absent.service"), systemdEnabled: true);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        Assert.Single(plan.Fixes, f => f.FilePath == paths.DaemonEnvironmentFilePath);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(paths.DaemonEnvironmentFilePath));
+    }
+
+    [Fact]
+    public async Task Fix_writes_through_a_symlinked_daemon_env()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var paths = NewPaths();
+        var unitPath = WriteWiredUnit(paths);
+        var targetDir = Path.Combine(paths.ConfigDirectory, "managed");
+        Directory.CreateDirectory(targetDir);
+        var target = Path.Combine(targetDir, "daemon.env");
+        await File.WriteAllTextAsync(target, "HTTP_PROXY=http://proxy.example:3128\nPATH=/usr/bin\n", TestContext.Current.CancellationToken);
+        File.CreateSymbolicLink(paths.DaemonEnvironmentFilePath, target);
+
+        var service = new DoctorFixService(paths, unitPath, systemdEnabled: true);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(new FileInfo(paths.DaemonEnvironmentFilePath).LinkTarget);
+        var text = await File.ReadAllTextAsync(target, TestContext.Current.CancellationToken);
+        Assert.StartsWith("HTTP_PROXY=http://proxy.example:3128\n", text, StringComparison.Ordinal);
+        Assert.Contains(InstallDir, text, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BuildPlan_plans_no_daemon_env_fix_and_does_not_throw_for_a_broken_link(bool loop)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var paths = NewPaths();
+        var unitPath = WriteWiredUnit(paths);
+        if (loop)
+        {
+            var other = Path.Combine(paths.ConfigDirectory, "other.env");
+            File.CreateSymbolicLink(paths.DaemonEnvironmentFilePath, other);
+            File.CreateSymbolicLink(other, paths.DaemonEnvironmentFilePath);
+        }
+        else
+        {
+            File.CreateSymbolicLink(paths.DaemonEnvironmentFilePath, Path.Combine(_temp.Path, "later", "daemon.env"));
+        }
+
+        var service = new DoctorFixService(paths, unitPath, systemdEnabled: true);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(plan.Fixes, fix => fix.FilePath == paths.DaemonEnvironmentFilePath);
+    }
+
+    [Fact]
     public async Task NoEnvFix_WhenHealthy()
     {
         var paths = NewPaths();
@@ -269,6 +468,8 @@ public sealed class DoctorFixServiceTests : IDisposable
             paths.DaemonEnvironmentFilePath,
             DaemonPathEnvironmentFile.Render(InstallDir, "/usr/bin"),
             TestContext.Current.CancellationToken);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(paths.DaemonEnvironmentFilePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
 
         var service = new DoctorFixService(paths, unitPath, systemdEnabled: true);
         var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);

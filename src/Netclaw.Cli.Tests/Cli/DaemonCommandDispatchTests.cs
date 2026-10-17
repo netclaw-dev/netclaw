@@ -71,4 +71,31 @@ public sealed class DaemonCommandDispatchTests
         // itself is normalized away before this check runs — none should be double-guarded here.
         Assert.False(DaemonCommandDispatch.ShouldShowHelpInsteadOfExecuting(verb, ["daemon", verb, "--help"]));
     }
+
+    [Fact]
+    public void TryParseInstallArguments_accepts_no_arguments()
+    {
+        Assert.True(DaemonCommandDispatch.TryParseInstallArguments(["daemon", "install"], out var entries, out var error), error);
+        Assert.Empty(entries);
+    }
+
+    [Theory]
+    [InlineData(new[] { "daemon", "install", "--env", "NETCLAW_A=1" }, new[] { "NETCLAW_A=1" })]
+    [InlineData(new[] { "daemon", "install", "--env", "NETCLAW_A=1", "--env", "NETCLAW_B=2" }, new[] { "NETCLAW_A=1", "NETCLAW_B=2" })]
+    public void TryParseInstallArguments_collects_each_env_flag(string[] args, string[] expected)
+    {
+        Assert.True(DaemonCommandDispatch.TryParseInstallArguments(args, out var entries, out var error), error);
+        Assert.Equal(expected, entries);
+    }
+
+    [Theory]
+    [InlineData("daemon", "install", "--env")]
+    [InlineData("daemon", "install", "--env", "NETCLAW_A=1", "--env")]
+    [InlineData("daemon", "install", "NETCLAW_A=1")]
+    [InlineData("daemon", "install", "--envs", "NETCLAW_A=1")]
+    public void TryParseInstallArguments_refuses_a_flag_with_no_value_and_unknown_arguments(params string[] args)
+    {
+        Assert.False(DaemonCommandDispatch.TryParseInstallArguments(args, out _, out var error));
+        Assert.NotEmpty(error);
+    }
 }
