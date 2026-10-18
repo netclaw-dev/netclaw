@@ -255,7 +255,7 @@ public abstract class ApprovalWaitTestBase : LlmSessionTestBase
             .ToArray();
     }
 
-    private async Task<long> LatestSnapshotSequenceNrAsync(SessionId sessionId)
+    protected async Task<long> LatestSnapshotSequenceNrAsync(SessionId sessionId)
     {
         var probe = CreateTestProbe("snapshot-reader-" + Guid.NewGuid().ToString("N"));
         AkkaPersistence.Instance.Apply(Sys).SnapshotStoreFor(null).Tell(

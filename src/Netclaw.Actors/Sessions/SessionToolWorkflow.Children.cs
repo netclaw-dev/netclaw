@@ -85,6 +85,12 @@ internal sealed partial class SessionToolWorkflow
                      .Select(pair => pair.Key).ToArray())
             _calls.Remove(key);
     }
+    public IEnumerable<PendingToolInteraction> OpenApprovals()
+        => _calls.Values.OfType<PendingToolApproval>().Select(call => call.Pending);
+    // Test-first stub (#2525). The implementer replaces this body: remove every entry of the run, ignore a missing one.
+    public void ApplyChildApprovalsClosed(ChildApprovalsClosed evt)
+    {
+    }
     public void ExpireChildApprovals(SubAgentRunId runId)
     {
         foreach (var key in _calls.Where(pair => pair.Value.Pending.Request.SourceChildRunId == runId)

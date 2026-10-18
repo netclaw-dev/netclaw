@@ -383,6 +383,44 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
         }
     }
 
+    [Fact]
+    public async Task Cancelling_a_child_with_an_open_approval_persists_one_close_event()
+    {
+        // Arrange: the child waits on an approval that nobody answers.
+        var sessionId = new SessionId("boundary/cancel-open-child-approval");
+        var control = await ConfigureJournalAsync(rejectAcceptance: false, holdAcceptance: false);
+        _clients.Parent.ToolCallsOnFirstCall = [Spawn("cancel-approval-child", "child-a")];
+        _clients.A.ToolCallsOnFirstCall = [Probe("forbidden-after-cancel")];
+        var subscriber = CreateTestProbe();
+        await JoinSessionAsync(ActorRegistry.Get<SessionManagerActorKey>(), subscriber, sessionId, OutputFilter.Full);
+        var session = await ResolveSessionAsync(sessionId);
+        await SendAsync(sessionId, "Start the child with an approval.", "original-owner");
+        await subscriber.FishForMessageAsync<ToolInteractionRequest>(
+            item => item.ToolName.Value == "authority_probe", Deadline, cancellationToken: Cancellation);
+        var accepted = await control.Acceptance.Task.WaitAsync(Deadline, Cancellation);
+
+        // Act
+        using var cancelled = JsonDocument.Parse(await session.Ask<string>(
+            new ChildRunControl(accepted.Run.RunId, true, accepted.Run.OriginalContext), Deadline, Cancellation));
+
+        // Assert: the cancel closes the approval and writes one event. The terminal result adds no second event.
+        await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<ChildRunEvent.TerminalRecorded>(),
+            evt => evt.RunId == accepted.Run.RunId), Deadline, cancellationToken: Cancellation);
+        var closed = Assert.Single(control.Committed.OfType<ChildApprovalsClosed>());
+        Assert.Equal(accepted.Run.RunId, closed.RunId);
+        Assert.Equal(sessionId, closed.SessionId);
+        Assert.Equal(ChildApprovalCloseReason.RunCancelled, closed.Reason);
+        var order = control.Committed.ToArray();
+        Assert.True(Array.IndexOf(order, order.OfType<ChildRunEvent.CancellationRequested>().Single())
+                    < Array.IndexOf(order, closed),
+            "The close event follows the cancel request.");
+        var status = await session.Ask<string>(new ChildRunControl(
+            accepted.Run.RunId, false, accepted.Run.OriginalContext), Deadline, Cancellation);
+        using var json = JsonDocument.Parse(status);
+        Assert.Equal(0, json.RootElement.GetProperty("pending_approval_count").GetInt32());
+        Assert.Empty(_tool.Contexts);
+    }
+
     [Theory]
     [InlineData("original-owner", true)]
     [InlineData("other-requester", false)]
