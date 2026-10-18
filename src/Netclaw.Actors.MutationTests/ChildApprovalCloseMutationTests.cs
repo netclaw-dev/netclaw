@@ -19,8 +19,8 @@ namespace Netclaw.Actors.MutationTests;
 /// <summary>
 /// Issue 2525. The approval table of a session holds child approvals, and <c>AllowsSnapshot</c> needs an empty
 /// table. One rule closes a child approval: the cancel record or the terminal record of its run closes every entry of
-/// that run. Live code and journal replay both use it. A rule that misses an entry strands it, and every snapshot stays
-/// blocked. A rule that removes too much drops a prompt that is still open, so a person cannot answer it. Each test
+/// that run. Live code uses it, and recovery closes the remaining child entries in <c>RecoveryCompleted</c>. A rule
+/// that misses an entry strands it, and every snapshot stays blocked. A rule that removes too much drops a prompt that is still open, so a person cannot answer it. Each test
 /// builds the table directly. No test uses an actor, a timer, or a delay.
 /// </summary>
 public sealed class ChildApprovalCloseMutationTests
