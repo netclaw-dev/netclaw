@@ -43,7 +43,7 @@ internal sealed class SystemdUserService(
     private readonly ISystemCommandRunner _commandRunner = commandRunner ?? ProcessSystemCommandRunner.Instance;
     private readonly bool _enabledOnThisPlatform = enabledOnThisPlatform ?? OperatingSystem.IsLinux();
 
-    private readonly Func<int, string?> _readEnviron = environReader ?? ReadProcEnviron;
+    private readonly Func<int, string?> _readEnviron = environReader ?? HomeIdentity.ReadProcessEnvironment;
 
     private readonly string _homePath = homePath;
 
@@ -133,29 +133,7 @@ internal sealed class SystemdUserService(
     /// NETCLAW_HOME (absent means the default home). <c>null</c> when its environment cannot be read.
     /// </summary>
     private bool? ProcessServesHome(int pid, string homePath)
-    {
-        if (_readEnviron(pid) is not { } environ)
-            return null;
-
-        var processHome = environ.Split('\0')
-            .FirstOrDefault(entry => entry.StartsWith("NETCLAW_HOME=", StringComparison.Ordinal))
-            ?["NETCLAW_HOME=".Length..];
-
-        var servedHome = string.IsNullOrEmpty(processHome) ? DefaultHomePath : processHome;
-        return string.Equals(ResolveLinks(servedHome), ResolveLinks(homePath), StringComparison.Ordinal);
-    }
-
-    private static string? ReadProcEnviron(int pid)
-    {
-        try
-        {
-            return File.ReadAllText($"/proc/{pid}/environ");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
+        => _readEnviron(pid) is { } environ ? HomeIdentity.EnvironmentServesHome(environ, homePath) : null;
 
     private static string? ShowValue(SystemCommandResult show, string property) =>
         show.Success
@@ -204,29 +182,10 @@ internal sealed class SystemdUserService(
         return null;
     }
 
-    internal static string DefaultHomePath => Path.GetFullPath(Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".netclaw"));
+    internal static string DefaultHomePath => HomeIdentity.DefaultHome;
 
     private static bool IsDefaultHome(string homePath) =>
-        string.Equals(ResolveLinks(homePath), ResolveLinks(DefaultHomePath), StringComparison.Ordinal);
-
-    private static string ResolveLinks(string path)
-    {
-        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-        try
-        {
-            var target = new DirectoryInfo(full).ResolveLinkTarget(returnFinalTarget: true);
-            if (target is not null)
-                return Path.TrimEndingDirectorySeparator(Path.GetFullPath(target.FullName));
-        }
-        catch (IOException)
-        {
-            return full; // not a readable link: compare the path as spelled
-        }
-
-        return full;
-    }
+        HomeIdentity.Same(homePath, DefaultHomePath);
 
     public async Task<DaemonResult> StopAsync()
     {

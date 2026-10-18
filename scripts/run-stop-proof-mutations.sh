@@ -88,9 +88,9 @@ run_gate() {
 
 failed=0
 run_gate Netclaw.Cli.csproj \
-  "$repo_root/src/Netclaw.Cli/Daemon/DaemonManager.cs" "Daemon/DaemonManager.cs" 20 \
+  "$repo_root/src/Netclaw.Cli/Daemon/DaemonManager.cs" "Daemon/DaemonManager.cs" 22 \
   "$output_path/cli" stale-pid stop-notice stop-proof || failed=1
 run_gate Netclaw.Configuration.csproj \
-  "$repo_root/src/Netclaw.Configuration/HomeIdentity.cs" "HomeIdentity.cs" 10 \
+  "$repo_root/src/Netclaw.Configuration/HomeIdentity.cs" "HomeIdentity.cs" 11 \
   "$output_path/configuration" home-match || failed=1
 exit "$failed"
