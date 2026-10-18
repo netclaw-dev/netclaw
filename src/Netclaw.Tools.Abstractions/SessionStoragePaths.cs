@@ -123,6 +123,17 @@ public readonly record struct ManagedTemporaryLocation
 
     /// <summary>Gets the storage root that contains <see cref="Directory"/>.</summary>
     public ManagedTemporaryStorageRoot StorageRoot { get; }
+
+    /// <summary>
+    /// Gets the per-user base of a <see cref="ManagedTemporaryLayout.PrivateBase"/> location. It is
+    /// <c>null</c> for a location inside session storage (Windows) and for a persisted record.
+    /// </summary>
+    /// <remarks>
+    /// <c>ManagedTemporaryEnvironment.Prepare</c> runs the private-folder checks (mode 0700, owner,
+    /// no link) on this base and on <see cref="StorageRoot"/> when the value is present.
+    /// Issue #2554 test-author stub: always <c>null</c> until the implementer adds the layout.
+    /// </remarks>
+    public ManagedTemporaryBase? PrivateBase => null;
 }
 
 /// <summary>
@@ -169,9 +180,14 @@ public sealed record SessionStoragePaths
 
     /// <summary>Creates the version-2 parent layout below one persisted envelope.</summary>
     /// <param name="envelopeRoot">The persisted envelope root.</param>
+    /// <param name="temporaryLayout">Where the managed temporary folder of each run lives.</param>
     /// <returns>The resolved parent paths.</returns>
-    public static SessionStoragePaths CreateVersion2(SessionStorageEnvelopeRoot envelopeRoot)
+    /// <remarks>Issue #2554 test-author stub: the layout is ignored until the implementer adds it.</remarks>
+    public static SessionStoragePaths CreateVersion2(
+        SessionStorageEnvelopeRoot envelopeRoot,
+        ManagedTemporaryLayout temporaryLayout)
     {
+        ArgumentNullException.ThrowIfNull(temporaryLayout);
         return new SessionStoragePaths(
             new SessionStorageBinding(SessionStorageLayoutVersion.Version2, envelopeRoot),
             new SessionWorkspaceDirectory(envelopeRoot),
@@ -187,12 +203,16 @@ public sealed record SessionStoragePaths
     /// <param name="sessionDirectory">The established session directory.</param>
     /// <param name="sessionLogsBasePath">The established session-log base.</param>
     /// <param name="sanitizedSessionId">The legacy path segment for the session.</param>
+    /// <param name="temporaryLayout">Where the managed temporary folder of each run lives.</param>
     /// <returns>The unchanged legacy paths.</returns>
+    /// <remarks>Issue #2554 test-author stub: the layout is ignored until the implementer adds it.</remarks>
     public static SessionStoragePaths CreateLegacy(
         string sessionDirectory,
         string sessionLogsBasePath,
-        string sanitizedSessionId)
+        string sanitizedSessionId,
+        ManagedTemporaryLayout temporaryLayout)
     {
+        ArgumentNullException.ThrowIfNull(temporaryLayout);
         ArgumentException.ThrowIfNullOrWhiteSpace(sanitizedSessionId);
         var normalizedSessionDirectory = SessionWorkspaceDirectory.FromLegacyPath(sessionDirectory);
         var normalizedLogsBase = new LegacySessionLogsDirectory(sessionLogsBasePath);

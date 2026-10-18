@@ -177,7 +177,7 @@ internal sealed class SessionToolPipelineTestFixture(
             Storage = SessionStoragePaths.CreateLegacy(
                 _sessionDirectory,
                 Path.Combine(Path.GetTempPath(), "netclaw-test-session-logs"),
-                "test-session"),
+                "test-session", ManagedTemporaryLayout.InsideSessionStorage.Instance),
             InlineOutputBudget = _inlineOutputBudget,
             ModelInputModalities = _modelInputModalities,
             SpawnChildActor = _spawnChildActor,

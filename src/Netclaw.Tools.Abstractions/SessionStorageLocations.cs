@@ -234,3 +234,75 @@ internal readonly record struct SubAgentRunStorageRoot
     /// <summary>Gets the canonical absolute child-run directory.</summary>
     public string Value { get; }
 }
+
+/// <summary>
+/// The per-user base of the short managed temporary folders on a POSIX host:
+/// <c>/tmp/netclaw-&lt;uid&gt;</c> (issue #2554).
+/// </summary>
+/// <remarks>
+/// SECURITY: the base is shared by every session of one daemon user. It is never
+/// a session root. Only one key folder below it is a root of one session.
+/// </remarks>
+public readonly record struct ManagedTemporaryBase
+{
+    /// <summary>Creates a base from a canonical absolute folder path.</summary>
+    /// <param name="value">The canonical absolute folder path.</param>
+    public ManagedTemporaryBase(string value)
+    {
+        var normalized = SessionStoragePathValue.NormalizeAbsolute(value, nameof(value));
+        if (!string.Equals(value, normalized, StringComparison.Ordinal))
+            throw new ArgumentException("A managed temporary base must be canonical.", nameof(value));
+
+        Value = normalized;
+    }
+
+    /// <summary>Gets the canonical absolute folder path.</summary>
+    public string Value { get; }
+
+    /// <summary>
+    /// Gets the base of the current effective user: <c>/tmp/netclaw-&lt;euid&gt;</c>, or
+    /// <c>/private/tmp/netclaw-&lt;euid&gt;</c> on macOS.
+    /// </summary>
+    /// <exception cref="PlatformNotSupportedException">The host is Windows.</exception>
+    public static ManagedTemporaryBase ForCurrentUser()
+        // Issue #2554 test-author stub. The implementer reads the effective user ID (geteuid).
+        => throw new NotImplementedException("Issue #2554: ManagedTemporaryBase.ForCurrentUser is not implemented yet.");
+
+    /// <summary>Returns the canonical absolute path.</summary>
+    public override string ToString() => Value;
+}
+
+/// <summary>Selects where the managed temporary folder of a run lives.</summary>
+public abstract record ManagedTemporaryLayout
+{
+    private ManagedTemporaryLayout()
+    {
+    }
+
+    /// <summary>
+    /// The POSIX layout: <c>&lt;base&gt;/&lt;key&gt;/p</c> for a parent run and
+    /// <c>&lt;base&gt;/&lt;key&gt;/c&lt;8 hex&gt;</c> for a child run.
+    /// </summary>
+    /// <param name="Base">The per-user base folder.</param>
+    public sealed record PrivateBase(ManagedTemporaryBase Base) : ManagedTemporaryLayout;
+
+    /// <summary>
+    /// The Windows layout: <c>&lt;session-envelope&gt;/tmp/parent</c> for a parent run and
+    /// <c>&lt;child-root&gt;/tmp</c> for a child run.
+    /// </summary>
+    public sealed record InsideSessionStorage : ManagedTemporaryLayout
+    {
+        private InsideSessionStorage()
+        {
+        }
+
+        /// <summary>Gets the one instance.</summary>
+        public static InsideSessionStorage Instance { get; } = new();
+    }
+
+    /// <summary>Gets the layout of this host: the private base on POSIX, else storage inside the session.</summary>
+    public static ManagedTemporaryLayout ForHost()
+        => OperatingSystem.IsWindows()
+            ? InsideSessionStorage.Instance
+            : new PrivateBase(ManagedTemporaryBase.ForCurrentUser());
+}

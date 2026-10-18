@@ -21,8 +21,22 @@ internal static class ManagedTemporaryEnvironment
     internal static string? Prepare(
         ProcessStartInfo startInfo,
         ManagedTemporaryLocation location)
+        => Prepare(startInfo, location, HostManagedTemporaryFolderInspector.Instance);
+
+    /// <summary>
+    /// Prepares the directory with an explicit folder inspector. For a location with a
+    /// <see cref="ManagedTemporaryLocation.PrivateBase"/>, the base and the key folder must
+    /// each be a folder that is not a link, that the daemon user owns, and that has no
+    /// group or other permission bits. A failed check refuses the launch (issue #2554).
+    /// </summary>
+    /// <remarks>Issue #2554 test-author stub: the inspector is not used yet.</remarks>
+    internal static string? Prepare(
+        ProcessStartInfo startInfo,
+        ManagedTemporaryLocation location,
+        IManagedTemporaryFolderInspector inspector)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
+        ArgumentNullException.ThrowIfNull(inspector);
 
         try
         {
@@ -58,4 +72,43 @@ internal static class ManagedTemporaryEnvironment
             return $"Error preparing managed temporary directory: {ex.Message}";
         }
     }
+}
+
+/// <summary>
+/// Reads the facts of one folder without following a link at the final path segment
+/// (<c>lstat</c>). The private-folder checks of <see cref="ManagedTemporaryEnvironment"/> use it.
+/// </summary>
+internal interface IManagedTemporaryFolderInspector
+{
+    /// <summary>Gets the effective user ID of the daemon process.</summary>
+    uint EffectiveUserId { get; }
+
+    /// <summary>Reads the facts of a path. Returns <c>false</c> when the path does not exist.</summary>
+    bool TryInspect(string path, out ManagedTemporaryFolderFacts facts);
+}
+
+/// <summary>The facts of one folder that the private-folder checks need.</summary>
+/// <param name="IsSymbolicLink">True when the path itself is a symbolic link.</param>
+/// <param name="OwnerUserId">The user ID that owns the path.</param>
+/// <param name="Mode">The permission bits of the path.</param>
+internal readonly record struct ManagedTemporaryFolderFacts(
+    bool IsSymbolicLink,
+    uint OwnerUserId,
+    UnixFileMode Mode);
+
+/// <summary>Reads folder facts from the host filesystem.</summary>
+internal sealed class HostManagedTemporaryFolderInspector : IManagedTemporaryFolderInspector
+{
+    internal static HostManagedTemporaryFolderInspector Instance { get; } = new();
+
+    private HostManagedTemporaryFolderInspector()
+    {
+    }
+
+    // Issue #2554 test-author stub. The implementer reads geteuid() and lstat().
+    public uint EffectiveUserId
+        => throw new NotImplementedException("Issue #2554: HostManagedTemporaryFolderInspector is not implemented yet.");
+
+    public bool TryInspect(string path, out ManagedTemporaryFolderFacts facts)
+        => throw new NotImplementedException("Issue #2554: HostManagedTemporaryFolderInspector is not implemented yet.");
 }

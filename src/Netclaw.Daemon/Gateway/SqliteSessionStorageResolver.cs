@@ -33,6 +33,7 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
     private readonly string _sessionsDirectory;
     private readonly string _sessionLogsDirectory;
     private readonly TimeProvider _timeProvider;
+    private readonly ManagedTemporaryLayout _temporaryLayout;
     private readonly ILogger<SqliteSessionStorageResolver> _logger;
     // GetOrAdd can run the resolve factory twice for one session; this keeps the re-root warning to once.
     private readonly ConcurrentDictionary<string, byte> _reRootedSessions = new(StringComparer.Ordinal);
@@ -46,7 +47,19 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
         NetclawPaths paths,
         TimeProvider timeProvider,
         ILogger<SqliteSessionStorageResolver>? logger = null)
-        : this(paths, timeProvider, paths.SessionsDirectory, logger)
+        // Issue #2554 test-author stub: the implementer makes the layout a required
+        // argument and the daemon passes ManagedTemporaryLayout.ForHost().
+        : this(paths, timeProvider, paths.SessionsDirectory, ManagedTemporaryLayout.InsideSessionStorage.Instance, logger)
+    {
+    }
+
+    /// <summary>Creates a resolver with an explicit managed temporary layout.</summary>
+    internal SqliteSessionStorageResolver(
+        NetclawPaths paths,
+        TimeProvider timeProvider,
+        ManagedTemporaryLayout temporaryLayout,
+        ILogger<SqliteSessionStorageResolver>? logger = null)
+        : this(paths, timeProvider, paths.SessionsDirectory, temporaryLayout, logger)
     {
     }
 
@@ -55,7 +68,19 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
         TimeProvider timeProvider,
         string sessionsDirectory,
         ILogger<SqliteSessionStorageResolver>? logger = null)
+        : this(paths, timeProvider, sessionsDirectory, ManagedTemporaryLayout.InsideSessionStorage.Instance, logger)
     {
+    }
+
+    internal SqliteSessionStorageResolver(
+        NetclawPaths paths,
+        TimeProvider timeProvider,
+        string sessionsDirectory,
+        ManagedTemporaryLayout temporaryLayout,
+        ILogger<SqliteSessionStorageResolver>? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(temporaryLayout);
+        _temporaryLayout = temporaryLayout;
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionsDirectory);
@@ -112,20 +137,21 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
                         Directory.Exists(resolvedRoot) ? string.Empty : " (that folder does not exist yet, so the session starts with an empty workspace)");
                 }
 
-                storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(resolvedRoot));
+                storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(resolvedRoot), _temporaryLayout);
                 break;
             case SessionStorageDatabaseState.Legacy:
                 storage = SessionStoragePaths.CreateLegacy(
                     legacySessionDirectory,
                     _sessionLogsDirectory,
-                    sanitizedSessionId);
+                    sanitizedSessionId,
+                    _temporaryLayout);
                 break;
             case SessionStorageDatabaseState.New:
                 var envelopeRoot = new SessionStorageEnvelopeRoot(
                     Path.Combine(_sessionsDirectory, CreateEnvelopeDirectoryName(sessionId, sanitizedSessionId)));
                 var newBinding = new SessionStorageBinding(SessionStorageLayoutVersion.Version2, envelopeRoot);
                 InsertBinding(connection, transaction, sessionId, newBinding);
-                storage = SessionStoragePaths.CreateVersion2(envelopeRoot);
+                storage = SessionStoragePaths.CreateVersion2(envelopeRoot, _temporaryLayout);
                 break;
             default:
                 throw new InvalidOperationException("The session storage database returned an invalid state.");

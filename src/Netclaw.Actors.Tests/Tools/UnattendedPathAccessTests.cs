@@ -311,6 +311,12 @@ public sealed class UnattendedPathAccessTests : IDisposable
             Mode = ToolFilesystemMode.Roots,
             Roots = [_projectDir]
         };
+        // Issue #2554: Personal reads reach the write profile, so bound it too.
+        config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [_projectDir]
+        };
         var policy = new PathAccessPolicy(config, _paths, new ToolPathPolicy([]));
         var context = Ctx(TrustAudience.Personal, autonomous: true);
 

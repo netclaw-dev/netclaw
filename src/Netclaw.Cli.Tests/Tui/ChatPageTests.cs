@@ -981,7 +981,7 @@ public sealed class ChatPageTests
                     SessionStoragePaths.CreateLegacy(
                         Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-chat-page-session")),
                         Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-chat-page-logs")),
-                        "test-session")),
+                        "test-session", ManagedTemporaryLayout.InsideSessionStorage.Instance)),
                 Audience = TrustAudience.Personal,
                 InlineOutputBudget = InlineOutputBudget.Default,
                 // A chat can answer the prompt. An unattended run would deny the call (D2).

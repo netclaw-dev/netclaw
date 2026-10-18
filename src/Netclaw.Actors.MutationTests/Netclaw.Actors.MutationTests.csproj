@@ -55,6 +55,9 @@
              Link="Channels/TurnContextRequesterTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Channels/TurnContextChildControlTests.cs"
              Link="Channels/TurnContextChildControlTests.cs" />
+    <!-- Issue #2554: the private-folder checks of the managed temporary folder (path-access gate). -->
+    <Compile Include="../Netclaw.Actors.Tests/Tools/ManagedTemporaryFolderCheckTests.cs"
+             Link="Tools/ManagedTemporaryFolderCheckTests.cs" />
     <Compile Include="../Netclaw.Tests.Utilities/TestSessionStorageResolver.cs"
              Link="Utilities/TestSessionStorageResolver.cs" />
     <!-- The stop-proof tests start a stand-in daemon (a process, a port, a recording listener). -->

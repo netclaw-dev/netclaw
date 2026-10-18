@@ -572,6 +572,53 @@ public sealed class SessionStorageResolverTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Issue #2554 cross-boundary contract: the resolver (producer) emits the
+    /// short managed temporary layout, and the path access decision (consumer)
+    /// accepts the key folder as a root of that session only.
+    /// </summary>
+    [Fact]
+    public async Task Resolver_emits_the_private_temporary_layout_that_the_path_policy_accepts()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var paths = CreatePaths();
+        await MigrateAsync(paths, paths.SqliteDbPath);
+        var temporaryBase = Path.Combine(_basePath, "netclaw-base");
+        var resolver = new SqliteSessionStorageResolver(
+            paths,
+            new FakeTimeProvider(),
+            new ManagedTemporaryLayout.PrivateBase(new ManagedTemporaryBase(temporaryBase)));
+
+        var storage = resolver.Resolve(new SessionId("signalr/short-temp"));
+        var other = resolver.Resolve(new SessionId("signalr/other-session"));
+
+        var envelope = Assert.IsType<SessionStorageBinding>(storage.Binding).EnvelopeRoot.Value;
+        var key = Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(envelope)))[..16];
+        Assert.Equal(Path.Combine(temporaryBase, key, "p"), storage.ManagedTemporary.Directory.Value);
+        Assert.Equal(Path.Combine(temporaryBase, key), storage.ManagedTemporary.StorageRoot.Value);
+
+        var policy = new PathAccessPolicy(new ToolConfig(), paths, new ToolPathPolicy([]));
+        var context = TestToolExecutionContext.CreateBoundWithStorage(
+            "signalr/short-temp",
+            storage,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Team,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Team)
+            }).Invocation;
+        Assert.IsType<PathAccessPolicy.PathAccessDecision.Allowed>(policy.Evaluate(
+            Path.Combine(storage.ManagedTemporary.Directory.Value, "frame.png"),
+            context,
+            PathAccessPolicy.FileOperation.Write));
+        Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(policy.Evaluate(
+            Path.Combine(other.ManagedTemporary.Directory.Value, "frame.png"),
+            context,
+            PathAccessPolicy.FileOperation.Read));
+    }
+
     private NetclawPaths CreatePaths()
     {
         var paths = new NetclawPaths(_basePath);

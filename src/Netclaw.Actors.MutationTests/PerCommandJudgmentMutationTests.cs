@@ -39,7 +39,7 @@ public sealed class PerCommandJudgmentMutationTests : IDisposable
     {
         _paths.EnsureDirectoriesExist();
         _storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")));
+            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         Directory.CreateDirectory(_storage.SessionDirectory.Value);
         _workingDirectory = Path.Combine(_paths.BasePath, "work");
         Directory.CreateDirectory(_workingDirectory);
@@ -233,6 +233,13 @@ public sealed class PerCommandJudgmentMutationTests : IDisposable
         {
             config.AudienceProfiles.GlobalReadRoots = [];
             config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+            {
+                Mode = ToolFilesystemMode.Roots,
+                Roots = [.. readRoots]
+            };
+            // Issue #2554: Personal reads reach the write profile. Bound it too,
+            // so that a known path outside the roots stays outside the read reach.
+            config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
             {
                 Mode = ToolFilesystemMode.Roots,
                 Roots = [.. readRoots]

@@ -337,6 +337,11 @@ runtime whitelist.
 
 Spawned subagents inherit the parent session's current `project_dir`.
 Each child receives its own `temp_dir`, `artifact_dir`, and `log_path`.
+On Linux and macOS, the child `temp_dir` is
+`/tmp/netclaw-<uid>/<key>/c<8 hex>`, in the key folder of the parent session.
+The parent and its children can read each other's temp files. Another
+session cannot. See
+[Managed Temporary Folder](session-storage.md#managed-temporary-folder).
 The child also receives the session `session_dir` as its workspace base.
 Project instructions come from the inherited project root.
 
