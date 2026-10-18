@@ -71,6 +71,22 @@ public sealed class ShutdownNoticeIdentityMutationTests : IDisposable
     }
 
     [Fact]
+    public async Task A_chain_of_links_to_this_home_is_this_home()
+    {
+        // The endpoint resolves each side once, so a link that points to a link must resolve to the end.
+        Directory.CreateDirectory(DaemonHome);
+        var first = Path.Combine(_root, "first-link");
+        var second = Path.Combine(_root, "second-link");
+        Directory.CreateSymbolicLink(first, DaemonHome);
+        Directory.CreateSymbolicLink(second, first);
+
+        var (response, _) = await PostAsync(OwnPid, second);
+
+        Assert.Equal(HttpStatusCode.OK, response);
+        Assert.Single(_sink.Alerts);
+    }
+
+    [Fact]
     public async Task A_notice_for_another_pid_is_refused_and_logged()
     {
         var otherPid = (Environment.ProcessId + 1).ToString(CultureInfo.InvariantCulture);
@@ -93,6 +109,14 @@ public sealed class ShutdownNoticeIdentityMutationTests : IDisposable
         Assert.Contains(otherHome, body, StringComparison.Ordinal);
         Assert.Contains(DaemonHome, body, StringComparison.Ordinal);
         AssertSilentExceptForOneWarning();
+    }
+
+    [Fact]
+    public async Task A_notice_for_a_home_that_does_not_exist_is_refused()
+    {
+        var (response, _) = await PostAsync(OwnPid, Path.Combine(_root, "no-such-home", "sub"));
+
+        Assert.Equal(HttpStatusCode.Conflict, response);
     }
 
     [Fact]

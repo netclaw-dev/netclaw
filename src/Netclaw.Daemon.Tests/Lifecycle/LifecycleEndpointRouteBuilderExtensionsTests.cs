@@ -293,6 +293,23 @@ public sealed class LifecycleEndpointRouteBuilderExtensionsTests : IAsyncDisposa
         AssertNothingAnnounced();
     }
 
+    [Fact]
+    public async Task Shutdown_returns_409_when_the_home_does_not_exist()
+    {
+        // A path part that does not exist is not a link. The comparison keeps it as spelled and refuses
+        // the notice. It must not fail with a server error.
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+        var client = app.GetTestClient();
+        var missing = Path.Combine(_dir.Path, "no-such-home", "sub");
+
+        var response = await client.PostAsync(
+            Notice("cli-stop", OwnPid.ToString(CultureInfo.InvariantCulture), missing), null, ct);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        AssertNothingAnnounced();
+    }
+
     public static TheoryData<string?, string?, string> MalformedIdentities() => new()
     {
         { null, null, "neither pid nor home" },

@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj" />
+    <ProjectReference Include="../Netclaw.Cli/Netclaw.Cli.csproj" />
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <ProjectReference Include="../Netclaw.Daemon/Netclaw.Daemon.csproj" />
     <ProjectReference Include="../Netclaw.Security/Netclaw.Security.csproj" />
@@ -52,6 +53,10 @@
              Link="Channels/TurnContextRequesterTests.cs" />
     <Compile Include="../Netclaw.Tests.Utilities/TestSessionStorageResolver.cs"
              Link="Utilities/TestSessionStorageResolver.cs" />
+    <!-- The stop-proof tests start a stand-in daemon (a process, a port, a recording listener). -->
+    <Compile Include="../Netclaw.Tests.Utilities/StandInDaemon.cs" Link="Utilities/StandInDaemon.cs" />
+    <Compile Include="../Netclaw.Tests.Utilities/SleepStandIn.cs" Link="Utilities/SleepStandIn.cs" />
+    <Compile Include="../Netclaw.Tests.Utilities/DisposableTempDir.cs" Link="Utilities/DisposableTempDir.cs" />
   </ItemGroup>
 
 </Project>

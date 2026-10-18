@@ -179,7 +179,7 @@ jobs:
           - group: authorization-and-directory
             gates: tool-authorization approval-directory
           - group: guard-and-authority
-            gates: skill-manage-guard no-program input-one-authority
+            gates: skill-manage-guard no-program input-one-authority stop-proof
           - group: session-reliability
             gates: tool-batch-readiness headless-stop-rule open-child-runs child-owner
 

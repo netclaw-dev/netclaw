@@ -61,23 +61,32 @@ the PID in the body with the PID from the PID file. A different PID is no proof.
 ### D4. Response codes
 
 The match keeps the 200 and the `daemon.stopping` alert that exist today. The investigation note proposed 202
-and moving the alert to the SIGTERM drain. This change does not do that: it would change the alert flow and the
-operator-visible reason. Do it in a separate change if wanted.
+and moving the alert to the SIGTERM drain. The owner decided to keep both in this change and to file the move
+as a follow-up.
 
 ### D5. Refusal text on stderr
 
-The refusal goes to stderr with exit code 1. Other daemon failures print on stdout today. The change does not
-move those. The implementer can write the refusal with `Console.Error` in `DaemonManager` as the existing
-"could not notify" note does, or move all failures of `WriteDaemonResult` to stderr. Tests check stderr for the refusal only.
+The refusal goes to stderr with exit code 1. Other daemon failures print on stdout today, and this change does
+not move them (decided). Write the refusal with `Console.Error` in `DaemonManager`, as the existing "could not
+notify" note does. Tests check stderr for the refusal only.
 
 ### D6. Mutation scope
 
-The gate covers the identity block of the endpoint, between the markers `// shutdown-identity:begin` and
-`// shutdown-identity:end`. It holds the PID parse and range check, the home check, the PID comparison, and the
-home comparison. The gate needs every tested mutant killed and at least 8 mutants in the span. The implementer
-sets the exact count in the script when the code exists, as other gates do. Stryker also mutates string literals in the span. Do not write a literal logger category there: inject `ILogger<T>` so that no mutant survives that a test cannot see. The reference run on a prototype killed 18 of 19 mutants. The survivor was such a literal. A second target for the
-proof-before-signal decision in `StopAsync` is a follow-up that the owner of the repository can add under the
-rule in `TOOLING.md`.
+Two gates protect the two decisions that gate an effect.
+
+**`shutdown-notice-identity`** covers the identity block of the endpoint, between the markers
+`// shutdown-identity:begin` and `// shutdown-identity:end`. It holds the PID parse and range check, the home
+check, the PID comparison, and the home comparison. Every tested mutant must die, and the span must hold at
+least 8 mutants. Stryker also mutates string literals in the span. Do not write a literal logger category there:
+inject `ILogger<T>`. A reference run on a prototype killed 18 of 19 mutants. The survivor was such a literal.
+
+**`stop-proof`** covers the proof in `DaemonManager.StopAsync`, because the proof gates SIGTERM to a process.
+It runs Stryker twice: on `DaemonManager.cs` (spans `stale-pid`, `stop-notice`, `stop-proof`) and on
+`HomeIdentity.cs` (span `home-match`). The tests are `StopProofMutationTests`. They kill mutants in the
+PID equality, the 200 versus other status, the environment home match, the rule that a 409 is never overruled,
+and the stale-PID handling. A span must not hold an `OperatingSystem` check: the mutant that removes it is
+equal to the original on the Linux runner, so no test can kill it. `ProcessServesHome` returns `false` for an
+unreadable environment instead.
 
 ## Risks / Trade-offs
 

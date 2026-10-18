@@ -16,7 +16,7 @@ away from the real daemon. This change closes the product defects.
   exit with code 1.
 - The CLI sends the notice to the local control endpoint of this home, not to `NETCLAW_DAEMON_ENDPOINT`.
 - `netclaw daemon start` gives the child daemon the home of the CLI in `NETCLAW_HOME`.
-- A focused mutation gate protects the identity comparison of the endpoint.
+- Two focused mutation gates protect the identity comparison of the endpoint and the proof before the signal.
 
 ## Capabilities
 
@@ -34,9 +34,8 @@ away from the real daemon. This change closes the product defects.
 - `src/Netclaw.Daemon/Lifecycle/LifecycleEndpointRouteBuilderExtensions.cs`: request fields, checks, 400 and 409.
 - `src/Netclaw.Cli/Daemon/DaemonManager.cs`: proof before signal, notice target, `NETCLAW_HOME` for the child.
 - `src/Netclaw.Cli/Daemon/SystemdUserService.cs`: the home comparison moves to a shared helper.
-- `scripts/run-shutdown-notice-identity-mutations.sh`, `TOOLING.md`, `.github/workflows/pr_validation.yml`.
-- The `netclaw-operations` system skill changes only if the refusal text is part of the guidance it gives.
-  If it changes, bump its version and run the eval suite.
+- `scripts/run-shutdown-notice-identity-mutations.sh`, `scripts/run-stop-proof-mutations.sh`, `TOOLING.md`, `.github/workflows/pr_validation.yml`.
+- The `netclaw-operations` system skill does not change (decided), so no eval run is needed.
 - No config type changes, so the config schema is unchanged. No change to `docs/architecture/tool-authorization.md`:
   the change adds no authorization decision owner, grant scope, candidate kind, or consent surface.
 - Compatibility: an old CLI with a new daemon gets 400 for its notice. The old CLI treats the notice as

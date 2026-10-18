@@ -14,7 +14,8 @@ the PID that the caller read from the PID file of its home. `home` SHALL be the 
 that home. The canonical path has every link resolved and no trailing separator.
 
 The daemon SHALL compare `pid` with its own PID and `home` with its own home. Two paths name the same home
-when their canonical forms are equal. A prefix is not a match.
+when their canonical forms are equal. A path part that does not exist is not a link; it keeps its spelling.
+A prefix is not a match.
 
 When both match, the daemon SHALL answer 200 with the reason and its own PID. It SHALL write the
 "Netclaw daemon stopping" log line and send the `daemon.stopping` alert, as it did before this change.
@@ -74,6 +75,12 @@ daemon receives POST ?reason=R&pid=P&home=H
 - **AND** the Warning line names `/tmp/x` and `/home/op/.netclaw`
 - **AND** no "stopping" line is written and no alert is sent
 
+#### Scenario: A home that does not exist does not match
+
+- **GIVEN** a daemon with PID 4100 and home `/home/op/.netclaw`
+- **WHEN** a caller sends `home=/no/such/home`
+- **THEN** the daemon answers 409, not a server error
+
 #### Scenario: A folder inside the home is not the home
 
 - **GIVEN** a daemon with PID 4100 and home `/home/op/.netclaw`
@@ -114,6 +121,9 @@ The proof SHALL be one of these:
 A 409 SHALL give no proof and SHALL NOT be overruled by the environment of the process. A 200 whose body has
 another PID SHALL give no proof. A daemon from before this change answers 200 for any notice and reports
 its own PID, so the PID check keeps a daemon of another home from passing as the daemon of this home.
+
+When the daemon does not answer because of a connection error or a timeout, the CLI SHALL write
+`Note: could not notify daemon of shutdown reason: <detail>` on stderr, as it did before this change.
 
 When the CLI has no proof, it SHALL send no signal and SHALL NOT remove the PID file or the lock file. It
 SHALL write this text on stderr, return a failed result, and exit with code 1:

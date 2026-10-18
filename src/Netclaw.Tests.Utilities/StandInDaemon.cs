@@ -60,14 +60,17 @@ internal sealed class StandInDaemon : IDisposable
 {
     private const int BindAttempts = 5;
     private const int RealDaemonPort = 5199;
+    private static readonly TimeSpan AcceptLoopStopTimeout = TimeSpan.FromSeconds(10);
 
     private readonly Lock _gate = new();
     private readonly List<RecordedRequest> _requests = [];
     private readonly HttpListener _listener;
     private readonly Task _acceptLoop;
+    private readonly CancellationTokenSource _stopAccepting = new();
     private readonly string? _standInFolder;
     private readonly int? _pid;
     private int _legacyPid;
+    private int _forcedStatus;
     private bool _disposed;
 
     private StandInDaemon(string home, int port, HttpListener listener, Process? process, string? standInFolder)
@@ -103,13 +106,25 @@ internal sealed class StandInDaemon : IDisposable
     public void AnswerAsLegacyDaemon(int claimedPid) => Volatile.Write(ref _legacyPid, claimedPid);
 
     /// <summary>
+    /// Makes the listener answer every shutdown notice with <paramref name="status"/> and no PID, whatever
+    /// the notice says. Use it to test how a caller reads an unexpected answer (a 409 from a daemon whose
+    /// process looks right, or a 500 from a daemon that is not ready).
+    /// </summary>
+    public void AnswerEveryNoticeWith(HttpStatusCode status) => Volatile.Write(ref _forcedStatus, (int)status);
+
+    /// <summary>
     /// Closes the listener and keeps the process and the port in the config of the home. After this call
     /// a connection to the port fails, as it does for a daemon that hangs or has not bound its port yet.
     /// </summary>
     public void StopListening()
     {
+        // HttpListener.Close can leave a GetContextAsync call that began at the same moment pending for
+        // ever. The token ends the loop in that case, and the bounded wait fails the test with a message
+        // instead of a hang.
+        _stopAccepting.Cancel();
         _listener.Close();
-        _acceptLoop.GetAwaiter().GetResult();
+        if (!_acceptLoop.Wait(AcceptLoopStopTimeout))
+            throw new TimeoutException($"The listener of the stand-in on port {Port} did not stop within {AcceptLoopStopTimeout}.");
     }
 
     /// <summary>Waits for the stand-in process to exit. A listener-only home has no process and returns <c>false</c>.</summary>
@@ -134,7 +149,10 @@ internal sealed class StandInDaemon : IDisposable
     /// </summary>
     /// <param name="home">The Netclaw home. The test owns and deletes it.</param>
     /// <param name="scratchDirectory">A folder that the test owns. It holds the stand-in executable.</param>
-    public static StandInDaemon Start(string home, string scratchDirectory)
+    /// <param name="declareHome">
+    /// <c>false</c> starts the process with no <c>NETCLAW_HOME</c>, as a daemon of the default home runs.
+    /// </param>
+    public static StandInDaemon Start(string home, string scratchDirectory, bool declareHome = true)
     {
         var (listener, port) = BindListener();
         string? folder = null;
@@ -150,7 +168,10 @@ internal sealed class StandInDaemon : IDisposable
 
             var psi = new ProcessStartInfo(executable, "600") { UseShellExecute = false };
             // The home this daemon serves, as the environment of a real daemon says.
-            psi.Environment["NETCLAW_HOME"] = home;
+            if (declareHome)
+                psi.Environment["NETCLAW_HOME"] = home;
+            else
+                psi.Environment.Remove("NETCLAW_HOME");
             process = Process.Start(psi)
                 ?? throw new InvalidOperationException("The stand-in daemon did not start.");
 
@@ -253,11 +274,16 @@ internal sealed class StandInDaemon : IDisposable
             Process.Dispose();
         }
 
-        _listener.Close();
-        _acceptLoop.GetAwaiter().GetResult();
-
-        if (_standInFolder is not null)
-            DisposableTempDir.Delete(_standInFolder);
+        try
+        {
+            StopListening();
+        }
+        finally
+        {
+            _stopAccepting.Dispose();
+            if (_standInFolder is not null)
+                DisposableTempDir.Delete(_standInFolder);
+        }
     }
 
     private async Task AcceptLoopAsync()
@@ -267,11 +293,11 @@ internal sealed class StandInDaemon : IDisposable
             HttpListenerContext context;
             try
             {
-                context = await _listener.GetContextAsync();
+                context = await _listener.GetContextAsync().WaitAsync(_stopAccepting.Token);
             }
-            catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException or InvalidOperationException)
+            catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException or InvalidOperationException or OperationCanceledException)
             {
-                return; // the listener closed in Dispose
+                return; // the listener closed in Dispose or StopListening
             }
 
             // Record before the reply. The caller sees the reply only after the request is on the list.
@@ -311,6 +337,12 @@ internal sealed class StandInDaemon : IDisposable
         var reason = query["reason"];
         if (string.IsNullOrEmpty(reason))
             return Error(HttpStatusCode.BadRequest, "reason query parameter is required");
+
+        var forcedStatus = Volatile.Read(ref _forcedStatus);
+        if (forcedStatus != 0)
+            return forcedStatus == (int)HttpStatusCode.Conflict
+                ? Error(HttpStatusCode.Conflict, "The stand-in is set to refuse every notice.")
+                : (forcedStatus, string.Empty);
 
         var legacyPid = Volatile.Read(ref _legacyPid);
         if (legacyPid != 0)
