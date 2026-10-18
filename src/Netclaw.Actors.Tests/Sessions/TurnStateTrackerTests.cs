@@ -531,7 +531,7 @@ public sealed class TurnStateTrackerTests
     }
 
     [Fact]
-    public void RefusedRepeatCount_CoversEveryIdentityOfTheTurn_AndANewTurnResetsIt()
+    public void RefusedRepeatCount_CoversEveryIdentityOfTheTurn_AndOnlyAnExplicitResetClearsIt()
     {
         var tracker = new TurnStateTracker();
         var first = Prepare(Call("call-a", "sample/a"));
@@ -551,8 +551,15 @@ public sealed class TurnStateTrackerTests
         Assert.Equal(RefusedRepeatAction.None, tracker.EvaluateBeforeDispatch(unrelated).RefusedRepeat);
         Assert.Equal(RefusedRepeatAction.EscalatedNudge, tracker.EvaluateBeforeDispatch(second).RefusedRepeat);
 
-        // New person input (a new turn, or input that joins the running turn) starts a new count.
+        // ResetForNewTurn clears the recurrence evidence. A child result in the middle of the loop and a system
+        // input that joins an automation turn both call it, and neither may clear the count (S1 of the re-review).
         tracker.ResetForNewTurn();
+        RefuseTwice(tracker, first, "call-a");
+        Assert.Equal(RefusedRepeatAction.EndTurn, tracker.EvaluateBeforeDispatch(first).RefusedRepeat);
+
+        // New person input, and a fresh turn, call the explicit reset. It starts a new count.
+        tracker.ResetForNewTurn();
+        tracker.ResetRefusedRepeatCount();
         RefuseTwice(tracker, first, "call-a");
         Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateBeforeDispatch(first).RefusedRepeat);
 

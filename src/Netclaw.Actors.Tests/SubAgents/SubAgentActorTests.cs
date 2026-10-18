@@ -1673,6 +1673,7 @@ public class SubAgentActorTests : SubAgentActorTestBase
         Assert.True(IsChildNudge(escalation), $"The last message was: {escalation.Text}");
         Assert.Contains(EscalationMarker, escalation.Text, StringComparison.Ordinal);
         Assert.Contains("parent", escalation.Text, StringComparison.Ordinal);
+        Assert.Contains("No call in that response runs.", escalation.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("_background", escalation.Text, StringComparison.Ordinal);
         // Only the latest child nudge stays in the child history.
         for (var request = 4; request <= 8; request++)

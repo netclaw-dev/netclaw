@@ -56,7 +56,7 @@ EvaluateBeforeDispatch(batch):
   return Correct if refused else Execute
 ```
 
-The count `refusedRepeats` is actor-local state of `TurnStateTracker`. `ResetForNewTurn` clears it with the recurrence evidence. One model response with repeated calls adds one to the count. A completed different action does not change it.
+The count `refusedRepeats` is actor-local state of `TurnStateTracker`. One model response with repeated calls adds one to the count. A completed different action does not change it. `ResetForNewTurn` clears the recurrence evidence but not the count. `ResetRefusedRepeatCount` clears the count, and decision 8 lists its callers.
 
 ### 2. The batch owner adds the nudge after the last result
 
@@ -109,7 +109,7 @@ Alternative: add the field only when a job manager exists. That needs another va
 - `EscalatedNudge`: `ToolCycleMessages.EscalatedRepeatNudge`. The call stays refused.
 - `EndTurn`: `HandleToolCallResponse` does not persist `ToolBatchStarted` and does not dispatch.
   - If the response has text, the session removes the tool calls from the response and uses the normal text path (`HandleTextResponse`). That path persists `TurnRecorded`, emits the text, and completes the turn. The history then ends with an assistant text message, which every provider accepts.
-  - If the response has no text, the session closes the active inputs and completes the turn with `TurnOutcome.Completed`. It adds no reply and emits no error. An empty assistant message is not safe, because some providers reject an empty text block. The history then ends with the last tool results.
+  - If the response has no text, the session closes the active inputs and completes the turn with `TurnOutcome.Completed` and `QuietEnd` true (decision 9). It adds no reply and emits no error. An empty assistant message is not safe, because some providers reject an empty text block. The history then ends with the escalated nudge, a user-role `[system: ...]` message after the last tool results.
 
 Schematic flow. It omits authorization and the child continuation:
 
@@ -118,22 +118,68 @@ HandleToolCallResponse(response):
   decision = PrepareFreshBatch(response)
   if decision.RefusedRepeat == EndTurn:
      if response has text: HandleTextResponse(response without tool calls)
-     else: CloseActiveInputs -> TurnCompleted(Completed)
+     else: CloseActiveInputs -> TurnCompleted(Completed, QuietEnd = true)
      return
   persist ToolBatchStarted; dispatch; nudge = Nudge or EscalatedNudge text
 ```
 
 Why the turn ends with the text of the last response, and not with an earlier text: the session already sent each earlier preamble text to the person. A second copy would repeat a Slack post.
 
-Why the joining input resets the count: a new Slack message in the same thread joins the running turn (`turn_mid_loop_buffer_drain`) and calls `ResetForNewTurn`. That call already clears the refusals, so the model can run the call again. The count describes the same refusals, so it resets with them. The person can then ask the model to try again.
+Why person input that joins the turn resets the count: a new Slack message in the same thread joins the running turn (`turn_mid_loop_buffer_drain`) and calls `ResetForNewTurn`. That call already clears the refusals, so the model can run the call again. The person can then ask the model to try again, and the count starts again with that new instruction.
 
 ### 7. A child ends quietly with its last text
 
 `SubAgentActor` (actor-local) uses the same decision. Refused repeat 5 gets `ToolCycleMessages.EscalatedChildRepeatNudge`. Refused repeat 6 completes the run with `success: true`, `SubAgentRunOutcome.Partial`, and `SubAgentOutcomeReason.ToolCycleStopped`. The output is the text of the final response, or else the latest earlier assistant text in the child history. The parent did not see that earlier text, so the child returns it. `SubAgentSpawner` treats `Partial` as a successful run, so the parent gets no error.
 
+### 8. Only a new turn and person input reset the count
+
+`ResetForNewTurn` has more callers than new person input. The re-review found two that must not reset the count:
+
+- `FireLlmCall` calls it when the session delivers a child result in the middle of a tool loop. The model can start a background child next to each refused repeat. If each child result reset the count, the model would never reach repeat 6.
+- `ApplyBufferedBatch` calls it when buffered input joins a running turn. For an automation turn, the requester is a fixed system sender, so every later reminder fire, job result, or webhook call of the same kind joins the turn. If each join reset the count, the automation fire rate would set the bound.
+
+The count therefore has its own reset, `TurnStateTracker.ResetRefusedRepeatCount`. The existing evidence reset stays as it was.
+
+| Event | Evidence reset | Count reset |
+|-------|----------------|-------------|
+| New turn from a person or an automation input (`PrepareFreshTurnState`, or a buffered batch that starts a turn) | yes | yes |
+| Person input that joins a running turn (`ApplyBufferedBatch`) | yes | yes |
+| Automation input that joins a running automation turn (`ApplyBufferedBatch`) | yes | no |
+| Child result delivered in the middle of a turn (`FireLlmCall`) | yes | no |
+| Child result that wakes an idle session (`WakeForChild`) | yes | no |
+
+A new turn must reset the count, whoever starts it. Otherwise a session that only automation writes to would keep the count of earlier turns. Its first refused repeat after the count reached 6 would end the turn at once, with no nudge.
+
+An automation input is an input whose requester principal is `VerifiedAutomation` or `SystemProcess`, the same test as `SessionToolWorkflow.IsAutomation`. The join test uses the principal of the running turn. `HasSameRequester` guarantees that a joining input has the same principal.
+
+A turn that a child result wakes has no new input, so it continues the count of the earlier turn. That count can be 6 after a quiet end. The first refused repeat of the woken turn then ends the turn at once, because the model already ignored the escalated nudge. The woken turn first needs two runs and one correction before the guard refuses a call, so the model does not lose its first attempts.
+
+Positive example: the count is 3, and the model starts a child next to the repeat. The child result arrives in the middle of the loop. The refused call runs twice again, and the count reaches 5 after two more refused repeats.
+
+Negative example: a reminder turn has count 4, and another reminder fire joins the turn. The count stays 4. Without this rule, the join would reset it to 0, and a reminder that fires every minute would keep the loop alive.
+
+### 9. A flag on `TurnCompleted` keeps the channels quiet
+
+`ChannelOutputEngine.CompleteTurnAsync` posts the empty-turn fallback (":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.") when a turn delivered nothing. For a quiet end with no text, that is a Netclaw error shown to the person. Its advice to send the message again also starts the same loop again.
+
+`TurnCompleted.QuietEnd` (bool, default false) marks this end. The session sets it only in `FinishTurnWithoutReply`, the no-text quiet end. The engine (owner of the fallback decision, call-local) skips the fallback when it is true. It still clears the pending approvals and the typing indicator. A failed post still reports to the session, because that path does not use the fallback.
+
+The flag crosses the hub in `SessionOutputDto.QuietEnd` (`bool?`, wire name `quietEnd`). The mapper writes it for every `turn_completed` output. A missing or null field reads as false, so an old daemon keeps the fallback for every empty turn. An old client ignores the field.
+
+Alternatives:
+
+- Keep the fallback and state the exception in the spec. Rejected: the person sees a Netclaw error, which the rule forbids.
+- Post a neutral line that the model did not write. Rejected: it is still Netclaw text.
+- Add a `TurnOutcome` value. Rejected: every consumer switches on `TurnOutcome`, and the quiet end is a normal `Completed` turn. A flag changes no existing consumer.
+
+Positive example: a looping model sends only tool calls and no text, and ignores the escalated nudge. Slack shows no new post and no warning. The typing indicator stops.
+
+Negative example: a provider returns an empty reply, and the turn completes with `QuietEnd` false. The Slack thread shows the fallback text, as before.
+
 ## Risks / Trade-offs
 
-- [A model repeats a refused call] → The worst case for one turn is five refused repeats with a nudge and one more response that ends the turn. That is six model requests after the first correction, and no refused call executes. Without new person input, no other runtime bound stops the loop: the session and the TUI have no cancel command, a caller wait limit does not stop the turn, a child inactivity watchdog resets on each model response, and compaction resumes the loop. New person input resets the count, so a person who keeps writing in the thread can extend the loop. Each message then gives the model a new instruction.
+- [A model repeats a refused call] → The worst case for one turn is five refused repeats with a nudge and one more response that ends the turn. That is six model requests after the first correction, and no refused call executes. Without new person input, no other runtime bound stops the loop: the session and the TUI have no cancel command, a caller wait limit does not stop the turn, a child inactivity watchdog resets on each model response, and compaction resumes the loop. Only person input resets the count, so a person who keeps writing in the thread can extend the loop. Each message then gives the model a new instruction. Child results and automation inputs do not extend it (decision 8).
+- [A reminder turn that ends quietly reports success] → The reminder records success with empty output and sends no failure alert. This follows the rule that no Netclaw error reaches the person. The only trace is the warning `turn_refused_repeat_end` in the session log. The runbook tells the operator where to look.
 - [The removal of an earlier nudge changes history before its end] → A byte-prefix cache misses after that point. The loop has at most five nudges for each count, so the cost is small.
 - [Open changes still hold the stop rule] → Three open OpenSpec changes keep the old stop rule in their deltas. If one of them archives after this change, it puts the stop rule back into the main specs. Before each one archives, update its delta with the opsx skills, or archive this change last:
   - `stop-repeated-tool-cycles`: `turn-loop-governance` "Cycle intervention is paired and terminal on repetition" ("A repeated blocked action forces completion"), and `netclaw-subagents` "Subagents stop exact repeated tool cycles" ("its final outcome is partial").

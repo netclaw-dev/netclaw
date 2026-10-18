@@ -24,7 +24,15 @@ The parent nudge SHALL name each refused tool. It SHALL tell the model that the 
 
 A child run SHALL follow the same rule. The child nudge SHALL NOT offer a background job, because a child has no background job manager. It SHALL tell the child that it can stop and give its result to the parent, with the name of the command that did not finish.
 
-The system SHALL count refused repeats for each turn. One refused repeat is one model response that repeats at least one refused identity or the refused adjacent action. Several repeated calls in one response count as one refused repeat. A first correction and a new call do not count. A different completed action SHALL NOT reset the count. New person input SHALL reset the count, because it also resets the recurrence evidence. This includes person input that joins a running turn, for example a new Slack message in the same thread.
+The system SHALL count refused repeats for each turn. One refused repeat is one model response that repeats at least one refused identity or the refused adjacent action. Several repeated calls in one response count as one refused repeat. A first correction and a new call do not count. A different completed action SHALL NOT reset the count.
+
+Only new person input SHALL reset the count, with one exception for a new turn:
+
+- A new turn SHALL start with a count of zero, whoever starts it: a person, or an automation input such as a reminder fire, a webhook call, or a background job result. Without this rule, an automation session that no person writes to would keep the count of earlier turns and end its first later refused repeat at once.
+- Person input that joins a running turn SHALL reset the count, because it also resets the recurrence evidence. An example is a new Slack message in the same thread.
+- A child result that the session delivers in the middle of a turn SHALL NOT reset the count, although it resets the recurrence evidence.
+- An automation input that joins a running automation turn SHALL NOT reset the count, although it resets the recurrence evidence. Its requester is a fixed system sender (`reminder-system`, `background-job-system`, or `webhook:{route}`), so every later fire of the same kind joins the turn. An automation input has the principal `VerifiedAutomation` or `SystemProcess`.
+- A turn that a child result starts after the earlier turn ended has no new input. It SHALL continue the count of the earlier turn.
 
 Refused repeats 1 to 4 of a turn SHALL get the nudge above. Refused repeat 5 SHALL get an escalated nudge in place of that nudge. The escalated nudge SHALL name each refused tool and SHALL tell the model these facts and steps:
 
@@ -33,8 +41,9 @@ Refused repeats 1 to 4 of a turn SHALL get the nudge above. Refused repeat 5 SHA
 - End the turn now.
 - Tell the person what blocked the work, and name the action that did not finish.
 - Another refused call ends the turn.
+- No call in that response runs.
 
-The call stays refused after the escalated nudge.
+The last fact covers a call next to the repeat, for example a `send_message` call of a reminder turn. The model must not rely on such a call. The call stays refused after the escalated nudge.
 
 If the model sends refused repeat 6, the system SHALL end the turn quietly:
 
@@ -42,12 +51,18 @@ If the model sends refused repeat 6, the system SHALL end the turn quietly:
 - It SHALL NOT make another model request for the turn.
 - If the response contains text, the turn SHALL complete with that text as the reply. The history keeps the text without the tool calls.
 - If the response contains no text, the turn SHALL complete with no new reply. The person keeps the text that the model wrote before.
+- If the response contains no text, the `TurnCompleted` output SHALL set `QuietEnd` to true. Every other `TurnCompleted` output SHALL set it to false.
 - It SHALL NOT emit an error output, add an error reply, record a failed turn, or report `ModelBehavior`.
+- Slack, Discord, and Mattermost SHALL post nothing for a `TurnCompleted` output with `QuietEnd` true and no earlier post in the turn. In particular, they SHALL NOT post the empty-turn fallback text. That text is Netclaw text, not text of the model, and its advice to send the message again starts the same loop again. These channels SHALL still clear the typing indicator. They SHALL still post the empty-turn fallback for any other turn that produced no reply.
 - A headless run SHALL exit with code 0 and print no `[turn:failed]` line. Its JSON envelope SHALL have no `errorCategory` and no `errorKind`. Its `response` SHALL hold only text that the model wrote.
 
-A child run SHALL use the same count for its run. Its escalated nudge SHALL tell the child to stop this action, to give its result to the parent, and to name the action that did not finish. Refused repeat 6 SHALL end the child run quietly. The run result SHALL be successful, with the outcome `partial` and the reason `tool_cycle_stopped`. Its output SHALL be the last text that the child model wrote in the run: the text of the final response, or the latest earlier text. The output is empty when the child wrote no text. The parent SHALL get this result as a successful partial result, not as an error.
+`QuietEnd` crosses the hub as the optional boolean `quietEnd` of the `turn_completed` output. A missing or null field comes from an earlier daemon and SHALL read as false, so an empty turn from an earlier daemon keeps the fallback.
 
-The end at refused repeat 6 is the only runtime bound for a refused loop. These events do not stop the loop: a cancel request (the TUI and the session have no cancel command), a caller wait limit, a child inactivity watchdog, and context compaction. These events can stop it before refused repeat 6: the model selects another action, a provider error or quota, the model obeys a message from the person, and a daemon stop or restart.
+A reminder turn that ends quietly SHALL report success with empty output. The reminder gets no failure alert, because the person-facing rule allows no Netclaw error. The session log SHALL hold the warning `turn_refused_repeat_end`, so an operator can find the end.
+
+A child run SHALL use the same count for its run. Its escalated nudge SHALL tell the child to stop this action, to give its result to the parent, to name the action that did not finish, and that no call in that response runs. Refused repeat 6 SHALL end the child run quietly. The run result SHALL be successful, with the outcome `partial` and the reason `tool_cycle_stopped`. Its output SHALL be the last text that the child model wrote in the run: the text of the final response, or the latest earlier text. The output is empty when the child wrote no text. The parent SHALL get this result as a successful partial result, not as an error.
+
+The end at refused repeat 6 is the only runtime bound for a refused loop. Child results and automation inputs do not extend it, because they do not reset the count. Only person input extends it, and each person message gives the model a new instruction. These events do not stop the loop: a cancel request (the TUI and the session have no cancel command), a caller wait limit, a child inactivity watchdog, and context compaction. These events can stop it before refused repeat 6: the model selects another action, a provider error or quota, the model obeys a message from the person, and a daemon stop or restart.
 
 A trusted repeat exception SHALL apply only to an authorized, non-cancel status query for an accessible pending background job. It SHALL NOT apply to cancellation, denied lookup, a different job, or model-authored claims. Every call SHALL pass normal authorization and tool validation.
 
@@ -120,6 +135,7 @@ round 9:      call C again           -> no dispatch, no model request; the turn 
 - **THEN** the runtime refuses the call without dispatch
 - **AND** the next model request ends with the escalated nudge
 - **AND** the escalated nudge tells the model to stop, to end the turn, and to tell the person what blocked it
+- **AND** the escalated nudge tells the model that no call in that response runs
 
 #### Scenario: A refused repeat after the escalation ends the turn quietly
 
@@ -135,7 +151,27 @@ round 9:      call C again           -> no dispatch, no model request; the turn 
 - **GIVEN** the model received the escalated nudge
 - **WHEN** it sends a refused call again with no text
 - **THEN** the turn completes with no new reply and no error
+- **AND** the `TurnCompleted` output has `QuietEnd` true
 - **AND** the next person message starts a turn whose history has no tool call without a result
+
+#### Scenario: A channel posts nothing for a quiet end with no text
+
+- **GIVEN** a Slack, Discord, or Mattermost thread whose turn posted nothing
+- **WHEN** the session completes the turn with `QuietEnd` true
+- **THEN** the binding posts no text, also not the empty-turn fallback
+- **AND** the typing indicator clears
+
+#### Scenario: An ordinary empty turn still posts the fallback
+
+- **GIVEN** a Slack, Discord, or Mattermost thread whose turn posted nothing
+- **WHEN** the session completes the turn with `QuietEnd` false
+- **THEN** the binding posts the empty-turn fallback, as before
+
+#### Scenario: An earlier daemon sends no quiet end flag
+
+- **GIVEN** a `turn_completed` output with no `quietEnd` field
+- **WHEN** a client reads it
+- **THEN** `QuietEnd` is false
 
 #### Scenario: A new call next to the last repeat does not run
 
@@ -150,6 +186,28 @@ round 9:      call C again           -> no dispatch, no model request; the turn 
 - **WHEN** a new person message joins the running turn
 - **THEN** the count starts again from zero
 - **AND** the next refused repeat gets the plain nudge, not the escalated nudge
+
+#### Scenario: A child result in the middle of the loop does not reset the count
+
+- **GIVEN** the model sent three refused repeats in a turn and a child run is open
+- **WHEN** the session delivers the child result in the middle of the turn
+- **AND** the model sends the refused call again, which runs twice and is then refused and repeated again
+- **THEN** the count continues from three
+- **AND** the second refused repeat after the delivery is repeat 5 and gets the escalated nudge
+
+#### Scenario: An automation input that joins an automation turn does not reset the count
+
+- **GIVEN** a reminder turn had four refused repeats
+- **WHEN** another reminder fire joins the running turn, and the model then repeats a refused call
+- **THEN** the count stays at four
+- **AND** the first refused repeat after the join is repeat 5 and gets the escalated nudge
+
+#### Scenario: A new turn starts a new count
+
+- **GIVEN** a turn ended with three refused repeats
+- **WHEN** a person or an automation input starts the next turn
+- **THEN** the next turn counts from zero
+- **AND** its fifth refused repeat gets the escalated nudge
 
 #### Scenario: Other work does not reset the count
 

@@ -467,8 +467,20 @@ A repeat after that correction gets the same correction and a nudge. The turn co
 The runtime counts refused repeats in each turn. Refused repeat 5 gets an escalated nudge.
 Refused repeat 6 ends the turn quietly with the text of the model. The person sees no error.
 In a parent session, the turn completes with no `ModelBehavior` category. A child run ends with a successful partial result.
-New person input resets the count. Unrelated calls remain available. Live context compaction preserves this evidence.
+Unrelated calls remain available. Live context compaction preserves this evidence.
 A process restart does not restore a detector checkpoint or repeat tool calls automatically.
+
+Only a new turn and new person input reset the count. This includes person input that joins a running turn.
+A child result in the middle of a turn does not reset it. An automation input that joins an automation turn does not reset it.
+Examples of an automation input: a reminder fire, a background job result, and a webhook call.
+
+A quiet end with no text posts nothing in Slack, Discord, and Mattermost. The session sets `TurnCompleted.QuietEnd`
+(wire name `quietEnd`) for this end only. The channel then skips the empty-turn warning and still clears the typing indicator.
+Any other turn with no reply keeps the warning.
+
+A reminder turn that ends quietly records success with empty output, and it sends no failure alert.
+To find such an end, search the session log for `turn_refused_repeat_end`. The line shows the number of refused repeats
+and whether the last response had text.
 
 Authorized status queries for a pending background job can repeat.
 Each query repeats the normal access checks. Cancellation and inaccessible jobs receive no exception.

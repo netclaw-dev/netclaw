@@ -257,6 +257,64 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
     }
 
+    // Rule of Aaron (18 Oct 2026): a person never sees a Netclaw error unless the model narrates it. The session ends
+    // a refused loop quietly with no reply when the model ignored the escalated nudge. The binding must then
+    // post no empty-turn fallback, because "I didn't manage to produce a reply" is Netclaw text, and its advice
+    // to send the message again starts the same loop again.
+    [Fact]
+    public async Task Quiet_end_with_no_text_posts_no_fallback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-quiet-end");
+        // Turn 2 is a barrier: once its reply is visible, turn 1 (including its fallback decision) is processed.
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TurnCompleted
+            {
+                SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), QuietEnd = true, OpenChildRunIds = []
+            },
+            new TextOutput("barrier reply") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), OpenChildRunIds = [] }
+        ]);
+
+        CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(GetPostedTexts(), t => t.Contains("barrier reply", StringComparison.Ordinal));
+        }, cancellationToken: ct);
+
+        var texts = GetPostedTexts();
+        Assert.DoesNotContain(texts, t => t.Contains("didn't manage to produce a reply", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(texts, t => t.Contains(":warning:", StringComparison.Ordinal));
+    }
+
+    // The quiet end skips only the fallback. An empty turn without the flag still posts it, also directly after
+    // a quiet end: the flag belongs to one turn.
+    [Fact]
+    public async Task Empty_turn_after_a_quiet_end_still_posts_fallback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-quiet-end-then-empty");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TurnCompleted
+            {
+                SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), QuietEnd = true, OpenChildRunIds = []
+            },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), OpenChildRunIds = [] }
+        ]);
+
+        CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(GetPostedTexts(), t => t.Contains("didn't manage to produce a reply", StringComparison.OrdinalIgnoreCase));
+        }, cancellationToken: ct);
+    }
+
     [Fact]
     public async Task Delivered_turn_no_fallback()
     {

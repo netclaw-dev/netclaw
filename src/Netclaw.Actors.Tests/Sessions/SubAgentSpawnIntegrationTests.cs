@@ -387,6 +387,99 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Child_result_delivered_in_the_middle_of_a_refused_loop_does_not_reset_the_refused_repeat_count()
+    {
+        // S1 of the re-review: a child result that the session delivers in the middle of the tool loop clears the
+        // recurrence evidence, so the refused call runs two more times. It must not clear the count. Otherwise
+        // the model could start a child next to each refused repeat and never reach the quiet end.
+        var childGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var parentGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _clientProvider.Compaction.NextResponseGate = childGate;
+        List<AIContent> Search(int round)
+            => [CreateToolCall($"search-{round}", "search_tools", new Dictionary<string, object?> { ["query"] = "browser" })];
+        // Request 1 starts the child. Requests 2 and 3 run. Request 4 is the first correction. Requests 5 to 7 are
+        // refused repeats 1 to 3. The child result arrives while request 7 is in flight, so request 8 delivers
+        // it. Requests 8 and 9 run again, request 10 is the correction, and requests 11 and 12 are repeats.
+        // The count stays at 3 across the delivery, so request 11 is repeat 4 and request 12 is repeat 5.
+        List<AIContent>[] script =
+        [
+            [CreateToolCall("call-spawn", "spawn_agent", new Dictionary<string, object?>
+            {
+                ["agent"] = "summarizer",
+                ["task"] = "Summarize src/README.md"
+            })],
+            .. Enumerable.Range(2, 11).Select(Search),
+            [new TextContent("The search stays blocked.")]
+        ];
+        var request = 0;
+        _clientProvider.Main.ResponseContentsSelector = _ =>
+        {
+            var number = Interlocked.Increment(ref request);
+            // The next request waits at the gate, so the child can finish while the parent loop runs.
+            if (number == 6)
+                _clientProvider.Main.NextResponseGate = parentGate;
+            return number <= script.Length ? script[number - 1] : null;
+        };
+
+        try
+        {
+            var sessionId = new SessionId("console/child-mid-loop-count");
+            var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+            var subscriber = CreateTestProbe("child-mid-loop-events");
+            await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+            {
+                SessionId = sessionId,
+                Filter = OutputFilter.Full
+            }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+            await sessionManager.Ask<CommandAck>(new SendUserMessage
+            {
+                SessionId = sessionId,
+                Content = "Start a helper and repeat the search.",
+                Source = BuildPersonalSource()
+            }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+            var outputs = new List<object>();
+            await AwaitAssertAsync(
+                () => Assert.True(_clientProvider.Main.CallCount >= 7, $"Request 7 is not in flight yet ({_clientProvider.Main.CallCount})."),
+                TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
+            childGate.TrySetResult();
+            await subscriber.FishForMessageAsync<object>(message =>
+            {
+                outputs.Add(message);
+                return message is SubAgentOutput { Phase: SubAgentPhase.Completed };
+            }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+            parentGate.TrySetResult();
+            await subscriber.FishForMessageAsync<object>(message =>
+            {
+                outputs.Add(message);
+                return message is TurnCompleted;
+            }, TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.DoesNotContain(outputs, static output => output is ErrorOutput);
+            Assert.Equal(13, _clientProvider.Main.CallCount);
+            var requests = _clientProvider.Main.ReceivedMessages;
+            // The delivery pair is in the history of request 8, and the evidence is clear: request 8 runs.
+            Assert.Contains(requests[7].SelectMany(static message => message.Contents.OfType<FunctionCallContent>()),
+                static call => call.Name == "child_run_result");
+            static bool IsRepeatNudge(Microsoft.Extensions.AI.ChatMessage message)
+                => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                    && message.Text.StartsWith("[system: Netclaw refused your repeated call to `search_tools` again.",
+                        StringComparison.Ordinal);
+            Assert.True(IsRepeatNudge(requests[11][^1]), $"The last message was: {requests[11][^1].Text}");
+            Assert.DoesNotContain("Stop trying this action.", requests[11][^1].Text, StringComparison.Ordinal);
+            Assert.True(IsRepeatNudge(requests[12][^1]), $"The last message was: {requests[12][^1].Text}");
+            Assert.Contains("Stop trying this action.", requests[12][^1].Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            childGate.TrySetResult();
+            parentGate.TrySetResult();
+        }
+    }
+
+    [Fact]
     public async Task Final_model_visible_child_footprint_reduces_from_frozen_baseline()
     {
         RegisterSyntheticMcpCatalog();

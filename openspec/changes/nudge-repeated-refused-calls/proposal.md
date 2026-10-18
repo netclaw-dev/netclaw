@@ -24,7 +24,9 @@ Aaron's second decision, also 18 October 2026: the loop gets an end, and the per
 - The turn continues with the next model request.
 - The session counts refused repeats in each turn. Refused repeat 5 gets an escalated nudge: stop this action, end the turn, and tell the person what blocked the work. The call stays refused.
 - Refused repeat 6 ends the turn quietly. No call of that response runs, and no model request follows. The turn completes with the text of that response, or with no new reply. The person sees no error, and a headless run exits with code 0.
-- New person input resets the count, also input that joins a running turn.
+- Only a new turn and new person input reset the count, also person input that joins a running turn. A child result in the middle of a turn and an automation input that joins an automation turn do not reset it.
+- A quiet end with no text sets the new `TurnCompleted.QuietEnd` flag (wire name `quietEnd`). Slack, Discord, and Mattermost then post no empty-turn fallback. Every other empty turn keeps the fallback.
+- The escalated nudge adds "No call in that response runs."
 - The history keeps only the latest repeat nudge.
 - The parent does not fail the turn, does not send an error to the person, and does not use `ModelBehavior` for this case.
 - A child run follows the same rule. The child nudge does not offer a background job, because a child has no background job manager. Refused repeat 6 ends the child as a successful partial run (`tool_cycle_stopped`) with the last text of the child.
@@ -58,9 +60,9 @@ None.
 
 ## Impact
 
-Code: `TurnStateTracker`, `ToolCycleSignatureFactory`, `SessionToolWorkflow`, `ActiveToolBatchTracker`, `LlmSessionActor`, and `SubAgentActor`.
+Code: `TurnStateTracker`, `ToolCycleSignatureFactory`, `SessionToolWorkflow`, `ActiveToolBatchTracker`, `LlmSessionActor`, `SubAgentActor`, `TurnCompleted`, `SessionOutputDto`, and `ChannelOutputEngine`.
 
-The change adds no actor, persistence event, configuration property, or package.
+The change adds no actor, persistence event, configuration property, or package. It adds one optional wire field, `quietEnd`, to the `turn_completed` output. A missing field reads as false.
 
 The nudge is transient history in the live owner, the same as other system nudges. It is not a durable event.
 

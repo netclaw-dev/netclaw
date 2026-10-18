@@ -1163,12 +1163,14 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     }
 
     private static async Task<List<object>> SendAndCollectTurnAsync(
-        IActorRef sessionManager, TestProbe subscriber, SessionId sessionId, string content)
+        IActorRef sessionManager, TestProbe subscriber, SessionId sessionId, string content,
+        MessageSource? source = null)
     {
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = content
+            Content = content,
+            Source = source
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var outputs = new List<object>();
@@ -1212,6 +1214,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Contains("End your turn", escalation.Text, StringComparison.Ordinal);
         Assert.Contains("Tell the person what blocked you", escalation.Text, StringComparison.Ordinal);
         Assert.Contains("did not execute", escalation.Text, StringComparison.Ordinal);
+        // The model must know that a sibling call next to a repeat does not run either.
+        Assert.Contains("No call in that response runs.", escalation.Text, StringComparison.Ordinal);
         for (var request = 4; request <= 8; request++)
             Assert.Single(requests[request], IsAnyRepeatNudge);
 
@@ -1225,7 +1229,11 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
         // The person sees no error. The turn completes with only the text that the model wrote.
         Assert.DoesNotContain(outputs, static output => output is ErrorOutput);
-        Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(outputs[^1]).Outcome);
+        var completed = Assert.IsType<TurnCompleted>(outputs[^1]);
+        Assert.Equal(TurnOutcome.Completed, completed.Outcome);
+        // Only this end sets the flag. A channel binding then posts no empty-turn fallback, because that text is
+        // Netclaw text, not text of the model.
+        Assert.True(completed.QuietEnd);
         var texts = outputs.OfType<TextOutput>().Select(static output => output.Text).ToList();
         string[] expectedTexts = finalResponseHasText ? [FinalText] : [];
         Assert.Equal(expectedTexts, texts);
@@ -1233,7 +1241,9 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         // The session takes the next message. History holds no tool call without a result.
         var followUp = await SendAndCollectTurnAsync(sessionManager, subscriber, sessionId, "What happened?");
         Assert.DoesNotContain(followUp, static output => output is ErrorOutput);
-        Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(followUp[^1]).Outcome);
+        var followUpCompleted = Assert.IsType<TurnCompleted>(followUp[^1]);
+        Assert.Equal(TurnOutcome.Completed, followUpCompleted.Outcome);
+        Assert.False(followUpCompleted.QuietEnd);
         Assert.Equal([FollowUpAnswer], followUp.OfType<TextOutput>().Select(static output => output.Text));
         // ReceivedMessages is a snapshot, so read it again after the follow-up turn.
         var followUpRequest = _fakeChatClient.ReceivedMessages.Last(static request =>
@@ -1313,6 +1323,90 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         for (var request = 12; request <= 15; request++)
             Assert.True(IsPlainRepeatNudge(requests[request][^1]), $"Request {request} must end with the plain nudge.");
         Assert.True(IsEscalatedNudge(requests[16][^1]), $"The last message was: {requests[16][^1].Text}");
+    }
+
+    [Fact]
+    public async Task System_input_that_joins_an_automation_turn_does_not_reset_the_refused_repeat_count()
+    {
+        // The requester of a reminder turn is the fixed system sender "reminder-system". Another reminder fire
+        // into the same session has the same requester, so it joins the running turn. Only person input resets
+        // the count (S1 of the re-review): an automation fire rate must not stretch the bound of the loop.
+        // The join still clears the recurrence evidence, so the refused call runs two more times first.
+        var sessionId = new SessionId("channel-cycle/repeat-count-system-join");
+        var (subscriber, sessionManager) = await JoinRepeatSessionAsync(sessionId);
+        // Window 1: two runs, the correction, and refused repeats 1 to 4. Then a new call runs, and the fire joins.
+        for (var round = 1; round <= 7; round++)
+            _fakeChatClient.PlannedResponses.Enqueue([SearchCall($"first-{round}", "browser")]);
+        _fakeChatClient.PlannedResponses.Enqueue([SearchCall("join", "join")]);
+        // Window 2: two runs, the correction, and refused repeat 5 (count 4 stays). Then a text answer.
+        for (var round = 1; round <= 4; round++)
+            _fakeChatClient.PlannedResponses.Enqueue([SearchCall($"second-{round}", "browser")]);
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("The search stays blocked.")]);
+        _fakeToolExecutor.ExecuteOverride = async (call, ct) =>
+        {
+            if (call.CallId == "join")
+            {
+                await sessionManager.Ask<CommandAck>(new SendUserMessage
+                {
+                    SessionId = sessionId,
+                    Content = "Check the search again.",
+                    Source = ReminderSource("check-b:2000")
+                }, TimeSpan.FromSeconds(3), ct);
+            }
+
+            return "same result";
+        };
+
+        var outputs = await SendAndCollectTurnAsync(
+            sessionManager, subscriber, sessionId, "Check the search.", ReminderSource("check-a:1000"));
+
+        Assert.DoesNotContain(outputs, static output => output is ErrorOutput);
+        Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(outputs[^1]).Outcome);
+        Assert.Equal(["The search stays blocked."], outputs.OfType<TextOutput>().Select(static output => output.Text));
+        Assert.Equal(13, _fakeChatClient.CallCount);
+        var requests = _fakeChatClient.ReceivedMessages;
+        Assert.Contains(requests[8], static message => message.Text == "Check the search again.");
+        for (var request = 4; request <= 7; request++)
+            Assert.True(IsPlainRepeatNudge(requests[request][^1]), $"Request {request} must end with the plain nudge.");
+        // The join cleared the evidence, so request 11 ends with the correction result and no nudge.
+        Assert.False(IsAnyRepeatNudge(requests[11][^1]), $"The last message was: {requests[11][^1].Text}");
+        // The count stayed at 4, so the first refused repeat after the join is repeat 5.
+        Assert.True(IsEscalatedNudge(requests[12][^1]), $"The last message was: {requests[12][^1].Text}");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_fresh_turn_starts_a_new_refused_repeat_count(bool automationStartsTurn)
+    {
+        // The count belongs to a turn. A turn that ended with a count of 3 must not leave it for the next turn,
+        // whoever starts that turn: a person, or an automation fire (a reminder, a webhook, a job result).
+        // Otherwise an automation session that no person ever writes to would reach the quiet end at its first
+        // refused repeat.
+        var sessionId = new SessionId($"channel-cycle/repeat-count-fresh-{automationStartsTurn}");
+        var (subscriber, sessionManager) = await JoinRepeatSessionAsync(sessionId);
+        // Turn 1: two runs, the correction, refused repeats 1 to 3, and a text answer.
+        for (var round = 1; round <= 6; round++)
+            _fakeChatClient.PlannedResponses.Enqueue([SearchCall($"first-{round}", "browser")]);
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("I stop here.")]);
+        // Turn 2: two runs, the correction, refused repeats 1 to 5, and a text answer.
+        for (var round = 1; round <= 8; round++)
+            _fakeChatClient.PlannedResponses.Enqueue([SearchCall($"second-{round}", "browser")]);
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("The search stays blocked.")]);
+        _fakeToolExecutor.Results["search_tools"] = "same result";
+
+        await SendAndCollectTurnAsync(sessionManager, subscriber, sessionId, "Repeat the same search.");
+        var outputs = await SendAndCollectTurnAsync(
+            sessionManager, subscriber, sessionId, "Check the search again.",
+            automationStartsTurn ? ReminderSource("check-a:1000") : null);
+
+        Assert.DoesNotContain(outputs, static output => output is ErrorOutput);
+        Assert.Equal(["The search stays blocked."], outputs.OfType<TextOutput>().Select(static output => output.Text));
+        Assert.Equal(16, _fakeChatClient.CallCount);
+        var requests = _fakeChatClient.ReceivedMessages;
+        for (var request = 11; request <= 14; request++)
+            Assert.True(IsPlainRepeatNudge(requests[request][^1]), $"Request {request} must end with the plain nudge.");
+        Assert.True(IsEscalatedNudge(requests[15][^1]), $"The last message was: {requests[15][^1].Text}");
     }
 
     [Fact]
