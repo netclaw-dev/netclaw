@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
+using System.Globalization;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -188,6 +190,8 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
         // The notice must go to the daemon of the home the manager was built on, never to the
         // default home's endpoint, or a test (or any non-default home) shuts down someone else's daemon.
         // The stand-in gives this home its own port and listener, so the notice cannot reach port 5199.
+        // #2527 rule 1: the notice names the PID from the PID file and the home, so the daemon can
+        // refuse a notice that is for another daemon.
         var daemon = StartFakeDaemon();
 
         var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
@@ -196,6 +200,136 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
         var notice = Assert.Single(daemon.ShutdownNotices);
         Assert.Equal("POST", notice.Method);
         Assert.Equal("cli-stop", notice.Reason);
+        Assert.Equal(daemon.Pid.ToString(CultureInfo.InvariantCulture), notice.Pid);
+        Assert.True(notice.Home is not null && StandInDaemon.SameDirectory(notice.Home, _paths.BasePath),
+            $"The notice named home '{notice.Home}', not '{_paths.BasePath}'.");
+        Assert.Equal(200, notice.Status);
+        Assert.True(daemon.WaitForExit(5000), "The daemon that serves this home got no signal.");
+    }
+
+    // ── #2527 rule 2: the signal needs proof that the PID serves this home ───
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task StopAsync_SendsNoSignal_WhenThePidFileNamesADaemonOfAnotherHome()
+    {
+        // NETCLAW_HOME=/tmp/x netclaw daemon stop, where /tmp/x/netclaw.pid holds the PID of the
+        // daemon of another home. Before the fix, the stand-in of the other home got SIGTERM.
+        var other = StartFakeDaemonForAnotherHome();
+        ListenForThisHome();
+        File.WriteAllText(_paths.PidFilePath, other.Pid.ToString(CultureInfo.InvariantCulture));
+
+        var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
+
+        AssertRefusedToStop(result, other);
+    }
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task StopAsync_SendsNoSignal_WhenThePortOfThisHomeBelongsToTheDaemonOfAnotherHome()
+    {
+        // The config of this home names the port of the other daemon. That daemon knows its own PID,
+        // so it matches the PID of the notice, but it refuses the home.
+        var other = StartFakeDaemonForAnotherHome();
+        StandInDaemon.WriteDaemonPort(_paths.BasePath, other.Port);
+        File.WriteAllText(_paths.PidFilePath, other.Pid.ToString(CultureInfo.InvariantCulture));
+
+        var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
+
+        AssertRefusedToStop(result, other);
+        Assert.All(other.ShutdownNotices, notice => Assert.Equal(409, notice.Status));
+    }
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task StopAsync_SendsNoSignal_WhenTheDaemonOfThisHomeAnswersWithAnotherPid()
+    {
+        // A daemon from before #2527 ignores pid and home and answers 200 with its own PID. A 200
+        // is proof only when the PID in the body is the PID from the PID file.
+        var other = StartFakeDaemonForAnotherHome();
+        var thisHome = ListenForThisHome();
+        thisHome.AnswerAsLegacyDaemon(claimedPid: other.Pid + 1);
+        File.WriteAllText(_paths.PidFilePath, other.Pid.ToString(CultureInfo.InvariantCulture));
+
+        var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
+
+        AssertRefusedToStop(result, other);
+    }
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task StopAsync_SendsNoSignal_WhenNothingAnswersAndTheProcessServesAnotherHome()
+    {
+        // No answer from this home's port gives no proof from the daemon. The environment of the
+        // process (NETCLAW_HOME) is the other source, and it names the other home.
+        var other = StartFakeDaemonForAnotherHome();
+        ListenForThisHome().StopListening();
+        File.WriteAllText(_paths.PidFilePath, other.Pid.ToString(CultureInfo.InvariantCulture));
+
+        var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
+
+        AssertRefusedToStop(result, other);
+    }
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task StopAsync_StillStopsAHungDaemon_WhenNothingAnswersButTheProcessServesThisHome()
+    {
+        // Regression guard for the wedged daemon: it holds the PID of this home and does not answer.
+        // The environment of the process proves the home, so the stop must still work.
+        var daemon = StartFakeDaemon();
+        daemon.StopListening();
+
+        var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Message);
+        Assert.True(daemon.WaitForExit(5000));
+        Assert.False(File.Exists(_paths.PidFilePath));
+    }
+
+    // ── a stale PID file keeps its handling (spec: daemon-lifecycle) ─────────
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task StopAsync_RemovesTheStalePidFileAndReportsNotRunning_WhenNoProcessHasThePid()
+    {
+        var daemon = StartFakeDaemon();
+        daemon.Process!.Kill();
+        Assert.True(daemon.WaitForExit(5000));
+
+        var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Equal("Daemon is not running.", result.Message);
+        Assert.False(File.Exists(_paths.PidFilePath));
+        Assert.Empty(daemon.ShutdownNotices);
+    }
+
+    [SlopwatchSuppress("SW001", "Starts a Linux utility as a process that is not a daemon.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Starts a Linux utility as a process that is not a daemon.")]
+    public async Task StopAsync_RemovesThePidFileAndSignalsNothing_WhenThePidIsNotANetclawdProcess()
+    {
+        ListenForThisHome();
+        var psi = new ProcessStartInfo("tail") { UseShellExecute = false };
+        psi.ArgumentList.Add("-f");
+        psi.ArgumentList.Add("/dev/null");
+        using var notADaemon = Process.Start(psi)!;
+        try
+        {
+            File.WriteAllText(_paths.PidFilePath, notADaemon.Id.ToString(CultureInfo.InvariantCulture));
+
+            var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
+
+            Assert.False(result.Success);
+            Assert.Equal("Daemon is not running.", result.Message);
+            Assert.False(File.Exists(_paths.PidFilePath));
+            Assert.False(notADaemon.HasExited);
+        }
+        finally
+        {
+            if (!notADaemon.HasExited)
+                notADaemon.Kill();
+        }
     }
 
     public static bool IsLinux => OperatingSystem.IsLinux();
@@ -205,6 +339,39 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
         var standIn = StandInDaemon.Start(_paths.BasePath, _dir.Path);
         _standIns.Add(standIn);
         return standIn;
+    }
+
+    /// <summary>A stand-in for the daemon of a home that is not the home of <see cref="_sut"/>.</summary>
+    private StandInDaemon StartFakeDaemonForAnotherHome()
+    {
+        var otherHome = Path.Combine(_dir.Path, "other-home");
+        Directory.CreateDirectory(otherHome);
+        var standIn = StandInDaemon.Start(otherHome, _dir.Path);
+        _standIns.Add(standIn);
+        return standIn;
+    }
+
+    /// <summary>
+    /// Gives this home a port and a listener with no process, so a notice from this home cannot
+    /// reach port 5199.
+    /// </summary>
+    private StandInDaemon ListenForThisHome()
+    {
+        var standIn = StandInDaemon.ListenOnly(_paths.BasePath);
+        _standIns.Add(standIn);
+        return standIn;
+    }
+
+    // #2527 rule 2: no signal, nothing removed, and a message that names the PID and this home.
+    private void AssertRefusedToStop(DaemonResult result, StandInDaemon other)
+    {
+        Assert.False(result.Success, result.Message);
+        Assert.Contains("Nothing was stopped.", result.Message, StringComparison.Ordinal);
+        Assert.Contains($"PID {other.Pid}", result.Message, StringComparison.Ordinal);
+        Assert.Contains(_paths.BasePath, result.Message, StringComparison.Ordinal);
+        Assert.False(other.HasExited, "The daemon of the other home got a signal.");
+        Assert.True(File.Exists(_paths.PidFilePath), "The refusal removed the PID file.");
+        Assert.DoesNotContain(other.ShutdownNotices, notice => notice.Status == 200);
     }
 
     private sealed class FakeSupervisor(bool supervised) : IContainerSupervisor

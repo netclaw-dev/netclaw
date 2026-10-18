@@ -99,6 +99,15 @@ public sealed class DaemonCommandWiringTests : IDisposable
         string[] args,
         Dictionary<string, string>? extraEnvironment = null)
     {
+        var (exitCode, stdout, stderr) = await RunWithStreamsAsync(netclawHome, args, extraEnvironment);
+        return (exitCode, stdout + stderr);
+    }
+
+    private async Task<(int ExitCode, string Stdout, string Stderr)> RunWithStreamsAsync(
+        string netclawHome,
+        string[] args,
+        Dictionary<string, string>? extraEnvironment = null)
+    {
         Directory.CreateDirectory(netclawHome);
         var cliAssembly = Path.Combine(AppContext.BaseDirectory, "netclaw.dll");
         var psi = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
@@ -128,7 +137,7 @@ public sealed class DaemonCommandWiringTests : IDisposable
         var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
         var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-        return (process.ExitCode, await stdout + await stderr);
+        return (process.ExitCode, await stdout, await stderr);
     }
 
     private static int FreePort()
@@ -178,8 +187,16 @@ public sealed class DaemonCommandWiringTests : IDisposable
         return standIn;
     }
 
+    // #2527 rule 1: the notice names the PID and the home of the daemon it is for, and that daemon accepts it.
     private static void AssertOneCliStopNotice(StandInDaemon daemon)
-        => Assert.Equal("cli-stop", Assert.Single(daemon.ShutdownNotices).Reason);
+    {
+        var notice = Assert.Single(daemon.ShutdownNotices);
+        Assert.Equal("cli-stop", notice.Reason);
+        Assert.Equal(daemon.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture), notice.Pid);
+        Assert.True(notice.Home is not null && StandInDaemon.SameDirectory(notice.Home, daemon.Home),
+            $"The notice named home '{notice.Home}', not '{daemon.Home}'.");
+        Assert.Equal(200, notice.Status);
+    }
 
     private static HttpListener Listen(int port, Func<HttpListenerRequest, (int Status, string Body)> handler)
     {
@@ -367,18 +384,23 @@ public sealed class DaemonCommandWiringTests : IDisposable
     {
         // F4: the pid file in the scratch home holds the PID of the default home's live daemon. The
         // unit's MainPID matches it, but that process serves the default home (its environment
-        // says so), so the scratch home's stop must not go through the unit.
+        // says so), so the scratch home's stop must not go through the unit. #2527: it must not
+        // signal that process either.
         var unitDaemon = UnitRunsDaemonOf(DefaultNetclawHome);
         // The scratch home needs a port of its own, or its notice goes to port 5199.
         var scratchListener = ListenForHome(ScratchHome);
         File.WriteAllText(Path.Combine(ScratchHome, "netclaw.pid"), unitDaemon.Pid.ToString());
 
-        var (_, output) = await RunAsync(ScratchHome, ["daemon", "stop"]);
+        var (exitCode, output) = await RunAsync(ScratchHome, ["daemon", "stop"]);
 
+        Assert.Equal(1, exitCode);
         Assert.DoesNotContain("--user stop", SystemctlCalls);
         Assert.DoesNotContain("systemd user service", output);
+        Assert.False(unitDaemon.HasExited, output);
         Assert.Empty(unitDaemon.ShutdownNotices);
-        AssertOneCliStopNotice(scratchListener); // the notice went to the endpoint of the scratch home, not elsewhere
+        // A notice for the scratch home, if the CLI sends one, goes to the endpoint of that home. The
+        // listener has no daemon behind it, so it refuses the notice.
+        Assert.All(scratchListener.ShutdownNotices, notice => Assert.Equal(409, notice.Status));
     }
 
     [SlopwatchSuppress("SW001", "Drives the Linux systemd user-service path through a fake systemctl.")]
@@ -494,6 +516,71 @@ public sealed class DaemonCommandWiringTests : IDisposable
 
         Assert.DoesNotContain("--user start", SystemctlCalls);
         Assert.Contains("Cannot find netclawd", output); // reached the detached spawn path
+    }
+
+    // ── #2527: a stop for one home never signals the daemon of another home ──
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task Stop_RefusesAndSignalsNothing_WhenThisHomesPidFileNamesTheDaemonOfAnotherHome()
+    {
+        var otherHome = Path.Combine(_dir.Path, "other-home");
+        var other = StartFakeDaemonProcess(otherHome);
+        var scratchListener = ListenForHome(ScratchHome);
+        File.WriteAllText(Path.Combine(ScratchHome, "netclaw.pid"), other.Pid.ToString());
+
+        var (exitCode, stdout, stderr) = await RunWithStreamsAsync(ScratchHome, ["daemon", "stop"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.False(other.HasExited, stdout + stderr);
+        Assert.Empty(other.ShutdownNotices);
+        Assert.All(scratchListener.ShutdownNotices, notice => Assert.Equal(409, notice.Status));
+        Assert.True(File.Exists(Path.Combine(ScratchHome, "netclaw.pid")), "The refusal removed the PID file.");
+        Assert.Contains("Nothing was stopped.", stderr, StringComparison.Ordinal);
+        Assert.Contains($"PID {other.Pid}", stderr, StringComparison.Ordinal);
+        Assert.Contains(ScratchHome, stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("Daemon stopped", stdout + stderr, StringComparison.Ordinal);
+    }
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task Stop_RefusesAndSignalsNothing_WhenThisHomesPortBelongsToTheDaemonOfAnotherHome()
+    {
+        // The config of the scratch home names the port of the other daemon, and its PID file names the
+        // PID of that daemon. The PID matches. The home does not, so the other daemon refuses the notice.
+        var otherHome = Path.Combine(_dir.Path, "other-home");
+        var other = StartFakeDaemonProcess(otherHome);
+        Directory.CreateDirectory(ScratchHome);
+        StandInDaemon.WriteDaemonPort(ScratchHome, other.Port);
+        File.WriteAllText(Path.Combine(ScratchHome, "netclaw.pid"), other.Pid.ToString());
+
+        var (exitCode, stdout, stderr) = await RunWithStreamsAsync(ScratchHome, ["daemon", "stop"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.False(other.HasExited, stdout + stderr);
+        Assert.All(other.ShutdownNotices, notice => Assert.Equal(409, notice.Status));
+        Assert.Contains("Nothing was stopped.", stderr, StringComparison.Ordinal);
+        Assert.Contains($"PID {other.Pid}", stderr, StringComparison.Ordinal);
+    }
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task Stop_SendsTheNoticeToThisHomesOwnPort_NotToTheEndpointVariable()
+    {
+        // NETCLAW_DAEMON_ENDPOINT can name a remote or another local daemon. The signal always goes to
+        // a local PID, so the proof must come from the daemon at the port of this home.
+        var daemon = StartFakeDaemonProcess(ScratchHome);
+        var decoy = ListenForHome(Path.Combine(_dir.Path, "decoy-home"));
+
+        var (exitCode, output) = await RunAsync(
+            ScratchHome,
+            ["daemon", "stop"],
+            new Dictionary<string, string> { ["NETCLAW_DAEMON_ENDPOINT"] = $"http://127.0.0.1:{decoy.Port}" });
+
+        Assert.Equal(0, exitCode);
+        Assert.True(daemon.WaitForExit(5000), output);
+        AssertOneCliStopNotice(daemon);
+        Assert.Empty(decoy.Requests);
     }
 
     // ── daemon stop under the container supervisor ──────────────────────────

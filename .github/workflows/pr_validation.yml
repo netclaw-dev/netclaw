@@ -173,7 +173,7 @@ jobs:
           - group: shell-assignment-and-paths
             gates: shell-assignment shell-config-read path-access
           - group: verb-chain
-            gates: exact-verb-chain
+            gates: exact-verb-chain shutdown-notice-identity
           - group: reminder
             gates: reminder-execution literal-twin stream-commit-gate
           - group: authorization-and-directory

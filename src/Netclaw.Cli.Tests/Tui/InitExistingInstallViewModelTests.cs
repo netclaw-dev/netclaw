@@ -493,7 +493,53 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         StartFullReset(vm);
         await CompleteResetAsync(vm);
         await runner.StopSeen.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        Assert.Equal("factory-reset", Assert.Single(standIn.ShutdownNotices).Reason);
+        // #2527 rule 1: the notice names the PID and the home of the daemon, and that daemon accepts it.
+        var notice = Assert.Single(standIn.ShutdownNotices);
+        Assert.Equal("factory-reset", notice.Reason);
+        Assert.Equal(standIn.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture), notice.Pid);
+        Assert.True(notice.Home is not null && StandInDaemon.SameDirectory(notice.Home, _paths.BasePath),
+            $"The notice named home '{notice.Home}', not '{_paths.BasePath}'.");
+        Assert.Equal(200, notice.Status);
+    }
+
+    [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Uses a copy of /bin/sleep as the stand-in daemon process.")]
+    public async Task Reset_SignalsNothingAndDeletesNothing_WhenThePidFileNamesTheDaemonOfAnotherHome()
+    {
+        // #2527 rule 4: the reset sends the same notice and needs the same proof as `netclaw daemon stop`.
+        // A stale PID file in the home to reset must not stop the daemon of another home. The reset
+        // then refuses to delete, because the PID file still names a running daemon.
+        var otherHome = Path.Combine(_dir.Path, "other-home");
+        Directory.CreateDirectory(otherHome);
+        using var other = StandInDaemon.Start(otherHome, _dir.Path);
+        using var thisHome = StandInDaemon.ListenOnly(_paths.BasePath);
+        File.WriteAllText(_paths.PidFilePath, other.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        File.WriteAllText(_paths.SqliteDbPath, "db");
+        var unitPath = Path.Combine(_dir.Path, "netclaw.service");
+        File.WriteAllText(unitPath, "[Service]\nExecStart=/opt/netclaw/netclawd\n");
+        var systemd = new SystemdUserService(
+            _paths.BasePath, unitPath, new InactiveUnitRunner(), enabledOnThisPlatform: true, environReader: _ => null);
+        using var vm = new InitExistingInstallViewModel(
+            _paths, _nav, new DaemonManager(_paths, TimeProvider.System), systemd, _time);
+
+        StartFullReset(vm);
+        // The reset either fails or goes on to delete. Wait for the first of the two.
+        var failed = WaitForProgressMessageAsync(vm, "Reset failed:");
+        var deleting = WaitForProgressAsync(vm, 3);
+        await Task.WhenAny(failed, deleting);
+        Assert.True(failed.IsCompletedSuccessfully, "The reset went on to delete after the stop.");
+
+        Assert.False(other.HasExited, "The reset stopped the daemon of another home.");
+        Assert.Empty(other.ShutdownNotices);
+        Assert.All(thisHome.ShutdownNotices, notice => Assert.Equal(409, notice.Status));
+        Assert.True(File.Exists(_paths.SqliteDbPath), "The reset deleted data.");
+        Assert.Contains("Nothing was deleted", vm.ProgressMessage.Value, StringComparison.Ordinal);
+    }
+
+    private sealed class InactiveUnitRunner : ISystemCommandRunner
+    {
+        public Task<SystemCommandResult> RunAsync(string command, string arguments)
+            => Task.FromResult(new SystemCommandResult(3, string.Empty, StandardOutput: "inactive\n"));
     }
 
     public static bool IsLinux => OperatingSystem.IsLinux();
