@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Focused gate for the child approval close rule (issue 2525). The span holds
 # ExpireRecoveredChildApprovals and CloseChildApprovals. A mutant that misses an
-# entry strands it and blocks each snapshot. A mutant that removes too much drops
-# a prompt that is still open. ChildApprovalCloseMutationTests must kill every mutant.
+# entry strands it, and a stranded entry can block a snapshot. In live code, a mutant
+# that removes too much drops a prompt that is still open. ChildApprovalCloseMutationTests must kill every mutant.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionToolWorkflow.Children.cs"

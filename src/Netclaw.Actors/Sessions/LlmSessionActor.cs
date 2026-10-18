@@ -214,12 +214,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         });
         Recover<InputClosed>(RecoverParentClosure);
         Recover<ChildRunAccepted>(evt => _state = _state.Apply(evt));
-        Recover<ChildRunEvent>(evt =>
-        {
-            _state = _state.Apply(evt);
-            // Replay applies the same close rule as the live callbacks, so a journal of any age rebuilds a closed table.
-            _toolWorkflow.CloseChildApprovals(evt);
-        });
+        // Replay does not close child approvals here. RecoveryCompleted closes every child entry that replay left open.
+        Recover<ChildRunEvent>(evt => _state = _state.Apply(evt));
         Recover<LegacyCoordinationEvent>(ApplyLegacyCoordination);
         Recover<ToolCallRecorded>(ApplyToolCallRecorded);
         Recover<ToolApprovalRequested>(ApplyToolApprovalRequested);

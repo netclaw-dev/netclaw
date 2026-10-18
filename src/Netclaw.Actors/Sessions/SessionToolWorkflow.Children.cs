@@ -88,8 +88,8 @@ internal sealed partial class SessionToolWorkflow
             _calls.Remove(key);
     }
 
-    // The one rule that live code and journal replay share: a cancel record or a terminal record (also the Lost record
-    // that recovery writes) closes every entry of its run. A checkpoint or a prepared result leaves the prompt open.
+    // The live close rule: a cancel record or a terminal record (also the Lost record that recovery writes) closes every
+    // entry of its run. A checkpoint or a prepared result leaves the prompt open. Replay does not call this method.
     public void CloseChildApprovals(ChildRunEvent evt)
     {
         if (evt is not (ChildRunEvent.CancellationRequested or ChildRunEvent.TerminalRecorded))
