@@ -56,7 +56,7 @@ Hosted runs of 2026-10-17 and 2026-10-18 measured these gate times (minutes):
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4) | 10 to 11 |
-| `child-owner-and-report` | `child-owner` (3.1 to 3.6), `reminder-report-once` (about 3.5 to 4) | 7 to 8 |
+| `child-owner-and-report` | `child-owner` (3.1 to 3.6), `reminder-report-once` (about 3.5 to 4), `child-approval-close` (6 mutants, about 3 to 3.5, estimate) | 10 to 11.5 (estimate) |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
 The `authorization-and-directory` and `guard-and-authority` groups were one group, `approval-and-authorization`. That group took 16.5 to 24.6 minutes on the same day and ran near the timeout.
@@ -65,7 +65,7 @@ The first CI run of the split took 9 minutes 37 seconds for `verb-chain` and 10 
 A hosted run of 2026-10-18 put the two gates of #2527 part 2 into `verb-chain` and `guard-and-authority`. Those groups took 21 and 20 minutes.
 `shutdown-notice-identity` took 3.4 minutes and `stop-proof` took 6.9 minutes there. `stop-proof` has its own group, and `shutdown-notice-identity` runs in `reminder`.
 The `shell-analysis` group held three gates. A hosted run of 2026-10-18 took 25 minutes 18 seconds, and the job timeout cancelled it. The `shell-assignment-and-paths` group held three gates and took 21.5 minutes.
-The `session-reliability` group held five gates and took 18.7 minutes. It now holds three gates, and `child-owner-and-report` holds the other two.
+The `session-reliability` group held five gates and took 18.7 minutes. It now holds three gates, and `child-owner-and-report` holds the other two. The `child-approval-close` gate (#2525) joined that group later.
 The `shell-command-analysis` group is still the longest group. Its first invocation (303 mutants) took 15.8 minutes in the slow run. A split of that gate needs a script change and a new expected mutant count for each part. Do not add a gate to this group.
 The `reminder` group took 16.4 minutes in the same run. Do not add a gate to it.
 The hosted runner speed varies, so the time of one gate changes by up to 5 minutes between runs.
@@ -108,6 +108,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run and a turn with one of two open runs each get the right decision (SPEC-004, "Waiting for child runs"). The gate does not cover the missing-field case: `SessionOutputDtoMapper.FromDto` maps a missing field to an empty list, outside the mutated span, and ordinary tests cover it | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
 | `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that is not `Closed`, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
 | `TurnContext.HasSameRequester` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it | 11 killed | `./scripts/run-child-owner-mutations.sh` |
+| `SessionToolWorkflow.CloseChildApprovals` and `SessionToolWorkflow.ExpireRecoveredChildApprovals` | Issue 2525: a cancel record or a terminal record (also the lost record that recovery writes) closes every approval entry of its run, in live code and in journal replay. A checkpoint, a prepared result, a parent approval, and an entry of another run stay open. Recovery closes each child entry that remains. A stranded entry blocks every snapshot, and an entry that closes too soon drops a prompt that a person can still answer | 6 killed | `./scripts/run-child-approval-close-mutations.sh` |
 | The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
 | The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
 
@@ -399,8 +400,37 @@ The final local run killed 11 of 11 mutants in 1 minute 59 seconds with a warm b
 A review run took 2 minutes 36 seconds with a cold report directory.
 A run on a machine with other builds in progress took 6 minutes 11 seconds.
 CI runs it in the `child-owner-and-report` group of the `mutation-gates` job.
-That group holds two gates and takes 7 to 8 minutes on a hosted runner.
+That group holds three gates (with the child approval close gate) and takes 10 to 11.5 minutes on a hosted runner.
 Its report directory is `artifacts/stryker/child-owner`.
+
+### Child Approval Close Gate
+
+Run the child approval close gate:
+
+```bash
+./scripts/run-child-approval-close-mutations.sh
+```
+
+The script selects the span in `SessionToolWorkflow.Children.cs` between `// <child-approval-close>` and
+`// </child-approval-close>`. The span holds `ExpireRecoveredChildApprovals` and `CloseChildApprovals`. The selector
+rejects a missing or repeated marker before Stryker starts.
+
+Stryker makes six mutants in the span. The gate fails for a survivor, a compile error, a mutant outside the span, or
+a changed mutant count. A different form of the span gives a different count, and the owner of the gate must review it.
+
+The approval table of a session holds child approvals, and `AllowsSnapshot` needs an empty table. One rule closes a
+child approval: the cancel record or the terminal record of its run. The live Persist callbacks and `Recover<ChildRunEvent>`
+call the same method, so a journal of any age rebuilds a closed table. `ChildApprovalCloseMutationTests` in
+`Netclaw.Actors.MutationTests` builds the table directly. It uses no actor, no timer, and no delay. It covers these cases:
+
+- a cancel record, a terminal record, and a lost terminal record close the pending and the resolved entries of the run
+- a checkpoint and a prepared result close nothing
+- a record closes only its own run (`run-1` is a prefix of `run-10`) and never a parent approval
+- a record for a run with no entry changes nothing
+- recovery closes every child entry and keeps a parent entry
+
+The local Stryker run took 2 minutes 14 seconds on a warm build cache. CI runs the gate in the `child-owner-and-report`
+group of the `mutation-gates` job. Its report directory is `artifacts/stryker/child-approval-close`.
 
 ### Tool Authorization Gate
 

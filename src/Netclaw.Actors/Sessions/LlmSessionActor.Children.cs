@@ -234,7 +234,7 @@ public sealed partial class LlmSessionActor
         {
             _state = _state.Apply(committed);
             _execution.CloseChild(run.RunId);
-            _toolWorkflow.ExpireChildApprovals(run.RunId);
+            _toolWorkflow.CloseChildApprovals(committed);
             replyTo.Tell(ChildStatus(_state.ChildRuns[run.RunId]));
         });
     }
@@ -285,7 +285,7 @@ public sealed partial class LlmSessionActor
         Persist(evt, committed =>
         {
             _state = _state.Apply(committed);
-            _toolWorkflow.ExpireChildApprovals(runId);
+            _toolWorkflow.CloseChildApprovals(committed);
             _execution.ReleaseChild(runId);
             if (!child.Equals(ActorRefs.Nobody))
             {
@@ -389,7 +389,6 @@ public sealed partial class LlmSessionActor
 
     private void RecoverChildren()
     {
-        _toolWorkflow.ExpireRecoveredChildApprovals();
         foreach (var run in _state.GetExecutableChildRuns().ToArray())
         {
             if (run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling)

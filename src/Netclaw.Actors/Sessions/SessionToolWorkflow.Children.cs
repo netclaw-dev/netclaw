@@ -79,23 +79,29 @@ internal sealed partial class SessionToolWorkflow
         => _calls.Values.Count(call => call is PendingToolApproval && call.Pending.Request.SourceChildRunId == runId);
     public bool IsChildApproval(ToolCallId callId)
         => _calls.TryGetValue(callId.Value, out var call) && call.Pending.Request.SourceChildRunId is not null;
+    // <child-approval-close>
+    // A child owner never survives a restart, so recovery closes every child entry that replay left open.
     public void ExpireRecoveredChildApprovals()
     {
         foreach (var key in _calls.Where(pair => pair.Value.Pending.Request.SourceChildRunId is not null)
                      .Select(pair => pair.Key).ToArray())
             _calls.Remove(key);
     }
-    // Test-first stub (#2525). The implementer replaces this body with the one rule that live code and replay share:
-    // a CancellationRequested or TerminalRecorded record closes every entry of its run. Other child records close nothing.
+
+    // The one rule that live code and journal replay share: a cancel record or a terminal record (also the Lost record
+    // that recovery writes) closes every entry of its run. A checkpoint or a prepared result leaves the prompt open.
     public void CloseChildApprovals(ChildRunEvent evt)
     {
-    }
-    public void ExpireChildApprovals(SubAgentRunId runId)
-    {
-        foreach (var key in _calls.Where(pair => pair.Value.Pending.Request.SourceChildRunId == runId)
+        if (evt is not (ChildRunEvent.CancellationRequested or ChildRunEvent.TerminalRecorded))
+            return;
+        foreach (var key in _calls.Where(pair => pair.Value.Pending.Request.SourceChildRunId == evt.RunId)
                      .Select(pair => pair.Key).ToArray())
             _calls.Remove(key);
     }
+    // </child-approval-close>
+
+    public IReadOnlyList<PendingToolInteraction> OpenApprovals()
+        => _calls.Values.OfType<PendingToolApproval>().Select(static call => call.Pending).ToArray();
 
     public InteractiveApprovalCapability ChildApprovalCapability(BackgroundChildRun run, IActorRef owner)
     {

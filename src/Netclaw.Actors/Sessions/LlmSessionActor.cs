@@ -214,7 +214,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         });
         Recover<InputClosed>(RecoverParentClosure);
         Recover<ChildRunAccepted>(evt => _state = _state.Apply(evt));
-        Recover<ChildRunEvent>(evt => _state = _state.Apply(evt));
+        Recover<ChildRunEvent>(evt =>
+        {
+            _state = _state.Apply(evt);
+            // Replay applies the same close rule as the live callbacks, so a journal of any age rebuilds a closed table.
+            _toolWorkflow.CloseChildApprovals(evt);
+        });
         Recover<LegacyCoordinationEvent>(ApplyLegacyCoordination);
         Recover<ToolCallRecorded>(ApplyToolCallRecorded);
         Recover<ToolApprovalRequested>(ApplyToolApprovalRequested);
@@ -250,6 +255,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
             // Always read fresh from disk — identity file edits take effect immediately
             SetSystemPrompt();
+
+            // A child owner never survives a restart. Close the child entries that remain before a stashed command
+            // runs, then log the approvals that stay open. Replay itself logs none (see ApplyToolApprovalRequested).
+            _toolWorkflow.ExpireRecoveredChildApprovals();
+            foreach (var open in _toolWorkflow.OpenApprovals())
+                LogToolApprovalRequested(open.AuthorizationAttemptId.Value, open.Request.CallId, open.Request.ToolName, recovered: true);
 
             TransitionTo(SessionPhase.Ready);
             RestoreWaitingInputs();
@@ -3120,13 +3131,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             persistApprovalState,
             recovered: _phase.Current == SessionPhase.Recovering);
 
-        _log.Info(
-            "Tool approval requested authorizationAttemptId={AuthorizationAttemptId} " +
-            "sessionId={SessionId} callId={CallId} toolName={ToolName}",
-            pending.AuthorizationAttemptId.Value,
-            _sessionId.Value,
-            evt.CallId,
-            evt.ToolName);
+        // Replay re-applies requests that a later record may answer, cancel, or lose. RecoveryCompleted logs the
+        // approvals that stay open.
+        if (_phase.Current != SessionPhase.Recovering)
+            LogToolApprovalRequested(pending.AuthorizationAttemptId.Value, evt.CallId, evt.ToolName, recovered: false);
 
         if (evt.SourceChildRunId is null && persistApprovalState && pending.TurnContext is { } turnContext)
             _input.SetTurnContext(turnContext);
@@ -3136,6 +3144,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 evt.CallId,
                 restoreFailure);
     }
+
+    private void LogToolApprovalRequested(string authorizationAttemptId, string callId, string toolName, bool recovered)
+        => _log.Info(
+            "Tool approval requested authorizationAttemptId={AuthorizationAttemptId} " +
+            "sessionId={SessionId} callId={CallId} toolName={ToolName} recovered={Recovered}",
+            authorizationAttemptId,
+            _sessionId.Value,
+            callId,
+            toolName,
+            recovered);
 
     private void ClearApprovalTurnState()
     {
