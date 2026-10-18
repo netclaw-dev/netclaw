@@ -65,7 +65,8 @@ with 'kill 4100' (Task Manager on Windows).
 ```
 
 `start` prints `Daemon was not started. PID <pid> is not shown to serve <home>.` and `status` prints
-`PID <pid> is not shown to serve <home>.` Both exit with code 1.
+`PID <pid> is not shown to serve <home>.` Both exit with code 1. They send no notice, so their second line starts
+with `No daemon of this home was proven to own PID <pid>.` and names no endpoint. The rest of the line is the same.
 
 Choose the recovery by cause:
 
@@ -76,7 +77,7 @@ Choose the recovery by cause:
 2. The process is a wedged daemon of this home. On macOS and Windows the CLI cannot prove it, because the
    daemon does not answer and the OS gives no environment. Check that the process serves this home, then stop it
    by hand with `kill <pid>` (macOS) or Task Manager (Windows). On Linux the environment proves it, so `stop` works,
-   except when the daemon runs with a relative `NETCLAW_HOME` or one with `~` or `$`. Then use `kill <pid>` too.
+   except when the daemon runs with a relative `NETCLAW_HOME` or one with `~`, `$`, or `%`. Then use `kill <pid>` too.
 3. The lock file is held and the PID file is missing. The message names `<home>/netclaw.lock`. Find the process
    that holds it (`lsof <home>/netclaw.lock` on macOS and Linux) and stop it with `kill <pid>`.
 4. You update from a daemon that is older than this check, on macOS or Windows. The daemon answers 200 with no

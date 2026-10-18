@@ -724,6 +724,8 @@ public sealed class DaemonCommandWiringTests : IDisposable
         Assert.Equal(1, exitCode);
         var output = stdout + stderr;
         Assert.Equal(1, Occurrences(output, $"PID {other.Pid} is not shown to serve {ScratchHome}."));
+        Assert.Contains($"No daemon of this home was proven to own PID {other.Pid}.", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("did not confirm", output, StringComparison.Ordinal);
         Assert.Contains($"delete {Path.Combine(ScratchHome, "netclaw.pid")}", output, StringComparison.Ordinal);
         Assert.Contains($"'kill {other.Pid}'", output, StringComparison.Ordinal);
         Assert.DoesNotContain("running", output, StringComparison.OrdinalIgnoreCase);
@@ -762,6 +764,8 @@ public sealed class DaemonCommandWiringTests : IDisposable
         Assert.DoesNotContain("already running", stdout + stderr, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, Occurrences(stderr, $"Daemon was not started. PID {other.Pid} is not shown to serve {ScratchHome}."));
         Assert.Equal(0, Occurrences(stdout, "is not shown to serve"));
+        Assert.Contains($"No daemon of this home was proven to own PID {other.Pid}.", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("did not confirm", stdout + stderr, StringComparison.Ordinal);
         Assert.Contains($"delete {Path.Combine(ScratchHome, "netclaw.pid")}", stderr, StringComparison.Ordinal);
         Assert.Contains($"'kill {other.Pid}'", stderr, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(ScratchHome, "netclaw.pid")), "Start removed the PID file.");

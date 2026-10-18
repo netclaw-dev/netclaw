@@ -83,7 +83,9 @@ advice of D11). This costs one manual step during the mixed-version window on th
 accepted because the alternative is a signal to the wrong daemon.
 
 A 200 whose body is not a JSON object, whose `pid` is not a whole JSON number, or whose `home` is not a string
-is Refused. The CLI reads the body with `JsonElement.ValueKind` checks before it reads a number, because
+is Refused. A `home` string that is empty, holds a NUL character, or is not fully qualified is Refused too: it
+gets the rule that the endpoint applies to the `home` of a notice (D10). Without that rule, `GetFullPath` throws
+for an empty string or a NUL, and a relative string resolves in the working folder of the CLI (round 2 review, N-2). The CLI reads the body with `JsonElement.ValueKind` checks before it reads a number, because
 `TryGetInt32` throws for a string.
 
 ### D4. Response codes
@@ -110,9 +112,9 @@ Two gates protect the two decisions that gate an effect.
 **`shutdown-notice-identity`** covers the identity block of the endpoint, between the markers
 `// shutdown-identity:begin` and `// shutdown-identity:end`. It holds the PID parse and range check, the home
 check, the PID comparison, and the home comparison. Every tested mutant must die, and the span must hold at
-least the number of mutants in `scripts/run-shutdown-notice-identity-mutations.sh` (18 before round 2; the
-script and `TOOLING.md` hold the current number, and the three must match). Stryker also mutates string literals in the span. Do not write a literal logger category there:
-inject `ILogger<T>`. A reference run on a prototype killed 18 of 19 mutants. The survivor was such a literal.
+least the number of mutants in `scripts/run-shutdown-notice-identity-mutations.sh` (19 after round 2). Stryker
+also mutates string literals in the span. Do not write a literal logger category there: inject `ILogger<T>`. A
+reference run on a prototype left one survivor, and it was such a literal.
 
 **`stop-proof`** covers the proof in `DaemonManager.StopAsync`, because the proof gates SIGTERM to a process.
 It runs Stryker twice: on `DaemonManager.cs` (spans `stale-pid`, `stop-notice`, `stop-proof`) and on
@@ -120,7 +122,9 @@ It runs Stryker twice: on `DaemonManager.cs` (spans `stale-pid`, `stop-notice`, 
 PID equality, the 200 versus other status, the environment home match, the rule that a 409 is never overruled,
 and the stale-PID handling. A span must not hold an `OperatingSystem` check: the mutant that removes it is
 equal to the original on the Linux runner, so no test can kill it. `ProcessServesHome` returns `false` for an
-unreadable environment instead.
+unreadable environment instead. The minimum counts are 32 mutants in `DaemonManager.cs` and 45 in
+`HomeIdentity.cs` (after round 2). The script and `TOOLING.md` hold the current numbers, and the three places must
+match.
 
 Round 2 adds code to the `home-match` span: the walk of D9, the environment rule of D8, and the parse of the
 `HOME` entry. It adds code to the `stop-notice` span: the checks of the 200 body (D3). The tests that kill the
@@ -152,11 +156,15 @@ default home of the CLI". It proved nothing.
 The rule now follows `NetclawPaths` in the context of the target:
 
 - Absent, empty, or white-space `NETCLAW_HOME`: the home is `<HOME>/.netclaw`, with `HOME` from the same
-  environment. No usable `HOME` (missing, empty, or not fully qualified) gives no proof.
-- A value that is not fully qualified, or that holds `~` or `$`, gives no proof. The daemon froze a relative value
+  environment. No usable `HOME` (missing, empty, not fully qualified, or with a `%`) gives no proof. A `%` in
+  `HOME` is not expanded by the daemon, so this refusal is not needed for safety. It keeps one rule for the
+  Windows token (round 2 review, N-1).
+- When the environment holds a name twice, the first entry counts. The .NET runtime of the daemon reads the first
+  entry, and `HomeIdentity` reads the same one (round 2 review, N-5).
+- A value that is not fully qualified, or that holds `~`, `$`, or `%`, gives no proof. The daemon froze a relative value
   against a working folder that it later left, and the CLI cannot read that folder. The CLI does not expand
-  `~` or `$HOME`, because a second expander would drift from `PathExpansion`. A home path that holds a literal
-  `~` or `$` gets a false refusal. This is safe, and D11 gives the operator a recovery.
+  `~`, `$HOME`, or `%USERPROFILE%`, because a second expander would drift from `PathExpansion`. A home path that
+  holds a literal `~`, `$`, or `%` gets a false refusal. This is safe, and D11 gives the operator a recovery.
 - The result is a refusal for any doubt. A false refusal costs the operator one `kill`. A false proof stops the
   wrong daemon.
 
@@ -200,7 +208,8 @@ A refusal that says only "not shown to serve" leaves the operator with one way o
 Every refusal has a second line with the cause and the recovery:
 
 - Cause: the daemon answered for another daemon or home (Refused), or it did not confirm the PID (all other
-  cases). The answer decides which text applies.
+  cases of a stop). The answer decides which text applies. `start` and `status` send no notice, so they say
+  `No daemon of this home was proven to own PID <pid>.` and name no endpoint (round 2 review, N-7).
 - Recovery 1: if no Netclaw daemon of this home runs, delete `<home>/netclaw.pid`. The PID file is stale for this
   home, and the next command works.
 - Recovery 2: if the PID is a daemon of this home (a wedged daemon on macOS or Windows, where the stop has no
@@ -246,7 +255,7 @@ removes for stop.
 
 - A daemon that is wedged on a non-Linux host gives no proof, so `daemon stop` refuses → the error text names the PID and gives `kill <pid>` (D11).
 - A daemon from before this change on macOS or Windows gives an Unconfirmed 200, so `update` from that daemon needs a manual stop once (D3).
-- A home path with a literal `~` or `$`, or a relative `NETCLAW_HOME` in the daemon, gives a false refusal for a stop that the operator wants (D8) → the recovery text applies.
+- A home path with a literal `~`, `$`, or `%`, or a relative `NETCLAW_HOME` in the daemon, gives a false refusal for a stop that the operator wants (D8) → the recovery text applies.
 - The walk of D9 reads one link per step, so a path with many links costs more file system calls than before → the home path is short, and the call runs once per command.
 - A stand-in PID reused by another process between the read and the signal → the check narrows this window but cannot close it; the PID file model has it today.
 - The helper change in `SystemdUserService` could alter the unit ownership result for a home path with a link in a parent folder → the existing wiring tests for symlinked homes cover the final component; add none, run them.

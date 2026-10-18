@@ -352,6 +352,14 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
         { """{"pid":@PID,"home":42}""" },
         { """{"pid":@PID,"home":null}""" },
         { """{"pid":@PID,"home":["@HOME"]}""" },
+        // N-2: a string that is no full path. The empty string and a NUL made the stop throw. A relative path
+        // that the working folder of the CLI turns into this home was accepted.
+        { """{"pid":@PID,"home":""}""" },
+        { """{"pid":@PID,"home":"@HOME\u0000"}""" },
+        { """{"pid":@PID,"home":"a\u0000b"}""" },
+        { """{"pid":@PID,"home":"@RELHOME"}""" },
+        { """{"pid":@PID,"home":"relative/home"}""" },
+        { """{"pid":@PID,"home":"."}""" },
         { """{"reason":"cli-stop"}""" },
         { """[@PID]""" },
         { "\"@PID\"" },
@@ -370,12 +378,13 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
         daemon.AnswerEveryNoticeWithBody(
             HttpStatusCode.OK,
             body.Replace("@PID", daemon.Pid.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+                .Replace("@RELHOME", Path.GetRelativePath(Environment.CurrentDirectory, _paths.BasePath), StringComparison.Ordinal)
                 .Replace("@HOME", _paths.BasePath, StringComparison.Ordinal));
 
         var result = await _sut.StopAsync("cli-stop", TestContext.Current.CancellationToken);
 
         Assert.False(result.Success, result.Message);
-        Assert.True(IsRefusal(result), "The refusal is not marked, so a caller may print it twice or not at all.");
+        Assert.True(result.IsRefusal, "The refusal is not marked, so a caller may print it twice or not at all.");
         Assert.Contains("Nothing was stopped.", result.Message, StringComparison.Ordinal);
         Assert.False(daemon.HasExited, "The daemon got a signal.");
         Assert.True(File.Exists(_paths.PidFilePath), "The refusal removed the PID file.");
@@ -481,7 +490,7 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
     public void GetStatus_DoesNotReportADaemonOfAnotherHomeAsRunning()
     {
         var other = StartFakeDaemonForAnotherHome();
-        var thisHome = ListenForThisHome();
+        ListenForThisHome();
         File.WriteAllText(_paths.PidFilePath, other.Pid.ToString(CultureInfo.InvariantCulture));
 
         var status = _sut.GetStatus();
@@ -489,7 +498,7 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
         var lines = status.Message.ReplaceLineEndings("\n").Split('\n');
         Assert.Equal(2, lines.Length);
         Assert.Equal($"PID {other.Pid} is not shown to serve {_paths.BasePath}.", lines[0]);
-        Assert.Equal(SecondLine(NotConfirmed, thisHome.Port, other.Pid), lines[1]);
+        Assert.Equal(SecondLineWithoutNotice(other.Pid), lines[1]);
         Assert.DoesNotContain("running", status.Message, StringComparison.OrdinalIgnoreCase);
         // The update flow and the factory reset test IsRunning. They must go on to the stop, which refuses.
         Assert.True(status.IsRunning);
@@ -515,18 +524,18 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
     public void Start_DoesNotSayThatTheDaemonOfAnotherHomeIsAlreadyRunning()
     {
         var other = StartFakeDaemonForAnotherHome();
-        var thisHome = ListenForThisHome();
+        ListenForThisHome();
         File.WriteAllText(_paths.PidFilePath, other.Pid.ToString(CultureInfo.InvariantCulture));
 
         var result = _sut.Start();
 
         Assert.False(result.Success);
-        Assert.True(IsRefusal(result), "The refusal is not marked, so a caller may print it twice or not at all.");
+        Assert.True(result.IsRefusal, "The refusal is not marked, so a caller may print it twice or not at all.");
         Assert.DoesNotContain("already running", result.Message, StringComparison.OrdinalIgnoreCase);
         var lines = result.Message.ReplaceLineEndings("\n").Split('\n');
         Assert.Equal(2, lines.Length);
         Assert.Equal($"Daemon was not started. PID {other.Pid} is not shown to serve {_paths.BasePath}.", lines[0]);
-        Assert.Equal(SecondLine(NotConfirmed, thisHome.Port, other.Pid), lines[1]);
+        Assert.Equal(SecondLineWithoutNotice(other.Pid), lines[1]);
         Assert.True(File.Exists(_paths.PidFilePath), "Start removed the PID file.");
         Assert.False(other.HasExited);
     }
@@ -613,6 +622,12 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
     private const string Answered = "answered for another daemon or home.";
     private const string NotConfirmed = "did not confirm PID {0} for this home.";
 
+    // N-7: start and status send no notice, so their cause names no daemon endpoint and no confirmation.
+    private string SecondLineWithoutNotice(int pid)
+        => $"No daemon of this home was proven to own PID {pid}. "
+           + $"If no Netclaw daemon of this home runs, delete {_paths.PidFilePath}. "
+           + $"If PID {pid} is a daemon of this home, check it, then stop it with 'kill {pid}' (Task Manager on Windows).";
+
     // The exact second line of a refusal (spec: daemon-lifecycle, "A refusal tells the operator how to recover").
     private string SecondLine(string cause, int endpointPort, int pid)
         => $"The daemon at http://127.0.0.1:{endpointPort} {string.Format(CultureInfo.InvariantCulture, cause, pid)} "
@@ -664,7 +679,7 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
     private void AssertRefusedToStop(DaemonResult result, StandInDaemon other, string cause, int endpointPort)
     {
         Assert.False(result.Success, result.Message);
-        Assert.True(IsRefusal(result), "The refusal is not marked, so a caller may print it twice or not at all.");
+        Assert.True(result.IsRefusal, "The refusal is not marked, so a caller may print it twice or not at all.");
         Assert.Contains("Nothing was stopped.", result.Message, StringComparison.Ordinal);
         Assert.Contains($"PID {other.Pid}", result.Message, StringComparison.Ordinal);
         Assert.Contains(_paths.BasePath, result.Message, StringComparison.Ordinal);
@@ -675,11 +690,6 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
         Assert.True(File.Exists(_paths.PidFilePath), "The refusal removed the PID file.");
         Assert.DoesNotContain(other.ShutdownNotices, notice => notice.Status == 200);
     }
-
-    // The refusal flag of the result (DaemonResult.IsRefusal). Read by name so that this file builds before the
-    // flag exists: a missing flag is false, and the test then fails for the right reason.
-    private static bool IsRefusal(DaemonResult result)
-        => typeof(DaemonResult).GetProperty("IsRefusal")?.GetValue(result) is true;
 
     private sealed class FakeSupervisor(bool supervised) : IContainerSupervisor
     {

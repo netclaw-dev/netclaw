@@ -152,6 +152,10 @@ public sealed class StopProofMutationTests : IDisposable
     [InlineData("""{"pid":[@PID]}""")]
     [InlineData("""{"pid":@PID,"home":42}""")]
     [InlineData("""{"pid":@PID,"home":null}""")]
+    [InlineData("""{"pid":@PID,"home":""}""")]
+    [InlineData("""{"pid":@PID,"home":"a\u0000b"}""")]
+    [InlineData("""{"pid":@PID,"home":"@RELHOME"}""")]
+    [InlineData("""{"pid":@PID,"home":"."}""")]
     [InlineData("""{"reason":"cli-stop"}""")]
     [InlineData("[@PID]")]
     [InlineData("not json")]
@@ -161,7 +165,8 @@ public sealed class StopProofMutationTests : IDisposable
         var daemon = StartDaemon(ThisHome);
         daemon.AnswerEveryNoticeWithBody(
             HttpStatusCode.OK,
-            body.Replace("@PID", daemon.Pid.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal));
+            body.Replace("@PID", daemon.Pid.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+                .Replace("@RELHOME", Path.GetRelativePath(Environment.CurrentDirectory, ThisHome), StringComparison.Ordinal));
 
         var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
 
@@ -508,7 +513,7 @@ public sealed class StopProofMutationTests : IDisposable
     private static void AssertRefused(DaemonResult result, StandInDaemon daemon, string home, int endpointPort, string cause)
     {
         Assert.False(result.Success, result.Message);
-        Assert.True(IsRefusal(result), "The refusal is not marked, so a caller may print it twice or not at all.");
+        Assert.True(result.IsRefusal, "The refusal is not marked, so a caller may print it twice or not at all.");
         Assert.False(daemon.HasExited, "The daemon got a signal.");
         Assert.True(File.Exists(Path.Combine(home, "netclaw.pid")), "The refusal removed the PID file.");
         var lines = result.Message.ReplaceLineEndings("\n").Split('\n');
@@ -520,11 +525,6 @@ public sealed class StopProofMutationTests : IDisposable
             + $"If PID {daemon.Pid} is a daemon of this home, check it, then stop it with 'kill {daemon.Pid}' (Task Manager on Windows).",
             lines[1]);
     }
-
-    // The refusal flag of the result (DaemonResult.IsRefusal). Read by name so that this file builds before the
-    // flag exists: a missing flag is false, and the test then fails for the right reason.
-    private static bool IsRefusal(DaemonResult result)
-        => typeof(DaemonResult).GetProperty("IsRefusal")?.GetValue(result) is true;
 
     private sealed class UnsupervisedHost : IContainerSupervisor
     {

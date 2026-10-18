@@ -20,7 +20,7 @@ away from the real daemon. This change closes the product defects.
   match. A 200 without `home` (an older daemon) leaves the decision to the environment of the process (Linux)
   or ends in a refusal.
 - The environment proof reads the target process as that process would: `NETCLAW_HOME`, or `<HOME>/.netclaw`
-  from the `HOME` of the same environment. A relative value, or a value with `~` or `$`, gives no proof.
+  from the `HOME` of the same environment. A relative value, or a value with `~`, `$`, or `%`, gives no proof.
 - The home comparison resolves links one component at a time, like `realpath(3)`, with a bound of 40 links.
 - A refusal prints once on stderr and has a second line with the cause and the recovery. `start` and `status` do
   not report a PID that is not shown to serve this home as the daemon of this home. The factory reset gives the

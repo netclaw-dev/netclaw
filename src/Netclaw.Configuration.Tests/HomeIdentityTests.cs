@@ -176,6 +176,53 @@ public sealed class HomeIdentityTests : IDisposable
         Assert.False(HomeIdentity.EnvironmentServesHome(Env($"NETCLAW_HOME={withTilde}"), withTilde));
     }
 
+    [Theory]
+    [InlineData("%USERPROFILE%")]
+    [InlineData("%userprofile%")]
+    [InlineData("a%b")]
+    public void A_NETCLAW_HOME_with_a_percent_sign_gives_no_proof(string folder)
+    {
+        // N-1: NetclawPaths expands %USERPROFILE% on every operating system, so the daemon serves a folder
+        // other than the literal text. A literal folder with that name must not match.
+        var declared = P("srv", folder, "nc");
+
+        Assert.False(HomeIdentity.EnvironmentServesHome(Env($"NETCLAW_HOME={declared}"), declared));
+        Assert.False(HomeIdentity.EnvironmentServesHome(Env($"NETCLAW_HOME={declared}", $"HOME={P("profile")}"), declared));
+    }
+
+    [Theory]
+    [InlineData("%USERPROFILE%")]
+    [InlineData("a%b")]
+    public void A_HOME_with_a_percent_sign_gives_no_proof(string folder)
+    {
+        var profile = P("srv", folder);
+
+        Assert.False(HomeIdentity.EnvironmentServesHome(Env($"HOME={profile}"), Path.Combine(profile, ".netclaw")));
+    }
+
+    [Fact]
+    public void The_first_NETCLAW_HOME_entry_counts()
+    {
+        // N-5: the .NET runtime of the daemon reads the first of two entries with one name.
+        var first = P("h1");
+        var second = P("h2");
+        var environment = Env($"NETCLAW_HOME={first}", $"NETCLAW_HOME={second}");
+
+        Assert.True(HomeIdentity.EnvironmentServesHome(environment, first));
+        Assert.False(HomeIdentity.EnvironmentServesHome(environment, second));
+    }
+
+    [Fact]
+    public void The_first_HOME_entry_counts()
+    {
+        var first = P("homeA");
+        var second = P("homeB");
+        var environment = Env($"HOME={first}", $"HOME={second}");
+
+        Assert.True(HomeIdentity.EnvironmentServesHome(environment, Path.Combine(first, ".netclaw")));
+        Assert.False(HomeIdentity.EnvironmentServesHome(environment, Path.Combine(second, ".netclaw")));
+    }
+
     [Fact]
     public void A_different_home_a_parent_and_a_child_are_not_the_home()
     {

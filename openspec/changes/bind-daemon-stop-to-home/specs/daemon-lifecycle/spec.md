@@ -208,6 +208,7 @@ The CLI SHALL read the answer to the notice as follows:
 | 200, and `pid` is missing, is not a JSON number, or is not a whole number | Refused |
 | 200, and `pid` differs from the PID of the notice | Refused |
 | 200, `pid` matches, and `home` is present but is not a string | Refused |
+| 200, `pid` matches, and `home` is a string that is empty, holds a NUL character, or is not fully qualified | Refused |
 | 200, `pid` matches, and `home` is a string for another home | Refused |
 | 200, `pid` matches, and `home` names this home | Accepted: this is proof |
 | 200, `pid` matches, and `home` is missing (a daemon from before this change) | Unconfirmed: the operating system decides |
@@ -222,12 +223,14 @@ The environment rule reads the home that the target process would resolve, from 
 process (`/proc/<pid>/environ`). It never uses the `HOME` or the working folder of the CLI.
 
 - When `NETCLAW_HOME` is absent, empty, or only white space, the process serves `<HOME>/.netclaw`. `HOME` is the
-  `HOME=` entry of the same environment. When that entry is missing, empty, or not fully qualified, the result is
-  no proof.
+  `HOME=` entry of the same environment. When that entry is missing, empty, not fully qualified, or holds a `%`,
+  the result is no proof.
 - When `NETCLAW_HOME` has a value, the CLI removes surrounding white space. The value SHALL be fully qualified.
   A relative value gives no proof, because the daemon froze it against a working folder that the CLI cannot
-  know. A value that holds a `~` or a `$` gives no proof, because `NetclawPaths` expands those tokens and the
-  CLI does not.
+  know. A value that holds a `~`, a `$`, or a `%` gives no proof, because `NetclawPaths` expands those tokens
+  (`~`, `$HOME`, `${HOME}`, and `%USERPROFILE%`) and the CLI does not.
+- When the environment holds a name twice, the first entry counts. The .NET runtime of the daemon reads the first
+  entry too.
 - The CLI then compares the home it found with the home of the command through the rule of the first
   requirement.
 
@@ -355,6 +358,32 @@ StopAsync(home)
 - **WHEN** the CLI stops `/home/op/.netclaw`
 - **THEN** the CLI sends no signal
 
+#### Scenario: A NETCLAW_HOME or HOME with a percent sign gives no proof
+
+- **GIVEN** the environment of PID 4100 has `NETCLAW_HOME=/srv/%USERPROFILE%/nc`, and its port does not answer
+- **WHEN** the CLI stops the folder `/srv/%USERPROFILE%/nc`, spelled with the percent signs
+- **THEN** the CLI sends no signal
+- **GIVEN** instead that the environment has no `NETCLAW_HOME` and has `HOME=/srv/%USERPROFILE%`
+- **WHEN** the CLI stops `/srv/%USERPROFILE%/.netclaw`
+- **THEN** the CLI sends no signal
+
+#### Scenario: The first of two entries counts
+
+- **GIVEN** the environment of PID 4100 has `NETCLAW_HOME=/h1` and later `NETCLAW_HOME=/h2`, and its port does not answer
+- **WHEN** the CLI stops `/h1`
+- **THEN** the CLI sends SIGTERM
+- **WHEN** the CLI stops `/h2`
+- **THEN** the CLI sends no signal
+- **AND** the same holds for two `HOME=` entries when there is no `NETCLAW_HOME`
+
+#### Scenario: A 200 whose home is not a full path is no proof
+
+- **GIVEN** the daemon at the port of home B answers 200 with the PID 4100 and `home` set to an empty string,
+  to a string with a NUL character, or to a relative path that the working folder of the CLI turns into home B
+- **AND** the environment of PID 4100 names home B
+- **WHEN** the CLI stops home B
+- **THEN** the CLI sends no signal to PID 4100 and does not fail with an unhandled error
+
 #### Scenario: The endpoint variable does not receive the notice
 
 - **GIVEN** `NETCLAW_DAEMON_ENDPOINT` names another daemon
@@ -380,11 +409,13 @@ exact, with one space between the three parts:
 
 - `<pidfile>` is the PID file path of this home (`<home>/netclaw.pid`).
 - `<cause>` is `The daemon at <endpoint> answered for another daemon or home.` when the answer was Refused. It is
-  `The daemon at <endpoint> did not confirm PID <pid> for this home.` in every other case. `<endpoint>` is the
-  local control endpoint of this home, for example `http://127.0.0.1:5300`.
+  `The daemon at <endpoint> did not confirm PID <pid> for this home.` for every other case of a stop.
+  `<endpoint>` is the local control endpoint of this home, for example `http://127.0.0.1:5300`.
+  `start` and `status` send no notice, so their `<cause>` is always `No daemon of this home was proven to own PID <pid>.`
+  and has no `<endpoint>`.
 - The two lines join with a line feed. The result has no third line.
-- The text is the same for `stop`, `start`, and the factory reset. `start` and `status` have no answer to a notice,
-  so their cause is always the second text.
+- The text is the same for `stop` and the factory reset. `start` and `status` use the `<cause>` of the previous
+  point and the same recovery sentences.
 
 The `kill` advice covers a wedged daemon of this home on macOS and Windows, where the stop has no proof. The
 operator must check the process first. The CLI never sends the signal in that case.
@@ -408,6 +439,13 @@ SHALL describe both recoveries.
 - **GIVEN** home B has a PID file with PID 4100, and its port does not answer
 - **WHEN** an operator runs `netclaw daemon stop` for home B
 - **THEN** the second line has `did not confirm PID 4100 for this home`
+
+#### Scenario: Start and status name no notice
+
+- **GIVEN** home B has a PID file with PID 4100, and the process is not shown to serve home B
+- **WHEN** an operator runs `netclaw daemon status` or `netclaw daemon start` for home B
+- **THEN** the second line is `No daemon of this home was proven to own PID 4100. If no Netclaw daemon of this home runs, delete B/netclaw.pid. If PID 4100 is a daemon of this home, check it, then stop it with 'kill 4100' (Task Manager on Windows).`
+- **AND** the output has no `did not confirm`, because these commands send no notice
 
 #### Scenario: The factory reset gives the same recovery
 

@@ -265,7 +265,7 @@ answers 200 with its PID and its resolved home, or 409 for another PID or home.
 A 200 with the right PID and the right home is the proof. A daemon that does not
 answer, or answers 200 with no `home` (an older daemon), is proven on Linux only by
 its own environment: `NETCLAW_HOME`, or `<HOME>/.netclaw` with the `HOME` of that
-environment. A relative `NETCLAW_HOME`, or one with `~` or `$`, gives no proof.
+environment. A relative `NETCLAW_HOME`, or one with `~`, `$`, or `%`, gives no proof.
 Without proof, `stop` sends no signal, keeps the PID file, prints a two-line
 refusal on stderr, and exits with code 1. `start` and `status` use the same
 environment rule, or the held lock file where the environment cannot be read,
