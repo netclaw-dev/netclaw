@@ -265,8 +265,16 @@ public readonly record struct ManagedTemporaryBase
     /// </summary>
     /// <exception cref="PlatformNotSupportedException">The host is Windows.</exception>
     public static ManagedTemporaryBase ForCurrentUser()
-        // Issue #2554 test-author stub. The implementer reads the effective user ID (geteuid).
-        => throw new NotImplementedException("Issue #2554: ManagedTemporaryBase.ForCurrentUser is not implemented yet.");
+    {
+        if (OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("The private managed temporary base exists only on POSIX hosts.");
+
+        // macOS /tmp is a link to /private/tmp. The base must be the resolved form, because the
+        // folder checks refuse a link.
+        var root = OperatingSystem.IsMacOS() ? "/private/tmp" : "/tmp";
+        return new ManagedTemporaryBase(
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{root}/netclaw-{PosixUserId.GetEffective()}"));
+    }
 
     /// <summary>Returns the canonical absolute path.</summary>
     public override string ToString() => Value;

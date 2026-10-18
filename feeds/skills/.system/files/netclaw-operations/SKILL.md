@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.120.0"
+  version: "2.122.0"
 ---
 
 # Netclaw Operations
@@ -27,6 +27,7 @@ a reference file — load the one matching the user's intent with
 | Understand approval prompts | [Approval Prompts](#approval-prompts) |
 | Update identity / where facts go (identity vs memory) | [Identity](#identity) |
 | Work on a project, switch projects | `skill_read_resource('netclaw-operations', 'references/projects.md')` |
+| `temp_dir` problems (`Socket path too long`, a temp folder check error), or `file_read` refuses a path that the shell can write | `skill_read_resource('netclaw-operations', 'references/projects.md')` |
 | Discover MCP / available tools | `skill_read_resource('netclaw-operations', 'references/tools.md')` |
 | Authorize or diagnose an HTTP/SSE MCP server | [MCP OAuth](#mcp-oauth) |
 | Manage skills and sources | `skill_read_resource('netclaw-operations', 'references/skills.md')` |
@@ -106,7 +107,7 @@ Do not substitute shell commands when a listed first-party tool satisfies the ta
 Do not delegate a known file operation that an available file tool can complete.
 After a successful file tool result, do not use shell only to verify it unless the user requests shell behavior.
 For disposable text, use `file_write` in `temp_dir`, then use `file_read`; do not attempt a shell redirect first.
-Standard temporary APIs use `temp_dir` in each shell process.
+Standard temporary APIs use `temp_dir` in each shell process. Do not set `TMPDIR`, `TMP`, or `TEMP` in a shell command.
 Use `load_tool` directly for a known exact tool name.
 Use `search_tools` when the capability is known but its exact tool name is not.
 
@@ -174,7 +175,7 @@ A denied child-directory call does not permit a project change.
 The `[session]` block separates five paths:
 
 - `session_dir` is the workspace and the relative-path fallback.
-- `temp_dir` is run-local storage for disposable files.
+- `temp_dir` is run-local storage for disposable files. On Linux and macOS it is `/tmp/netclaw-<uid>/<key>/p`.
 - `artifact_dir` is the run-owned output area.
 - `worktree_dir` is the session area for Git worktrees.
 - `log_path` is the exact raw audit log for the current run.

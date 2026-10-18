@@ -134,6 +134,7 @@ internal sealed class TemporaryPathCorrectionPolicy
         if (string.IsNullOrWhiteSpace(path)
             || !Path.IsPathFullyQualified(path)
             || pathPolicy.FileSystem.IsProtected(path, PathOperation.Write)
+            || IsInsideOwnManagedTemporaryDirectory(path, managedTemporaryDirectory)
             || !TryGetEligibleTemporaryRoot(path, out var temporaryRoot))
         {
             return null;
@@ -144,6 +145,16 @@ internal sealed class TemporaryPathCorrectionPolicy
                 managedTemporaryDirectory,
                 temporaryRoot));
     }
+
+    // On POSIX the managed temporary folder is itself below /tmp (issue #2554). Advice that
+    // sends the agent from its own folder to the same folder would be noise. Only the folder of
+    // this call is exempt: the folder of another session is a different path and still gets advice.
+    // A shell call needs no such check. Its advice starts only when the working directory is the
+    // platform temporary root itself, and the own folder is a child of that root.
+    private bool IsInsideOwnManagedTemporaryDirectory(string path, string managedTemporaryDirectory)
+        => TryNormalizePath(path, out var target)
+           && TryNormalizePath(managedTemporaryDirectory, out var own)
+           && own.Contains(target);
 
     internal bool IsPlatformTemporaryRoot(string? path)
         => TryGetTemporaryRoot(path, out _);

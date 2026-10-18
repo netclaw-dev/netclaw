@@ -53,7 +53,7 @@ Hosted runs from 2026-10-17 through 2026-10-19 measured these gate times (minute
 | `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2) | 13.3 |
 | `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9) | 8 (estimate) |
 | `shell-command-analysis` | `shell-command-analysis` (two invocations: 303 mutants, up to 15.8, and 27 mutants, up to 4.7) | 14 to 21 |
-| `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2) | 9 to 13 |
+| `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; five spans since #2554, one local run took 2.4 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4) | 10 to 11 |
 | `child-owner-and-report` | `child-owner` (3.2), `child-control` (2.8), `reminder-report-once` (2.7), `child-approval-close` (2.7), `loopback-host-origin` (two invocations, 4.3) | 16.0 (one run) |
@@ -87,7 +87,7 @@ coverage. They do not replace positive and negative behavior tests.
 
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
-| `PathAccessPolicy.AddSessionRoots` and `PathAccessPolicy.IsReadableByAudience` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected | 4 killed | `./scripts/run-path-access-mutations.sh` |
+| `PathAccessPolicy.AddSessionRoots`, `PathAccessPolicy.IsReadableByAudience`, `PathAccessPolicy.GetEffectiveAccess`, and `ManagedTemporaryEnvironment.CheckFolder` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected; issue #2554: a Personal read or attach follows the write profile and no other audience, operation, or write mode does (write `All` gives `All`, write `Roots` adds its roots, write `None` adds nothing, and a read profile of mode `All` stays `All`); the managed temporary key folder is a session root and the shared base is not; the shell launch is refused when the base or the key folder is missing, a link, owned by another user, or open to a group or others | 24 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
@@ -125,12 +125,24 @@ Run the path-access check locally:
 ./scripts/run-path-access-mutations.sh
 ```
 
-The script tests two mutants in the shared session-root boundary and two
-mutants in the read branch of the reviewed-safe path check.
-`Reviewed_shell_path_uses_the_read_authority_of_the_audience` kills the
-branch mutants: a relative path and a protected path must not qualify, and an
-attended and an unattended read get the same decision (D2). The job fails
-unless all four mutants die.
+The script tests 24 mutants in five spans:
+
+- the shared session-root boundary and the read branch of the reviewed-safe path check (two
+  mutants each). `Reviewed_shell_path_uses_the_read_authority_of_the_audience` kills the branch
+  mutants: a relative path and a protected path must not qualify, and an attended and an
+  unattended read get the same decision (D2).
+- the effective profile of a Personal read or attach (`GetEffectiveAccess`: the Personal check,
+  the `Read` and `Attach` operation check, the write-mode check, and the root union). The kill
+  list is in `PersonalReadReachMutationTests`.
+- the key folder of the managed temporary location in `AddSessionRoots` (one block-removal mutant). The
+  shared base must not be a root. `Key_folder_is_a_root_and_the_base_is_not` kills it.
+- the folder checks of `ManagedTemporaryEnvironment.CheckFolder` (a missing folder, a link, a
+  foreign owner, a group or other bit). The linked `ManagedTemporaryFolderCheckTests` kill them.
+
+The helper `BoundedRoots` is outside the mutated spans. It ignores a leftover `Roots` list in a
+profile of mode `None`. No test in the gate has a profile of mode `None` with leftover roots,
+so a mutant of that helper would survive. Add such a test before you add the helper to a span.
+The job fails unless all 24 mutants die.
 The approval taxonomy PR 1 run took 3 minutes after package restore.
 The local prototype took 1 minute 28 seconds after package restore.
 A cold CI runner should take two to four minutes.

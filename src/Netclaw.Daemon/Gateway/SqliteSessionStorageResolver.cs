@@ -43,23 +43,29 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
     /// <summary>Creates a resolver that stores bindings in the Netclaw database.</summary>
     /// <param name="paths">The Netclaw filesystem paths.</param>
     /// <param name="timeProvider">The clock used for binding timestamps.</param>
+    /// <param name="temporaryLayout">Where the managed temporary folder of each run lives.</param>
+    /// <param name="logger">The logger.</param>
+    /// <remarks>
+    /// The daemon registers <see cref="ManagedTemporaryLayout.ForHost"/>, so the layout is a required
+    /// dependency (issue #2554).
+    /// </remarks>
     public SqliteSessionStorageResolver(
-        NetclawPaths paths,
-        TimeProvider timeProvider,
-        ILogger<SqliteSessionStorageResolver>? logger = null)
-        // Issue #2554 test-author stub: the implementer makes the layout a required
-        // argument and the daemon passes ManagedTemporaryLayout.ForHost().
-        : this(paths, timeProvider, paths.SessionsDirectory, ManagedTemporaryLayout.InsideSessionStorage.Instance, logger)
-    {
-    }
-
-    /// <summary>Creates a resolver with an explicit managed temporary layout.</summary>
-    internal SqliteSessionStorageResolver(
         NetclawPaths paths,
         TimeProvider timeProvider,
         ManagedTemporaryLayout temporaryLayout,
         ILogger<SqliteSessionStorageResolver>? logger = null)
         : this(paths, timeProvider, paths.SessionsDirectory, temporaryLayout, logger)
+    {
+    }
+
+    // The next two constructors keep the managed temporary folder inside the session envelope.
+    // Tests use them for a fixture that does not need the /tmp base. They are not public, so the
+    // dependency injection container cannot choose them.
+    internal SqliteSessionStorageResolver(
+        NetclawPaths paths,
+        TimeProvider timeProvider,
+        ILogger<SqliteSessionStorageResolver>? logger = null)
+        : this(paths, timeProvider, paths.SessionsDirectory, ManagedTemporaryLayout.InsideSessionStorage.Instance, logger)
     {
     }
 
