@@ -35,30 +35,34 @@ Data: the `OriginalContext` of the run is durable (session journal). The request
 ```text
 schematic
 CanControlChildRunOf(requester, owner):
-    if requester is a reminder turn:
+    if requester is a reminder turn or owner is a reminder turn:
         return requester.session  == owner.session
            and requester.audience == owner.audience
            and requester.boundary == owner.boundary
            and requester.channel  == owner.channel
     return requester.HasSameRequester(owner)
 
-requester is a reminder turn:
-    requester.principal == VerifiedAutomation and requester.sourceKind == "reminder"
+X is a reminder turn:
+    X.principal == VerifiedAutomation and X.sourceKind == "reminder"
 ```
 
 The pseudocode is schematic. It omits the legacy-run branch of `ControlChild`. That branch uses the same comparison.
 
-The relaxation looks only at the requester. The owner of the run is not tested for being a reminder. Thus:
+The relaxation applies when one side is a reminder turn. The requester is the turn that asks. The owner is the recorded `OriginalContext` of the run. Thus:
 
-| Run owner | Requester | Result |
-|-----------|-----------|--------|
+| Run started by | Requester | Result |
+|----------------|-----------|--------|
 | person (`local`, Operator) | reminder, same session | allowed (new) |
-| person | reminder, other session | denied |
-| person | reminder, other audience, boundary, or channel type | denied |
-| person Alice | person Bob, same session | denied (unchanged) |
+| reminder | person, same session, same audience, boundary, and channel type | allowed (new, owner answer 18 October) |
+| reminder | another person (Bob), same session | allowed (new, accepted shared-channel effect) |
 | reminder | reminder, same session | allowed (the six facts match; unchanged) |
-| reminder | person, same session | denied (unchanged) |
+| person | reminder, other session | denied |
+| reminder | person, other session | denied |
+| person | reminder, other audience, boundary, or channel type | denied |
+| reminder | person, other audience, boundary, or channel type | denied |
+| person Alice | person Bob, same session | denied (unchanged) |
 | person | `VerifiedAutomation` with another source kind | denied (unchanged) |
+| `VerifiedAutomation` with another source kind | person of another sender | denied (unchanged) |
 
 Alternatives:
 
@@ -67,13 +71,13 @@ Alternatives:
 - Keep the strict rule and add error text (investigation Option B). Rejected by the owner: a person who may start a reminder may manage a sub-agent.
 - Allow status only (investigation Option C). Rejected by the owner.
 
-### D2. The reverse direction does not change
+### D2. The relaxation is symmetric
 
-A person cannot manage a run that a reminder turn started. The owner decision covers the reminder side only. The rule stays symmetric in one respect: the run owner is not a reminder-specific concept. The follow-up question for the owner is in the pull request description.
+The owner answered on 18 October 2026: a person turn of the same session may check and cancel a child run that a reminder turn started. The check therefore tests both sides for a reminder turn. A person turn that is not the sender of the run's starter gets no more than the session, audience, boundary, and channel type check, and only when a reminder turn is on the other side. Alternative: relax the requester side only (the first version of this change). Rejected by the owner.
 
 ### D3. Identification of a reminder turn
 
-The check reads two recorded facts of the request context: the principal classification and the source kind. Both come from the `MessageSource` that `ReminderExecutionActor` builds. A channel binding copies them into the turn context. A person's message cannot set the source kind. The check needs both facts, so a webhook turn (`VerifiedAutomation`, other source kind) gets no relaxation.
+The check reads two recorded facts of each turn context: the principal classification and the source kind. Both come from the `MessageSource` that `ReminderExecutionActor` builds. A channel binding copies them into the turn context. A person's message cannot set the source kind. The check needs both facts, so a webhook turn (`VerifiedAutomation`, other source kind) gets no relaxation, as the requester or as the owner.
 
 ### D4. Focused mutation target
 
@@ -81,8 +85,8 @@ The comparison is a security boundary, so it gets a narrow Stryker target in `TO
 
 ## Risks / Trade-offs
 
-- [In a shared channel session, a reminder that one participant wrote can manage a child run that another participant started] -> Accepted by the owner decision. The session is the trust unit for a reminder. The reminder still needs the stored audience and boundary to match. Any participant who can set a reminder in that session can already ask the agent to act in it. The architecture document states this limit.
-- [A stored reminder prompt can carry injected text, and it can now cancel a run of the person] -> Same decision. The cancel only acts on a run of its own session. A cancel cannot grant any tool authority. A child result never grants authority.
+- [In a shared channel session, a reminder that one participant wrote can manage a child run that another participant started, and any participant can manage a child run that a reminder started] -> Accepted by the owner on 18 October 2026. The session is the trust unit for a reminder. The audience, boundary, and channel type must still match. The architecture document states this limit.
+- [A stored reminder prompt can carry injected text, and it can now cancel a run of the person] -> Same decision. A cancel acts only on a run of its own session. A cancel grants no tool authority. A child result never grants authority.
 - [All reminders of a session share one sender ID] -> Unchanged. A later change can give each reminder its own sender ID. It does not affect this rule, because the comparison ignores the sender.
 - [A restart-resume reminder adopts the authority of the interrupted input] -> That turn is not a reminder turn and uses the six-fact rule with the recorded sender. No change.
 

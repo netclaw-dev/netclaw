@@ -520,15 +520,18 @@ Bob asks for status in the same thread               -> other requester, denied
 ```
 
 One exception covers child status and cancel. A reminder turn (principal
-`VerifiedAutomation`, source kind `reminder`) owns the child runs of its own
-session. For a reminder turn the check ignores the sender ID and the principal
+`VerifiedAutomation`, source kind `reminder`) and a person turn of one session
+manage each other's child runs. When the requester or the turn that started the
+run is a reminder turn, the check ignores the sender ID and the principal
 classification. It still requires the same session, audience, trust boundary,
 and channel type.
 
 ```text
 An operator starts a child in a TUI session
 A reminder fire in the same session asks for status  -> allowed
+A reminder fire starts a child; the operator asks    -> allowed
 A reminder fire in another session asks for status   -> denied
+Alice starts a child; Bob asks (both people)         -> denied
 ```
 
 **Code anchors:** `TurnContext.HasSameRequester`, `TurnContext.CanControlChildRunOf`,

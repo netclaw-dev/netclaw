@@ -1,6 +1,6 @@
 ## 1. Product code
 
-- [ ] 1.1 Replace the body of `TurnContext.CanControlChildRunOf` with the rule in design D1, and verify that `TurnContextChildControlTests` pass
+- [ ] 1.1 Replace the body of `TurnContext.CanControlChildRunOf` with the symmetric rule in design D1, and verify that `TurnContextChildControlTests` pass
 - [ ] 1.2 Make `LlmSessionActor.HasSameChildRequester` call `CanControlChildRunOf` with the request context as the instance, and verify that `ChildOwnerActorSpecs` pass
 - [ ] 1.3 Keep `HasSameRequester` and `HasSameAuthority` unchanged, and verify that `TurnContextRequesterTests` and `SessionInputFlowRequesterTests` still pass
 
