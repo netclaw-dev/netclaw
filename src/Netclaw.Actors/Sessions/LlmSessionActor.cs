@@ -2015,9 +2015,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         if (placement == InputPlacement.BufferDuringModel)
         {
-            // Clear ends the link of a pending retry. The retry turn then records no reminder, and its final
-            // failure raises no alert. A person is in the thread, but a buffered reminder fire may have no reader,
-            // so the end of the link must be visible.
+            // The retry of a child-delivery turn has no input, so its link comes only from the pending retry.
+            // Clear ends that link: the retry turn then records no reminder, and its final failure raises no alert.
+            // A person is in the thread, but a buffered reminder fire may have no reader, so the end of the
+            // link must be visible.
             if (_deliveryRetry.RetriedTurnReminder is { } endedLink)
             {
                 _log.Warning(

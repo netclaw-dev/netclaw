@@ -140,6 +140,7 @@ public sealed partial class LlmSessionActor
             ArgumentsDigest = prepared.ArgumentsDigest, OriginalContext = message.OriginalContext,
             InitialWorkingSnapshot = prepared.Execution.Scope.InitialWorkingSnapshot,
             AcceptedAtMs = NowMs(), Lifecycle = new ChildRunLifecycle.Accepted(null),
+            // A retry turn cannot reach this call today (Tool batch dispatch requires admitted turn authority, #2548).
             SourceReminderId = RunningTurnReminder(_toolWorkflow.SelectedContinuation is { } delivering
                 ? _state.ChildRuns[delivering.RunId] : null)
         };
