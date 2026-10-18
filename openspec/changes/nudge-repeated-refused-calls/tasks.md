@@ -10,13 +10,13 @@
 
 ## 2. Runtime (implementer commit)
 
-- [ ] 2.1 Remove the `Stop` decision kind and add the repeated call set in `TurnStateTracker`. Verify with the tracker unit tests.
-- [ ] 2.2 Add the background field to the call identity in `ToolCycleSignatureFactory.Prepare`. Verify with `ToolCycleValidationTests`.
-- [ ] 2.3 Add the parent nudge after the batch results through `ActiveToolBatchTracker`, and remove `FailCurrentTurn` for this case. Verify with the session and headless tests.
-- [ ] 2.4 Add the child nudge in `SubAgentActor` and remove the partial stop. Verify with `SubAgentActorTests`.
-- [ ] 2.5 Remove `ToolCycleMessages.TurnStopped` and `ToolCycleMessages.ChildStopped`, and update the `ErrorCategory.ModelBehavior` comment. Verify that the solution builds.
+- [x] 2.1 Remove the `Stop` decision kind and add the repeated call set in `TurnStateTracker`. Verify with the tracker unit tests.
+- [x] 2.2 Add the background field to the call identity in `ToolCycleSignatureFactory.Prepare`. Verify with `ToolCycleValidationTests`.
+- [x] 2.3 Add the parent nudge after the batch results through `ActiveToolBatchTracker`, and remove `FailCurrentTurn` for this case. Verify with the session and headless tests.
+- [x] 2.4 Add the child nudge in `SubAgentActor` and remove the partial stop. Verify with `SubAgentActorTests`.
+- [x] 2.5 Remove `ToolCycleMessages.TurnStopped` and `ToolCycleMessages.ChildStopped`, and update the `ErrorCategory.ModelBehavior` comment. Verify that the solution builds.
 
 ## 3. Skill and gates
 
-- [ ] 3.1 Add `references/long-running-commands.md` to `netclaw-operations`, move the background job details to it, add the routing row, and bump `metadata.version`. Verify that the nudge names the page path.
-- [ ] 3.2 Run `Netclaw.Actors.Tests`, `Netclaw.Actors.MutationTests`, `Netclaw.Cli.Tests`, `Netclaw.Daemon.Tests`, the covering Stryker gate, slopwatch, and the header check. Verify that all pass.
+- [x] 3.1 Add `references/long-running-commands.md` to `netclaw-operations`, move the background job details to it, add the routing row, and bump `metadata.version`. Verify that the nudge names the page path.
+- [x] 3.2 Run `Netclaw.Actors.Tests`, `Netclaw.Actors.MutationTests`, `Netclaw.Cli.Tests`, `Netclaw.Daemon.Tests`, the covering Stryker gate, slopwatch, and the header check. Verify that all pass.

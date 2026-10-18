@@ -1382,25 +1382,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (prepared.Decision.Kind != ToolCycleDecisionKind.Execute)
         {
             Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
-                "Tool recurrence decision kind={DecisionKind} refused={RefusedCount}",
-                prepared.Decision.Kind, prepared.Decision.RefusedCallIds.Count);
+                "Tool recurrence decision kind={DecisionKind} refused={RefusedCount} repeated={RepeatedCount}",
+                prepared.Decision.Kind, prepared.Decision.RefusedCallIds.Count, prepared.Decision.RepeatedCallIds.Count);
         }
 
-        if (prepared is PreparedFreshBatch.Stop)
-        {
-            // The model repeated a call after the runtime refused it. The turn fails as a model
-            // failure with no further model request, in every parent session: Slack, Discord,
-            // Mattermost, and the TUI show the text as a warning, and a headless caller sees
-            // category=model. The text is for a person, so it is not the model-facing stop text.
-            RecordIntermediateUsage(usage);
-            FailCurrentTurn(
-                ToolCycleMessages.TurnStopped,
-                new InvalidOperationException("The model repeated a tool call that the recurrence guard already refused."),
-                ErrorCategory.ModelBehavior);
-            return;
-        }
-
-        var ready = (PreparedFreshBatch.Ready)prepared;
+        // A repeat of a refused call does not stop the turn (Aaron, 18 Oct 2026). The pipeline refuses it
+        // again, and the batch adds a model-facing nudge after its results. No error reaches the person.
         var userMsg = _state.FindLastUserMessage() ?? new SerializableChatMessage
         {
             Role = Protocol.ChatRole.User,
@@ -1411,7 +1398,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             SessionId = _sessionId,
             UserMessage = userMsg,
-            AssistantMessage = ready.AssistantMessage,
+            AssistantMessage = prepared.AssistantMessage,
             StartedAtMs = NowMs(),
             ConsumedInputIds = _input.SelectedInputs.Ids,
             ChildContinuation = _toolWorkflow.ChildDecision(_execution.CurrentModelCallId)
@@ -1426,10 +1413,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             ReviewConsumedChildFindings(child);
             EmitAndDispatchToolBatch(
                 lastMessage,
-                ready.Calls,
+                prepared.Calls,
                 usage,
-                ready.Cycle,
-                ready.Decision);
+                prepared.Cycle,
+                prepared.Decision);
         });
     }
 
@@ -1480,7 +1467,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         RecordIntermediateUsage(usage);
 
-        DispatchToolBatch(toolCalls, preparedCycleBatch: preparedCycleBatch, refusedCallIds: cycleDecision.RefusedCallIds);
+        var repeatNudge = cycleDecision.RepeatedCallIds.Count == 0
+            ? null
+            : ToolCycleMessages.RepeatNudge(toolCalls
+                .Where(call => cycleDecision.RepeatedCallIds.Contains(call.CallId))
+                .Select(static call => call.Name));
+        DispatchToolBatch(toolCalls, cycleDecision.RefusedCallIds, repeatNudge,
+            preparedCycleBatch: preparedCycleBatch);
     }
 
     private void RecordIntermediateUsage(UsageDetails? usage)
@@ -1502,11 +1495,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
         IReadOnlySet<string> refusedCallIds,
+        string? repeatNudge,
         ApprovalRedrivePlan? approvalPlan = null,
         PreparedToolCycleBatch? preparedCycleBatch = null,
         bool recordCompletedCycle = true)
     {
         _toolWorkflow.StartDispatch(toolCalls, preparedCycleBatch, _toolExecutor, recordCompletedCycle);
+        if (repeatNudge is not null)
+            _toolWorkflow.AddRepeatNudgeAfterBatch(repeatNudge);
 
         // The pipeline sends each result before it signals batch completion.
         TurnLog().Info("turn_tool_call_batch count={Count} tools={Tools}",
@@ -3537,7 +3533,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                     _input.RestoreTurnAuthority(dispatch.TurnContext, _trustContextDeriver);
                     UpdateCrashContext();
                     TransitionTo(SessionPhase.Processing);
-                    DispatchToolBatch(dispatch.Calls, new HashSet<string>(), approvalPlan: dispatch.ApprovalPlan,
+                    DispatchToolBatch(dispatch.Calls, new HashSet<string>(), repeatNudge: null, approvalPlan: dispatch.ApprovalPlan,
                         recordCompletedCycle: false);
                     TryReplyAck();
                     return;

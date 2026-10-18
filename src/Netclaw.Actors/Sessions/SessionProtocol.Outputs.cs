@@ -225,11 +225,12 @@ public static partial class SessionProtocol
         InputCompatibility,
 
         /// <summary>
-        /// The model broke a rule that the runtime enforces: it repeated a tool call after the runtime
-        /// refused that call, it kept returning empty replies and each stream finished with Stop or
-        /// Length, it ended a text reply on the output limit (Length) with no tool call, or one call
-        /// streamed only thinking until the thinking cap. The provider worked. The model did not comply.
-        /// Empty replies from a stream with no finish reason are <see cref="StreamFailure"/>.
+        /// The model broke a rule that the runtime enforces: it kept returning empty replies and each
+        /// stream finished with Stop or Length, it ended a text reply on the output limit (Length) with
+        /// no tool call, or one call streamed only thinking until the thinking cap. The provider worked.
+        /// The model did not comply. Empty replies from a stream with no finish reason are
+        /// <see cref="StreamFailure"/>. A repeated refused tool call is not a failure: the runtime
+        /// refuses it again and nudges the model.
         /// </summary>
         /// <remarks>
         /// New members go last. The wire carries this enum by name, and an older reader maps an

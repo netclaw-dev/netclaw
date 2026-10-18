@@ -105,13 +105,14 @@ internal sealed class TurnStateTracker
     /// A cycle contains one to three batches. Each completed batch includes its action and outcome hashes.
     /// For example, A B A B followed by candidate A gets one correction if both completed copies match.
     /// A changed result in either copy prevents that match. The candidate's future result is not known.
-    /// A repeat of the last corrected action stops the turn unless a different action completes first.
+    /// A repeat of the last corrected action gets the same correction again, marked as repeated, until a
+    /// different action completes. The caller then adds the repeat nudge. The turn does not stop.
     /// Synthetic corrections do not enter completed history. New user input resets both intervention states.
     /// </remarks>
     public ToolCycleDecision EvaluateAdjacentBeforeDispatch(ToolActionSignature candidate)
     {
         if (_lastBlockedAction == candidate)
-            return new ToolCycleDecision(ToolCycleDecisionKind.Stop);
+            return new ToolCycleDecision(ToolCycleDecisionKind.Correct, Repeated: true);
 
         for (var period = 1; period <= ToolCycleSignatureFactory.MaximumPeriod; period++)
         {
@@ -136,9 +137,15 @@ internal sealed class TurnStateTracker
         return new ToolCycleDecision(ToolCycleDecisionKind.Execute);
     }
 
+    /// <summary>
+    /// Decide which calls of a batch dispatch. A refused call does not execute. A call that repeats a refused
+    /// identity or a refused adjacent action is refused again and also marked as repeated, so that the turn
+    /// owner adds the repeat nudge after the batch results. Other calls in the batch keep their own decision.
+    /// </summary>
     public ToolCycleBatchDecision EvaluateBeforeDispatch(PreparedToolCycleBatch batch)
     {
         var refused = new HashSet<string>(StringComparer.Ordinal);
+        var repeated = new HashSet<string>(StringComparer.Ordinal);
         var exempt = new HashSet<string>(StringComparer.Ordinal);
         foreach (var group in batch.Calls.GroupBy(static call => new ToolRecurrenceKey(call.ToolName, call.ArgumentsHash)))
         {
@@ -153,7 +160,15 @@ internal sealed class TurnStateTracker
             }
 
             if (episode.Corrected)
-                return new ToolCycleBatchDecision(ToolCycleDecisionKind.Stop, new HashSet<string>(StringComparer.Ordinal), exempt);
+            {
+                foreach (var call in group)
+                {
+                    refused.Add(call.CallId.Value);
+                    repeated.Add(call.CallId.Value);
+                }
+
+                continue;
+            }
 
             if (episode.EqualRounds >= 2)
             {
@@ -165,12 +180,14 @@ internal sealed class TurnStateTracker
         if (exempt.Count == 0)
         {
             var adjacent = EvaluateAdjacentBeforeDispatch(batch.Action);
-            if (adjacent.Kind == ToolCycleDecisionKind.Stop)
-                return new ToolCycleBatchDecision(ToolCycleDecisionKind.Stop, new HashSet<string>(StringComparer.Ordinal), exempt);
             if (adjacent.Kind == ToolCycleDecisionKind.Correct)
             {
                 foreach (var call in batch.Calls)
+                {
                     refused.Add(call.CallId.Value);
+                    if (adjacent.Repeated)
+                        repeated.Add(call.CallId.Value);
+                }
             }
         }
 
@@ -182,7 +199,10 @@ internal sealed class TurnStateTracker
         }
 
         return new ToolCycleBatchDecision(refused.Count == 0 ? ToolCycleDecisionKind.Execute : ToolCycleDecisionKind.Correct,
-            refused, exempt);
+            refused, exempt)
+        {
+            RepeatedCallIds = repeated
+        };
     }
 
     private void ObserveGroup(CompletedToolRecurrenceGroup group)
@@ -302,7 +322,11 @@ internal readonly record struct ToolRecurrenceKey(ToolName ToolName, string Argu
 internal sealed record ToolRecurrenceEpisode(string Outcome, int EqualRounds, bool Corrected, bool PendingJob);
 internal sealed record CompletedToolRecurrenceGroup(ToolRecurrenceKey Key, string Outcome, bool PendingJob);
 internal sealed record ToolCycleBatchDecision(ToolCycleDecisionKind Kind,
-    IReadOnlySet<string> RefusedCallIds, IReadOnlySet<string> ExemptCallIds);
+    IReadOnlySet<string> RefusedCallIds, IReadOnlySet<string> ExemptCallIds)
+{
+    /// <summary>The refused call IDs that repeat an earlier refusal. Each one needs the repeat nudge.</summary>
+    public IReadOnlySet<string> RepeatedCallIds { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+}
 
 internal sealed record PreparedToolCycleCall(
     ToolCallId CallId,
@@ -338,14 +362,14 @@ internal readonly record struct ToolCycleResult(
 internal enum ToolCycleDecisionKind
 {
     Execute,
-    Correct,
-    Stop
+    Correct
 }
 
 internal readonly record struct ToolCycleDecision(
     ToolCycleDecisionKind Kind,
     int Period = 0,
-    int Repetitions = 0);
+    int Repetitions = 0,
+    bool Repeated = false);
 
 internal static class ToolCycleMessages
 {
@@ -353,18 +377,32 @@ internal static class ToolCycleMessages
         "Netclaw stopped this tool call because it would continue a repeated action-and-outcome cycle. "
         + "The same action completed twice without a changed result. This call did not execute.";
 
-    // Model-facing: the child result that the parent model reads. It stays in the second person.
-    public const string ChildStopped =
-        "Netclaw stopped this run after you repeated a tool call that the cycle guard already blocked. "
-        + "The result is partial. The last refused operation did not execute. "
-        + "Earlier tool results remain available in the session.";
+    // Model-facing. A refused call repeats, so the turn continues with this nudge after the batch results.
+    // The text names the skill page for long commands. A person sees it only when the model writes about it.
+    public static string RepeatNudge(IEnumerable<string> toolNames)
+        => $"Netclaw refused your repeated call to {FormatToolNames(toolNames)} again. The call did not execute. "
+            + "Netclaw refuses the same call each time that you send it. Do not send it again. Select a different action:\n"
+            + "- For a slow shell command, run it as a background job: set `_background: true` on `shell_execute`, "
+            + "then use `check_background_job`.\n"
+            + "- Change the command or its arguments.\n"
+            + "- Divide the work into smaller steps.\n"
+            + "- Ask the person how to continue.\n"
+            + "For instructions about long-running commands, call "
+            + "skill_read_resource('netclaw-operations', 'references/long-running-commands.md').";
 
-    // Person-facing: the failed-turn text that Slack, Discord, Mattermost, the TUI, and the CLI show
-    // to a person. A person did not repeat the call, so this text names the model.
-    public const string TurnStopped =
-        "Netclaw stopped this turn because the model repeated a tool call that was already refused. "
-        + "The result is partial. The last refused operation did not execute. "
-        + "Earlier tool results remain available in the session.";
+    // Model-facing, for a child run. A child has no background job manager and can lack the skill tools,
+    // so this text sends a long command back to the parent instead.
+    public static string ChildRepeatNudge(IEnumerable<string> toolNames)
+        => $"Netclaw refused your repeated call to {FormatToolNames(toolNames)} again. The call did not execute. "
+            + "Netclaw refuses the same call each time that you send it. Do not send it again. Select a different action:\n"
+            + "- Change the command or its arguments.\n"
+            + "- Divide the work into smaller steps.\n"
+            + "- Stop and give your result to the parent. Name the command that did not finish, "
+            + "so that the parent can run it as a background job.";
+
+    private static string FormatToolNames(IEnumerable<string> toolNames)
+        => string.Join(", ", toolNames.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+            .Select(static name => $"`{name}`"));
 }
 
 internal static class ToolCycleSignatureFactory
@@ -380,7 +418,7 @@ internal static class ToolCycleSignatureFactory
         var prepared = calls.Select(call =>
         {
             var rejection = executor.ValidateToolCall(call);
-            var (_, cleaned) = executor.PrepareToolCall(call);
+            var (meta, cleaned) = executor.PrepareToolCall(call);
             // Only valid metadata is irrelevant to execution identity. A repair
             // must differ from a rejected call, even after a cycle correction.
             var arguments = rejection is null ? cleaned.Arguments : call.Arguments;
@@ -390,7 +428,10 @@ internal static class ToolCycleSignatureFactory
                 HashFields([
                     rejection is null ? "accepted" : "rejected",
                     rejection?.DenyReason ?? string.Empty,
-                    HashCanonicalArguments(arguments)]))
+                    HashCanonicalArguments(arguments),
+                    // A valid background request changes how the call runs. The repeat nudge offers it,
+                    // so a background run of a refused command must not get the same refusal.
+                    rejection is null && meta is { Background: true } ? "background" : "foreground"]))
             {
                 AllowsPendingJob = rejection is null && cleaned.Name == "check_background_job"
                     && (cleaned.Arguments is null || cleaned.Arguments.All(argument =>

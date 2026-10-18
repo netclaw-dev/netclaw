@@ -18,6 +18,8 @@ internal sealed class ActiveToolBatchTracker
     private readonly Dictionary<string, ToolCycleResult> _cycleResults = new(StringComparer.Ordinal);
     private List<SerializableMediaReference> _pendingMedia = [];
     private PreparedToolCycleBatch? _preparedCycleBatch;
+    // Transient, like the other system nudges: process recovery does not restore it.
+    private string? _repeatNudge;
 
     private int CompletedCount => _completedCallIds.Count;
 
@@ -37,6 +39,7 @@ internal sealed class ActiveToolBatchTracker
         IEnumerable<SerializableChatMessage> existingResults)
     {
         _preparedCycleBatch = null;
+        _repeatNudge = null;
         _cycleResults.Clear();
         ClearExpectedCallIds();
         foreach (var call in assistantMessage.ToolCalls)
@@ -57,6 +60,7 @@ internal sealed class ActiveToolBatchTracker
         PreparedToolCycleBatch? preparedCycleBatch)
     {
         _preparedCycleBatch = preparedCycleBatch;
+        _repeatNudge = null;
         _cycleResults.Clear();
         ClearExpectedCallIds();
         foreach (var call in toolCalls)
@@ -108,6 +112,13 @@ internal sealed class ActiveToolBatchTracker
             return BatchCompletion.Pending.Instance;
 
         var updated = AddMediaNudge(current, DrainPendingMedia());
+        // The repeat nudge follows every result of the batch, so the next model request ends with it.
+        if (_repeatNudge is { } repeatNudge)
+        {
+            updated = updated.AddSystemNudge(repeatNudge);
+            _repeatNudge = null;
+        }
+
         if (_preparedCycleBatch is { } prepared)
             turn.ObserveCompleted(ToolCycleSignatureFactory.Complete(prepared, _cycleResults));
 
@@ -116,6 +127,9 @@ internal sealed class ActiveToolBatchTracker
     }
 
     public void DiscardPendingMedia() => _pendingMedia.Clear();
+
+    // Start clears this value, so a nudge belongs only to the batch that started before it.
+    public void AddNudgeAfterResults(string nudge) => _repeatNudge = nudge;
 
     private IReadOnlyList<SerializableMediaReference> DrainPendingMedia()
     {
@@ -169,6 +183,7 @@ internal sealed class ActiveToolBatchTracker
         ClearExpectedCallIds();
         ClearCompletedCallIds();
         _preparedCycleBatch = null;
+        _repeatNudge = null;
         _cycleResults.Clear();
         ExecutionTaskCompleted = false;
         DiscardPendingMedia();

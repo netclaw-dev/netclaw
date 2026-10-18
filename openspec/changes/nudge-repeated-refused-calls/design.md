@@ -51,7 +51,7 @@ EvaluateBeforeDispatch(batch):
 
 ### 2. The batch owner adds the nudge after the last result
 
-The parent nudge text comes from `ToolCycleMessages`. The session passes it to `SessionToolWorkflow.StartDispatch`. `ActiveToolBatchTracker` (actor-local) holds it with the batch. `CompleteIfReady` adds it with `SessionState.AddSystemNudge` after the media nudge. The nudge is then the last history entry before the next model request.
+The parent nudge text comes from `ToolCycleMessages`. After `SessionToolWorkflow.StartDispatch`, the session calls `SessionToolWorkflow.AddRepeatNudgeAfterBatch`. `ActiveToolBatchTracker` (actor-local) holds the nudge with the batch, and a new batch start clears it. `CompleteIfReady` adds it with `SessionState.AddSystemNudge` after the media nudge. The nudge is then the last history entry before the next model request.
 
 Alternative: add the nudge before dispatch. History would then hold the nudge before the assistant tool-call message, not at the end.
 

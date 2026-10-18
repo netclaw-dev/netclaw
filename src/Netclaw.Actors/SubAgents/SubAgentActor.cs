@@ -90,6 +90,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly MemoryPolicyEvaluator _policyEvaluator = new();
     private readonly TurnStateTracker _turnState = new();
     private PreparedToolCycleBatch? _activeCycleBatch;
+    // The repeat nudge for the active batch. The child adds it after the batch results.
+    private string? _activeRepeatNudge;
 
     // Stopwatch tracking the total wall-clock duration of the sub-agent run.
     // Used for the summary log on completion (ProcessingWatchdog is only a
@@ -622,6 +624,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             AddModelInputMediaNudge(msg.Results
                 .SelectMany(result => result.ModelInputMediaReferences)
                 .ToArray());
+            if (_activeRepeatNudge is { } repeatNudge)
+            {
+                AddSystemNudge(repeatNudge);
+                _activeRepeatNudge = null;
+            }
 
             _turnState.RecordToolCompletion(msg.Results.Length);
 
@@ -636,6 +643,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 return;
             _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
             _activeCycleBatch = null;
+            _activeRepeatNudge = null;
             _log.Error(msg.Cause, "SubAgent [{AgentName}] tool execution failed", _definition.Name);
             Complete(false, $"Tool execution failed: {msg.Cause.Message}", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.ToolExecutionFailed);
         });
@@ -846,17 +854,19 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         if (cycleDecision.Kind != ToolCycleDecisionKind.Execute)
         {
             Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
-                "Subagent tool cycle decision kind={DecisionKind} refusedCalls={RefusedCalls}",
+                "Subagent tool cycle decision kind={DecisionKind} refusedCalls={RefusedCalls} repeatedCalls={RepeatedCalls}",
                 cycleDecision.Kind,
-                cycleDecision.RefusedCallIds.Count);
+                cycleDecision.RefusedCallIds.Count,
+                cycleDecision.RepeatedCallIds.Count);
         }
 
-        if (cycleDecision.Kind == ToolCycleDecisionKind.Stop)
-        {
-            Complete(true, ToolCycleMessages.ChildStopped, SubAgentRunOutcome.Partial,
-                SubAgentOutcomeReason.ToolCycleStopped);
-            return;
-        }
+        // A repeat of a refused call does not stop the child. The call is refused again, and the child
+        // nudge follows the batch results. The child nudge offers no background job: a child has none.
+        _activeRepeatNudge = cycleDecision.RepeatedCallIds.Count == 0
+            ? null
+            : ToolCycleMessages.ChildRepeatNudge(toolCalls
+                .Where(call => cycleDecision.RepeatedCallIds.Contains(call.CallId))
+                .Select(static call => call.Name));
 
         // Add assistant message (with tool calls) to history
         _history.Add(assistantMessage);
