@@ -85,10 +85,9 @@ internal sealed partial class SessionToolWorkflow
                      .Select(pair => pair.Key).ToArray())
             _calls.Remove(key);
     }
-    public IEnumerable<PendingToolInteraction> OpenApprovals()
-        => _calls.Values.OfType<PendingToolApproval>().Select(call => call.Pending);
-    // Test-first stub (#2525). The implementer replaces this body: remove every entry of the run, ignore a missing one.
-    public void ApplyChildApprovalsClosed(ChildApprovalsClosed evt)
+    // Test-first stub (#2525). The implementer replaces this body with the one rule that live code and replay share:
+    // a CancellationRequested or TerminalRecorded record closes every entry of its run. Other child records close nothing.
+    public void CloseChildApprovals(ChildRunEvent evt)
     {
     }
     public void ExpireChildApprovals(SubAgentRunId runId)

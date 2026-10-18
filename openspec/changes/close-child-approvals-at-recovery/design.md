@@ -1,40 +1,39 @@
 ## Context
 
-See proposal.md for the cause. Replay applies `ToolApprovalRequested` through `ApplyToolApprovalRequested`, and that method writes the log line. Child approvals are durable (`PersistApprovalState = true`). Today the session closes them in memory only: `ExpireChildApprovals` (cancel and terminal) and `ExpireRecoveredChildApprovals` (in `RecoverChildren`, after the `RecoverChildRuns` self message). `AllowsSnapshot` needs an empty approval table.
+See proposal.md for the cause. Replay applies `ToolApprovalRequested` through `ApplyToolApprovalRequested`, and that method writes the log line. Child approvals are durable (`PersistApprovalState = true`). Today the session closes them in memory only: `ExpireChildApprovals` (the live cancel and terminal callbacks) and `ExpireRecoveredChildApprovals` (in `RecoverChildren`, after the `RecoverChildRuns` self message). `Recover<ChildRunEvent>` applies the record to the session state and does not touch the approval table. `AllowsSnapshot` needs an empty approval table.
 
 Data ownership:
 
 - `LlmSessionActor`: owns the log decision and the decision to close. It runs the recovery sequence.
 - `SessionToolWorkflow._calls`: actor-local approval table. Replay rebuilds it.
-- Journal: durable. It holds `ToolApprovalRequested`, `ToolApprovalResolved`, the child run events, and the new `ChildApprovalsClosed`.
+- Journal: durable. It already holds `ToolApprovalRequested`, `ToolApprovalResolved`, and the child run records. Nothing is added.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
 - A recovery log that lists only approvals that stay open.
-- A durable close for child approvals, so replay does not re-open them.
-- A recovery that reads old journals.
+- Replay that closes child approvals from the records that the journal already holds, so a journal of any age rebuilds a closed table.
+- No persisted format change.
 
 **Non-Goals:**
 
 - Show a prompt again at recovery. The chat client owns that.
 - Change the answer path, the authorization rules, or the grant scopes.
 - Close resolved parent calls. `ClearCalls` and `TurnRecorded` already do that.
+- Add a journal event, a proto message, or a manifest. See decision 3.
 
 ## Decisions
 
 1. **Skip the log while recovering, log open entries once after.** `ApplyToolApprovalRequested` logs only when the phase is not `Recovering`. `RecoveryCompleted` closes child entries first, then logs each open entry with `recovered=True`. The template gets a `recovered={Recovered}` field, and its prefix stays `Tool approval requested`. A tool that counts the prefix still works.
-   Alternative: keep the log in replay and filter later. Rejected, because replay cannot know whether a later event closes the entry.
-2. **Move the recovery close into `RecoveryCompleted`.** The close then runs before a stashed command. This removes the window between `RecoveryCompleted` and `RecoverChildRuns`, in which a stale child entry passes validation and only the per-incarnation approval channel stops the answer.
-3. **Add `ChildApprovalsClosed` as a top-level event, not as a `ChildRunEvent`.** `SessionState.Apply(ChildRunEvent)` throws for an event that does not fit the run lifecycle, and a close event fits no lifecycle step. The new type needs one manifest, `cac-v1`, and one proto message with its own fields. No existing oneof or field number changes.
-   Alternative: close from the replay of `CancellationRequested` and `TerminalRecorded`, with no new event. It needs no format change and also fixes old journals. The owner chose an explicit event. The behavior tests do not depend on this choice, except the tests that name the event.
-4. **One event for each run, not for each call.** The session closes all entries of a run at once (`ExpireChildApprovals` has the same grain). Replay is idempotent: a missing entry is not an error.
-5. **Persist only when an entry existed.** `ExpireChildApprovals` returns whether it removed an entry. A cancel followed by a terminal result writes one event.
-6. **Recovery keeps its close step for old journals.** This is not a silent fallback. Old journals are a normal input, and the step is the defined path for them. It uses the same event.
+   Alternative: keep the log in replay and filter later. Rejected, because replay cannot know whether a later record closes the entry.
+2. **One close rule, shared by live code and replay.** `SessionToolWorkflow.CloseChildApprovals(ChildRunEvent)` closes every entry of the run for a `CancellationRequested` or a `TerminalRecorded` record, and nothing for other records. The live Persist callbacks call it in place of `ExpireChildApprovals(runId)`. `Recover<ChildRunEvent>` calls it after it applies the record to the state. One function means that live code and replay cannot drift.
+3. **No new journal event (repo rule: reuse before you add).** A first draft added `ChildApprovalsClosed`. The records `CancellationRequested` and `TerminalRecorded` already say that a run no longer waits for an answer. Recovery also writes a `TerminalRecorded` with `Lost: true` for a run that was live at the restart. A new event would duplicate this fact, add a persisted type, a proto message, and a manifest for ever, and it would not repair a journal that was written before it. Replay of the existing records repairs old journals.
+4. **Close what remains in `RecoveryCompleted`.** A run that was live at the restart has no terminal record yet. Its owner is dead, so the session closes every remaining child entry in `RecoveryCompleted`, before a stashed command runs (`ExpireRecoveredChildApprovals`, moved from `RecoverChildren`). This removes the window in which a stale entry passes validation and only the per-incarnation approval channel stops the answer. Recovery then records the lost terminal, and the next replay closes the entry by decision 2.
+5. **Resolved child entries also close.** The rule removes pending and resolved entries, as `ExpireChildApprovals` does today. A resolved child entry would otherwise keep the table non-empty.
 
 ## Risks / Trade-offs
 
-- A persist inside `RecoveryCompleted` -> the implementer may send a self message and persist in its handler. The tests await the journal, not a delay.
-- A close event for a run that the journal does not know -> replay ignores the unknown run id, like an absent entry. A malformed event (empty run id) fails loudly in the serializer.
-- A new persisted type cannot be removed later -> keep the type small, and give it a reason enum with an explicit zero `UNSPECIFIED` that the reader rejects.
+- A child entry that never gets a cancel or terminal record in the journal -> `RecoveryCompleted` closes it. The table is then correct at the end of recovery, though replay holds it open for a while. No log line is written during replay, so the open entry does no harm.
+- The rule must ignore a checkpoint -> a unit test and a mutation target pin this.
+- Moving the close into `RecoveryCompleted` changes the order of recovery steps -> the late-answer tests pin the order.

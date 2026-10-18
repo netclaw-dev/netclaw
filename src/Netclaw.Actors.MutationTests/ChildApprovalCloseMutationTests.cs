@@ -18,39 +18,75 @@ namespace Netclaw.Actors.MutationTests;
 
 /// <summary>
 /// Issue 2525. The approval table of a session holds child approvals, and <c>AllowsSnapshot</c> needs an empty
-/// table. A close event that misses an entry strands that entry, and every snapshot stays blocked. A close event
-/// that removes too much drops a prompt that is still open, so a person cannot answer it. Each test builds the
-/// table directly. No test uses an actor, a timer, or a delay.
+/// table. One rule closes a child approval: the cancel record or the terminal record of its run closes every entry of
+/// that run. Live code and journal replay both use it. A rule that misses an entry strands it, and every snapshot stays
+/// blocked. A rule that removes too much drops a prompt that is still open, so a person cannot answer it. Each test
+/// builds the table directly. No test uses an actor, a timer, or a delay.
 /// </summary>
 public sealed class ChildApprovalCloseMutationTests
 {
     private static readonly SessionId Session = new("test/child-approval-close");
 
     [Fact]
-    public void Closing_a_run_removes_its_pending_and_resolved_entries()
+    public void A_cancel_record_closes_the_pending_and_resolved_entries_of_its_run()
     {
-        var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), durable: true, recovered: false);
-        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/2"), durable: true, recovered: false);
-        workflow.ApplyResolvedResponse(Resolved("run-1/subagent-approval/2"));
+        var workflow = TwoEntriesOf("run-1");
 
-        workflow.ApplyChildApprovalsClosed(Closed("run-1"));
+        workflow.CloseChildApprovals(Cancel("run-1"));
 
-        Assert.Equal(0, workflow.ChildApprovalCount(new SubAgentRunId("run-1")));
-        Assert.False(workflow.IsChildApproval(new ToolCallId("run-1/subagent-approval/1")));
-        Assert.False(workflow.IsChildApproval(new ToolCallId("run-1/subagent-approval/2")));
+        AssertRunClosed(workflow, "run-1");
         Assert.True(workflow.AllowsSnapshot(SessionState.Empty));
     }
 
     [Fact]
-    public void Closing_a_run_keeps_the_entries_of_another_run()
+    public void A_terminal_record_closes_the_entries_of_its_run()
+    {
+        var workflow = TwoEntriesOf("run-1");
+
+        workflow.CloseChildApprovals(Terminal("run-1", lost: false));
+
+        AssertRunClosed(workflow, "run-1");
+    }
+
+    [Fact]
+    public void A_lost_terminal_record_closes_the_entries_of_its_run()
+    {
+        // Recovery writes this record when it marks an open child run lost.
+        var workflow = TwoEntriesOf("run-1");
+
+        workflow.CloseChildApprovals(Terminal("run-1", lost: true));
+
+        AssertRunClosed(workflow, "run-1");
+    }
+
+    [Fact]
+    public void A_checkpoint_or_a_prepared_result_closes_nothing()
+    {
+        // The run is still live after a checkpoint, and its prompt stays open. A prepared result follows a terminal record.
+        var workflow = TwoEntriesOf("run-1");
+
+        workflow.CloseChildApprovals(new ChildRunEvent.Checkpointed(
+            new ChildRunCheckpoint(1, "round one", new WorkingContextDelta()))
+        { SessionId = Session, RunId = new SubAgentRunId("run-1"), RecordedAtMs = 20 });
+        workflow.CloseChildApprovals(new ChildRunEvent.ResultPrepared(
+            new SerializableChatMessage(), new SerializableChatMessage(), null)
+        { SessionId = Session, RunId = new SubAgentRunId("run-1"), RecordedAtMs = 21 });
+
+        Assert.Equal(1, workflow.ChildApprovalCount(new SubAgentRunId("run-1")));
+        Assert.True(workflow.IsChildApproval(new ToolCallId("run-1/subagent-approval/1")));
+        Assert.True(workflow.IsChildApproval(new ToolCallId("run-1/subagent-approval/2")));
+        Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
+    }
+
+    [Fact]
+    public void A_record_closes_only_the_entries_of_its_own_run()
     {
         // The id "run-1" is a prefix of "run-10". A match on text would drop the second run.
         var workflow = new SessionToolWorkflow();
         workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), durable: true, recovered: false);
         workflow.ApplyApprovalRequested(ChildRequest("run-10", "run-10/subagent-approval/1"), durable: true, recovered: false);
 
-        workflow.ApplyChildApprovalsClosed(Closed("run-1"));
+        workflow.CloseChildApprovals(Cancel("run-1"));
 
         Assert.True(workflow.IsChildApproval(new ToolCallId("run-10/subagent-approval/1")));
         Assert.Equal(1, workflow.ChildApprovalCount(new SubAgentRunId("run-10")));
@@ -58,36 +94,51 @@ public sealed class ChildApprovalCloseMutationTests
     }
 
     [Fact]
-    public void Closing_a_run_keeps_a_parent_approval()
+    public void A_record_keeps_a_parent_approval()
     {
         var workflow = new SessionToolWorkflow();
         workflow.ApplyApprovalRequested(ParentRequest("call-parent"), durable: true, recovered: false);
         workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), durable: true, recovered: false);
 
-        workflow.ApplyChildApprovalsClosed(Closed("run-1"));
+        workflow.CloseChildApprovals(Terminal("run-1", lost: false));
 
         Assert.Equal(0, workflow.ChildApprovalCount(new SubAgentRunId("run-1")));
         Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
-        Assert.Contains(workflow.OpenApprovals(), pending => pending.Request.CallId == "call-parent");
-        Assert.Single(workflow.OpenApprovals());
     }
 
     [Fact]
-    public void Closing_a_run_with_no_entry_is_not_an_error_and_changes_nothing()
+    public void A_record_for_a_run_with_no_entry_changes_nothing()
     {
-        // Replay applies a close event after a snapshot or an earlier close removed the entries.
+        // Replay applies the record of a run whose entries a snapshot or an earlier record already removed.
         var workflow = new SessionToolWorkflow();
         workflow.ApplyApprovalRequested(ChildRequest("run-2", "run-2/subagent-approval/1"), durable: true, recovered: false);
 
-        workflow.ApplyChildApprovalsClosed(Closed("run-unknown"));
-        workflow.ApplyChildApprovalsClosed(Closed("run-2"));
-        workflow.ApplyChildApprovalsClosed(Closed("run-2"));
+        workflow.CloseChildApprovals(Cancel("run-unknown"));
+        Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
 
+        workflow.CloseChildApprovals(Cancel("run-2"));
+        workflow.CloseChildApprovals(Terminal("run-2", lost: true));
         Assert.True(workflow.AllowsSnapshot(SessionState.Empty));
     }
 
     [Fact]
-    public void An_open_child_entry_blocks_a_snapshot_until_its_run_closes()
+    public void Recovery_closes_every_child_entry_and_keeps_a_parent_entry()
+    {
+        // A child owner never survives a restart, so no child entry stays open when replay ends.
+        var workflow = new SessionToolWorkflow();
+        workflow.ApplyApprovalRequested(ParentRequest("call-parent"), durable: true, recovered: true);
+        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), durable: true, recovered: true);
+        workflow.ApplyApprovalRequested(ChildRequest("run-10", "run-10/subagent-approval/1"), durable: true, recovered: true);
+
+        workflow.ExpireRecoveredChildApprovals();
+
+        Assert.Equal(0, workflow.ChildApprovalCount(new SubAgentRunId("run-1")));
+        Assert.Equal(0, workflow.ChildApprovalCount(new SubAgentRunId("run-10")));
+        Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
+    }
+
+    [Fact]
+    public void A_table_with_no_entry_allows_a_snapshot()
     {
         var workflow = new SessionToolWorkflow();
         Assert.True(workflow.AllowsSnapshot(SessionState.Empty));
@@ -95,18 +146,38 @@ public sealed class ChildApprovalCloseMutationTests
         workflow.ApplyApprovalRequested(ChildRequest("run-3", "run-3/subagent-approval/1"), durable: true, recovered: false);
         Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
 
-        workflow.ApplyChildApprovalsClosed(Closed("run-3"));
+        workflow.ExpireRecoveredChildApprovals();
         Assert.True(workflow.AllowsSnapshot(SessionState.Empty));
     }
 
-    private static ChildApprovalsClosed Closed(string runId)
-        => new()
+    private static SessionToolWorkflow TwoEntriesOf(string runId)
+    {
+        var workflow = new SessionToolWorkflow();
+        workflow.ApplyApprovalRequested(ChildRequest(runId, $"{runId}/subagent-approval/1"), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest(runId, $"{runId}/subagent-approval/2"), durable: true, recovered: false);
+        workflow.ApplyResolvedResponse(Resolved($"{runId}/subagent-approval/2"));
+        return workflow;
+    }
+
+    private static void AssertRunClosed(SessionToolWorkflow workflow, string runId)
+    {
+        Assert.Equal(0, workflow.ChildApprovalCount(new SubAgentRunId(runId)));
+        Assert.False(workflow.IsChildApproval(new ToolCallId($"{runId}/subagent-approval/1")));
+        Assert.False(workflow.IsChildApproval(new ToolCallId($"{runId}/subagent-approval/2")));
+    }
+
+    private static ChildRunEvent.CancellationRequested Cancel(string runId)
+        => new() { SessionId = Session, RunId = new SubAgentRunId(runId), RecordedAtMs = 10 };
+
+    private static ChildRunEvent.TerminalRecorded Terminal(string runId, bool lost)
+        => new(new ChildRunTerminal(new SubAgentProtocol.SubAgentResult
         {
-            SessionId = Session,
+            AgentName = new AgentName("worker"),
             RunId = new SubAgentRunId(runId),
-            Reason = ChildApprovalCloseReason.RunCancelled,
-            ClosedAtMs = 10
-        };
+            Output = "Done.",
+            Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.ActorStopped)
+        }, lost, null))
+        { SessionId = Session, RunId = new SubAgentRunId(runId), RecordedAtMs = 11 };
 
     private static ToolApprovalResolved Resolved(string callId)
         => new()

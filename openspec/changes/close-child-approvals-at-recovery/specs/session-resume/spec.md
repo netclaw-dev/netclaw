@@ -2,7 +2,7 @@
 
 ### Requirement: Recovery logs an approval request only for an approval that stays open
 
-Journal replay SHALL NOT write a `Tool approval requested` log entry. When recovery completes, the session SHALL write one `Tool approval requested` entry with `recovered=True` for each approval that is still open. An approval is open when the session holds it as pending, and a live turn or a live child owner can still use it. The session SHALL NOT write the entry again for an approval that a later journal event answers, cancels, expires, or closes. A live request SHALL write its entry with `recovered=False`.
+Journal replay SHALL NOT write a `Tool approval requested` log entry. When recovery completes, the session SHALL write one `Tool approval requested` entry with `recovered=True` for each approval that is still open. An approval is open when the session holds it as pending, and a live turn or a live child owner can still use it. The session SHALL NOT write the entry for an approval that a later journal record answers, cancels, expires, or closes. A live request SHALL write its entry with `recovered=False`.
 
 The `LlmSessionActor` owns this decision. The approval table is actor-local state, and replay rebuilds it. The journal is the durable record.
 
@@ -27,75 +27,64 @@ A line with `recovered=True` does not mean that the session sent the prompt agai
 - **WHEN** the session recovers
 - **THEN** the session writes no `Tool approval requested` entry
 
+### Requirement: A cancel record or a terminal record closes the child approvals of its run
+
+A `CancellationRequested` record or a `TerminalRecorded` record of a child run SHALL close every approval entry of that run, pending or resolved. The session SHALL apply this one rule when it persists the record and when journal replay reads the record. A terminal record that recovery wrote for a lost run (`Lost: true`) is a terminal record. A checkpoint record and a prepared-result record SHALL NOT close an entry. A record for a run with no entry SHALL NOT cause an error.
+
+The `LlmSessionActor` owns the decision. The approval table in `SessionToolWorkflow` is actor-local. The child run records are the durable input. This rule adds no persisted type, because the records already exist.
+
+#### Scenario: Replay of a cancel record
+
+- **GIVEN** a journal holds a child approval request and then the cancel record of its run
+- **WHEN** the session recovers
+- **THEN** the session writes no `Tool approval requested` entry for that call
+- **AND** an entry of another run, or of a parent call, is not closed by this record
+
+#### Scenario: Replay of a terminal record, also a lost one
+
+- **GIVEN** a journal holds a child approval request and then a terminal record of its run, cancelled or lost
+- **WHEN** the session recovers
+- **THEN** the session writes no `Tool approval requested` entry for that call
+
+#### Scenario: A negative example
+
+- **GIVEN** a live child run has an open approval and records a checkpoint
+- **WHEN** the session applies the checkpoint
+- **THEN** the approval entry stays open
+
 ### Requirement: Recovery closes child approvals before a stashed command runs
 
-A child owner never survives a restart. In `RecoveryCompleted`, before the session runs a stashed command, the session SHALL close every child approval that replay rebuilt. A response to a closed child approval SHALL get the `prompt_expired` or `already_answered` nack. It SHALL run no tool.
+A child owner never survives a restart. In `RecoveryCompleted`, before the session runs a stashed command, the session SHALL close every child approval that remains after replay. A response to a closed child approval SHALL find no entry. It SHALL get the `prompt_expired` nack, and it SHALL run no tool. The approval channel SHALL NOT be the first gate for such a response.
+
+Recovery then records each run that was live at the restart as lost. That terminal record closes the entries at the next replay.
 
 #### Scenario: A late answer reaches a recovering session
 
 - **GIVEN** a journal holds a child approval whose child run was live at the restart
 - **AND** an approval answer for that call wakes the session and waits in the stash
 - **WHEN** recovery completes
-- **THEN** the session answers the response with a nack
+- **THEN** the session finds no entry for the call and answers with the `prompt_expired` nack
 - **AND** no tool runs
 
-### Requirement: A durable event closes child approvals
+#### Scenario: A late answer to a parent call that was answered
 
-When the session closes one or more child approvals of a run, it SHALL persist one `ChildApprovalsClosed` event for that run before it relies on the close. The event names the session, the run, a reason, and the close time. The reason is one of `RunCancelled`, `RunTerminal`, or `OwnerLost`. The session SHALL persist the event when a cancel request closes approvals, when a terminal result closes approvals, and when recovery closes the approvals of a lost owner. The session SHALL NOT persist the event for a run that has no open approval entry. Replay of the event SHALL close the entries of that run without a log entry, and an entry that is already closed SHALL NOT cause an error.
-
-The `LlmSessionActor` owns the close decision. The `SessionToolWorkflow` approval table is actor-local. The event is durable. It is a framework-owned type with its own serializer manifest, `cac-v1`.
-
-#### Scenario: Recovery of a stranded child approval
-
-- **GIVEN** a journal holds an accepted child run and its approval request
-- **AND** the journal holds no terminal event and no close event
-- **WHEN** the session recovers
-- **THEN** the session persists one `ChildApprovalsClosed` event with the reason `OwnerLost` for the run
-- **AND** the session saves a snapshot after recovery
-
-#### Scenario: A cancel closes the approval once
-
-- **GIVEN** a live child run with an open approval
-- **WHEN** the parent cancels the child run
-- **THEN** the journal gets exactly one `ChildApprovalsClosed` event with the reason `RunCancelled`
-- **AND** the later terminal event of the run adds no second close event
-
-#### Scenario: Replay applies a close event
-
-- **GIVEN** a journal holds a child approval request and then a `ChildApprovalsClosed` event for its run
-- **WHEN** replay reaches the close event
-- **THEN** the approval table holds no entry for that run
-- **AND** an entry of another run, or of a parent call, stays
-
-#### Scenario: A negative example
-
-- **GIVEN** a run has no entry in the approval table
-- **WHEN** the session cancels the run
-- **THEN** the session persists no `ChildApprovalsClosed` event
+- **GIVEN** a journal holds a parent call that the person answered
+- **WHEN** a second answer for that call arrives after recovery
+- **THEN** the session answers with a nack
+- **AND** no tool runs
 
 ### Requirement: A closed child approval does not block a snapshot
 
-A snapshot SHALL be allowed when the approval table holds no entry and no parked tool batch is open. A child approval that the session closed, durably or at recovery, SHALL NOT keep the table non-empty.
+A snapshot SHALL be allowed when the approval table holds no entry and no parked tool batch is open. A child approval that the session closed SHALL NOT keep the table non-empty. An open parent approval SHALL block the snapshot.
 
-#### Scenario: The session snapshots after a stranded approval closes
+#### Scenario: An old journal recovers and the session snapshots again
 
-- **GIVEN** recovery closed the only child approval
-- **WHEN** the session persists its next event
-- **THEN** the session saves a snapshot
+- **GIVEN** an old journal with an answered call, a cancelled child run, and a lost child run, and no open parent call
+- **WHEN** the session recovers
+- **THEN** the session saves a snapshot that covers the whole journal
 
 #### Scenario: An open approval blocks a snapshot
 
 - **GIVEN** a parent approval is still open
 - **WHEN** the session persists an event
 - **THEN** the session saves no snapshot and logs that an approval batch is unresolved
-
-### Requirement: An old journal without close events still recovers
-
-A journal that was written before `ChildApprovalsClosed` existed SHALL recover. The recovery step in `RecoveryCompleted` SHALL close the child approvals that replay rebuilt, and it SHALL persist the close events for them. The session SHALL NOT fail, and it SHALL NOT keep a stale child entry.
-
-#### Scenario: Old journal of a cancelled and a lost child
-
-- **GIVEN** a journal with a cancelled child run and a lost child run, each with an approval request and no close event
-- **WHEN** the session recovers
-- **THEN** the approval table holds no child entry
-- **AND** the session writes no `Tool approval requested` entry for either call

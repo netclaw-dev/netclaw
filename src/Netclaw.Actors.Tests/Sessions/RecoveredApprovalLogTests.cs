@@ -18,10 +18,11 @@ namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
 /// Issue 2525: recovery must not log "Tool approval requested" again for an approval that is answered, cancelled, or
-/// lost. It logs one line for each approval that stays open, and it closes child approvals durably.
-/// The journal holds four approval requests: an answered parent call, a parent call that is still open, a call of a
-/// child run that the parent cancelled, and a call of a child run that was live at the restart (lost).
-/// The journal has no <see cref="ChildApprovalsClosed"/> event for them. That is the shape of an old journal.
+/// lost. It logs one line for each approval that stays open. A cancel record or a terminal record closes the child
+/// approvals of its run, in live code and in journal replay. A child owner never survives a restart, so recovery closes
+/// the child approvals that remain before a stashed command runs. No new journal event is involved.
+/// The journal of the main scenario holds four approval requests: an answered parent call, a parent call that is
+/// still open, a call of a child run that the parent cancelled, and a call of a child run that was live at the restart.
 /// </summary>
 public sealed class RecoveredApprovalLogTests : ApprovalWaitTestBase
 {
@@ -111,84 +112,95 @@ public sealed class RecoveredApprovalLogTests : ApprovalWaitTestBase
         Assert.Equal(0, ToolExecutor.SuccessfulExecutions);
     }
 
-    [Fact]
-    public async Task Recovery_persists_a_close_event_for_a_stranded_child_approval_and_the_session_snapshots()
+    // The rule: replay of a cancel record, a terminal record, or a lost record closes the child approvals of its run,
+    // and recovery closes the child approvals of a run that was live at the restart. Replay logs none of them.
+    [Theory]
+    [InlineData("cancel-record")]
+    [InlineData("terminal-record")]
+    [InlineData("lost-record")]
+    [InlineData("owner-lost")]
+    public async Task Replay_of_a_closed_child_approval_logs_nothing(string scenario)
     {
-        // A live child run with an open approval, and a journal with no terminal event for it.
-        var sessionId = new SessionId("test-channel/stranded-child-approval");
+        var sessionId = new SessionId("test-channel/closed-child-" + scenario);
         var (request, context) = await ParentRequestAsync(sessionId);
-        var run = ChildRun("run-stranded", context);
-        await SeedJournalAsync(sessionId,
-            new ChildRunAccepted { SessionId = sessionId, Run = run, RecordedAtMs = 1 },
-            ChildApproval(request, run.RunId));
-
-        await JoinNewSubscriberAsync(sessionId);
-
-        await AwaitAssertAsync(async () =>
+        var run = ChildRun("run-" + scenario, context);
+        var journal = new List<ISessionEvent>
         {
-            var events = await ReadJournalAsync(sessionId);
-            var closed = Assert.Single(events.Select(entry => entry.Payload).OfType<ChildApprovalsClosed>());
-            Assert.Equal(run.RunId, closed.RunId);
-            Assert.Equal(sessionId, closed.SessionId);
-            Assert.Equal(ChildApprovalCloseReason.OwnerLost, closed.Reason);
-            var closeSequence = events.Single(entry => entry.Payload is ChildApprovalsClosed).SequenceNr;
-
-            // The closed approval no longer blocks a snapshot, so a snapshot covers the close event.
-            Assert.True(await LatestSnapshotSequenceNrAsync(sessionId) >= closeSequence,
-                "A snapshot must cover the close event.");
-        }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
-    }
-
-    [Fact]
-    public async Task An_old_journal_without_close_events_recovers_and_closes_each_child_run_once()
-    {
-        var sessionId = new SessionId("test-channel/old-journal-close");
-        await SeedFourCallsAsync(sessionId);
-
-        await JoinNewSubscriberAsync(sessionId);
-
-        await AwaitAssertAsync(async () =>
-        {
-            var closed = (await ReadJournalAsync(sessionId)).Select(entry => entry.Payload)
-                .OfType<ChildApprovalsClosed>().ToArray();
-            Assert.Equal(["run-cancelled", "run-lost"], closed.Select(item => item.RunId.Value).Order().ToArray());
-            Assert.All(closed, item => Assert.Equal(ChildApprovalCloseReason.OwnerLost, item.Reason));
-        }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
-    }
-
-    [Fact]
-    public async Task Replay_of_a_close_event_logs_nothing_and_writes_no_second_close_event()
-    {
-        var sessionId = new SessionId("test-channel/close-event-replay");
-        var (request, context) = await ParentRequestAsync(sessionId);
-        var run = ChildRun("run-closed-before", context);
-        await SeedJournalAsync(sessionId,
             new ChildRunAccepted { SessionId = sessionId, Run = run, RecordedAtMs = 1 },
-            ChildApproval(request, run.RunId),
-            new ChildApprovalsClosed
-            {
-                SessionId = sessionId,
-                RunId = run.RunId,
-                Reason = ChildApprovalCloseReason.OwnerLost,
-                ClosedAtMs = 3
-            });
+            ChildApproval(request, run.RunId)
+        };
+        switch (scenario)
+        {
+            case "cancel-record":
+                journal.Add(new ChildRunEvent.CancellationRequested
+                { SessionId = sessionId, RunId = run.RunId, RecordedAtMs = 3 });
+                break;
+            case "terminal-record":
+                journal.Add(Terminal(sessionId, run, lost: false,
+                    new ChildRunCompletion.Cancelled(SubAgentOutcomeReason.CancelledByParent)));
+                break;
+            case "lost-record":
+                journal.Add(Terminal(sessionId, run, lost: true,
+                    new ChildRunCompletion.Failed(SubAgentOutcomeReason.ActorStopped)));
+                break;
+        }
+
+        await SeedJournalAsync(sessionId, journal.ToArray());
 
         await EventFilter.Info(contains: "Tool approval requested").ExpectAsync(0, async () =>
         {
             await JoinNewSubscriberAsync(sessionId);
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+    }
 
-        // Recovery records the run as lost. When that terminal event is in the journal, recovery has finished
-        // its work for the run, and the session must not have written a second close event.
+    // The stashed answer runs right after RecoveryCompleted, before the RecoverChildRuns self message. The child entry
+    // must already be closed then. Before the fix, the entry is still open, the answer passes validation, and only
+    // the per-incarnation approval channel stops it ("no_live_wait"). That is a second gate and not the first.
+    [Theory]
+    [InlineData(CancelledChildCall)]
+    [InlineData(LostChildCall)]
+    public async Task A_late_answer_to_a_closed_child_call_finds_no_entry(string callId)
+    {
+        var sessionId = new SessionId("test-channel/late-child-answer-" + callId.Replace('/', '-'));
+        await SeedFourCallsAsync(sessionId);
+
+        await EventFilter.Warning(contains: $"Ignoring tool interaction response for call {callId}: unknown")
+            .ExpectAsync(1, async () =>
+            {
+                var subscriber = CreateTestProbe("late-child-answer-subscriber");
+                SessionManager.Tell(new JoinSession(subscriber) { SessionId = sessionId, Filter = OutputFilter.Full });
+                var reply = await SessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
+                {
+                    SessionId = sessionId,
+                    CallId = new ToolCallId(callId),
+                    SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+                    SenderId = new SenderId(Requester)
+                }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+                Assert.Equal(ApprovalNackReasons.PromptExpired, Assert.IsType<CommandNack>(reply).Reason);
+            }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, ToolExecutor.SuccessfulExecutions);
+    }
+
+    // Regression guard (passes before the fix): an old journal with answered, cancelled, and lost calls and no open
+    // parent call recovers, and the closed child entries do not block the snapshot.
+    [Fact]
+    public async Task An_old_journal_recovers_and_the_session_snapshots_again()
+    {
+        var sessionId = new SessionId("test-channel/old-journal-snapshot");
+        await SeedFourCallsAsync(sessionId, includeOpenParentCall: false);
+
+        await JoinNewSubscriberAsync(sessionId);
+
         await AwaitAssertAsync(async () =>
         {
-            var events = (await ReadJournalAsync(sessionId)).Select(entry => entry.Payload).ToArray();
-            Assert.Contains(events.OfType<ChildRunEvent.TerminalRecorded>(), item => item.RunId == run.RunId);
-            Assert.Single(events.OfType<ChildApprovalsClosed>());
+            var last = (await ReadJournalAsync(sessionId)).Max(entry => entry.SequenceNr);
+            Assert.True(await LatestSnapshotSequenceNrAsync(sessionId) >= last,
+                "A snapshot must cover the whole journal after recovery.");
         }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
     }
 
-    private async Task SeedFourCallsAsync(SessionId sessionId)
+    private async Task SeedFourCallsAsync(SessionId sessionId, bool includeOpenParentCall = true)
     {
         var (pending, context) = await ParentRequestAsync(sessionId);
         var answered = pending with { CallId = AnsweredCall, AuthorizationAttemptId = "auth-answered" };
@@ -199,22 +211,12 @@ public sealed class RecoveredApprovalLogTests : ApprovalWaitTestBase
             Resolved(answered),
             new ChildRunAccepted { SessionId = sessionId, Run = cancelledRun, RecordedAtMs = 3 },
             ChildApproval(pending, cancelledRun.RunId),
-            new ChildRunEvent.TerminalRecorded(new ChildRunTerminal(new SubAgentProtocol.SubAgentResult
-            {
-                AgentName = cancelledRun.AgentName,
-                RunId = cancelledRun.RunId,
-                ScopeId = cancelledRun.ScopeId,
-                Output = "Cancelled by parent.",
-                Completion = new ChildRunCompletion.Cancelled(SubAgentOutcomeReason.CancelledByParent)
-            }, Lost: false, EvidenceWarning: null))
-            {
-                SessionId = sessionId,
-                RunId = cancelledRun.RunId,
-                RecordedAtMs = 5
-            },
+            Terminal(sessionId, cancelledRun, lost: false,
+                new ChildRunCompletion.Cancelled(SubAgentOutcomeReason.CancelledByParent)),
             new ChildRunAccepted { SessionId = sessionId, Run = lostRun, RecordedAtMs = 6 },
-            ChildApproval(pending, lostRun.RunId),
-            pending);
+            ChildApproval(pending, lostRun.RunId));
+        if (includeOpenParentCall)
+            await SeedJournalAsync(sessionId, pending);
     }
 
     // Copies a real parent approval request, so the seeded events carry a valid turn authority.
@@ -229,6 +231,22 @@ public sealed class RecoveredApprovalLogTests : ApprovalWaitTestBase
         var context = request.TurnContext! with { SessionId = sessionId };
         return (request with { SessionId = sessionId, TurnContext = context }, context);
     }
+
+    private static ChildRunEvent.TerminalRecorded Terminal(
+        SessionId sessionId, BackgroundChildRun run, bool lost, ChildRunCompletion completion)
+        => new(new ChildRunTerminal(new SubAgentProtocol.SubAgentResult
+        {
+            AgentName = run.AgentName,
+            RunId = run.RunId,
+            ScopeId = run.ScopeId,
+            Output = "Closed.",
+            Completion = completion
+        }, lost, EvidenceWarning: null))
+        {
+            SessionId = sessionId,
+            RunId = run.RunId,
+            RecordedAtMs = 5
+        };
 
     private static ToolApprovalResolved Resolved(ToolApprovalRequested request)
         => new()
