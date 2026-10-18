@@ -6,7 +6,7 @@
     <AkkaHostingVersion>1.5.73</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.70</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>1.5.73.3</AkkaRemindersVersion>
-    <OpenTelemetryVersion>1.19.1</OpenTelemetryVersion>
+    <OpenTelemetryVersion>1.20.0</OpenTelemetryVersion>
     <SlackNetVersion>0.18.0</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
     <MattermostNetVersion>5.0.12</MattermostNetVersion>
