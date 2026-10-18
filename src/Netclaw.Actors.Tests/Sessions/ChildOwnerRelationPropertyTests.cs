@@ -114,6 +114,43 @@ public sealed class ChildOwnerRelationPropertyTests(ITestOutputHelper output)
             "The owner asked for status in a later turn that adopted thread context, and the check denied the owner.");
     }
 
+    // #2524. The actor test for a reminder turn in another session never reaches the session compare, because
+    // session B does not hold the run of session A. This case calls the production check that ControlChild uses,
+    // so the session compare is what denies the pair. A reminder turn ignores the sender and the principal, but it
+    // does not ignore the session.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_reminder_record_and_a_person_record_of_different_sessions_do_not_match(bool reminderIsOwner)
+    {
+        var reminder = ReminderRecord("session-a");
+        var person = BuildRecord(
+            new Identity("session-b", TrustAudience.Personal, ChannelType.Tui, "local", PrincipalClassification.Operator),
+            new TurnVariation("turn-1", false, false, []));
+        var sameSessionPerson = BuildRecord(
+            new Identity("session-a", TrustAudience.Personal, ChannelType.Tui, "local", PrincipalClassification.Operator),
+            new TurnVariation("turn-1", false, false, []));
+
+        Assert.False(reminderIsOwner ? ControlChildOwnerCheck(reminder, person) : ControlChildOwnerCheck(person, reminder));
+        // The control: the same pair in one session matches, so the session is the only fact that denies the pair.
+        Assert.True(reminderIsOwner
+            ? ControlChildOwnerCheck(reminder, sameSessionPerson)
+            : ControlChildOwnerCheck(sameSessionPerson, reminder));
+    }
+
+    private static TurnContextRecord ReminderRecord(string session) => new TurnContext
+    {
+        SessionId = new SessionId(session),
+        TurnId = new TurnId("reminder:1"),
+        Audience = TrustAudience.Personal,
+        Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
+        ChannelType = ChannelType.Tui,
+        RequesterSenderId = new SenderId("reminder-system"),
+        RequesterPrincipal = PrincipalClassification.VerifiedAutomation,
+        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+        { SourceKind = new SourceKind("reminder") }
+    }.ToRecord();
+
     private static Gen<Identity> GenerateIdentity { get; } = Gen.Select(
         Gen.OneOfConst("session-a", "session-b"),
         Gen.OneOfConst(Enum.GetValues<TrustAudience>()),

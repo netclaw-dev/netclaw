@@ -44,16 +44,19 @@ CanControlChildRunOf(requester, owner):
 
 X is a reminder turn:
     X.principal == VerifiedAutomation and X.sourceKind == "reminder"
+                and X.transportAuthenticity == LocalProcess
 ```
 
 The pseudocode is schematic. It omits the legacy-run branch of `ControlChild`. That branch uses the same comparison.
 
-The relaxation applies when one side is a reminder turn. The requester is the turn that asks. The owner is the recorded `OriginalContext` of the run. Thus:
+The relaxation applies when one side is a reminder turn. The other side can be any turn of the session: a person turn, or an automated turn such as the delivery turn of a background job. The rule names the reminder turn, not the person. The requester is the turn that asks. The owner is the recorded `OriginalContext` of the run. Thus:
 
 | Run started by | Requester | Result |
 |----------------|-----------|--------|
 | person (`local`, Operator) | reminder, same session | allowed (new) |
 | reminder | person, same session, same audience, boundary, and channel type | allowed (new, owner answer 18 October) |
+| reminder | background-job delivery turn, same session, same audience, boundary, and channel type | allowed (new; any turn of the session) |
+| background-job delivery turn | reminder, same session, same audience, boundary, and channel type | allowed (new; any turn of the session) |
 | reminder | another person (Bob), same session | allowed (new, accepted shared-channel effect) |
 | reminder | reminder, same session | allowed (the six facts match; unchanged) |
 | person | reminder, other session | denied |
@@ -63,6 +66,8 @@ The relaxation applies when one side is a reminder turn. The requester is the tu
 | person Alice | person Bob, same session | denied (unchanged) |
 | person | `VerifiedAutomation` with another source kind | denied (unchanged) |
 | `VerifiedAutomation` with another source kind | person of another sender | denied (unchanged) |
+| webhook turn with source kind `reminder` (`Verified`) | person, same session | denied (a webhook is not a reminder turn) |
+| person | webhook turn with source kind `reminder` | denied |
 
 Alternatives:
 
@@ -73,11 +78,15 @@ Alternatives:
 
 ### D2. The relaxation is symmetric
 
-The owner answered on 18 October 2026: a person turn of the same session may check and cancel a child run that a reminder turn started. The check therefore tests both sides for a reminder turn. A person turn that is not the sender of the run's starter gets no more than the session, audience, boundary, and channel type check, and only when a reminder turn is on the other side. Alternative: relax the requester side only (the first version of this change). Rejected by the owner.
+The owner answered on 18 October 2026: a person turn of the same session may check and cancel a child run that a reminder turn started. The check therefore tests both sides for a reminder turn. A turn that is not the sender of the run's starter gets no more than the session, audience, boundary, and channel type check, and only when a reminder turn is on the other side. Alternative: relax the requester side only (the first version of this change). Rejected by the owner.
 
 ### D3. Identification of a reminder turn
 
-The check reads two recorded facts of each turn context: the principal classification and the source kind. Both come from the `MessageSource` that `ReminderExecutionActor` builds. A channel binding copies them into the turn context. A person's message cannot set the source kind. The check needs both facts, so a webhook turn (`VerifiedAutomation`, other source kind) gets no relaxation, as the requester or as the owner.
+The check reads three recorded facts of each turn context: the principal classification, the source kind, and the transport authenticity. All three come from the `MessageSource` that `ReminderExecutionActor` builds, and a channel binding copies them into the turn context. A person's message cannot set them.
+
+The source kind alone is not enough. `WebhookExecutionActor` gives a webhook turn the principal `VerifiedAutomation`. It takes the source kind from the event header or the route name, and the authenticated webhook sender controls both. So a webhook turn can carry the source kind `reminder`. The webhook path sets the authenticity `Verified` in code. The reminder path sets `LocalProcess` in code, in both of its delivery paths. The check requires `LocalProcess`, so a webhook turn gets no relaxation, as the requester or as the owner. The sender ID `reminder-system` would also separate the two, because the webhook sender is `webhook:<route>`. The authenticity is the better fact: it is a typed value that code sets, and it does not depend on a string. The background-job delivery turn also has `LocalProcess`. Its source kind `background-job` keeps it apart.
+
+A recorded turn context that lacks the source kind is not a reminder turn. This fails closed.
 
 ### D4. Focused mutation target
 

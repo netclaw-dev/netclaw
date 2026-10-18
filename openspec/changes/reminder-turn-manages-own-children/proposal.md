@@ -9,7 +9,8 @@ The owner decided on 16 October 2026: a person who can start a reminder can also
 ## What Changes
 
 - A reminder turn can check and cancel a child run when the session, audience, boundary, and channel type match the run. The comparison ignores the sender ID and the principal classification when the requester or the turn that started the run is a reminder turn.
-- A person turn can check and cancel a child run that a reminder turn started in the same session, with the same audience, boundary, and channel type. The sender of the person does not matter.
+- Any other turn of the session can check and cancel a child run that a reminder turn started, with the same audience, boundary, and channel type. The turn can be a person turn or an automated turn, such as the delivery turn of a background job. The sender and the principal do not matter.
+- A reminder turn has the principal `VerifiedAutomation`, the source kind `reminder`, and the transport authenticity `LocalProcess`. A webhook turn can carry the source kind `reminder`, but it has the authenticity `Verified`. It is not a reminder turn.
 - Two turns that are not reminder turns keep the six-fact rule. A person turn of another sender in the same session stays denied for a run that a person started.
 - The skills `agent-coordination`, `netclaw-operations`, and `run-reminder` state the rule. The test PR lists the exact sentences. The implementer changes the skill files.
 - The architecture document `docs/architecture/tool-authorization.md` describes the new comparison and its owner.
@@ -22,7 +23,7 @@ None.
 
 ### Modified Capabilities
 
-- `background-subagent-runs`: add the requirement "A reminder turn shares child runs with the people of its own session".
+- `background-subagent-runs`: add the requirement "A reminder turn shares child runs with the other turns of its own session", and modify the requirement "Child execution keeps the parent's authority" so that the two rules agree. The open change `simplify-agent-coordination` also touches that requirement. The change that syncs second must merge the two texts.
 
 ## Impact
 

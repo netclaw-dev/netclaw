@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
@@ -157,19 +158,28 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
     }
 
     /// <summary>
-    /// Issue #2524. A reminder turn and a person turn of one session manage each other's child runs, and two
-    /// person turns keep the six-fact rule. The fire has the source shape of ReminderExecutionActor.InitializeCurrentSessionAsync
-    /// (sender reminder-system, principal VerifiedAutomation, source kind reminder).
+    /// Issue #2524. A reminder turn and any other turn of one session manage each other's child runs, and two
+    /// turns that are not reminder turns keep the six-fact rule. The fire has the source shape of
+    /// ReminderExecutionActor.InitializeCurrentSessionAsync (sender reminder-system, principal VerifiedAutomation,
+    /// source kind reminder).
     /// Source: openspec/changes/reminder-turn-manages-own-children, background-subagent-runs
-    /// "A reminder turn manages the child runs of its own session".
+    /// "A reminder turn shares child runs with the other turns of its own session".
     /// Row 1 is the swap-1 exercise (a person started the run). Rows 3 and 4 follow the owner answer of
-    /// 18 October 2026: a person, also another sender, controls a run that a reminder turn started. Row 2 passes today.
+    /// 18 October 2026: a person, also another sender, controls a run that a reminder turn started.
+    /// Rows 5 and 6: the delivery turn of a background job is not a person, and the rule still holds.
+    /// Rows 7 and 8: a webhook turn can carry the source kind "reminder" because the webhook sender sets it.
+    /// Such a turn is not a reminder turn, so it cannot reach the run of a person, and a person cannot reach its run.
+    /// Rows 7 and 8 need a reminder test that also requires the authenticity LocalProcess.
     /// </summary>
     [Theory]
     [InlineData("person", "reminder", true)]
     [InlineData("reminder", "reminder", true)]
     [InlineData("reminder", "person", true)]
     [InlineData("reminder", "other-person", true)]
+    [InlineData("reminder", "background-job", true)]
+    [InlineData("background-job", "reminder", true)]
+    [InlineData("person", "webhook-reminder", false)]
+    [InlineData("webhook-reminder", "person", false)]
     public async Task Child_control_that_involves_a_reminder_turn_follows_the_rule_in_its_own_session(
         string starter, string controller, bool allowed)
     {
@@ -226,9 +236,12 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
     }
 
     /// <summary>
-    /// A turn in session B cannot reach a child run of session A when one side is a reminder turn. The session
-    /// boundary holds even though a reminder turn ignores the sender and the principal. These tests pass today
-    /// and must keep passing after the fix.
+    /// A turn in session B cannot reach a child run of session A when one side is a reminder turn. These tests pass
+    /// today and must keep passing after the fix.
+    /// Scope: session B does not hold the run, so the lookup in ControlChild fails before the comparison. These
+    /// tests prove that structural isolation. They do not prove the session compare in
+    /// TurnContext.CanControlChildRunOf, because a run id is random and session B cannot hold the run of session A.
+    /// <c>TurnContextChildControlTests</c> and <c>ChildOwnerRelationPropertyTests</c> cover that compare.
     /// </summary>
     [Theory]
     [InlineData("person", "reminder")]
@@ -417,6 +430,8 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
         kind switch
         {
             "reminder" => ReminderOf(fireKey),
+            "background-job" => BackgroundJobOf(),
+            "webhook-reminder" => WebhookReminderOf(),
             "other-person" => Operator("bob"),
             _ => Operator("local")
         };
@@ -429,6 +444,31 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
         Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal,
         Principal = PrincipalClassification.VerifiedAutomation,
         Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+        { SourceKind = new SourceKind("reminder") },
+        ReceivedAt = TimeProvider.System.GetUtcNow()
+    };
+
+    // The source shape of BackgroundJobManagerActor.DeliverResultToSession for a TUI-style origin.
+    private static MessageSource BackgroundJobOf() => new()
+    {
+        ChannelType = ChannelType.SignalR, SenderId = new SenderId("background-job-system"),
+        MessageId = "bg-job:test-1", TurnId = new TurnId("bg-job:test-1"), BackgroundJobId = new BackgroundJobId("bg-job:test-1"),
+        Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal,
+        Principal = PrincipalClassification.VerifiedAutomation,
+        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+        { SourceKind = new SourceKind("background-job") },
+        ReceivedAt = TimeProvider.System.GetUtcNow()
+    };
+
+    // The source shape of WebhookExecutionActor, with the event header "reminder". The webhook sender sets the
+    // source kind. The audience, boundary, and channel match the session, so only the reminder test can deny it.
+    private static MessageSource WebhookReminderOf() => new()
+    {
+        ChannelType = ChannelType.SignalR, SenderId = new SenderId("webhook:github"),
+        MessageId = "github-delivery-1", TurnId = new TurnId("github-delivery-1"),
+        Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal,
+        Principal = PrincipalClassification.VerifiedAutomation,
+        Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
         { SourceKind = new SourceKind("reminder") },
         ReceivedAt = TimeProvider.System.GetUtcNow()
     };

@@ -13,7 +13,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.Tests.Channels;
 
 /// <summary>
-/// Issue #2524. A reminder turn and a person turn of one session manage each other's child runs. The comparison for child status
+/// Issue #2524. A reminder turn and any other turn of one session manage each other's child runs. The comparison for child status
 /// and cancel is <see cref="TurnContext.CanControlChildRunOf"/>. The instance is the requesting turn and the
 /// argument is the turn that started the run. <see cref="TurnContext.HasSameRequester"/> keeps its meaning,
 /// because input batching also uses it (see <see cref="TurnContextRequesterTests"/>).
@@ -129,6 +129,79 @@ public sealed class TurnContextChildControlTests
         Assert.False(bob.CanControlChildRunOf(Person()));
     }
 
+    // The rule names the reminder turn, not a person. Any other turn of the session, such as the delivery turn
+    // of a background job (sender background-job-system, VerifiedAutomation, source kind background-job),
+    // manages a run that a reminder turn started, and the reminder turn manages a run that such a turn started.
+    [Fact]
+    public void A_background_job_turn_controls_a_run_that_a_reminder_turn_started_in_the_same_session()
+    {
+        Assert.True(BackgroundJob().CanControlChildRunOf(Reminder()));
+    }
+
+    [Fact]
+    public void A_reminder_turn_controls_a_run_that_a_background_job_turn_started_in_the_same_session()
+    {
+        Assert.True(Reminder().CanControlChildRunOf(BackgroundJob()));
+    }
+
+    [Theory]
+    [InlineData("session")]
+    [InlineData("audience")]
+    [InlineData("boundary")]
+    [InlineData("channel")]
+    public void A_background_job_turn_that_differs_in_a_kept_fact_does_not_control_a_run_that_a_reminder_turn_started(string field)
+    {
+        var job = field switch
+        {
+            "session" => BackgroundJob() with { SessionId = new SessionId("other-session") },
+            "audience" => BackgroundJob() with { Audience = TrustAudience.Team },
+            "boundary" => BackgroundJob() with { Boundary = TrustBoundary.Public },
+            "channel" => BackgroundJob() with { ChannelType = ChannelType.Slack },
+            _ => throw new ArgumentOutOfRangeException(nameof(field), field, null)
+        };
+
+        Assert.False(job.CanControlChildRunOf(Reminder()));
+    }
+
+    // A background job turn is not a reminder turn, so two such turns keep the six-fact rule.
+    [Fact]
+    public void A_background_job_turn_does_not_control_a_run_that_a_person_started()
+    {
+        Assert.False(BackgroundJob().CanControlChildRunOf(Person()));
+        Assert.False(Person().CanControlChildRunOf(BackgroundJob()));
+    }
+
+    // S1 of the review of PR #2550. A webhook sender sets the source kind through the event header or the route
+    // name, and WebhookExecutionActor gives the turn VerifiedAutomation. The source kind alone must not make a
+    // reminder turn. The webhook turn has the sender "webhook:<route>" and the authenticity Verified. The
+    // reminder fire has the sender "reminder-system" and the authenticity LocalProcess, and no webhook sets them.
+    [Theory]
+    [InlineData("webhook:github")]
+    [InlineData("webhook:reminder")]
+    public void A_webhook_turn_with_the_reminder_source_kind_is_not_a_reminder_turn(string sender)
+    {
+        var webhook = Webhook(sender);
+        var bob = Person() with { RequesterSenderId = new SenderId("bob") };
+
+        // As the requester: it cannot manage the run of a person.
+        Assert.False(webhook.CanControlChildRunOf(Person()));
+        Assert.False(webhook.CanControlChildRunOf(bob));
+        // As the run starter: a person of another sender cannot manage its run.
+        Assert.False(bob.CanControlChildRunOf(webhook));
+        Assert.False(Person().CanControlChildRunOf(webhook));
+        // It cannot manage the run of another automation turn either.
+        Assert.False(webhook.CanControlChildRunOf(BackgroundJob()));
+    }
+
+    [Fact]
+    public void A_webhook_turn_with_the_reminder_source_kind_keeps_the_six_fact_rule_with_itself()
+    {
+        var webhook = Webhook("webhook:github");
+
+        Assert.True((webhook with { TurnId = new TurnId("delivery-2") }).CanControlChildRunOf(webhook));
+        Assert.False(Webhook("webhook:other").CanControlChildRunOf(webhook));
+    }
+
     // Both facts make a reminder turn. One of them alone gets the six-fact rule.
     [Fact]
     public void Automation_with_another_source_kind_is_not_a_reminder_turn()
@@ -190,6 +263,26 @@ public sealed class TurnContextChildControlTests
         RequesterSenderId = new SenderId("reminder-system"),
         RequesterPrincipal = PrincipalClassification.VerifiedAutomation,
         Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+        { SourceKind = new SourceKind("reminder") }
+    };
+
+    // The source shape of BackgroundJobManagerActor.DeliverResultToSession.
+    private static TurnContext BackgroundJob() => Person() with
+    {
+        TurnId = new TurnId("background-job:1"),
+        RequesterSenderId = new SenderId("background-job-system"),
+        RequesterPrincipal = PrincipalClassification.VerifiedAutomation,
+        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+        { SourceKind = new SourceKind("background-job") }
+    };
+
+    // The source shape of WebhookExecutionActor: the sender and the source kind come from the webhook request.
+    private static TurnContext Webhook(string sender) => Person() with
+    {
+        TurnId = new TurnId("delivery-1"),
+        RequesterSenderId = new SenderId(sender),
+        RequesterPrincipal = PrincipalClassification.VerifiedAutomation,
+        Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
         { SourceKind = new SourceKind("reminder") }
     };
 }
