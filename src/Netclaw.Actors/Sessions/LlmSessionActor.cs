@@ -1521,6 +1521,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             TurnNumber = new TurnNumber(_state.TurnCount),
             Outcome = TurnOutcome.Completed,
             SourceReminderId = _input.Authority.Source?.ReminderId,
+            // A channel posts nothing for this turn, not even its empty-turn fallback: that text is Netclaw text.
+            QuietEnd = true,
             OpenChildRunIds = _state.GetOpenChildRunIds()
         });
 
@@ -1760,6 +1762,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // A replay resumes the same turn. New input starts a fresh guard
             // window only after the prior batch or response completes.
             _turnState.ResetForNewTurn();
+            // The input clears the refusals, so the model can run a refused call again. It starts a new refused
+            // repeat count only for a new turn or for a person. Automation that joins an automation turn keeps
+            // the count: its requester is a fixed system sender, so the fire rate would otherwise set the bound.
+            if (!batch.JoinsAutomationTurn)
+                _turnState.ResetRefusedRepeatCount();
             _modelContext.ResetForNewTurn();
         }
 
@@ -1774,6 +1781,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void PrepareFreshTurnState()
     {
         _turnState.ResetForNewTurn();
+        // A new turn counts from zero, whoever starts it. A mid-loop child result and a wake for a child result
+        // clear the evidence only (they call ResetForNewTurn): they bring no new person input.
+        _turnState.ResetRefusedRepeatCount();
         _discoveredToolCache.PrepareForNewTurn(
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount,

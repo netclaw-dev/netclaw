@@ -23,6 +23,7 @@ An unresolved legacy run reports quarantine. It cannot execute or deliver anothe
 The terminal result includes authorized log and artifact paths when available.
 Use normal file tools for these exact paths. Do not derive paths or search other session trees.
 A log does not prove current health or terminal completion.
+A `child_run_result` with the outcome `partial` and the reason `tool_cycle_stopped` means that the child stopped before it finished. Its output can be an earlier, incomplete text. Do not treat it as a complete answer.
 If evidence preparation fails, the result retains a warning and does not adopt the raw context delta.
 There is no private child-message, peer-message, or live task revision tool.
 For a revised assignment, request cancellation and then submit the revised task when safe.

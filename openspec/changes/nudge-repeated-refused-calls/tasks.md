@@ -35,9 +35,9 @@
 
 - [x] 5.1 Add tests: the `QuietEnd` wire round trip and the old-daemon default, the three channel binding contract tests (quiet end posts no fallback, an empty turn after it still posts it), the count that a child result in the middle of the loop and a joining automation input do not reset, the count that a fresh turn resets, and the "No call in that response runs." sentence in both escalated nudges. Verify that they fail on 80dbf13c4.
 - [x] 5.2 Update the spec delta, `design.md` (decisions 8 and 9, the history end), `proposal.md`, and `docs/runbooks/subagents.md`.
-- [ ] 5.3 Add `TurnCompleted.QuietEnd`, set it in `FinishTurnWithoutReply`, map it in `SessionOutputDto`, and skip the fallback in `ChannelOutputEngine`. Verify with the wire, contract, and session tests.
-- [ ] 5.4 Add `TurnStateTracker.ResetRefusedRepeatCount` and call it only for a new turn and for person input that joins a turn. Verify with the tracker and session tests.
-- [ ] 5.5 Add the sentence "No call in that response runs." to both escalated nudges.
-- [ ] 5.6 Add the `tool_cycle_stopped` guidance for a parent to `netclaw-operations` `references/child-runs.md`.
-- [ ] 5.7 Add the `CountRefusedRepeat` Stryker span to the `tool-batch-readiness` gate. Verify that it kills every mutant.
-- [ ] 5.8 Run the gates again.
+- [x] 5.3 Add `TurnCompleted.QuietEnd`, set it in `FinishTurnWithoutReply`, map it in `SessionOutputDto`, and skip the fallback in `ChannelOutputEngine`. Verify with the wire, contract, and session tests.
+- [x] 5.4 Add `TurnStateTracker.ResetRefusedRepeatCount` and call it only for a new turn and for person input that joins a turn. Verify with the tracker and session tests.
+- [x] 5.5 Add the sentence "No call in that response runs." to both escalated nudges.
+- [x] 5.6 Add the `tool_cycle_stopped` guidance for a parent to `netclaw-operations` `references/child-runs.md`.
+- [x] 5.7 Add the `CountRefusedRepeat` Stryker span to the `tool-batch-readiness` gate. Verify that it kills every mutant.
+- [x] 5.8 Run the gates again.

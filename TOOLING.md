@@ -110,7 +110,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `SessionInputFlow.DrainBufferedBatch` (turn owner choice), `SessionInputFlow.JoinsTurn`, and the automation check of `SessionToolWorkflow.PlanNewInputAbandonment` | A turn has one requester: a drain after a turn adopts the authority of the first buffered input, a drain inside a turn keeps the turn's authority, and only inputs of that requester join the batch; automated input waits behind an open approval, and only input from a person closes it | 10 killed | `./scripts/run-input-one-authority-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
 | `LoopbackHostOriginPolicy` (the Host and Origin rule and `IsEmptyOrPortSuffix`), `LoopbackHostName.IsStrictLoopback`, and the refusal call in `LoopbackAuthenticationHandler.HandleAuthenticateAsync` | Loopback operator trust needs a loopback Host name, and an `Origin` header must equal `http://` plus the Host: a foreign page cannot reach the daemon by DNS rebinding or a cross-site request | 41 killed | `./scripts/run-loopback-host-origin-mutations.sh` |
-| `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, and `SessionInputFlow.DrainBufferedBatch` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn | 8 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
+| `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, `SessionInputFlow.DrainBufferedBatch`, and `TurnStateTracker.CountRefusedRepeat` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn; refused repeats 1 to 4 get the nudge, repeat 5 gets the escalated nudge, repeat 6 ends the turn, and a new call does not count | 19 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
 | `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run and a turn with one of two open runs each get the right decision (SPEC-004, "Waiting for child runs"). The gate does not cover the missing-field case: `SessionOutputDtoMapper.FromDto` maps a missing field to an empty list, outside the mutated span, and ordinary tests cover it | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
 | `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that is not `Closed`, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
 | `TurnContext.HasSameRequester` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it | 11 killed | `./scripts/run-child-owner-mutations.sh` |
@@ -332,9 +332,12 @@ The linked `SessionExecutionLifetimeStopPolicyTests` source kills this mutant wh
 The script also selects the replay check in `SessionInputFlow.DrainBufferedBatch`.
 Stryker changes `!item.IsReplay` to `item.IsReplay`.
 The linked `SessionInputFlowTests` source kills this mutant when fresh buffered input must start a new turn.
+The script also selects the whole `TurnStateTracker.CountRefusedRepeat` method.
+Stryker changes the increment, the cap, the two thresholds, and the repeat test.
+The `RefusedRepeatCountMutationTests` source kills all 11 mutants when the count moves the escalation or the end by one response.
 The linked `ProcessingWatchdogTests` source supplies the existing timer fake without an actor test host.
 The selectors reject missing or repeated source markers before Stryker starts.
-The gate requires one killed mutant in each of six single-expression spans and two killed history mutants.
+The gate requires one killed mutant in each of six single-expression spans, two killed history mutants, and eleven killed refused repeat count mutants.
 It fails for no mutant, a survivor, or a compile error in a selected span.
 
 The combined local calibration took 1 minute 56 seconds with a warm build cache.
@@ -346,7 +349,8 @@ The seven-mutant local run took 1 minute 48 seconds with a warm build cache.
 The eight-mutant combined local run took 2 minutes 6 seconds with a warm build cache.
 Hosted run `38448179312` took 15 to 21 minutes for the four existing matrix groups.
 Its Windows test took 16 minutes 6 seconds. A target in any of those four groups would extend that critical path.
-All seven source spans produce eight expected mutants in one Stryker invocation in the `session-reliability` group.
+All eight source spans produce 19 expected mutants in one Stryker invocation in the `session-reliability` group.
+The local run with the refused repeat span took 2 minutes 21 seconds with a warm build cache. The earlier run without it took 2 minutes 13 seconds.
 Hosted CI must measure the combined gate on a cold runner.
 Its report directory is `artifacts/stryker/tool-batch-readiness`.
 

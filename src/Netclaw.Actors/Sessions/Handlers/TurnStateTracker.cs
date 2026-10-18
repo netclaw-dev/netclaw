@@ -60,8 +60,10 @@ internal sealed class TurnStateTracker
     private readonly List<CompletedToolCycleIteration> _completedToolCycles = [];
     private ToolActionSignature? _lastBlockedAction;
     private readonly Dictionary<ToolRecurrenceKey, ToolRecurrenceEpisode> _episodes = [];
-    // One model response that repeats a refused call adds one. Only new user input resets it, the same as
-    // the refusals that it counts. A different completed action does not reset it.
+    // One model response that repeats a refused call adds one. Only a new turn and new person input reset it
+    // (ResetRefusedRepeatCount). ResetForNewTurn clears the refusals but not the count: a child result in the
+    // middle of a turn and an automation input that joins an automation turn call it, and neither may extend
+    // the loop. A different completed action does not reset the count.
     private int _refusedRepeatCount;
 
     public int ToolCallCount { get; private set; }
@@ -82,8 +84,13 @@ internal sealed class TurnStateTracker
         _completedToolCycles.Clear();
         _lastBlockedAction = null;
         _episodes.Clear();
-        _refusedRepeatCount = 0;
     }
+
+    /// <summary>
+    /// Start a new refused repeat count. The turn owner calls it for a new turn and for person input that joins
+    /// a running turn. See <see cref="EscalatedRefusedRepeat"/>.
+    /// </summary>
+    public void ResetRefusedRepeatCount() => _refusedRepeatCount = 0;
 
     /// <summary>
     /// Partial reset for mid-turn buffer drain: clears tool counters
@@ -458,7 +465,7 @@ internal static class ToolCycleMessages
             + $"You repeated refused calls {TurnStateTracker.EscalatedRefusedRepeat} times in this turn. "
             + "Stop trying this action. End your turn now. "
             + "Tell the person what blocked you, and name the action that did not finish. "
-            + "If you send a refused call again, Netclaw ends the turn.";
+            + "If you send a refused call again, Netclaw ends the turn. No call in that response runs.";
 
     // Model-facing, for a child run. Refused repeat 5 of the run. Another refused repeat ends the run with
     // the last text of the child.
@@ -467,7 +474,7 @@ internal static class ToolCycleMessages
             + $"You repeated refused calls {TurnStateTracker.EscalatedRefusedRepeat} times in this run. "
             + "Stop trying this action. Stop now and give your result to the parent. "
             + "Name the action that did not finish. "
-            + "If you send a refused call again, Netclaw ends this run with your last text.";
+            + "If you send a refused call again, Netclaw ends this run with your last text. No call in that response runs.";
 
     /// <summary>
     /// The nudge for the refused repeat of <paramref name="decision"/>, or null when the batch needs none. It

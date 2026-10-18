@@ -29,10 +29,13 @@ internal abstract record AdmissionDecision
 
 // AdoptsAuthority: the batch starts a turn for its own requester. The flow then holds the authority of the first
 // input in the batch, and the actor must derive trust for it before the next model call.
+// JoinsAutomationTurn: the batch joins a running turn whose requester is automation (a reminder, a background
+// job, a webhook). Every later input of that kind has the same fixed system sender, so it joins the same way.
 internal sealed record BufferedInputBatch(
     IReadOnlyList<SendUserMessage> Messages,
     bool StartsNewTurn,
-    bool AdoptsAuthority);
+    bool AdoptsAuthority,
+    bool JoinsAutomationTurn);
 
 internal readonly record struct SelectedInputFacts(
     IReadOnlyList<InputId> Ids,
@@ -403,7 +406,9 @@ internal sealed class SessionInputFlow
 
         if (adoptsAuthority)
             AdoptAuthority(messages[0], BufferedAuthority(messages[0]));
-        return new BufferedInputBatch(messages, startsNewTurn, adoptsAuthority);
+        var joinsAutomationTurn = !adoptsAuthority
+            && owner is { } running && SessionToolWorkflow.IsAutomation(running.RequesterPrincipal);
+        return new BufferedInputBatch(messages, startsNewTurn, adoptsAuthority, joinsAutomationTurn);
     }
 
     private static bool JoinsTurn((SendUserMessage Message, bool IsReplay) input, TurnContext? owner)
