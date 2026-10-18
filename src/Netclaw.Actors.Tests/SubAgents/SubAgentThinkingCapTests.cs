@@ -206,7 +206,6 @@ public sealed class SubAgentThinkingCapTests : TestKit
     private async Task StartRunAsync()
     {
         _results = CreateTestProbe();
-        _results = CreateTestProbe();
         _agent = Sys.ActorOf(SubAgentActor.CreateProps(
             new SubAgentDefinition
             {
