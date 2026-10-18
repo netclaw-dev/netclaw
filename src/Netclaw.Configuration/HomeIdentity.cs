@@ -76,6 +76,14 @@ public static class HomeIdentity
     private static string[] Parts(string path)
         => path.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
 
+    /// <summary>
+    /// Whether a home value from outside can be compared at all: it holds no NUL character and is fully
+    /// qualified. A relative value would resolve in the working folder of the caller, and a NUL or an empty
+    /// value makes <see cref="Canonical"/> throw. The shutdown endpoint and the CLI apply this one rule.
+    /// </summary>
+    public static bool IsFullPath(string path)
+        => !path.Contains('\0', StringComparison.Ordinal) && Path.IsPathFullyQualified(path);
+
     /// <summary>Whether two paths name the same home. A path with no resolved form (a link cycle) matches nothing.</summary>
     public static bool Same(string first, string second)
     {
@@ -103,7 +111,7 @@ public static class HomeIdentity
         if (string.IsNullOrWhiteSpace(declared))
         {
             var profile = ValueOf(entries, "HOME=");
-            if (string.IsNullOrEmpty(profile) || !Path.IsPathFullyQualified(profile))
+            if (string.IsNullOrEmpty(profile) || !Path.IsPathFullyQualified(profile) || profile.Contains('%', StringComparison.Ordinal))
                 return false;
 
             served = Path.Combine(profile, ".netclaw");
@@ -111,7 +119,11 @@ public static class HomeIdentity
         else
         {
             served = declared.Trim();
-            if (!Path.IsPathFullyQualified(served) || served.Contains('~', StringComparison.Ordinal) || served.Contains('$', StringComparison.Ordinal))
+            // NetclawPaths expands ~, $HOME, ${HOME}, and %USERPROFILE%. The CLI does not, so any of them gives no proof.
+            if (!Path.IsPathFullyQualified(served)
+                || served.Contains('~', StringComparison.Ordinal)
+                || served.Contains('$', StringComparison.Ordinal)
+                || served.Contains('%', StringComparison.Ordinal))
                 return false;
         }
 

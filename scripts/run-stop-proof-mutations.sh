@@ -97,6 +97,6 @@ run_gate Netclaw.Cli.csproj \
   "$repo_root/src/Netclaw.Cli/Daemon/DaemonManager.cs" "Daemon/DaemonManager.cs" 32 \
   "$output_path/cli" '.status == "Killed"' stale-pid stop-notice stop-proof || failed=1
 run_gate Netclaw.Configuration.csproj \
-  "$repo_root/src/Netclaw.Configuration/HomeIdentity.cs" "HomeIdentity.cs" 45 \
+  "$repo_root/src/Netclaw.Configuration/HomeIdentity.cs" "HomeIdentity.cs" 49 \
   "$output_path/configuration" '.status == "Killed" or .status == "Timeout"' home-match || failed=1
 exit "$failed"

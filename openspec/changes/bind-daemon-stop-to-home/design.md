@@ -112,7 +112,7 @@ Two gates protect the two decisions that gate an effect.
 **`shutdown-notice-identity`** covers the identity block of the endpoint, between the markers
 `// shutdown-identity:begin` and `// shutdown-identity:end`. It holds the PID parse and range check, the home
 check, the PID comparison, and the home comparison. Every tested mutant must die, and the span must hold at
-least the number of mutants in `scripts/run-shutdown-notice-identity-mutations.sh` (19 after round 2). Stryker
+least the number of mutants in `scripts/run-shutdown-notice-identity-mutations.sh` (18 after round 3). Stryker
 also mutates string literals in the span. Do not write a literal logger category there: inject `ILogger<T>`. A
 reference run on a prototype left one survivor, and it was such a literal.
 
@@ -122,8 +122,8 @@ It runs Stryker twice: on `DaemonManager.cs` (spans `stale-pid`, `stop-notice`, 
 PID equality, the 200 versus other status, the environment home match, the rule that a 409 is never overruled,
 and the stale-PID handling. A span must not hold an `OperatingSystem` check: the mutant that removes it is
 equal to the original on the Linux runner, so no test can kill it. `ProcessServesHome` returns `false` for an
-unreadable environment instead. The minimum counts are 32 mutants in `DaemonManager.cs` and 45 in
-`HomeIdentity.cs` (after round 2). The script and `TOOLING.md` hold the current numbers, and the three places must
+unreadable environment instead. The minimum counts are 32 mutants in `DaemonManager.cs` and 49 in
+`HomeIdentity.cs` (after round 3). The script and `TOOLING.md` hold the current numbers, and the three places must
 match.
 
 Round 2 adds code to the `home-match` span: the walk of D9, the environment rule of D8, and the parse of the
@@ -197,7 +197,9 @@ mutation gate cannot cover, and Windows needs its own code.
 ### D10. The notice rejects a malformed home as a client error
 
 `Path.IsPathRooted` accepts `\x` and `C:x` on Windows. Those paths are relative to a drive or a folder. The
-endpoint uses `Path.IsPathFullyQualified`. A NUL character in `home` made `GetFullPath` throw and the endpoint
+endpoint uses `Path.IsPathFullyQualified`. Since round 3, the endpoint and the CLI call one helper,
+`HomeIdentity.IsFullPath` (no NUL, fully qualified). Its mutants moved from the `shutdown-identity` span to the
+`home-match` span, so the first minimum fell from 19 to 18 and the second rose from 45 to 49. A NUL character in `home` made `GetFullPath` throw and the endpoint
 answer 500. The endpoint now rejects a NUL with 400 before any file system call. The Linux tests cover the NUL
 case. The Windows forms are in the test data and pass on Linux too (a backslash is a file name character there),
 so only a Windows run proves the `IsPathFullyQualified` choice.

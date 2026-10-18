@@ -47,8 +47,7 @@ public static class LifecycleEndpointRouteBuilderExtensions
             if (!int.TryParse(request.Pid, NumberStyles.None, CultureInfo.InvariantCulture, out var pid)
                 || pid <= 0
                 || string.IsNullOrEmpty(request.Home)
-                || request.Home.Contains('\0', StringComparison.Ordinal)
-                || !Path.IsPathFullyQualified(request.Home))
+                || !HomeIdentity.IsFullPath(request.Home))
                 return TypedResults.BadRequest(new LifecycleErrorResponse("pid and home query parameters are required"));
 
             if (pid != Environment.ProcessId || !HomeIdentity.Same(request.Home, paths.BasePath))

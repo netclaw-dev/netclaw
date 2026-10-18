@@ -73,7 +73,7 @@ public sealed partial class DaemonManager
             if (existingPid != 0 && !PidServesThisHome(existingPid))
                 return new DaemonResult(
                     false,
-                    $"Daemon was not started. {NotShownToServe(existingPid, answered: false)}",
+                    $"Daemon was not started. {NotShownWithoutNotice(existingPid)}",
                     IsRefusal: true);
 
             return new DaemonResult(false, $"Daemon already running (PID {existingPid}).");
@@ -356,20 +356,35 @@ public sealed partial class DaemonManager
             if (!root.TryGetProperty("home", out var answeredHome))
                 return NoticeOutcome.Unconfirmed;
 
-            return answeredHome.ValueKind == JsonValueKind.String && HomeIdentity.Same(answeredHome.GetString()!, home)
+            // A string that is no full path is no answer: Canonical throws for an empty string or a NUL, and
+            // resolves a relative string in the working folder of this CLI.
+            if (answeredHome.ValueKind != JsonValueKind.String)
+                return NoticeOutcome.Refused;
+
+            var claimed = answeredHome.GetString()!;
+            return HomeIdentity.IsFullPath(claimed) && HomeIdentity.Same(claimed, home)
                 ? NoticeOutcome.Accepted
                 : NoticeOutcome.Refused;
         }
     }
     // stop-notice:end
 
-    // The two lines of a refusal. The second line names the cause and the recovery.
+    // The refusal of a stop: the cause is the answer to the notice that the stop sent.
     private string NotShownToServe(int pid, bool answered)
     {
         var endpoint = DaemonApi.ResolveLocalControlEndpoint(_paths);
-        var cause = answered
+        return Refusal(pid, answered
             ? $"The daemon at {endpoint} answered for another daemon or home."
-            : $"The daemon at {endpoint} did not confirm PID {pid} for this home.";
+            : $"The daemon at {endpoint} did not confirm PID {pid} for this home.");
+    }
+
+    // The refusal of start and status. They send no notice, so the cause names no endpoint and no answer.
+    private string NotShownWithoutNotice(int pid)
+        => Refusal(pid, $"No daemon of this home was proven to own PID {pid}.");
+
+    // The two lines of a refusal. The second line names the cause and the recovery.
+    private string Refusal(int pid, string cause)
+    {
         return $"PID {pid} is not shown to serve {_paths.BasePath}.\n{cause} "
             + $"If no Netclaw daemon of this home runs, delete {_paths.PidFilePath}. "
             + $"If PID {pid} is a daemon of this home, check it, then stop it with 'kill {pid}' (Task Manager on Windows).";
@@ -416,7 +431,7 @@ public sealed partial class DaemonManager
             }
 
             if (!PidServesThisHome(pid))
-                return new DaemonStatus(IsRunning: true, Pid: pid, Message: NotShownToServe(pid, answered: false), ServesThisHome: false);
+                return new DaemonStatus(IsRunning: true, Pid: pid, Message: NotShownWithoutNotice(pid), ServesThisHome: false);
 
             // Prefer PID file timestamp (reflects soft restarts), fall back to process start time
             TryReadPidFile(out _, out var pidFileStartedAt);

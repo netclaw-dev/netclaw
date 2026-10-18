@@ -96,8 +96,8 @@ coverage. They do not replace positive and negative behavior tests.
 | `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run and a turn with one of two open runs each get the right decision (SPEC-004, "Waiting for child runs"). The gate does not cover the missing-field case: `SessionOutputDtoMapper.FromDto` maps a missing field to an empty list, outside the mutated span, and ordinary tests cover it | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
 | `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that is not `Closed`, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
 | `TurnContext.HasSameRequester` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it | 11 killed | `./scripts/run-child-owner-mutations.sh` |
-| The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 19) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
-| The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 45 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
+| The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
+| The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -178,7 +178,7 @@ or duplicated marker fails before Stryker starts. The tests in
 must kill every mutant: a mutant that accepts a wrong PID, a wrong home, a
 folder inside the home, or a missing value would send a false `daemon.stopping`
 alert or let a CLI of one home stop the daemon of another home. The gate needs
-at least 19 mutants in the span, so a span that lost its checks also fails.
+at least 18 mutants in the span, so a span that lost its checks also fails.
 
 ### Stop Proof Gate
 
@@ -196,7 +196,7 @@ The script runs Stryker two times: on the marked spans of `DaemonManager.cs`
 They need Linux. A span must not hold an `OperatingSystem` check or a retry
 limit that no test can tell apart on the Linux runner; keep those outside the
 markers, as the HTTP timeout, the `/proc` read, and the handling of a failed
-notice are. The gate tested 32 mutants in `DaemonManager` and 45 in
+notice are. The gate tested 32 mutants in `DaemonManager` and 49 in
 `HomeIdentity`, and detected all of them. In `HomeIdentity`, a mutant that
 removes the 40-link bound makes a link cycle spin. Stryker reports that as
 `Timeout`, and the gate counts it as detected, as the exact verb chain gate does.
