@@ -190,7 +190,7 @@
           "minimum": 60,
           "maximum": 7200,
           "default": 1200,
-          "description": "Hard ceiling in seconds on time without substantive output. Reset only by real streaming tokens — content-free keepalives never extend it — so a backend that heartbeats forever without producing a token is killed once this elapses. Catches a wedged stream the prefill/first-token liveness watchdog cannot, because keepalives refresh those."
+          "description": "Hard ceiling in seconds on time without substantive output. Reset only by real streaming tokens — content-free keepalives never extend it — so a backend that heartbeats forever without producing a token is killed once this elapses. Catches a wedged stream the prefill/first-token liveness watchdog cannot, because keepalives refresh those. The value also sets the thinking cap: one model call that streams only thinking, with no answer text and no tool call, stops at three times this value."
         },
         "CompactionThreshold": {
           "type": "number",
@@ -764,7 +764,7 @@
           "minimum": 60,
           "maximum": 7200,
           "default": 1200,
-          "description": "Hard ceiling (seconds) on time without substantive output for sub-agent LLM calls, mirroring Session.NoProgressTimeoutSeconds. Reset only by real streaming tokens — content-free keepalives never extend it — so a backend that heartbeats forever without producing a token is killed once this elapses."
+          "description": "Hard ceiling (seconds) on time without substantive output for sub-agent LLM calls, mirroring Session.NoProgressTimeoutSeconds. Reset only by real streaming tokens — content-free keepalives never extend it — so a backend that heartbeats forever without producing a token is killed once this elapses. The value also sets the sub-agent thinking cap: one model call that streams only thinking, with no answer text and no tool call, stops at three times this value."
         }
       },
       "additionalProperties": false

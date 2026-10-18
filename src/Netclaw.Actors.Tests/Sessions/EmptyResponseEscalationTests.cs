@@ -89,8 +89,7 @@ public class EmptyResponseEscalationTests : LlmSessionTestBase
 
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         // The model broke a rule the runtime enforces. A provider outage uses ProviderFailure.
-        // Asserted by name: the error category contract in HeadlessTurnErrorCategoryTests names ModelBehavior.
-        Assert.Equal("ModelBehavior", error.Category.ToString());
+        Assert.Equal(ErrorCategory.ModelBehavior, error.Category);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Six main-model calls: 5 Retries + Fail.
@@ -125,8 +124,7 @@ public class EmptyResponseEscalationTests : LlmSessionTestBase
         var error = Assert.Single(outputs.OfType<ErrorOutput>());
         Assert.Contains("truncat", error.Message, StringComparison.OrdinalIgnoreCase);
         // The provider worked. The model used all of its output budget, so the model gets the blame.
-        // Asserted by name: the error category contract in HeadlessTurnErrorCategoryTests names ModelBehavior.
-        Assert.Equal("ModelBehavior", error.Category.ToString());
+        Assert.Equal(ErrorCategory.ModelBehavior, error.Category);
 
         // Fail fast: no retry call.
         Assert.Equal(1, _fakeChatClient.CallCount);

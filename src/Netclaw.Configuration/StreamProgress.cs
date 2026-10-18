@@ -15,7 +15,7 @@ internal enum StreamActivity
     /// <summary>Content-free heartbeat or usage-only chunk. It proves the socket is alive.</summary>
     Keepalive,
 
-    /// <summary>The update carries reasoning text and nothing else the user or a tool needs.</summary>
+    /// <summary>The update carries a reasoning part and nothing else the user or a tool needs.</summary>
     Thinking,
 
     /// <summary>The update carries answer text, a tool call, a finish reason, or other non-usage content.</summary>
@@ -44,7 +44,7 @@ internal static class StreamProgress
     /// Splits substantive progress into thinking and answer. Thinking is progress for
     /// the no-progress deadline, but only an answer update (text, tool call, finish
     /// reason, other content) resets the thinking cap. An empty or whitespace-only
-    /// text part counts as thinking.
+    /// text part counts as thinking. Every reasoning part counts as thinking.
     /// </summary>
     internal static StreamActivity Classify(ChatResponseUpdate update)
     {
@@ -65,7 +65,10 @@ internal static class StreamProgress
                     // must not restart the thinking cap.
                     activity = StreamActivity.Thinking;
                     break;
-                case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text):
+                case TextReasoningContent:
+                    // Every reasoning part is thinking, also one with empty text. A backend can
+                    // send "reasoning_content": "" as a chunk, and a signature-only part has no
+                    // text. Neither is an answer, so neither may restart the thinking cap.
                     activity = StreamActivity.Thinking;
                     break;
                 case UsageContent:

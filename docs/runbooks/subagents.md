@@ -132,7 +132,9 @@ Two more rules end a run with outcome `failed`:
   and no tool call, for longer than three times `SubAgents.NoProgressTimeoutSeconds`
   (default `1200`, so 60 minutes). Thinking counts as progress for the
   `no_substantive_output_timeout` deadline, so only this cap stops a model that
-  thinks without end. A text delta or a tool-call delta restarts the cap.
+  thinks without end. A text delta with visible characters or a tool-call delta
+  restarts the cap. A reasoning part never restarts it, also when its text is
+  empty. The cap counts from the start of the call, so prefill time counts.
 
 The main session applies the same two rules to its own model calls:
 
@@ -145,8 +147,11 @@ The main session applies the same two rules to its own model calls:
   says that the model streamed only thinking.
 - Both errors have category `ModelBehavior`. Headless output reports
   `[turn:failed] category=model kind=ModelBehavior`. The provider worked, so do
-  not look for an infrastructure fault. Ask for a shorter answer, or raise the
-  model output limit.
+  not look for an infrastructure fault.
+- For a cut-off reply, ask for a shorter answer, or raise the model output limit.
+- For the thinking cap, a larger output limit does not help. Ask for a simpler
+  task, or use a model that thinks less. To allow longer thinking, raise
+  `NoProgressTimeoutSeconds`: the cap is three times that value.
 
 ### Observability
 

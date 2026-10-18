@@ -111,7 +111,9 @@ Two more rules end a run with outcome `failed`:
 - `thinking_only_timeout`: one model call streamed only thinking, with no text
   and no tool call, for three times the no-progress ceiling (default 60 min).
   Thinking refreshes the ceiling, so this cap stops a model that thinks without
-  end. A text delta or a tool-call delta restarts the cap.
+  end. A text delta with visible characters or a tool-call delta restarts the
+  cap. A reasoning part never restarts it, also when its text is empty. The cap
+  counts from the start of the call, so prefill time counts.
 - `output_truncated`: the model reply stopped at its output limit and has no
   tool call. The text is cut off, so it is not a result. The run does not retry.
   The failure text holds a short, redacted preview of the cut-off text. A reply
@@ -120,6 +122,11 @@ Two more rules end a run with outcome `failed`:
 When a subagent fails with `output_truncated`, ask for a shorter answer. If the
 subagent has a file write tool, tell it to write long output to a file and to
 return the file path.
+
+When a subagent fails with `thinking_only_timeout`, ask for a simpler task, or
+use a model that thinks less. A larger output limit does not help. To allow
+longer thinking, raise `SubAgents.NoProgressTimeoutSeconds` in `netclaw.json`.
+The cap is three times that value.
 
 ## Example: valid subagent definition
 
