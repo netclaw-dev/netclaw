@@ -68,7 +68,7 @@ public sealed class ChildApprovalCloseMutationTests
 
         Assert.Equal(0, workflow.ChildApprovalCount(new SubAgentRunId("run-1")));
         Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
-        Assert.Contains(workflow.OpenApprovals(), pending => pending.Request.CallId.Value == "call-parent");
+        Assert.Contains(workflow.OpenApprovals(), pending => pending.Request.CallId == "call-parent");
         Assert.Single(workflow.OpenApprovals());
     }
 
