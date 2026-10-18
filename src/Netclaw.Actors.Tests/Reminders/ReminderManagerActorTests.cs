@@ -253,6 +253,10 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
     public async Task Failed_enable_keeps_terminal_diagnostics()
     {
         var manager = await GetManagerAsync();
+
+        // The startup sweep ends a one-shot that has a terminal outcome, and it deletes the definition.
+        // Drain the startup reconcile before the fixture is written, or that sweep can delete the fixture.
+        await DrainStartupReconcileAsync(manager);
         var definition = CreateDefinition("failed-enable", "Failed enable") with
         {
             Enabled = false,
