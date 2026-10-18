@@ -626,6 +626,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 .ToArray());
             if (_activeRepeatNudge is { } repeatNudge)
             {
+                // The latest repeat nudge replaces the earlier one, so equal nudges do not pile up.
+                _history.RemoveAll(static message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                    && message.Text.StartsWith($"[system: {ToolCycleMessages.RepeatNudgeStart}", StringComparison.Ordinal));
                 AddSystemNudge(repeatNudge);
                 _activeRepeatNudge = null;
             }
@@ -860,13 +863,18 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 cycleDecision.RepeatedCallIds.Count);
         }
 
-        // A repeat of a refused call does not stop the child. The call is refused again, and the child
+        if (cycleDecision.RefusedRepeat == RefusedRepeatAction.EndTurn)
+        {
+            // The child ignored the escalated nudge (Aaron, 18 Oct 2026). The run ends with no dispatch and no
+            // model request. It is a successful partial run, so the parent gets the child text and no error.
+            Complete(true, LastChildText(assistantMessage), SubAgentRunOutcome.Partial,
+                SubAgentOutcomeReason.ToolCycleStopped);
+            return;
+        }
+
+        // A repeat of a refused call does not stop the child at once. The call is refused again, and the child
         // nudge follows the batch results. The child nudge offers no background job: a child has none.
-        _activeRepeatNudge = cycleDecision.RepeatedCallIds.Count == 0
-            ? null
-            : ToolCycleMessages.ChildRepeatNudge(toolCalls
-                .Where(call => cycleDecision.RepeatedCallIds.Contains(call.CallId))
-                .Select(static call => call.Name));
+        _activeRepeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: true);
 
         // Add assistant message (with tool calls) to history
         _history.Add(assistantMessage);
@@ -1288,6 +1296,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _definition.Name,
             projectDirectory);
     }
+
+    // The last text that the child model wrote in this run: the text of the final response, or else the latest
+    // earlier assistant text. The parent did not see the earlier text, so the child returns it. Empty when none.
+    private string LastChildText(AiChatMessage finalResponse)
+        => new[] { finalResponse }
+            .Concat(Enumerable.Reverse(_history).Where(static message => message.Role == Microsoft.Extensions.AI.ChatRole.Assistant))
+            .Select(ExtractText)
+            .FirstOrDefault(static text => text != EmptyResponseMarker && !string.IsNullOrWhiteSpace(text))
+            ?? string.Empty;
 
     private static string ExtractText(AiChatMessage message)
     {

@@ -23,6 +23,12 @@ internal sealed class TurnStateTracker
     private const int MaxPreToolEmptyRetries = 5;
     private const int MaxPostToolEmptyRetries = 8;
 
+    /// <summary>
+    /// The refused repeat of a turn that gets the escalated nudge. The next refused repeat ends the turn
+    /// quietly (Aaron, 18 Oct 2026): the loop gets an end, but the person never sees a Netclaw error.
+    /// </summary>
+    internal const int EscalatedRefusedRepeat = 5;
+
     // Nudge for a thinking-only response: the model emitted reasoning but no
     // final answer. Generic across providers — no provider-specific payload.
     private const string ThinkingOnlyNudge =
@@ -54,6 +60,9 @@ internal sealed class TurnStateTracker
     private readonly List<CompletedToolCycleIteration> _completedToolCycles = [];
     private ToolActionSignature? _lastBlockedAction;
     private readonly Dictionary<ToolRecurrenceKey, ToolRecurrenceEpisode> _episodes = [];
+    // One model response that repeats a refused call adds one. Only new user input resets it, the same as
+    // the refusals that it counts. A different completed action does not reset it.
+    private int _refusedRepeatCount;
 
     public int ToolCallCount { get; private set; }
     public int ToolIterationCount { get; private set; }
@@ -73,6 +82,7 @@ internal sealed class TurnStateTracker
         _completedToolCycles.Clear();
         _lastBlockedAction = null;
         _episodes.Clear();
+        _refusedRepeatCount = 0;
     }
 
     /// <summary>
@@ -139,8 +149,10 @@ internal sealed class TurnStateTracker
 
     /// <summary>
     /// Decide which calls of a batch dispatch. A refused call does not execute. A call that repeats a refused
-    /// identity or a refused adjacent action is refused again and also marked as repeated, so that the turn
-    /// owner adds the repeat nudge after the batch results. Other calls in the batch keep their own decision.
+    /// identity or a refused adjacent action is refused again and also marked as repeated. Other calls in the
+    /// batch keep their own decision. A batch with a repeated call is one refused repeat of the turn:
+    /// <see cref="ToolCycleBatchDecision.RefusedRepeat"/> tells the turn owner to add the nudge, to add the
+    /// escalated nudge, or to end the turn.
     /// </summary>
     public ToolCycleBatchDecision EvaluateBeforeDispatch(PreparedToolCycleBatch batch)
     {
@@ -201,8 +213,21 @@ internal sealed class TurnStateTracker
         return new ToolCycleBatchDecision(refused.Count == 0 ? ToolCycleDecisionKind.Execute : ToolCycleDecisionKind.Correct,
             refused, exempt)
         {
-            RepeatedCallIds = repeated
+            RepeatedCallIds = repeated,
+            RefusedRepeat = CountRefusedRepeat(repeated.Count > 0)
         };
+    }
+
+    private RefusedRepeatAction CountRefusedRepeat(bool repeats)
+    {
+        if (!repeats)
+            return RefusedRepeatAction.None;
+
+        // EndTurn ends the turn, so the count cannot grow past EscalatedRefusedRepeat + 1 in a live turn.
+        _refusedRepeatCount = Math.Min(_refusedRepeatCount + 1, EscalatedRefusedRepeat + 1);
+        return _refusedRepeatCount < EscalatedRefusedRepeat ? RefusedRepeatAction.Nudge
+            : _refusedRepeatCount == EscalatedRefusedRepeat ? RefusedRepeatAction.EscalatedNudge
+            : RefusedRepeatAction.EndTurn;
     }
 
     private void ObserveGroup(CompletedToolRecurrenceGroup group)
@@ -326,6 +351,28 @@ internal sealed record ToolCycleBatchDecision(ToolCycleDecisionKind Kind,
 {
     /// <summary>The refused call IDs that repeat an earlier refusal. Each one needs the repeat nudge.</summary>
     public IReadOnlySet<string> RepeatedCallIds { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>What the turn owner does for a refused repeat. <see cref="RefusedRepeatAction.None"/> without one.</summary>
+    public RefusedRepeatAction RefusedRepeat { get; init; }
+}
+
+/// <summary>The response of the turn owner to a refused repeat. See <see cref="TurnStateTracker.EscalatedRefusedRepeat"/>.</summary>
+internal enum RefusedRepeatAction
+{
+    /// <summary>The batch repeats no refused call.</summary>
+    None,
+
+    /// <summary>Refuse the repeated calls again and add the repeat nudge after the batch results.</summary>
+    Nudge,
+
+    /// <summary>Refuse the repeated calls again and add the escalated nudge: stop, end the turn, tell the person.</summary>
+    EscalatedNudge,
+
+    /// <summary>
+    /// The model ignored the escalated nudge. Dispatch no call of the batch and make no model request. End the
+    /// turn quietly with the text of the model. No error reaches the person.
+    /// </summary>
+    EndTurn
 }
 
 internal sealed record PreparedToolCycleCall(
@@ -373,6 +420,10 @@ internal readonly record struct ToolCycleDecision(
 
 internal static class ToolCycleMessages
 {
+    // Every repeat nudge, plain or escalated, parent or child, starts with this text. The batch owner uses it to
+    // remove the earlier repeat nudge, so that the history keeps only the latest one.
+    internal const string RepeatNudgeStart = "Netclaw refused your repeated call to ";
+
     public const string Correction =
         "Netclaw stopped this tool call because it would continue a repeated action-and-outcome cycle. "
         + "The same action completed twice without a changed result. This call did not execute.";
@@ -380,7 +431,7 @@ internal static class ToolCycleMessages
     // Model-facing. A refused call repeats, so the turn continues with this nudge after the batch results.
     // The text names the skill page for long commands. A person sees it only when the model writes about it.
     public static string RepeatNudge(IEnumerable<string> toolNames)
-        => $"Netclaw refused your repeated call to {FormatToolNames(toolNames)} again. The call did not execute. "
+        => $"{RepeatNudgeStart}{FormatToolNames(toolNames)} again. The call did not execute. "
             + "Netclaw refuses the same call each time that you send it. Do not send it again. Select a different action:\n"
             + "- For a slow shell command, run it as a background job: set `_background: true` on `shell_execute`, "
             + "then use `check_background_job`.\n"
@@ -393,12 +444,47 @@ internal static class ToolCycleMessages
     // Model-facing, for a child run. A child has no background job manager and can lack the skill tools,
     // so this text sends a long command back to the parent instead.
     public static string ChildRepeatNudge(IEnumerable<string> toolNames)
-        => $"Netclaw refused your repeated call to {FormatToolNames(toolNames)} again. The call did not execute. "
+        => $"{RepeatNudgeStart}{FormatToolNames(toolNames)} again. The call did not execute. "
             + "Netclaw refuses the same call each time that you send it. Do not send it again. Select a different action:\n"
             + "- Change the command or its arguments.\n"
             + "- Divide the work into smaller steps.\n"
             + "- Stop and give your result to the parent. Name the command that did not finish, "
             + "so that the parent can run it as a background job.";
+
+    // Model-facing. Refused repeat 5 of the turn. The model must stop and tell the person. Another refused
+    // repeat ends the turn quietly with the text of the model.
+    public static string EscalatedRepeatNudge(IEnumerable<string> toolNames)
+        => $"{RepeatNudgeStart}{FormatToolNames(toolNames)} again. The call did not execute. "
+            + $"You repeated refused calls {TurnStateTracker.EscalatedRefusedRepeat} times in this turn. "
+            + "Stop trying this action. End your turn now. "
+            + "Tell the person what blocked you, and name the action that did not finish. "
+            + "If you send a refused call again, Netclaw ends the turn.";
+
+    // Model-facing, for a child run. Refused repeat 5 of the run. Another refused repeat ends the run with
+    // the last text of the child.
+    public static string EscalatedChildRepeatNudge(IEnumerable<string> toolNames)
+        => $"{RepeatNudgeStart}{FormatToolNames(toolNames)} again. The call did not execute. "
+            + $"You repeated refused calls {TurnStateTracker.EscalatedRefusedRepeat} times in this run. "
+            + "Stop trying this action. Stop now and give your result to the parent. "
+            + "Name the action that did not finish. "
+            + "If you send a refused call again, Netclaw ends this run with your last text.";
+
+    /// <summary>
+    /// The nudge for the refused repeat of <paramref name="decision"/>, or null when the batch needs none. It
+    /// names only the repeated tools. <see cref="RefusedRepeatAction.EndTurn"/> has no nudge: the turn ends.
+    /// </summary>
+    public static string? ForRefusedRepeat(
+        ToolCycleBatchDecision decision, IEnumerable<FunctionCallContent> toolCalls, bool childRun)
+    {
+        var names = toolCalls.Where(call => decision.RepeatedCallIds.Contains(call.CallId))
+            .Select(static call => call.Name);
+        return decision.RefusedRepeat switch
+        {
+            RefusedRepeatAction.Nudge => childRun ? ChildRepeatNudge(names) : RepeatNudge(names),
+            RefusedRepeatAction.EscalatedNudge => childRun ? EscalatedChildRepeatNudge(names) : EscalatedRepeatNudge(names),
+            _ => null
+        };
+    }
 
     private static string FormatToolNames(IEnumerable<string> toolNames)
         => string.Join(", ", toolNames.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
@@ -429,9 +515,12 @@ internal static class ToolCycleSignatureFactory
                     rejection is null ? "accepted" : "rejected",
                     rejection?.DenyReason ?? string.Empty,
                     HashCanonicalArguments(arguments),
-                    // A valid background request changes how the call runs. The repeat nudge offers it,
-                    // so a background run of a refused command must not get the same refusal.
-                    rejection is null && meta is { Background: true } ? "background" : "foreground"]))
+                    // A valid background request changes how a shell call runs. The repeat nudge offers it,
+                    // so a background run of a refused command must not get the same refusal. Every other
+                    // tool runs a background request in the foreground, so the field must not give it a
+                    // new identity: that would permit two more real runs of a refused call.
+                    rejection is null && meta is { Background: true } && cleaned.Name == ShellTool.ToolName
+                        ? "background" : "foreground"]))
             {
                 AllowsPendingJob = rejection is null && cleaned.Name == "check_background_job"
                     && (cleaned.Arguments is null || cleaned.Arguments.All(argument =>

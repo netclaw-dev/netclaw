@@ -25,8 +25,8 @@
 
 - [x] 4.1 Add tests: the escalated nudge at refused repeat 5, the quiet end at refused repeat 6 (session, child, and headless text and JSON), the count reset for new and joining person input, `_background` identity only for `shell_execute`, one repeat nudge in history, and the eval timeout margin. Verify that they fail on f7d9f9327.
 - [x] 4.2 Correct the bound text in the spec delta, `design.md`, and `docs/runbooks/subagents.md`, and flag the three open changes that keep the stop rule.
-- [ ] 4.3 Add the refused repeat count and the `RefusedRepeat` decision to `TurnStateTracker`. Verify with the tracker unit tests.
-- [ ] 4.4 Add the escalated nudge and the quiet end to `LlmSessionActor` and `SubAgentActor`, and keep only the latest repeat nudge in history. Verify with the session, child, and headless tests.
-- [ ] 4.5 Add the background field only for `shell_execute`. Verify with `ToolCycleValidationTests`.
-- [ ] 4.6 Update the skill page and `SKILL.md`, restore the dropped job details, and set `metadata.version` to `2.116.0`.
-- [ ] 4.7 Run the gates again.
+- [x] 4.3 Add the refused repeat count and the `RefusedRepeat` decision to `TurnStateTracker`. Verify with the tracker unit tests.
+- [x] 4.4 Add the escalated nudge and the quiet end to `LlmSessionActor` and `SubAgentActor`, and keep only the latest repeat nudge in history. Verify with the session, child, and headless tests.
+- [x] 4.5 Add the background field only for `shell_execute`. Verify with `ToolCycleValidationTests`.
+- [x] 4.6 Update the skill page and `SKILL.md`, restore the dropped job details, and set `metadata.version` to `2.116.0`.
+- [x] 4.7 Run the gates again.

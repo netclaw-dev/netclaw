@@ -1386,8 +1386,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 prepared.Decision.Kind, prepared.Decision.RefusedCallIds.Count, prepared.Decision.RepeatedCallIds.Count);
         }
 
-        // A repeat of a refused call does not stop the turn (Aaron, 18 Oct 2026). The pipeline refuses it
-        // again, and the batch adds a model-facing nudge after its results. No error reaches the person.
+        if (prepared.Decision.RefusedRepeat == RefusedRepeatAction.EndTurn)
+        {
+            EndTurnAfterIgnoredEscalation(lastMessage, usage);
+            return;
+        }
+
+        // A repeat of a refused call does not stop the turn at once (Aaron, 18 Oct 2026). The pipeline refuses
+        // it again, and the batch adds a model-facing nudge after its results. No error reaches the person.
         var userMsg = _state.FindLastUserMessage() ?? new SerializableChatMessage
         {
             Role = Protocol.ChatRole.User,
@@ -1467,13 +1473,58 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         RecordIntermediateUsage(usage);
 
-        var repeatNudge = cycleDecision.RepeatedCallIds.Count == 0
-            ? null
-            : ToolCycleMessages.RepeatNudge(toolCalls
-                .Where(call => cycleDecision.RepeatedCallIds.Contains(call.CallId))
-                .Select(static call => call.Name));
+        var repeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: false);
         DispatchToolBatch(toolCalls, cycleDecision.RefusedCallIds, repeatNudge,
             preparedCycleBatch: preparedCycleBatch);
+    }
+
+    /// <summary>
+    /// The model sent a refused call again after the escalated nudge (Aaron, 18 Oct 2026). The turn ends with no
+    /// dispatch and no further model request. No call of the response runs, also a new call next to the repeat.
+    /// No error output, error reply, or failed turn reaches the person: the person sees only text of the model.
+    /// </summary>
+    private void EndTurnAfterIgnoredEscalation(AiChatMessage lastMessage, UsageDetails? usage)
+    {
+        var withoutCalls = new AiChatMessage(lastMessage.Role,
+            lastMessage.Contents.Where(static content => content is not FunctionCallContent).ToList());
+        var hasText = withoutCalls.Contents.OfType<TextContent>()
+            .Any(static text => !string.IsNullOrWhiteSpace(text.Text));
+        TurnLog().Warning("turn_refused_repeat_end refusedRepeats={RefusedRepeats} hasText={HasText}",
+            TurnStateTracker.EscalatedRefusedRepeat + 1, hasText);
+
+        if (hasText)
+        {
+            // The normal text path records the text as the reply, sends it, and completes the turn.
+            HandleTextResponse(withoutCalls, usage, streamedText: false, streamedThinking: false);
+            return;
+        }
+
+        // No text. An empty assistant reply is not safe, because some providers reject an empty text block.
+        // So the turn records no reply. The person keeps the text that the model wrote before.
+        RecordIntermediateUsage(usage);
+        CloseActiveInputs(FinishTurnWithoutReply);
+    }
+
+    // The cleanup of a failed turn, without the error reply and the error output. The turn completes.
+    private void FinishTurnWithoutReply()
+    {
+        _input.FailedTurn();
+        _execution.ReleaseAll();
+        _deliveryRetry.Clear();
+        _toolWorkflow.ClearFailedTurn();
+        // A failed turn also counts without a journal event, so the next turn gets a new turn number.
+        _state = _state with { TurnCount = _state.TurnCount + 1 };
+
+        EmitOutput(new TurnCompleted
+        {
+            SessionId = _sessionId,
+            TurnNumber = new TurnNumber(_state.TurnCount),
+            Outcome = TurnOutcome.Completed,
+            SourceReminderId = _input.Authority.Source?.ReminderId,
+            OpenChildRunIds = _state.GetOpenChildRunIds()
+        });
+
+        DrainBufferedMessagesOrBecomeReady();
     }
 
     private void RecordIntermediateUsage(UsageDetails? usage)

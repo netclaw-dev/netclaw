@@ -253,7 +253,9 @@ for the job lifecycle, the output log, and the rules.
 Two equal feedback rounds for the same tool and arguments cause a correction before the next dispatch.
 The refused call did not execute. Change the approach after that correction.
 Netclaw refuses each later identical call again and adds a nudge. The turn continues.
-A timeout change alone is the same call. A valid `_background: true` is a different call.
+The fifth refused repeat in a turn gets an escalated nudge: stop, end your turn, and tell the person what blocked you.
+A refused call after that ends the turn with your text and no error. A new message from the person starts a new count.
+A timeout change alone is the same call. A valid `_background: true` on `shell_execute` is a different call.
 For the options after a timeout or a refusal, read
 `skill_read_resource('netclaw-operations', 'references/long-running-commands.md')`.
 `MaxToolIterationsPerTurn` is a legacy config field. The runtime no longer enforces its fixed limit.
@@ -287,7 +289,7 @@ fix and re-issue once, do not retry the same shape:
 
 A repeated action-and-outcome correction means that no requested call ran.
 Choose a different action or finish the task from the available evidence.
-Do not repeat the blocked batch. Netclaw refuses it again.
+Do not repeat the blocked batch. Netclaw refuses it again, and the fifth repeat escalates.
 Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
 A valid metadata repair is not the same rejected action. A new user message
