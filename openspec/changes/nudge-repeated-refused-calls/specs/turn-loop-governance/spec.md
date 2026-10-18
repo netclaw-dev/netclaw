@@ -58,7 +58,7 @@ If the model sends refused repeat 6, the system SHALL end the turn quietly:
 
 `QuietEnd` crosses the hub as the optional boolean `quietEnd` of the `turn_completed` output. A missing or null field comes from an earlier daemon and SHALL read as false, so an empty turn from an earlier daemon keeps the fallback.
 
-A reminder turn that ends quietly SHALL report success with empty output. The reminder gets no failure alert, because the person-facing rule allows no Netclaw error. The session log SHALL hold the warning `turn_refused_repeat_end`, so an operator can find the end.
+A reminder turn that ends quietly SHALL report success with empty output. The reminder gets no failure alert, because the person-facing rule allows no Netclaw error. The exception: a reminder that requires channel delivery, and whose turn never called the notify tool, SHALL record a failure in reminder history and the logs. It SHALL NOT post in the thread. The session log SHALL hold the warning `turn_refused_repeat_end`, so an operator can find the end.
 
 A child run SHALL use the same count for its run. Its escalated nudge SHALL tell the child to stop this action, to give its result to the parent, to name the action that did not finish, and that no call in that response runs. Refused repeat 6 SHALL end the child run quietly. The run result SHALL be successful, with the outcome `partial` and the reason `tool_cycle_stopped`. Its output SHALL be the last text that the child model wrote in the run: the text of the final response, or the latest earlier text. The output is empty when the child wrote no text. The parent SHALL get this result as a successful partial result, not as an error.
 
