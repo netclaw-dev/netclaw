@@ -1235,7 +1235,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.DoesNotContain(followUp, static output => output is ErrorOutput);
         Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(followUp[^1]).Outcome);
         Assert.Equal([FollowUpAnswer], followUp.OfType<TextOutput>().Select(static output => output.Text));
-        var followUpRequest = requests.Last(static request =>
+        // ReceivedMessages is a snapshot, so read it again after the follow-up turn.
+        var followUpRequest = _fakeChatClient.ReceivedMessages.Last(static request =>
             request.Any(static message => message.Text == "What happened?"));
         Assert.DoesNotContain(
             followUpRequest.SelectMany(static message => message.Contents.OfType<FunctionCallContent>()),
