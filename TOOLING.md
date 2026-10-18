@@ -47,10 +47,10 @@ Hosted runs of 2026-10-17 measured these gate times (minutes):
 
 | Group | Gates | Hosted time (about) |
 |-------|-------|---------------------|
-| `verb-chain` | `exact-verb-chain` (seven invocations, 53 mutants, 9 to 14.5) | 9.5 to 15 |
+| `verb-chain` | `exact-verb-chain` (seven invocations, 53 mutants, 9 to 14.5), `shutdown-notice-identity` (18 mutants, one invocation, about 3 on a local run, not yet measured on a hosted runner) | 12.5 to 18 (estimate) |
 | `reminder` | `reminder-execution` (4.4), `literal-twin` (2.9), `stream-commit-gate` (2.5) | 10.3 |
 | `authorization-and-directory` | `tool-authorization` (5.8), `approval-directory` (5.2) | 11.3 |
-| `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2) | 13.3 |
+| `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2), `stop-proof` (81 mutants, two invocations, about 5 on a local run, not yet measured on a hosted runner) | 18.3 (estimate) |
 | `session-reliability` | `tool-batch-readiness` (2.4 to 3.2), `headless-stop-rule` (2.2 to 3.2), `open-child-runs` (1.8 to 2.8), `child-owner` (3.1) | 12.2 |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
