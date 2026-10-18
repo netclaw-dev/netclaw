@@ -39,11 +39,11 @@ A `FakeToolExecutor` result does not prove that the real executor accepts those 
 ## Focused Mutation Tests
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
-The job has eight Linux matrix groups that run in parallel with the normal test matrix.
+The job has ten Linux matrix groups that run in parallel with the normal test matrix.
 The job timeout is 25 minutes.
 Each Stryker invocation builds the test project and runs the initial test run again. That fixed cost is about 1.5 to 2 minutes per invocation.
 The mutant run itself takes under 1 minute for most spans. Group time is mostly the sum of the invocations of its gates.
-Hosted runs of 2026-10-17 measured these gate times (minutes):
+Hosted runs of 2026-10-17 and 2026-10-18 measured these gate times (minutes):
 
 | Group | Gates | Hosted time (about) |
 |-------|-------|---------------------|
@@ -52,7 +52,11 @@ Hosted runs of 2026-10-17 measured these gate times (minutes):
 | `authorization-and-directory` | `tool-authorization` (5.8), `approval-directory` (5.2) | 11.3 |
 | `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2) | 13.3 |
 | `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9) | 8 (estimate) |
-| `session-reliability` | `tool-batch-readiness` (2.4 to 3.2), `headless-stop-rule` (2.2 to 3.2), `open-child-runs` (1.8 to 2.8), `child-owner` (3.1), `reminder-report-once` (2 to 3) | 12.2 with four gates; about 15 with five |
+| `shell-command-analysis` | `shell-command-analysis` (two invocations: 303 mutants, up to 15.8, and 27 mutants, up to 4.7) | 14 to 21 |
+| `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2) | 9 to 13 |
+| `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
+| `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4) | 10 to 11 |
+| `child-owner-and-report` | `child-owner` (3.1 to 3.6), `reminder-report-once` (about 3.5 to 4) | 7 to 8 |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
 The `authorization-and-directory` and `guard-and-authority` groups were one group, `approval-and-authorization`. That group took 16.5 to 24.6 minutes on the same day and ran near the timeout.
@@ -60,6 +64,10 @@ Each gate there runs Stryker two or three times, so a Stryker run costs 2 to 3 m
 The first CI run of the split took 9 minutes 37 seconds for `verb-chain` and 10 minutes 16 seconds for `reminder`.
 A hosted run of 2026-10-18 put the two gates of #2527 part 2 into `verb-chain` and `guard-and-authority`. Those groups took 21 and 20 minutes.
 `shutdown-notice-identity` took 3.4 minutes and `stop-proof` took 6.9 minutes there. `stop-proof` has its own group, and `shutdown-notice-identity` runs in `reminder`.
+The `shell-analysis` group held three gates. A hosted run of 2026-10-18 took 25 minutes 18 seconds, and the job timeout cancelled it. The `shell-assignment-and-paths` group held three gates and took 21.5 minutes.
+The `session-reliability` group held five gates and took 18.7 minutes. It now holds three gates, and `child-owner-and-report` holds the other two.
+The `shell-command-analysis` group is still the longest group. Its first invocation (303 mutants) took 15.8 minutes in the slow run. A split of that gate needs a script change and a new expected mutant count for each part. Do not add a gate to this group.
+The `reminder` group took 16.4 minutes in the same run. Do not add a gate to it.
 The hosted runner speed varies, so the time of one gate changes by up to 5 minutes between runs.
 Measure a new gate on a cold runner and update this table.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
@@ -285,7 +293,7 @@ The seven-mutant local run took 1 minute 48 seconds with a warm build cache.
 The eight-mutant combined local run took 2 minutes 6 seconds with a warm build cache.
 Hosted run `38448179312` took 15 to 21 minutes for the four existing matrix groups.
 Its Windows test took 16 minutes 6 seconds. A target in any of those four groups would extend that critical path.
-All seven source spans produce eight expected mutants in one Stryker invocation in the existing `session-reliability` group.
+All seven source spans produce eight expected mutants in one Stryker invocation in the `session-reliability` group.
 Hosted CI must measure the combined gate on a cold runner.
 Its report directory is `artifacts/stryker/tool-batch-readiness`.
 
@@ -363,10 +371,9 @@ uses no actor, no timer, and no delay. It covers these cases:
 - the list keeps acceptance order, then run id order
 
 The local Stryker run took 1 minute 52 seconds. CI runs the gate in the `session-reliability` group of the
-`mutation-gates` job, because that group has the most headroom. Two gates took 5 minutes 20 seconds on CI, so the
-third gate should bring the group to about 8 minutes. The group will also hold the child owner and the report-once
-gates, which gives an expected total of 15 to 16 minutes against the limit of 25. Hosted CI must measure the
-group on a cold runner. Its report directory is `artifacts/stryker/open-child-runs`.
+`mutation-gates` job. That group holds three gates and takes 10 to 11 minutes on a hosted runner. The child owner
+and report-once gates run in the `child-owner-and-report` group. Its report directory is
+`artifacts/stryker/open-child-runs`.
 
 ### Child Owner Gate
 
@@ -391,8 +398,8 @@ Unit tests and actor tests cover those two lines.
 The final local run killed 11 of 11 mutants in 1 minute 59 seconds with a warm build cache.
 A review run took 2 minutes 36 seconds with a cold report directory.
 A run on a machine with other builds in progress took 6 minutes 11 seconds.
-CI runs it in the `session-reliability` group of the `mutation-gates` job.
-That group now holds two gates. Hosted CI must measure the group time on a cold runner.
+CI runs it in the `child-owner-and-report` group of the `mutation-gates` job.
+That group holds two gates and takes 7 to 8 minutes on a hosted runner.
 Its report directory is `artifacts/stryker/child-owner`.
 
 ### Tool Authorization Gate
@@ -490,7 +497,7 @@ under a bounded profile, and a protected path with a grant.
 
 The tests pick the host shell and a temporary root without links, so they also
 pass in the normal Windows and macOS test jobs. The local run took about
-2 minutes after package restore. CI runs it in the `shell-analysis` group of the
+2 minutes after package restore. CI runs it in the `config-read-and-admission` group of the
 `mutation-gates` job. Its report directory is
 `artifacts/stryker/tool-authorizer-order`.
 
@@ -627,9 +634,8 @@ This gate protects an alerting path, not an authority boundary. A mutant that ma
 turn number would let a report for another turn name the wrong fire. A mutant on the mark would raise one alert for
 each failed post of one reply, or none. A mutant on the retry link would hide the final failure of a retried
 child-delivery turn, or give a later person's turn the link of a reminder.
-CI runs it in the `session-reliability` group of the `mutation-gates` job, as the fifth gate of that group.
-The gate took 2 to 3 minutes in its hosted runs. The group took 12.2 minutes with four gates, so five gates take about
-15 minutes against the limit of 25.
+CI runs it in the `child-owner-and-report` group of the `mutation-gates` job, with the child owner gate.
+The gate took 2 to 4 minutes in its hosted runs. The group takes 7 to 8 minutes.
 The local run selected 15 mutants. The whole script took 114 seconds, which includes the Stryker build.
 Its report directory is `artifacts/stryker/reminder-report-once`.
 
