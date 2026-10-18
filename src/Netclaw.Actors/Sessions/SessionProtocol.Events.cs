@@ -57,10 +57,10 @@ public static partial class SessionProtocol
 
         /// <summary>
         /// True when a sub-agent ran a routed skill and produced this turn's reply, so the main model did not.
-        /// Also true for the child-delivery turn that posts the result of a routed-skill child run: both posts of
-        /// a routed skill follow one rule. Replay needs it to treat the turn as the live session did: a failed post
-        /// alerts but never retries on the main model. A journal entry written before this field reads as false
-        /// (an ordinary turn).
+        /// Replay needs it to treat the turn as the live session did: a failed post alerts but never retries
+        /// on the main model. It is false for the child-delivery turn that posts the result of a routed-skill child
+        /// run, because the main model writes that reply, so the turn retries like any ordinary turn. A journal
+        /// entry written before this field reads as false (an ordinary turn).
         /// </summary>
         public bool RoutedSkill { get; init; }
 

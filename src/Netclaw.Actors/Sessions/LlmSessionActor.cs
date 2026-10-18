@@ -1574,9 +1574,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             SourceReminderId = RunningTurnReminder(deliveredChild),
             SourceBackgroundJobId = selected.BackgroundJobId,
             ConsumedInputIds = selected.Ids,
-            ChildContinuation = continuation,
-            // The child result of a routed skill follows the rule of the routed turn that accepted the child.
-            RoutedSkill = deliveredChild?.StartKey is ChildRunStartKey.Slash
+            // RoutedSkill stays false. The main model writes the reply of a child-delivery turn, also for a routed
+            // skill, so a retry can fix a rejected reply. Only the routed turn that accepts the child never retries.
+            ChildContinuation = continuation
         };
 
         _ = _state.Apply(turnEvent, userAlreadyInHistory: true);
@@ -2015,6 +2015,17 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         if (placement == InputPlacement.BufferDuringModel)
         {
+            // Clear ends the link of a pending retry. The retry turn then records no reminder, and its final
+            // failure raises no alert. A person is in the thread, but a buffered reminder fire may have no reader,
+            // so the end of the link must be visible.
+            if (_deliveryRetry.RetriedTurnReminder is { } endedLink)
+            {
+                _log.Warning(
+                    "A new input ended the delivery retry of turn {Turn} for reminder {FireKey}",
+                    _state.TurnCount,
+                    endedLink.Value);
+            }
+
             _deliveryRetry.Clear();
             _log.Info("Buffering user message (LLM call in progress)");
         }
