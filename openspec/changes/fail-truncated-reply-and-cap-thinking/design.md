@@ -48,6 +48,16 @@ existing path unchanged.
 Alternative: check `length` first. Rejected, because it would fail a reply
 that the retry path can recover.
 
+**Blame the model for both session failures.** A cut-off text reply and the
+thinking cap end the turn with `ErrorCategory.ModelBehavior`. The provider
+worked in both cases: the model used all of its output budget, or it gave no
+answer. This follows the #2517 rule for repeated empty replies that end with
+`Stop` or `Length`. The headless channel reports `category=model`.
+Alternative: `ProviderFailure` for the cut-off reply and `Timeout` for the cap.
+Rejected, because the headless channel maps both to `infra`, and the eval
+harness then blames the infrastructure for a model fault. Owner: Aaron
+(decision of 16 October 2026).
+
 **Redact the whole stub, then cut at 300 on a text-element boundary.** The
 cut-first order can leave a partial secret that no redaction pattern matches.
 The cut on a UTF-16 unit can leave a lone surrogate in JSON.

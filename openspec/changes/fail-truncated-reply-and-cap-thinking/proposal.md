@@ -18,7 +18,8 @@ Source PRDs: `PRD-001`, `PRD-006` (through `docs/spec/SPEC-016-tool-liveness-and
     output holds a redacted preview of at most 300 characters. The cut falls on
     a text-element boundary.
   - A session ends the turn with an error that says the reply was truncated. It
-    does not post the cut-off text.
+    does not post the cut-off text. The error category is `ModelBehavior`
+    (`category=model` in headless output).
   - A `length` reply that has a tool call still runs its tools.
   - A thinking-only or empty `length` reply still follows the existing retry
     path.
@@ -28,8 +29,9 @@ Source PRDs: `PRD-001`, `PRD-006` (through `docs/spec/SPEC-016-tool-liveness-and
   - Only an answer update restarts the cap. An answer update is non-empty text,
     a tool call, or a finish reason. Empty or whitespace-only text counts as
     thinking.
-  - A session ends the turn with a Timeout error that names thinking. A
-    sub-agent fails with reason `thinking_only_timeout`.
+  - A session ends the turn with an error that names thinking. The error
+    category is `ModelBehavior`, not `Timeout`. A sub-agent fails with reason
+    `thinking_only_timeout`.
 - No new configuration key. The cap derives from the existing no-progress
   timeout (`SessionConfig` and `SubAgentConfig.NoProgressTimeoutSeconds`).
 
@@ -44,11 +46,15 @@ None.
 
 ### Modified Capabilities
 
-- `netclaw-session`: the streaming timeout scenario gains the thinking-only cap.
-  A new requirement fails a truncated reply.
-- `netclaw-subagents`: the execution contract gains the `output_truncated`
-  failure. The timeout enforcement requirement gains the `thinking_only_timeout`
-  failure.
+- `netclaw-session`: two added requirements. A truncated reply fails the turn,
+  and a thinking-only model call is capped. Both errors have category
+  `ModelBehavior`.
+- `netclaw-subagents`: two added requirements. A truncated reply fails the run
+  with reason `output_truncated`, and a thinking-only model call fails the run
+  with reason `thinking_only_timeout`.
+
+The deltas add requirements only. They do not copy an existing requirement, so
+a later sync does not overwrite text that other changes own.
 
 ## Impact
 

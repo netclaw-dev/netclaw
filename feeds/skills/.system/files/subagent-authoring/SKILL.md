@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.5.2"
+  version: "1.6.0"
 ---
 
 # Subagent Authoring
@@ -100,12 +100,26 @@ The inter-delta budget is not a per-agent setting. Every subagent uses
 profile that used the old `timeoutSeconds` default of `60` now waits up to `600`
 seconds between deltas.
 
-Beyond these per-agent budgets, every sub-agent LLM call is also bounded by a
-config-level **no-progress ceiling** (`SubAgents.NoProgressTimeoutSeconds` in
-`netclaw.json`, default `1200` = 20 min). Unlike `prefillTimeoutSeconds` and the
-inter-delta budget, content-free keepalives never refresh it — only real tokens do —
-so a backend that heartbeats forever without producing output is killed once it
-elapses. It is not a per-agent frontmatter field; tune it in `netclaw.json`.
+Every sub-agent LLM call also has a config-level **no-progress ceiling**
+(`SubAgents.NoProgressTimeoutSeconds` in `netclaw.json`, default `1200` = 20 min).
+Text, tool calls, and thinking refresh it. Content-free keepalives never refresh
+it. When it elapses, the run fails with reason `no_substantive_output_timeout`.
+It is not a per-agent frontmatter field. Tune it in `netclaw.json`.
+
+Two more rules end a run with outcome `failed`:
+
+- `thinking_only_timeout`: one model call streamed only thinking, with no text
+  and no tool call, for three times the no-progress ceiling (default 60 min).
+  Thinking refreshes the ceiling, so this cap stops a model that thinks without
+  end. A text delta or a tool-call delta restarts the cap.
+- `output_truncated`: the model reply stopped at its output limit and has no
+  tool call. The text is cut off, so it is not a result. The run does not retry.
+  The failure text holds a short, redacted preview of the cut-off text. A reply
+  that has a tool call still runs its tools.
+
+When a subagent fails with `output_truncated`, ask for a shorter answer. If the
+subagent has a file write tool, tell it to write long output to a file and to
+return the file path.
 
 ## Example: valid subagent definition
 

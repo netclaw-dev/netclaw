@@ -125,13 +125,28 @@ Two more rules end a run with outcome `failed`:
 
 - `output_truncated`: a model reply ended on the output limit
   (`finishReason=length`) and made no tool call. The text is cut off, so it is
-  never a result. The run does not retry. The `Error:` section holds a preview
-  of the cut-off text. A reply that has a tool call still runs its tools.
+  never a result. The run does not retry. The failure text of the run result
+  holds a redacted preview of at most 300 characters of the cut-off text. A
+  reply that has a tool call still runs its tools.
 - `thinking_only_timeout`: one model call streamed only thinking, with no text
   and no tool call, for longer than three times `SubAgents.NoProgressTimeoutSeconds`
   (default `1200`, so 60 minutes). Thinking counts as progress for the
   `no_substantive_output_timeout` deadline, so only this cap stops a model that
   thinks without end. A text delta or a tool-call delta restarts the cap.
+
+The main session applies the same two rules to its own model calls:
+
+- A cut-off text reply with no tool call ends the turn with an error that says
+  the reply was truncated. The session does not post the cut-off text and does
+  not store it in history. A live viewer can see the streamed text before the
+  error arrives.
+- One call that streams only thinking ends the turn at three times
+  `Session.NoProgressTimeoutSeconds` (default `1200`, so 60 minutes). The error
+  says that the model streamed only thinking.
+- Both errors have category `ModelBehavior`. Headless output reports
+  `[turn:failed] category=model kind=ModelBehavior`. The provider worked, so do
+  not look for an infrastructure fault. Ask for a shorter answer, or raise the
+  model output limit.
 
 ### Observability
 

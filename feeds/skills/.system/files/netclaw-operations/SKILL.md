@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.111.1"
+  version: "2.112.0"
 ---
 
 # Netclaw Operations
@@ -280,6 +280,8 @@ A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
 A repeat of a refused call after the correction is a `ModelBehavior` failure.
 Repeated empty replies get the same `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
+A text reply that ends with the finish reason `length` and has no tool call is also `ModelBehavior`. Netclaw does not post the cut-off text.
+One model call that streams only thinking for three times `Session.NoProgressTimeoutSeconds` is also `ModelBehavior`.
 An empty reply with no finish reason is `StreamFailure`. A `content_filter` reply is `ProviderFailure`. Both are `infra`.
 A provider outage is not `ModelBehavior`.
 
