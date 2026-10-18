@@ -157,18 +157,20 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
     }
 
     /// <summary>
-    /// Issue #2524. A reminder turn manages the child runs of its own session, and the other requesters keep
-    /// the six-fact rule. The fire has the source shape of ReminderExecutionActor.InitializeCurrentSessionAsync
+    /// Issue #2524. A reminder turn and a person turn of one session manage each other's child runs, and two
+    /// person turns keep the six-fact rule. The fire has the source shape of ReminderExecutionActor.InitializeCurrentSessionAsync
     /// (sender reminder-system, principal VerifiedAutomation, source kind reminder).
     /// Source: openspec/changes/reminder-turn-manages-own-children, background-subagent-runs
     /// "A reminder turn manages the child runs of its own session".
-    /// Row 1 is the swap-1 exercise (a person started the run). Row 2 and 3 are controls that pass today.
+    /// Row 1 is the swap-1 exercise (a person started the run). Rows 3 and 4 follow the owner answer of
+    /// 18 October 2026: a person, also another sender, controls a run that a reminder turn started. Row 2 passes today.
     /// </summary>
     [Theory]
     [InlineData("person", "reminder", true)]
     [InlineData("reminder", "reminder", true)]
-    [InlineData("reminder", "person", false)]
-    public async Task Reminder_turn_follows_the_child_control_rule_in_its_own_session(
+    [InlineData("reminder", "person", true)]
+    [InlineData("reminder", "other-person", true)]
+    public async Task Child_control_that_involves_a_reminder_turn_follows_the_rule_in_its_own_session(
         string starter, string controller, bool allowed)
     {
         // Arrange
@@ -224,16 +226,18 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
     }
 
     /// <summary>
-    /// A reminder turn in session B cannot reach a child run of session A. The session boundary holds even
-    /// though the reminder turn ignores the sender and the principal. This test passes today and must keep
-    /// passing after the fix.
+    /// A turn in session B cannot reach a child run of session A when one side is a reminder turn. The session
+    /// boundary holds even though a reminder turn ignores the sender and the principal. These tests pass today
+    /// and must keep passing after the fix.
     /// </summary>
-    [Fact]
-    public async Task Reminder_turn_cannot_control_a_child_run_of_another_session()
+    [Theory]
+    [InlineData("person", "reminder")]
+    [InlineData("reminder", "person")]
+    public async Task Child_control_that_involves_a_reminder_turn_cannot_cross_sessions(string starter, string controller)
     {
         // Arrange
-        var sessionA = new SessionId("child-owner/reminder-session-a");
-        var sessionB = new SessionId("child-owner/reminder-session-b");
+        var sessionA = new SessionId($"child-owner/cross-{starter}-a");
+        var sessionB = new SessionId($"child-owner/cross-{starter}-b");
         var control = await ConfigureJournalAsync();
         var childGate = NewGate();
         _clients.A.NextResponseGate = childGate;
@@ -244,7 +248,7 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
 
         try
         {
-            await SendAsync(sessionA, "Start a child.", Operator("local"));
+            await SendAsync(sessionA, "Start a child.", SourceOf(starter, "child-reminder:1000"));
             var accepted = await control.Acceptance.Task.WaitAsync(Deadline, Cancellation);
             await _clients.A.FirstCallEntered.Task.WaitAsync(Deadline, Cancellation);
             await AwaitAssertAsync(() => Assert.Single(control.Committed.OfType<TurnRecorded>()),
@@ -255,7 +259,7 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
             _clients.Parent.PlannedResponses.Enqueue([new TextContent("Checked.")]);
 
             // Act
-            await SendAsync(sessionB, "Check the child of the other session.", ReminderOf("child-reminder:3000"));
+            await SendAsync(sessionB, "Check the child of the other session.", SourceOf(controller, "child-reminder:3000"));
             await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<ToolCallRecorded>(),
                 evt => evt.ToolResult.ToolCallId?.Value == "cross-cancel"), Deadline, cancellationToken: Cancellation);
 
@@ -410,7 +414,12 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
     };
 
     private static MessageSource SourceOf(string kind, string fireKey) =>
-        kind == "reminder" ? ReminderOf(fireKey) : Operator("local");
+        kind switch
+        {
+            "reminder" => ReminderOf(fireKey),
+            "other-person" => Operator("bob"),
+            _ => Operator("local")
+        };
 
     // The source shape of ReminderExecutionActor.InitializeCurrentSessionAsync for a TUI-style origin.
     private static MessageSource ReminderOf(string fireKey) => new()

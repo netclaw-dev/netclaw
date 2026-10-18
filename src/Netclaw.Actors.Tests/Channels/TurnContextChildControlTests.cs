@@ -13,7 +13,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.Tests.Channels;
 
 /// <summary>
-/// Issue #2524. A reminder turn manages the child runs of its own session. The comparison for child status
+/// Issue #2524. A reminder turn and a person turn of one session manage each other's child runs. The comparison for child status
 /// and cancel is <see cref="TurnContext.CanControlChildRunOf"/>. The instance is the requesting turn and the
 /// argument is the turn that started the run. <see cref="TurnContext.HasSameRequester"/> keeps its meaning,
 /// because input batching also uses it (see <see cref="TurnContextRequesterTests"/>).
@@ -84,11 +84,35 @@ public sealed class TurnContextChildControlTests
         Assert.True(reminder.CanControlChildRunOf(owner));
     }
 
-    [Fact]
-    public void A_person_does_not_control_a_run_that_a_reminder_turn_started()
+    // Owner answer of 18 October 2026: the relaxation is symmetric. A person turn of the same session controls
+    // a run that a reminder turn started, whatever the sender of the person.
+    [Theory]
+    [InlineData("local")]
+    [InlineData("bob")]
+    public void A_person_controls_a_run_that_a_reminder_turn_started_in_the_same_session(string sender)
     {
-        // Unchanged rule: the relaxation reads the requester only.
-        Assert.False(Person().CanControlChildRunOf(Reminder()));
+        var person = Person() with { RequesterSenderId = new SenderId(sender) };
+
+        Assert.True(person.CanControlChildRunOf(Reminder()));
+    }
+
+    [Theory]
+    [InlineData("session")]
+    [InlineData("audience")]
+    [InlineData("boundary")]
+    [InlineData("channel")]
+    public void A_person_that_differs_in_a_kept_fact_does_not_control_a_run_that_a_reminder_turn_started(string field)
+    {
+        var person = field switch
+        {
+            "session" => Person() with { SessionId = new SessionId("other-session") },
+            "audience" => Person() with { Audience = TrustAudience.Team },
+            "boundary" => Person() with { Boundary = TrustBoundary.Public },
+            "channel" => Person() with { ChannelType = ChannelType.Slack },
+            _ => throw new ArgumentOutOfRangeException(nameof(field), field, null)
+        };
+
+        Assert.False(person.CanControlChildRunOf(Reminder()));
     }
 
     [Fact]
@@ -121,6 +145,10 @@ public sealed class TurnContextChildControlTests
 
         Assert.False(webhook.CanControlChildRunOf(Person()));
         Assert.False(noKind.CanControlChildRunOf(Person()));
+        // The same holds when such a turn started the run.
+        var bob = Person() with { RequesterSenderId = new SenderId("bob") };
+        Assert.False(bob.CanControlChildRunOf(webhook));
+        Assert.False(bob.CanControlChildRunOf(noKind));
     }
 
     [Fact]
