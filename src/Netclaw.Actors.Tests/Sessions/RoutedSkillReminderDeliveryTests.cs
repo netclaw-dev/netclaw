@@ -4,9 +4,11 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Akka.Persistence;
 using Akka.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
@@ -115,7 +117,7 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
     {
         // Arrange: the reminder prompt runs a routed skill. The turn is recorded by the routed-skill path.
         var sessionId = new SessionId("mattermost/chan1/routed-reminder-live");
-        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
+        var (subscriber, completed, childGate) = await RunRoutedTurnWithHeldChildAsync(sessionId, ReminderSource(FireKey));
         Assert.Equal(new Netclaw.Actors.Reminders.ReminderId(FireKey), completed.SourceReminderId);
 
         // Act
@@ -124,6 +126,7 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
         // Assert
         var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
         Assert.Equal(ReminderSlug, alert.Source);
+        childGate.TrySetResult();
     }
 
     [Fact]
@@ -131,7 +134,7 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
     {
         // Arrange
         var sessionId = new SessionId("mattermost/chan1/routed-reminder-retryable");
-        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
+        var (subscriber, completed, childGate) = await RunRoutedTurnWithHeldChildAsync(sessionId, ReminderSource(FireKey));
         var callsBefore = ChatClient.CallCount;
 
         // Act: ContentRejected is retryable for an ordinary turn. A routed turn has no retry budget to spend.
@@ -141,6 +144,7 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
         var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
         Assert.Equal(ReminderSlug, alert.Source);
         AssertNextModelCallIsTheBarrier(callsBefore);
+        childGate.TrySetResult();
     }
 
     [Fact]
@@ -148,7 +152,7 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
     {
         // Arrange
         var sessionId = new SessionId("mattermost/chan1/routed-reminder-retryable-twice");
-        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
+        var (subscriber, completed, childGate) = await RunRoutedTurnWithHeldChildAsync(sessionId, ReminderSource(FireKey));
         var callsBefore = ChatClient.CallCount;
 
         // Act
@@ -158,6 +162,7 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
         // Assert
         await AwaitExactlyOneAlertAsync(sessionId, subscriber);
         AssertNextModelCallIsTheBarrier(callsBefore);
+        childGate.TrySetResult();
     }
 
     [Fact]
@@ -165,14 +170,13 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
     {
         // Arrange: a session that replays the journal reads the routed mark of the TurnRecorded event.
         var sessionId = new SessionId("mattermost/chan1/routed-reminder-recovered");
-        var (_, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
-        await StopSessionAsync(sessionId);
+        await SeedRoutedTurnJournalAsync(sessionId, new Netclaw.Actors.Reminders.ReminderId(FireKey));
 
         var recovered = CreateTestProbe("routed-recovered-subscriber");
         await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
 
         // Act
-        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.TransportFailure);
+        SendDeliveryFailed(sessionId, new TurnNumber(1), DeliveryFailureKind.TransportFailure);
 
         // Assert
         var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
@@ -184,15 +188,14 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
     {
         // Arrange
         var sessionId = new SessionId("mattermost/chan1/routed-reminder-recovered-retryable");
-        var (_, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
-        await StopSessionAsync(sessionId);
+        await SeedRoutedTurnJournalAsync(sessionId, new Netclaw.Actors.Reminders.ReminderId(FireKey));
 
         var recovered = CreateTestProbe("routed-recovered-retryable-subscriber");
         await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
         var callsBefore = ChatClient.CallCount;
 
         // Act
-        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+        SendDeliveryFailed(sessionId, new TurnNumber(1), DeliveryFailureKind.ContentRejected);
 
         // Assert: the replayed session behaves like the live session in the test above.
         var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
@@ -204,20 +207,21 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
     public async Task A_session_that_passivated_alerts_and_does_not_retry_a_retryable_failure_on_a_routed_skill_reminder_turn()
     {
         // Arrange: the restored session does not replay TurnRecorded, so the snapshot carries the routed mark.
+        // A live routed turn leaves an open child run, and the session does not passivate while a child run is
+        // open. The test therefore stores the snapshot that a passivation after the routed turn would save.
         var sessionId = new SessionId("mattermost/chan1/routed-reminder-passivated-retryable");
-        var (subscriber, completed) = await RunTurnAsync(sessionId, ReminderSource(FireKey), RoutedPrompt);
-        var session = await ResolveSessionAsync(sessionId);
-        Watch(session);
-        session.Tell(new LeaveSession(subscriber) { SessionId = sessionId });
-        session.Tell(ReceiveTimeout.Instance);
-        await ExpectTerminatedAsync(session, cancellationToken: TestContext.Current.CancellationToken);
+        await SeedSnapshotAsync(sessionId, SnapshotOfOneTurn() with
+        {
+            EligibleDeliveryReminderId = new Netclaw.Actors.Reminders.ReminderId(FireKey),
+            EligibleDeliveryTurnRoutedSkill = true
+        });
 
         var recovered = CreateTestProbe("routed-passivated-subscriber");
         await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
         var callsBefore = ChatClient.CallCount;
 
         // Act
-        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+        SendDeliveryFailed(sessionId, new TurnNumber(1), DeliveryFailureKind.ContentRejected);
 
         // Assert
         var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
@@ -231,7 +235,7 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
         // Arrange: no reminder started this turn. A person in the thread sees the missing reply.
         var sessionId = new SessionId("mattermost/chan1/routed-person-live");
         var personSource = ReminderSource(FireKey) with { ReminderId = null };
-        var (subscriber, completed) = await RunTurnAsync(sessionId, personSource, RoutedPrompt);
+        var (subscriber, completed, childGate) = await RunRoutedTurnWithHeldChildAsync(sessionId, personSource);
         Assert.Null(completed.SourceReminderId);
         var callsBefore = ChatClient.CallCount;
 
@@ -242,6 +246,7 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
         // Assert
         Assert.Equal(0, AlertCount);
         AssertNextModelCallIsTheBarrier(callsBefore);
+        childGate.TrySetResult();
     }
 
     [Fact]
@@ -249,22 +254,64 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
     {
         // Arrange: no reminder started this turn. A person in the thread sees the missing reply.
         var sessionId = new SessionId("mattermost/chan1/routed-person-recovered");
-        var personSource = ReminderSource(FireKey) with { ReminderId = null };
-        var (_, completed) = await RunTurnAsync(sessionId, personSource, RoutedPrompt);
-        Assert.Null(completed.SourceReminderId);
-        await StopSessionAsync(sessionId);
+        await SeedRoutedTurnJournalAsync(sessionId, reminderId: null);
 
         var recovered = CreateTestProbe("routed-person-subscriber");
         await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
         var callsBefore = ChatClient.CallCount;
 
         // Act
-        SendDeliveryFailed(sessionId, completed.TurnNumber, DeliveryFailureKind.ContentRejected);
+        SendDeliveryFailed(sessionId, new TurnNumber(1), DeliveryFailureKind.ContentRejected);
         await AwaitSessionHandledEarlierMessagesAsync(sessionId, recovered);
 
         // Assert
         Assert.Equal(0, AlertCount);
         AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    // The coordination stack runs a routed skill as a child run. The routed turn records the acceptance, and a later
+    // child-delivery turn posts the child result. The test holds the child's model call, so the routed turn stays the
+    // latest recorded turn while the test sends its report. The method returns after the child's call started, so the
+    // next model call belongs to the session.
+    private async Task<(Akka.TestKit.TestProbe Subscriber, TurnCompleted Completed, TaskCompletionSource ChildGate)>
+        RunRoutedTurnWithHeldChildAsync(SessionId sessionId, MessageSource source)
+    {
+        var childGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callsBefore = ChatClient.CallCount;
+        ChatClient.NextResponseGate = childGate;
+        var (subscriber, completed) = await RunTurnAsync(sessionId, source, RoutedPrompt);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(ChatClient.CallCount > callsBefore, "The child model call did not start.");
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        return (subscriber, completed, childGate);
+    }
+
+    // A live routed turn leaves an open child run. A recovered session records that run as lost and starts a
+    // child-delivery turn at once, so the routed turn stops being the latest recorded turn. The recovery tests
+    // therefore write the routed turn straight to the journal, as a session without an open child run leaves it.
+    private async Task SeedRoutedTurnJournalAsync(SessionId sessionId, Netclaw.Actors.Reminders.ReminderId? reminderId)
+    {
+        var turn = new TurnRecorded
+        {
+            SessionId = sessionId,
+            UserMessage = new SerializableChatMessage { Role = Netclaw.Actors.Protocol.ChatRole.User, Content = RoutedPrompt },
+            AssistantReply = new SerializableChatMessage
+            {
+                Role = Netclaw.Actors.Protocol.ChatRole.Assistant,
+                Content = "The routed skill accepted the task."
+            },
+            RecordedAtMs = 1_712_000_000_000,
+            RoutedSkill = true,
+            SourceReminderId = reminderId
+        };
+        var probe = CreateTestProbe("journal-seed-" + Guid.NewGuid().ToString("N"));
+        var write = new AtomicWrite(new Persistent(turn, 1, $"session-{sessionId.Value}", writerGuid: Guid.NewGuid().ToString("N")));
+        Akka.Persistence.Persistence.Instance.Apply(Sys).JournalFor(null).Tell(
+            new WriteMessages([write], probe.Ref, actorInstanceId: 1), probe.Ref);
+        await probe.ExpectMsgAsync<WriteMessagesSuccessful>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     // The first model call after the report must belong to the barrier message. A retry would make its own
