@@ -142,7 +142,8 @@ public sealed class OpenChildRunsMutationTests
             },
             InitialWorkingSnapshot = null,
             AcceptedAtMs = acceptedAtMs,
-            Lifecycle = lifecycle
+            Lifecycle = lifecycle,
+            SourceReminderId = null
         };
 
     private static ChildRunLifecycle.Closed Closed()
