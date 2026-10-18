@@ -6,10 +6,10 @@ set -euo pipefail
 #
 #   Netclaw.Cli, Daemon/DaemonManager.cs
 #     stale-pid:begin/end   the PID-file branch of TryGetRunningPid (a gone or non-daemon process)
-#     stop-notice:begin/end the notice and the reading of its answer (200 with the PID, 409, other)
-#     stop-proof:begin/end  the decision: an accepted notice, or no answer plus an environment match
+#     stop-notice:begin/end the notice and the reading of its answer (200 with the PID and home, 409, other)
+#     stop-proof:begin/end  the decision: an accepted notice, or an unconfirmed notice plus an environment match
 #   Netclaw.Configuration, HomeIdentity.cs
-#     home-match:begin/end  the canonical home path, the home comparison, and the environment check
+#     home-match:begin/end  the link walk, the home comparison, and the environment rule
 #
 # Each marker pair must occur once. The tests are StopProofMutationTests (and the endpoint tests of
 # ShutdownNoticeIdentityMutationTests, which share the home comparison). Every tested mutant must die.
@@ -40,10 +40,12 @@ span_of() {
   ' "$file"
 }
 
-# run_gate <project> <source file> <relative path in project> <minimum mutants> <report dir> <label>...
+# run_gate <project> <source file> <relative path in project> <minimum mutants> <report dir>
+#          <detected statuses: a jq test> <label>...
+# <detected statuses> names the Stryker statuses that count as a dead mutant.
 run_gate() {
-  local project="$1" source_file="$2" relative="$3" minimum="$4" report_dir="$5"
-  shift 5
+  local project="$1" source_file="$2" relative="$3" minimum="$4" report_dir="$5" detected_filter="$6"
+  shift 6
   local mutate_args=() lines='[]' label spans start end first last
   for label in "$@"; do
     # Fail before Stryker starts when a marker is missing or duplicated. The `|| return` is needed:
@@ -69,7 +71,7 @@ run_gate() {
   tested="$(
     jq '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length' "$report"
   )"
-  killed="$(jq '[.files[].mutants[] | select(.status == "Killed")] | length' "$report")"
+  killed="$(jq "[.files[].mutants[] | select($detected_filter)] | length" "$report")"
   in_span="$(
     jq --arg source "$source_file" --argjson spans "$lines" \
       '[(.files[$source].mutants // [])[]
@@ -86,11 +88,15 @@ run_gate() {
   fi
 }
 
+# A mutant that removes the 40-link bound of HomeIdentity.Canonical makes a link cycle spin until Stryker
+# stops the test run. Stryker reports that as Timeout, and a spin is a detected defect, so the home-match
+# span counts Timeout as dead, as run-exact-verb-chain-mutations.sh does. The DaemonManager spans count
+# Killed only.
 failed=0
 run_gate Netclaw.Cli.csproj \
-  "$repo_root/src/Netclaw.Cli/Daemon/DaemonManager.cs" "Daemon/DaemonManager.cs" 22 \
-  "$output_path/cli" stale-pid stop-notice stop-proof || failed=1
+  "$repo_root/src/Netclaw.Cli/Daemon/DaemonManager.cs" "Daemon/DaemonManager.cs" 32 \
+  "$output_path/cli" '.status == "Killed"' stale-pid stop-notice stop-proof || failed=1
 run_gate Netclaw.Configuration.csproj \
-  "$repo_root/src/Netclaw.Configuration/HomeIdentity.cs" "HomeIdentity.cs" 11 \
-  "$output_path/configuration" home-match || failed=1
+  "$repo_root/src/Netclaw.Configuration/HomeIdentity.cs" "HomeIdentity.cs" 45 \
+  "$output_path/configuration" '.status == "Killed" or .status == "Timeout"' home-match || failed=1
 exit "$failed"

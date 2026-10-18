@@ -23,50 +23,103 @@ public static class HomeIdentity
         ".netclaw"));
 
     // home-match:begin
+    private const int MaxLinkHops = 40;
+
     /// <summary>
-    /// The full path with no trailing separator and every link resolved, in every path part. A part that
-    /// does not exist is not a link and keeps its spelling, so a home that does not exist still compares.
-    /// A link target is not checked for links of its own: two spellings then compare as different homes,
-    /// and a caller refuses. It never makes two different folders compare as one.
+    /// The resolved home path: the full path with no trailing separator and every link resolved, one path
+    /// component at a time, as <c>realpath(3)</c> does. A relative link target is joined to the folder that the
+    /// walk has already resolved, so a <c>..</c> in a target leaves that folder. A part that does not exist is
+    /// not a link and keeps its spelling. It throws <see cref="IOException"/> after more than 40 links.
     /// </summary>
     public static string Canonical(string path)
     {
         var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-        var root = Path.GetPathRoot(full)!;
-        var current = root;
-        foreach (var part in full[root.Length..].Split(
-                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                     StringSplitOptions.RemoveEmptyEntries))
+        var rootLength = Path.GetPathRoot(full.AsSpan()).Length;
+        var done = full[..rootLength];
+        var rest = new Stack<string>(Parts(full[rootLength..]).Reverse());
+        var hops = 0;
+        while (hops <= MaxLinkHops && rest.TryPop(out var part))
         {
-            current = Path.Combine(current, part);
-            if (!Directory.Exists(current))
+            if (part == ".")
                 continue;
 
-            // Every part is checked, so a link in a parent folder counts (macOS keeps /var and /tmp behind links).
-            var target = new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true);
-            if (target is not null)
-                current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(target.FullName));
+            if (part == "..")
+            {
+                done = Path.GetDirectoryName(done) ?? done;
+                continue;
+            }
+
+            var candidate = Path.Combine(done, part);
+            var target = new DirectoryInfo(candidate).LinkTarget;
+            if (target is null)
+            {
+                done = candidate;
+                continue;
+            }
+
+            hops++;
+            var targetRootLength = Path.GetPathRoot(target.AsSpan()).Length;
+            if (targetRootLength > 0)
+                done = target[..targetRootLength];
+
+            foreach (var targetPart in Parts(target[targetRootLength..]).Reverse())
+                rest.Push(targetPart);
         }
 
-        return current;
+        // The bound is checked after the loop, so a cycle ends the loop and never spins.
+        if (hops > MaxLinkHops)
+            throw new IOException($"The path '{path}' follows more than {MaxLinkHops} links.");
+
+        return Path.TrimEndingDirectorySeparator(done);
     }
 
+    private static string[] Parts(string path)
+        => path.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+
+    /// <summary>Whether two paths name the same home. A path with no resolved form (a link cycle) matches nothing.</summary>
     public static bool Same(string first, string second)
-        => string.Equals(Canonical(first), Canonical(second), PathComparison);
+    {
+        try
+        {
+            return string.Equals(Canonical(first), Canonical(second), PathComparison);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
-    /// Whether a process with this environment serves <paramref name="home"/>. A process with no
-    /// <c>NETCLAW_HOME</c> serves the default home. <paramref name="environment"/> is the text of
+    /// Whether a process with this environment serves <paramref name="home"/>, read as that process reads
+    /// itself: <c>NETCLAW_HOME</c>, or <c>&lt;HOME&gt;/.netclaw</c> with the <c>HOME</c> of the same
+    /// environment. No usable value gives no proof. <paramref name="environment"/> is the text of
     /// <c>/proc/&lt;pid&gt;/environ</c>: entries that end with a NUL character.
     /// </summary>
     public static bool EnvironmentServesHome(string environment, string home)
     {
-        var declared = environment.Split('\0')
-            .FirstOrDefault(entry => entry.StartsWith("NETCLAW_HOME=", StringComparison.Ordinal))
-            ?["NETCLAW_HOME=".Length..];
-        var served = string.IsNullOrEmpty(declared) ? DefaultHome : declared;
+        var entries = environment.Split('\0');
+        var declared = ValueOf(entries, "NETCLAW_HOME=");
+        string served;
+        if (string.IsNullOrWhiteSpace(declared))
+        {
+            var profile = ValueOf(entries, "HOME=");
+            if (string.IsNullOrEmpty(profile) || !Path.IsPathFullyQualified(profile))
+                return false;
+
+            served = Path.Combine(profile, ".netclaw");
+        }
+        else
+        {
+            served = declared.Trim();
+            if (!Path.IsPathFullyQualified(served) || served.Contains('~', StringComparison.Ordinal) || served.Contains('$', StringComparison.Ordinal))
+                return false;
+        }
+
         return Same(served, home);
     }
+
+    private static string? ValueOf(string[] entries, string prefix)
+        => entries.FirstOrDefault(entry => entry.StartsWith(prefix, StringComparison.Ordinal))?[prefix.Length..];
     // home-match:end
 
     /// <summary>

@@ -4,7 +4,7 @@ set -euo pipefail
 # Mutation gate for #2527 rule 1: the identity check of POST /api/lifecycle/shutdown.
 # The check sits between the markers `// shutdown-identity:begin` and `// shutdown-identity:end`
 # in LifecycleEndpointRouteBuilderExtensions.cs. The span holds the parse of the PID, the parse
-# of the home, and the comparison of both with the PID and the home of this daemon.
+# of the home (NUL and fully qualified checks), and the comparison of both with the PID and the home of this daemon.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_file="$repo_root/src/Netclaw.Daemon/Lifecycle/LifecycleEndpointRouteBuilderExtensions.cs"
@@ -41,7 +41,7 @@ read -r span_start span_end first_line last_line < <(
 )
 
 report="$output_path/reports/mutation-report.json"
-minimum_count=18
+minimum_count=19
 tested_count="$(
   jq '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length' "$report"
 )"

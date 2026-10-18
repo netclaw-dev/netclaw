@@ -69,7 +69,15 @@ public sealed partial class DaemonManager
         }
 
         if (TryGetRunningPid(out var existingPid))
+        {
+            if (existingPid != 0 && !PidServesThisHome(existingPid))
+                return new DaemonResult(
+                    false,
+                    $"Daemon was not started. {NotShownToServe(existingPid, answered: false)}",
+                    IsRefusal: true);
+
             return new DaemonResult(false, $"Daemon already running (PID {existingPid}).");
+        }
 
         var binaryPath = FindDaemonBinary();
         if (binaryPath is null)
@@ -142,7 +150,8 @@ public sealed partial class DaemonManager
         if (pid == 0)
             return new DaemonResult(false,
                 "Daemon appears running (lock file held) but PID file is missing. " +
-                "The daemon will self-terminate shortly, or use 'pkill netclawd' to stop it manually.");
+                "The daemon will self-terminate shortly. If it does not, find the process that holds " +
+                $"the lock file {_paths.LockFilePath} and stop that process with 'kill <pid>'.");
 
         Process process;
         try
@@ -171,12 +180,13 @@ public sealed partial class DaemonManager
         var home = HomeIdentity.Canonical(_paths.BasePath);
         var outcome = await NotifyAsync(pid, home, reason, cancellationToken);
         var proven = outcome == NoticeOutcome.Accepted
-            || (outcome == NoticeOutcome.NoAnswer && HomeIdentity.ProcessServesHome(pid, home));
+            || (outcome == NoticeOutcome.Unconfirmed && HomeIdentity.ProcessServesHome(pid, home));
         if (!proven)
         {
-            var refusal = $"Nothing was stopped. PID {pid} is not shown to serve {_paths.BasePath}.";
-            Console.Error.WriteLine(refusal);
-            return new DaemonResult(false, refusal);
+            return new DaemonResult(
+                false,
+                $"Nothing was stopped. {NotShownToServe(pid, answered: outcome == NoticeOutcome.Refused)}",
+                IsRefusal: true);
         }
         // stop-proof:end
 
@@ -273,8 +283,11 @@ public sealed partial class DaemonManager
         /// <summary>A 409, or a 200 for another PID. A refusal is never overruled.</summary>
         Refused,
 
-        /// <summary>No connection, a timeout, or a status other than 200 and 409.</summary>
-        NoAnswer
+        /// <summary>
+        /// No connection, a timeout, a status other than 200 and 409, or a 200 for the right PID with no home
+        /// (an older daemon). The environment of the process decides.
+        /// </summary>
+        Unconfirmed
     }
 
     private static readonly TimeSpan NoticeTimeout = TimeSpan.FromSeconds(5);
@@ -294,7 +307,7 @@ public sealed partial class DaemonManager
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested && ex is (HttpRequestException or TaskCanceledException))
         {
             Console.Error.WriteLine($"Note: could not notify daemon of shutdown reason: {ex.Message}");
-            return NoticeOutcome.NoAnswer;
+            return NoticeOutcome.Unconfirmed;
         }
     }
 
@@ -309,33 +322,65 @@ public sealed partial class DaemonManager
         if (response.StatusCode == HttpStatusCode.Conflict)
             return NoticeOutcome.Refused;
         if (response.StatusCode != HttpStatusCode.OK)
-            return NoticeOutcome.NoAnswer;
+            return NoticeOutcome.Unconfirmed;
 
-        // A daemon from before the identity check answers 200 for any notice and reports its own PID.
-        // Only the PID of this notice is proof.
+        // A daemon from before the identity check answers 200 for any notice and reports its own PID, so a
+        // matching PID proves the PID only. The daemon of this version also names its resolved home.
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        return TryReadAnsweredPid(body, out var answered) && answered == pid
-            ? NoticeOutcome.Accepted
-            : NoticeOutcome.Refused;
+        return ReadAnswer(body, pid, home);
     }
-    // stop-notice:end
 
-    // A 200 whose body is not a daemon answer (another service on the port) names no PID.
-    private static bool TryReadAnsweredPid(string body, out int pid)
+    // A 200 whose body is not a daemon answer (another service on the port) is a refusal.
+    private static NoticeOutcome ReadAnswer(string body, int pid, string home)
     {
-        pid = 0;
+        JsonDocument document;
         try
         {
-            using var document = JsonDocument.Parse(body);
-            return document.RootElement.ValueKind == JsonValueKind.Object
-                && document.RootElement.TryGetProperty("pid", out var element)
-                && element.TryGetInt32(out pid);
+            document = JsonDocument.Parse(body);
         }
         catch (JsonException)
         {
-            return false;
+            return NoticeOutcome.Refused;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("pid", out var answeredPid)
+                || answeredPid.ValueKind != JsonValueKind.Number
+                || !answeredPid.TryGetInt32(out var answered)
+                || answered != pid)
+                return NoticeOutcome.Refused;
+
+            if (!root.TryGetProperty("home", out var answeredHome))
+                return NoticeOutcome.Unconfirmed;
+
+            return answeredHome.ValueKind == JsonValueKind.String && HomeIdentity.Same(answeredHome.GetString()!, home)
+                ? NoticeOutcome.Accepted
+                : NoticeOutcome.Refused;
         }
     }
+    // stop-notice:end
+
+    // The two lines of a refusal. The second line names the cause and the recovery.
+    private string NotShownToServe(int pid, bool answered)
+    {
+        var endpoint = DaemonApi.ResolveLocalControlEndpoint(_paths);
+        var cause = answered
+            ? $"The daemon at {endpoint} answered for another daemon or home."
+            : $"The daemon at {endpoint} did not confirm PID {pid} for this home.";
+        return $"PID {pid} is not shown to serve {_paths.BasePath}.\n{cause} "
+            + $"If no Netclaw daemon of this home runs, delete {_paths.PidFilePath}. "
+            + $"If PID {pid} is a daemon of this home, check it, then stop it with 'kill {pid}' (Task Manager on Windows).";
+    }
+
+    // The proof of start and status. They send no notice, so they read the environment of the process, or,
+    // where the environment cannot be read, the lock file of this home.
+    private bool PidServesThisHome(int pid)
+        => HomeIdentity.ReadProcessEnvironment(pid) is { } environment
+            ? HomeIdentity.EnvironmentServesHome(environment, HomeIdentity.Canonical(_paths.BasePath))
+            : IsLockFileHeld();
 
     /// <summary>
     /// Reports daemon status.
@@ -369,6 +414,9 @@ public sealed partial class DaemonManager
                 return new DaemonStatus(IsRunning: false, Pid: null,
                     Message: "Daemon is not running (PID file pointed to a different process).");
             }
+
+            if (!PidServesThisHome(pid))
+                return new DaemonStatus(IsRunning: true, Pid: pid, Message: NotShownToServe(pid, answered: false), ServesThisHome: false);
 
             // Prefer PID file timestamp (reflects soft restarts), fall back to process start time
             TryReadPidFile(out _, out var pidFileStartedAt);
@@ -876,6 +924,6 @@ public sealed partial class DaemonManager
     }
 }
 
-public sealed record DaemonResult(bool Success, string Message, string? CrashLogPath = null);
+public sealed record DaemonResult(bool Success, string Message, string? CrashLogPath = null, bool IsRefusal = false);
 
-public sealed record DaemonStatus(bool IsRunning, int? Pid, string Message);
+public sealed record DaemonStatus(bool IsRunning, int? Pid, string Message, bool ServesThisHome = true);

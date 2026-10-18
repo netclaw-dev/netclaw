@@ -21,7 +21,7 @@ public sealed record ShutdownDaemonRequest(
     [FromQuery(Name = "home")] string? Home);
 
 /// <summary>Successful shutdown acknowledgement: echoes the reason and reports the daemon PID.</summary>
-public sealed record ShutdownDaemonResponse(string Reason, int Pid);
+public sealed record ShutdownDaemonResponse(string Reason, int Pid, string Home);
 
 /// <summary>Error payload returned when a lifecycle request is malformed.</summary>
 public sealed record LifecycleErrorResponse(string Error);
@@ -47,7 +47,8 @@ public static class LifecycleEndpointRouteBuilderExtensions
             if (!int.TryParse(request.Pid, NumberStyles.None, CultureInfo.InvariantCulture, out var pid)
                 || pid <= 0
                 || string.IsNullOrEmpty(request.Home)
-                || !Path.IsPathRooted(request.Home))
+                || request.Home.Contains('\0', StringComparison.Ordinal)
+                || !Path.IsPathFullyQualified(request.Home))
                 return TypedResults.BadRequest(new LifecycleErrorResponse("pid and home query parameters are required"));
 
             if (pid != Environment.ProcessId || !HomeIdentity.Same(request.Home, paths.BasePath))
@@ -61,7 +62,7 @@ public static class LifecycleEndpointRouteBuilderExtensions
             // shutdown-identity:end
 
             notifier.NotifyShutdown(request.Reason);
-            return TypedResults.Ok(new ShutdownDaemonResponse(request.Reason, Environment.ProcessId));
+            return TypedResults.Ok(new ShutdownDaemonResponse(request.Reason, Environment.ProcessId, HomeIdentity.Canonical(paths.BasePath)));
         })
         .WithName("ShutdownDaemon")
         .WithSummary("Request a graceful daemon shutdown ahead of SIGTERM.")

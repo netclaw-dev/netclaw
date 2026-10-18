@@ -396,12 +396,16 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
     {
         Task<DaemonResult>? stopTask = null;
         string? stopFailure = null;
+        var refused = false;
         try
         {
             stopTask = _stopDaemonAsync("factory-reset", ct);
             var result = await stopTask.WaitAsync(ct);
             if (!result.Success && !IsDaemonAlreadyStopped(result.Message))
+            {
                 stopFailure = result.Message;
+                refused = result.IsRefusal;
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -415,6 +419,10 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
 
         if (_isDaemonRunning())
         {
+            // A refusal carries its own recovery. The default unit may serve another home, so do not advise to stop it.
+            if (refused)
+                throw new InvalidOperationException($"{stopFailure}\nNothing was deleted.");
+
             throw new InvalidOperationException(
                 $"the daemon is still running or its systemd unit could restart it ({stopFailure ?? "it did not exit"}). Nothing was deleted. " +
                 "Run this from a login session, or run `systemctl --user stop netclaw.service`, then retry.");
