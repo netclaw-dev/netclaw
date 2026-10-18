@@ -124,6 +124,9 @@ public class EmptyResponseEscalationTests : LlmSessionTestBase
         // The user must see why the turn ended.
         var error = Assert.Single(outputs.OfType<ErrorOutput>());
         Assert.Contains("truncat", error.Message, StringComparison.OrdinalIgnoreCase);
+        // The provider worked. The model used all of its output budget, so the model gets the blame.
+        // Asserted by name: the error category contract in HeadlessTurnErrorCategoryTests names ModelBehavior.
+        Assert.Equal("ModelBehavior", error.Category.ToString());
 
         // Fail fast: no retry call.
         Assert.Equal(1, _fakeChatClient.CallCount);

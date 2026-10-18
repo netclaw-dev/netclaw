@@ -88,7 +88,8 @@ public sealed class LlmSessionEmptyTextCapTests(ITestOutputHelper output) : LlmS
 
         var error = await ReadUntilAsync(output => output is ErrorOutput) as ErrorOutput;
         Assert.NotNull(error);
-        Assert.Equal(ErrorCategory.Timeout, error.Category);
+        // The provider streamed without fault. The model gave no answer, so the model gets the blame.
+        Assert.Equal(ErrorCategory.ModelBehavior, error.Category);
         Assert.Contains("thinking", error.Message, StringComparison.OrdinalIgnoreCase);
         await ReadUntilAsync(output => output is TurnCompleted);
     }

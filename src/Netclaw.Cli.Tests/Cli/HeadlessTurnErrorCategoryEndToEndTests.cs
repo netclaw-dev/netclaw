@@ -113,6 +113,24 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         AssertFailed(run, json, "model", "ModelBehavior");
     }
 
+    // A text reply cut off at the output limit, with no tool call. The provider worked. The model used all
+    // of its output budget, so the failure is the model's. Planted bug: the turn reports ProviderFailure,
+    // so the harness sees infra.
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Text_reply_cut_off_at_the_output_limit_is_a_model_failure(bool json)
+    {
+        var model = new ScriptedModel(_ => Text("The first half of the ans"), ChatFinishReason.Length);
+
+        var run = await RunAsync(model, json);
+
+        AssertFailed(run, json, "model", "ModelBehavior");
+        // A retry meets the same limit, so the runtime asks the model once.
+        Assert.Equal(1, model.CallCount);
+    }
+
     // The stream ended with no finish reason: EOF, or a proxy cut the connection. The backend failed. The
     // model did not get a fair turn, so the failure is infra. The same stream fault feeds the thinking-only
     // and the empty case.
