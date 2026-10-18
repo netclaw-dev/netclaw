@@ -191,9 +191,10 @@ public sealed partial class LlmSessionActor
     private static bool HasSameChildAuthority(TurnContextRecord left, TurnContextRecord right)
         => CompareChildContexts(left, right, static (original, candidate) => original.HasSameAuthority(candidate));
 
-    // Status and cancel: the requester that started the child owns it in each later turn.
+    // Status and cancel: the requester that started the child owns it in each later turn. A reminder turn and a
+    // person turn of one session manage each other's runs (TurnContext.CanControlChildRunOf).
     private static bool HasSameChildRequester(TurnContextRecord left, TurnContextRecord right)
-        => CompareChildContexts(left, right, static (original, candidate) => original.HasSameRequester(candidate));
+        => CompareChildContexts(left, right, static (original, candidate) => candidate.CanControlChildRunOf(original));
 
     // A record that cannot be read matches nothing.
     private static bool CompareChildContexts(

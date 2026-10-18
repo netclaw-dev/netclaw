@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.1.0"
+  version: "1.2.2"
 ---
 
 # Agent Coordination
@@ -93,6 +93,9 @@ Do not use artifact reads, status polls, or sleep commands to wait.
 Load `check_agent_run` through `load_tool` only when status or cancellation is necessary.
 Do not create a tight status poll loop. Normal completion uses the terminal result.
 Status and cancellation retain the owner-session and original eligible requester boundary under current policy.
+A reminder turn may check and cancel any child run of its own session, including a run that a person started.
+A person turn may check and cancel a child run that a reminder turn started in the same session.
+A turn cannot reach a child run of another session.
 For child diagnosis, read an exact authorized `log_path` from the terminal result with ordinary file tools.
 Use bounded reads and targeted searches. Follow normal file policy.
 Do not derive paths or search a global log tree.

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -64,11 +65,26 @@ public sealed record TurnContext
            && RequesterSenderId == right.RequesterSenderId
            && RequesterPrincipal == right.RequesterPrincipal;
 
-    // Test-author stub for #2524. It keeps the current rule so the new tests compile and fail.
-    // The implementer replaces the body with the rule in openspec/changes/reminder-turn-manages-own-children/design.md (D1).
-    // The instance is the requesting turn. The argument is the turn that started the child run.
+    // Security boundary: this check decides who may read the status of a child run and who may cancel it (#2524).
+    // The instance is the requesting turn. The argument is the turn that started the run.
+    // If either turn is a reminder turn, the sender and the principal do not count, because a reminder fire
+    // always has the sender "reminder-system" and the principal VerifiedAutomation. The session, the audience,
+    // the boundary, and the channel type must still match, so a turn never reaches a run of another session.
+    // The session is the unit of trust for a reminder. All other pairs of turns keep the six-fact rule.
+    // HasSameRequester stays strict, because input batching also uses it.
     internal bool CanControlChildRunOf(TurnContext owner)
-        => owner.HasSameRequester(this);
+        => IsReminderTurn || owner.IsReminderTurn
+            ? SessionId == owner.SessionId
+              && Audience == owner.Audience
+              && Boundary == owner.Boundary
+              && ChannelType == owner.ChannelType
+            : owner.HasSameRequester(this);
+
+    // Both facts make a reminder turn. Another source kind with VerifiedAutomation, such as a webhook, is not
+    // a reminder turn, and a person turn cannot set the principal.
+    private bool IsReminderTurn
+        => RequesterPrincipal == PrincipalClassification.VerifiedAutomation
+           && Provenance.SourceKind?.Value == ReminderExecutionActor.ReminderSourceKind;
 
     // Turn identity is separate: restart batches can span several turns. Use this check where one authority
     // must continue unchanged (start idempotency, approval and continuation recovery), not for ownership.

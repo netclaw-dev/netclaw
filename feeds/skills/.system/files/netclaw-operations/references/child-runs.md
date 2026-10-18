@@ -7,6 +7,8 @@ The current user batch stays intact. Unfinished siblings do not delay a ready ch
 
 Use `check_agent_run` with the accepted `run_id` when status or intervention is necessary.
 The original owner authority applies to status, cancellation, and downstream consent.
+One exception covers status and cancellation: a reminder turn and a person turn of one session manage each other's child runs.
+The error `This child run is not available to the requester` means that the run is not yours, is in another session, or does not exist. It does not mean that the run was lost.
 Status includes the lifecycle state and `pending_approval_count`.
 A child can wait for human consent while the parent continues other work.
 A later ordinary parent message does not cancel the child.

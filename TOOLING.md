@@ -56,7 +56,7 @@ Hosted runs of 2026-10-17 and 2026-10-18 measured these gate times (minutes):
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4) | 10 to 11 |
-| `child-owner-and-report` | `child-owner` (3.1 to 3.6), `reminder-report-once` (about 3.5 to 4), `child-approval-close` (6 mutants, about 3 to 3.5, estimate) | 10 to 11.5 (estimate) |
+| `child-owner-and-report` | `child-owner` (3.1 to 3.6), `child-control` (about 3 to 3.5), `reminder-report-once` (about 3.5 to 4), `child-approval-close` (6 mutants, about 3 to 3.5, estimate) | 13.5 to 15.5 (estimate) |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
 The `authorization-and-directory` and `guard-and-authority` groups were one group, `approval-and-authorization`. That group took 16.5 to 24.6 minutes on the same day and ran near the timeout.
@@ -66,6 +66,7 @@ A hosted run of 2026-10-18 put the two gates of #2527 part 2 into `verb-chain` a
 `shutdown-notice-identity` took 3.4 minutes and `stop-proof` took 6.9 minutes there. `stop-proof` has its own group, and `shutdown-notice-identity` runs in `reminder`.
 The `shell-analysis` group held three gates. A hosted run of 2026-10-18 took 25 minutes 18 seconds, and the job timeout cancelled it. The `shell-assignment-and-paths` group held three gates and took 21.5 minutes.
 The `session-reliability` group held five gates and took 18.7 minutes. It now holds three gates, and `child-owner-and-report` holds the other two. The `child-approval-close` gate (#2525) joined that group later.
+The `child-control` gate of #2524 runs in `child-owner-and-report` too. The group now holds four gates.
 The `shell-command-analysis` group is still the longest group. Its first invocation (303 mutants) took 15.8 minutes in the slow run. A split of that gate needs a script change and a new expected mutant count for each part. Do not add a gate to this group.
 The `reminder` group took 16.4 minutes in the same run. Do not add a gate to it.
 The hosted runner speed varies, so the time of one gate changes by up to 5 minutes between runs.
@@ -109,6 +110,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that is not `Closed`, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
 | `TurnContext.HasSameRequester` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it | 11 killed | `./scripts/run-child-owner-mutations.sh` |
 | `SessionToolWorkflow.CloseChildApprovals` and `SessionToolWorkflow.ExpireRecoveredChildApprovals` | Issue 2525: a cancel record or a terminal record (also the lost record that recovery writes) closes every approval entry of its run in live code. A checkpoint, a prepared result, a parent approval, and an entry of another run stay open. Recovery closes each child entry that remains. A stranded entry can block a snapshot. In live code, an entry that closes too soon drops a prompt that a person can still answer (a checkpoint, another run, or a parent call) | 6 killed | `./scripts/run-child-approval-close-mutations.sh` |
+| `TurnContext.CanControlChildRunOf` and the reminder turn test (`IsReminderTurn`) | Issue #2524: a reminder turn and a person turn of one session manage each other's child runs, and the sender and the principal do not count. The session, audience, boundary, and channel type must still match, so no turn reaches a run of another session. A turn with `VerifiedAutomation` and another source kind, and a person turn with the reminder source kind, are not reminder turns and keep the six-fact rule | 13 killed | `./scripts/run-child-control-mutations.sh` |
 | The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
 | The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
 
@@ -400,7 +402,7 @@ The final local run killed 11 of 11 mutants in 1 minute 59 seconds with a warm b
 A review run took 2 minutes 36 seconds with a cold report directory.
 A run on a machine with other builds in progress took 6 minutes 11 seconds.
 CI runs it in the `child-owner-and-report` group of the `mutation-gates` job.
-That group holds three gates (with the child approval close gate) and takes 10 to 11.5 minutes on a hosted runner.
+That group holds four gates (with the child control and child approval close gates) and takes about 13.5 to 15.5 minutes on a hosted runner (estimate).
 Its report directory is `artifacts/stryker/child-owner`.
 
 ### Child Approval Close Gate
@@ -432,6 +434,34 @@ entry that replay left open. `ChildApprovalCloseMutationTests` in
 
 The local Stryker run took 2 minutes 14 seconds on a warm build cache. CI runs the gate in the `child-owner-and-report`
 group of the `mutation-gates` job. Its report directory is `artifacts/stryker/child-approval-close`.
+
+### Child Control Gate
+
+Run the child control gate:
+
+```bash
+./scripts/run-child-control-mutations.sh
+```
+
+The script selects the body of `TurnContext.CanControlChildRunOf` and the property `IsReminderTurn`, from the start of the method to the end of the property.
+`LlmSessionActor.ControlChild` uses this check for child status and cancel (issue #2524).
+The `HasSameRequester` gate does not cover it, because the input join rule also uses `HasSameRequester`.
+Stryker makes 13 mutants: the choice between the relaxed rule and the six-fact rule (two mutants), the `||` between the two sides (one), each of the four kept facts (four equality mutants and three `&&` mutants), and the two parts of the reminder test (one equality mutant for each part and one `&&` mutant).
+The linked `TurnContextChildControlTests` source must kill all 13 mutants.
+A reminder turn that differs in a kept fact must not control the run, and the same holds for a person turn and a run that a reminder turn started.
+A reminder turn must ignore the sender and the principal of the other turn.
+A webhook turn, a turn with no source kind, and a person turn with the reminder source kind must not get the relaxation, as requester or as run starter.
+The selector rejects a missing or repeated source marker before Stryker starts.
+The gate fails for a survivor, a changed mutant count, or a compile error in the span.
+
+The span does not include `LlmSessionActor.HasSameChildRequester`, the call in `ControlChild`, or `HasSameAuthority`.
+`ChildOwnerActorSpecs` covers the call path.
+
+The first local run killed 13 of 13 mutants. Stryker took 2 minutes 6 seconds with a warm build cache.
+CI runs it in the `child-owner-and-report` group of the `mutation-gates` job.
+That group now holds four gates.
+Its report directory is `artifacts/stryker/child-control`.
+Measure the group on a cold hosted runner and update the table.
 
 ### Tool Authorization Gate
 
@@ -665,7 +695,7 @@ This gate protects an alerting path, not an authority boundary. A mutant that ma
 turn number would let a report for another turn name the wrong fire. A mutant on the mark would raise one alert for
 each failed post of one reply, or none. A mutant on the retry link would hide the final failure of a retried
 child-delivery turn, or give a later person's turn the link of a reminder.
-CI runs it in the `child-owner-and-report` group of the `mutation-gates` job, with the child owner gate.
+CI runs it in the `child-owner-and-report` group of the `mutation-gates` job, with the child owner and child control gates.
 The gate took 2 to 4 minutes in its hosted runs. The group takes 7 to 8 minutes.
 The local run selected 15 mutants. The whole script took 114 seconds, which includes the Stryker build.
 Its report directory is `artifacts/stryker/reminder-report-once`.

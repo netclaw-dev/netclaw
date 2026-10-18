@@ -187,7 +187,7 @@ jobs:
           - group: session-reliability
             gates: tool-batch-readiness headless-stop-rule open-child-runs
           - group: child-owner-and-report
-            gates: child-owner reminder-report-once child-approval-close
+            gates: child-owner child-control reminder-report-once child-approval-close
 
     steps:
       - name: "Checkout"

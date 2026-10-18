@@ -10,7 +10,7 @@ keywords:
   - reminder approvals
 metadata:
   author: netclaw
-  version: "1.0.1"
+  version: "1.0.2"
 license: MIT
 compatibility: "netclaw >= 0.27.1"
 ---
@@ -61,6 +61,9 @@ The user message gives the reminder ID. If it is missing, call
 - Do not use `set_reminder` to make a copy of the reminder for the test. The
   test must use the real reminder's prompt and audience.
 - The test does not change the schedule or the reminder history.
+- A reminder reaches only the child runs of the session where it fires. If the
+  reminder prompt names a child run, that run must belong to that session. A test
+  in another chat does not prove that the scheduled run can reach the run.
 - A model can choose other commands on a later run. A grant matches the
   command and the folder that the user approved. A repository or "anywhere"
   grant accepts more change than a folder grant.
