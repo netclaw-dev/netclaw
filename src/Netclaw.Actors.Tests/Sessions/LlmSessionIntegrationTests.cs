@@ -1231,9 +1231,9 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.DoesNotContain(outputs, static output => output is ErrorOutput);
         var completed = Assert.IsType<TurnCompleted>(outputs[^1]);
         Assert.Equal(TurnOutcome.Completed, completed.Outcome);
-        // Only this end sets the flag. A channel binding then posts no empty-turn fallback, because that text is
-        // Netclaw text, not text of the model.
-        Assert.True(completed.QuietEnd);
+        // Only the end with no new reply sets the flag. A channel binding then posts no empty-turn fallback,
+        // because that text is Netclaw text, not text of the model. An end with text posts that text instead.
+        Assert.Equal(!finalResponseHasText, completed.QuietEnd);
         var texts = outputs.OfType<TextOutput>().Select(static output => output.Text).ToList();
         string[] expectedTexts = finalResponseHasText ? [FinalText] : [];
         Assert.Equal(expectedTexts, texts);
