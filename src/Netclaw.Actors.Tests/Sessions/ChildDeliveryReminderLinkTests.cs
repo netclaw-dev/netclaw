@@ -432,6 +432,42 @@ public sealed class ChildDeliveryReminderLinkTests : ChildDeliveryReminderLinkTe
         }
     }
 
+    [Fact]
+    public async Task A_new_input_during_the_retry_of_a_person_turn_writes_no_warning()
+    {
+        // Arrange: a person turn has no reminder link. The channel rejects its reply, and the retry turn waits on the main model.
+        var sessionId = new SessionId("boundary/person-turn-retry-cleared");
+        var subscriber = await JoinFullAsync(sessionId);
+        var retryGate = NewGate();
+        try
+        {
+            await SendRequesterAsync(sessionId, "A person speaks.");
+            var person = await NextTurnAsync(subscriber);
+            Assert.Null(person.SourceReminderId);
+            var callsBefore = FakeChat.CallCount;
+            FakeChat.NextResponseGate = retryGate;
+            SendDeliveryFailed(sessionId, person.TurnNumber, DeliveryFailureKind.ContentRejected);
+            await AwaitAssertAsync(
+                () => Assert.True(FakeChat.CallCount > callsBefore, "The session did not start the retry turn."),
+                Deadline, cancellationToken: Cancellation);
+
+            // Act: a second input arrives during the retry. The session buffers it, and no link ends.
+            await EventFilter.Warning(contains: "ended the delivery retry")
+                .ExpectAsync(0, async () => await SendRequesterAsync(sessionId, "The person speaks again during the retry."),
+                    cancellationToken: Cancellation);
+            retryGate.TrySetResult();
+            await NextTurnAsync(subscriber);
+            await NextTurnAsync(subscriber);
+
+            // Assert: there was no link to end, so the session raises no alert.
+            Assert.Equal(0, AlertCount);
+        }
+        finally
+        {
+            retryGate.TrySetResult();
+        }
+    }
+
     private async Task AwaitChildCallsAsync(int count)
         => await AwaitAssertAsync(
             () => Assert.True(Clients.Child.CallCount >= count, $"The child model made {Clients.Child.CallCount} of {count} calls."),
