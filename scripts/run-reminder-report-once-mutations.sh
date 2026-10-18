@@ -17,7 +17,11 @@ spans="$(
       ["if (_recordedTurnNumber != turnNumber)\n            return new ReminderLookup(ReminderLookupKind.UnknownTurn, null);", 1],
       ["if (_recordedTurnNumber != turnNumber || _recordedTurnReminder is null || _recordedTurnReported)\n            return false;", 6],
       ["_recordedTurnReported = true;\n        return true;", 2],
-      ["_recordedTurnReported = false;", 1]
+      ["_recordedTurnReported = false;", 1],
+      ["_retryPending = false;\n    }\n\n    /// <summary>\n    /// Mark the given turn", 1],
+      ["_retryPending = false;\n    }\n\n    /// <summary>\n    /// Which reminder fire", 1],
+      ["_retryPending = true;", 1],
+      ["_retryPending ? _recordedTurnReminder : null", 2]
     );
     for $target (@targets) {
       ($marker, $count) = @$target;

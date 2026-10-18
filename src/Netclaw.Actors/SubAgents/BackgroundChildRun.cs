@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -30,6 +31,14 @@ public sealed record BackgroundChildRun
     public required WorkingContextSnapshot? InitialWorkingSnapshot { get; init; }
     public required long AcceptedAtMs { get; init; }
     public required ChildRunLifecycle Lifecycle { get; init; }
+
+    /// <summary>
+    /// The reminder fire key of the turn that started this child, or null when no reminder started that turn.
+    /// The child-delivery turn copies it to <see cref="SessionProtocol.TurnRecorded.SourceReminderId"/>, so a
+    /// failed post of the child result raises the reminder alert. The field is durable: the acceptance event and
+    /// the snapshot both carry it. A record written before the field reads as null.
+    /// </summary>
+    public required ReminderId? SourceReminderId { get; init; }
 }
 
 public abstract record ChildRunLifecycle

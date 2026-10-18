@@ -35,7 +35,11 @@ public static partial class SessionProtocol
         /// Populated when this turn originated from a reminder firing.
         /// Format is <c>"{reminderId}:{fireTimestampMs}"</c>, matching the value
         /// placed on <see cref="Channels.MessageSource.ReminderId"/> by the
-        /// reminder dispatcher. Null for regular user turns. Used for forensics.
+        /// reminder dispatcher. Null for regular user turns. A child-delivery turn
+        /// carries the link that the child run kept from the turn that started it
+        /// (<see cref="SubAgents.BackgroundChildRun.SourceReminderId"/>), and a delivery
+        /// retry turn carries the link of the turn that it repeats. The session reads it
+        /// to report a failed post of a reminder reply.
         /// </summary>
         public ReminderId? SourceReminderId { get; init; }
 
@@ -53,8 +57,10 @@ public static partial class SessionProtocol
 
         /// <summary>
         /// True when a sub-agent ran a routed skill and produced this turn's reply, so the main model did not.
-        /// Replay needs it to treat the turn as the live session did: a failed post alerts but never retries
-        /// on the main model. A journal entry written before this field reads as false (an ordinary turn).
+        /// Also true for the child-delivery turn that posts the result of a routed-skill child run: both posts of
+        /// a routed skill follow one rule. Replay needs it to treat the turn as the live session did: a failed post
+        /// alerts but never retries on the main model. A journal entry written before this field reads as false
+        /// (an ordinary turn).
         /// </summary>
         public bool RoutedSkill { get; init; }
 

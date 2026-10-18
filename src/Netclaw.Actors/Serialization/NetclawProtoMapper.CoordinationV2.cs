@@ -6,6 +6,7 @@
 using System.Collections.Immutable;
 using Google.Protobuf;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
@@ -287,7 +288,9 @@ internal static partial class NetclawProtoMapper
                 Git = FromLegacyGitInspection(proto.InitialGit)
             },
             AcceptedAtMs = proto.AcceptedAtMs,
-            Lifecycle = lifecycle
+            Lifecycle = lifecycle,
+            // A deployed v1 child record has no reminder link.
+            SourceReminderId = null
         };
     }
 
@@ -393,6 +396,8 @@ internal static partial class NetclawProtoMapper
             OriginalContext = ToProto(run.OriginalContext),
             AcceptedAtMs = run.AcceptedAtMs
         };
+        if (run.SourceReminderId is { } sourceReminder)
+            proto.SourceReminderId = sourceReminder.Value;
         if (run.InitialWorkingSnapshot is { } initialSnapshot)
         {
             proto.InitialWorkingContext = ToProto(initialSnapshot.WorkingContext);
@@ -507,7 +512,8 @@ internal static partial class NetclawProtoMapper
             OriginalContext = FromLegacyTurnContext(proto.OriginalContext),
             InitialWorkingSnapshot = initialWorkingSnapshot,
             AcceptedAtMs = proto.AcceptedAtMs,
-            Lifecycle = lifecycle
+            Lifecycle = lifecycle,
+            SourceReminderId = proto.HasSourceReminderId ? new ReminderId(proto.SourceReminderId) : null
         };
     }
 

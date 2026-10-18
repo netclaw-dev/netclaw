@@ -481,6 +481,9 @@ message BackgroundChildRunV2Proto {
     ChildPreparedStateV2Proto consumed = 18;
     ChildRunClosedV2Proto closed = 19;
   }
+  // The reminder fire key of the turn that started the child. The child-delivery turn copies it, so a failed post
+  // of the child result raises the reminder alert. A record from before this field has no value (no reminder).
+  optional string source_reminder_id = 20;
 }
 
 message ChildRunAcceptedStateV2Proto { ChildRunCheckpointProto checkpoint = 1; }

@@ -18,6 +18,8 @@ internal sealed partial class SessionToolWorkflow
     private SelectedChild? _selectedChild;
     public bool IsPendingChildStart(ToolCallId callId) => _activeBatch.IsPending(callId);
     public bool HasChildContinuation => _selectedChild is not null;
+    // The child whose result the running turn delivers. Unlike ChildDecision, this read has no model-generation check.
+    public ChildContinuation? SelectedContinuation => _selectedChild?.Continuation;
 
     public BackgroundChildRun? SelectChild(SessionState state, long modelGeneration, bool allowSelection)
     {

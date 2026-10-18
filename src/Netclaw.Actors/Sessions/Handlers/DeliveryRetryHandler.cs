@@ -39,6 +39,7 @@ internal sealed class DeliveryRetryHandler
     private ReminderId? _recordedTurnReminder;
     private bool _recordedTurnRouted;
     private bool _recordedTurnReported;
+    private bool _retryPending;
 
     public TurnNumber? EligibleTurnNumber => _eligibleTurnNumber;
     public int RetryCount => _retryCount;
@@ -46,13 +47,14 @@ internal sealed class DeliveryRetryHandler
 
     /// <summary>
     /// Clear all delivery retry state. Called at the start of a new user turn
-    /// and when a turn fails.
+    /// and when a turn fails. It also ends the link of a pending retry.
     /// </summary>
     public void Clear()
     {
         _eligibleTurnNumber = null;
         _retryCount = 0;
         _chainActive = false;
+        _retryPending = false;
     }
 
     /// <summary>
@@ -69,6 +71,7 @@ internal sealed class DeliveryRetryHandler
     /// Remember which reminder fire, if any, started the latest recorded turn, and whether a sub-agent ran
     /// a routed skill for it. <see cref="Clear"/> keeps both. A new recorded turn replaces them and clears the
     /// report mark, so the session always knows the source of the latest turn that delivery feedback can name.
+    /// A recorded turn also ends the link of a pending retry, so the link reaches only the retry turn itself.
     /// The session calls this for a live turn, for a turn it replays from the journal, and when it restores a snapshot.
     /// </summary>
     public void RecordTurn(TurnNumber turnNumber, ReminderId? sourceReminder, bool routedSkill)
@@ -77,6 +80,7 @@ internal sealed class DeliveryRetryHandler
         _recordedTurnReminder = sourceReminder;
         _recordedTurnRouted = routedSkill;
         _recordedTurnReported = false;
+        _retryPending = false;
     }
 
     /// <summary>
@@ -131,7 +135,16 @@ internal sealed class DeliveryRetryHandler
     {
         _retryCount++;
         _chainActive = true;
+        _retryPending = true;
     }
+
+    /// <summary>
+    /// The reminder link that a retry turn keeps: the link of the latest recorded turn, from <see cref="RecordRetry"/>
+    /// until the session records the next turn. Null when no retry is pending. A child-delivery turn has no input,
+    /// so its retry turn has no input source either. Without this link, the final failure of that retry turn would
+    /// raise no alert.
+    /// </summary>
+    public ReminderId? RetriedTurnReminder => _retryPending ? _recordedTurnReminder : null;
 
     /// <summary>
     /// Exhaust the retry budget for the current turn (marks ineligible).

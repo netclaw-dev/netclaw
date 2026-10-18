@@ -1559,6 +1559,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         }
 
         var selected = _input.SelectedInputs;
+        var continuation = _toolWorkflow.ChildDecision(_execution.CurrentModelCallId);
+        var deliveredChild = continuation is null ? null : _state.ChildRuns[continuation.RunId];
         var turnEvent = new TurnRecorded
         {
             SessionId = _sessionId,
@@ -1569,10 +1571,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             },
             AssistantReply = reply,
             RecordedAtMs = NowMs(),
-            SourceReminderId = selected.ReminderId,
+            SourceReminderId = RunningTurnReminder(deliveredChild),
             SourceBackgroundJobId = selected.BackgroundJobId,
             ConsumedInputIds = selected.Ids,
-            ChildContinuation = _toolWorkflow.ChildDecision(_execution.CurrentModelCallId)
+            ChildContinuation = continuation,
+            // The child result of a routed skill follows the rule of the routed turn that accepted the child.
+            RoutedSkill = deliveredChild?.StartKey is ChildRunStartKey.Slash
         };
 
         _ = _state.Apply(turnEvent, userAlreadyInHistory: true);
@@ -1686,6 +1690,17 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _config.Tuning.DiscoveredToolMaxCount,
             _toolRegistry);
     }
+
+    /// <summary>
+    /// The reminder link of the running turn. A child-delivery turn has no input of its own, so it takes the link
+    /// that the child run kept from the turn that started it. A retry turn keeps the link of the turn that it
+    /// repeats. Any other turn takes the link of its own input. A child that this turn starts keeps the same link,
+    /// so the link also reaches the child result of a child that a child-delivery turn started.
+    /// </summary>
+    private ReminderId? RunningTurnReminder(BackgroundChildRun? deliveredChild)
+        => deliveredChild is not null
+            ? deliveredChild.SourceReminderId
+            : _input.SelectedInputs.ReminderId ?? _deliveryRetry.RetriedTurnReminder;
 
     /// <summary>
     /// Makes the turn that <paramref name="evt"/> recorded the eligible turn and the latest recorded turn.

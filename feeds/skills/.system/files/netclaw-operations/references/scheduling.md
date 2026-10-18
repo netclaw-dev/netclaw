@@ -78,7 +78,10 @@ Rules:
   `Notifications.Webhooks`. With no webhook, only the Error log shows the
   failure. Look in the daemon log and the webhook channel, not in the history,
   for a reply that did not arrive. This holds for Slack, Discord, and
-  Mattermost, and for a reminder that runs a routed skill.
+  Mattermost. It also holds when the reminder turn starts a child run, with a
+  routed skill or an async sub-agent: that turn posts only the acceptance, and
+  a later turn posts the child result. A failed post of either reply raises
+  the alert.
   A session keeps one waiting fire per reminder: if a fire arrives while an
   earlier fire of the same reminder still waits for its turn, Netclaw drops the
   newer fire and logs `reminder_fire_dropped`.

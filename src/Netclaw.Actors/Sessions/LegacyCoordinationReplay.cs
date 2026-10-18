@@ -338,7 +338,9 @@ public static class LegacyCoordinationReplay
                 Git = FromLegacyGitInspection(legacy.InitialGit)
             },
             AcceptedAtMs = legacy.AcceptedAtMs,
-            Lifecycle = new ChildRunLifecycle.Accepted(null)
+            Lifecycle = new ChildRunLifecycle.Accepted(null),
+            // A draft v1 acceptance has no reminder link.
+            SourceReminderId = null
         };
         if (evt.SessionId != session || run.OriginalContext.SessionId != session
             || run.OriginalContext.TurnId != legacy.OriginalTurnId || state.ChildRuns.ContainsKey(run.RunId)
