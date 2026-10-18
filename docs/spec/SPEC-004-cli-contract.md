@@ -273,10 +273,11 @@ The session log is not safe against forged lines. A model reply or a tool result
 looks like `TURN_FAILED: ...`. A reader of the session log uses the last `TURN_FAILED` record before the
 final `TURN_COMPLETED`, and only when the exit code is `1`.
 
-Positive example: the model repeats `web_search("same")` after the runtime refused that call. The
-runtime ends the turn and makes no more model requests. Stderr ends with
-`[turn:failed] category=model kind=ModelBehavior`. The exit code is `1`. If the model answers with text
-after the refusal instead, the turn completes and the exit code is `0`.
+Positive example: the model repeats `web_search("same")` after the runtime refused that call, up to the
+sixth refused repeat. The runtime ends the turn quietly and makes no more model requests. The exit code
+is `0`. Stderr has no `[turn:failed]` line. The JSON envelope `response` holds only the text that the
+model wrote, and it can be empty. If the model answers with text after the refusal instead, the turn
+completes with that text.
 
 Negative example: the provider returns HTTP 503. The kind is `ProviderFailure` and the category is
 `infra`. A harness must not score this run as a model failure.

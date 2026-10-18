@@ -479,6 +479,7 @@ A quiet end with no text posts nothing in Slack, Discord, and Mattermost. The se
 Any other turn with no reply keeps the warning.
 
 A reminder turn that ends quietly records success with empty output, and it sends no failure alert.
+The exception: a reminder that requires channel delivery, and whose loop never called the notify tool, records a failure in reminder history and the logs. It does not post in the thread.
 To find such an end, search the session log for `turn_refused_repeat_end`. The line shows the number of refused repeats
 and whether the last response had text.
 
