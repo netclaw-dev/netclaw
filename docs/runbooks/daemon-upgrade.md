@@ -51,6 +51,40 @@ control.
     - `curl http://127.0.0.1:5199/api/health/ready`
     - `curl http://127.0.0.1:5199/api/health/status`
 
+## When a command refuses
+
+`netclaw daemon stop`, `netclaw daemon start`, `netclaw daemon status`, `netclaw update`, and the factory
+reset read the PID file `<home>/netclaw.pid`. They act on that PID only when it is shown to serve the home of
+the command. When it is not, the command sends no signal, keeps the PID file, and prints two lines:
+
+```text
+Nothing was stopped. PID 4100 is not shown to serve /home/op/.netclaw-b.
+The daemon at http://127.0.0.1:5300 did not confirm PID 4100 for this home. If no Netclaw daemon of this home
+runs, delete /home/op/.netclaw-b/netclaw.pid. If PID 4100 is a daemon of this home, check it, then stop it
+with 'kill 4100' (Task Manager on Windows).
+```
+
+`start` prints `Daemon was not started. PID <pid> is not shown to serve <home>.` and `status` prints
+`PID <pid> is not shown to serve <home>.` Both exit with code 1.
+
+Choose the recovery by cause:
+
+1. The PID file is stale for this home. Another home runs a daemon with that PID, or the OS reused the PID.
+   Check which home the process serves: on Linux, run `tr '\0' '\n' < /proc/<pid>/environ | grep -E '^(NETCLAW_HOME|HOME)='`.
+   If the process serves another home, delete `<home>/netclaw.pid` and run the command again. Never use `pkill netclawd`:
+   it stops the daemon of every home.
+2. The process is a wedged daemon of this home. On macOS and Windows the CLI cannot prove it, because the
+   daemon does not answer and the OS gives no environment. Check that the process serves this home, then stop it
+   by hand with `kill <pid>` (macOS) or Task Manager (Windows). On Linux the environment proves it, so `stop` works,
+   except when the daemon runs with a relative `NETCLAW_HOME` or one with `~` or `$`. Then use `kill <pid>` too.
+3. The lock file is held and the PID file is missing. The message names `<home>/netclaw.lock`. Find the process
+   that holds it (`lsof <home>/netclaw.lock` on macOS and Linux) and stop it with `kill <pid>`.
+4. You update from a daemon that is older than this check, on macOS or Windows. The daemon answers 200 with no
+   `home`, so the CLI cannot prove it. Stop the old daemon once with `kill <pid>`, then run the update again.
+
+The `systemd` user unit does not set `NETCLAW_HOME`. Its daemon serves `<HOME>/.netclaw`, and on Linux the
+CLI proves that from the `HOME` entry of the daemon environment.
+
 ## Rollback Notes
 
 - Rollback is binary rollback plus, if needed, restoring a DB backup.

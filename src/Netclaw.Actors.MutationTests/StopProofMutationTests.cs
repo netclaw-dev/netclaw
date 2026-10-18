@@ -76,15 +76,15 @@ public sealed class StopProofMutationTests : IDisposable
 
         var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
 
-        AssertRefused(result, daemon, ThisHome);
+        AssertRefused(result, daemon, ThisHome, daemon.Port, Answered);
     }
 
     [Fact]
-    public async Task A_200_for_the_right_pid_is_proof_even_when_the_environment_names_another_home()
+    public async Task A_200_for_the_right_pid_and_this_home_is_proof_even_when_the_environment_names_another_home()
     {
         var daemon = StartDaemon(OtherHome);
         var listener = ListenFor(ThisHome);
-        listener.AnswerAsLegacyDaemon(daemon.Pid);
+        listener.AnswerAsDaemonOf(daemon.Pid, HomeIdentity.Canonical(ThisHome));
         File.WriteAllText(Path.Combine(ThisHome, "netclaw.pid"), daemon.Pid.ToString(CultureInfo.InvariantCulture));
 
         var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
@@ -94,17 +94,91 @@ public sealed class StopProofMutationTests : IDisposable
     }
 
     [Fact]
-    public async Task The_refusal_is_written_to_stderr()
+    public async Task A_200_for_the_right_pid_and_another_home_is_no_proof_even_when_the_environment_matches()
+    {
+        var daemon = StartDaemon(ThisHome);
+        daemon.AnswerAsDaemonOf(daemon.Pid, OtherHome);
+
+        var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
+
+        AssertRefused(result, daemon, ThisHome, daemon.Port, Answered);
+    }
+
+    [Fact]
+    public async Task A_200_for_the_right_pid_and_a_spelling_of_this_home_is_proof()
     {
         var daemon = StartDaemon(OtherHome);
-        ListenFor(ThisHome).StopListening();
+        var listener = ListenFor(ThisHome);
+        listener.AnswerAsDaemonOf(daemon.Pid, ThisHome + Path.DirectorySeparatorChar);
+        File.WriteAllText(Path.Combine(ThisHome, "netclaw.pid"), daemon.Pid.ToString(CultureInfo.InvariantCulture));
+
+        var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
+
+        Assert.True(result.Success, result.Message);
+        Assert.True(daemon.WaitForExit(10000));
+    }
+
+    [Fact]
+    public async Task A_200_with_no_home_leaves_the_decision_to_the_environment_which_matches()
+    {
+        // A daemon from before the identity check answers 200 with its PID and no home.
+        var daemon = StartDaemon(ThisHome);
+        daemon.AnswerAsLegacyDaemon(daemon.Pid);
+
+        var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
+
+        Assert.True(result.Success, result.Message);
+        Assert.True(daemon.WaitForExit(10000));
+    }
+
+    [Fact]
+    public async Task A_200_with_no_home_leaves_the_decision_to_the_environment_which_names_another_home()
+    {
+        var daemon = StartDaemon(OtherHome);
+        var listener = ListenFor(ThisHome);
+        listener.AnswerAsLegacyDaemon(daemon.Pid);
+        File.WriteAllText(Path.Combine(ThisHome, "netclaw.pid"), daemon.Pid.ToString(CultureInfo.InvariantCulture));
+
+        var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
+
+        AssertRefused(result, daemon, ThisHome, listener.Port, NotConfirmed);
+    }
+
+    [Theory]
+    [InlineData("""{"pid":"@PID"}""")]
+    [InlineData("""{"pid":null}""")]
+    [InlineData("""{"pid":true}""")]
+    [InlineData("""{"pid":@PID.5}""")]
+    [InlineData("""{"pid":[@PID]}""")]
+    [InlineData("""{"pid":@PID,"home":42}""")]
+    [InlineData("""{"pid":@PID,"home":null}""")]
+    [InlineData("""{"reason":"cli-stop"}""")]
+    [InlineData("[@PID]")]
+    [InlineData("not json")]
+    [InlineData("")]
+    public async Task A_200_body_that_is_no_daemon_answer_is_no_proof_even_when_the_environment_matches(string body)
+    {
+        var daemon = StartDaemon(ThisHome);
+        daemon.AnswerEveryNoticeWithBody(
+            HttpStatusCode.OK,
+            body.Replace("@PID", daemon.Pid.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal));
+
+        var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
+
+        AssertRefused(result, daemon, ThisHome, daemon.Port, Answered);
+    }
+
+    [Fact]
+    public async Task A_failed_notice_is_reported_on_stderr_and_the_refusal_names_the_recovery()
+    {
+        var daemon = StartDaemon(OtherHome);
+        var silent = ListenFor(ThisHome);
+        silent.StopListening();
         File.WriteAllText(Path.Combine(ThisHome, "netclaw.pid"), daemon.Pid.ToString(CultureInfo.InvariantCulture));
 
         var (result, stderr) = await StopCapturingStderrAsync(ThisHome);
 
-        AssertRefused(result, daemon, ThisHome);
-        Assert.Contains("Nothing was stopped.", stderr, StringComparison.Ordinal);
-        Assert.Contains($"PID {daemon.Pid}", stderr, StringComparison.Ordinal);
+        AssertRefused(result, daemon, ThisHome, silent.Port, NotConfirmed);
         // No answer from the port is reported as well, as it was before the proof.
         Assert.Contains("could not notify daemon of shutdown reason", stderr, StringComparison.Ordinal);
     }
@@ -117,7 +191,7 @@ public sealed class StopProofMutationTests : IDisposable
 
         var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
 
-        AssertRefused(result, daemon, ThisHome);
+        AssertRefused(result, daemon, ThisHome, daemon.Port, Answered);
     }
 
     // ── a daemon that does not give a usable answer ─────────────────────────
@@ -143,12 +217,13 @@ public sealed class StopProofMutationTests : IDisposable
     public async Task Another_status_leaves_the_decision_to_the_environment_which_names_another_home(int status)
     {
         var daemon = StartDaemon(OtherHome);
-        ListenFor(ThisHome).AnswerEveryNoticeWith((HttpStatusCode)status);
+        var listener = ListenFor(ThisHome);
+        listener.AnswerEveryNoticeWith((HttpStatusCode)status);
         File.WriteAllText(Path.Combine(ThisHome, "netclaw.pid"), daemon.Pid.ToString(CultureInfo.InvariantCulture));
 
         var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
 
-        AssertRefused(result, daemon, ThisHome);
+        AssertRefused(result, daemon, ThisHome, listener.Port, NotConfirmed);
     }
 
     [Fact]
@@ -167,12 +242,13 @@ public sealed class StopProofMutationTests : IDisposable
     public async Task No_answer_and_an_environment_for_another_home_stops_nothing()
     {
         var daemon = StartDaemon(OtherHome);
-        ListenFor(ThisHome).StopListening();
+        var silent = ListenFor(ThisHome);
+        silent.StopListening();
         File.WriteAllText(Path.Combine(ThisHome, "netclaw.pid"), daemon.Pid.ToString(CultureInfo.InvariantCulture));
 
         var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
 
-        AssertRefused(result, daemon, ThisHome);
+        AssertRefused(result, daemon, ThisHome, silent.Port, NotConfirmed);
     }
 
     [Fact]
@@ -180,12 +256,13 @@ public sealed class StopProofMutationTests : IDisposable
     {
         // Paths on Linux are case-sensitive: a home that differs in case is another home.
         var daemon = StartDaemon(Path.Combine(_dir.Path, "THIS HOME&X"));
-        ListenFor(ThisHome).StopListening();
+        var silent = ListenFor(ThisHome);
+        silent.StopListening();
         File.WriteAllText(Path.Combine(ThisHome, "netclaw.pid"), daemon.Pid.ToString(CultureInfo.InvariantCulture));
 
         var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
 
-        AssertRefused(result, daemon, ThisHome);
+        AssertRefused(result, daemon, ThisHome, silent.Port, NotConfirmed);
     }
 
     [Fact]
@@ -197,7 +274,7 @@ public sealed class StopProofMutationTests : IDisposable
 
         var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
 
-        AssertRefused(result, daemon, ThisHome);
+        AssertRefused(result, daemon, ThisHome, daemon.Port, NotConfirmed);
     }
 
     [Theory]
@@ -249,28 +326,80 @@ public sealed class StopProofMutationTests : IDisposable
     }
 
     [Fact]
-    public async Task No_answer_and_a_process_with_no_home_variable_stops_when_this_is_the_default_home()
+    public async Task No_answer_and_a_process_with_no_home_variable_stops_when_its_own_HOME_holds_this_home()
     {
-        // A process with no NETCLAW_HOME serves the default home: $HOME/.netclaw. HOME is a temp folder
-        // here, so the real home of the user is never read.
+        // B1: a process with no NETCLAW_HOME serves $HOME/.netclaw, with the HOME of its own environment. The
+        // HOME of the CLI plays no part, so the test leaves the HOME of the test process alone.
         var profile = Path.Combine(_dir.Path, "profile");
         var defaultHome = Path.Combine(profile, ".netclaw");
-        var originalHome = Environment.GetEnvironmentVariable("HOME");
-        Environment.SetEnvironmentVariable("HOME", profile);
-        try
+        var daemon = StartDaemonWith(defaultHome, environment =>
         {
-            var daemon = StartDaemon(defaultHome, declareHome: false);
-            daemon.StopListening();
+            environment.Remove("NETCLAW_HOME");
+            environment["HOME"] = profile;
+        });
+        daemon.StopListening();
 
-            var result = await ManagerFor(defaultHome).StopAsync("cli-stop", CancellationToken.None);
+        var result = await ManagerFor(defaultHome).StopAsync("cli-stop", CancellationToken.None);
 
-            Assert.True(result.Success, result.Message);
-            Assert.True(daemon.WaitForExit(10000));
-        }
-        finally
+        Assert.True(result.Success, result.Message);
+        Assert.True(daemon.WaitForExit(10000));
+    }
+
+    [Fact]
+    public async Task No_answer_and_a_process_whose_HOME_differs_from_the_HOME_of_the_CLI_is_not_the_default_home_of_the_CLI()
+    {
+        // The review scenario. The CLI has HOME=<profile>, so its default home is <profile>/.netclaw, and a stale
+        // PID file there names a daemon that runs from the unit with HOME=<another profile>.
+        var profile = Path.Combine(_dir.Path, "profile");
+        var cliHome = Path.Combine(profile, ".netclaw");
+        var daemon = StartDaemonWith(cliHome, environment =>
         {
-            Environment.SetEnvironmentVariable("HOME", originalHome);
-        }
+            environment.Remove("NETCLAW_HOME");
+            environment["HOME"] = Path.Combine(_dir.Path, "another-profile");
+        });
+        daemon.StopListening();
+
+        var result = await WithProcessHome(profile, () => ManagerFor(cliHome).StopAsync("cli-stop", CancellationToken.None));
+
+        AssertRefused(result, daemon, cliHome, daemon.Port, NotConfirmed);
+    }
+
+    [Fact]
+    public async Task No_answer_and_a_process_with_neither_NETCLAW_HOME_nor_HOME_is_not_the_default_home_of_the_CLI()
+    {
+        var profile = Path.Combine(_dir.Path, "profile");
+        var cliHome = Path.Combine(profile, ".netclaw");
+        var daemon = StartDaemonWith(cliHome, environment =>
+        {
+            environment.Remove("NETCLAW_HOME");
+            environment.Remove("HOME");
+        });
+        daemon.StopListening();
+
+        var result = await WithProcessHome(profile, () => ManagerFor(cliHome).StopAsync("cli-stop", CancellationToken.None));
+
+        AssertRefused(result, daemon, cliHome, daemon.Port, NotConfirmed);
+    }
+
+    [Theory]
+    [InlineData("relative")]
+    [InlineData("token")]
+    public async Task No_answer_and_a_process_with_a_relative_or_token_NETCLAW_HOME_stops_nothing(string kind)
+    {
+        var profile = Path.Combine(_dir.Path, "profile");
+        var home = Path.Combine(profile, ".netclaw");
+        var elsewhere = Path.Combine(_dir.Path, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        var daemon = StartDaemonWith(home, environment =>
+        {
+            environment["HOME"] = profile;
+            environment["NETCLAW_HOME"] = kind == "relative" ? Path.Combine("..", "profile", ".netclaw") : "~/.netclaw";
+        }, elsewhere);
+        daemon.StopListening();
+
+        var result = await ManagerFor(home).StopAsync("cli-stop", CancellationToken.None);
+
+        AssertRefused(result, daemon, home, daemon.Port, NotConfirmed);
     }
 
     // ── a stale PID file ────────────────────────────────────────────────────
@@ -311,6 +440,33 @@ public sealed class StopProofMutationTests : IDisposable
 
     // ── helpers ─────────────────────────────────────────────────────────────
 
+    private const string Answered = "answered for another daemon or home.";
+    private const string NotConfirmed = "did not confirm PID {0} for this home.";
+
+    private StandInDaemon StartDaemonWith(
+        string home, Action<IDictionary<string, string?>> configureEnvironment, string? workingDirectory = null)
+    {
+        Directory.CreateDirectory(home);
+        var standIn = StandInDaemon.Start(home, _dir.Path, configureEnvironment, workingDirectory);
+        _standIns.Add(standIn);
+        return standIn;
+    }
+
+    // The default home of the CLI comes from its HOME. The test sets HOME for the one call and restores it.
+    private static async Task<T> WithProcessHome<T>(string profile, Func<Task<T>> action)
+    {
+        var original = Environment.GetEnvironmentVariable("HOME");
+        Environment.SetEnvironmentVariable("HOME", profile);
+        try
+        {
+            return await action();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HOME", original);
+        }
+    }
+
     private StandInDaemon StartDaemon(string home, bool declareHome = true)
     {
         Directory.CreateDirectory(home);
@@ -347,16 +503,28 @@ public sealed class StopProofMutationTests : IDisposable
     private static DaemonManager ManagerFor(string home)
         => new(new NetclawPaths(home), TimeProvider.System, new UnsupervisedHost());
 
-    // The refusal sends no signal, removes nothing, and names the PID and the home.
-    private static void AssertRefused(DaemonResult result, StandInDaemon daemon, string home)
+    // The refusal sends no signal, removes nothing, and holds the two exact lines of the spec: the first names the
+    // PID and the home, the second names the cause and the recovery.
+    private static void AssertRefused(DaemonResult result, StandInDaemon daemon, string home, int endpointPort, string cause)
     {
         Assert.False(result.Success, result.Message);
-        Assert.Contains("Nothing was stopped.", result.Message, StringComparison.Ordinal);
-        Assert.Contains($"PID {daemon.Pid}", result.Message, StringComparison.Ordinal);
-        Assert.Contains(home, result.Message, StringComparison.Ordinal);
+        Assert.True(IsRefusal(result), "The refusal is not marked, so a caller may print it twice or not at all.");
         Assert.False(daemon.HasExited, "The daemon got a signal.");
         Assert.True(File.Exists(Path.Combine(home, "netclaw.pid")), "The refusal removed the PID file.");
+        var lines = result.Message.ReplaceLineEndings("\n").Split('\n');
+        Assert.Equal(2, lines.Length);
+        Assert.Equal($"Nothing was stopped. PID {daemon.Pid} is not shown to serve {new NetclawPaths(home).BasePath}.", lines[0]);
+        Assert.Equal(
+            $"The daemon at http://127.0.0.1:{endpointPort} {string.Format(CultureInfo.InvariantCulture, cause, daemon.Pid)} "
+            + $"If no Netclaw daemon of this home runs, delete {new NetclawPaths(home).PidFilePath}. "
+            + $"If PID {daemon.Pid} is a daemon of this home, check it, then stop it with 'kill {daemon.Pid}' (Task Manager on Windows).",
+            lines[1]);
     }
+
+    // The refusal flag of the result (DaemonResult.IsRefusal). Read by name so that this file builds before the
+    // flag exists: a missing flag is false, and the test then fails for the right reason.
+    private static bool IsRefusal(DaemonResult result)
+        => typeof(DaemonResult).GetProperty("IsRefusal")?.GetValue(result) is true;
 
     private sealed class UnsupervisedHost : IContainerSupervisor
     {

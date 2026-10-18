@@ -802,6 +802,15 @@ itself grant access.
 A resolved path is a canonical path after link resolution. Do not call a
 resolved path "canonical".
 
+### Resolved home path
+
+A resolved home path is the full path of a Netclaw home with no trailing separator and every link resolved,
+one path component at a time, as `realpath(3)` does. A relative link target is joined to the folder that the
+walk already resolved, so a `..` in a target leaves that folder. A walk that follows more than 40 links fails.
+`HomeIdentity.Canonical` returns it. The daemon and the CLI compare two home paths only through this form
+(`HomeIdentity.Same`), so two different folders never compare as one home. The method name says "canonical"
+for historical reasons. By the term "Canonical path" above, this value is a resolved path, not a canonical path.
+
 ### Path relationship
 
 A path relationship states whether a canonical path is the trusted root, is a

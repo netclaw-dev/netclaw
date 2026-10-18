@@ -534,6 +534,12 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         Assert.All(thisHome.ShutdownNotices, notice => Assert.Equal(409, notice.Status));
         Assert.True(File.Exists(_paths.SqliteDbPath), "The reset deleted data.");
         Assert.Contains("Nothing was deleted", vm.ProgressMessage.Value, StringComparison.Ordinal);
+        // S4: the PID may belong to the daemon of another home, so the default unit is the wrong thing to stop.
+        // The operator gets the recovery of the refusal instead.
+        Assert.Contains($"PID {other.Pid} is not shown to serve {_paths.BasePath}.", vm.ProgressMessage.Value, StringComparison.Ordinal);
+        Assert.Contains($"delete {_paths.PidFilePath}", vm.ProgressMessage.Value, StringComparison.Ordinal);
+        Assert.Contains($"'kill {other.Pid}'", vm.ProgressMessage.Value, StringComparison.Ordinal);
+        Assert.DoesNotContain("systemctl --user stop netclaw.service", vm.ProgressMessage.Value, StringComparison.Ordinal);
     }
 
     private sealed class InactiveUnitRunner : ISystemCommandRunner

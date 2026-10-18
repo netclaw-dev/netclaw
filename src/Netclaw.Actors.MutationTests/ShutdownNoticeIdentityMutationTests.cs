@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Globalization;
 using System.Net;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
@@ -47,11 +48,90 @@ public sealed class ShutdownNoticeIdentityMutationTests : IDisposable
     [Fact]
     public async Task A_notice_for_this_pid_and_this_home_is_announced()
     {
-        var (response, _) = await PostAsync(OwnPid, DaemonHome);
+        var (response, body) = await PostAsync(OwnPid, DaemonHome);
 
         Assert.Equal(HttpStatusCode.OK, response);
         Assert.Single(_sink.Alerts);
         Assert.Single(_logs.Messages, message => message.Contains("Netclaw daemon stopping", StringComparison.Ordinal));
+        // S2: the answer names the resolved home as well as the PID, so a CLI can prove the home.
+        using var document = JsonDocument.Parse(body);
+        Assert.Equal(Environment.ProcessId, document.RootElement.GetProperty("pid").GetInt32());
+        Assert.Equal(HomeIdentity.Canonical(DaemonHome), document.RootElement.GetProperty("home").GetString());
+    }
+
+    [Fact]
+    public async Task The_answer_names_the_folder_behind_a_link_when_the_daemon_serves_a_link()
+    {
+        var link = Path.Combine(_root, "link-to-daemon-home");
+        Directory.CreateDirectory(DaemonHome);
+        Directory.CreateSymbolicLink(link, DaemonHome);
+
+        var (response, body) = await PostAsync(OwnPid, DaemonHome, servedHome: link);
+
+        Assert.Equal(HttpStatusCode.OK, response);
+        using var document = JsonDocument.Parse(body);
+        Assert.Equal(HomeIdentity.Canonical(DaemonHome), document.RootElement.GetProperty("home").GetString());
+    }
+
+    [Fact]
+    public async Task A_dot_dot_in_a_link_target_that_points_at_another_folder_is_not_this_home()
+    {
+        // S1: a=b/c, b=q/r, q/r/c/link=../../y. The folder of a/link is q/y, so it is not the served folder y.
+        var other = Path.Combine(_root, "y");
+        Directory.CreateDirectory(other);
+        Directory.CreateDirectory(Path.Combine(_root, "q", "r", "c"));
+        Directory.CreateDirectory(Path.Combine(_root, "q", "y"));
+        Directory.CreateSymbolicLink(Path.Combine(_root, "b"), Path.Combine("q", "r"));
+        Directory.CreateSymbolicLink(Path.Combine(_root, "a"), Path.Combine("b", "c"));
+        Directory.CreateSymbolicLink(Path.Combine(_root, "q", "r", "c", "link"), Path.Combine("..", "..", "y"));
+
+        var (response, _) = await PostAsync(OwnPid, Path.Combine(_root, "a", "link"), servedHome: other);
+        var (matching, _) = await PostAsync(OwnPid, Path.Combine(_root, "a", "link"), servedHome: Path.Combine(_root, "q", "y"));
+
+        Assert.Equal(HttpStatusCode.Conflict, response);
+        Assert.Equal(HttpStatusCode.OK, matching);
+    }
+
+    [Fact]
+    public async Task A_notice_for_a_home_that_is_a_link_cycle_is_refused_not_a_server_error()
+    {
+        var loop = Path.Combine(_root, "loop");
+        Directory.CreateDirectory(_root);
+        Directory.CreateSymbolicLink(loop, "loop");
+
+        var (response, _) = await PostAsync(OwnPid, loop);
+
+        Assert.Equal(HttpStatusCode.Conflict, response);
+        Assert.Empty(_sink.Alerts);
+    }
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r")]
+    [InlineData("\u2028")]
+    [InlineData("\u2029")]
+    [InlineData("\u0085")]
+    [InlineData("\u001b")]
+    [InlineData("\t")]
+    public async Task Control_characters_and_line_breaks_in_the_home_do_not_reach_the_log(string injected)
+    {
+        var (response, _) = await PostAsync(OwnPid, Path.Combine(_root, "x" + injected + "fake-log-line level=critical"));
+
+        Assert.Equal(HttpStatusCode.Conflict, response);
+        var warning = Assert.Single(_logs.Warnings, message => message.Contains("fake-log-line", StringComparison.Ordinal));
+        Assert.False(
+            warning.Any(static character => char.IsControl(character) || character is '\u2028' or '\u2029'),
+            "The Warning holds a control character or a line separator.");
+    }
+
+    [Fact]
+    public async Task A_very_long_home_is_cut_in_the_log()
+    {
+        var (response, _) = await PostAsync(OwnPid, Path.Combine(_root, new string('a', 600)));
+
+        Assert.Equal(HttpStatusCode.Conflict, response);
+        var warning = Assert.Single(_logs.Warnings, message => message.Contains(new string('a', 20), StringComparison.Ordinal));
+        Assert.DoesNotContain(new string('a', 201), warning, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -138,6 +218,9 @@ public sealed class ShutdownNoticeIdentityMutationTests : IDisposable
     [InlineData("0", "@HOME")]
     [InlineData("-1", "@HOME")]
     [InlineData("@PID", "relative/home")]
+    [InlineData("@PID", "@HOME\0x")]
+    [InlineData("@PID", "\\x")]
+    [InlineData("@PID", "C:x")]
     public async Task A_notice_with_a_missing_or_malformed_pid_or_home_is_a_bad_request(string? pid, string? home)
     {
         var (response, body) = await PostAsync(pid?.Replace("@PID", OwnPid, StringComparison.Ordinal), home?.Replace("@HOME", DaemonHome, StringComparison.Ordinal));
@@ -156,7 +239,7 @@ public sealed class ShutdownNoticeIdentityMutationTests : IDisposable
         Assert.Single(_logs.Warnings, message => message.Contains(DaemonHome, StringComparison.Ordinal));
     }
 
-    private async Task<(HttpStatusCode Status, string Body)> PostAsync(string? pid, string? home)
+    private async Task<(HttpStatusCode Status, string Body)> PostAsync(string? pid, string? home, string? servedHome = null)
     {
         Directory.CreateDirectory(DaemonHome);
         var builder = WebApplication.CreateBuilder();
@@ -170,7 +253,7 @@ public sealed class ShutdownNoticeIdentityMutationTests : IDisposable
         });
         builder.Services.AddSingleton<IOperationalNotificationSink>(_sink);
         builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
-        builder.Services.AddSingleton(new NetclawPaths(DaemonHome));
+        builder.Services.AddSingleton(new NetclawPaths(servedHome ?? DaemonHome));
         builder.Services.AddSingleton<DaemonLifecycleNotifier>();
 
         await using var app = builder.Build();

@@ -49,7 +49,8 @@ internal sealed record RecordedRequest(string Method, string Path, string Query,
 /// the PID of the stand-in only when the notice names the PID of the stand-in process and the
 /// home that the stand-in serves. It replies 409 for any other PID or home, and 400 when the PID
 /// or the home is missing or malformed. A listener-only home has no process, so it refuses every
-/// notice. <see cref="AnswerAsLegacyDaemon"/> makes it answer as a daemon from before #2527 does.
+/// notice. The 200 body holds the PID and the resolved home of the stand-in. <see cref="AnswerAsLegacyDaemon"/>
+/// makes it answer as a daemon from before #2527 does: the PID only, with no <c>home</c>.
 /// </para>
 /// <para>
 /// A source scan (<c>StandInDaemonGuardTests</c>) fails the build when a test starts a
@@ -71,6 +72,9 @@ internal sealed class StandInDaemon : IDisposable
     private readonly int? _pid;
     private int _legacyPid;
     private int _forcedStatus;
+    private readonly Lock _answerGate = new();
+    private (int Pid, string Home)? _claimed;
+    private (int Status, string Body)? _rawAnswer;
     private bool _disposed;
 
     private StandInDaemon(string home, int port, HttpListener listener, Process? process, string? standInFolder)
@@ -113,6 +117,27 @@ internal sealed class StandInDaemon : IDisposable
     public void AnswerEveryNoticeWith(HttpStatusCode status) => Volatile.Write(ref _forcedStatus, (int)status);
 
     /// <summary>
+    /// Makes the listener answer every shutdown notice with 200, <paramref name="claimedPid"/>, and
+    /// <paramref name="claimedHome"/> as <c>home</c>, as a daemon of that PID and home does. Use it to give a
+    /// listener-only home a daemon that confirms itself, or to test a 200 that names another home.
+    /// </summary>
+    public void AnswerAsDaemonOf(int claimedPid, string claimedHome)
+    {
+        lock (_answerGate)
+            _claimed = (claimedPid, claimedHome);
+    }
+
+    /// <summary>
+    /// Makes the listener answer every shutdown notice with <paramref name="status"/> and the exact text
+    /// <paramref name="body"/>. Use it for a body that is not a daemon answer (not JSON, or a PID that is a string).
+    /// </summary>
+    public void AnswerEveryNoticeWithBody(HttpStatusCode status, string body)
+    {
+        lock (_answerGate)
+            _rawAnswer = ((int)status, body);
+    }
+
+    /// <summary>
     /// Closes the listener and keeps the process and the port in the config of the home. After this call
     /// a connection to the port fails, as it does for a daemon that hangs or has not bound its port yet.
     /// </summary>
@@ -153,6 +178,31 @@ internal sealed class StandInDaemon : IDisposable
     /// <c>false</c> starts the process with no <c>NETCLAW_HOME</c>, as a daemon of the default home runs.
     /// </param>
     public static StandInDaemon Start(string home, string scratchDirectory, bool declareHome = true)
+        => Start(home, scratchDirectory, environment =>
+        {
+            // The home this daemon serves, as the environment of a real daemon says.
+            if (declareHome)
+                environment["NETCLAW_HOME"] = home;
+            else
+                environment.Remove("NETCLAW_HOME");
+        });
+
+    /// <summary>
+    /// Starts a stand-in daemon whose process environment the test sets. Use it to give the process a
+    /// <c>NETCLAW_HOME</c> that is relative or holds a home token, a <c>HOME</c> that differs from the
+    /// <c>HOME</c> of the CLI, or no <c>HOME</c>. The PID file and the port still go to <paramref name="home"/>.
+    /// </summary>
+    /// <param name="home">The home that holds the PID file and the port config. The test owns and deletes it.</param>
+    /// <param name="scratchDirectory">A folder that the test owns. It holds the stand-in executable.</param>
+    /// <param name="configureEnvironment">
+    /// Changes the environment of the process. It starts as a copy of the environment of the test process.
+    /// </param>
+    /// <param name="workingDirectory">The working folder of the process, or <c>null</c> for the folder of the test.</param>
+    public static StandInDaemon Start(
+        string home,
+        string scratchDirectory,
+        Action<IDictionary<string, string?>> configureEnvironment,
+        string? workingDirectory = null)
     {
         var (listener, port) = BindListener();
         string? folder = null;
@@ -167,11 +217,9 @@ internal sealed class StandInDaemon : IDisposable
             SleepStandIn.Create(executable);
 
             var psi = new ProcessStartInfo(executable, "600") { UseShellExecute = false };
-            // The home this daemon serves, as the environment of a real daemon says.
-            if (declareHome)
-                psi.Environment["NETCLAW_HOME"] = home;
-            else
-                psi.Environment.Remove("NETCLAW_HOME");
+            if (workingDirectory is not null)
+                psi.WorkingDirectory = workingDirectory;
+            configureEnvironment(psi.Environment);
             process = Process.Start(psi)
                 ?? throw new InvalidOperationException("The stand-in daemon did not start.");
 
@@ -344,24 +392,44 @@ internal sealed class StandInDaemon : IDisposable
                 ? Error(HttpStatusCode.Conflict, "The stand-in is set to refuse every notice.")
                 : (forcedStatus, string.Empty);
 
+        (int Status, string Body)? raw;
+        (int Pid, string Home)? claimed;
+        lock (_answerGate)
+        {
+            raw = _rawAnswer;
+            claimed = _claimed;
+        }
+
+        if (raw is { } rawAnswer)
+            return rawAnswer;
+
+        if (claimed is { } claim)
+            return Accepted(reason, claim.Pid, claim.Home);
+
         var legacyPid = Volatile.Read(ref _legacyPid);
         if (legacyPid != 0)
-            return Accepted(reason, legacyPid);
+            return Accepted(reason, legacyPid, home: null);
 
         if (!int.TryParse(query["pid"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid) || pid <= 0
             || string.IsNullOrEmpty(query["home"]) || !Path.IsPathRooted(query["home"]))
             return Error(HttpStatusCode.BadRequest, "pid and home query parameters are required");
 
         if (_pid is { } ownPid && pid == ownPid && SameDirectory(query["home"]!, Home))
-            return Accepted(reason, ownPid);
+            return Accepted(reason, ownPid, Canonical(Home));
 
         return Error(HttpStatusCode.Conflict,
             $"This daemon is PID {_pid?.ToString(CultureInfo.InvariantCulture) ?? "none"} for home {Home}; "
             + $"the notice is for PID {pid} and home {query["home"]}.");
     }
 
-    private static (int Status, string Body) Accepted(string reason, int pid)
-        => ((int)HttpStatusCode.OK, new JsonObject { ["reason"] = reason, ["pid"] = pid }.ToJsonString());
+    // The daemon of this PID names its resolved home in the 200 body. A daemon from before #2527 names no home.
+    private static (int Status, string Body) Accepted(string reason, int pid, string? home)
+    {
+        var body = new JsonObject { ["reason"] = reason, ["pid"] = pid };
+        if (home is not null)
+            body["home"] = home;
+        return ((int)HttpStatusCode.OK, body.ToJsonString());
+    }
 
     private static (int Status, string Body) Error(HttpStatusCode status, string message)
         => ((int)status, new JsonObject { ["error"] = message }.ToJsonString());

@@ -56,7 +56,7 @@ public sealed class LifecycleEndpointRouteBuilderExtensionsTests : IAsyncDisposa
 
     // ─── App factory ───────────────────────────────────────────────────────────
 
-    private async Task<WebApplication> CreateAppAsync(bool spoofLoopback)
+    private async Task<WebApplication> CreateAppAsync(bool spoofLoopback, string? servedHome = null)
     {
         Directory.CreateDirectory(DaemonHome);
 
@@ -73,7 +73,7 @@ public sealed class LifecycleEndpointRouteBuilderExtensionsTests : IAsyncDisposa
         });
         builder.Services.AddSingleton<IOperationalNotificationSink>(_sink);
         builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
-        builder.Services.AddSingleton(new NetclawPaths(DaemonHome));
+        builder.Services.AddSingleton(new NetclawPaths(servedHome ?? DaemonHome));
         builder.Services.AddSingleton<DaemonLifecycleNotifier>();
 
         var app = builder.Build();
@@ -163,6 +163,8 @@ public sealed class LifecycleEndpointRouteBuilderExtensionsTests : IAsyncDisposa
         var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
         Assert.Equal(shutdownReason, body.GetProperty("reason").GetString());
         Assert.Equal(OwnPid, body.GetProperty("pid").GetInt32());
+        // S2: the CLI accepts a 200 as proof only when it names this home as well as this PID.
+        Assert.Equal(HomeIdentity.Canonical(DaemonHome), body.GetProperty("home").GetString());
 
         // Verify NotifyShutdown was invoked via the notification sink
         Assert.Single(_sink.Emitted);
@@ -220,6 +222,116 @@ public sealed class LifecycleEndpointRouteBuilderExtensionsTests : IAsyncDisposa
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Single(_sink.Emitted);
+    }
+
+    [SlopwatchSuppress("SW001", "Creating a symbolic link needs a privilege on Windows.")]
+    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "Creating a symbolic link needs a privilege on Windows.")]
+    public async Task Shutdown_200_names_the_resolved_home_when_the_daemon_serves_a_link_to_its_home()
+    {
+        // S2: the daemon serves the home through a link. The answer names the folder behind the link, which is
+        // the form that every CLI sends. A CLI that read the unresolved text would not match its own notice.
+        var ct = TestContext.Current.CancellationToken;
+        var link = Path.Combine(_dir.Path, "link-to-daemon-home");
+        Directory.CreateDirectory(DaemonHome);
+        Directory.CreateSymbolicLink(link, DaemonHome);
+        await using var app = await CreateAppAsync(spoofLoopback: true, servedHome: link);
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync(
+            Notice("cli-stop", OwnPid.ToString(CultureInfo.InvariantCulture), DaemonHome), null, ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+        Assert.Equal(HomeIdentity.Canonical(DaemonHome), body.GetProperty("home").GetString());
+        Assert.NotEqual(link, body.GetProperty("home").GetString());
+    }
+
+    [SlopwatchSuppress("SW001", "Creating a symbolic link needs a privilege on Windows.")]
+    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "Creating a symbolic link needs a privilege on Windows.")]
+    public async Task Shutdown_returns_409_not_a_server_error_when_the_home_is_a_link_cycle()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+        var client = app.GetTestClient();
+        var loop = Path.Combine(_dir.Path, "loop");
+        Directory.CreateSymbolicLink(loop, "loop");
+
+        var response = await client.PostAsync(
+            Notice("cli-stop", OwnPid.ToString(CultureInfo.InvariantCulture), loop), null, ct);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        AssertNothingAnnounced();
+    }
+
+    [SlopwatchSuppress("SW001", "Creating a symbolic link needs a privilege on Windows.")]
+    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "Creating a symbolic link needs a privilege on Windows.")]
+    public async Task Shutdown_returns_409_when_a_dot_dot_in_a_link_target_points_at_another_folder()
+    {
+        // S1 at the endpoint: with a=b/c, b=q/r, and q/r/c/link=../../y, the folder of a/link is q/y. A notice
+        // whose home is that link must not match a daemon that serves the other folder y.
+        var ct = TestContext.Current.CancellationToken;
+        var other = Path.Combine(_dir.Path, "y");
+        Directory.CreateDirectory(other);
+        Directory.CreateDirectory(Path.Combine(_dir.Path, "q", "r", "c"));
+        Directory.CreateDirectory(Path.Combine(_dir.Path, "q", "y"));
+        Directory.CreateSymbolicLink(Path.Combine(_dir.Path, "b"), Path.Combine("q", "r"));
+        Directory.CreateSymbolicLink(Path.Combine(_dir.Path, "a"), Path.Combine("b", "c"));
+        Directory.CreateSymbolicLink(Path.Combine(_dir.Path, "q", "r", "c", "link"), Path.Combine("..", "..", "y"));
+        await using var app = await CreateAppAsync(spoofLoopback: true, servedHome: other);
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync(
+            Notice("cli-stop", OwnPid.ToString(CultureInfo.InvariantCulture), Path.Combine(_dir.Path, "a", "link")), null, ct);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        AssertNothingAnnounced();
+    }
+
+    public static TheoryData<string> LogInjectionCharacters() => new()
+    {
+        { "\n" }, { "\r" }, { "\r\n" }, { "\u2028" }, { "\u2029" }, { "\u0085" }, { "\u001b" }, { "\t" }, { "\u007f" },
+    };
+
+    [Theory]
+    [MemberData(nameof(LogInjectionCharacters))]
+    public async Task Shutdown_removes_control_characters_and_line_breaks_from_the_home_before_it_logs(string injected)
+    {
+        // S5: the home comes from the query string. A line break in it must not start a forged log line.
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+        var client = app.GetTestClient();
+        var home = Path.Combine(_dir.Path, "x" + injected + "fake-log-line level=critical");
+
+        var response = await client.PostAsync(
+            Notice("cli-stop", OwnPid.ToString(CultureInfo.InvariantCulture), home), null, ct);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var warning = Assert.Single(
+            _logs.Entries,
+            entry => entry.Level >= LogLevel.Warning && entry.Message.Contains("fake-log-line", StringComparison.Ordinal));
+        Assert.False(
+            warning.Message.Any(static character => char.IsControl(character) || character is '\u2028' or '\u2029'),
+            "The Warning holds a control character or a line separator.");
+        Assert.Contains(DaemonHome, warning.Message, StringComparison.Ordinal);
+        AssertNothingAnnounced();
+    }
+
+    [Fact]
+    public async Task Shutdown_cuts_a_very_long_home_in_the_log()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+        var client = app.GetTestClient();
+        var home = Path.Combine(_dir.Path, new string('a', 600));
+
+        var response = await client.PostAsync(
+            Notice("cli-stop", OwnPid.ToString(CultureInfo.InvariantCulture), home), null, ct);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var warning = Assert.Single(
+            _logs.Entries,
+            entry => entry.Level >= LogLevel.Warning && entry.Message.Contains(new string('a', 20), StringComparison.Ordinal));
+        Assert.DoesNotContain(new string('a', 201), warning.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -321,6 +433,9 @@ public sealed class LifecycleEndpointRouteBuilderExtensionsTests : IAsyncDisposa
         { "0", "@HOME", "zero pid" },
         { "-1", "@HOME", "negative pid" },
         { "@PID", "relative/home", "relative home" },
+        { "@PID", "@HOME\0x", "home with a NUL character" },
+        { "@PID", "\\x", "drive-relative home with a backslash (not fully qualified on Windows)" },
+        { "@PID", "C:x", "drive-relative home (not fully qualified on Windows)" },
     };
 
     [Theory]
