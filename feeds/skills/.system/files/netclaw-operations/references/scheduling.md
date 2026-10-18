@@ -69,9 +69,10 @@ Rules:
   Omit `delivery_transport` and `delivery_address` for this route.
   Netclaw preserves the stored reminder audience when the reminder executes.
   The reminder turn may check and cancel the child runs of its own session with
-  `check_agent_run`, including runs that a person started. A person turn of that
-  session may check and cancel a child run that a reminder turn started. A turn
-  cannot reach a child run of another session.
+  `check_agent_run`, including runs that a person started. Any other turn of that
+  session may check and cancel a child run that a reminder turn started. The
+  audience, boundary, and channel type must match. A turn cannot reach a child
+  run of another session.
   The reminder run ends when the session accepts the fire. A later failed post
   is not a reminder failure, and the reminder system does not retry it.
   The history row records the acceptance and stays `ok`. When the session gives

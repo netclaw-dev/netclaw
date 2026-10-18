@@ -44,7 +44,7 @@ read -r span_start span_end first_line last_line < <(
 )
 
 report="$output_path/reports/mutation-report.json"
-expected_count=13
+expected_count=15
 jq -e --arg source "$source_file" \
   --argjson first "$first_line" --argjson last "$last_line" \
   --argjson count "$expected_count" '

@@ -23,6 +23,6 @@
 
 ## 5. Review fixes (PR #2550)
 
-- [ ] 5.1 Make `IsReminderTurn` require the transport authenticity `LocalProcess`, so that a webhook turn with the source kind `reminder` is not a reminder turn, and verify that `TurnContextChildControlTests` and `ChildOwnerActorSpecs` pass
-- [ ] 5.2 Update the expected mutant count in `scripts/run-child-control-mutations.sh` and `TOOLING.md`, and verify that the gate kills every mutant
-- [ ] 5.3 State in `agent-coordination` that the turn needs the same audience, boundary, and channel type
+- [x] 5.1 Make `IsReminderTurn` require the transport authenticity `LocalProcess`, so that a webhook turn with the source kind `reminder` is not a reminder turn, and verify that `TurnContextChildControlTests` and `ChildOwnerActorSpecs` pass
+- [x] 5.2 Update the expected mutant count in `scripts/run-child-control-mutations.sh` and `TOOLING.md`, and verify that the gate kills every mutant
+- [x] 5.3 State in `agent-coordination` that the turn needs the same audience, boundary, and channel type

@@ -80,10 +80,13 @@ public sealed record TurnContext
               && ChannelType == owner.ChannelType
             : owner.HasSameRequester(this);
 
-    // Both facts make a reminder turn. Another source kind with VerifiedAutomation, such as a webhook, is not
-    // a reminder turn, and a person turn cannot set the principal.
+    // Three facts make a reminder turn. A webhook turn also has VerifiedAutomation, and its sender sets the source
+    // kind through the event header or the route name, so the source kind can read "reminder". The webhook path
+    // sets the authenticity Verified in code. The reminder path sets LocalProcess in code, so a webhook sender
+    // cannot copy it. A person turn cannot set the principal.
     private bool IsReminderTurn
         => RequesterPrincipal == PrincipalClassification.VerifiedAutomation
+           && Provenance.TransportAuthenticity == TransportAuthenticity.LocalProcess
            && Provenance.SourceKind?.Value == ReminderExecutionActor.ReminderSourceKind;
 
     // Turn identity is separate: restart batches can span several turns. Use this check where one authority

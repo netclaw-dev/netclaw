@@ -110,7 +110,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that is not `Closed`, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
 | `TurnContext.HasSameRequester` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it | 11 killed | `./scripts/run-child-owner-mutations.sh` |
 | `SessionToolWorkflow.CloseChildApprovals` and `SessionToolWorkflow.ExpireRecoveredChildApprovals` | Issue 2525: a cancel record or a terminal record (also the lost record that recovery writes) closes every approval entry of its run in live code. A checkpoint, a prepared result, a parent approval, and an entry of another run stay open. Recovery closes each child entry that remains. A stranded entry can block a snapshot. In live code, an entry that closes too soon drops a prompt that a person can still answer (a checkpoint, another run, or a parent call) | 6 killed | `./scripts/run-child-approval-close-mutations.sh` |
-| `TurnContext.CanControlChildRunOf` and the reminder turn test (`IsReminderTurn`) | Issue #2524: a reminder turn and a person turn of one session manage each other's child runs, and the sender and the principal do not count. The session, audience, boundary, and channel type must still match, so no turn reaches a run of another session. A turn with `VerifiedAutomation` and another source kind, and a person turn with the reminder source kind, are not reminder turns and keep the six-fact rule | 13 killed | `./scripts/run-child-control-mutations.sh` |
+| `TurnContext.CanControlChildRunOf` and the reminder turn test (`IsReminderTurn`) | Issue #2524: a reminder turn and any other turn of one session manage each other's child runs, and the sender and the principal do not count. The session, audience, boundary, and channel type must still match, so no turn reaches a run of another session. A turn with `VerifiedAutomation` and another source kind, a webhook turn with the reminder source kind (authenticity `Verified`), and a person turn with the reminder source kind, are not reminder turns and keep the six-fact rule | 15 killed | `./scripts/run-child-control-mutations.sh` |
 | The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
 | The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
 
@@ -446,18 +446,19 @@ Run the child control gate:
 The script selects the body of `TurnContext.CanControlChildRunOf` and the property `IsReminderTurn`, from the start of the method to the end of the property.
 `LlmSessionActor.ControlChild` uses this check for child status and cancel (issue #2524).
 The `HasSameRequester` gate does not cover it, because the input join rule also uses `HasSameRequester`.
-Stryker makes 13 mutants: the choice between the relaxed rule and the six-fact rule (two mutants), the `||` between the two sides (one), each of the four kept facts (four equality mutants and three `&&` mutants), and the two parts of the reminder test (one equality mutant for each part and one `&&` mutant).
-The linked `TurnContextChildControlTests` source must kill all 13 mutants.
+Stryker makes 15 mutants: the choice between the relaxed rule and the six-fact rule (two mutants), the `||` between the two sides (one), each of the four kept facts (four equality mutants and three `&&` mutants), and the three parts of the reminder test (one equality mutant for each part and two `&&` mutants).
+The linked `TurnContextChildControlTests` source must kill all 15 mutants.
 A reminder turn that differs in a kept fact must not control the run, and the same holds for a person turn and a run that a reminder turn started.
 A reminder turn must ignore the sender and the principal of the other turn.
-A webhook turn, a turn with no source kind, and a person turn with the reminder source kind must not get the relaxation, as requester or as run starter.
+A webhook turn (also one with the reminder source kind and the authenticity `Verified`), a turn with no source kind, and a person turn with the reminder source kind must not get the relaxation, as requester or as run starter.
+Any other turn of the session, such as the delivery turn of a background job, gets it.
 The selector rejects a missing or repeated source marker before Stryker starts.
 The gate fails for a survivor, a changed mutant count, or a compile error in the span.
 
 The span does not include `LlmSessionActor.HasSameChildRequester`, the call in `ControlChild`, or `HasSameAuthority`.
 `ChildOwnerActorSpecs` covers the call path.
 
-The first local run killed 13 of 13 mutants. Stryker took 2 minutes 6 seconds with a warm build cache.
+The first local run killed 15 of 15 mutants. Stryker took 2 minutes 7 seconds with a warm build cache.
 CI runs it in the `child-owner-and-report` group of the `mutation-gates` job.
 That group now holds four gates.
 Its report directory is `artifacts/stryker/child-control`.
