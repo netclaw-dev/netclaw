@@ -151,7 +151,8 @@ public sealed class BackgroundChildRunReducerTests
                 Git = new GitWorkingContextInspection.Skipped()
             },
             AcceptedAtMs = 10,
-            Lifecycle = new ChildRunLifecycle.Accepted(null)
+            Lifecycle = new ChildRunLifecycle.Accepted(null),
+            SourceReminderId = null
         };
     }
 

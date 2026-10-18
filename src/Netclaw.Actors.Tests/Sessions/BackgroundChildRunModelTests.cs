@@ -323,7 +323,8 @@ public sealed class BackgroundChildRunModelTests(ITestOutputHelper output)
                 Git = new GitWorkingContextInspection.Skipped()
             },
             AcceptedAtMs = 1,
-            Lifecycle = new ChildRunLifecycle.Accepted(null)
+            Lifecycle = new ChildRunLifecycle.Accepted(null),
+            SourceReminderId = null
         };
     }
 

@@ -269,6 +269,105 @@ public sealed class RoutedSkillReminderDeliveryTests : ReminderDeliveryTestBase
         AssertNextModelCallIsTheBarrier(callsBefore);
     }
 
+    // --- The child result of a routed skill (spec netclaw-session, "A child-delivery turn keeps the reminder link") ---
+    // The routed turn posts only the acceptance. A later child-delivery turn posts the real reply. That turn has no
+    // input of its own, so it must keep the reminder link of the routed turn, and it follows the routed rule.
+
+    [Fact]
+    public async Task A_failed_post_of_the_child_result_of_a_routed_skill_reminder_alerts_once_and_does_not_retry()
+    {
+        // Arrange
+        var sessionId = new SessionId("mattermost/chan1/routed-reminder-child-result");
+        var (subscriber, delivery) = await RunRoutedChildDeliveryTurnAsync(sessionId, ReminderSource(FireKey));
+        var callsBefore = ChatClient.CallCount;
+
+        // Act: ContentRejected is retryable for an ordinary turn. The child result of a routed skill is not.
+        SendDeliveryFailed(sessionId, delivery.TurnNumber, DeliveryFailureKind.ContentRejected);
+
+        // Assert
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
+        Assert.Equal(ReminderSlug, alert.Source);
+        AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    [Fact]
+    public async Task The_child_result_of_a_routed_skill_that_a_person_started_raises_no_alert_and_no_retry()
+    {
+        // Arrange: no reminder started the routed turn, so the child result has no reminder link.
+        var sessionId = new SessionId("mattermost/chan1/routed-person-child-result");
+        var personSource = ReminderSource(FireKey) with { ReminderId = null };
+        var (subscriber, delivery) = await RunRoutedChildDeliveryTurnAsync(sessionId, personSource);
+        var callsBefore = ChatClient.CallCount;
+
+        // Act
+        SendDeliveryFailed(sessionId, delivery.TurnNumber, DeliveryFailureKind.ContentRejected);
+        await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
+
+        // Assert
+        Assert.Equal(0, AlertCount);
+        AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    [Fact]
+    public async Task A_recovered_session_alerts_once_and_does_not_retry_the_child_result_of_a_routed_skill_reminder()
+    {
+        // Arrange: the journal holds the child-delivery turn. Replay must read its reminder link and routed mark.
+        var sessionId = new SessionId("mattermost/chan1/routed-reminder-child-result-recovered");
+        var (_, delivery) = await RunRoutedChildDeliveryTurnAsync(sessionId, ReminderSource(FireKey));
+        await StopSessionAsync(sessionId);
+
+        var recovered = CreateTestProbe("routed-child-result-recovered-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
+        var callsBefore = ChatClient.CallCount;
+
+        // Act
+        SendDeliveryFailed(sessionId, delivery.TurnNumber, DeliveryFailureKind.ContentRejected);
+
+        // Assert
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
+        Assert.Equal(ReminderSlug, alert.Source);
+        AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    [Fact]
+    public async Task A_session_that_passivated_alerts_once_and_does_not_retry_the_child_result_of_a_routed_skill_reminder()
+    {
+        // Arrange: the child run is closed after its delivery, so the session can passivate. The next incarnation
+        // restores from the passivation snapshot and does not replay the child-delivery turn.
+        var sessionId = new SessionId("mattermost/chan1/routed-reminder-child-result-passivated");
+        var (subscriber, delivery) = await RunRoutedChildDeliveryTurnAsync(sessionId, ReminderSource(FireKey));
+        var session = await ResolveSessionAsync(sessionId);
+        Watch(session);
+        session.Tell(new LeaveSession(subscriber) { SessionId = sessionId });
+        session.Tell(ReceiveTimeout.Instance);
+        await ExpectTerminatedAsync(session, cancellationToken: TestContext.Current.CancellationToken);
+
+        var recovered = CreateTestProbe("routed-child-result-passivated-subscriber");
+        await JoinAsync(ActorRegistry.Get<SessionManagerActorKey>(), recovered, sessionId);
+        var callsBefore = ChatClient.CallCount;
+
+        // Act
+        SendDeliveryFailed(sessionId, delivery.TurnNumber, DeliveryFailureKind.ContentRejected);
+
+        // Assert
+        var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
+        Assert.Equal(ReminderSlug, alert.Source);
+        AssertNextModelCallIsTheBarrier(callsBefore);
+    }
+
+    // Runs the routed turn, releases the child, and waits for the child-delivery turn, which posts the child result.
+    private async Task<(Akka.TestKit.TestProbe Subscriber, TurnCompleted Delivery)> RunRoutedChildDeliveryTurnAsync(
+        SessionId sessionId, MessageSource source)
+    {
+        var (subscriber, routed, childGate) = await RunRoutedTurnWithHeldChildAsync(sessionId, source);
+        childGate.TrySetResult();
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        var delivery = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(routed.TurnNumber.Value + 1, delivery.TurnNumber.Value);
+        Assert.Empty(delivery.OpenChildRunIds);
+        return (subscriber, delivery);
+    }
+
     // The coordination stack runs a routed skill as a child run. The routed turn records the acceptance, and a later
     // child-delivery turn posts the child result. The test holds the child's model call, so the routed turn stays the
     // latest recorded turn while the test sends its report. The method returns after the child's call started, so the

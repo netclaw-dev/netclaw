@@ -150,4 +150,55 @@ public sealed class DeliveryRetryHandlerReminderTests
 
         Assert.True(handler.IsRoutedSkill(new TurnNumber(2)));
     }
+
+    // --- A retry turn keeps the reminder link of the turn that it repeats ---
+    // A child-delivery turn has no input, so its retry turn has no input source. The handler holds the link from
+    // the retry until the session records the next turn. A link that leaks past that turn would name a reminder
+    // for a person's turn. A link that is lost would hide the final failure of the retry turn.
+
+    [Fact]
+    public void A_pending_retry_keeps_the_link_of_the_turn_that_it_repeats()
+    {
+        var handler = new DeliveryRetryHandler();
+        handler.RecordTurn(new TurnNumber(2), FireA, routedSkill: false);
+
+        handler.RecordRetry();
+
+        Assert.Equal(FireA, handler.RetriedTurnReminder);
+    }
+
+    [Fact]
+    public void No_retry_means_no_retry_link()
+    {
+        var handler = new DeliveryRetryHandler();
+        handler.RecordTurn(new TurnNumber(2), FireA, routedSkill: false);
+
+        Assert.Null(handler.RetriedTurnReminder);
+    }
+
+    [Fact]
+    public void The_next_recorded_turn_ends_the_retry_link()
+    {
+        var handler = new DeliveryRetryHandler();
+        handler.RecordTurn(new TurnNumber(2), FireA, routedSkill: false);
+        handler.RecordRetry();
+
+        // The retry turn is recorded. A later turn must not take the link again.
+        handler.RecordTurn(new TurnNumber(3), FireA, routedSkill: false);
+
+        Assert.Null(handler.RetriedTurnReminder);
+    }
+
+    [Fact]
+    public void Clear_ends_the_retry_link()
+    {
+        // A new input or a failed retry turn ends the retry chain, and the link with it.
+        var handler = new DeliveryRetryHandler();
+        handler.RecordTurn(new TurnNumber(2), FireA, routedSkill: false);
+        handler.RecordRetry();
+
+        handler.Clear();
+
+        Assert.Null(handler.RetriedTurnReminder);
+    }
 }

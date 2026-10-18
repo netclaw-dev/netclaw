@@ -493,7 +493,8 @@ public sealed class LegacyCoordinationReplayTests : TestKit
                 Git = new GitWorkingContextInspection.Skipped()
             },
             AcceptedAtMs = 20,
-            Lifecycle = new ChildRunLifecycle.Accepted(null)
+            Lifecycle = new ChildRunLifecycle.Accepted(null),
+            SourceReminderId = null
         };
     }
 

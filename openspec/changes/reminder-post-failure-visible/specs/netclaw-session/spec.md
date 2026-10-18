@@ -14,9 +14,9 @@ Every snapshot that the session builds SHALL carry a value for the routed mark, 
 
 The session SHALL record a turn as eligible and as the latest recorded turn before it saves a snapshot for that turn. Thus a snapshot that the reminder turn itself triggers keeps both facts. A passivation snapshot keeps them too.
 
-A routed-skill turn is a turn where a sub-agent runs a skill (`HandleRoutedSkillExecutionCompleted`). The session SHALL record it as eligible, like any other turn, so a failed post on it can raise the alert. The session SHALL mark it as routed, and it SHALL NOT retry a routed-skill turn on the main model. The mark travels as follows:
+A routed-skill turn is a turn where a sub-agent runs a skill (`HandleRoutedSkillExecutionCompleted`). A routed skill runs as a child run, so this turn posts the acceptance of the child. The child-delivery turn of that child posts the child result, and it also counts as a routed-skill turn (see "A child-delivery turn keeps the reminder link of the turn that started the child"). The session SHALL record a routed-skill turn as eligible, like any other turn, so a failed post on it can raise the alert. The session SHALL mark it as routed, and it SHALL NOT retry a routed-skill turn on the main model. The mark travels as follows:
 
-- `TurnRecorded.RoutedSkill` is a new `bool` on the journal event (proto3 `bool routed_skill = 10`). The session writes `true` for a routed-skill turn. A journal entry written before this field has no value. It SHALL read as `false`, so an old entry is an ordinary turn. A turn that is not routed writes the same bytes as before.
+- `TurnRecorded.RoutedSkill` is a new `bool` on the journal event (proto3 `bool routed_skill = 10`). The session writes `true` for a routed-skill turn and for the child-delivery turn of a routed-skill child. A journal entry written before this field has no value. It SHALL read as `false`, so an old entry is an ordinary turn. A turn that is not routed writes the same bytes as before.
 - `DeliveryRetryHandler` keeps the mark with the latest recorded turn. `RecordTurn` takes it, and `IsRoutedSkill(turn)` returns it for the latest recorded turn only.
 - `SessionSnapshot.EligibleDeliveryTurnRoutedSkill` is a new `bool?` (`optional bool eligible_delivery_turn_routed_skill = 21`). It is `null` when the snapshot has no value. The explicit presence lets the session tell a new-format snapshot (`true` or `false`) from an old-format snapshot (`null`).
 - `SessionSnapshot.EligibleDeliveryReminderId` is `optional string eligible_delivery_reminder_id = 20`.
@@ -206,3 +206,98 @@ The session SHALL NOT raise `reminder.delivery.failed` for a turn that no remind
 - **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected` for that turn, before or after recovery
 - **THEN** the sink receives no `reminder.delivery.failed` alert
 - **AND** the session makes no model call for the report
+
+### Requirement: A child-delivery turn keeps the reminder link of the turn that started the child
+
+A routed skill and an async `spawn_agent` call both start a child run (see `background-subagent-runs`). The turn that starts the child posts only the acceptance. A later child-delivery turn gives the child result to the main model and posts the real reply. That turn has no input of its own, so it has no input source with a reminder id.
+
+The session SHALL record a child-delivery turn with the reminder link of the turn that started the child. The rules of "A failed post on a reminder turn is visible to the operator" then apply to it without change. `LlmSessionActor` owns this decision.
+
+Data and owners:
+
+| Data | Owner | Lifetime |
+|------|-------|----------|
+| `BackgroundChildRun.SourceReminderId` | `LlmSessionActor.AcceptChild`, in the `ChildRunAccepted` event | Durable: `BackgroundChildRunV2Proto.source_reminder_id = 20`, in the journal event and in the snapshot child list |
+| `TurnRecorded.SourceReminderId` and `TurnRecorded.RoutedSkill` of the child-delivery turn | `LlmSessionActor.HandleTextResponse` | Durable: the existing journal fields |
+| The link of a pending retry | `DeliveryRetryHandler.RetriedTurnReminder` | Actor-local, from the retry until the next recorded turn |
+
+The field number 20 is the next number after the fields 1 to 19 of `BackgroundChildRunV2Proto` on `dev`. No open branch edits this message. The other open branches that edit the proto file (#1897, #1730) add other messages. The field has explicit presence (`optional string`).
+
+The session SHALL find the link of the running turn in this order (schematic; it omits the security gates):
+
+```
+RunningTurnLink(deliveredChild):
+  deliveredChild is not null           -> deliveredChild.SourceReminderId
+  the turn's own input has a reminder  -> that fire key
+  a delivery retry is pending          -> the link of the turn that the retry repeats
+  otherwise                            -> null
+```
+
+- `AcceptChild` writes the link of the running turn into the new child run. Thus a child that a child-delivery turn starts keeps the same link.
+- When the session records a child-delivery turn, it writes the link of the child into `TurnRecorded.SourceReminderId`. The live turn, the journal replay, and the snapshot then carry the link with no other change.
+- A retry turn has no input and no child. It SHALL keep the link of the turn that it repeats. `DeliveryRetryHandler.RecordRetry` starts the pending link. The next `RecordTurn` and `Clear` end it. A new input calls `Clear`, so it ends the retry chain and the link together.
+
+A child-delivery turn of a routed-skill child (`StartKey` is `ChildRunStartKey.Slash`) SHALL count as a routed-skill turn. A routed skill gives one result in two posts: the acceptance and the child result. Both posts SHALL follow one rule: the first report is the final failure, and the session makes no model call for it. A child-delivery turn of an async `spawn_agent` child (`ChildRunStartKey.Tool`) is an ordinary turn, with the retry budget.
+
+The `TurnCompleted` output of a child-delivery turn SHALL NOT change. Its `SourceReminderId` stays null. The reminder execution actor reads that output to find the turn of its own fire, and a child-delivery turn is not that turn.
+
+Old data: a child run record from before field 20 SHALL read as no link. Its child-delivery turn raises no alert and writes no Warning. The session cannot tell a child that a person started from a child that an older reminder turn started. A draft v1 child record and a deployed v1 child record also read as no link.
+
+The `netclaw-operations` skill (`references/scheduling.md`) SHALL say that the alert also covers the later reply that posts the result of a child run that a reminder started, for a routed skill and for an async sub-agent. Before this requirement, the skill said that the alert holds "for a reminder that runs a routed skill". That statement was true only for the acceptance post.
+
+#### Scenario: A failed post of the child result of a reminder turn raises the alert
+
+- **GIVEN** a reminder fire `check-pr:1712000000000` started turn 1, and turn 1 called `spawn_agent`
+- **AND** the child finished, and the session recorded the child-delivery turn 2
+- **WHEN** the binding sends `DeliveryFailed` with `TurnNumber = 2` and `FailureKind = TransportFailure`
+- **THEN** the sink receives one `reminder.delivery.failed` alert with `Source = "check-pr"`
+- **AND** the `TurnCompleted` output of turn 2 has no `SourceReminderId`
+
+#### Scenario: Counterexample - the child result of a person's turn raises no alert
+
+- **GIVEN** a person started turn 1, and turn 1 called `spawn_agent`
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for the child-delivery turn
+- **THEN** the sink receives no `reminder.delivery.failed` alert
+
+#### Scenario: A spent retry budget on the child result of a reminder turn raises the alert
+
+- **GIVEN** the child-delivery turn of a reminder-started `spawn_agent` child
+- **WHEN** the binding reports `ContentRejected` for that turn and for each of its two retry turns
+- **THEN** the session retries twice on the main model
+- **AND** the sink receives one `reminder.delivery.failed` alert after the third report
+
+#### Scenario: The child result of a routed-skill reminder alerts once and makes no retry
+
+- **GIVEN** a reminder prompt runs a routed skill, and the session recorded the child-delivery turn of that child
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected` for that turn
+- **THEN** the sink receives exactly one `reminder.delivery.failed` alert
+- **AND** the session makes no model call for the report
+
+#### Scenario: Counterexample - the child result of a routed skill that a person started raises no alert and makes no retry
+
+- **GIVEN** a person ran a routed skill, and the session recorded the child-delivery turn of that child
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected` for that turn
+- **THEN** the sink receives no `reminder.delivery.failed` alert
+- **AND** the session makes no model call for the report
+
+#### Scenario: The link survives a restart while the child runs
+
+- **GIVEN** a reminder turn started a child, and the session stopped while the child ran
+- **WHEN** the session recovers from its journal, or from a snapshot that holds the accepted child
+- **AND** the session records the child as lost and records the child-delivery turn
+- **AND** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert with `Source = "check-pr"`
+
+#### Scenario: The link survives a restart after the child-delivery turn
+
+- **GIVEN** the session recorded the child-delivery turn of a reminder-started child
+- **WHEN** the session recovers from its journal, from a snapshot that the turn saved, or from a passivation snapshot
+- **AND** the binding sends `DeliveryFailed` for that turn
+- **THEN** the session gives the same result as the live session: one alert, and no model call for a routed-skill child
+
+#### Scenario: A child run record from before the link loads with no link
+
+- **GIVEN** a stored `BackgroundChildRunV2Proto` with no field 20
+- **WHEN** the session reads it from the journal or from a snapshot
+- **THEN** the record loads, and `BackgroundChildRun.SourceReminderId` is null
+- **AND** a hand-built record with a string at field 20 reads that string as the link

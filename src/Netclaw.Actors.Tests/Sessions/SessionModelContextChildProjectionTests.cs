@@ -56,7 +56,8 @@ public sealed partial class SessionModelContextTests
             AgentName = new AgentName("worker"), SourceOperation = "spawn_agent", ArgumentsDigest = "digest",
             OriginalContext = new TurnContextRecord { SessionId = SessionId, TurnId = "original-turn" },
             InitialWorkingSnapshot = null, AcceptedAtMs = 1,
-            Lifecycle = new ChildRunLifecycle.Prepared(new ChildPreparedResult(terminal, call, result, delta))
+            Lifecycle = new ChildRunLifecycle.Prepared(new ChildPreparedResult(terminal, call, result, delta)),
+            SourceReminderId = null
         };
         var state = SessionState.Empty.AddUserMessage("Start the child.") with
         {

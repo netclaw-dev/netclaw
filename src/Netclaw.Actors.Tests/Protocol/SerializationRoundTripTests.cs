@@ -1034,7 +1034,8 @@ public sealed class SerializationRoundTripTests : TestKit
             },
             InitialWorkingSnapshot = initialSnapshot,
             AcceptedAtMs = 1,
-            Lifecycle = new ChildRunLifecycle.Accepted(null)
+            Lifecycle = new ChildRunLifecycle.Accepted(null),
+            SourceReminderId = null
         };
         var proto = NetclawProtoMapper.ToProtoV2(new SessionSnapshot { ChildRuns = [run] });
         var child = Assert.Single(proto.ChildRuns);
@@ -1744,6 +1745,115 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Empty(result.Anchors);
         Assert.Empty(result.Proposals);
         Assert.Equal(0L, result.TimestampMs);
+    }
+
+    // --- The reminder link of a child run: BackgroundChildRunV2Proto field 20 ---
+    // A child-delivery turn copies the link of its child run to TurnRecorded.SourceReminderId. The link must survive
+    // the acceptance event (journal replay) and the snapshot child list (snapshot restore). No open branch edits
+    // BackgroundChildRunV2Proto, and dev uses fields 1 to 19.
+
+    private const int ChildRunSourceReminderField = 20;
+    private static readonly ReminderId ChildRunFireKey = new("check-pr:1712000000000");
+
+    private static BackgroundChildRun ChildRunWithReminderLink(ReminderId? link) => new()
+    {
+        RunId = new SubAgentRunId("run-link-1"),
+        ScopeId = new SubAgentScopeId("scope-link-1"),
+        StartKey = new ChildRunStartKey.Tool(new SessionId("session-link-1"), "turn-link-1", new ToolCallId("call-link-1")),
+        AgentName = new AgentName("worker"),
+        SourceOperation = "spawn_agent",
+        ArgumentsDigest = "digest-link-1",
+        OriginalContext = new TurnContextRecord
+        {
+            SessionId = new SessionId("session-link-1"),
+            TurnId = "turn-link-1",
+            Boundary = TrustBoundary.Team,
+            RequesterPrincipal = PrincipalClassification.VerifiedAutomation
+        },
+        InitialWorkingSnapshot = new WorkingContextSnapshot
+        {
+            WorkingContext = WorkingContext.Empty,
+            Git = new GitWorkingContextInspection.Skipped()
+        },
+        AcceptedAtMs = 1,
+        Lifecycle = new ChildRunLifecycle.Accepted(null),
+        SourceReminderId = link
+    };
+
+    private static ChildRunAccepted AcceptanceOf(BackgroundChildRun run) => new()
+    {
+        SessionId = new SessionId("session-link-1"),
+        Run = run,
+        RecordedAtMs = 1
+    };
+
+    // The run record inside the acceptance event, as the journal writes it.
+    private byte[] AcceptedRunRecord(ChildRunAccepted accepted)
+        => Serialization.Proto.ChildRunAcceptedV2Proto.Parser.ParseFrom(Serialize(accepted)).Run.ToByteArray();
+
+    [Fact]
+    public void The_child_run_reminder_link_uses_field_20_with_explicit_presence()
+    {
+        var field = Serialization.Proto.BackgroundChildRunV2Proto.Descriptor.FindFieldByName("source_reminder_id");
+
+        Assert.Equal(ChildRunSourceReminderField, field.FieldNumber);
+        // Presence tells "no reminder" from an empty key.
+        Assert.True(field.HasPresence);
+    }
+
+    [Fact]
+    public void ChildRunAccepted_keeps_the_reminder_link_of_the_turn_that_started_the_child()
+    {
+        var accepted = AcceptanceOf(ChildRunWithReminderLink(ChildRunFireKey));
+
+        var result = RoundTrip(accepted);
+
+        Assert.Equal(ChildRunFireKey, result.Run.SourceReminderId);
+        Assert.Contains(ChildRunSourceReminderField, WireFieldNumbers(AcceptedRunRecord(accepted)));
+    }
+
+    [Fact]
+    public void ChildRunAccepted_of_a_person_turn_writes_no_reminder_link()
+    {
+        var accepted = AcceptanceOf(ChildRunWithReminderLink(null));
+
+        var result = RoundTrip(accepted);
+
+        Assert.Null(result.Run.SourceReminderId);
+        Assert.DoesNotContain(ChildRunSourceReminderField, WireFieldNumbers(AcceptedRunRecord(accepted)));
+    }
+
+    [Fact]
+    public void A_child_run_record_from_before_the_link_reads_as_no_link_and_a_hand_built_field_20_reads_as_the_link()
+    {
+        // A record without field 20 is what a journal from before this change holds. It reads as no reminder, so
+        // the child-delivery turn of such a child raises no alert.
+        var oldShape = AcceptanceOf(ChildRunWithReminderLink(null));
+        var oldBytes = Serialize(oldShape);
+        Assert.Null(Deserialize(oldBytes, oldShape).Run.SourceReminderId);
+
+        var proto = Serialization.Proto.ChildRunAcceptedV2Proto.Parser.ParseFrom(oldBytes);
+        proto.Run = Serialization.Proto.BackgroundChildRunV2Proto.Parser.ParseFrom(
+            WithStringField(proto.Run.ToByteArray(), ChildRunSourceReminderField, ChildRunFireKey.Value));
+
+        Assert.Equal(ChildRunFireKey, Deserialize(proto.ToByteArray(), oldShape).Run.SourceReminderId);
+    }
+
+    [Fact]
+    public void SessionSnapshot_child_run_keeps_the_reminder_link()
+    {
+        // A session that restores from a snapshot reads the child run from the snapshot, not from the
+        // acceptance event. The child-delivery turn after the restore needs the link from here.
+        var snapshot = new SessionSnapshot
+        {
+            TurnCount = 1,
+            History = [],
+            ChildRuns = [ChildRunWithReminderLink(ChildRunFireKey)]
+        };
+
+        var restored = RoundTrip(snapshot);
+
+        Assert.Equal(ChildRunFireKey, Assert.Single(restored.ChildRuns).SourceReminderId);
     }
 
     private byte[] SerializeLegacySnapshot(SessionSnapshot snapshot)
