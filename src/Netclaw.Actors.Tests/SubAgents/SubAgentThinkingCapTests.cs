@@ -115,6 +115,29 @@ public sealed class SubAgentThinkingCapTests : TestKit
     }
 
     [Fact]
+    public async Task Empty_reasoning_does_not_restart_the_thinking_cap()
+    {
+        await StartRunAsync();
+
+        // 28 s of reasoning chunks with empty text, as a backend that sends
+        // "reasoning_content": "" sends them. That is not answer text.
+        await PushAndSettleAsync(EmptyReasoningUpdate());
+        for (var i = 0; i < 4; i++)
+        {
+            Advance(Step);
+            await PushAndSettleAsync(EmptyReasoningUpdate());
+        }
+        Assert.False(_results.HasMessages);
+
+        // 35 s is past the 30 s cap and no real text or tool call arrived.
+        Advance(Step);
+
+        var result = await _results.ExpectMsgAsync<SubAgentResult>(
+            FaultCeiling, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(ThinkingOnlyTimeoutReason, result.OutcomeReason?.Value);
+    }
+
+    [Fact]
     public async Task Empty_text_next_to_thinking_does_not_restart_the_thinking_cap()
     {
         await StartRunAsync();
@@ -265,6 +288,13 @@ public sealed class SubAgentThinkingCapTests : TestKit
         {
             Role = Microsoft.Extensions.AI.ChatRole.Assistant,
             Contents = [new TextReasoningContent(text)]
+        };
+
+    private static ChatResponseUpdate EmptyReasoningUpdate()
+        => new()
+        {
+            Role = Microsoft.Extensions.AI.ChatRole.Assistant,
+            Contents = [new TextReasoningContent("")]
         };
 
     private static ChatResponseUpdate ThinkingWithEmptyText()

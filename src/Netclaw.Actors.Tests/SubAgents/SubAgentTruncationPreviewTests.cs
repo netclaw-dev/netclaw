@@ -108,6 +108,29 @@ public sealed class SubAgentTruncationPreviewTests(ITestOutputHelper output) : T
         Assert.Contains("prefix\\n", preview, StringComparison.Ordinal);
     }
 
+    // The key sits at the end of a line and its value is on the next line. Only the pass
+    // that runs after the line break escape can match it, because the escaped "\n" then
+    // joins the key to its value.
+    [Theory]
+    [InlineData("API_KEY=\nsupersecretvalue123", "supersecretvalue123")]
+    [InlineData("API_KEY=\r\nsupersecretvalue123", "supersecretvalue123")]
+    [InlineData("PASSWORD=\nhunter2hunter2", "hunter2hunter2")]
+    public void Log_preview_masks_a_value_on_the_line_after_its_key(string text, string secretFragment)
+    {
+        var preview = SubAgentActor.PreviewForLog($"cfg {text}", 300);
+
+        Assert.DoesNotContain(secretFragment, preview, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Failed_output_masks_a_value_on_the_line_after_its_key()
+    {
+        var result = await RunTruncatedAsync("cfg API_KEY=\nsupersecretvalue123");
+
+        Assert.Equal("output_truncated", result.OutcomeReason?.Value);
+        Assert.DoesNotContain("supersecretvalue123", result.Output, StringComparison.Ordinal);
+    }
+
     private async Task<SubAgentResult> RunTruncatedAsync(string cutOffText)
     {
         var client = new FakeChatClient

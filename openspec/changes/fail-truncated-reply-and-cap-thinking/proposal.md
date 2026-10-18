@@ -28,7 +28,7 @@ Source PRDs: `PRD-001`, `PRD-006` (through `docs/spec/SPEC-016-tool-liveness-and
   - Thinking resets the no-progress deadline but not the cap.
   - Only an answer update restarts the cap. An answer update is non-empty text,
     a tool call, or a finish reason. Empty or whitespace-only text counts as
-    thinking.
+    thinking. A reasoning part counts as thinking, also when its text is empty.
   - A session ends the turn with an error that names thinking. The error
     category is `ModelBehavior`, not `Timeout`. A sub-agent fails with reason
     `thinking_only_timeout`.

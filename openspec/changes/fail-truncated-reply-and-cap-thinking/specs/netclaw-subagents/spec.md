@@ -48,8 +48,9 @@ three times `SubAgents.NoProgressTimeoutSeconds`. The shared
 `ProcessingWatchdog` owns the cap, as in the session. A thinking update SHALL
 reset the no-progress deadline but SHALL NOT restart the cap. Only an answer
 update SHALL restart the cap. Empty or whitespace-only text counts as thinking.
-The run SHALL end with outcome Failed and reason `thinking_only_timeout`. Like
-the no-progress deadline, the cap gets no approval grace.
+A reasoning part counts as thinking, also when its text is empty. The run SHALL
+end with outcome Failed and reason `thinking_only_timeout`. Like the
+no-progress deadline, the cap gets no approval grace.
 
 #### Scenario: Thinking-only model call stops at the cap
 

@@ -23,8 +23,9 @@ namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
 /// An empty text part is not answer text. A backend can send <c>TextContent("")</c>
-/// next to every reasoning chunk. Such a delta must not restart the thinking cap, or a
-/// call that only thinks is never stopped. The ActorSystem runs on
+/// next to every reasoning chunk, or <c>TextReasoningContent("")</c> as a chunk of its
+/// own. Such a delta must not restart the thinking cap, or a call that only thinks is
+/// never stopped. The ActorSystem runs on
 /// <see cref="Akka.TestKit.TestScheduler"/>: virtual time moves only on
 /// <c>AdvanceScheduler</c>.
 /// </summary>
@@ -94,6 +95,36 @@ public sealed class LlmSessionEmptyTextCapTests(ITestOutputHelper output) : LlmS
         await ReadUntilAsync(output => output is TurnCompleted);
     }
 
+    [Fact]
+    public async Task Empty_reasoning_chunks_do_not_restart_the_thinking_cap()
+    {
+        await StartTurnAsync("empty-text-cap/empty-reasoning");
+
+        // Each step sends an empty reasoning chunk, then a marker chunk. The empty chunk is
+        // handled before the marker, so the shown marker proves the session saw both.
+        _chatClient.Push(ThinkingWithEmptyText("first-0"));
+        _chatClient.Push(ThinkingWithEmptyText("first-1"));
+        await ReadUntilAsync(output => IsThinkingDelta(output, "first-1"));
+
+        for (var step = 1; step <= 4; step++)
+        {
+            AdvanceScheduler(Step);
+            var marker = $"first-step-{step}";
+            _chatClient.Push(EmptyReasoning());
+            _chatClient.Push(ThinkingWithEmptyText(marker));
+            await ReadUntilAsync(output => IsThinkingDelta(output, marker));
+        }
+
+        // 35 s is past the cap. No real text or tool call arrived.
+        AdvanceScheduler(Step);
+
+        var error = await ReadUntilAsync(output => output is ErrorOutput) as ErrorOutput;
+        Assert.NotNull(error);
+        Assert.Equal(ErrorCategory.ModelBehavior, error.Category);
+        Assert.Contains("thinking", error.Message, StringComparison.OrdinalIgnoreCase);
+        await ReadUntilAsync(output => output is TurnCompleted);
+    }
+
     private async Task StartTurnAsync(string sessionIdValue)
     {
         var sessionId = new SessionId(sessionIdValue);
@@ -152,6 +183,9 @@ public sealed class LlmSessionEmptyTextCapTests(ITestOutputHelper output) : LlmS
                 return output;
         }
     }
+
+    private static ChatResponseUpdate EmptyReasoning()
+        => new() { Role = AiChatRole.Assistant, Contents = [new TextReasoningContent("")] };
 
     private static ChatResponseUpdate ThinkingWithEmptyText(string text)
         => new() { Role = AiChatRole.Assistant, Contents = [new TextReasoningContent(text), new TextContent("")] };

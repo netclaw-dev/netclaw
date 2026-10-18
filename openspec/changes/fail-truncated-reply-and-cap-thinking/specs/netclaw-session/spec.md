@@ -51,9 +51,10 @@ session and `SubAgents.NoProgressTimeoutSeconds` for a subagent. The
 thinking update SHALL reset the no-progress deadline but SHALL NOT restart the
 cap. Only an answer update SHALL restart the cap. An answer update is non-empty
 text, a tool call, or a finish reason. Empty or whitespace-only text counts as
-thinking. When the cap fires in a session, the turn SHALL end with an error that
-names thinking. The error category SHALL be `ErrorCategory.ModelBehavior`,
-because the provider streamed without fault and the model gave no answer.
+thinking. A reasoning part counts as thinking, also when its text is empty. When
+the cap fires in a session, the turn SHALL end with an error that names
+thinking. The error category SHALL be `ErrorCategory.ModelBehavior`, because the
+provider streamed without fault and the model gave no answer.
 
 #### Scenario: Thinking-only stream stops at the cap with a model error
 
