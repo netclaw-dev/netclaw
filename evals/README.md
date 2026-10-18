@@ -234,6 +234,12 @@ other categories have no reminders. The reminder tools read the files for each
 call. The daemon gives a schedule entry only to a file that exists at startup,
 so a seeded reminder cannot fire during a run.
 
+The weekly disk cleanup reminder fires every Sunday at 03:00 UTC. The setup
+also writes one successful history record at the latest Sunday 03:00 UTC. On
+a Sunday after 03:00 UTC, an empty history made the agent think that the fire
+was missed, and it ran `netclaw reminder status` to check. The record keeps
+the schedule on time for every run day.
+
 The `eval_workspace` MCP fixture adds 18 tools for every category. Their names
 share common words with the built-in tools, as a production catalog does. The
 search case needs them: without those tools, an unranked search still returns

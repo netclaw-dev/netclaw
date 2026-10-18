@@ -487,8 +487,47 @@ write_eval_reminder() {
     chmod ugo+rw "$file"
 }
 
+# Prints the epoch seconds of the latest "0 3 * * 0" fire (Sunday 03:00 UTC)
+# at or before a time. UTC has no daylight saving shift, so epoch arithmetic
+# is exact. The epoch day 0 was a Thursday, so (day + 4) % 7 is the weekday
+# with Sunday as 0.
+# Args: epoch seconds of the time (default: now)
+last_sunday_0300_utc_epoch() {
+    local now="${1:-$(date +%s)}"
+    local day=$(( now / 86400 ))
+    local fire=$(( day * 86400 + 3 * 3600 - ((day + 4) % 7) * 86400 ))
+    if (( fire > now )); then
+        fire=$(( fire - 7 * 86400 ))
+    fi
+    printf '%s\n' "$fire"
+}
+
+# Writes one successful history record for a reminder. The reminder tools read
+# the file {id}.history.jsonl next to the definition file.
+# Args: id, epoch seconds of the fire
+write_eval_reminder_history() {
+    local id="$1" fired_at="$2"
+    local file="$EVAL_HOME/data/schedules/reminders/$id.history.jsonl"
+    jq -nc --argjson fired "$fired_at" --arg id "$id" '
+        {
+            firedAt: ($fired | strftime("%Y-%m-%dT%H:%M:%SZ")),
+            success: true,
+            durationMs: 2300,
+            sessionId: ("reminder/" + $id + "/" + ($fired | tostring)),
+            errorMessage: null,
+            toolDenied: false
+        }' > "$file"
+    chmod ugo+rw "$file"
+}
+
+# The seeded reminder fires every Sunday at 03:00 UTC. It gets one successful
+# run at the latest Sunday 03:00 UTC, so the history is never empty for a job
+# that is due. Without it, a run on a Sunday after 03:00 UTC made the agent
+# think the fire was missed. It then ran `netclaw reminder status` to check.
+# The record time depends on the run day, but the schedule never looks late.
 seed_disk_cleanup_reminder() {
     write_eval_reminder "disk-cleanup-weekly" "Weekly disk space cleanup" "0 3 * * 0"
+    write_eval_reminder_history "disk-cleanup-weekly" "$(last_sunday_0300_utc_epoch)"
 }
 
 start_eval_daemon() {
