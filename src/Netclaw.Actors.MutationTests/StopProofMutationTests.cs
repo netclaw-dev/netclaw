@@ -21,9 +21,11 @@ namespace Netclaw.Actors.MutationTests;
 /// </summary>
 /// <remarks>
 /// The tests use a stand-in daemon: a process that shows as <c>netclawd</c>, a port in the config of the
-/// home, and a recording listener. They need Linux (the stand-in is a link to <c>sleep</c>), as the
-/// Linux CI runner of the mutation gates has. They are the xUnit 2 twin of the stop tests in
-/// <c>Netclaw.Cli.Tests</c>, because Stryker's adapter does not support xUnit 3.
+/// home, and a recording listener. They need Linux: the stand-in is a link to <c>/bin/sleep</c>, and the
+/// stop reads the environment of the process from <c>/proc</c>. The mutation gates run on a Linux runner.
+/// On another system each test returns at once, as the Linux-only tests of this project do.
+/// They are the xUnit 2 twin of the stop tests in <c>Netclaw.Cli.Tests</c>, because Stryker's adapter does not
+/// support xUnit 3.
 /// </remarks>
 public sealed class StopProofMutationTests : IDisposable
 {
@@ -55,6 +57,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_daemon_that_confirms_the_pid_and_the_home_is_stopped()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(ThisHome);
 
         var result = await ManagerFor(ThisHome).StopAsync("cli-stop", CancellationToken.None);
@@ -71,6 +76,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_200_for_another_pid_is_no_proof_even_when_the_environment_matches()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(ThisHome);
         daemon.AnswerAsLegacyDaemon(daemon.Pid + 1);
 
@@ -82,6 +90,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_200_for_the_right_pid_and_this_home_is_proof_even_when_the_environment_names_another_home()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(OtherHome);
         var listener = ListenFor(ThisHome);
         listener.AnswerAsDaemonOf(daemon.Pid, HomeIdentity.Canonical(ThisHome));
@@ -96,6 +107,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_200_for_the_right_pid_and_another_home_is_no_proof_even_when_the_environment_matches()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(ThisHome);
         daemon.AnswerAsDaemonOf(daemon.Pid, OtherHome);
 
@@ -107,6 +121,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_200_for_the_right_pid_and_a_spelling_of_this_home_is_proof()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(OtherHome);
         var listener = ListenFor(ThisHome);
         listener.AnswerAsDaemonOf(daemon.Pid, ThisHome + Path.DirectorySeparatorChar);
@@ -121,6 +138,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_200_with_no_home_leaves_the_decision_to_the_environment_which_matches()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         // A daemon from before the identity check answers 200 with its PID and no home.
         var daemon = StartDaemon(ThisHome);
         daemon.AnswerAsLegacyDaemon(daemon.Pid);
@@ -134,6 +154,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_200_with_no_home_leaves_the_decision_to_the_environment_which_names_another_home()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(OtherHome);
         var listener = ListenFor(ThisHome);
         listener.AnswerAsLegacyDaemon(daemon.Pid);
@@ -162,6 +185,9 @@ public sealed class StopProofMutationTests : IDisposable
     [InlineData("")]
     public async Task A_200_body_that_is_no_daemon_answer_is_no_proof_even_when_the_environment_matches(string body)
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(ThisHome);
         daemon.AnswerEveryNoticeWithBody(
             HttpStatusCode.OK,
@@ -176,6 +202,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_failed_notice_is_reported_on_stderr_and_the_refusal_names_the_recovery()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(OtherHome);
         var silent = ListenFor(ThisHome);
         silent.StopListening();
@@ -191,6 +220,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_409_is_never_overruled_by_the_environment()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(ThisHome);
         daemon.AnswerEveryNoticeWith(HttpStatusCode.Conflict);
 
@@ -207,6 +239,9 @@ public sealed class StopProofMutationTests : IDisposable
     [InlineData(204)]
     public async Task Another_status_leaves_the_decision_to_the_environment_which_matches(int status)
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(ThisHome);
         daemon.AnswerEveryNoticeWith((HttpStatusCode)status);
 
@@ -221,6 +256,9 @@ public sealed class StopProofMutationTests : IDisposable
     [InlineData(204)]
     public async Task Another_status_leaves_the_decision_to_the_environment_which_names_another_home(int status)
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(OtherHome);
         var listener = ListenFor(ThisHome);
         listener.AnswerEveryNoticeWith((HttpStatusCode)status);
@@ -234,6 +272,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task No_answer_and_an_environment_that_matches_stops_the_daemon()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(ThisHome);
         daemon.StopListening();
 
@@ -246,6 +287,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task No_answer_and_an_environment_for_another_home_stops_nothing()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(OtherHome);
         var silent = ListenFor(ThisHome);
         silent.StopListening();
@@ -259,6 +303,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task No_answer_and_an_environment_home_that_differs_only_in_case_stops_nothing()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         // Paths on Linux are case-sensitive: a home that differs in case is another home.
         var daemon = StartDaemon(Path.Combine(_dir.Path, "THIS HOME&X"));
         var silent = ListenFor(ThisHome);
@@ -273,6 +320,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task No_answer_and_a_process_with_no_home_variable_stops_nothing()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         // A process with no NETCLAW_HOME serves the default home. This home is not the default home.
         var daemon = StartDaemon(ThisHome, declareHome: false);
         daemon.StopListening();
@@ -287,6 +337,9 @@ public sealed class StopProofMutationTests : IDisposable
     [InlineData("dot-segment")]
     public async Task No_answer_and_another_spelling_of_this_home_in_the_environment_stops_the_daemon(string spelling)
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         Directory.CreateDirectory(Path.Combine(ThisHome, "sub"));
         var environmentHome = spelling == "trailing-separator"
             ? ThisHome + Path.DirectorySeparatorChar
@@ -303,6 +356,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task No_answer_and_a_link_to_this_home_in_the_command_stops_the_daemon()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(ThisHome);
         daemon.StopListening();
         var link = Path.Combine(_dir.Path, "link-to-this-home");
@@ -317,6 +373,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task No_answer_and_a_chain_of_links_to_this_home_stops_the_daemon()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(ThisHome);
         daemon.StopListening();
         var first = Path.Combine(_dir.Path, "first-link");
@@ -333,6 +392,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task No_answer_and_a_process_with_no_home_variable_stops_when_its_own_HOME_holds_this_home()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         // B1: a process with no NETCLAW_HOME serves $HOME/.netclaw, with the HOME of its own environment. The
         // HOME of the CLI plays no part, so the test leaves the HOME of the test process alone.
         var profile = Path.Combine(_dir.Path, "profile");
@@ -353,6 +415,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task No_answer_and_a_process_whose_HOME_differs_from_the_HOME_of_the_CLI_is_not_the_default_home_of_the_CLI()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         // The review scenario. The CLI has HOME=<profile>, so its default home is <profile>/.netclaw, and a stale
         // PID file there names a daemon that runs from the unit with HOME=<another profile>.
         var profile = Path.Combine(_dir.Path, "profile");
@@ -372,6 +437,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task No_answer_and_a_process_with_neither_NETCLAW_HOME_nor_HOME_is_not_the_default_home_of_the_CLI()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var profile = Path.Combine(_dir.Path, "profile");
         var cliHome = Path.Combine(profile, ".netclaw");
         var daemon = StartDaemonWith(cliHome, environment =>
@@ -391,6 +459,9 @@ public sealed class StopProofMutationTests : IDisposable
     [InlineData("token")]
     public async Task No_answer_and_a_process_with_a_relative_or_token_NETCLAW_HOME_stops_nothing(string kind)
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var profile = Path.Combine(_dir.Path, "profile");
         var home = Path.Combine(profile, ".netclaw");
         var elsewhere = Path.Combine(_dir.Path, "elsewhere");
@@ -412,6 +483,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_PID_file_for_a_process_that_has_gone_is_removed_and_nothing_is_sent()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         var daemon = StartDaemon(ThisHome);
         daemon.Process!.Kill();
         Assert.True(daemon.WaitForExit(10000));
@@ -427,6 +501,9 @@ public sealed class StopProofMutationTests : IDisposable
     [Fact]
     public async Task A_PID_file_for_a_process_that_is_not_a_daemon_is_removed_and_the_process_is_left_alone()
     {
+        if (!OperatingSystem.IsLinux())
+            return;
+
         ListenFor(ThisHome);
         var psi = new ProcessStartInfo("tail") { UseShellExecute = false };
         psi.ArgumentList.Add("-f");

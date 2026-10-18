@@ -300,7 +300,9 @@ public sealed class LifecycleEndpointRouteBuilderExtensionsTests : IAsyncDisposa
         var ct = TestContext.Current.CancellationToken;
         await using var app = await CreateAppAsync(spoofLoopback: true);
         var client = app.GetTestClient();
-        var home = Path.Combine(_dir.Path, "x" + injected + "fake-log-line level=critical");
+        // The log cuts the home at 200 characters. The marker sits right after the root of the file system, so
+        // the length of the temp folder (long on macOS) cannot push it past the cut.
+        var home = Path.Combine(Path.GetPathRoot(_dir.Path)!, "x" + injected + "fake-log-line level=critical");
 
         var response = await client.PostAsync(
             Notice("cli-stop", OwnPid.ToString(CultureInfo.InvariantCulture), home), null, ct);
@@ -322,7 +324,8 @@ public sealed class LifecycleEndpointRouteBuilderExtensionsTests : IAsyncDisposa
         var ct = TestContext.Current.CancellationToken;
         await using var app = await CreateAppAsync(spoofLoopback: true);
         var client = app.GetTestClient();
-        var home = Path.Combine(_dir.Path, new string('a', 600));
+        // Start at the root of the file system, so the length of the temp folder cannot hide the cut.
+        var home = Path.Combine(Path.GetPathRoot(_dir.Path)!, new string('a', 600));
 
         var response = await client.PostAsync(
             Notice("cli-stop", OwnPid.ToString(CultureInfo.InvariantCulture), home), null, ct);

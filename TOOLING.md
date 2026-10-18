@@ -39,7 +39,7 @@ A `FakeToolExecutor` result does not prove that the real executor accepts those 
 ## Focused Mutation Tests
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
-The job has seven Linux matrix groups that run in parallel with the normal test matrix.
+The job has eight Linux matrix groups that run in parallel with the normal test matrix.
 The job timeout is 25 minutes.
 Each Stryker invocation builds the test project and runs the initial test run again. That fixed cost is about 1.5 to 2 minutes per invocation.
 The mutant run itself takes under 1 minute for most spans. Group time is mostly the sum of the invocations of its gates.
@@ -47,16 +47,19 @@ Hosted runs of 2026-10-17 measured these gate times (minutes):
 
 | Group | Gates | Hosted time (about) |
 |-------|-------|---------------------|
-| `verb-chain` | `exact-verb-chain` (seven invocations, 53 mutants, 9 to 14.5), `shutdown-notice-identity` (18 mutants, one invocation, about 3 on a local run, not yet measured on a hosted runner) | 12.5 to 18 (estimate) |
-| `reminder` | `reminder-execution` (4.4), `literal-twin` (2.9), `stream-commit-gate` (2.5) | 10.3 |
+| `verb-chain` | `exact-verb-chain` (seven invocations, 53 mutants, 9 to 17.5) | 9.5 to 18 |
+| `reminder` | `reminder-execution` (4.4), `literal-twin` (2.9), `stream-commit-gate` (2.5), `shutdown-notice-identity` (18 mutants, one invocation, 3.4) | 13.7 (estimate) |
 | `authorization-and-directory` | `tool-authorization` (5.8), `approval-directory` (5.2) | 11.3 |
-| `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2), `stop-proof` (81 mutants, two invocations, about 5 on a local run, not yet measured on a hosted runner) | 18.3 (estimate) |
+| `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2) | 13.3 |
+| `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9) | 8 (estimate) |
 | `session-reliability` | `tool-batch-readiness` (2.4 to 3.2), `headless-stop-rule` (2.2 to 3.2), `open-child-runs` (1.8 to 2.8), `child-owner` (3.1) | 12.2 |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
 The `authorization-and-directory` and `guard-and-authority` groups were one group, `approval-and-authorization`. That group took 16.5 to 24.6 minutes on the same day and ran near the timeout.
 Each gate there runs Stryker two or three times, so a Stryker run costs 2 to 3 minutes in this group.
 The first CI run of the split took 9 minutes 37 seconds for `verb-chain` and 10 minutes 16 seconds for `reminder`.
+A hosted run of 2026-10-18 put the two gates of #2527 part 2 into `verb-chain` and `guard-and-authority`. Those groups took 21 and 20 minutes.
+`shutdown-notice-identity` took 3.4 minutes and `stop-proof` took 6.9 minutes there. `stop-proof` has its own group, and `shutdown-notice-identity` runs in `reminder`.
 The hosted runner speed varies, so the time of one gate changes by up to 5 minutes between runs.
 Measure a new gate on a cold runner and update this table.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
@@ -180,6 +183,8 @@ folder inside the home, or a missing value would send a false `daemon.stopping`
 alert or let a CLI of one home stop the daemon of another home. The gate needs
 at least 18 mutants in the span, so a span that lost its checks also fails.
 
+CI runs it in the `reminder` group of the `mutation-gates` job. It took 3.4 minutes on a hosted runner.
+
 ### Stop Proof Gate
 
 Run the stop proof gate:
@@ -201,6 +206,9 @@ notice are. The gate tested 32 mutants in `DaemonManager` and 49 in
 removes the 40-link bound makes a link cycle spin. Stryker reports that as
 `Timeout`, and the gate counts it as detected, as the exact verb chain gate does.
 In `DaemonManager`, only `Killed` counts.
+
+CI runs it in the `stop-proof` group of the `mutation-gates` job. That group holds this gate alone.
+The gate took 6.9 minutes on a hosted runner, and it made `guard-and-authority` take 20 minutes.
 
 ### Stream Commit Gate
 

@@ -25,9 +25,15 @@ public sealed class HomeIdentityMutationTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
 
+    // The temp folder of macOS sits below /var, a link to /private/var. Every path of a test starts at the
+    // resolved folder, so an expected value is a resolved path and a chain of links adds no hop of the temp path.
+    private readonly string _root;
+
+    public HomeIdentityMutationTests() => _root = HomeIdentity.Canonical(_dir.Path);
+
     public void Dispose() => _dir.Dispose();
 
-    private string P(params string[] parts) => Path.Combine([_dir.Path, .. parts]);
+    private string P(params string[] parts) => Path.Combine([_root, .. parts]);
 
     // The text of /proc/<pid>/environ: entries that end with a NUL character.
     private static string Env(params string[] entries) => string.Concat(entries.Select(entry => entry + "\0"));
@@ -355,12 +361,16 @@ public sealed class HomeIdentityMutationTests : IDisposable
 
         Assert.False(HomeIdentity.Same(home, P("home2")));
         Assert.False(HomeIdentity.Same(home, P("home", "workspaces")));
-        Assert.False(HomeIdentity.Same(home, _dir.Path));
+        Assert.False(HomeIdentity.Same(home, _root));
     }
 
     [Fact]
     public void Paths_that_differ_only_in_case_are_two_homes_on_Linux()
     {
+        // Windows and macOS file systems ignore case by default, so two such folders are one folder.
+        if (!OperatingSystem.IsLinux())
+            return;
+
         Folder("Home");
         Folder("home");
 
@@ -419,8 +429,8 @@ public sealed class HomeIdentityMutationTests : IDisposable
     public void A_dot_dot_in_a_link_target_stops_at_the_root_of_the_file_system()
     {
         // realpath(3): the parent of the root is the root.
-        var root = Path.GetPathRoot(_dir.Path)!;
-        var depth = _dir.Path[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries).Length;
+        var root = Path.GetPathRoot(_root)!;
+        var depth = _root[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries).Length;
         var target = string.Join(Path.DirectorySeparatorChar, Enumerable.Repeat("..", depth + 3).Append("zz-no-such-folder"));
         Directory.CreateSymbolicLink(P("up"), target);
 

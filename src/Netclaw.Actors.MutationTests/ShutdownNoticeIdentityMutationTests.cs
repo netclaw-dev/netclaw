@@ -186,8 +186,11 @@ public sealed class ShutdownNoticeIdentityMutationTests : IDisposable
         var (response, body) = await PostAsync(OwnPid, otherHome);
 
         Assert.Equal(HttpStatusCode.Conflict, response);
-        Assert.Contains(otherHome, body, StringComparison.Ordinal);
-        Assert.Contains(DaemonHome, body, StringComparison.Ordinal);
+        // The body is JSON, which escapes the backslash of a Windows path. Compare the decoded text.
+        using var document = JsonDocument.Parse(body);
+        var error = document.RootElement.GetProperty("error").GetString()!;
+        Assert.Contains(otherHome, error, StringComparison.Ordinal);
+        Assert.Contains(DaemonHome, error, StringComparison.Ordinal);
         AssertSilentExceptForOneWarning();
     }
 
