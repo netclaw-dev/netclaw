@@ -519,7 +519,19 @@ Alice asks for status in turn 2 (no quoted context)  -> same requester, allowed
 Bob asks for status in the same thread               -> other requester, denied
 ```
 
-**Code anchors:** `TurnContext.HasSameRequester`,
+One exception covers child status and cancel. A reminder turn (principal
+`VerifiedAutomation`, source kind `reminder`) owns the child runs of its own
+session. For a reminder turn the check ignores the sender ID and the principal
+classification. It still requires the same session, audience, trust boundary,
+and channel type.
+
+```text
+An operator starts a child in a TUI session
+A reminder fire in the same session asks for status  -> allowed
+A reminder fire in another session asks for status   -> denied
+```
+
+**Code anchors:** `TurnContext.HasSameRequester`, `TurnContext.CanControlChildRunOf`,
 `ApprovalButtonValueCodec.CanApprove`
 
 ### Consent mode

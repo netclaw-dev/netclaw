@@ -738,21 +738,55 @@ A valid example: Alice denies a prompt, the turn ends, and her second click on "
 Child ownership (status and cancel):
 
 - Owner: `LlmSessionActor.ControlChild`. It answers `check_agent_run` for status and for cancel.
-- Check: `HasSameChildRequester`, which calls `TurnContext.HasSameRequester`.
-  The check compares the [requester](../spec/GLOSSARY.md#requester): session, audience, boundary,
-  channel type, sender ID, and principal classification.
+- Check: `HasSameChildRequester`, which calls `TurnContext.CanControlChildRunOf`. The instance is the
+  requesting turn. The argument is the turn that started the run.
+- A requester that is not a reminder turn must match the [requester](../spec/GLOSSARY.md#requester) of the run on
+  six facts: session, audience, boundary, channel type, sender ID, and principal classification
+  (`TurnContext.HasSameRequester`).
+- A reminder turn is a turn with principal `VerifiedAutomation` and source kind `reminder`. It owns the child runs of
+  its own session. It must match the run on four facts: session, audience, boundary, and channel type. The check
+  ignores the sender ID and the principal of the reminder turn (issue #2524, owner decision of 16 October 2026).
 - The check ignores the turn ID, provenance, delivery targets, adopted-context fields, and the
   interactive approval flag. These fields describe one message, and they change between turns of one person.
 - Data: the `OriginalContext` of the run is durable in the session journal. The context of the request is call-local.
+  The check adds no durable data.
 - The child start keeps the full authority check (`HasSameChildAuthority`, `TurnContext.HasSameAuthority`)
   for start idempotency. Approval recovery and child continuation also keep the full authority check.
+- Input batching keeps `HasSameRequester`. A reminder input never joins the turn of a person (section 3.1).
+
+| Run started by | Requester | Result |
+| --- | --- | --- |
+| Alice (person) | Alice, a later turn | allowed |
+| Alice | Bob, same session | denied |
+| person (`local`, Operator), TUI session S | reminder fire in S, same audience, boundary, and channel type | allowed |
+| person in session A | reminder fire in session B | denied |
+| person | reminder fire with another audience, boundary, or channel type | denied |
+| reminder fire in S | later reminder fire in S | allowed |
+| reminder fire in S | person turn in S | denied |
+| person | turn with `VerifiedAutomation` and another source kind (a webhook) | denied |
 
 A valid example: Alice starts a child in a Slack thread turn that quotes earlier messages.
 In a later turn with no quoted context, Alice asks for status and then cancels. Both calls succeed.
+A valid example: an operator starts a child in a TUI session. A `current_session` reminder of that session fires
+and calls `check_agent_run` for the run. The call returns the status.
 An invalid example: Bob asks for the status of Alice's child in the same thread.
 The check denies the request, and Bob does not see the pending approval count.
-A focused mutation gate (`./scripts/run-child-owner-mutations.sh`) guards the requester check.
-The testable rule is "Status enforces run ownership" in
+An invalid example: a reminder turn of session B asks for the status of a child run of session A.
+The check denies the request, because the session differs.
+A reminder turn that cancels a run grants no tool authority. A child result never grants authority.
+
+Limits of the reminder rule:
+
+- All reminders of a session share the sender `reminder-system`. A reminder that Bob wrote in a shared channel
+  session can check or cancel a run that Alice started in the same session. The session is the unit of trust for a
+  reminder. The stored audience and boundary must still match.
+- A person turn cannot control a run that a reminder turn started. The rule changes only the reminder side.
+- A reminder fire that delivers to a channel or to a new session runs in a session that has no relation to the
+  run, so it owns no run of the person's session.
+
+A focused mutation gate guards the requester checks (`./scripts/run-child-owner-mutations.sh`).
+The testable rules are "Status and cancel enforce run ownership" and
+"A reminder turn manages the child runs of its own session" in
 [background-subagent-runs](../../openspec/specs/background-subagent-runs/spec.md).
 
 ```mermaid
