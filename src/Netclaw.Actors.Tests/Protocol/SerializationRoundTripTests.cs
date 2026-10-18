@@ -92,6 +92,19 @@ public sealed class SerializationRoundTripTests : TestKit
             output.WriteLength(0);
         });
 
+    // The journal writes a snapshot as SessionSnapshotV2Proto. Its field 1 is the SessionSnapshotProto state record,
+    // which holds the delivery fields. This wraps a hand-built state record the way the current writer does.
+    private static byte[] AsSnapshotV2(byte[] stateRecord)
+        => WithField([], output =>
+        {
+            output.WriteTag(1, WireFormat.WireType.LengthDelimited);
+            output.WriteBytes(ByteString.CopyFrom(stateRecord));
+        });
+
+    // The state record that the journal writer puts in field 1 of a v2 snapshot.
+    private byte[] SnapshotStateRecord(SessionSnapshot snapshot)
+        => Serialization.Proto.SessionSnapshotV2Proto.Parser.ParseFrom(Serialize(snapshot)).State.ToByteArray();
+
     // Reads the mark as nullable. Null means the snapshot predates the field. False is a value.
     private static bool? RoutedMark(SessionSnapshot snapshot) => snapshot.EligibleDeliveryTurnRoutedSkill;
 
@@ -1066,7 +1079,7 @@ public sealed class SerializationRoundTripTests : TestKit
             EligibleDeliveryReminderId = "check-pr:1712000000000"
         }.ToByteArray();
 
-        Assert.Equal(expected, Serialize(wrapped));
+        Assert.Equal(expected, SnapshotStateRecord(wrapped));
 
         var result = RoundTrip(wrapped);
         Assert.Equal(new ReminderId("check-pr:1712000000000"), result.EligibleDeliveryReminderId);
@@ -1095,7 +1108,7 @@ public sealed class SerializationRoundTripTests : TestKit
             EligibleDeliveryTurnRoutedSkill = true
         }.ToByteArray();
 
-        Assert.Equal(expected, Serialize(wrapped));
+        Assert.Equal(expected, SnapshotStateRecord(wrapped));
         Assert.True(RoundTrip(wrapped).EligibleDeliveryTurnRoutedSkill);
     }
 
@@ -1110,16 +1123,14 @@ public sealed class SerializationRoundTripTests : TestKit
             EligibleDeliveryTurnNumber = 4
         }.ToByteArray();
 
-        var probe = new SessionSnapshot { TurnCount = 0, History = [] };
-        var serializer = Sys.Serialization.FindSerializerFor(probe);
-        var manifest = serializer is SerializerWithStringManifest swm ? swm.Manifest(probe) : string.Empty;
-        var snapshot = Assert.IsType<SessionSnapshot>(Sys.Serialization.Deserialize(oldShape, serializer.Identifier, manifest));
+        // A journal from before the delivery fields holds v1 snapshots (manifest "ss-v1").
+        var snapshot = DeserializeLegacySnapshot(oldShape);
 
         Assert.Equal(new TurnNumber(4), snapshot.EligibleDeliveryTurnNumber);
         Assert.Null(snapshot.EligibleDeliveryReminderId);
         // No value is not the same as false. A snapshot without the mark was written before the delivery fields.
         Assert.Null(RoutedMark(snapshot));
-        Assert.Equal(oldShape, Serialize(snapshot));
+        Assert.Equal(oldShape, SnapshotStateRecord(snapshot));
     }
 
     // --- Review round 3, S2: the field numbers are durable, and other branches use the low numbers ---
@@ -1165,11 +1176,20 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.True(routed.RoutedSkill);
         Assert.Equal(probe.SourceReminderId, routed.SourceReminderId);
 
-        // Entries that the coordination stack (field 8) and #1897 (fields 8 and 9) wrote hold messages at 8 and 9.
-        // They are not routed marks.
-        var stackEntry = Deserialize(WithEmptyMessageField(oldBytes, 8), probe);
+        // Field 8 is the child continuation of the coordination stack. An entry that holds a child continuation
+        // at 8 is not a routed mark, and the routed mark at 10 does not change the continuation.
+        var continuation = new ChildContinuation(new SubAgentRunId("run-1"), new ToolCallId("call-1"));
+        var stackEntry = Deserialize(Serialize(probe with { ChildContinuation = continuation }), probe);
         Assert.False(stackEntry.RoutedSkill);
-        var tuiEntry = Deserialize(WithEmptyMessageField(WithEmptyMessageField(oldBytes, 8), 9), probe);
+        Assert.Equal(continuation, stackEntry.ChildContinuation);
+        var routedStackEntry = Deserialize(
+            WithVarintField(Serialize(probe with { ChildContinuation = continuation }), TurnRecordedRoutedSkillField, true),
+            probe);
+        Assert.True(routedStackEntry.RoutedSkill);
+        Assert.Equal(continuation, routedStackEntry.ChildContinuation);
+
+        // #1897 writes a message at 9. It is not a routed mark.
+        var tuiEntry = Deserialize(WithEmptyMessageField(oldBytes, 9), probe);
         Assert.False(tuiEntry.RoutedSkill);
 
         // Even a varint at 8 or 9 is not the routed mark.
@@ -1210,7 +1230,7 @@ public sealed class SerializationRoundTripTests : TestKit
             WithStringField(oldBytes, SnapshotEligibleReminderField, "check-pr:1712000000000"),
             SnapshotEligibleRoutedSkillField,
             true);
-        var snapshot = Deserialize(bytes, probe);
+        var snapshot = Deserialize(AsSnapshotV2(bytes), probe);
 
         Assert.Equal(new ReminderId("check-pr:1712000000000"), snapshot.EligibleDeliveryReminderId);
         Assert.True(snapshot.EligibleDeliveryTurnRoutedSkill);
@@ -1228,8 +1248,8 @@ public sealed class SerializationRoundTripTests : TestKit
         }.ToByteArray();
 
         // The writer sets the mark for every new snapshot, so a person's turn writes an explicit false.
-        var newFormat = Deserialize(WithVarintField(oldBytes, SnapshotEligibleRoutedSkillField, false), probe);
-        var oldFormat = Deserialize(oldBytes, probe);
+        var newFormat = Deserialize(AsSnapshotV2(WithVarintField(oldBytes, SnapshotEligibleRoutedSkillField, false)), probe);
+        var oldFormat = DeserializeLegacySnapshot(oldBytes);
 
         Assert.True(RoutedMark(newFormat) is false);
         Assert.Null(RoutedMark(oldFormat));
@@ -1247,7 +1267,7 @@ public sealed class SerializationRoundTripTests : TestKit
             EligibleDeliveryTurnRoutedSkill = false
         };
 
-        var numbers = WireFieldNumbers(Serialize(snapshot));
+        var numbers = WireFieldNumbers(SnapshotStateRecord(snapshot));
 
         // The explicit false is on the wire. An old snapshot lacks it.
         Assert.Contains(SnapshotEligibleRoutedSkillField, numbers);
@@ -1266,7 +1286,7 @@ public sealed class SerializationRoundTripTests : TestKit
             EligibleDeliveryTurnRoutedSkill = true
         };
 
-        var numbers = WireFieldNumbers(Serialize(snapshot));
+        var numbers = WireFieldNumbers(SnapshotStateRecord(snapshot));
 
         Assert.Contains(SnapshotEligibleReminderField, numbers);
         Assert.Contains(SnapshotEligibleRoutedSkillField, numbers);
@@ -1284,10 +1304,10 @@ public sealed class SerializationRoundTripTests : TestKit
             EligibleDeliveryTurnNumber = 4
         }.ToByteArray();
 
-        // #1897 writes a message at 12 (recent_transcript). The coordination stack reserves 12 and writes a message at 13
-        // (loop_admission). Neither is a delivery field, and a snapshot with them must still load.
+        // #1897 writes a message at 12 (recent_transcript). This tree reserves 12, and 13 is the loop_admission field
+        // of the coordination stack. Neither is a delivery field, and a snapshot with them must still load.
         var bytes = WithEmptyMessageField(WithEmptyMessageField(oldBytes, 12), 13);
-        var snapshot = Deserialize(bytes, probe);
+        var snapshot = Deserialize(AsSnapshotV2(bytes), probe);
 
         Assert.Null(snapshot.EligibleDeliveryReminderId);
         Assert.Null(RoutedMark(snapshot));
@@ -1295,7 +1315,7 @@ public sealed class SerializationRoundTripTests : TestKit
 
         // Even a string at 12 or a varint at 13 is not a delivery field.
         var stringAndVarint = WithVarintField(WithStringField(oldBytes, 12, "check-pr:1712000000000"), 13, true);
-        var other = Deserialize(stringAndVarint, probe);
+        var other = Deserialize(AsSnapshotV2(stringAndVarint), probe);
         Assert.Null(other.EligibleDeliveryReminderId);
         Assert.Null(RoutedMark(other));
     }

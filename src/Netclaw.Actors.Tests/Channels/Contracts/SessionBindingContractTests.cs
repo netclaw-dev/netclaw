@@ -807,12 +807,12 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("turn two reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2) },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), OpenChildRunIds = [] },
             new TextOutput("turn three first part") { SessionId = sid },
             new TextOutput("turn three second part") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(3) },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(3), OpenChildRunIds = [] },
             new TextOutput("turn four reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(4) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(4), OpenChildRunIds = [] }
         ]);
 
         // Every post fails, so each turn has a failed post. Turn 3 has two of them.
@@ -846,9 +846,9 @@ public abstract class SessionBindingContractTests : TestKit
         [
             new TextOutput("lost part") { SessionId = sid },
             new TextOutput("delivered part") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(3) },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(3), OpenChildRunIds = [] },
             new TextOutput("barrier reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(4) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(4), OpenChildRunIds = [] }
         ]);
 
         // Only the first post fails. The next two posts succeed.
@@ -875,8 +875,8 @@ public abstract class SessionBindingContractTests : TestKit
         var sid = new SessionId("session-failed-fallback-turn-number");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(3) },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(4) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(3), OpenChildRunIds = [] },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(4), OpenChildRunIds = [] }
         ]);
 
         SetReplyClientThrows(new InvalidOperationException("channel API down"));
@@ -913,7 +913,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("turn reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(5) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(5), OpenChildRunIds = [] }
         ], reactive: true);
 
         // The first post is the warning for the blocked message. The second post is the output of the turn.
