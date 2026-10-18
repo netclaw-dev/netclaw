@@ -1,0 +1,22 @@
+## 1. Tests and docs (test-author commit)
+
+- [x] 1.1 Change the `TurnStateTracker` and `ToolCycleValidationTests` unit tests: a repeat after correction is `Correct` with the repeated call IDs refused, a new sibling is not refused, and a valid `_background: true` changes the identity. Verify that they fail on `dev`.
+- [x] 1.2 Replace the parent session stop tests in `LlmSessionIntegrationTests` with refusal, nudge, and continuation tests. Verify that they fail on `dev`.
+- [x] 1.3 Replace the user-input stop tests in `ToolCycleUserInputTests` with continuation tests. Verify that they fail on `dev`.
+- [x] 1.4 Replace the child stop test in `SubAgentActorTests` with a child nudge test. Verify that it fails on `dev`.
+- [x] 1.5 Replace the headless model-failure test with a headless success test: exit code 0, no `[turn:failed]`, and only the model text. Verify that it fails on `dev`.
+- [x] 1.6 Update `docs/spec/SPEC-004-cli-contract.md` and `docs/runbooks/subagents.md`. Verify that no doc names the terminal cycle stop.
+- [x] 1.7 Rework the eval case `tool_cycle_terminal` into `tool_cycle_repeat_nudge` and add `long_command_background_job`. Verify with `python3 -m unittest discover -s evals -p 'test_*.py'`.
+
+## 2. Runtime (implementer commit)
+
+- [ ] 2.1 Remove the `Stop` decision kind and add the repeated call set in `TurnStateTracker`. Verify with the tracker unit tests.
+- [ ] 2.2 Add the background field to the call identity in `ToolCycleSignatureFactory.Prepare`. Verify with `ToolCycleValidationTests`.
+- [ ] 2.3 Add the parent nudge after the batch results through `ActiveToolBatchTracker`, and remove `FailCurrentTurn` for this case. Verify with the session and headless tests.
+- [ ] 2.4 Add the child nudge in `SubAgentActor` and remove the partial stop. Verify with `SubAgentActorTests`.
+- [ ] 2.5 Remove `ToolCycleMessages.TurnStopped` and `ToolCycleMessages.ChildStopped`, and update the `ErrorCategory.ModelBehavior` comment. Verify that the solution builds.
+
+## 3. Skill and gates
+
+- [ ] 3.1 Add `references/long-running-commands.md` to `netclaw-operations`, move the background job details to it, add the routing row, and bump `metadata.version`. Verify that the nudge names the page path.
+- [ ] 3.2 Run `Netclaw.Actors.Tests`, `Netclaw.Actors.MutationTests`, `Netclaw.Cli.Tests`, `Netclaw.Daemon.Tests`, the covering Stryker gate, slopwatch, and the header check. Verify that all pass.

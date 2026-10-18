@@ -623,6 +623,17 @@ start_eval_daemon() {
         > "$marker_executable"
     chmod ugo+x "$marker_executable"
 
+    # The long_command_background_job case runs this command. It takes 150 s,
+    # longer than the 90 s foreground shell limit, so a plain foreground run
+    # always times out. The prompt does not tell the agent the duration.
+    local slow_render_executable="$EVAL_HOME/data/evals/slow_render"
+    printf '%s\n' \
+        '#!/bin/sh' \
+        'sleep 150' \
+        'echo render-complete' \
+        > "$slow_render_executable"
+    chmod ugo+x "$slow_render_executable"
+
     # Pre-seed a large (>256 KB) text file in the workspaces read-root for the
     # bounded-tool-output file_read eval (complex_large_file_read_ranged). It must
     # be too big for one inline read AND have model-unguessable content so the only
@@ -2300,6 +2311,19 @@ assert_tool_background_job_api_selection() {
     # process lifetime, job identity, output, cancellation, and launch authority.
     stdout_contains '\[tool:call\] shell_execute(.*_background.:true' \
         && stdout_contains '\[tool:call\] check_background_job'
+}
+
+assert_long_command_background_job() {
+    # Regression for the live failure of 18 October 2026. The check reads the
+    # tool calls in the JSON envelope. long_command_evals.py has the rules.
+    local report rc=0
+    report="${STDOUT_FILE%.txt}_long-command-verdict.txt"
+    keep_assertion_report "$report"
+    python3 "$REPO_ROOT/evals/long_command_evals.py" check --output "$STDOUT_FILE" > "$report" || rc=$?
+    if (( rc != 0 )); then
+        EVAL_ASSERTION_DETAILS=$(jq -r '.reason // "fail"' "$report" 2>/dev/null || printf 'fail')
+    fi
+    return "$rc"
 }
 
 # Category 5: Grounding & Alignment
@@ -4087,6 +4111,17 @@ run_all() {
     run_multi_turn_case tool_background_job_api_selection "model selects background job tools" \
         "Run 'sleep 120' as a background job — it should keep running while we keep talking. Tell me the job id and where its output log is." \
         "Check that background job's status, then cancel it — we're done with it."
+
+    # The fixture command runs for 150 s. Two timed-out foreground runs and one
+    # background run need more than the default prompt timeout.
+    local long_command_timeout="$PROMPT_TIMEOUT"
+    PROMPT_TIMEOUT=$(( long_command_timeout > 480 ? long_command_timeout : 480 ))
+
+    run_case --json long_command_background_job "slow command is not repeated in the foreground after timeouts" \
+        "Run /home/netclaw/.netclaw/evals/slow_render and tell me what it prints." \
+        "Please execute the script at /home/netclaw/.netclaw/evals/slow_render and report its output to me."
+
+    PROMPT_TIMEOUT="$long_command_timeout"
 
     end_category
 

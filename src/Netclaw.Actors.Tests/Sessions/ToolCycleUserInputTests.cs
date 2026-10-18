@@ -96,14 +96,14 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
     }
 
     [Fact]
-    public async Task User_input_queued_before_terminal_settlement_starts_a_fresh_tool_request()
+    public async Task User_input_queued_before_a_repeated_refusal_joins_the_continuing_turn()
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         ConfigureRepeatedCalls();
         _client.Inner.AlwaysReturnToolCalls = true;
         _client.Pause = PausePoint.PostCorrectionResponse;
-        var sessionId = new SessionId("cycle-user-input/terminal-reply");
+        var sessionId = new SessionId("cycle-user-input/repeat-nudge");
         var subscriber = await StartRequestAsync(sessionId);
 
         try
@@ -112,24 +112,34 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
             await _client.CallPaused.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
             Assert.Equal(2, _executor.Count);
             await SendRequestAsync(sessionId, "A fresh request after the correction.");
+            // The paused response repeats the refused call. The fresh request then gets one call and a text answer.
             foreach (var decision in new[] { true, true, false })
                 _client.Inner.PlannedToolCallDecisions.Enqueue(decision);
             _client.ResumeCall.TrySetResult();
-            var terminal = await subscriber.FishForMessageAsync<ErrorOutput>(
-                message => message.Message.Contains("The result is partial.", StringComparison.Ordinal),
-                TimeSpan.FromSeconds(10), cancellationToken: ct);
-            await ExpectTurnCompletedAsync(subscriber);
-            await ExpectTurnCompletedAsync(subscriber);
+            var outputs = new List<object>();
+            await subscriber.FishForMessageAsync<object>(message =>
+            {
+                outputs.Add(message);
+                return message is TurnCompleted;
+            }, TimeSpan.FromSeconds(10), cancellationToken: ct);
 
             // Assert
-            Assert.Equal(ErrorCategory.ModelBehavior, terminal.Category);
-            Assert.Contains("last refused operation did not execute", terminal.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(outputs, static output => output is ErrorOutput);
+            Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(outputs[^1]).Outcome);
+            // The repeat did not run. The fresh request starts a new guard window, so its call runs.
             Assert.Equal(3, _executor.Count);
             Assert.Equal(6, _client.Inner.CallCount);
+            var afterRepeat = _client.Inner.ReceivedMessages[4];
             Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[4]);
-            Assert.Contains(_client.Inner.ReceivedMessages[4], message =>
+            var nudge = afterRepeat.ToList().FindIndex(static message =>
+                message.Role == Microsoft.Extensions.AI.ChatRole.User
+                && message.Text.StartsWith("[system: Netclaw refused your repeated call to `search_tools` again.",
+                    StringComparison.Ordinal));
+            var fresh = afterRepeat.ToList().FindIndex(static message =>
                 message.Role == Microsoft.Extensions.AI.ChatRole.User
                 && message.Text == "A fresh request after the correction.");
+            Assert.True(nudge >= 0, "The request after the repeat has no nudge.");
+            Assert.True(fresh > nudge, "The fresh request must follow the nudge.");
         }
         finally
         {
@@ -196,9 +206,9 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
             // Act
             if (newUserInput)
                 await SendNewRequestAsync(sessionId);
+            // The replayed request repeats the call. Then the model answers with text.
             _client.Inner.PlannedToolCallDecisions.Enqueue(true);
-            if (newUserInput)
-                _client.Inner.PlannedToolCallDecisions.Enqueue(false);
+            _client.Inner.PlannedToolCallDecisions.Enqueue(false);
             _client.ResumeCall.TrySetResult();
             await subscriber.FishForMessageAsync<object>(message => message is CompactionOutput,
                 TimeSpan.FromSeconds(10), cancellationToken: ct);
@@ -213,10 +223,14 @@ public sealed class ToolCycleUserInputTests(ITestOutputHelper output) : LlmSessi
             // Assert
             Assert.Equal(newUserInput ? 3 : 2, _executor.Count);
             Assert.Contains("search_tools", _client.Inner.ReceivedToolNames[^1]);
+            // A repeat of the unresolved correction is refused again with a nudge. It is never a model failure.
+            Assert.DoesNotContain(errors, static error => error.Category == ErrorCategory.ModelBehavior);
             if (!newUserInput)
             {
-                Assert.Contains(errors, error => error.Category == ErrorCategory.ModelBehavior
-                    && error.Message.Contains("The result is partial.", StringComparison.Ordinal));
+                var last = _client.Inner.ReceivedMessages[^1][^1];
+                Assert.Equal(Microsoft.Extensions.AI.ChatRole.User, last.Role);
+                Assert.StartsWith("[system: Netclaw refused your repeated call to `search_tools` again.",
+                    last.Text, StringComparison.Ordinal);
             }
         }
         finally

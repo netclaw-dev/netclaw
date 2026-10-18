@@ -157,7 +157,7 @@ the child inspected the named artifacts.
 | Identity & Self-Awareness | 5 | Bot knows its name, version, repo, session ID, and routes all identity-file concerns without a skill dependency |
 | Skill Discovery and Activation | 20 | Models load relevant file, feed, and MCP prompt skills while they skip unrelated skills |
 | Memory Pipeline | 4 | Memory recall is active, identity-vs-memory routing is correct, explicit saves use memory tools, and automatic checkpointing still fires |
-| Tool Discovery & Use | 16 | Progressive discovery, structured workspace selection, web search, and timestamped webhook configuration |
+| Tool Discovery & Use | 19 | Progressive discovery, structured workspace selection, web search, timestamped webhook configuration, and long-command strategy |
 | Grounding & Alignment | 4 | Uses tools to verify facts, admits uncertainty, and resolves announced attachment paths from the authoritative session root |
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
 | Deployment Mission | 1 | Applies the disk mission playbook, loads its required skill, and returns reviewed sales email |
@@ -256,6 +256,23 @@ Use a timeout of 240 seconds for this category. A case can need five model calls
 NETCLAW_EVAL_CATEGORY='Built-in Tools' NETCLAW_EVAL_TIMEOUT=240 ./evals/run-evals.sh
 ```
 
+### Long Command Case
+
+`long_command_background_job` is the regression case for a live failure on
+18 October 2026. A slow command timed out at the 90 s foreground limit two
+times. The runtime refused the third identical run, and the model sent the same
+call again.
+
+The fixture `/home/netclaw/.netclaw/evals/slow_render` runs for 150 s and then
+prints `render-complete`. The prompt does not give the duration. The case
+proves that the agent sends the same foreground command at most two times and
+uses a background job, a timeout of 150 s or more, or the
+`long-running-commands.md` page of `netclaw-operations`.
+
+`long_command_evals.py` reads the tool calls in the `--json` envelope. A changed
+timeout below 150 s is still the same command. The prompt timeout of this case
+is at least 480 s.
+
 ### Tool Cycle Cases
 
 The cycle cases use the existing harness and provider relay. They require an
@@ -276,14 +293,18 @@ NETCLAW_EVAL_TIMEOUT=180 \
 | Case | Required evidence |
 |------|-------------------|
 | `tool_cycle_correction` | The third request receives a runtime correction. The model uses `file_read` to complete an alternative. |
-| `tool_cycle_terminal` | After the model repeats the refused action, Netclaw fails the turn without another model request. The envelope has `errorCategory` `model` and `errorKind` `ModelBehavior`. The turn error reports partial work and two completed executions. |
+| `tool_cycle_repeat_nudge` | The relay repeats the refused request with a fresh call ID. Netclaw refuses it again with the same correction and adds one nudge as the last message. The turn continues with tools. The real model reports incomplete work with two completed executions. It can also follow the nudge and run the primary command as a background job: then three executions are correct, and the report must give three. A third execution in the foreground fails. The envelope has no `errorCategory` or `errorKind`, and no log shows a turn failure. |
 | `tool_cycle_compaction` | Normal compaction completes between executions one and two. The third request receives a correction. The model completes an alternative. |
 | `tool_cycle_changed_result` | The same command returns a different result each time. All three executions complete. |
 | `tool_cycle_metadata_repair` | Two requests lack required metadata. The corrected request executes once without a cycle correction. |
 
 The relay scripts the tool requests. Each request has a fresh call ID.
 The daemon executes tools and emits the intervention. The model controls recovery
-after a correction. Netclaw fails the turn with `ModelBehavior` after a repeated refusal.
+after a correction. After a repeated refusal, Netclaw refuses the call again, adds
+a nudge, and continues the turn. The nudge is a user-role `[system: ...]` message.
+The relay matches its stable text: the refused tool name and the
+`skill_read_resource('netclaw-operations', 'references/long-running-commands.md')` call.
+The first refusal must not add a nudge.
 
 Each trial uses synthetic files in the isolated workspace. A separate counter
 checks actual side effects. Strict assertions require paired runtime results,
@@ -652,11 +673,10 @@ A trial has one of three states:
     (141 for a pipe failure, 127 for a missing command).
 
 **Known limit:** for now, a failed turn is inconclusive. A model behavior
-failure that fails the turn cannot give a FAIL. One example is the tool cycle
-stop (`tool_cycle_terminal`), where the model repeats a tool call that the
-runtime already refused. The case shows `turn_failed`, and the run exits 3. The
-CLI reports `category=model` for this failure, but the harness does not read the
-category yet.
+failure that fails the turn cannot give a FAIL. The CLI reports `category=model`
+for this failure, but the harness does not read the category yet. Thus, if a
+runtime fails the turn after a repeated refusal, `tool_cycle_repeat_nudge`
+shows `turn_failed` and the run exits 3. The case does not show a FAIL.
 
 A `CANCELLED` record in `headless-errors.log` is the normal sign of a cut turn.
 It is not an infrastructure fault, so the verdict does not read that file.

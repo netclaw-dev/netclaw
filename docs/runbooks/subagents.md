@@ -416,7 +416,10 @@ known-good version.
   back-and-forth interaction with the user.
 - Subagents have no fixed maximum number of tool iterations. A final response
   completes the run; cancellation or an inactivity timeout can stop it.
-  A recurrence refusal can settle the child turn without another model request.
+  A repeated refused call does not stop the child. The runtime refuses the call
+  again and adds a nudge. The child then selects another action or returns its
+  result to the parent. A child cannot start a background job, so its nudge
+  tells it to name a long command for the parent.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.

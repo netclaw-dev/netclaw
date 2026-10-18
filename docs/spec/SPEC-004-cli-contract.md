@@ -234,12 +234,14 @@ after the `[error]` or `[headless:error]` line:
 ```
 
 - `category` is `model` only for `kind=ModelBehavior`. The model broke a rule that the runtime
-  enforces: it repeated a tool call after the runtime refused that call (the terminal cycle stop), or it
-  returned repeated empty replies and each stream finished with the finish reason `stop` or `length`.
+  enforces: it returned repeated empty replies and each stream finished with the finish reason `stop`
+  or `length`.
 - A text reply that finished with the finish reason `length` and has no tool call is also
   `kind=ModelBehavior`: the model used all of its output budget. One model call that streamed only
   thinking until the thinking cap (three times the no-progress timeout) is also `kind=ModelBehavior`.
   In both cases the provider worked.
+- A repeated refused tool call is not a failure. The runtime refuses the call again, adds a nudge for
+  the model, and continues the turn. The run gets no `[turn:failed]` line for it.
 - Repeated empty replies from a stream with no finish reason (the connection closed early) are
   `kind=StreamFailure`. Repeated empty replies with the finish reason `content_filter`, or any other
   finish reason, are `kind=ProviderFailure`. Both are `infra`: the model did not get a fair turn.

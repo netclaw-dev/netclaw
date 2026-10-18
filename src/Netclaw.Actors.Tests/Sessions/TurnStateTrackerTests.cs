@@ -429,7 +429,12 @@ public sealed class TurnStateTrackerTests
                 shouldRefuse ? new[] { "candidate" } : Array.Empty<string>(),
                 decision.RefusedCallIds);
             if (shouldRefuse)
-                Assert.Equal(ToolCycleDecisionKind.Stop, tracker.EvaluateBeforeDispatch(candidate).Kind);
+            {
+                // A repeat after the correction gets the same refusal. The turn does not stop.
+                var repeat = tracker.EvaluateBeforeDispatch(candidate);
+                Assert.Equal(ToolCycleDecisionKind.Correct, repeat.Kind);
+                Assert.Equal(new[] { "candidate" }, repeat.RefusedCallIds);
+            }
             cases++;
         }, iter: 1_000, seed: RecurrenceSampleSeed, threads: 1,
             print: scenario => $"candidate={scenario.CandidateIdentity}; "
@@ -439,7 +444,7 @@ public sealed class TurnStateTrackerTests
     }
 
     [Fact]
-    public void RepeatedCall_StopsUntilItsOwnOutcomeChanges()
+    public void RepeatedCall_IsRefusedAgainUntilItsOwnOutcomeChanges()
     {
         var tracker = new TurnStateTracker();
         var repeated = Prepare(Call("call-a", "sample/a"));
@@ -453,17 +458,17 @@ public sealed class TurnStateTrackerTests
         Assert.Equal(
             ToolCycleDecisionKind.Correct,
             tracker.EvaluateBeforeDispatch(repeated).Kind);
-        Assert.Equal(
-            ToolCycleDecisionKind.Stop,
-            tracker.EvaluateBeforeDispatch(repeated).Kind);
+        var repeat = tracker.EvaluateBeforeDispatch(repeated);
+        Assert.Equal(ToolCycleDecisionKind.Correct, repeat.Kind);
+        Assert.Equal(["call-a"], repeat.RefusedCallIds);
 
         tracker.ObserveCompleted(Complete(
             other,
             ("call-b", ToolInvocationOutcomeCategory.Success, "different")));
 
-        Assert.Equal(
-            ToolCycleDecisionKind.Stop,
-            tracker.EvaluateBeforeDispatch(repeated).Kind);
+        var afterOtherWork = tracker.EvaluateBeforeDispatch(repeated);
+        Assert.Equal(ToolCycleDecisionKind.Correct, afterOtherWork.Kind);
+        Assert.Equal(["call-a"], afterOtherWork.RefusedCallIds);
 
         tracker.ObserveCompleted(Complete(
             repeated,
@@ -472,6 +477,28 @@ public sealed class TurnStateTrackerTests
         Assert.Equal(
             ToolCycleDecisionKind.Execute,
             tracker.EvaluateBeforeDispatch(repeated).Kind);
+    }
+
+    [Fact]
+    public void RepeatedRefusedCall_DoesNotBlockANewSibling()
+    {
+        // Negative example: a refused call repeats in a batch with a new call. Only the repeat is refused.
+        var tracker = new TurnStateTracker();
+        var repeated = Prepare(Call("call-a", "sample/a"));
+        var completed = Complete(
+            repeated,
+            ("call-a", ToolInvocationOutcomeCategory.Success, "same"));
+        tracker.ObserveCompleted(completed);
+        tracker.ObserveCompleted(completed);
+        Assert.Equal(ToolCycleDecisionKind.Correct, tracker.EvaluateBeforeDispatch(repeated).Kind);
+
+        var mixed = Prepare(
+            Call("repeat", "sample/a"),
+            Call("diagnostic", "sample/diagnostic", ("id", "host-1")));
+        var decision = tracker.EvaluateBeforeDispatch(mixed);
+
+        Assert.Equal(ToolCycleDecisionKind.Correct, decision.Kind);
+        Assert.Equal(["repeat"], decision.RefusedCallIds);
     }
 
     [Fact]
