@@ -64,6 +64,12 @@ public sealed record TurnContext
            && RequesterSenderId == right.RequesterSenderId
            && RequesterPrincipal == right.RequesterPrincipal;
 
+    // Test-author stub for #2524. It keeps the current rule so the new tests compile and fail.
+    // The implementer replaces the body with the rule in openspec/changes/reminder-turn-manages-own-children/design.md (D1).
+    // The instance is the requesting turn. The argument is the turn that started the child run.
+    internal bool CanControlChildRunOf(TurnContext owner)
+        => owner.HasSameRequester(this);
+
     // Turn identity is separate: restart batches can span several turns. Use this check where one authority
     // must continue unchanged (start idempotency, approval and continuation recovery), not for ownership.
     internal bool HasSameAuthority(TurnContext right)

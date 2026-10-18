@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
@@ -148,6 +149,120 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
                 Assert.Contains(NotAvailable, cancel, StringComparison.Ordinal);
                 Assert.DoesNotContain(control.Committed, evt => evt is ChildRunEvent.CancellationRequested);
             }
+        }
+        finally
+        {
+            childGate.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Issue #2524. A reminder turn manages the child runs of its own session, and the other requesters keep
+    /// the six-fact rule. The fire has the source shape of ReminderExecutionActor.InitializeCurrentSessionAsync
+    /// (sender reminder-system, principal VerifiedAutomation, source kind reminder).
+    /// Source: openspec/changes/reminder-turn-manages-own-children, background-subagent-runs
+    /// "A reminder turn manages the child runs of its own session".
+    /// Row 1 is the swap-1 exercise (a person started the run). Row 2 and 3 are controls that pass today.
+    /// </summary>
+    [Theory]
+    [InlineData("person", "reminder", true)]
+    [InlineData("reminder", "reminder", true)]
+    [InlineData("reminder", "person", false)]
+    public async Task Reminder_turn_follows_the_child_control_rule_in_its_own_session(
+        string starter, string controller, bool allowed)
+    {
+        // Arrange
+        var sessionId = new SessionId($"child-owner/reminder-{starter}-{controller}");
+        var control = await ConfigureJournalAsync();
+        var childGate = NewGate();
+        _clients.A.NextResponseGate = childGate;
+        _clients.Parent.PlannedResponses.Enqueue([Spawn("reminder-spawn")]);
+        _clients.Parent.PlannedResponses.Enqueue([new TextContent("Child started.")]);
+        await JoinAsync(sessionId);
+
+        try
+        {
+            await SendAsync(sessionId, "Start a child.", SourceOf(starter, "child-reminder:1000"));
+            var accepted = await control.Acceptance.Task.WaitAsync(Deadline, Cancellation);
+            await _clients.A.FirstCallEntered.Task.WaitAsync(Deadline, Cancellation);
+            await AwaitAssertAsync(() => Assert.Single(control.Committed.OfType<TurnRecorded>()),
+                Deadline, cancellationToken: Cancellation);
+            var runId = accepted.Run.RunId.Value;
+            _clients.Parent.PlannedResponses.Enqueue([CheckRun("status-call", runId, cancel: false)]);
+            _clients.Parent.PlannedResponses.Enqueue([CheckRun("cancel-call", runId, cancel: true)]);
+            _clients.Parent.PlannedResponses.Enqueue([new TextContent("Checked.")]);
+
+            // Act
+            await SendAsync(sessionId, "Check the child, then cancel it.", SourceOf(controller, "child-reminder:2000"));
+            await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<ToolCallRecorded>(),
+                evt => evt.ToolResult.ToolCallId?.Value == "cancel-call"), Deadline, cancellationToken: Cancellation);
+
+            // Assert
+            var status = ToolResult(control, "status-call");
+            var cancel = ToolResult(control, "cancel-call");
+            _output.WriteLine($"starter={starter} controller={controller} status={status}");
+            _output.WriteLine($"starter={starter} controller={controller} cancel={cancel}");
+            if (allowed)
+            {
+                Assert.DoesNotContain(NotAvailable, status, StringComparison.Ordinal);
+                Assert.Contains($"\"run_id\":\"{runId}\"", status, StringComparison.Ordinal);
+                Assert.DoesNotContain(NotAvailable, cancel, StringComparison.Ordinal);
+                Assert.Contains(control.Committed.OfType<ChildRunEvent.CancellationRequested>(),
+                    evt => evt.RunId == accepted.Run.RunId);
+            }
+            else
+            {
+                Assert.Contains(NotAvailable, status, StringComparison.Ordinal);
+                Assert.Contains(NotAvailable, cancel, StringComparison.Ordinal);
+                Assert.DoesNotContain(control.Committed, evt => evt is ChildRunEvent.CancellationRequested);
+            }
+        }
+        finally
+        {
+            childGate.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// A reminder turn in session B cannot reach a child run of session A. The session boundary holds even
+    /// though the reminder turn ignores the sender and the principal. This test passes today and must keep
+    /// passing after the fix.
+    /// </summary>
+    [Fact]
+    public async Task Reminder_turn_cannot_control_a_child_run_of_another_session()
+    {
+        // Arrange
+        var sessionA = new SessionId("child-owner/reminder-session-a");
+        var sessionB = new SessionId("child-owner/reminder-session-b");
+        var control = await ConfigureJournalAsync();
+        var childGate = NewGate();
+        _clients.A.NextResponseGate = childGate;
+        _clients.Parent.PlannedResponses.Enqueue([Spawn("cross-spawn")]);
+        _clients.Parent.PlannedResponses.Enqueue([new TextContent("Child started.")]);
+        await JoinAsync(sessionA);
+        await JoinAsync(sessionB);
+
+        try
+        {
+            await SendAsync(sessionA, "Start a child.", Operator("local"));
+            var accepted = await control.Acceptance.Task.WaitAsync(Deadline, Cancellation);
+            await _clients.A.FirstCallEntered.Task.WaitAsync(Deadline, Cancellation);
+            await AwaitAssertAsync(() => Assert.Single(control.Committed.OfType<TurnRecorded>()),
+                Deadline, cancellationToken: Cancellation);
+            var runId = accepted.Run.RunId.Value;
+            _clients.Parent.PlannedResponses.Enqueue([CheckRun("cross-status", runId, cancel: false)]);
+            _clients.Parent.PlannedResponses.Enqueue([CheckRun("cross-cancel", runId, cancel: true)]);
+            _clients.Parent.PlannedResponses.Enqueue([new TextContent("Checked.")]);
+
+            // Act
+            await SendAsync(sessionB, "Check the child of the other session.", ReminderOf("child-reminder:3000"));
+            await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<ToolCallRecorded>(),
+                evt => evt.ToolResult.ToolCallId?.Value == "cross-cancel"), Deadline, cancellationToken: Cancellation);
+
+            // Assert
+            Assert.Contains(NotAvailable, ToolResult(control, "cross-status"), StringComparison.Ordinal);
+            Assert.Contains(NotAvailable, ToolResult(control, "cross-cancel"), StringComparison.Ordinal);
+            Assert.DoesNotContain(control.Committed, evt => evt is ChildRunEvent.CancellationRequested);
         }
         finally
         {
@@ -292,6 +407,21 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
         Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
         ReceivedAt = TimeProvider.System.GetUtcNow(),
         AdoptedSpeakerIds = adopted ? [sender] : []
+    };
+
+    private static MessageSource SourceOf(string kind, string fireKey) =>
+        kind == "reminder" ? ReminderOf(fireKey) : Operator("local");
+
+    // The source shape of ReminderExecutionActor.InitializeCurrentSessionAsync for a TUI-style origin.
+    private static MessageSource ReminderOf(string fireKey) => new()
+    {
+        ChannelType = ChannelType.SignalR, SenderId = new SenderId("reminder-system"),
+        MessageId = fireKey, TurnId = new TurnId(fireKey), ReminderId = new ReminderId(fireKey),
+        Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal,
+        Principal = PrincipalClassification.VerifiedAutomation,
+        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+        { SourceKind = new SourceKind("reminder") },
+        ReceivedAt = TimeProvider.System.GetUtcNow()
     };
 
     private static FunctionCallContent Spawn(string callId) => new(callId, "spawn_agent",
