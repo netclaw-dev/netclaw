@@ -242,6 +242,10 @@ after the `[error]` or `[headless:error]` line:
   In both cases the provider worked.
 - A repeated refused tool call is not a failure. The runtime refuses the call again, adds a nudge for
   the model, and continues the turn. The run gets no `[turn:failed]` line for it.
+- After the fifth refused repeat in a turn, the nudge escalates. A sixth refused repeat ends the turn
+  quietly. The run exits with code 0 and prints no `[error]` or `[turn:failed]` line. The JSON envelope
+  has no `errorCategory` or `errorKind`. Its `response` holds only text that the model wrote, and it can
+  be empty.
 - Repeated empty replies from a stream with no finish reason (the connection closed early) are
   `kind=StreamFailure`. Repeated empty replies with the finish reason `content_filter`, or any other
   finish reason, are `kind=ProviderFailure`. Both are `infra`: the model did not get a fair turn.

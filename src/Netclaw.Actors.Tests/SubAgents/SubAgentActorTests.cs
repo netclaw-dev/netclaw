@@ -1618,6 +1618,76 @@ public class SubAgentActorTests : SubAgentActorTestBase
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Child_ends_quietly_with_its_last_text_after_it_ignores_the_escalated_nudge(bool finalResponseHasText)
+    {
+        // Aaron's rule (18 Oct 2026), child form. Rounds 1 and 2 run, round 3 is the first correction,
+        // rounds 4 to 7 are refused repeats 1 to 4, round 8 is repeat 5 (the escalation), and round 9 is
+        // repeat 6. Repeat 6 ends the child with the last text that the child wrote. The parent sees no error.
+        const string EarlierText = "The looper call returns the same value. I try once more.";
+        const string FinalText = "The looper call stays blocked. The repeat check did not finish.";
+        var tool = new ProgressTool();
+        FunctionCallContent Call(int round)
+            => CreateToolCall($"repeat-{round}", "looper", new Dictionary<string, object?> { ["query"] = "repeat" });
+        var responses = new List<IReadOnlyList<AIContent>>();
+        for (var round = 1; round <= 8; round++)
+        {
+            responses.Add(round == 4
+                ? [new TextContent(EarlierText), Call(round)]
+                : [Call(round)]);
+        }
+        responses.Add(finalResponseHasText ? [new TextContent(FinalText), Call(9)] : [Call(9)]);
+        var fakeClient = new ScriptedToolCallChatClient(responses, "This response must not run.");
+
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([tool]),
+            fakeClient,
+            PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(),
+                Task = "Repeat one call.",
+                Timeout = TimeSpan.FromSeconds(10)
+            },
+            TimeSpan.FromSeconds(10),
+            TestContext.Current.CancellationToken);
+
+        // Repeats 1 to 4 get the plain child nudge. Repeat 5 gets the escalated child nudge.
+        static bool IsChildNudge(ChatMessage message)
+            => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                && message.Text.StartsWith("[system: Netclaw refused your repeated call to `looper` again.",
+                    StringComparison.Ordinal);
+        const string EscalationMarker = "Stop trying this action.";
+        var requests = fakeClient.ReceivedMessagesByCall;
+        for (var request = 4; request <= 7; request++)
+        {
+            Assert.True(IsChildNudge(requests[request][^1]), $"Request {request} must end with the child nudge.");
+            Assert.DoesNotContain(EscalationMarker, requests[request][^1].Text, StringComparison.Ordinal);
+        }
+
+        var escalation = requests[8][^1];
+        Assert.True(IsChildNudge(escalation), $"The last message was: {escalation.Text}");
+        Assert.Contains(EscalationMarker, escalation.Text, StringComparison.Ordinal);
+        Assert.Contains("parent", escalation.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("_background", escalation.Text, StringComparison.Ordinal);
+        // Only the latest child nudge stays in the child history.
+        for (var request = 4; request <= 8; request++)
+            Assert.Single(requests[request], IsChildNudge);
+
+        // Repeat 6 ends the child with no further model request and no execution.
+        Assert.Equal(9, fakeClient.CallCount);
+        Assert.Equal(["repeat", "repeat"], tool.Queries);
+        // A successful partial run: the parent gets the child text, not an error.
+        Assert.True(result.Success);
+        Assert.Equal(SubAgentRunOutcome.Partial, result.Outcome);
+        Assert.Equal(SubAgentOutcomeReason.ToolCycleStopped, result.OutcomeReason);
+        Assert.Equal(finalResponseHasText ? FinalText : EarlierText, result.Output);
+    }
+
     [Fact]
     public async Task Timeout_returns_failure()
     {

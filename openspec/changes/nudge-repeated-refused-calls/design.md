@@ -15,12 +15,14 @@ The first refusal already has a complete path. The pipeline returns a synthetic 
 
 - Use the existing first-refusal path for a repeated refusal.
 - Add one model-facing nudge after the tool results of the batch.
+- Give the refused loop an end that the person does not see as an error (Aaron, 18 October 2026).
 - Keep each decision in its current owner.
 
 **Non-Goals:**
 
-- A new limit, a new persistence event, or a new actor message.
+- A new persistence event, a new actor message, or a configuration property.
 - A change to the first correction or to evidence counts.
+- A limit on distinct work. Only refused repeats count.
 
 ## Decisions
 
@@ -46,8 +48,15 @@ EvaluateBeforeDispatch(batch):
     adjacent repeat    -> refused += all; repeated += all
     adjacent cycle     -> refused += all
   mark refused groups Corrected
+  if repeated: refusedRepeats += 1
+  refusedRepeat = none      if not repeated
+                  Nudge     if refusedRepeats < 5
+                  Escalated if refusedRepeats == 5
+                  EndTurn   if refusedRepeats > 5
   return Correct if refused else Execute
 ```
+
+The count `refusedRepeats` is actor-local state of `TurnStateTracker`. `ResetForNewTurn` clears it with the recurrence evidence. One model response with repeated calls adds one to the count. A completed different action does not change it.
 
 ### 2. The batch owner adds the nudge after the last result
 
@@ -57,7 +66,9 @@ Alternative: add the nudge before dispatch. History would then hold the nudge be
 
 The child adds its nudge with its own `AddSystemNudge` after it appends the tool results and the media nudge.
 
-Persistence: the nudge is transient history, like the empty-response nudge. Process recovery does not restore it. Recovery also does not restore a detector checkpoint, so a restarted session gets no stale nudge.
+The history keeps at most one repeat nudge. Before `CompleteIfReady` adds a repeat nudge, it removes the earlier repeat nudge with `SessionState.ReplaceSystemNudge`. The child removes its earlier repeat nudge from its own history in the same way. Each repeat nudge starts with the same text, `Netclaw refused your repeated call to`, so the match is exact. The removal changes the history before the end, so a byte-prefix cache misses after that point. Aaron accepted this cost: a stack of equal nudges gives the model no new information.
+
+Persistence: no journal event holds the nudge, the same as the empty-response nudge. A snapshot holds `SessionState.History`, so a snapshot that the session takes during the loop keeps the latest nudge. Journal replay without that snapshot drops the nudge. Recovery does not restore a detector checkpoint or the count, so a restarted session starts a new count.
 
 ### 3. The parent and the child get different nudge text
 
@@ -69,11 +80,16 @@ The child can lack `skill_read_resource`, so the child nudge names no skill page
 
 `ToolCycleSignatureFactory.Prepare` adds a `background` field to the identity hash when a valid call has `_background: true`. The parent nudge offers a background job. Without this field, the background call has the same identity and gets the same refusal.
 
+`Prepare` adds the field only when the canonical tool name is `shell_execute`. `SessionToolExecutionPipeline` runs `_background` in the foreground for every other tool. If another tool got the field, a refused `web_fetch` with `_background: true` would get a new identity and two more real runs.
+
 Positive example: the guard refused `shell_execute` with `Command="node render.mjs"`. The same call with `_background: true` starts a job after normal approval.
 
-Negative example: the same call with only `_timeout_seconds=600` keeps the identity and gets a refusal and the nudge.
+Negative examples:
 
-In a child, `_background` does not start a job, so the field gives one more identity for that command. That identity needs two equal rounds before the guard refuses it. The bound is two more executions for each command, and each execution passes normal authorization.
+- The same call with only `_timeout_seconds=600` keeps the identity and gets a refusal and the nudge.
+- A refused `web_fetch` call with `_background: true` keeps the identity and gets a refusal and the nudge.
+
+In a child, `_background` does not start a job, so the field gives one more identity for a shell command. That identity needs two equal rounds before the guard refuses it. The bound is two more executions for each command, and each execution passes normal authorization.
 
 Alternative: add the field only when a job manager exists. That needs another value in `Prepare` for every caller. The bounded cost does not justify the plumbing.
 
@@ -83,11 +99,46 @@ Alternative: add the field only when a job manager exists. That needs another va
 
 `ErrorCategory.ModelBehavior` stays for repeated empty replies.
 
+`SubAgentOutcomeReason.ToolCycleStopped` gets a caller again: the quiet end of a child run (decision 7).
+
+### 6. The fifth refused repeat escalates, and the sixth ends the parent turn quietly
+
+`ToolCycleBatchDecision.RefusedRepeat` tells the turn owner which of these applies: `None`, `Nudge`, `EscalatedNudge`, or `EndTurn`. `LlmSessionActor` (actor-local) owns the end of the turn.
+
+- `Nudge`: `ToolCycleMessages.RepeatNudge`.
+- `EscalatedNudge`: `ToolCycleMessages.EscalatedRepeatNudge`. The call stays refused.
+- `EndTurn`: `HandleToolCallResponse` does not persist `ToolBatchStarted` and does not dispatch.
+  - If the response has text, the session removes the tool calls from the response and uses the normal text path (`HandleTextResponse`). That path persists `TurnRecorded`, emits the text, and completes the turn. The history then ends with an assistant text message, which every provider accepts.
+  - If the response has no text, the session closes the active inputs and completes the turn with `TurnOutcome.Completed`. It adds no reply and emits no error. An empty assistant message is not safe, because some providers reject an empty text block. The history then ends with the last tool results.
+
+Schematic flow. It omits authorization and the child continuation:
+
+```text
+HandleToolCallResponse(response):
+  decision = PrepareFreshBatch(response)
+  if decision.RefusedRepeat == EndTurn:
+     if response has text: HandleTextResponse(response without tool calls)
+     else: CloseActiveInputs -> TurnCompleted(Completed)
+     return
+  persist ToolBatchStarted; dispatch; nudge = Nudge or EscalatedNudge text
+```
+
+Why the turn ends with the text of the last response, and not with an earlier text: the session already sent each earlier preamble text to the person. A second copy would repeat a Slack post.
+
+Why the joining input resets the count: a new Slack message in the same thread joins the running turn (`turn_mid_loop_buffer_drain`) and calls `ResetForNewTurn`. That call already clears the refusals, so the model can run the call again. The count describes the same refusals, so it resets with them. The person can then ask the model to try again.
+
+### 7. A child ends quietly with its last text
+
+`SubAgentActor` (actor-local) uses the same decision. Refused repeat 5 gets `ToolCycleMessages.EscalatedChildRepeatNudge`. Refused repeat 6 completes the run with `success: true`, `SubAgentRunOutcome.Partial`, and `SubAgentOutcomeReason.ToolCycleStopped`. The output is the text of the final response, or else the latest earlier assistant text in the child history. The parent did not see that earlier text, so the child returns it. `SubAgentSpawner` treats `Partial` as a successful run, so the parent gets no error.
+
 ## Risks / Trade-offs
 
-- [A model repeats a refused call without end] → Each repeat costs one model request and no tool execution. The person can cancel. A caller wait limit, child timeouts, compaction, and provider budgets stop the work. Aaron did not ask for a new limit.
-- [Two nudges in a row] → Each repeated batch adds one nudge. The text is short and the same each time.
-- [The active change `simplify-agent-coordination` has an older delta for the same requirement] → Its archive must take this requirement text. The PR notes the conflict.
+- [A model repeats a refused call] → The worst case for one turn is five refused repeats with a nudge and one more response that ends the turn. That is six model requests after the first correction, and no refused call executes. Without new person input, no other runtime bound stops the loop: the session and the TUI have no cancel command, a caller wait limit does not stop the turn, a child inactivity watchdog resets on each model response, and compaction resumes the loop. New person input resets the count, so a person who keeps writing in the thread can extend the loop. Each message then gives the model a new instruction.
+- [The removal of an earlier nudge changes history before its end] → A byte-prefix cache misses after that point. The loop has at most five nudges for each count, so the cost is small.
+- [Open changes still hold the stop rule] → Three open OpenSpec changes keep the old stop rule in their deltas. If one of them archives after this change, it puts the stop rule back into the main specs. Before each one archives, update its delta with the opsx skills, or archive this change last:
+  - `stop-repeated-tool-cycles`: `turn-loop-governance` "Cycle intervention is paired and terminal on repetition" ("A repeated blocked action forces completion"), and `netclaw-subagents` "Subagents stop exact repeated tool cycles" ("its final outcome is partial").
+  - `simplify-agent-coordination`: `turn-loop-governance` "Tool recurrence governs repeated work", scenario "Repeated call after correction settles without another model request".
+  - `report-headless-turn-error-category`: `netclaw-cli` scenario "Model ignores the cycle stop", which requires `[turn:failed] category=model kind=ModelBehavior`.
 - [Eval expectations] → `tool_cycle_terminal` becomes `tool_cycle_repeat_nudge`. The new case `long_command_background_job` covers the live pattern.
 
 ## Migration Plan

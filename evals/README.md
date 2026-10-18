@@ -266,11 +266,13 @@ call again.
 The fixture `/home/netclaw/.netclaw/evals/slow_render` runs for 150 s and then
 prints `render-complete`. The prompt does not give the duration. The case
 proves that the agent sends the same foreground command at most two times and
-uses a background job, a timeout of 150 s or more, or the
-`long-running-commands.md` page of `netclaw-operations`.
+uses a background job, a timeout of 180 s or more, or the
+`long-running-commands.md` page of `netclaw-operations`. The timeout must be
+greater than the 150 s sleep, because the shell start and the print also take
+time.
 
 `long_command_evals.py` reads the tool calls in the `--json` envelope. A changed
-timeout below 150 s is still the same command. The prompt timeout of this case
+timeout below 180 s is still the same command. The prompt timeout of this case
 is at least 480 s.
 
 ### Tool Cycle Cases

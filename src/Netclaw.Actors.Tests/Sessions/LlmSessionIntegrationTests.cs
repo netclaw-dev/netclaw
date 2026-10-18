@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Event;
 using Akka.Hosting;
 using Akka.Streams;
+using Akka.TestKit;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -1132,6 +1133,185 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Contains("repeated action-and-outcome cycle", resultsByCallId["repeat-4"], StringComparison.Ordinal);
         Assert.DoesNotContain(_fakeChatClient.ReceivedMessages[3], IsRepeatNudge);
         Assert.True(IsRepeatNudge(_fakeChatClient.ReceivedMessages[4][^1]));
+    }
+
+    // The fifth refused repeat of a turn gets the escalated nudge. Only that text has this sentence.
+    private const string EscalationMarker = "Stop trying this action.";
+    private const string AnyRepeatNudgeStart = "[system: Netclaw refused your repeated call to ";
+
+    private static bool IsAnyRepeatNudge(ChatMessage message)
+        => message.Role == Microsoft.Extensions.AI.ChatRole.User
+            && message.Text.StartsWith(AnyRepeatNudgeStart, StringComparison.Ordinal);
+
+    private static bool IsEscalatedNudge(ChatMessage message)
+        => IsRepeatNudge(message) && message.Text.Contains(EscalationMarker, StringComparison.Ordinal);
+
+    private static bool IsPlainRepeatNudge(ChatMessage message)
+        => IsRepeatNudge(message) && !message.Text.Contains(EscalationMarker, StringComparison.Ordinal);
+
+    private async Task<(TestProbe Subscriber, IActorRef SessionManager)> JoinRepeatSessionAsync(SessionId sessionId)
+    {
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        return (subscriber, sessionManager);
+    }
+
+    private static async Task<List<object>> SendAndCollectTurnAsync(
+        IActorRef sessionManager, TestProbe subscriber, SessionId sessionId, string content)
+    {
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = content
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var outputs = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            outputs.Add(message);
+            return message is TurnCompleted;
+        }, TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken);
+        return outputs;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Fifth_refused_repeat_escalates_and_the_sixth_ends_the_turn_quietly(bool finalResponseHasText)
+    {
+        // Aaron's rule (18 Oct 2026): the loop gets an end, and the person never sees a Netclaw error.
+        // Rounds 1 and 2 run. Round 3 is the first correction. Rounds 4 to 7 are refused repeats 1 to 4.
+        // Round 8 is repeat 5 and gets the escalated nudge. Round 9 is repeat 6, so the turn ends quietly.
+        const string FinalText = "The browser search stays blocked by the repeat guard.";
+        const string FollowUpAnswer = "The search did not change, so I stopped.";
+        for (var round = 1; round <= 8; round++)
+            _fakeChatClient.PlannedResponses.Enqueue([SearchCall($"cycle-call-{round}", "browser")]);
+        _fakeChatClient.PlannedResponses.Enqueue(finalResponseHasText
+            ? [new TextContent(FinalText), SearchCall("cycle-call-9", "browser")]
+            : [SearchCall("cycle-call-9", "browser")]);
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent(FollowUpAnswer)]);
+        _fakeToolExecutor.Results["search_tools"] = "same result";
+        var sessionId = new SessionId($"channel-cycle/repeat-end-{finalResponseHasText}");
+        var (subscriber, sessionManager) = await JoinRepeatSessionAsync(sessionId);
+
+        var outputs = await SendAndCollectTurnAsync(sessionManager, subscriber, sessionId, "Repeat the same search.");
+
+        // Repeats 1 to 4 get the plain nudge. Repeat 5 gets the escalated nudge. Only the latest nudge stays.
+        var requests = _fakeChatClient.ReceivedMessages;
+        Assert.DoesNotContain(requests[3], IsAnyRepeatNudge);
+        for (var request = 4; request <= 7; request++)
+            Assert.True(IsPlainRepeatNudge(requests[request][^1]), $"Request {request} must end with the plain nudge.");
+        var escalation = requests[8][^1];
+        Assert.True(IsEscalatedNudge(escalation), $"The last message was: {escalation.Text}");
+        Assert.Contains("End your turn", escalation.Text, StringComparison.Ordinal);
+        Assert.Contains("Tell the person what blocked you", escalation.Text, StringComparison.Ordinal);
+        Assert.Contains("did not execute", escalation.Text, StringComparison.Ordinal);
+        for (var request = 4; request <= 8; request++)
+            Assert.Single(requests[request], IsAnyRepeatNudge);
+
+        // Repeat 6 ends the turn: no further model request, no execution, and no tool line without a result.
+        Assert.Equal(9, _fakeChatClient.CallCount);
+        Assert.Equal(2, _fakeToolExecutor.CallCount);
+        var results = outputs.OfType<ToolResultOutput>().ToList();
+        Assert.Equal(8, results.Count);
+        Assert.DoesNotContain(results, static result => result.CallId.Value == "cycle-call-9");
+        Assert.DoesNotContain(outputs.OfType<ToolCallOutput>(), static call => call.CallId.Value == "cycle-call-9");
+
+        // The person sees no error. The turn completes with only the text that the model wrote.
+        Assert.DoesNotContain(outputs, static output => output is ErrorOutput);
+        Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(outputs[^1]).Outcome);
+        var texts = outputs.OfType<TextOutput>().Select(static output => output.Text).ToList();
+        string[] expectedTexts = finalResponseHasText ? [FinalText] : [];
+        Assert.Equal(expectedTexts, texts);
+
+        // The session takes the next message. History holds no tool call without a result.
+        var followUp = await SendAndCollectTurnAsync(sessionManager, subscriber, sessionId, "What happened?");
+        Assert.DoesNotContain(followUp, static output => output is ErrorOutput);
+        Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(followUp[^1]).Outcome);
+        Assert.Equal([FollowUpAnswer], followUp.OfType<TextOutput>().Select(static output => output.Text));
+        var followUpRequest = requests.Last(static request =>
+            request.Any(static message => message.Text == "What happened?"));
+        Assert.DoesNotContain(
+            followUpRequest.SelectMany(static message => message.Contents.OfType<FunctionCallContent>()),
+            static call => call.CallId == "cycle-call-9");
+        Assert.Equal(finalResponseHasText, followUpRequest.Any(static message =>
+            message.Role == Microsoft.Extensions.AI.ChatRole.Assistant && message.Text == FinalText));
+    }
+
+    [Fact]
+    public async Task Only_the_latest_repeat_nudge_stays_in_history()
+    {
+        // Rounds 1 and 2 run, round 3 is the first correction, and rounds 4 to 6 are refused repeats 1 to 3.
+        // Each repeat nudge replaces the one before it, so equal nudges do not pile up in the context.
+        for (var round = 1; round <= 6; round++)
+            _fakeChatClient.PlannedResponses.Enqueue([SearchCall($"cycle-call-{round}", "browser")]);
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("The search did not change.")]);
+        _fakeToolExecutor.Results["search_tools"] = "same result";
+        var sessionId = new SessionId("channel-cycle/one-nudge");
+        var (subscriber, sessionManager) = await JoinRepeatSessionAsync(sessionId);
+
+        var outputs = await SendAndCollectTurnAsync(sessionManager, subscriber, sessionId, "Repeat the same search.");
+
+        Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(outputs[^1]).Outcome);
+        var requests = _fakeChatClient.ReceivedMessages;
+        Assert.Equal(7, requests.Count);
+        for (var request = 4; request <= 6; request++)
+        {
+            Assert.True(IsPlainRepeatNudge(requests[request][^1]), $"Request {request} must end with the nudge.");
+            Assert.Single(requests[request], IsAnyRepeatNudge);
+        }
+    }
+
+    [Fact]
+    public async Task Person_input_that_joins_the_turn_starts_a_new_refused_repeat_count()
+    {
+        // Decision: person input that joins the running turn clears the refusals, so it also starts a new count.
+        // Without the reset, the first repeat after the join is repeat 5 and gets the escalated nudge.
+        var sessionId = new SessionId("channel-cycle/repeat-count-join");
+        var (subscriber, sessionManager) = await JoinRepeatSessionAsync(sessionId);
+        // Window 1: two runs, the correction, and refused repeats 1 to 4. Then a new call runs, and the person writes.
+        for (var round = 1; round <= 7; round++)
+            _fakeChatClient.PlannedResponses.Enqueue([SearchCall($"first-{round}", "browser")]);
+        _fakeChatClient.PlannedResponses.Enqueue([SearchCall("join", "join")]);
+        // Window 2: two runs, the correction, refused repeats 1 to 5, and then a text answer.
+        for (var round = 1; round <= 8; round++)
+            _fakeChatClient.PlannedResponses.Enqueue([SearchCall($"second-{round}", "browser")]);
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("The search stays blocked.")]);
+        _fakeToolExecutor.ExecuteOverride = async (call, ct) =>
+        {
+            if (call.CallId == "join")
+            {
+                // The person writes while the new call runs, so the message joins the running turn.
+                await sessionManager.Ask<CommandAck>(new SendUserMessage
+                {
+                    SessionId = sessionId,
+                    Content = "Keep trying, please."
+                }, TimeSpan.FromSeconds(3), ct);
+            }
+
+            return "same result";
+        };
+
+        var outputs = await SendAndCollectTurnAsync(sessionManager, subscriber, sessionId, "Repeat the same search.");
+
+        Assert.DoesNotContain(outputs, static output => output is ErrorOutput);
+        Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(outputs[^1]).Outcome);
+        Assert.Equal(["The search stays blocked."], outputs.OfType<TextOutput>().Select(static output => output.Text));
+        Assert.Equal(17, _fakeChatClient.CallCount);
+        var requests = _fakeChatClient.ReceivedMessages;
+        Assert.Contains(requests[8], static message => message.Text == "Keep trying, please.");
+        for (var request = 4; request <= 7; request++)
+            Assert.True(IsPlainRepeatNudge(requests[request][^1]), $"Request {request} must end with the plain nudge.");
+        // Window 2 counts from 1 again: repeats 1 to 4 are plain, and repeat 5 is the escalation.
+        for (var request = 12; request <= 15; request++)
+            Assert.True(IsPlainRepeatNudge(requests[request][^1]), $"Request {request} must end with the plain nudge.");
+        Assert.True(IsEscalatedNudge(requests[16][^1]), $"The last message was: {requests[16][^1].Text}");
     }
 
     [Fact]

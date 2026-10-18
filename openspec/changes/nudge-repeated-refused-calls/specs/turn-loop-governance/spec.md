@@ -2,7 +2,7 @@
 
 ### Requirement: Tool recurrence governs repeated work
 
-**Reason**: The old requirement stops the turn when the model repeats a refused call. The person then sees a runtime error. Aaron's rule of 18 October 2026 replaces the stop with a second refusal and a model-facing nudge.
+**Reason**: The old requirement stops the turn when the model repeats a refused call. The person then sees a runtime error. Aaron's rule of 18 October 2026 replaces the stop with a second refusal and a model-facing nudge. After five refused repeats in one turn, the nudge escalates. A sixth refused repeat ends the turn quietly with the text of the model.
 
 **Migration**: Use "Tool recurrence refuses repeated work and continues the turn". It keeps every other rule and scenario of the old requirement.
 
@@ -12,17 +12,42 @@
 
 The system SHALL use exact per-call recurrence and the existing adjacent-cycle rules to stop repeated tool work. It SHALL NOT stop a useful task only because it reached `MaxToolIterationsPerTurn` or a child iteration limit.
 
-A call identity SHALL use the canonical tool and prepared arguments. It SHALL exclude valid call metadata and correlation IDs, and it SHALL retain rejected metadata. A valid `_background: true` request SHALL be part of the call identity, because it changes how the call runs. It SHALL count one observation for each call identity per completed model feedback round. Unrelated calls and duplicate call counts SHALL NOT erase recurrence evidence. A distinct actual outcome SHALL reset evidence only for the affected identity.
+A call identity SHALL use the canonical tool and prepared arguments. It SHALL exclude valid call metadata and correlation IDs, and it SHALL retain rejected metadata. A valid `_background: true` request on `shell_execute` SHALL be part of the call identity, because it changes how that call runs. Only `shell_execute` runs in the background. Another tool runs a background request in the foreground, so `_background` SHALL NOT change the identity of another tool. It SHALL count one observation for each call identity per completed model feedback round. Unrelated calls and duplicate call counts SHALL NOT erase recurrence evidence. A distinct actual outcome SHALL reset evidence only for the affected identity.
 
 After two equal completed feedback rounds for one identity, the system SHALL refuse the next matching call before dispatch and return a corrective tool result for every matching call ID. The existing adjacent period-one through period-three cycle guard SHALL remain active for eligible complete batches.
 
 If the model repeats a refused identity or a refused adjacent action, the system SHALL refuse the repeated call again before dispatch. It SHALL return a corrective tool result for every refused call ID. It SHALL then add one model-facing system nudge after the tool results of that batch, and it SHALL make the next model request. The turn SHALL continue. The system SHALL NOT fail the turn, send an error to the person, or report the error category `ModelBehavior` for this case. A person SHALL see the refusal only when the model writes about it.
 
+The history SHALL keep at most one repeat nudge. When the system adds a repeat nudge, it SHALL remove the earlier repeat nudge from the history.
+
 The parent nudge SHALL name each refused tool. It SHALL tell the model that the call did not execute and that the same call gets the same refusal. It SHALL list these alternatives: run a slow shell command as a background job with `_background: true` and `check_background_job`, change the command or its arguments, divide the work into smaller steps, and ask the person. It SHALL name `skill_read_resource('netclaw-operations', 'references/long-running-commands.md')`.
 
 A child run SHALL follow the same rule. The child nudge SHALL NOT offer a background job, because a child has no background job manager. It SHALL tell the child that it can stop and give its result to the parent, with the name of the command that did not finish.
 
-The system SHALL NOT add a count limit or a time limit for repeated refusals. The existing bounds remain the backstop: cancellation by the person, the wait limit of a caller, child run timeouts, context compaction, and provider budgets.
+The system SHALL count refused repeats for each turn. One refused repeat is one model response that repeats at least one refused identity or the refused adjacent action. Several repeated calls in one response count as one refused repeat. A first correction and a new call do not count. A different completed action SHALL NOT reset the count. New person input SHALL reset the count, because it also resets the recurrence evidence. This includes person input that joins a running turn, for example a new Slack message in the same thread.
+
+Refused repeats 1 to 4 of a turn SHALL get the nudge above. Refused repeat 5 SHALL get an escalated nudge in place of that nudge. The escalated nudge SHALL name each refused tool and SHALL tell the model these facts and steps:
+
+- The call did not execute.
+- Stop this action.
+- End the turn now.
+- Tell the person what blocked the work, and name the action that did not finish.
+- Another refused call ends the turn.
+
+The call stays refused after the escalated nudge.
+
+If the model sends refused repeat 6, the system SHALL end the turn quietly:
+
+- It SHALL NOT dispatch any call of that response, also a new call next to the repeat.
+- It SHALL NOT make another model request for the turn.
+- If the response contains text, the turn SHALL complete with that text as the reply. The history keeps the text without the tool calls.
+- If the response contains no text, the turn SHALL complete with no new reply. The person keeps the text that the model wrote before.
+- It SHALL NOT emit an error output, add an error reply, record a failed turn, or report `ModelBehavior`.
+- A headless run SHALL exit with code 0 and print no `[turn:failed]` line. Its JSON envelope SHALL have no `errorCategory` and no `errorKind`. Its `response` SHALL hold only text that the model wrote.
+
+A child run SHALL use the same count for its run. Its escalated nudge SHALL tell the child to stop this action, to give its result to the parent, and to name the action that did not finish. Refused repeat 6 SHALL end the child run quietly. The run result SHALL be successful, with the outcome `partial` and the reason `tool_cycle_stopped`. Its output SHALL be the last text that the child model wrote in the run: the text of the final response, or the latest earlier text. The output is empty when the child wrote no text. The parent SHALL get this result as a successful partial result, not as an error.
+
+The end at refused repeat 6 is the only runtime bound for a refused loop. These events do not stop the loop: a cancel request (the TUI and the session have no cancel command), a caller wait limit, a child inactivity watchdog, and context compaction. These events can stop it before refused repeat 6: the model selects another action, a provider error or quota, the model obeys a message from the person, and a daemon stop or restart.
 
 A trusted repeat exception SHALL apply only to an authorized, non-cancel status query for an accessible pending background job. It SHALL NOT apply to cancellation, denied lookup, a different job, or model-authored claims. Every call SHALL pass normal authorization and tool validation.
 
@@ -31,11 +56,13 @@ The live session owner SHALL preserve recurrence evidence and unresolved correct
 Schematic flow. It omits authorization, validation, and persistence steps:
 
 ```text
-round 1: call C executes             -> outcome O
-round 2: call C executes             -> outcome O   (two equal rounds)
-round 3: call C refused              -> corrective result, no nudge
-round 4: call C refused again        -> corrective result + system nudge
-round 5: model request continues     -> model selects another action
+round 1:      call C executes        -> outcome O
+round 2:      call C executes        -> outcome O   (two equal rounds)
+round 3:      call C refused         -> corrective result, no nudge
+rounds 4..7:  call C refused again   -> corrective result + nudge        (refused repeats 1..4)
+round 8:      call C refused again   -> corrective result + escalated nudge (refused repeat 5)
+round 9:      call C again           -> no dispatch, no model request; the turn completes
+                                        with the text of round 9, or with no new reply
 ```
 
 #### Scenario: Unrelated work does not clear recurrence
@@ -86,6 +113,56 @@ round 5: model request continues     -> model selects another action
 - **AND** a headless run exits with code 0 and prints no `[turn:failed]` line
 - **AND** the person sees only the text of the model
 
+#### Scenario: The fifth refused repeat gets the escalated nudge
+
+- **GIVEN** the model sent four refused repeats of `search_tools` in one turn
+- **WHEN** it sends the same call again
+- **THEN** the runtime refuses the call without dispatch
+- **AND** the next model request ends with the escalated nudge
+- **AND** the escalated nudge tells the model to stop, to end the turn, and to tell the person what blocked it
+
+#### Scenario: A refused repeat after the escalation ends the turn quietly
+
+- **GIVEN** the model received the escalated nudge in a parent session
+- **WHEN** it sends a refused call again with the text "The search stays blocked."
+- **THEN** the runtime dispatches no call and makes no further model request
+- **AND** the turn completes with the reply "The search stays blocked."
+- **AND** no error output, error reply, failed turn, or `ModelBehavior` category occurs
+- **AND** a headless run exits with code 0 and its JSON `response` is "The search stays blocked."
+
+#### Scenario: A silent repeat after the escalation ends the turn with no new reply
+
+- **GIVEN** the model received the escalated nudge
+- **WHEN** it sends a refused call again with no text
+- **THEN** the turn completes with no new reply and no error
+- **AND** the next person message starts a turn whose history has no tool call without a result
+
+#### Scenario: A new call next to the last repeat does not run
+
+- **GIVEN** the model received the escalated nudge
+- **WHEN** one response repeats the refused call and also requests a new call
+- **THEN** the runtime ends the turn quietly
+- **AND** the new call does not run
+
+#### Scenario: Person input starts a new count
+
+- **GIVEN** the model sent four refused repeats in a turn
+- **WHEN** a new person message joins the running turn
+- **THEN** the count starts again from zero
+- **AND** the next refused repeat gets the plain nudge, not the escalated nudge
+
+#### Scenario: Other work does not reset the count
+
+- **GIVEN** the model sent four refused repeats in a turn
+- **WHEN** a different call completes and the model then repeats a refused call
+- **THEN** that refused repeat is repeat 5 and gets the escalated nudge
+
+#### Scenario: Only the latest repeat nudge stays in history
+
+- **GIVEN** a turn has three refused repeats
+- **WHEN** the next model request starts
+- **THEN** its history holds exactly one repeat nudge, the latest one
+
 #### Scenario: Another action after the nudge runs
 
 - **GIVEN** the runtime refused a repeated call and added the nudge
@@ -106,6 +183,13 @@ round 5: model request continues     -> model selects another action
 - **THEN** the runtime does not refuse it as a repeat
 - **AND** the call follows normal authorization and the background job rules
 
+#### Scenario: A background request on another tool is the same action
+
+- **GIVEN** the runtime refused a `web_fetch` call
+- **WHEN** the model sends the same call with `_background: true`
+- **THEN** the runtime refuses it again as a repeat
+- **AND** it adds the nudge
+
 #### Scenario: A timeout change alone is the same action
 
 - **GIVEN** the runtime refused a call
@@ -120,6 +204,15 @@ round 5: model request continues     -> model selects another action
 - **THEN** the runtime refuses the call again without dispatch
 - **AND** the next child model request ends with a child nudge that offers no background job
 - **AND** the child run continues and can complete normally
+
+#### Scenario: A child ignores the escalated child nudge
+
+- **GIVEN** a child run received the escalated child nudge
+- **WHEN** the child sends a refused call again
+- **THEN** the child run ends without dispatch and without another model request
+- **AND** the run result is successful with the outcome `partial` and the reason `tool_cycle_stopped`
+- **AND** its output is the last text that the child model wrote
+- **AND** the parent gets no error for the child
 
 #### Scenario: Pending job status query uses a narrow exception
 

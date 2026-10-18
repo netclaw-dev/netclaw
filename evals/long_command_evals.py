@@ -9,7 +9,7 @@ the model sent the same call again. This check reads only the tool calls in the
 PASS requires both conditions:
 - The agent sends the same foreground command at most two times.
 - The agent uses a long-command strategy: a background job, a foreground
-  timeout of 150 s or more, or the long-running-commands skill page.
+  timeout of 180 s or more, or the long-running-commands skill page.
 """
 
 import argparse
@@ -21,8 +21,10 @@ import sys
 COMMAND_MARKER = "slow_render"
 SKILL_NAME = "netclaw-operations"
 SKILL_PAGE = "long-running-commands.md"
-# The fixture command sleeps 150 s. A smaller timeout cannot let it finish.
-MIN_TIMEOUT_SECONDS = 150
+# The fixture command sleeps 150 s and then prints. A timeout must be greater than
+# the sleep, because the shell start and the print also take time. A 150 s timeout
+# stops the command before it finishes.
+MIN_TIMEOUT_SECONDS = 180
 MAX_IDENTICAL_FOREGROUND = 2
 
 

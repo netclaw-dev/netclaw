@@ -13,6 +13,8 @@ Live example, 18 October 2026, 12:17 to 12:32 UTC:
 
 Aaron's rule: do not stop the turn. Refuse the call again and give the model a nudge with alternatives. A person must not see this error text unless the model decides to tell the person.
 
+Aaron's second decision, also 18 October 2026: the loop gets an end, and the person still never sees a Netclaw error. After five refused repeats in one turn, the nudge escalates. If the model repeats a refused call after that, the turn ends quietly with the text of the model.
+
 ## What Changes
 
 - A repeated refused call gets a refusal tool result again. The call does not execute.
@@ -20,9 +22,13 @@ Aaron's rule: do not stop the turn. Refuse the call again and give the model a n
 - The parent nudge names the refused tool and gives alternatives: a background shell job, a changed command or arguments, smaller steps, and a question to the person.
 - The parent nudge names `skill_read_resource('netclaw-operations', 'references/long-running-commands.md')`.
 - The turn continues with the next model request.
+- The session counts refused repeats in each turn. Refused repeat 5 gets an escalated nudge: stop this action, end the turn, and tell the person what blocked the work. The call stays refused.
+- Refused repeat 6 ends the turn quietly. No call of that response runs, and no model request follows. The turn completes with the text of that response, or with no new reply. The person sees no error, and a headless run exits with code 0.
+- New person input resets the count, also input that joins a running turn.
+- The history keeps only the latest repeat nudge.
 - The parent does not fail the turn, does not send an error to the person, and does not use `ModelBehavior` for this case.
-- A child run follows the same rule. The child nudge does not offer a background job, because a child has no background job manager.
-- A valid `_background: true` request becomes part of the call identity. A background run of a refused foreground command is a different action, so the guard permits it.
+- A child run follows the same rule. The child nudge does not offer a background job, because a child has no background job manager. Refused repeat 6 ends the child as a successful partial run (`tool_cycle_stopped`) with the last text of the child.
+- A valid `_background: true` request on `shell_execute` becomes part of the call identity. A background run of a refused foreground shell command is a different action, so the guard permits it. Other tools ignore `_background`, so it does not change their identity.
 - A different call in the same batch runs normally.
 - **BREAKING** (observable contract): a headless run that repeats a refused call no longer exits with `[turn:failed] category=model kind=ModelBehavior`. The eval case `tool_cycle_terminal` becomes `tool_cycle_repeat_nudge` and checks the new behavior.
 - Add the `netclaw-operations` reference page `references/long-running-commands.md`. Move the background job details to that page.
@@ -36,7 +42,7 @@ In scope:
 
 Out of scope:
 
-- A new count limit or time limit for repeated refusals. Aaron did not ask for one.
+- A limit on distinct work or a time limit. Only refused repeats count.
 - Changes to the first correction, the per-call evidence count, or the adjacent-cycle rule.
 - Changes to empty-response failures. They keep `ModelBehavior`.
 
@@ -60,4 +66,6 @@ The nudge is transient history in the live owner, the same as other system nudge
 
 Security: a refused call still executes no tool and grants no authority. Every executed call still passes authorization and validation. The background identity rule permits at most one more identity for each command, and that call still needs normal authorization.
 
-Operations: the person no longer sees a runtime error for this case. Existing bounds stay the backstop: cancellation by the person, a caller wait limit, child run timeouts, context compaction, and the provider budget. The `netclaw-operations` skill version increases.
+Operations: the person no longer sees a runtime error for this case. The end at refused repeat 6 is the runtime bound for a refused loop. No other runtime bound applies: the session has no cancel command, a caller wait limit does not stop the turn, a child inactivity watchdog resets on each model response, and compaction resumes the loop. The `netclaw-operations` skill version increases.
+
+Caution: the open changes `stop-repeated-tool-cycles`, `simplify-agent-coordination`, and `report-headless-turn-error-category` still keep the stop rule. Each one must take this requirement before it archives. See design.md, Risks.

@@ -50,15 +50,15 @@ public sealed class ToolCycleValidationTests
     }
 
     [Fact]
-    public void Background_request_changes_identity_but_a_timeout_change_does_not()
+    public void Background_request_changes_shell_identity_but_a_timeout_change_does_not()
     {
-        // The repeat nudge offers a background job. A background run of a refused command
+        // The repeat nudge offers a background job. A background run of a refused shell command
         // must not get the same refusal. A new timeout alone is the same action.
         var executor = CreateExecutor();
-        var foreground = Call("foreground", "same");
-        var background = Call("background", "same");
+        var foreground = Call("foreground", "same", ShellTool.ToolName);
+        var background = Call("background", "same", ShellTool.ToolName);
         background.Arguments!["_background"] = true;
-        var longerTimeout = Call("timeout", "same");
+        var longerTimeout = Call("timeout", "same", ShellTool.ToolName);
         longerTimeout.Arguments!["_timeout_seconds"] = 600;
         Assert.Null(executor.ValidateToolCall(background));
         Assert.Null(executor.ValidateToolCall(longerTimeout));
@@ -78,6 +78,31 @@ public sealed class ToolCycleValidationTests
         var timeoutDecision = tracker.EvaluateBeforeDispatch(timeoutBatch);
         Assert.Equal(ToolCycleDecisionKind.Correct, timeoutDecision.Kind);
         Assert.Equal(["timeout"], timeoutDecision.RefusedCallIds);
+    }
+
+    [Fact]
+    public void Background_request_does_not_change_the_identity_of_another_tool()
+    {
+        // Negative example: only shell_execute runs in the background. Another tool runs a background
+        // request in the foreground, so `_background: true` must not give a refused call a new identity.
+        var executor = CreateExecutor();
+        var foreground = Call("foreground", "same");
+        var background = Call("background", "same");
+        background.Arguments!["_background"] = true;
+        Assert.Null(executor.ValidateToolCall(background));
+
+        var foregroundBatch = ToolCycleSignatureFactory.Prepare([foreground], executor);
+        var completed = Complete(foregroundBatch, "same result");
+        var tracker = new TurnStateTracker();
+        tracker.ObserveCompleted(completed);
+        tracker.ObserveCompleted(completed);
+        Assert.Equal(ToolCycleDecisionKind.Correct, tracker.EvaluateBeforeDispatch(foregroundBatch).Kind);
+
+        var backgroundBatch = ToolCycleSignatureFactory.Prepare([background], executor);
+        Assert.Equal(foregroundBatch.Action, backgroundBatch.Action);
+        var decision = tracker.EvaluateBeforeDispatch(backgroundBatch);
+        Assert.Equal(ToolCycleDecisionKind.Correct, decision.Kind);
+        Assert.Equal(["background"], decision.RefusedCallIds);
     }
 
     [Fact]
@@ -120,6 +145,8 @@ public sealed class ToolCycleValidationTests
     {
         var registry = new ToolRegistry();
         registry.Register(AIFunctionFactory.Create((string text) => text, "probe"), "builtin");
+        // A stand-in with the shell tool name. The identity rule reads only the canonical tool name.
+        registry.Register(AIFunctionFactory.Create((string text) => text, ShellTool.ToolName), "builtin");
         return new DispatchingToolExecutor(registry, new ToolAccessPolicy(
             new NetclawPaths(), new ToolConfig(),
             new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
@@ -127,7 +154,7 @@ public sealed class ToolCycleValidationTests
             new ShellCommandPolicy(), new ToolPathPolicy([])));
     }
 
-    private static FunctionCallContent Call(string id, string text) => new(id, "probe",
+    private static FunctionCallContent Call(string id, string text, string toolName = "probe") => new(id, toolName,
         new Dictionary<string, object?>
         {
             ["text"] = text,

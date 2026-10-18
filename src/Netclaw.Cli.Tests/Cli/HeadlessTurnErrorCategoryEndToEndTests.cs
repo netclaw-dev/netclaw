@@ -82,6 +82,34 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         Assert.Equal(5, model.CallCount);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Repeat_after_the_escalated_nudge_ends_the_run_quietly_with_exit_0(bool json, bool finalResponseHasText)
+    {
+        // Aaron's rule (18 Oct 2026): the loop gets an end, and the person never sees a Netclaw error.
+        // Calls 1 and 2 run, call 3 gets the correction, calls 4 to 7 are refused repeats 1 to 4, call 8 is
+        // repeat 5 and gets the escalated nudge, and call 9 is repeat 6. Call 9 ends the turn with no error.
+        // Planted bug: the runtime keeps the loop open, or it ends the turn as a failure.
+        const string FinalText = "web_search stays blocked by the repeat guard.";
+        var model = new ScriptedModel(call => finalResponseHasText
+                && call.LastMessageText.Contains("Stop trying this action.", StringComparison.Ordinal)
+            ? [new TextContent(FinalText), .. ToolCall(call, query: "same")]
+            : ToolCall(call, query: "same"));
+
+        var run = await RunAsync(model, json, maxToolIterations: 20);
+
+        AssertSucceeded(run, json, expectedResponse: finalResponseHasText ? FinalText : string.Empty);
+        Assert.Equal(9, model.CallCount);
+        Assert.DoesNotContain("Netclaw stopped", run.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("Netclaw refused your repeated call", run.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("Netclaw refused your repeated call", run.Stdout, StringComparison.Ordinal);
+        if (!json)
+            Assert.Equal(finalResponseHasText, run.Stdout.Contains(FinalText, StringComparison.Ordinal));
+    }
+
     // Repeated empty replies count against the model only when the stream finished on its own terms:
     // finish reason Stop or Length. Planted bug: the finish reason is ignored, so a broken stream blames
     // the model.
@@ -310,7 +338,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
             Assert.Equal(kind, envelopeKind);
     }
 
-    private static void AssertSucceeded(HeadlessRun run, bool json)
+    private static void AssertSucceeded(HeadlessRun run, bool json, string expectedResponse = "Done.")
     {
         Assert.Equal(0, run.ExitCode);
         Assert.Empty(run.TurnFailedLines);
@@ -322,7 +350,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
 
         using var envelope = run.Envelope;
         Assert.NotNull(envelope);
-        Assert.Equal("Done.", envelope.RootElement.GetProperty("response").GetString());
+        Assert.Equal(expectedResponse, envelope.RootElement.GetProperty("response").GetString());
         Assert.False(envelope.RootElement.TryGetProperty("errorCategory", out _));
         Assert.False(envelope.RootElement.TryGetProperty("errorKind", out _));
     }

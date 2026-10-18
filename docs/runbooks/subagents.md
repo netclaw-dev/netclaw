@@ -416,10 +416,13 @@ known-good version.
   back-and-forth interaction with the user.
 - Subagents have no fixed maximum number of tool iterations. A final response
   completes the run; cancellation or an inactivity timeout can stop it.
-  A repeated refused call does not stop the child. The runtime refuses the call
-  again and adds a nudge. The child then selects another action or returns its
-  result to the parent. A child cannot start a background job, so its nudge
-  tells it to name a long command for the parent.
+  A repeated refused call does not stop the child at once. The runtime refuses
+  the call again and adds a nudge. The child then selects another action or
+  returns its result to the parent. A child cannot start a background job, so
+  its nudge tells it to name a long command for the parent. The fifth refused
+  repeat gets an escalated nudge. A sixth refused repeat ends the run as a
+  successful `partial` result with the reason `tool_cycle_stopped` and the last
+  text of the child.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.
@@ -460,9 +463,11 @@ No live deployment or database restore forms part of this source change.
 
 The parent and child use exact tool identities and actual results to detect repeated work.
 After two equal feedback rounds, the runtime returns a correction for each repeated call.
-A repeat after that correction ends the turn without another model request.
-In a parent session, the turn fails with the error category `ModelBehavior`. A child run ends with a partial result.
-Unrelated calls remain available. Live context compaction preserves this evidence.
+A repeat after that correction gets the same correction and a nudge. The turn continues.
+The runtime counts refused repeats in each turn. Refused repeat 5 gets an escalated nudge.
+Refused repeat 6 ends the turn quietly with the text of the model. The person sees no error.
+In a parent session, the turn completes with no `ModelBehavior` category. A child run ends with a successful partial result.
+New person input resets the count. Unrelated calls remain available. Live context compaction preserves this evidence.
 A process restart does not restore a detector checkpoint or repeat tool calls automatically.
 
 Authorized status queries for a pending background job can repeat.
@@ -470,8 +475,10 @@ Each query repeats the normal access checks. Cancellation and inaccessible jobs 
 
 `MaxToolIterationsPerTurn` remains readable in old configuration files. The runtime does not enforce that value.
 Useful work can exceed the former parent and child iteration limits.
-The runtime still enforces deadlines, cancellation, and authorization.
-Distinct calls can continue indefinitely if no other stop condition applies.
+The runtime still enforces authorization and the per-call tool timeouts.
+The session and the TUI have no cancel command for a running turn.
+A child has inactivity watchdogs only. Each model response resets them.
+Distinct calls can continue indefinitely if the model, the provider, or a daemon stop does not end them.
 
 A recurrence refusal executes no tool and grants no authority.
 The result retains the call identity, validation error, and authorization-attempt identity.

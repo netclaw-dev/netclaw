@@ -2,11 +2,12 @@
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
 
-from long_command_evals import evaluate
+from long_command_evals import MIN_TIMEOUT_SECONDS, evaluate
 
 COMMAND = "/home/netclaw/.netclaw/evals/slow_render"
 
@@ -60,9 +61,22 @@ class LongCommandCheckTests(unittest.TestCase):
 
     def test_argument_key_spelling_variants_are_recognized(self):
         for meta in ({"Background": True}, {"background": True}, {"_Background": "true"},
-                     {"TimeoutSeconds": 200}, {"timeout_seconds": "180"}, {"Timeout": 150}):
+                     {"TimeoutSeconds": 200}, {"timeout_seconds": "180"}, {"Timeout": 181}):
             with self.subTest(meta=meta):
                 self.assert_passes(call("shell_execute", command=COMMAND, **meta))
+
+    def test_a_timeout_equal_to_the_fixture_sleep_is_not_a_strategy(self):
+        # The fixture sleeps 150 s and then prints. A 150 s timeout stops it before the print.
+        self.assert_fails("no_long_command_strategy", shell(_timeout_seconds=150))
+        self.assert_fails("no_long_command_strategy", shell(_timeout_seconds="179"))
+        self.assert_passes(shell(_timeout_seconds=180))
+
+    def test_the_minimum_timeout_is_greater_than_the_fixture_sleep(self):
+        script = Path(__file__).with_name("run-evals.sh").read_text()
+        fixture = script[script.index("slow_render_executable="):]
+        sleep_seconds = int(re.search(r"'sleep (\d+)'", fixture).group(1))
+        self.assertEqual(150, sleep_seconds)
+        self.assertGreater(MIN_TIMEOUT_SECONDS, sleep_seconds)
 
     def test_string_booleans_are_recognized(self):
         self.assert_passes(shell(_background="true"))
