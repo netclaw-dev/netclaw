@@ -157,7 +157,7 @@ public sealed class OneShotSettlementTests : OneShotReminderTestBase
         Assert.True(stored.Enabled);
         Assert.Equal(current.Schedule.FireAtMs, stored.Schedule.FireAtMs);
         Assert.False(TombstoneExists(current.Id));
-        Assert.NotEmpty(LogsOfLevel(Akka.Event.LogLevel.WarningLevel, current.Id.Value));
+        Assert.NotEmpty(await LogsOfLevelAsync(Akka.Event.LogLevel.WarningLevel, current.Id.Value));
     }
 
     // The refusal of a stale occurrence comes before the rule for an unreadable tombstone. A stale
@@ -226,7 +226,7 @@ public sealed class OneShotSettlementTests : OneShotReminderTestBase
         Assert.True(await IsScheduledAsync(definition.Id));
         Assert.False(TombstoneExists(definition.Id), "A stale tombstone must be deleted.");
         Assert.Contains(
-            LogsOfLevel(Akka.Event.LogLevel.WarningLevel, definition.Id.Value),
+            await LogsOfLevelAsync(Akka.Event.LogLevel.WarningLevel, definition.Id.Value),
             e => e.Message.ToString()!.Contains("tombstone", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -250,7 +250,7 @@ public sealed class OneShotSettlementTests : OneShotReminderTestBase
         Assert.True(stored.Enabled);
         Assert.True(await IsScheduledAsync(definition.Id));
         Assert.False(TombstoneExists(definition.Id));
-        Assert.NotEmpty(LogsOfLevel(Akka.Event.LogLevel.WarningLevel, definition.Id.Value));
+        Assert.NotEmpty(await LogsOfLevelAsync(Akka.Event.LogLevel.WarningLevel, definition.Id.Value));
     }
 
     [Fact]

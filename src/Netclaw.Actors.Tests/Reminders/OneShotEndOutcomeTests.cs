@@ -360,7 +360,7 @@ public sealed class OneShotEndOutcomeTests : OneShotReminderTestBase
         Assert.True(stored.Enabled, "The definition must stay so that the reconciliation can end the one-shot.");
         Assert.False(TombstoneExists(definition.Id));
         Assert.Contains(Alerts.Alerts, a => a.Type == "reminder.settlement.failed" && a.Source == definition.Id.Value);
-        Assert.NotEmpty(LogsOfLevel(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value));
+        Assert.NotEmpty(await LogsOfLevelAsync(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value));
 
         // The acknowledgement lease is 70 minutes. Move past it: nothing may deliver the occurrence again.
         for (var step = 0; step < 9; step++)

@@ -118,7 +118,7 @@ public sealed class OneShotUpgradeTests : OneShotReminderTestBase
 
         // The log line counts the ends and the purges. The 20-day-old leftovers count in both.
         Assert.Contains(
-            LogsAbout("Reminder reconcile complete"),
+            await LogsAboutAsync("Reminder reconcile complete"),
             e => e.Message.ToString()!.Contains("ended_oneshots=5", StringComparison.Ordinal)
                  && e.Message.ToString()!.Contains("purged_tombstones=2", StringComparison.Ordinal));
 

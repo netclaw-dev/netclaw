@@ -67,6 +67,7 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
     private int _dispatchesTaken;
     private int _managerSequence;
     private IActorRef _tap = ActorRefs.Nobody;
+    private IActorRef _logSink = ActorRefs.Nobody;
 
     protected OneShotReminderTestBase(ITestOutputHelper output) : base(output: output) { }
 
@@ -130,8 +131,8 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
             // The manager clock and the scheduler clock start at the same instant.
             Clock.SetUtcNow(system.Scheduler.Now);
 
-            var sink = system.ActorOf(Props.Create(() => new LogSink(_logs)), "log-sink");
-            system.EventStream.Subscribe(sink, typeof(LogEvent));
+            _logSink = system.ActorOf(Props.Create(() => new LogSink(_logs)), "log-sink");
+            system.EventStream.Subscribe(_logSink, typeof(LogEvent));
             _tap = system.ActorOf(Props.Create(() => new EnvelopeTap(Envelopes)), "envelope-tap");
             _resolver.RegisterShardRegion(ReminderManagerActor.ShardRegionName, _tap);
 
@@ -535,11 +536,28 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
 
     // ── Log events ──
 
-    protected IReadOnlyList<LogEvent> LogsAbout(string text)
-        => _logs.Where(e => e.Message?.ToString()?.Contains(text, StringComparison.Ordinal) == true).ToArray();
+    // A log call publishes the event to the event stream. The stream delivers it to the sink actor by
+    // Tell, so the event reaches _logs after the manager has already replied. A test must not read _logs
+    // right after an Ask returns. These methods flush the sink first, so the result holds every event that
+    // the manager logged before it replied. This also makes an assertion that no event exists reliable.
 
-    protected IReadOnlyList<LogEvent> LogsOfLevel(Akka.Event.LogLevel level, string text)
-        => LogsAbout(text).Where(e => e.LogLevel() == level).ToArray();
+    /// <summary>
+    /// Waits until the sink has handled every log event that was published before the call. The sink
+    /// mailbox is first-in first-out, and the manager publishes before it replies, so the flush message
+    /// queues behind every event that the manager logged before its reply.
+    /// </summary>
+    protected async Task FlushLogsAsync()
+        => await _logSink.Ask<LogSink.Flushed>(
+            LogSink.Flush.Instance, AskTimeout, TestContext.Current.CancellationToken);
+
+    protected async Task<IReadOnlyList<LogEvent>> LogsAboutAsync(string text)
+    {
+        await FlushLogsAsync();
+        return _logs.Where(e => e.Message?.ToString()?.Contains(text, StringComparison.Ordinal) == true).ToArray();
+    }
+
+    protected async Task<IReadOnlyList<LogEvent>> LogsOfLevelAsync(Akka.Event.LogLevel level, string text)
+        => (await LogsAboutAsync(text)).Where(e => e.LogLevel() == level).ToArray();
 
     // ── Test doubles ──
 
@@ -748,6 +766,20 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
 
     private sealed class LogSink : ReceiveActor
     {
-        public LogSink(ConcurrentQueue<LogEvent> queue) => Receive<LogEvent>(queue.Enqueue);
+        public LogSink(ConcurrentQueue<LogEvent> queue)
+        {
+            Receive<LogEvent>(queue.Enqueue);
+            Receive<Flush>(_ => Sender.Tell(Flushed.Instance));
+        }
+
+        public sealed record Flush : INoSerializationVerificationNeeded
+        {
+            public static readonly Flush Instance = new();
+        }
+
+        public sealed record Flushed : INoSerializationVerificationNeeded
+        {
+            public static readonly Flushed Instance = new();
+        }
     }
 }

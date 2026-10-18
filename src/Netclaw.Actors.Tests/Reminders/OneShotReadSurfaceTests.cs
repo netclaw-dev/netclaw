@@ -307,7 +307,7 @@ public sealed class OneShotReadSurfaceTests : OneShotReminderTestBase
 
         Assert.False(history.Found, "History without a readable audience must not be exposed.");
         Assert.Contains(Alerts.Alerts, a => a.Type == "reminder.tombstone.invalid" && a.Source == definition.Id.Value);
-        Assert.NotEmpty(LogsOfLevel(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value));
+        Assert.NotEmpty(await LogsOfLevelAsync(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value));
         Assert.True(TombstoneExists(definition.Id), "The file stays for the operator.");
     }
 }

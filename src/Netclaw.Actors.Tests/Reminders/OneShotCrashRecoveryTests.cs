@@ -172,7 +172,7 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
             await File.ReadAllTextAsync(TombstonePath(ended.Id), TestContext.Current.CancellationToken));
         Assert.Single(await History.ReadAsync(ended.Id, 10));
         // A fire after the end is expected after a crash. It is not an error (design D4).
-        Assert.Empty(LogsOfLevel(Akka.Event.LogLevel.ErrorLevel, ended.Id.Value));
+        Assert.Empty(await LogsOfLevelAsync(Akka.Event.LogLevel.ErrorLevel, ended.Id.Value));
     }
 
     [Fact]
@@ -417,11 +417,9 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
             Alerts.Alerts,
             a => a.Type == StatusQueryAlert && a.Source == definition.Id.Value);
         // The earlier settlement failure also logged an error for this id, so the text must say what failed here.
-        await AwaitAssertAsync(
-            () => Assert.Contains(
-                LogsOfLevel(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value),
-                e => e.Message!.ToString()!.Contains("occurrence status", StringComparison.OrdinalIgnoreCase)),
-            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains(
+            await LogsOfLevelAsync(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value),
+            e => e.Message!.ToString()!.Contains("occurrence status", StringComparison.OrdinalIgnoreCase));
         var stored = Definitions.Get(definition.Id);
         Assert.NotNull(stored);
         Assert.True(stored.Enabled);
@@ -585,7 +583,7 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
         await DrainStartupAsync();
         var definition = await RunAckedWithoutTombstoneAsync("history-damaged", RunMode.Succeed);
         await File.AppendAllTextAsync(HistoryPath(definition.Id), "{\"firedAt\":", TestContext.Current.CancellationToken);
-        var warningsBefore = LogsOfLevel(Akka.Event.LogLevel.WarningLevel, definition.Id.Value).Count;
+        var warningsBefore = (await LogsOfLevelAsync(Akka.Event.LogLevel.WarningLevel, definition.Id.Value)).Count;
 
         await TriggerAsync(trigger);
 
@@ -593,11 +591,9 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
         var tombstone = RequireTombstone(definition.Id);
         Assert.Equal("Completed", OutcomeOf(tombstone));
         Assert.Null(Text(tombstone, "lastError"));
-        await AwaitAssertAsync(
-            () => Assert.Contains(
-                LogsOfLevel(Akka.Event.LogLevel.WarningLevel, definition.Id.Value).Skip(warningsBefore),
-                e => e.Message!.ToString()!.Contains("history", StringComparison.OrdinalIgnoreCase)),
-            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains(
+            (await LogsOfLevelAsync(Akka.Event.LogLevel.WarningLevel, definition.Id.Value)).Skip(warningsBefore),
+            e => e.Message!.ToString()!.Contains("history", StringComparison.OrdinalIgnoreCase));
     }
 
     [Theory]
@@ -607,13 +603,13 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
     {
         await DrainStartupAsync();
         var definition = await RunAckedWithoutTombstoneAsync("history-readable", RunMode.Succeed);
-        var warningsBefore = LogsOfLevel(Akka.Event.LogLevel.WarningLevel, definition.Id.Value).Count;
+        var warningsBefore = (await LogsOfLevelAsync(Akka.Event.LogLevel.WarningLevel, definition.Id.Value)).Count;
 
         await TriggerAsync(trigger);
 
         Assert.Equal("Completed", OutcomeOf(RequireTombstone(definition.Id)));
         Assert.DoesNotContain(
-            LogsOfLevel(Akka.Event.LogLevel.WarningLevel, definition.Id.Value).Skip(warningsBefore),
+            (await LogsOfLevelAsync(Akka.Event.LogLevel.WarningLevel, definition.Id.Value)).Skip(warningsBefore),
             e => e.Message!.ToString()!.Contains("history", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -656,7 +652,7 @@ public sealed class OneShotCrashRecoveryTests : OneShotReminderTestBase
             damaged,
             await File.ReadAllTextAsync(TombstonePath(definition.Id), TestContext.Current.CancellationToken));
         Assert.Contains(Alerts.Alerts, a => a.Type == "reminder.tombstone.invalid" && a.Source == definition.Id.Value);
-        Assert.NotEmpty(LogsOfLevel(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value));
+        Assert.NotEmpty(await LogsOfLevelAsync(Akka.Event.LogLevel.ErrorLevel, definition.Id.Value));
 
         // The operator deletes the file. The acknowledgement lease expires, and Akka.Reminders delivers the
         // occurrence again. The test scheduler runs the timers that Akka.Reminders sets in reaction to the
