@@ -76,3 +76,15 @@ Tests exist and fail until the product code changes. Do not edit the tests.
 - [x] 11.4 Widen `./scripts/run-reminder-report-once-mutations.sh` to the retry link, and update the `TOOLING.md` row and section.
 - [x] 11.5 Fix the `netclaw-operations` `references/scheduling.md` text: the alert covers the child result of a reminder, for a routed skill and for an async sub-agent.
 - [x] 11.6 Run `Netclaw.Actors.Tests`, `Netclaw.Actors.MutationTests`, `Netclaw.Daemon.Tests`, `Netclaw.Cli.Tests`, the report-once mutation gate, `dotnet slopwatch analyze`, and the header check.
+
+## 12. Review round 5: delivery-turn routed rule, tests, coordination (owner decisions)
+
+Tests exist and fail until the product code changes. Do not edit the tests.
+
+- [ ] 12.1 Remove `RoutedSkill = deliveredChild?.StartKey is ChildRunStartKey.Slash` from `HandleTextResponse`, so a child-delivery turn writes `RoutedSkill = false`. Fix the comment on that line and the doc of `TurnRecorded.RoutedSkill`: the flag is true only for the routed turn that a sub-agent answered. Verify with the child-result tests in `RoutedSkillReminderDeliveryTests` (retry, then alert once for a reminder, retry and no alert for a person, same after recovery and after passivation).
+- [ ] 12.2 When a new input ends a pending reminder-linked retry, write one Warning: `A new input ended the delivery retry of turn {Turn} for reminder {FireKey}`. `{Turn}` is the turn that the retry repeats (`_state.TurnCount` at that time). Raise no alert. The place is the `BufferDuringModel` branch of `CompleteAcceptedInput`, before `Clear()`. Verify with `A_new_input_during_the_retry_of_a_child_result_writes_a_warning_and_raises_no_alert`.
+- [x] 12.3 Add tests for the owner of the link: `A_person_turn_between_the_reminder_start_and_the_child_result_does_not_move_the_link`, `A_reminder_turn_between_the_person_start_and_the_child_result_does_not_move_the_link`. They pass on the round 4 head by design. They fail the mutant that takes the link of the latest recorded turn.
+- [x] 12.4 Add `A_child_that_a_child_delivery_turn_started_keeps_the_reminder_link` (mutant M2 and M3). A retry turn cannot start a child today (see the spec), so no test covers a child that a retry turn starts. The spec says so.
+- [x] 12.5 Add `One_fire_raises_one_alert_for_the_acceptance_post_and_one_for_the_result_post`, `A_failed_post_on_a_person_turn_after_a_reminder_turn_raises_no_alert`, and `A_failed_post_on_a_person_turn_after_a_delivery_retry_of_a_reminder_turn_raises_no_alert`.
+- [x] 12.6 Add the "Coordination with #2515" section to `design.md`, the spec, and the PR body.
+- [ ] 12.7 Run `Netclaw.Actors.Tests`, `Netclaw.Actors.MutationTests`, `Netclaw.Daemon.Tests`, `Netclaw.Cli.Tests`, the report-once mutation gate, `dotnet slopwatch analyze`, and the header check. Run mutants M1, M2, M3, and M6: the PR suite kills each one.

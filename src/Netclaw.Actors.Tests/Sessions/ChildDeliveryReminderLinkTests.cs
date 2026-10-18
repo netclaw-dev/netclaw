@@ -253,6 +253,189 @@ public sealed class ChildDeliveryReminderLinkTests : ChildDeliveryReminderLinkTe
             childGate.TrySetResult();
         }
     }
+
+    // --- The link belongs to the turn that STARTED the child, not to the latest recorded turn ---
+
+    [Fact]
+    public async Task A_person_turn_between_the_reminder_start_and_the_child_result_does_not_move_the_link()
+    {
+        // Arrange: a reminder starts the child. A person speaks while the child runs, so the latest recorded turn
+        // is a person turn when the child result arrives.
+        var sessionId = new SessionId("boundary/child-result-person-between");
+        var (subscriber, _, childGate) = await StartChildFromReminderAsync(sessionId);
+        try
+        {
+            await SendRequesterAsync(sessionId, "A person speaks while the child runs.");
+            var person = await NextTurnAsync(subscriber);
+            Assert.Null(person.SourceReminderId);
+            childGate.TrySetResult();
+            var delivery = await NextTurnAsync(subscriber);
+            Assert.Empty(delivery.OpenChildRunIds);
+
+            // Act
+            SendDeliveryFailed(sessionId, delivery.TurnNumber, DeliveryFailureKind.TransportFailure);
+
+            // Assert: the child result still belongs to the reminder.
+            var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
+            Assert.Equal(ReminderSlug, alert.Source);
+        }
+        finally
+        {
+            childGate.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task A_reminder_turn_between_the_person_start_and_the_child_result_does_not_move_the_link()
+    {
+        // Arrange: a person starts the child. A reminder fires while the child runs, so the latest recorded turn
+        // is a reminder turn when the child result arrives.
+        var sessionId = new SessionId("boundary/child-result-reminder-between");
+        var childGate = NewGate();
+        Clients.Child.NextResponseGate = childGate;
+        FakeChat.ToolCallsOnFirstCall = [Spawn("spawn-1", "child-a")];
+        var subscriber = await JoinFullAsync(sessionId);
+        try
+        {
+            await SendRequesterAsync(sessionId, "Start the child run.");
+            var start = await NextTurnAsync(subscriber);
+            Assert.Single(start.OpenChildRunIds);
+            await SendReminderAsync(sessionId, FireKey);
+            var reminder = await NextTurnAsync(subscriber);
+            Assert.Equal(new ReminderId(FireKey), reminder.SourceReminderId);
+            childGate.TrySetResult();
+            var delivery = await NextTurnAsync(subscriber);
+            Assert.Empty(delivery.OpenChildRunIds);
+
+            // Act
+            SendDeliveryFailed(sessionId, delivery.TurnNumber, DeliveryFailureKind.TransportFailure);
+            await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
+
+            // Assert: the child result belongs to the person, so the reminder gets no alert.
+            Assert.Equal(0, AlertCount);
+        }
+        finally
+        {
+            childGate.TrySetResult();
+        }
+    }
+
+    // --- A child that a turn without an input starts keeps the link ---
+    // A retry turn cannot start a child: a tool call in a retry turn fails with "Tool batch dispatch requires
+    // admitted turn authority" (the guard is on dev, too). So the child-delivery turn is the only turn with no input
+    // that starts a child, and this test is the proof for the inherited link.
+
+    [Fact]
+    public async Task A_child_that_a_child_delivery_turn_started_keeps_the_reminder_link()
+    {
+        // Arrange: the reminder turn starts child 1. The child-delivery turn of child 1 starts child 2.
+        // Plan of the main model: call 1 starts child 1, call 2 is the acceptance, call 3 is the delivery turn
+        // and starts child 2, call 4 is its acceptance.
+        var sessionId = new SessionId("boundary/child-result-nested");
+        foreach (var startsChild in new[] { true, false, true, false })
+            FakeChat.PlannedToolCallDecisions.Enqueue(startsChild);
+        FakeChat.AfterToolCallResponse = _ => FakeChat.ToolCallsOnFirstCall = [Spawn("spawn-2", "child-a")];
+        var (subscriber, _, firstGate) = await StartChildFromReminderAsync(sessionId);
+        var secondGate = NewGate();
+        try
+        {
+            await AwaitChildCallsAsync(1);
+            Clients.Child.NextResponseGate = secondGate;
+            firstGate.TrySetResult();
+            var firstDelivery = await NextTurnAsync(subscriber);
+            Assert.Single(firstDelivery.OpenChildRunIds);
+            secondGate.TrySetResult();
+            var secondDelivery = await NextTurnAsync(subscriber);
+            Assert.Empty(secondDelivery.OpenChildRunIds);
+
+            // Act
+            SendDeliveryFailed(sessionId, secondDelivery.TurnNumber, DeliveryFailureKind.TransportFailure);
+
+            // Assert: child 2 has no input of its own to name the reminder, so it must inherit the link of child 1.
+            var alert = await AwaitExactlyOneAlertAsync(sessionId, subscriber);
+            Assert.Equal(ReminderSlug, alert.Source);
+        }
+        finally
+        {
+            firstGate.TrySetResult();
+            secondGate.TrySetResult();
+        }
+    }
+
+    // --- One fire, two replies, two alerts (spec: at most one alert for each recorded turn) ---
+
+    [Fact]
+    public async Task One_fire_raises_one_alert_for_the_acceptance_post_and_one_for_the_result_post()
+    {
+        // Arrange: the reminder turn posts the acceptance, and the child-delivery turn posts the result.
+        // The operator needs both facts, so the session does not merge the two reports.
+        var sessionId = new SessionId("boundary/child-result-two-alerts");
+        var (subscriber, accepting, childGate) = await StartChildFromReminderAsync(sessionId);
+        try
+        {
+            // Act: the acceptance post fails.
+            SendDeliveryFailed(sessionId, accepting.TurnNumber, DeliveryFailureKind.TransportFailure);
+            await AwaitAssertAsync(() => Assert.Equal(1, AlertCount), Deadline, cancellationToken: Cancellation);
+
+            // Act: the result post fails.
+            childGate.TrySetResult();
+            var delivery = await NextTurnAsync(subscriber);
+            SendDeliveryFailed(sessionId, delivery.TurnNumber, DeliveryFailureKind.TransportFailure);
+            await AwaitAssertAsync(() => Assert.Equal(2, AlertCount), Deadline, cancellationToken: Cancellation);
+            await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
+
+            // Assert: two alerts for one fire, one for each reply. A repeat report for the same turn adds none.
+            Assert.Equal(2, AlertCount);
+            Assert.All(Alerts.Alerts.Where(a => a.Type == AlertTypeText), a => Assert.Equal(ReminderSlug, a.Source));
+        }
+        finally
+        {
+            childGate.TrySetResult();
+        }
+    }
+
+    // --- A new input during the retry of a child-delivery turn ends the link, and the session says so ---
+
+    [Fact]
+    public async Task A_new_input_during_the_retry_of_a_child_result_writes_a_warning_and_raises_no_alert()
+    {
+        // Arrange: the channel rejects the child result, and the retry turn waits on the main model.
+        var sessionId = new SessionId("boundary/child-result-retry-cleared");
+        var (subscriber, _, childGate) = await StartChildFromReminderAsync(sessionId);
+        var retryGate = NewGate();
+        try
+        {
+            childGate.TrySetResult();
+            var delivery = await NextTurnAsync(subscriber);
+            var callsBefore = FakeChat.CallCount;
+            FakeChat.NextResponseGate = retryGate;
+            SendDeliveryFailed(sessionId, delivery.TurnNumber, DeliveryFailureKind.ContentRejected);
+            await AwaitAssertAsync(
+                () => Assert.True(FakeChat.CallCount > callsBefore, "The session did not start the retry turn."),
+                Deadline, cancellationToken: Cancellation);
+
+            // Act: a person speaks during the retry. The session buffers the input, and that input ends the retry link.
+            await EventFilter.Warning(contains: $"ended the delivery retry of turn {delivery.TurnNumber} for reminder {FireKey}")
+                .ExpectAsync(1, async () => await SendRequesterAsync(sessionId, "A person speaks during the retry."),
+                    cancellationToken: Cancellation);
+            retryGate.TrySetResult();
+            await NextTurnAsync(subscriber);
+            await NextTurnAsync(subscriber);
+
+            // Assert: the Warning is the only signal. The person is in the thread, so the session raises no alert.
+            Assert.Equal(0, AlertCount);
+        }
+        finally
+        {
+            childGate.TrySetResult();
+            retryGate.TrySetResult();
+        }
+    }
+
+    private async Task AwaitChildCallsAsync(int count)
+        => await AwaitAssertAsync(
+            () => Assert.True(Clients.Child.CallCount >= count, $"The child model made {Clients.Child.CallCount} of {count} calls."),
+            Deadline, cancellationToken: Cancellation);
 }
 
 /// <summary>

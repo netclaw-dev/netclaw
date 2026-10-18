@@ -198,6 +198,45 @@ public sealed class ReminderTurnDeliveryFailureTests : ReminderDeliveryTestBase
         Assert.Equal(0, AlertCount);
     }
 
+    // --- The reminder link never leaks onto a later person turn ---
+
+    [Fact]
+    public async Task A_failed_post_on_a_person_turn_after_a_reminder_turn_raises_no_alert()
+    {
+        // Arrange: a reminder turn, then a person turn that has no input source with a reminder.
+        var sessionId = new SessionId("mattermost/chan1/reminder-then-person");
+        var (subscriber, _) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
+        var person = await RunFollowUpTurnAsync(sessionId, subscriber, source: null, "A person speaks.");
+        Assert.Null(person.SourceReminderId);
+
+        // Act
+        SendDeliveryFailed(sessionId, person.TurnNumber, DeliveryFailureKind.TransportFailure);
+        await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
+
+        // Assert
+        Assert.Equal(0, AlertCount);
+    }
+
+    [Fact]
+    public async Task A_failed_post_on_a_person_turn_after_a_delivery_retry_of_a_reminder_turn_raises_no_alert()
+    {
+        // Arrange: the retry turn of a reminder turn keeps the link. The next person turn must not keep it.
+        var sessionId = new SessionId("mattermost/chan1/reminder-retry-then-person");
+        var (subscriber, reminder) = await RunTurnAsync(sessionId, ReminderSource(FireKey));
+        SendDeliveryFailed(sessionId, reminder.TurnNumber, DeliveryFailureKind.ContentRejected);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var person = await RunFollowUpTurnAsync(sessionId, subscriber, source: null, "A person speaks.");
+        Assert.Null(person.SourceReminderId);
+
+        // Act
+        SendDeliveryFailed(sessionId, person.TurnNumber, DeliveryFailureKind.TransportFailure);
+        await AwaitSessionHandledEarlierMessagesAsync(sessionId, subscriber);
+
+        // Assert
+        Assert.Equal(0, AlertCount);
+    }
+
     // --- S1: one reply raises at most one alert ---
 
     [Fact]
