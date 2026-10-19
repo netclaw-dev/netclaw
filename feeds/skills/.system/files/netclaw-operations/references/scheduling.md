@@ -13,7 +13,7 @@ The tools are deferred: call `load_tool(name)` first.
 |-----------|--------------------|------------------|
 | List reminders; read a schedule, a status, or the next fire time | `list_reminders` (`Filter`: `active` or `all`; `all` adds disabled reminders) | `netclaw reminder list` |
 | Create or change a reminder | `set_reminder` (see below) | none |
-| Stop a reminder (disable it) | `cancel_reminder` (`ReminderId`) | `netclaw reminder cancel <id>` |
+| Stop a reminder (a one-shot is deleted; a recurring reminder is disabled) | `cancel_reminder` (`ReminderId`) | `netclaw reminder cancel <id>` |
 | Read the run history | `get_reminder_history` (`ReminderId`, optional `Last`) | `netclaw reminder history <id>` |
 | Test a reminder in this chat | `run_reminder` (`Id`) | `netclaw reminder run <id>` |
 
@@ -68,8 +68,25 @@ Rules:
   Mattermost uses the original channel and thread root ID.
   Omit `delivery_transport` and `delivery_address` for this route.
   Netclaw preserves the stored reminder audience when the reminder executes.
+  The reminder turn may check and cancel the child runs of its own session with
+  `check_agent_run`, including runs that a person started. Any other turn of that
+  session may check and cancel a child run that a reminder turn started. The
+  audience, boundary, and channel type must match. A turn cannot reach a child
+  run of another session.
   The reminder run ends when the session accepts the fire. A later failed post
   is not a reminder failure, and the reminder system does not retry it.
+  The history row records the acceptance and stays `ok`. When the session gives
+  up on the reply, it writes an Error log in the daemon log. The log names the
+  reminder. The session also raises a `reminder.delivery.failed` alert once for
+  each failed reply. The alert `Source` is the reminder ID. The alert reaches
+  only the notification webhooks that the operator configured in
+  `Notifications.Webhooks`. With no webhook, only the Error log shows the
+  failure. Look in the daemon log and the webhook channel, not in the history,
+  for a reply that did not arrive. This holds for Slack, Discord, and
+  Mattermost. It also holds when the reminder turn starts a child run, with a
+  routed skill or an async sub-agent: that turn posts only the acceptance, and
+  a later turn posts the child result. A failed post of either reply raises
+  the alert.
   A session keeps one waiting fire per reminder: if a fire arrives while an
   earlier fire of the same reminder still waits for its turn, Netclaw drops the
   newer fire and logs `reminder_fire_dropped`.
@@ -85,14 +102,16 @@ Rules:
   incident resolved), call `cancel_reminder` with that reminder's ID so it does
   not keep firing indefinitely.
 
-`cancel_reminder` **disables** the reminder — it stops future executions but
-preserves the definition file on disk for diagnosis and re-enablement.
-`netclaw reminder delete <id>` permanently deletes a reminder and its history.
+`cancel_reminder` deletes a one-shot reminder and disables a recurring reminder.
+A disabled recurring reminder keeps its definition, so `netclaw reminder enable <id>`
+can start it again. `netclaw reminder delete <id>` permanently deletes any reminder
+and its history.
 
 Reminders that hit 5 consecutive failures are auto-disabled with a
-`ReminderAutoDisabled` critical alert. The definition stays on disk so the
-operator can diagnose and re-enable after fixing the root cause. Both execution
-failures and scheduling failures count toward the same threshold.
+`ReminderAutoDisabled` critical alert. A recurring reminder stays on disk, so the
+operator can diagnose and re-enable it after fixing the root cause. A one-shot ends
+as `Failed` instead: its definition is deleted, and its record and history stay for
+12 days. Both execution failures and scheduling failures count toward the same threshold.
 
 A **scheduling failure** is a failure to compute the next fire time. A cron with
 no future occurrence, or an unresolvable `CRON_TZ` time zone, is a scheduling
@@ -105,18 +124,19 @@ A known execution or delivery failure starts the Akka.Reminders retry policy.
 The retry uses bounded backoff and the same durable occurrence identity. A
 successful execution resets the consecutive failure count.
 
-A one-shot reminder stays enabled while an occurrence can retry. After a
-successful acknowledgement, it becomes disabled with a `Completed` outcome. A
-poison one-shot becomes disabled with a `Failed` outcome. Either way the
-definition and its history stay available (`netclaw reminder history <id>`,
-`netclaw reminder status <id>`). A `Completed` one-shot is pruned with its
-history 12 days after it ran. Netclaw never prunes a `Failed` one-shot or any
-recurring reminder, whatever its state; only `netclaw reminder delete <id>`
-removes those (or removes a completed one sooner). Reminders that are disabled
-or auto-disabled do not count in the `failed` figure of `netclaw stats`, which
-counts only enabled reminders with failures. Creating a reminder with the id of
-a completed one-shot replaces it and drops its old history; a failed one-shot
-keeps its id until you delete it.
+A one-shot reminder stays enabled while an occurrence can retry. It deletes
+itself after it runs, after its failures reach the limit, after its expiry time,
+or after it is cancelled. Netclaw then keeps a small record of the end (the
+outcome and the time) and the run history for 12 days. `netclaw reminder status <id>`
+and `netclaw reminder history <id>` work in that period. `netclaw reminder show <id>`
+reports that the reminder ended. `list_reminders` does not show it. A one-shot that
+ended as `Failed` also keeps its prompt in that record. Read it with
+`netclaw reminder status <id>`, and set the reminder again if you need it. To run the
+same one-shot again, call `set_reminder` with the same ID. This starts a new reminder
+and discards the old history and the old record. Netclaw never deletes a recurring
+reminder on its own. Only `netclaw reminder delete <id>` removes it. Reminders that
+are disabled or auto-disabled do not count in the `failed` figure of `netclaw stats`,
+which counts only enabled reminders with failures.
 
 Each attempt has a 20-minute inactivity limit and a one-hour absolute limit.
 The durable acknowledgement lease is 70 minutes. A daemon crash therefore lets

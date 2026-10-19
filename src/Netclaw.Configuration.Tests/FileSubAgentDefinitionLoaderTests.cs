@@ -79,7 +79,6 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
             description: Deep research
             tools: [web_search, web_fetch]
             modelRole: Main
-            timeoutSeconds: 120
             visibility: user-facing
             emitStructuredFindings: true
             ---
@@ -97,13 +96,12 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
         Assert.Contains("Follow sources carefully.", profile.SystemPrompt);
         Assert.Equal(new[] { "web_search", "web_fetch" }, profile.ToolNames);
         Assert.Equal(ModelRole.Main, profile.ModelRole);
-        Assert.Equal(120, profile.TimeoutSeconds);
         Assert.True(profile.EmitStructuredFindings);
         Assert.Equal(SubAgentVisibility.UserFacing, profile.Visibility);
     }
 
     [Fact]
-    public void LoadAll_defaults_model_role_to_compaction_and_timeout_to_60()
+    public void LoadAll_defaults_model_role_to_compaction()
     {
         WriteAgent("minimal.md", """
             ---
@@ -119,7 +117,6 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
 
         var profile = Assert.Single(results);
         Assert.Equal(ModelRole.Compaction, profile.ModelRole);
-        Assert.Equal(60, profile.TimeoutSeconds);
         Assert.False(profile.EmitStructuredFindings);
         Assert.Equal(SubAgentVisibility.UserFacing, profile.Visibility);
     }
@@ -310,41 +307,60 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
     }
 
     [Fact]
-    public void LoadAll_rejects_out_of_range_timeout_overrides_with_warnings()
+    public void LoadAll_keeps_profiles_with_obsolete_timeoutSeconds_and_warns_once_per_file()
     {
-        // Non-positive timeoutSeconds would throw when armed on the scheduler; an
-        // out-of-range value silently exceeds the documented ceiling. The frontmatter
-        // path bypasses JSON-schema validation, so the loader must fail loud here.
-        WriteAgent("zero-timeout.md", """
+        // timeoutSeconds is obsolete. Any value, in range or not, must not reject the profile.
+        // The loader warns once per file so the operator deletes the key.
+        var outOfRange = WriteAgent("legacy-900.md", """
             ---
-            name: zero-timeout
-            description: Non-positive inter-delta budget
-            timeoutSeconds: 0
-            ---
-
-            body
-            """);
-
-        WriteAgent("negative-timeout.md", """
-            ---
-            name: negative-timeout
-            description: Negative inter-delta budget
-            timeoutSeconds: -5
+            name: legacy-900
+            description: Obsolete key with an out-of-range value
+            timeoutSeconds: 900
             ---
 
             body
             """);
 
-        WriteAgent("huge-timeout.md", """
+        var inRange = WriteAgent("legacy-120.md", """
             ---
-            name: huge-timeout
-            description: Inter-delta budget beyond the 600s ceiling
-            timeoutSeconds: 999
+            name: legacy-120
+            description: Obsolete key with an in-range value
+            timeoutSeconds: 120
             ---
 
             body
             """);
 
+        WriteAgent("no-key.md", """
+            ---
+            name: no-key
+            description: No obsolete key
+            ---
+
+            body
+            """);
+
+        var results = _loader.LoadAll();
+
+        Assert.Equal(new[] { "legacy-120", "legacy-900", "no-key" }, results.Select(p => p.Name));
+
+        foreach (var path in new[] { outOfRange, inRange })
+        {
+            var warning = Assert.Single(_logger.Warnings, w =>
+                w.Contains(path, StringComparison.Ordinal)
+                && w.Contains("timeoutSeconds", StringComparison.Ordinal));
+            Assert.Contains("obsolete", warning, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("ignored", warning, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.DoesNotContain(_logger.Warnings, w => w.Contains("no-key.md", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void LoadAll_rejects_out_of_range_prefill_timeout_overrides_with_warnings()
+    {
+        // The frontmatter path bypasses JSON-schema validation, so the loader must fail loud
+        // on an out-of-range prefill budget.
         WriteAgent("huge-prefill.md", """
             ---
             name: huge-prefill
@@ -355,12 +371,10 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
             body
             """);
 
-        // In range — must still load.
-        WriteAgent("valid-overrides.md", """
+        WriteAgent("valid-prefill.md", """
             ---
-            name: valid-overrides
-            description: Valid overrides
-            timeoutSeconds: 90
+            name: valid-prefill
+            description: Valid prefill override
             prefillTimeoutSeconds: 600
             ---
 
@@ -370,19 +384,9 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
         var results = _loader.LoadAll();
 
         var profile = Assert.Single(results);
-        Assert.Equal("valid-overrides", profile.Name);
-        Assert.Equal(90, profile.TimeoutSeconds);
+        Assert.Equal("valid-prefill", profile.Name);
         Assert.Equal(600, profile.PrefillTimeoutSeconds);
 
-        Assert.Contains(_logger.Warnings, w =>
-            w.Contains("zero-timeout.md", StringComparison.Ordinal)
-            && w.Contains("timeoutSeconds", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(_logger.Warnings, w =>
-            w.Contains("negative-timeout.md", StringComparison.Ordinal)
-            && w.Contains("timeoutSeconds", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(_logger.Warnings, w =>
-            w.Contains("huge-timeout.md", StringComparison.Ordinal)
-            && w.Contains("timeoutSeconds", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(_logger.Warnings, w =>
             w.Contains("huge-prefill.md", StringComparison.Ordinal)
             && w.Contains("prefillTimeoutSeconds", StringComparison.OrdinalIgnoreCase));

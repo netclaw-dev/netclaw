@@ -134,6 +134,97 @@ public sealed class SecurityPolicyDoctorCheckTests : IDisposable
         Assert.Equal("Config File", result.Name);
     }
 
+    [Fact]
+    public async Task ToolsShellMode_DiffersFromSecurityShellMode_Warns()
+    {
+        WriteConfig("""
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Personal", "ShellExecutionMode": "HostAllowed", "StrictDefaults": true },
+              "Tools": { "ShellMode": "SandboxOnly" }
+            }
+            """);
+
+        var result = await new SecurityPolicyDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Equal("Security Policy", result.Name);
+        Assert.Contains(
+            "Tools.ShellMode is SandboxOnly but Security.ShellExecutionMode is HostAllowed. The daemon uses Tools.ShellMode.",
+            result.Message);
+    }
+
+    [Fact]
+    public async Task ToolsShellMode_MatchesSecurityShellMode_Passes()
+    {
+        WriteConfig("""
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team", "ShellExecutionMode": "SandboxOnly", "StrictDefaults": true },
+              "Tools": { "ShellMode": "SandboxOnly" }
+            }
+            """);
+
+        var result = await new SecurityPolicyDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public async Task ToolsShellMode_Absent_Passes()
+    {
+        WriteConfig("""
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team", "ShellExecutionMode": "SandboxOnly", "StrictDefaults": true },
+              "Tools": { }
+            }
+            """);
+
+        var result = await new SecurityPolicyDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Theory]
+    [InlineData("Security", "tools")]
+    [InlineData("security", "Tools")]
+    [InlineData("security", "tools")]
+    public async Task ToolsShellMode_SectionNamesInAnyCase_Warns(string securityKey, string toolsKey)
+    {
+        // The daemon binds configuration keys without case, so the check must match section names without case.
+        WriteConfig($$"""
+            {
+              "configVersion": 1,
+              "{{securityKey}}": { "DeploymentPosture": "Team", "ShellExecutionMode": "Off", "StrictDefaults": true },
+              "{{toolsKey}}": { "ShellMode": "HostAllowed" }
+            }
+            """);
+
+        var result = await new SecurityPolicyDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Tools.ShellMode is HostAllowed but Security.ShellExecutionMode is Off.", result.Message);
+    }
+
+    [Fact]
+    public async Task ToolsShellMode_Mismatch_RemediationNamesBothFixes()
+    {
+        WriteConfig("""
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team", "ShellExecutionMode": "SandboxOnly", "StrictDefaults": true },
+              "Tools": { "ShellMode": "Off" }
+            }
+            """);
+
+        var result = await new SecurityPolicyDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Remove Tools.ShellMode so the shell mode of the posture applies", result.Remediation);
+        Assert.Contains("set Tools.ShellMode and Security.ShellExecutionMode to the same value", result.Remediation);
+    }
+
     private void WriteConfig(object config)
     {
         var options = new JsonSerializerOptions { WriteIndented = true };

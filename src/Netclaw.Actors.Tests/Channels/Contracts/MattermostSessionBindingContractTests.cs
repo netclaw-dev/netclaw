@@ -109,6 +109,12 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
     protected override void SetReplyClientThrowsOnce(Exception ex)
         => _replyClient.ThrowOnceOnPost = ex;
 
+    protected override void SetReplyClientThrowsInOrder(params Exception[] exceptions)
+    {
+        foreach (var exception in exceptions)
+            _replyClient.ThrowInOrderOnPosts.Enqueue(exception);
+    }
+
     protected override void ClearReplyClientThrows()
         => _replyClient.ThrowOnPost = null;
 
@@ -172,15 +178,27 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
             ReceivedAt: TimeProvider.System.GetUtcNow());
     }
 
+    private void CarryOver(IEnumerable<Exception> pendingOrdered)
+    {
+        foreach (var exception in pendingOrdered)
+            _replyClient.ThrowInOrderOnPosts.Enqueue(exception);
+    }
+
     private void ResetReplyClient()
     {
         var pendingThrow = _replyClient.ThrowOnPost;
         var pendingUploadThrow = _replyClient.ThrowOnUpload;
+        // Keep the one-shot failure too. Dropping it made every "fail one post" contract test pass
+        // without a failed post.
+        var pendingThrowOnce = _replyClient.ThrowOnceOnPost;
+        var pendingOrdered = _replyClient.ThrowInOrderOnPosts.ToArray();
         _replyClient = new RecordingMattermostReplyClient
         {
             ThrowOnPost = pendingThrow,
+            ThrowOnceOnPost = pendingThrowOnce,
             ThrowOnUpload = pendingUploadThrow
         };
+        CarryOver(pendingOrdered);
     }
 
     private IActorRef CreateActorCore(
@@ -231,7 +249,7 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
                 FileName = "report.txt",
                 MimeType = new Netclaw.Media.MimeType("text/plain")
             },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()));

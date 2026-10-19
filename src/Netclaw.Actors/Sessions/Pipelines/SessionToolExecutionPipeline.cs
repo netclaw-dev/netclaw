@@ -14,7 +14,9 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Security;
@@ -186,6 +188,7 @@ internal sealed class SessionToolBatch
             _toolCalls = Array.AsReadOnly(value.ToArray());
         }
     }
+    public IReadOnlySet<string> RefusedCallIds { get; init; } = new HashSet<string>();
     public TurnContext TurnContext { get; }
     public ToolRunScope RunScope { get; }
     public required ToolExecutionTimeout DefaultTimeout { get; init; }
@@ -320,7 +323,7 @@ internal sealed class SessionToolExecutionPipeline
                         result.Receipt,
                         batch.SetWorkingDirectoryAvailable)
                 };
-                batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result));
+                batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result, batch.CancellationToken));
                 return result;
             });
             var results = await Task.WhenAll(tasks);
@@ -339,11 +342,11 @@ internal sealed class SessionToolExecutionPipeline
                         (receipt as ToolInvocationReceipt.Correction)?.RemediationCode.ToString());
             }
 
-            batch.ReplyTo.Tell(new ToolExecutionBatchCompleted());
+            batch.ReplyTo.Tell(new ToolExecutionBatchCompleted(batch.CancellationToken));
         }
         catch (TimeoutException ex)
         {
-            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex });
+            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, DispatchToken = batch.CancellationToken });
         }
         catch (OperationCanceledException) when (batch.CancellationToken.IsCancellationRequested)
         {
@@ -352,7 +355,7 @@ internal sealed class SessionToolExecutionPipeline
         }
         catch (Exception ex)
         {
-            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex });
+            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, DispatchToken = batch.CancellationToken });
         }
     }
 
@@ -387,13 +390,25 @@ internal sealed class SessionToolExecutionPipeline
             return new ToolCallResult(new SerializableChatMessage
             {
                 Role = Protocol.ChatRole.Tool,
-                Content = rejection.Message,
+                Content = batch.RefusedCallIds.Contains(tc.CallId)
+                    ? $"{rejection.Message}\n{ToolCycleMessages.Correction}" : rejection.Message,
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             }, [], [], [], authorizationAttemptId, FailureCode: rejection.DenyReason,
-                Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
+                Receipt: batch.RefusedCallIds.Contains(tc.CallId)
+                    ? new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle)
+                    : new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
         }
 
+        if (batch.RefusedCallIds.Contains(tc.CallId))
+        {
+            var correction = new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle);
+            return new ToolCallResult(new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool, ToolCallId = new ToolCallId(tc.CallId),
+                Name = tc.Name, Content = ToolCycleMessages.Correction
+            }, [], [], [], authorizationAttemptId, Receipt: correction);
+        }
         var meta = interpretation.Meta;
         tc = interpretation.Cleaned;
 
@@ -453,30 +468,8 @@ internal sealed class SessionToolExecutionPipeline
 
             if (!info.IsStarted && info.Success)
             {
-                foreach (var finding in info.Findings)
-                {
-                    var findingDecision = ReviewSubAgentFinding(finding, batch.SessionId);
-                    acceptedFindings.Add(new AcceptedSubAgentFinding
-                    {
-                        RunId = info.RunId,
-                        AgentName = new SubAgents.AgentName(info.AgentName),
-                        Duration = info.Duration,
-                        Shape = finding.Shape,
-                        Title = finding.Title,
-                        Content = finding.Content,
-                        Kind = finding.Kind,
-                        Sensitivity = finding.Sensitivity,
-                        RecallMode = finding.RecallMode,
-                        UpdateSemantics = finding.UpdateSemantics,
-                        Confidence = finding.Confidence,
-                        Durability = finding.Durability,
-                        Reusability = finding.Reusability,
-                        Evidence = finding.Evidence,
-                        FreshnessAtMs = finding.FreshnessAtMs,
-                        Decision = findingDecision.Decision,
-                        DecisionReason = findingDecision.Reason
-                    });
-                }
+                acceptedFindings.AddRange(ReviewChildFindings(info.RunId,
+                    new SubAgents.AgentName(info.AgentName), info.Duration, info.Findings, batch.SessionId));
             }
         });
         var approvalBridge = CanRequestInteractiveApproval(batch.TurnContext)
@@ -492,8 +485,18 @@ internal sealed class SessionToolExecutionPipeline
                 batch.TurnContext.HasThirdPartyAdoptedContext,
                 batch.TurnContext.AdoptedSpeakerIds)
             : null;
+        var spawnChildActor = batch.RunScope.SpawnChildActor
+            ?? throw new InvalidOperationException("A session tool batch requires its owner callback.");
         var callScope = batch.RunScope with
         {
+            SpawnChildActor = (request, name, token) => spawnChildActor(request switch
+            {
+                PreparedChildStart prepared => new AcceptChildStart(prepared,
+                    new ChildRunStartKey.Tool(batch.TurnContext.SessionId, batch.TurnContext.TurnId.Value,
+                        new ToolCallId(tc.CallId)), batch.TurnContext.ToRecord(), tc.Name, token),
+                ChildRunControlRequest control => new ChildRunControl(control.RunId, control.Cancel, batch.TurnContext.ToRecord()),
+                _ => request
+            }, name, token),
             InteractiveApproval = approvalBridge is null
                 ? new InteractiveApprovalCapability.Unavailable()
                 : new InteractiveApprovalCapability.Available(approvalBridge)
@@ -810,16 +813,8 @@ internal sealed class SessionToolExecutionPipeline
         {
             var stream = executor.ExecuteStreamAsync(toolCall, context, cancellationToken);
 
-            // Self-monitoring tools (spawn_agent) own their liveness end to end and
-            // always drive their stream to a terminal item, so the parent does not
-            // supervise them at all — it drains to that terminal item under caller
-            // (turn/user) cancellation only. For spawn_agent the terminal item is
-            // produced by SpawnAgentTool's stream, which completes when SpawnAsync
-            // returns; SpawnAsync's finally unconditionally completes the activity
-            // channel, and SubAgentActor.PostStop guarantees the reply that lets
-            // SpawnAsync return even on a crash. (Note: PostStop alone only unblocks
-            // the spawner Ask — the terminal stream item depends on that finally
-            // running.)
+            // Self-monitoring tools own their terminal stream contract.
+            // Caller cancellation still bounds their lifetime.
             if (executor.GetLivenessMode(toolCall) == ToolLivenessMode.SelfMonitoring)
                 return await DrainToCompletionAsync(stream, toolCall.Name, cancellationToken);
 
@@ -877,6 +872,24 @@ internal sealed class SessionToolExecutionPipeline
     /// Reviews a sub-agent finding to decide whether it should be accepted,
     /// deferred, or rejected for memory persistence.
     /// </summary>
+    internal static IReadOnlyList<AcceptedSubAgentFinding> ReviewChildFindings(
+        SubAgentRunId runId, SubAgents.AgentName agentName, TimeSpan duration,
+        IEnumerable<SubAgentFinding> findings, SessionId sessionId)
+        => findings.Select(finding =>
+        {
+            var decision = ReviewSubAgentFinding(finding, sessionId);
+            return new AcceptedSubAgentFinding
+            {
+                RunId = runId, AgentName = agentName, Duration = duration,
+                Shape = finding.Shape, Title = finding.Title, Content = finding.Content,
+                Kind = finding.Kind, Sensitivity = finding.Sensitivity, RecallMode = finding.RecallMode,
+                UpdateSemantics = finding.UpdateSemantics, Confidence = finding.Confidence,
+                Durability = finding.Durability, Reusability = finding.Reusability,
+                Evidence = finding.Evidence, FreshnessAtMs = finding.FreshnessAtMs,
+                Decision = decision.Decision, DecisionReason = decision.Reason
+            };
+        }).ToArray();
+
     internal static SubAgentFindingReviewResult ReviewSubAgentFinding(
         SubAgentFinding finding,
         SessionId sessionId)

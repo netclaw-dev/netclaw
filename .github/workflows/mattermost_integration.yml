@@ -1,0 +1,120 @@
+name: mattermost_integration
+
+# Runs Netclaw.Channels.Mattermost.IntegrationTests against a real Mattermost
+# server in Docker. The 3-OS matrix in pr_validation.yml cannot run them: the
+# fixture opts in through NETCLAW_RUN_MATTERMOST_INTEGRATION_TESTS=1 and
+# otherwise reports every test as skipped. Two behavior changes (#2402, #2511)
+# broke MattermostReminderIntegrationTests without any CI signal (issue #2535).
+#
+# This job runs on ubuntu only, because only the Linux runner has Docker.
+# It runs:
+#   - nightly, to catch drift in the pinned server image and dependencies;
+#   - on a pull request that touches the Mattermost channel, the shared channel
+#     code, reminders, sessions, the session protocol, or a dependency pin
+#     (Directory.Packages.props, global.json).
+# Nightly runs fire from the default branch only.
+#
+# Do not make this a required check. A path filter on a required check blocks
+# every pull request that does not match the filter.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 06:30 UTC daily.
+    - cron: '30 6 * * *'
+  pull_request:
+    branches:
+      - dev
+      - feature/*
+    paths:
+      - 'src/Netclaw.Channels.Mattermost/**'
+      - 'src/Netclaw.Channels.Mattermost.Bootstrap/**'
+      - 'src/Netclaw.Channels.Mattermost.IntegrationTests/**'
+      - 'src/Netclaw.Channels/**'
+      - 'src/Netclaw.Actors/Channels/**'
+      - 'src/Netclaw.Actors/Protocol/**'
+      - 'src/Netclaw.Actors/Reminders/**'
+      - 'src/Netclaw.Actors/Sessions/**'
+      - 'Directory.Packages.props'
+      - 'global.json'
+      - '.github/workflows/mattermost_integration.yml'
+
+concurrency:
+  group: mattermost_integration-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mattermost-integration:
+    name: Mattermost Integration (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      NETCLAW_RUN_MATTERMOST_INTEGRATION_TESTS: '1'
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Restore .NET tools"
+        run: dotnet tool restore
+
+      # The fixture reports every test as skipped when Docker is missing, and a
+      # skipped run passes. Fail here so a missing daemon is a red job.
+      - name: "Check Docker"
+        run: docker info
+
+      - name: "Update release notes"
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: "dotnet build"
+        run: dotnet build src/Netclaw.Channels.Mattermost.IntegrationTests -c Release
+
+      - name: "dotnet test (Mattermost integration)"
+        # blame-hang aborts a stalled run and writes a dump, as in pr_validation.yml.
+        run: >
+          dotnet test src/Netclaw.Channels.Mattermost.IntegrationTests
+          -c Release --no-build
+          --logger "trx;LogFileName=mattermost.trx"
+          --blame-hang-timeout 600s --blame-hang-dump-type full
+          --results-directory ./TestResults
+
+      # A skipped test passes silently. The job exists to run these tests, so a
+      # skip or an empty run is a failure.
+      - name: "Require that the tests ran"
+        if: success()
+        shell: bash
+        run: |
+          trx=$(find ./TestResults -name 'mattermost.trx' | head -n 1)
+          if [ -z "$trx" ]; then
+            echo "No TRX file. The test run produced no result." >&2
+            exit 1
+          fi
+          passed=$(grep -c 'outcome="Passed"' "$trx" || true)
+          skipped=$(grep -c 'outcome="NotExecuted"' "$trx" || true)
+          echo "Passed: $passed  Skipped: $skipped"
+          if [ "$skipped" -ne 0 ] || [ "$passed" -eq 0 ]; then
+            echo "The Mattermost integration tests did not all run." >&2
+            exit 1
+          fi
+
+      - name: "Upload test results"
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: mattermost-integration-results
+          path: ./TestResults
+          if-no-files-found: ignore
+          retention-days: 14

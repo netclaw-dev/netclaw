@@ -171,7 +171,7 @@ Common failure patterns:
 
 The `Netclaw.Channels.Mattermost.IntegrationTests` project boots a real
 `mattermost/mattermost-preview` container via Testcontainers. By design it is
-excluded from required CI — a developer or dedicated CI lane opts in with:
+excluded from the required 3-OS matrix — a developer or the `mattermost_integration` lane opts in with:
 
 ```bash
 NETCLAW_RUN_MATTERMOST_INTEGRATION_TESTS=1 \
@@ -181,6 +181,11 @@ NETCLAW_RUN_MATTERMOST_INTEGRATION_TESTS=1 \
 Without the env var, every test in the collection self-skips. Docker must be
 reachable when the env var is set; otherwise the suite still degrades to
 skipped rather than failed.
+
+The `mattermost_integration` workflow sets the env var on `ubuntu-latest`. It
+runs nightly and on a pull request that changes the Mattermost channel,
+`Netclaw.Channels`, reminders, sessions, the session protocol, or a dependency pin
+(`Directory.Packages.props`, `global.json`). That job fails if a test is skipped.
 
 ## Security notes
 

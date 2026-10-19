@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.109.1"
+  version: "2.117.0"
 ---
 
 # Netclaw Operations
@@ -197,6 +197,25 @@ receive a read-only project/recent-file snapshot. Successful and partial runs
 return only file edits confirmed through their own tools; failed or cancelled
 runs contribute no parent working-context changes.
 
+For an explicit task-worker profile install or update, read `references/agent-profiles.md` through `skill_read_resource`.
+Use `agent-coordination` for task composition and independent review.
+
+## Child agent runs
+
+`spawn_agent`, routed `skill_load`, and a routed slash command return after durable acceptance.
+The response contains `run_id` and `scope_id`. Acceptance does not mean completion.
+Continue independent work. A ready child result arrives as tool output at the next safe parent boundary.
+Another child's unfinished work does not delay a ready result.
+Use `check_agent_run` with the returned `run_id` for a status check.
+The original owner can see `pending_approval_count` and request cancellation with `cancel: true`.
+A cancellation acknowledgement reports intent. Wait for the terminal result before you report that the child stopped.
+Do not poll status in a loop. Use it when the user needs a status update or intervention.
+Do not wait or poll for a child in a headless run. End the turn. The result starts a later parent turn.
+The terminal result includes authorized log and artifact paths when available.
+Use normal file tools for those exact paths. Do not derive a broader session path.
+A lost child reports uncertainty. Recovery does not repeat its external work.
+If result evidence preparation fails, do not assume parent context adoption.
+
 ## Scheduling & Background Jobs
 
 Reminders: `set_reminder` with schedule type `once` / `interval` / `cron`. Always
@@ -214,6 +233,16 @@ when done; background jobs are killed when the session passivates).
 Full detail — delivery contract, proactive channel messaging, approval scoping,
 job lifecycle — is in
 `skill_read_resource('netclaw-operations', 'references/scheduling.md')`.
+
+## Repeated tool calls
+
+Two equal feedback rounds for the same tool and arguments cause a correction before the next dispatch.
+Change the approach after that correction. Another repeat ends the turn without another model request.
+The turn then fails with `kind=ModelBehavior`. A text answer after the correction completes the turn.
+Unrelated calls and context compaction do not erase this evidence.
+An authorized status query for a pending background job can repeat through the normal access checks.
+`MaxToolIterationsPerTurn` is a legacy config field. The runtime no longer enforces its fixed limit.
+Deadlines, cancellation, and tool policy still apply.
 
 ## Tool argument validation
 
@@ -244,16 +273,17 @@ fix and re-issue once, do not retry the same shape:
 A repeated action-and-outcome correction means that no requested call ran.
 Choose a different action or finish the task from the available evidence.
 Do not repeat the blocked batch.
-Netclaw disables tools for the turn if the same blocked batch appears again.
+If the same blocked call appears again, Netclaw ends the turn as a `ModelBehavior` failure.
 Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
 A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
-If a text-only response contains tool calls, Netclaw rejects those calls and reports a `ModelBehavior` failure.
+A repeat of a refused call after the correction is a `ModelBehavior` failure.
 Repeated empty replies get the same `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
+A text reply that ends with the finish reason `length` and has no tool call is also `ModelBehavior`. Netclaw does not post the cut-off text.
+One model call that streams only thinking for three times `Session.NoProgressTimeoutSeconds` is also `ModelBehavior`.
 An empty reply with no finish reason is `StreamFailure`. A `content_filter` reply is `ProviderFailure`. Both are `infra`.
 A provider outage is not `ModelBehavior`.
-This failure does not prove that the turn exhausted its tool budget.
 
 ## Large tool output
 
@@ -933,11 +963,24 @@ add to it. This applies to `AllowedTools`, `ReadFiles`/`WriteFiles`/`AttachFiles
   not write `Tools.AudienceProfiles`. The daemon computes the profiles from the posture. An
   absent profile is normal and gets the posture default. For the Personal posture, that
   default requires approval for `shell_execute` on Personal.
+- `netclaw doctor` warns when `Tools.ShellMode` and `Security.ShellExecutionMode` have
+  different values. The check name is `Security Policy`. The daemon uses `Tools.ShellMode`
+  first, so that value wins. The warning has no auto-fix. Set both keys to the value that
+  you want. The Exposure Mode screen in `netclaw config` changes only `Daemon.ExposureMode`,
+  `Daemon.Host`, and `Daemon.TrustedProxies`. A release before this fix reset `Security` to
+  `Personal` and `HostAllowed` when that screen saved. Check `Security.DeploymentPosture` in
+  a file that was saved by an older release.
 - Do not write a default list into `netclaw.json` to "make it visible". Write only the key
   that you change.
 
 ## Diagnostics, Kill Switches & Self-Maintenance
 
+A `netclaw chat -p` run waits for open child runs. It ends on the first completed turn that reports none.
+While it waits, stdout shows `[subagent:waiting] <n> open: <run ids>`, and the session log has `WAITING_FOR_CHILDREN`.
+The child text reaches stdout as a `child_run_result` tool result. A background shell job does not hold the run.
+With `--json`, stdout holds one envelope. `response` is the text of the last turn, and `turnResponses` holds each turn.
+A signal, a failed turn, or a stopped session ends the run with exit 1.
+Stderr then has `[headless:open-runs] session=<id> runs=<ids>`. Resume with `netclaw chat --resume <id>`.
 A failed `netclaw chat -p` run exits 1. It prints `[turn:failed] category=<model|infra> kind=<Kind>` on stderr.
 The session log has a `TURN_FAILED: category=... kind=...` record before `TURN_COMPLETED`.
 With `--json`, the stdout envelope has `errorCategory` and `errorKind`.

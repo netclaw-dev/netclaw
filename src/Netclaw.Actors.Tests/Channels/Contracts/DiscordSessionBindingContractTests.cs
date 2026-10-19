@@ -105,6 +105,12 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
     protected override void SetReplyClientThrowsOnce(Exception ex)
         => _replyClient.ThrowOnceOnPost = ex;
 
+    protected override void SetReplyClientThrowsInOrder(params Exception[] exceptions)
+    {
+        foreach (var exception in exceptions)
+            _replyClient.ThrowInOrderOnPosts.Enqueue(exception);
+    }
+
     protected override void ClearReplyClientThrows()
         => _replyClient.ThrowOnPost = null;
 
@@ -167,15 +173,27 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             ReceivedAt: TimeProvider.System.GetUtcNow());
     }
 
+    private void CarryOver(IEnumerable<Exception> pendingOrdered)
+    {
+        foreach (var exception in pendingOrdered)
+            _replyClient.ThrowInOrderOnPosts.Enqueue(exception);
+    }
+
     private void ResetReplyClient()
     {
         var pendingThrow = _replyClient.ThrowOnPost;
         var pendingUploadThrow = _replyClient.ThrowOnUpload;
+        // Keep the one-shot failure too. Dropping it made every "fail one post" contract test pass
+        // without a failed post.
+        var pendingThrowOnce = _replyClient.ThrowOnceOnPost;
+        var pendingOrdered = _replyClient.ThrowInOrderOnPosts.ToArray();
         _replyClient = new RecordingDiscordReplyClient
         {
             ThrowOnPost = pendingThrow,
+            ThrowOnceOnPost = pendingThrowOnce,
             ThrowOnUpload = pendingUploadThrow
         };
+        CarryOver(pendingOrdered);
     }
 
     private IActorRef CreateActorCore(
@@ -227,7 +245,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
                 FileName = "report.txt",
                 MimeType = new Netclaw.Media.MimeType("text/plain")
             },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()));
@@ -265,7 +283,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         // The bot ("bot-account") is not an allowed user, so the proactively
@@ -309,7 +327,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
         var actor = CreateActorCore(
             sid, pipeline, detector, fetcher,
@@ -350,7 +368,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ]);
         var actor = CreateActorCore(
             sid, pipeline, detector, fetcher,
@@ -381,7 +399,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         [
             new TextOutput("hello back") { SessionId = sid },
             new SessionTitleOutput("Release Readout") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
         ], reactive: true);
 
         var actor = CreateActorCore(sid, pipeline, detector);

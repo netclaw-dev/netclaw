@@ -56,6 +56,11 @@ default provider.
    `$EVAL_HOME` is deleted. A throwaway root-in-container cleanup step
    handles files the daemon wrote as UID 0.
 
+A memory warm-up prompt that exits with a nonzero status stops the suite. The
+harness archives its output and status, then stops its private container. A
+trial prompt that exits with a nonzero status does not stop the suite. The
+trial gets an inconclusive state.
+
 The harness preloads `evals/fixtures/config/netclaw.json` into the ephemeral
 home before startup. It auto-approves tools and grants read/write access for the
 Personal audience because headless sessions cannot answer approval prompts or
@@ -139,6 +144,14 @@ The suite runs prompts via `netclaw chat -p` against the eval container and
 verifies both **stdout output** (tool calls, text content) and **daemon
 log patterns** (skill loading, memory recall, checkpoint formation).
 
+Coordination checks separate task accuracy from optional spill-hint uptake and
+child-resume proof. The synthesis observer proves active child work at the
+first parent response, later child completions, and automatic continuation.
+It does not link child tasks to child results or record child tool calls, so it
+cannot prove each child's inspection scope. The artifact case checks a child
+spawn and completion plus the exact parent outcome, but it cannot prove that
+the child inspected the named artifacts.
+
 | Category | Cases | What It Validates |
 |----------|-------|-------------------|
 | Identity & Self-Awareness | 5 | Bot knows its name, version, repo, session ID, and routes all identity-file concerns without a skill dependency |
@@ -148,7 +161,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Grounding & Alignment | 4 | Uses tools to verify facts, admits uncertainty, and resolves announced attachment paths from the authoritative session root |
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
 | Deployment Mission | 1 | Applies the disk mission playbook, loads its required skill, and returns reviewed sales email |
-| Subagents | 3 | Delegates through `spawn_agent`, completes ambiguous work, preserves specialized guidance, and declares a different named project before shell inspection |
+| Subagents | 7 | Covers four existing child tasks and three coordination cases. Checks retained-result and artifact outcomes, child completion, and automatic parent continuation. |
 | Coding Context | 1 | Repeatedly switches between isolated linked worktrees, alternates branch and one-of-four target files by run, and verifies Git grounding, wrong-file/worktree safety, and path-free child handoff |
 | Session Storage | 4 | Verifies managed temporary APIs, parent-child log handoff, and managed worktree creation |
 | Complex Task Execution | 6 | Multi-step tool chains complete successfully, incl. bounded tool output — given only the goal (no handling hints), the agent retrieves a deep line from oversized shell output and from a large file, which is only possible by coping with the bound the way AGENTS.md/skills/steer text direct; and in a session with no shell call, the agent reads the middle of an oversized skill through `tool_output_read` |
@@ -221,6 +234,12 @@ other categories have no reminders. The reminder tools read the files for each
 call. The daemon gives a schedule entry only to a file that exists at startup,
 so a seeded reminder cannot fire during a run.
 
+The weekly disk cleanup reminder fires every Sunday at 03:00 UTC. The setup
+also writes one successful history record at the latest Sunday 03:00 UTC. On
+a Sunday after 03:00 UTC, an empty history made the agent think that the fire
+was missed, and it ran `netclaw reminder status` to check. The record keeps
+the schedule on time for every run day.
+
 The `eval_workspace` MCP fixture adds 18 tools for every category. Their names
 share common words with the built-in tools, as a production catalog does. The
 search case needs them: without those tools, an unranked search still returns
@@ -257,15 +276,14 @@ NETCLAW_EVAL_TIMEOUT=180 \
 | Case | Required evidence |
 |------|-------------------|
 | `tool_cycle_correction` | The third request receives a runtime correction. The model uses `file_read` to complete an alternative. |
-| `tool_cycle_terminal` | The repeated blocked request causes a text-only call. The model reports incomplete work and two completed executions. |
+| `tool_cycle_terminal` | After the model repeats the refused action, Netclaw fails the turn without another model request. The envelope has `errorCategory` `model` and `errorKind` `ModelBehavior`. The turn error reports partial work and two completed executions. |
 | `tool_cycle_compaction` | Normal compaction completes between executions one and two. The third request receives a correction. The model completes an alternative. |
 | `tool_cycle_changed_result` | The same command returns a different result each time. All three executions complete. |
 | `tool_cycle_metadata_repair` | Two requests lack required metadata. The corrected request executes once without a cycle correction. |
 
-The relay scripts only the initial tool requests. Each request has a fresh call ID.
-The real daemon executes tools and emits the intervention. The target model then
-controls the response and any alternative tool use. The fixture never supplies a
-successful final answer.
+The relay scripts the tool requests. Each request has a fresh call ID.
+The daemon executes tools and emits the intervention. The model controls recovery
+after a correction. Netclaw fails the turn with `ModelBehavior` after a repeated refusal.
 
 Each trial uses synthetic files in the isolated workspace. A separate counter
 checks actual side effects. Strict assertions require paired runtime results,
@@ -286,6 +304,25 @@ key through the existing environment variable. It does not accept encrypted keys
 The common archive includes a synthetic relay snapshot and an assertion report.
 These cases cover the parent actor. They do not replace child actor tests,
 private incident replay, or observe-only acceptance evidence.
+
+## Coordination Spill Hint Pair
+
+This opt-in pair runs the same retained-output task with the optional child-inspection hint present and absent.
+The relay removes only that exact hint from provider-bound tool results in the absent arm.
+It preserves the result text, spill call ID, continuation instruction, tool schemas, prompt, and authority.
+The pair runs each arm three times and keeps the configured pass threshold.
+Task accuracy gates each arm. The archive records child calls and completions as separate uptake data.
+The pair does not force child use or prove a causal rate because separate model trials can differ.
+
+```bash
+NETCLAW_EVAL_PROVIDER_TYPE=openai-compatible \
+NETCLAW_EVAL_PROVIDER_ENDPOINT=http://your-model-server:8000/v1 \
+NETCLAW_EVAL_MODEL_ID=your-model \
+NETCLAW_EVAL_CATEGORY='Coordination Spill Hint' \
+NETCLAW_EVAL_RUNS=3 \
+NETCLAW_EVAL_TIMEOUT=300 \
+  ./evals/run-evals.sh
+```
 
 #### Raw-output review of the first fixed run
 
@@ -616,10 +653,10 @@ A trial has one of three states:
 
 **Known limit:** for now, a failed turn is inconclusive. A model behavior
 failure that fails the turn cannot give a FAIL. One example is the tool cycle
-stop, where the model keeps calling tools after the runtime requires a text-only
-reply. The case shows `turn_failed`, and the run exits 3. The CLI must report an
-error category before the harness can tell such a failure from a provider
-outage. A separate .NET change adds the category.
+stop (`tool_cycle_terminal`), where the model repeats a tool call that the
+runtime already refused. The case shows `turn_failed`, and the run exits 3. The
+CLI reports `category=model` for this failure, but the harness does not read the
+category yet.
 
 A `CANCELLED` record in `headless-errors.log` is the normal sign of a cut turn.
 It is not an infrastructure fault, so the verdict does not read that file.

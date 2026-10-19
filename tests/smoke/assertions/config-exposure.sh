@@ -21,6 +21,12 @@ assert_field '.Daemon.Host' 'null' "$config_json" || :
 assert_field '.Daemon.Port' '5299' "$config_json" || :
 assert_field '.Daemon.DisableSelfUpdate' 'true' "$config_json" || :
 assert_field '.Daemon.TrustedProxies' 'null' "$config_json" || :
+assert_field '.Daemon.UpdateChannel' 'beta' "$config_json" || :
+# The save must keep the posture. The old save reset a Team install to Personal / HostAllowed.
+assert_field '.Security.DeploymentPosture' 'Team' "$config_json" || :
+assert_field '.Security.ShellExecutionMode' 'SandboxOnly' "$config_json" || :
+assert_field '.Security.StrictDefaults' 'true' "$config_json" || :
+assert_field '.Tools.ShellMode' 'SandboxOnly' "$config_json" || :
 
 if [[ ! -f "$editor_state_path" ]]; then
   echo "FAIL: ${editor_state_path} does not exist." >&2

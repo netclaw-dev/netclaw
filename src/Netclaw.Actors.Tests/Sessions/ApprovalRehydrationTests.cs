@@ -161,6 +161,142 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         Assert.Equal(1, _toolExecutor.SuccessfulExecutions);
     }
 
+    // Two gated calls open two prompts in one turn. The operator denies the first prompt and then answers it
+    // again with "approve once". The turn is still live, because the second prompt is open. The late answer
+    // must not run the tool. It must fail loud with an "already has an answer" notice, and it must not tell
+    // the operator that the prompt expired. The prompt did not expire. The first answer resolved it.
+    [Fact]
+    public async Task Second_answer_to_a_resolved_live_prompt_grants_nothing_and_says_the_prompt_has_an_answer()
+    {
+        _toolExecutor.GatedTools.Add("shell_execute");
+        _toolExecutor.GatedTools.Add("read_file");
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-second-answer-shell", "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" }),
+            new FunctionCallContent("call-second-answer-read", "read_file",
+                new Dictionary<string, object?> { ["path"] = "README.md" })
+        ];
+        var sessionId = new SessionId("test-channel/second-answer-live-prompt");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("second-answer-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status and read the file",
+            Source = RequesterSource("U-requester")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var prompts = new Dictionary<string, ToolInteractionRequest>(StringComparer.Ordinal);
+        while (prompts.Count < 2)
+        {
+            var prompt = await subscriber.FishForMessageAsync<ToolInteractionRequest>(
+                item => !prompts.ContainsKey(item.CallId.Value),
+                TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+            prompts[prompt.CallId.Value] = prompt;
+        }
+
+        var first = prompts["call-second-answer-shell"].CallId;
+        var firstReply = await sessionManager.Ask<ISessionResponse>(
+            AnswerFrom(sessionId, first, ApprovalOptionKeys.Deny), TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.IsType<CommandAck>(firstReply);
+
+        var secondReply = await sessionManager.Ask<ISessionResponse>(
+            AnswerFrom(sessionId, first, ApprovalOptionKeys.ApproveOnce), TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        var notices = await DrainTextAsync(subscriber);
+
+        Assert.IsType<CommandNack>(secondReply);
+        var expired = notices.Where(text => text.Contains("expired", StringComparison.OrdinalIgnoreCase)).ToArray();
+        Assert.True(expired.Length == 0,
+            $"The first answer resolved the prompt. The second answer got this notice: {string.Join(" | ", expired)}");
+        Assert.Contains(notices, text => text.Contains("already has an answer", StringComparison.Ordinal));
+
+        var lastReply = await sessionManager.Ask<ISessionResponse>(
+            AnswerFrom(sessionId, prompts["call-second-answer-read"].CallId, ApprovalOptionKeys.Deny),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.IsType<CommandAck>(lastReply);
+        var completed = await subscriber.FishForMessageAsync<TurnCompleted>(
+            _ => true, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Completed, completed.Outcome);
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+    }
+
+    // Control for the test above. An answer for a call that never existed, sent during a live wait, still
+    // tells the operator that the prompt expired.
+    [Fact]
+    public async Task Answer_for_a_call_that_never_existed_during_a_live_wait_still_gets_the_expired_notice()
+    {
+        _toolExecutor.GatedTools.Add("shell_execute");
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-unknown-answer-shell", "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+        var sessionId = new SessionId("test-channel/unknown-answer-live-prompt");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("unknown-answer-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status",
+            Source = RequesterSource("U-requester")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var prompt = await subscriber.FishForMessageAsync<ToolInteractionRequest>(
+            _ => true, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        var reply = await sessionManager.Ask<ISessionResponse>(
+            AnswerFrom(sessionId, new Netclaw.Tools.ToolCallId("never-existed"), ApprovalOptionKeys.ApproveOnce),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var notices = await DrainTextAsync(subscriber);
+
+        Assert.IsType<CommandNack>(reply);
+        Assert.Contains(notices, text => text.Contains("approval prompt has expired", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+
+        var denied = await sessionManager.Ask<ISessionResponse>(
+            AnswerFrom(sessionId, prompt.CallId, ApprovalOptionKeys.Deny),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.IsType<CommandAck>(denied);
+    }
+
+    private static ToolInteractionResponse AnswerFrom(SessionId sessionId, Netclaw.Tools.ToolCallId callId, string optionKey)
+        => new()
+        {
+            SessionId = sessionId,
+            CallId = callId,
+            SelectedKey = new ApprovalOptionKey(optionKey),
+            SenderId = new SenderId("U-requester")
+        };
+
+    // The session emits output to subscribers before it replies to the sender. A marker sent after the reply
+    // therefore arrives behind every output that the answer caused.
+    private async Task<List<string>> DrainTextAsync(Akka.TestKit.TestProbe subscriber)
+    {
+        var texts = new List<string>();
+        subscriber.Ref.Tell(Akka.Done.Instance);
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            if (message is TextOutput text)
+                texts.Add(text.Text);
+            return message is Akka.Done;
+        }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        return texts;
+    }
+
     [Fact]
     public async Task Restart_drain_waits_for_active_sibling_then_preserves_its_result()
     {

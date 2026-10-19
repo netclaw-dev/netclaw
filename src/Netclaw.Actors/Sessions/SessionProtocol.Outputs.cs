@@ -179,6 +179,13 @@ public static partial class SessionProtocol
         /// Null for non-reminder turns.
         /// </summary>
         public ReminderId? SourceReminderId { get; init; }
+
+        /// <summary>
+        /// The child runs whose result has not yet had its follow-up parent turn. The session assigns it
+        /// from its durable state for every outcome. Empty means no open run, and a client reads an absent
+        /// wire field as empty. See the "open child run" term in the engineering glossary.
+        /// </summary>
+        public required IReadOnlyList<SubAgentRunId> OpenChildRunIds { get; init; }
     }
 
     /// <summary>
@@ -218,10 +225,11 @@ public static partial class SessionProtocol
         InputCompatibility,
 
         /// <summary>
-        /// The model broke a rule that the runtime enforces: it requested tools after a text-only stop,
-        /// or it kept returning empty replies and each stream finished with Stop or Length. The provider
-        /// worked. The model did not comply. Empty replies from a stream with no finish reason are
-        /// <see cref="StreamFailure"/>.
+        /// The model broke a rule that the runtime enforces: it repeated a tool call after the runtime
+        /// refused that call, it kept returning empty replies and each stream finished with Stop or
+        /// Length, it ended a text reply on the output limit (Length) with no tool call, or one call
+        /// streamed only thinking until the thinking cap. The provider worked. The model did not comply.
+        /// Empty replies from a stream with no finish reason are <see cref="StreamFailure"/>.
         /// </summary>
         /// <remarks>
         /// New members go last. The wire carries this enum by name, and an older reader maps an

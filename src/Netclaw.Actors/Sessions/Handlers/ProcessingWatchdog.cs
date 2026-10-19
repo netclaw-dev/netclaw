@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Sessions.Handlers;
 
@@ -19,6 +20,15 @@ internal sealed class ProcessingWatchdog
 
     private static readonly object TimerKey = new();
     private static readonly object ProgressTimerKey = new();
+    private static readonly object ThinkingCapTimerKey = new();
+
+    /// <summary>
+    /// One model call may stream only thinking for this many times the no-progress
+    /// deadline. Thinking resets the no-progress deadline, so without this cap a
+    /// model that thinks forever is never stopped.
+    /// </summary>
+    public const int ThinkingCapMultiplier = 3;
+
     private long _operationId;
     private string? _operationName;
     private TimeSpan? _noProgressDeadline;
@@ -34,6 +44,8 @@ internal sealed class ProcessingWatchdog
     /// bounds a backend that streams keepalives forever without ever producing a
     /// real token, which the liveness timer alone cannot catch because keepalives
     /// refresh it. Pass null to bound the operation by liveness only.
+    /// The same deadline also arms the thinking cap: <see cref="ThinkingCapMultiplier"/>
+    /// times the deadline, restarted by any answer update (see <see cref="OnStreamProgress"/>).
     /// </summary>
     public void Start(string operationName, TimeSpan timeout, ITimerScheduler timers, TimeSpan? noProgressDeadline = null)
     {
@@ -50,12 +62,14 @@ internal sealed class ProcessingWatchdog
         // for this one. The no-progress expiry carries NoProgress=true so the
         // handler distinguishes it from a liveness tick.
         timers.Cancel(ProgressTimerKey);
+        timers.Cancel(ThinkingCapTimerKey);
         if (noProgressDeadline is { } deadline)
         {
             timers.StartSingleTimer(
                 ProgressTimerKey,
                 new ProcessingWatchdogExpired(_operationId, operationName, NoProgress: true),
                 deadline);
+            StartThinkingCapTimer(timers);
         }
     }
 
@@ -66,6 +80,7 @@ internal sealed class ProcessingWatchdog
     {
         timers.Cancel(TimerKey);
         timers.Cancel(ProgressTimerKey);
+        timers.Cancel(ThinkingCapTimerKey);
         _operationName = null;
         _noProgressDeadline = null;
     }
@@ -78,18 +93,24 @@ internal sealed class ProcessingWatchdog
     /// substantive delta (so a content-free keepalive cannot shrink the
     /// wait-for-first-token window), the inter-delta budget after. A substantive
     /// delta also resets the no-progress deadline (if armed); keepalives never do,
-    /// which is what lets that deadline catch a heartbeat-only wedge. Returns the
-    /// updated "already promoted" flag for the caller to thread back in.
+    /// which is what lets that deadline catch a heartbeat-only wedge. Only an
+    /// <see cref="StreamActivity.Answer"/> update resets the thinking cap, so a call
+    /// that streams only thinking reaches the cap. Returns the updated "already
+    /// promoted" flag for the caller to thread back in.
     /// </summary>
     public bool OnStreamProgress(
-        bool isSubstantive,
+        StreamActivity activity,
         bool alreadyPromoted,
         TimeSpan prefillTimeout,
         TimeSpan interDeltaTimeout,
         ITimerScheduler timers)
     {
+        var isSubstantive = activity != StreamActivity.Keepalive;
         if (isSubstantive)
             RestartProgressTimer(timers);
+
+        if (activity == StreamActivity.Answer)
+            StartThinkingCapTimer(timers);
 
         if (isSubstantive && !alreadyPromoted)
         {
@@ -110,6 +131,17 @@ internal sealed class ProcessingWatchdog
             TimerKey,
             new ProcessingWatchdogExpired(_operationId, _operationName),
             timeout);
+    }
+
+    private void StartThinkingCapTimer(ITimerScheduler timers)
+    {
+        if (_operationName is not LlmCall || _noProgressDeadline is not { } deadline)
+            return;
+
+        timers.StartSingleTimer(
+            ThinkingCapTimerKey,
+            new ProcessingWatchdogExpired(_operationId, _operationName, ThinkingCap: true),
+            deadline * ThinkingCapMultiplier);
     }
 
     private void RestartProgressTimer(ITimerScheduler timers)

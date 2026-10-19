@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Reminders;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
 
@@ -53,6 +55,8 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     public IReadOnlyList<SerializableChatMessage> History { get; init; } =
         Array.Empty<SerializableChatMessage>();
 
+    public IReadOnlyList<BackgroundChildRun> ChildRuns { get; init; } = [];
+
     public int TurnCount { get; init; }
 
     public string? Title { get; init; }
@@ -63,6 +67,21 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     /// Null when no turn is eligible (initial state or retries exhausted).
     /// </summary>
     public TurnNumber? EligibleDeliveryTurnNumber { get; init; }
+
+    /// <summary>
+    /// The reminder fire key (<c>{reminderId}:{fireTimeMs}</c>) that started the eligible turn.
+    /// A session that restores from a snapshot does not replay that turn's <c>TurnRecorded</c> event,
+    /// so a failed post of a reminder reply would find no reminder without this value. The session writes
+    /// it only while the eligible turn has no report, so a later incarnation cannot alert twice for one reply.
+    /// Null for an old snapshot, for a turn that a person started, and for a reported turn.
+    /// </summary>
+    public ReminderId? EligibleDeliveryReminderId { get; init; }
+
+    /// <summary>
+    /// True when a sub-agent ran a routed skill for the eligible turn. The session never retries such a
+    /// turn on the main model, and a restored session must agree with a live one. False for an old snapshot.
+    /// </summary>
+    public bool? EligibleDeliveryTurnRoutedSkill { get; init; }
 
     /// <summary>
     /// Durable working-context state (recent files). Null when the session
@@ -78,8 +97,15 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     public IReadOnlyList<ActiveJobInfo> ActiveBackgroundJobs { get; init; } =
         Array.Empty<ActiveJobInfo>();
 
+    /// <summary>Background job IDs that the session already accepted.</summary>
+    public IReadOnlyList<BackgroundJobId> ProcessedBackgroundJobIds { get; init; } =
+        [];
+
     public IReadOnlyList<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; init; } =
         Array.Empty<AdoptedContextSnapshotRecord>();
+
+    public IReadOnlyList<LegacyCoordinationEvidence> LegacyCoordinationEvidence { get; init; } =
+        Array.Empty<LegacyCoordinationEvidence>();
 
     public IReadOnlyList<SessionProtocol.InputAdmitted> PendingInputs { get; init; } =
         Array.Empty<SessionProtocol.InputAdmitted>();

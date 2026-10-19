@@ -21,8 +21,14 @@ public sealed class SystemdUserServiceTests : IDisposable
     private SystemdUserService ServiceFor(FakeSystemCommandRunner runner, string homePath, string? environ = null)
         => new(homePath, WriteUnit(), runner, enabledOnThisPlatform: true, environReader: _ => environ);
 
+    // A process with no NETCLAW_HOME serves $HOME/.netclaw, with the HOME of its own environment. The default
+    // home of the test process is the one that the process names here.
     private static string Environ(string? netclawHome) =>
-        "PATH=/usr/bin\0" + (netclawHome is null ? string.Empty : $"NETCLAW_HOME={netclawHome}\0") + "LANG=C\0";
+        "PATH=/usr/bin\0"
+        + (netclawHome is null
+            ? $"HOME={Path.GetDirectoryName(SystemdUserService.DefaultHomePath)}\0"
+            : $"NETCLAW_HOME={netclawHome}\0")
+        + "LANG=C\0";
 
     private string ScratchHome => Path.Combine(_dir.Path, "scratch-home");
 
@@ -98,6 +104,22 @@ public sealed class SystemdUserServiceTests : IDisposable
 
         AssertKind(SystemdUserServiceOwnershipKind.Managed,
             await ServiceFor(runner, DefaultHome, Environ(null)).GetStopOwnershipAsync(RunningAs(4242)));
+    }
+
+    [Theory]
+    [InlineData("HOME=/home/another-user")]
+    [InlineData("")]
+    public async Task Stop_ReturnsUnmanaged_WhenTheProcessHasNoNetclawHomeAndItsOwnHomeFolderIsNotThisDefaultHome(string homeEntry)
+    {
+        // B1: the HOME of the process decides, not the HOME of the CLI. With no HOME at all there is no proof,
+        // and the PID match is not a fallback because the environment could be read.
+        var runner = new FakeSystemCommandRunner();
+        runner.Enqueue(State("active"));
+        runner.Enqueue(MainPid("4242"));
+        var environ = "PATH=/usr/bin\0" + (homeEntry.Length == 0 ? string.Empty : homeEntry + "\0");
+
+        AssertKind(SystemdUserServiceOwnershipKind.Unmanaged,
+            await ServiceFor(runner, DefaultHome, environ).GetStopOwnershipAsync(RunningAs(4242)));
     }
 
     [Fact]

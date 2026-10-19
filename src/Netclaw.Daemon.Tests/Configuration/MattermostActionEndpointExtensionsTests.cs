@@ -275,6 +275,37 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
         Assert.Contains("expired", payload.GetProperty("ephemeral_text").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    // The session sends this nack for a second click on a prompt that already has an answer. The prompt did
+    // not expire, so the operator must not read that it expired.
+    [Fact]
+    public async Task Already_answered_prompt_does_not_say_expired()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
+        var actionStore = new MattermostCallbackActionStore(time);
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+
+        await using var app = await CreateHostAsync(
+            time,
+            actionStore,
+            gatewayResponseFactory: _ => CommandNack.For(new SessionId("ch-1/root-1"), ApprovalNackReasons.AlreadyAnswered),
+            recorder: new GatewayInteractionRecorder());
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsJsonAsync("/api/mattermost/actions", new
+        {
+            user_id = "requester-1",
+            post_id = "prompt-55",
+            channel_id = "ch-1",
+            context = new Dictionary<string, string> { ["action_token"] = token }
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        var text = payload.GetProperty("ephemeral_text").GetString();
+        Assert.Contains("already has an answer", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("expired", text, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task Unavailable_option_returns_explicit_rejection_message()
     {

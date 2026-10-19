@@ -108,17 +108,32 @@ command text, file paths, schema bodies, or hidden tool names.
 The system SHALL run subagents as ephemeral actors (`SubAgentActor`) that
 execute an autonomous LLM tool loop and return a single text result plus an
 optional structured findings envelope. A subagent SHALL stop itself after
-completing its task. Subagents SHALL NOT persist durable memory, stream direct
-durable-memory writes, or participate in session pub/sub by default.
+completing its task. Subagents SHALL NOT persist durable memory or write
+directly to durable memory. Subagents SHALL NOT participate in session
+pub/sub by default. The parent session SHALL durably accept a child run before
+it starts the worker. `spawn_agent` SHALL return the accepted run identity
+before the child completes. The parent SHALL retain run status, terminal
+results, approval correlation, and cancellation state across restart. Recovery
+SHALL NOT restart an uncertain child action.
 
 For subagent execution launched from skill metadata routing, the subagent SHALL
-remain an isolated worker by default:
+remain isolated by default. It SHALL NOT inherit the main identity prompt stack
+or load repository `AGENTS.md` by default. It SHALL inherit the audience and
+authority boundary of the launching invocation.
 
-- It SHALL NOT inherit the main session identity prompt stack unless explicitly
-  enabled by a future opt-in setting.
-- It SHALL NOT auto-load repo-local `AGENTS.md` unless explicitly enabled by a
-  future opt-in setting.
-- It SHALL inherit audience/boundary context from the launching invocation.
+#### Scenario: Child acceptance returns before child completion
+
+- **GIVEN** a valid child request whose durable acceptance succeeds
+- **WHEN** the parent calls `spawn_agent`
+- **THEN** the parent receives the accepted run identity before the child completes
+- **AND** the child starts only after the acceptance persists
+
+#### Scenario: Failed acceptance starts no child
+
+- **GIVEN** a valid child request whose durable acceptance fails
+- **WHEN** the parent calls `spawn_agent`
+- **THEN** the call returns a failure
+- **AND** the system starts no child work
 
 #### Scenario: Subagent completes with text response and findings
 
@@ -131,18 +146,17 @@ remain an isolated worker by default:
 
 #### Scenario: Subagent executes tool calls in a loop
 
-- **GIVEN** the LLM returns `FunctionCallContent` tool calls
-- **WHEN** the subagent processes the response
-- **THEN** it executes the tool calls via `DispatchingToolExecutor`
-- **AND** sends tool results back to the LLM
-- **AND** continues until the LLM returns a text response
+- **GIVEN** a subagent receives tool results for its task
+- **WHEN** it requests further tools
+- **THEN** the tool loop follows `turn-loop-governance`
+- **AND** the system does not apply a separate child iteration ceiling
 
 #### Scenario: Subagent hits maximum tool iterations
 
-- **GIVEN** the subagent has executed 10 tool iterations
-- **WHEN** the LLM returns another tool call
-- **THEN** the subagent forces a final LLM call with tools omitted
-- **AND** returns the resulting text response
+- **GIVEN** a subagent has completed 10 useful tool iterations
+- **WHEN** it requests another distinct useful tool call
+- **THEN** the system does not stop the child only because of the former iteration limit
+- **AND** recurrence governance remains active
 
 #### Scenario: Default subagent cannot write durable memory directly
 
@@ -430,7 +444,7 @@ Each sub-agent approval-gated tool call SHALL settle exactly once as approved, d
 - **WHEN** the approval decision is delivered
 - **THEN** the tool is not executed
 - **AND** the sub-agent receives a tool-result message explaining that approval was denied
-- **AND** the sub-agent may continue or finish within the normal tool-iteration limit
+- **AND** the sub-agent may continue or finish subject to recurrence governance
 
 #### Scenario: Timed-out approval becomes tool result
 - **GIVEN** a sub-agent approval-gated tool call receives an expired or timed-out approval decision

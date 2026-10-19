@@ -6,7 +6,7 @@
     <AkkaHostingVersion>1.5.73</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.70</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>1.5.73.3</AkkaRemindersVersion>
-    <OpenTelemetryVersion>1.19.1</OpenTelemetryVersion>
+    <OpenTelemetryVersion>1.20.0</OpenTelemetryVersion>
     <SlackNetVersion>0.18.0</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
     <MattermostNetVersion>5.0.12</MattermostNetVersion>
@@ -45,8 +45,8 @@
          GHSA-v5pm-xwqc-g5wc, circular schema references can terminate OpenAPI
          parsing). Keep this on the patched 2.x line until ASP.NET Core ships a
          non-vulnerable transitive dependency.
-         Microsoft.AspNetCore.OpenApi 10.0.12 requires Microsoft.OpenApi
-         >= 2.12.0 && < 3.0.0. Central transitive pinning turns a lower pin
+         Microsoft.AspNetCore.OpenApi 10.0.13 requires Microsoft.OpenApi
+         >= 2.12.2 && < 3.0.0. Central transitive pinning turns a lower pin
          into an NU1109 downgrade error, so keep this version at or above the
          floor that MicrosoftAspNetCoreVersion demands. -->
     <PackageVersion Include="Microsoft.OpenApi" Version="2.12.2" />
@@ -137,10 +137,8 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
     <PackageVersion Include="FastBertTokenizer" Version="1.2.6" />
-    <!-- Pinned to 10.0.10 (matches $(MicrosoftAspNetCoreVersion)), not the lowest version that
-         compiles: Microsoft.Extensions.AI 10.8.0 already pulls System.Numerics.Tensors
-         >= 10.0.10 transitively, and CentralPackageTransitivePinningEnabled requires the
-         central pin to be at least as high as every transitive floor in the graph. -->
+    <!-- Pinned to the 10.0.10 transitive floor for Microsoft.Extensions.AI. Central
+         transitive pinning requires a central version at or above every transitive floor. -->
     <PackageVersion Include="System.Numerics.Tensors" Version="10.0.10" />
   </ItemGroup>
   <!-- Source generators -->

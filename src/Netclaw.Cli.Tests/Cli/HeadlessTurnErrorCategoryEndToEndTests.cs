@@ -57,23 +57,8 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         _directory.Dispose();
     }
 
-    // Model failures. The runtime asks for text only. The model keeps asking for tools.
+    // Model failures. The runtime stops the tool work. The model keeps asking for the same tools.
     // Planted bug: the product reports ProviderFailure for these, so the harness sees infra.
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Tool_call_limit_that_the_model_ignores_is_a_model_failure(bool json)
-    {
-        // Each call differs, so the cycle guard stays quiet. The limit of 3 forces the text-only turn.
-        var model = new ScriptedModel(call => ToolCall(call, query: $"query-{call.Number}"));
-
-        var run = await RunAsync(model, json, maxToolIterations: 3);
-
-        AssertFailed(run, json, "model", "ModelBehavior");
-        Assert.Contains("required text only", run.Stderr, StringComparison.Ordinal);
-        Assert.Equal(4, model.CallCount);
-    }
 
     [Theory]
     [InlineData(false)]
@@ -81,13 +66,17 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     public async Task Cycle_stop_that_the_model_ignores_is_a_model_failure(bool json)
     {
         // The eval case tool_cycle_terminal. The same call repeats, so the runtime corrects once and
-        // then stops the cycle. The limit of 20 is far away, so only the cycle stop forces text.
+        // then stops the cycle. Only the cycle stop ends the turn.
         var model = new ScriptedModel(call => ToolCall(call, query: "same"));
 
         var run = await RunAsync(model, json, maxToolIterations: 20);
 
         AssertFailed(run, json, "model", "ModelBehavior");
-        Assert.Contains("required text only", run.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Netclaw stopped this turn because the model repeated a tool call that was already refused.", run.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("you repeated", run.Stderr, StringComparison.Ordinal);
+        // Two executed rounds, one corrected round, and the repeat that ends the turn. The runtime asks
+        // the model nothing after the repeat.
+        Assert.Equal(4, model.CallCount);
     }
 
     // Repeated empty replies count against the model only when the stream finished on its own terms:
@@ -122,6 +111,24 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         var run = await RunAsync(model, json);
 
         AssertFailed(run, json, "model", "ModelBehavior");
+    }
+
+    // A text reply cut off at the output limit, with no tool call. The provider worked. The model used all
+    // of its output budget, so the failure is the model's. Planted bug: the turn reports ProviderFailure,
+    // so the harness sees infra.
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Text_reply_cut_off_at_the_output_limit_is_a_model_failure(bool json)
+    {
+        var model = new ScriptedModel(_ => Text("The first half of the ans"), ChatFinishReason.Length);
+
+        var run = await RunAsync(model, json);
+
+        AssertFailed(run, json, "model", "ModelBehavior");
+        // A retry meets the same limit, so the runtime asks the model once.
+        Assert.Equal(1, model.CallCount);
     }
 
     // The stream ended with no finish reason: EOF, or a proxy cut the connection. The backend failed. The
@@ -228,23 +235,36 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     [InlineData(true)]
     public async Task Cycle_stop_that_the_model_obeys_is_not_a_failure(bool json)
     {
-        var model = new ScriptedModel(call => call.ToolsOffered ? ToolCall(call, query: "same") : Text("Done."));
+        // The model obeys the runtime correction: the runtime replaced the result of its last call.
+        var model = new ScriptedModel(call => call.RuntimeIntervened ? Text("Done.") : ToolCall(call, query: "same"));
 
         var run = await RunAsync(model, json, maxToolIterations: 20);
 
         AssertSucceeded(run, json);
+        // Proof that the run reached the cycle stop: two executed rounds, one corrected round, and the answer.
+        Assert.Equal(4, model.CallCount);
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Tool_call_limit_that_the_model_obeys_is_not_a_failure(bool json)
+    public async Task Distinct_tool_rounds_past_the_legacy_limit_then_an_answer_is_not_a_failure(bool json)
     {
-        var model = new ScriptedModel(call => call.ToolsOffered ? ToolCall(call, query: $"query-{call.Number}") : Text("Done."));
+        // MaxToolIterationsPerTurn is a legacy field with no ceiling. Each call differs, so the cycle guard
+        // stays quiet. The model makes 12 tool rounds against a legacy value of 3, then it answers.
+        const int toolRounds = 12;
+        var toolsWithdrawn = false;
+        var model = new ScriptedModel(call =>
+        {
+            toolsWithdrawn |= !call.ToolsOffered;
+            return call.Number <= toolRounds ? ToolCall(call, query: $"query-{call.Number}") : Text("Done.");
+        });
 
         var run = await RunAsync(model, json, maxToolIterations: 3);
 
         AssertSucceeded(run, json);
+        Assert.Equal(toolRounds + 1, model.CallCount);
+        Assert.False(toolsWithdrawn, "The runtime withdrew the tools before the model answered.");
     }
 
     [Theory]
@@ -321,7 +341,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         var paths = new NetclawPaths(_directory.Path);
         paths.EnsureDirectoriesExist();
         var registry = new ToolRegistry();
-        registry.RegisterCore(AIFunctionFactory.Create(() => "search result", "web_search"), "web_search");
+        registry.RegisterCore(AIFunctionFactory.Create(() => ScriptedModel.FixedToolResult, "web_search"), "web_search");
         var storage = new TestSessionStorageResolver(paths);
 
         var builder = WebApplication.CreateBuilder();
@@ -333,6 +353,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
                 LoopbackAuthenticationHandler.SchemeName, _ => { });
         builder.Services.AddAuthorization();
         builder.Services.AddSingleton(paths);
+        builder.Services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
         builder.Services.AddSingleton<ISessionStorageResolver>(storage);
         builder.Services.AddSingleton(new SessionConfig
         {
@@ -382,7 +403,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     {
         public Task<string> ExecuteAsync(
             FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default)
-            => Task.FromResult("search result");
+            => Task.FromResult(ScriptedModel.FixedToolResult);
     }
 
     private sealed class FixedWorkingContext : IWorkingContextSnapshotProvider
@@ -397,11 +418,14 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
     }
 }
 
-/// <summary>One call to the scripted model.</summary>
-internal sealed record ModelCall(int Number, bool ToolsOffered);
+/// <summary>
+/// One call to the scripted model. <see cref="RuntimeIntervened"/> is true when the last tool result
+/// is not the text that the fixed tool returns, so the runtime replaced it (for example, a cycle correction).
+/// </summary>
+internal sealed record ModelCall(int Number, bool ToolsOffered, bool RuntimeIntervened);
 
 /// <summary>
-/// A model that follows a script. It ignores the tool list unless the script reads
+/// A model that follows a script. It ignores the tool list. A script can read
 /// <see cref="ModelCall.ToolsOffered"/>. The script throws to fail the call. The throw is synchronous,
 /// so the failure reaches the session actor before the send is acknowledged. Every reply carries
 /// <c>finishReason</c>. A null value models a stream that ended with no finish reason.
@@ -410,17 +434,20 @@ internal sealed class ScriptedModel(
     Func<ModelCall, IReadOnlyList<AIContent>> script,
     ChatFinishReason? finishReason = null) : IChatClient
 {
+    /// <summary>The text that the fixed test tool returns.</summary>
+    public const string FixedToolResult = "search result";
+
     private int _callCount;
 
     public int CallCount => Volatile.Read(ref _callCount);
 
     public Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-        => Task.FromResult(Next(options));
+        => Task.FromResult(Next(messages, options));
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-        => Replay(Next(options));
+        => Replay(Next(messages, options));
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
@@ -428,9 +455,15 @@ internal sealed class ScriptedModel(
     {
     }
 
-    private ChatResponse Next(ChatOptions? options)
+    private ChatResponse Next(IEnumerable<ChatMessage> messages, ChatOptions? options)
     {
-        var call = new ModelCall(Interlocked.Increment(ref _callCount), options?.Tools is { Count: > 0 });
+        var lastToolResult = messages
+            .SelectMany(message => message.Contents.OfType<FunctionResultContent>())
+            .LastOrDefault();
+        var call = new ModelCall(
+            Interlocked.Increment(ref _callCount),
+            options?.Tools is { Count: > 0 },
+            lastToolResult is not null && lastToolResult.Result?.ToString() != FixedToolResult);
         return new ChatResponse(new ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, script(call).ToList()))
         {
             FinishReason = finishReason

@@ -119,7 +119,9 @@ SHALL NOT affect routing.
 - **WHEN** the Mattermost post API later rejects the response
 - **THEN** the execution still records a successful outcome
 - **AND** the reminder system does not retry the fire
-- **AND** the session's own delivery retry handles the failed post
+- **AND** the session does not retry the post, because a Mattermost or Discord post failure is a `TransportFailure` and the delivery retry covers other failure kinds only
+- **AND** the binding reports `DeliveryFailed` with `TransportFailure` to the session
+- **AND** the session writes an Error log and raises a `reminder.delivery.failed` alert (see the `netclaw-session` requirement "A failed post on a reminder turn is visible to the operator")
 
 ## ADDED Requirements
 
@@ -132,8 +134,10 @@ and `None` reminders no longer get an eager acknowledgement.
 The execution actor SHALL report its outcome to the manager. It SHALL wait for
 `ReminderExecutionAccepted` before it stops.
 
-The manager SHALL acknowledge only a successful execution with all required
-delivery evidence. It SHALL negatively acknowledge a known failure.
+The manager SHALL acknowledge only a successful execution. For `Channel`
+delivery, it SHALL also require all required delivery evidence. A `CurrentSession`
+run needs no delivery evidence (see below). It SHALL negatively acknowledge a
+known failure.
 
 A `CurrentSession` reminder SHALL use the origin gateway and
 `Ask<CommandAck>`. The run SHALL end when the session acknowledges the fire

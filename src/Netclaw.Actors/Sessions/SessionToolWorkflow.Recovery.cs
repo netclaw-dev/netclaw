@@ -62,7 +62,7 @@ internal sealed partial class SessionToolWorkflow
                 CreateAbandonment(
                     state,
                     sessionId,
-                    "Tool call was not completed — approval state could not be recovered safely.",
+                    ParkedToolBatchHistory.AbandonedResultPrefix + "approval state could not be recovered safely.",
                     nowMs),
                 diagnostic);
     }
@@ -96,9 +96,9 @@ internal sealed partial class SessionToolWorkflow
     }
 
     public bool ShouldAbandonResolvedAfterRecovery()
-        => ResolvedCount > 0 && PendingCount == 0;
+        => ResolvedParentCount > 0 && PendingParentCount == 0;
 
-    public bool ShouldAbandonResolvedForIdle() => ResolvedCount > 0;
+    public bool ShouldAbandonResolvedForIdle() => ResolvedParentCount > 0;
 
     // Security boundary: only a person can abandon an open approval. Automation (a reminder fire, a webhook, a
     // background job completion) cannot answer a prompt, so it must not cancel one. Its input waits until the
@@ -111,7 +111,7 @@ internal sealed partial class SessionToolWorkflow
         PrincipalClassification? inputPrincipal,
         long nowMs)
     {
-        if (PendingCount > 0)
+        if (PendingParentCount > 0)
         {
             if (IsAutomation(inputPrincipal))
                 return new NewInputPlan.WaitForApproval();
@@ -120,23 +120,23 @@ internal sealed partial class SessionToolWorkflow
             return new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
                 sessionId,
-                "Tool call was not completed — the request was "
+                ParkedToolBatchHistory.AbandonedResultPrefix + "the request was "
                 + "superseded by a new message before approval was given.",
                 nowMs));
         }
 
-        if (ResolvedCount > 0)
+        if (ResolvedParentCount > 0)
             return new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
                 sessionId,
-                "Tool call was not completed — the session restarted after approval before the action completed.",
+                ParkedToolBatchHistory.AbandonedResultPrefix + "the session restarted after approval before the action completed.",
                 nowMs));
 
         return ShouldAbandonInterruptedAfterRecovery(state)
             ? new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
                 sessionId,
-                "Tool call was not completed — the session restarted before the action completed.",
+                ParkedToolBatchHistory.AbandonedResultPrefix + "the session restarted before the action completed.",
                 nowMs))
             : new NewInputPlan.Activate();
     }
@@ -154,20 +154,21 @@ internal sealed partial class SessionToolWorkflow
             : CreateAbandonment(
                 state,
                 sessionId,
-                "Tool call was not completed — the tool run failed.",
+                ParkedToolBatchHistory.AbandonedResultPrefix + "the tool run failed.",
                 nowMs);
 
     public bool ShouldAbandonInterruptedAfterRecovery(SessionState state)
-        => PendingCount == 0
-           && ResolvedCount == 0
+        => PendingParentCount == 0
+           && ResolvedParentCount == 0
            && ParkedToolBatchHistory.FindRedrivableAssistantMessage(state.History, null) is not null;
 
-    public bool HasPendingApprovals() => PendingCount > 0;
+    public bool HasPendingApprovals() => PendingParentCount > 0;
 
     // A parked batch still waits for an answer, or has an answer and no result yet. Input admitted after it waits.
-    public bool HasParkedApprovals() => PendingCount > 0 || ResolvedCount > 0;
+    // Only parent approvals count: a child approval belongs to the child run and must not hold the parent's input.
+    public bool HasParkedApprovals() => PendingParentCount > 0 || ResolvedParentCount > 0;
 
-    public int PendingDiagnosticCount => PendingCount;
+    public int PendingDiagnosticCount => PendingParentCount;
 
-    public int ResolvedDiagnosticCount => ResolvedCount;
+    public int ResolvedDiagnosticCount => ResolvedParentCount;
 }

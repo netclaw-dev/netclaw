@@ -13,6 +13,7 @@ using Akka.Reminders.Sharding;
 using Akka.Streams;
 using Akka.Streams.Dsl;
 using Mattermost;
+using Mattermost.Models.Posts;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
@@ -81,7 +82,7 @@ public sealed class MattermostReminderIntegrationTests(
     [InlineData(true, false)]
     [InlineData(true, true)]
     [InlineData(false, true)]
-    public async Task Current_session_reminder_records_the_actual_thread_delivery_result(bool validToken, bool existingSession)
+    public async Task Current_session_reminder_ends_at_admission_and_reports_a_failed_post_to_the_session(bool validToken, bool existingSession)
     {
         fixture.SkipIfUnavailable();
         var ct = TestContext.Current.CancellationToken;
@@ -140,38 +141,58 @@ public sealed class MattermostReminderIntegrationTests(
         Assert.Equal(rootId, input.DefaultDeliveryTarget?.ThreadOrRootId);
         Assert.Equal(1, _pipeline.CreateCount);
 
+        // The run ends at admission (#2511), so both tokens leave one successful history row.
+        // The row does not hold the post result. A bad token fails the post after the row.
         await AwaitAssertAsync(async () =>
         {
-            if (validToken)
-            {
-                // The manager deletes a successful one-shot definition and its history.
-                Assert.Null(new ReminderDefinitionStore(_state.Paths).Get(id));
-                var health = await manager.Ask<ReminderHealthResponse>(GetReminderHealthQuery.Instance, Timeout, ct);
-                Assert.Equal(0, health.ActiveExecutions);
-            }
-            else
-            {
-                var history = await new ReminderHistoryStore(_state.Paths).ReadAsync(id, 10);
-                var record = Assert.Single(history);
-                Assert.Equal(sessionId.Value, record.SessionId);
-                Assert.False(record.Success);
-                Assert.Contains("Mattermost post did not succeed", record.ErrorMessage);
-            }
+            var health = await manager.Ask<ReminderHealthResponse>(GetReminderHealthQuery.Instance, Timeout, ct);
+            Assert.Equal(0, health.ActiveExecutions);
+
+            var history = await new ReminderHistoryStore(_state.Paths).ReadAsync(id, 10);
+            var record = Assert.Single(history);
+            Assert.Equal(sessionId.Value, record.SessionId);
+            Assert.True(record.Success);
+
+            // One-shot lifecycle is not under test here. A completed one-shot is either kept
+            // as a disabled copy or deleted, but it is never live.
+            Assert.False(new ReminderDefinitionStore(_state.Paths).Get(id) is { Enabled: true });
         }, duration: Timeout, cancellationToken: ct);
 
+        if (!validToken)
+        {
+            // The binding reports the failed post to the session. This is the only signal
+            // that exists after admission. The session turns it into an alert (#2535, step B).
+            var failed = await _pipeline.DeliveryFailure.Task.WaitAsync(Timeout, ct);
+            Assert.Equal(sessionId, failed.SessionId);
+            Assert.Equal(ChannelType.Mattermost, failed.ChannelType);
+            Assert.Equal(DeliveryFailureKind.TransportFailure, failed.FailureKind);
+            // The session accepts feedback only for the turn it recorded. The fake pipeline completes turn 1,
+            // so a report for turn 0 (the last completed turn before the reply) would reach a live session as stale.
+            Assert.Equal(new TurnNumber(1), failed.TurnNumber);
+        }
+
         using var reader = new MattermostClient(fixture.ServerUrl, fixture.BotToken);
-        var thread = await reader.GetThreadPostsAsync(rootId);
-        var replies = thread.Posts.Values.Where(post => post.Text == ReminderReplyPipeline.ReplyText).ToArray();
+        async Task<Post[]> ReadRepliesAsync()
+        {
+            var thread = await reader.GetThreadPostsAsync(rootId);
+            return thread.Posts.Values.Where(post => post.Text == ReminderReplyPipeline.ReplyText).ToArray();
+        }
+
         if (validToken)
         {
-            var reply = Assert.Single(replies);
-            Assert.Equal(fixture.ChannelId, reply.ChannelId);
+            // The run ended at admission, so the post lands after the history row. Wait for it.
+            Post? reply = null;
+            await AwaitAssertAsync(async () => reply = Assert.Single(await ReadRepliesAsync()),
+                duration: Timeout, cancellationToken: ct);
+            Assert.Equal(fixture.ChannelId, reply!.ChannelId);
             Assert.Equal(rootId, reply.RootId);
             Assert.Equal(fixture.BotUserId, reply.UserId);
+            Assert.False(_pipeline.DeliveryFailure.Task.IsCompleted);
         }
         else
         {
-            Assert.Empty(replies);
+            // The failure report above is the proof that the post ended. No reply can follow it.
+            Assert.Empty(await ReadRepliesAsync());
         }
     }
 
@@ -207,6 +228,7 @@ public sealed class MattermostReminderIntegrationTests(
         public const string ReplyText = "The reminder returned to the original Mattermost thread.";
         public TaskCompletionSource<ChannelInput> Received { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Created { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<DeliveryFailed> DeliveryFailure { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public SessionId SessionId { get; private set; }
         public int CreateCount { get; private set; }
 
@@ -224,7 +246,8 @@ public sealed class MattermostReminderIntegrationTests(
                 await queue.OfferAsync(new TextOutput(ReplyText) { SessionId = sessionId });
                 await queue.OfferAsync(new TurnCompleted
                 {
-                    SessionId = sessionId, TurnNumber = new TurnNumber(1), SourceReminderId = message.ReminderId
+                    SessionId = sessionId, TurnNumber = new TurnNumber(1), SourceReminderId = message.ReminderId,
+                    OpenChildRunIds = []
                 });
             }).MapMaterializedValue(_ => NotUsed.Instance);
             var killSwitch = KillSwitches.Shared("reminder-proof");
@@ -232,7 +255,12 @@ public sealed class MattermostReminderIntegrationTests(
             return Task.FromResult(new MaterializedSession(input, output.Via(killSwitch.Flow<SessionOutput>()), killSwitch));
         }
 
-        public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default) => Task.CompletedTask;
+        public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
+        {
+            if (feedback is DeliveryFailed failed)
+                DeliveryFailure.TrySetResult(failed);
+            return Task.CompletedTask;
+        }
         public Task<ISessionResponse> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
             => Task.FromResult<ISessionResponse>(CommandAck.For(feedback.SessionId));
     }

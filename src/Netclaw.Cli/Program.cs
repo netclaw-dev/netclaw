@@ -572,7 +572,7 @@ static async Task RunAsync(string[] args)
             {
                 var status = manager.GetStatus();
                 Console.WriteLine(status.Message);
-                if (!status.IsRunning)
+                if (!status.IsRunning || !status.ServesThisHome)
                 {
                     Environment.ExitCode = 1;
                     return;
@@ -1391,7 +1391,11 @@ static async Task RunTerminaHostAsync(IHost host)
 
 static void WriteDaemonResult(DaemonResult result)
 {
-    Console.WriteLine(result.Message);
+    // A refusal has one writer and goes to stderr only.
+    if (result.IsRefusal)
+        Console.Error.WriteLine(result.Message);
+    else
+        Console.WriteLine(result.Message);
     if (!string.IsNullOrWhiteSpace(result.CrashLogPath))
         Console.WriteLine($"Crash log: {result.CrashLogPath}");
     if (!result.Success)
@@ -1447,6 +1451,10 @@ static void WriteDaemonHelp()
     Console.WriteLine("  pair                         Generate a pairing code for remote device access");
     Console.WriteLine("  devices                      List paired devices");
     Console.WriteLine("  devices revoke <name>        Revoke a paired device by name");
+    Console.WriteLine();
+    Console.WriteLine("start, stop, and status refuse when the PID in netclaw.pid is not shown to serve this home.");
+    Console.WriteLine("If no Netclaw daemon of this home runs, delete <home>/netclaw.pid.");
+    Console.WriteLine("If the process is a wedged daemon of this home, check it, then stop it with 'kill <pid>'.");
 }
 
 static void WriteDaemonPairHelp()

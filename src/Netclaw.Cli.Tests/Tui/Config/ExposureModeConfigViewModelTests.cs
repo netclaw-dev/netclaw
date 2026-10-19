@@ -7,6 +7,7 @@ using System.Buffers.Text;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Tests.Tui.Wizard;
 using Netclaw.Cli.Tui.Config;
@@ -397,6 +398,168 @@ public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
 
         Assert.False(vm.IsSaved.Value);
         Assert.Equal(0, vm.Step.CurrentSubStep);
+    }
+
+    public static TheoryData<string, string, ExposureMode> PostureAndModeCases()
+    {
+        var data = new TheoryData<string, string, ExposureMode>();
+        foreach (var (posture, shell) in new[] { ("Team", "SandboxOnly"), ("Public", "Off") })
+        {
+            foreach (var mode in new[]
+                     {
+                         ExposureMode.Local, ExposureMode.ReverseProxy, ExposureMode.TailscaleServe,
+                         ExposureMode.TailscaleFunnel, ExposureMode.CloudflareTunnel
+                     })
+            {
+                data.Add(posture, shell, mode);
+            }
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(PostureAndModeCases))]
+    public void Saving_exposure_mode_keeps_posture_and_unrelated_sections(string posture, string shell, ExposureMode mode)
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, SeedWithPosture(posture, shell));
+        var before = JsonNode.Parse(File.ReadAllText(Context.Paths.NetclawConfigPath))!.AsObject();
+
+        using (var vm = new ExposureModeConfigViewModel(Context.Paths))
+        {
+            vm.Step.SelectedMode = mode;
+            if (mode == ExposureMode.ReverseProxy)
+            {
+                vm.Step.Host = "10.0.0.5";
+                vm.Step.TrustedProxies = ["10.0.0.0/24"];
+            }
+
+            AdvanceToSave(vm, mode);
+
+            Assert.True(vm.IsSaved.Value, vm.Context.StatusMessage.Value);
+        }
+
+        var after = JsonNode.Parse(File.ReadAllText(Context.Paths.NetclawConfigPath))!.AsObject();
+        var daemonBefore = before["Daemon"]!.AsObject();
+        var daemonAfter = after["Daemon"]!.AsObject();
+        var changeable = new[] { "ExposureMode", "Host", "TrustedProxies" };
+        foreach (var (name, value) in daemonBefore.Where(pair => !changeable.Contains(pair.Key)))
+            Assert.True(JsonNode.DeepEquals(value, daemonAfter[name]), $"Daemon.{name} changed.");
+
+        foreach (var (name, section) in before)
+        {
+            if (name == "Daemon")
+                continue;
+
+            Assert.True(JsonNode.DeepEquals(section, after[name]), $"Section '{name}' changed.");
+        }
+
+        Assert.Equal(before.Count, after.Count);
+
+        Assert.Equal(mode.ToWireValue(), daemonAfter["ExposureMode"]!.GetValue<string>());
+        if (mode == ExposureMode.ReverseProxy)
+        {
+            Assert.Equal("10.0.0.5", daemonAfter["Host"]!.GetValue<string>());
+            Assert.Equal(["10.0.0.0/24"], daemonAfter["TrustedProxies"]!.AsArray().Select(static n => n!.GetValue<string>()));
+        }
+        else
+        {
+            Assert.False(daemonAfter.ContainsKey("Host"));
+            Assert.False(daemonAfter.ContainsKey("TrustedProxies"));
+        }
+    }
+
+    [Fact]
+    public void Saving_first_reverse_proxy_mode_auto_pairs_current_client()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Daemon": { "ExposureMode": "local" }
+            }
+            """);
+
+        using var vm = new ExposureModeConfigViewModel(Context.Paths);
+        vm.Step.SelectedMode = ExposureMode.ReverseProxy;
+        vm.Step.Host = "10.0.0.5";
+        vm.Step.TrustedProxies = ["10.0.0.0/24"];
+
+        AdvanceReverseProxyToSave(vm);
+
+        Assert.True(vm.IsSaved.Value);
+        var device = Assert.Single(ReadPairedDevices());
+        Assert.True(device.IsBootstrapDevice);
+        Assert.True(PairedDevice.VerifyToken(ReadLocalDeviceToken(), device));
+    }
+
+    [Fact]
+    public void Saving_when_the_session_rejects_the_file_surfaces_the_error_and_keeps_the_file()
+    {
+        // The editor session adds "configVersion". A key that differs only in case makes the daemon
+        // reader see a duplicate, so the session refuses to write the file.
+        const string seed = """
+            {
+              "ConfigVersion": 1,
+              "Security": { "DeploymentPosture": "Team", "ShellExecutionMode": "SandboxOnly" },
+              "Daemon": { "ExposureMode": "local" }
+            }
+            """;
+        File.WriteAllText(Context.Paths.NetclawConfigPath, seed);
+        var bytesBefore = File.ReadAllBytes(Context.Paths.NetclawConfigPath);
+
+        using var vm = new ExposureModeConfigViewModel(Context.Paths);
+        vm.Step.SelectedMode = ExposureMode.TailscaleServe;
+
+        AdvanceTunnelModeToSave(vm);
+
+        Assert.False(vm.IsSaved.Value);
+        Assert.StartsWith("Failed to save exposure mode:", vm.Context.StatusMessage.Value, StringComparison.Ordinal);
+        Assert.Equal(bytesBefore, File.ReadAllBytes(Context.Paths.NetclawConfigPath));
+        Assert.False(File.Exists(Context.Paths.DevicesPath));
+    }
+
+    [Fact]
+    public void Saving_with_a_malformed_config_refuses_and_keeps_the_file()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, "{ not valid json ");
+        var bytesBefore = File.ReadAllBytes(Context.Paths.NetclawConfigPath);
+
+        using var vm = new ExposureModeConfigViewModel(Context.Paths);
+        vm.Step.SelectedMode = ExposureMode.TailscaleServe;
+
+        var exception = Record.Exception(() => AdvanceTunnelModeToSave(vm));
+
+        Assert.Null(exception);
+        Assert.False(vm.IsSaved.Value);
+        Assert.Contains("Could not read netclaw.json", vm.Context.StatusMessage.Value, StringComparison.Ordinal);
+        Assert.Equal(bytesBefore, File.ReadAllBytes(Context.Paths.NetclawConfigPath));
+    }
+
+    private static string SeedWithPosture(string posture, string shell)
+        => $$"""
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "{{posture}}", "ShellExecutionMode": "{{shell}}", "StrictDefaults": true },
+              "Tools": { "ShellMode": "{{shell}}" },
+              "Models": { "Default": "my-model" },
+              "Providers": { "openai": { "Type": "openai" } },
+              "Slack": { "Enabled": true, "Channels": ["C1"] },
+              "Daemon": { "ExposureMode": "local", "Port": 5299, "DisableSelfUpdate": true, "UpdateChannel": "beta" }
+            }
+            """;
+
+    private static void AdvanceToSave(ExposureModeConfigViewModel vm, ExposureMode mode)
+    {
+        var steps = mode switch
+        {
+            ExposureMode.Local => 1,
+            ExposureMode.ReverseProxy => 4,
+            _ => 2
+        };
+
+        for (var i = 0; i < steps; i++)
+            vm.GoNext();
     }
 
     private static void AdvanceReverseProxyToSave(ExposureModeConfigViewModel vm)

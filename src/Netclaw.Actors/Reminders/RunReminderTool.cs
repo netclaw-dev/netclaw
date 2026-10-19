@@ -62,6 +62,13 @@ public sealed partial class RunReminderTool : NetclawTool<RunReminderTool.Params
             TimeSpan.FromSeconds(10),
             ct);
 
+        // An ended one-shot has no definition and no prompt to run. The reply names the end and shows no prompt.
+        if (response.Reminder is null && response.Ended is { } ended)
+        {
+            return $"Error: Reminder '{args.Id}' ended ({ended.Outcome.ToString().ToLowerInvariant()}) at {ended.EndedAt:u}. "
+                   + "A one-shot reminder deletes itself after it ends. Set it again with set_reminder to run it.";
+        }
+
         if (response.Reminder is not { } reminder)
             return $"Error: Reminder '{args.Id}' not found.";
 

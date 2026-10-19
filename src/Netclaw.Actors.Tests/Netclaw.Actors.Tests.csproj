@@ -12,6 +12,7 @@
   <ItemGroup>
     <PackageReference Include="Akka.Hosting.TestKit" />
     <PackageReference Include="Akka.Persistence.Hosting" />
+    <PackageReference Include="Akka.Persistence.Sql.Hosting" />
     <PackageReference Include="CsCheck" />
     <PackageReference Include="Microsoft.Accordant" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
@@ -45,6 +46,7 @@
     <None Include="../Netclaw.Security.Tests/Evidence/ToolFrictionEvidence/tool-friction-fixtures.json" Link="ToolFrictionEvidence/tool-friction-fixtures.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.html" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures/CoordinationLegacy/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

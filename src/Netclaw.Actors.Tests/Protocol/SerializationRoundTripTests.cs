@@ -15,6 +15,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Security.Authorization.Consent;
 using Netclaw.Tools;
@@ -46,6 +47,80 @@ public sealed class SerializationRoundTripTests : TestKit
     {
         var serializer = Sys.Serialization.FindSerializerFor(value);
         return serializer.ToBinary(value);
+    }
+
+    // Decodes bytes that a test built by hand, with the serializer that the journal uses.
+    private T Deserialize<T>(byte[] bytes, T probe)
+        where T : notnull
+    {
+        var serializer = Sys.Serialization.FindSerializerFor(probe);
+        var manifest = serializer is SerializerWithStringManifest swm ? swm.Manifest(probe) : string.Empty;
+        return Assert.IsType<T>(Sys.Serialization.Deserialize(bytes, serializer.Identifier, manifest));
+    }
+
+    // Appends one field to a serialized message, as a writer that uses another proto file would write it.
+    // Protobuf merges a message and a field list that follows it, so the result is one message.
+    private static byte[] WithField(byte[] message, Action<CodedOutputStream> writeValue)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(message);
+        var output = new CodedOutputStream(stream);
+        writeValue(output);
+        output.Flush();
+        return stream.ToArray();
+    }
+
+    private static byte[] WithVarintField(byte[] message, int fieldNumber, bool value)
+        => WithField(message, output =>
+        {
+            output.WriteTag(fieldNumber, WireFormat.WireType.Varint);
+            output.WriteBool(value);
+        });
+
+    private static byte[] WithStringField(byte[] message, int fieldNumber, string value)
+        => WithField(message, output =>
+        {
+            output.WriteTag(fieldNumber, WireFormat.WireType.LengthDelimited);
+            output.WriteString(value);
+        });
+
+    // A message field of the coordination stack and of #1897 uses these numbers with a length-delimited value.
+    private static byte[] WithEmptyMessageField(byte[] message, int fieldNumber)
+        => WithField(message, output =>
+        {
+            output.WriteTag(fieldNumber, WireFormat.WireType.LengthDelimited);
+            output.WriteLength(0);
+        });
+
+    // The journal writes a snapshot as SessionSnapshotV2Proto. Its field 1 is the SessionSnapshotProto state record,
+    // which holds the delivery fields. This wraps a hand-built state record the way the current writer does.
+    private static byte[] AsSnapshotV2(byte[] stateRecord)
+        => WithField([], output =>
+        {
+            output.WriteTag(1, WireFormat.WireType.LengthDelimited);
+            output.WriteBytes(ByteString.CopyFrom(stateRecord));
+        });
+
+    // The state record that the journal writer puts in field 1 of a v2 snapshot.
+    private byte[] SnapshotStateRecord(SessionSnapshot snapshot)
+        => Serialization.Proto.SessionSnapshotV2Proto.Parser.ParseFrom(Serialize(snapshot)).State.ToByteArray();
+
+    // Reads the mark as nullable. Null means the snapshot predates the field. False is a value.
+    private static bool? RoutedMark(SessionSnapshot snapshot) => snapshot.EligibleDeliveryTurnRoutedSkill;
+
+    // The field numbers on the wire, in order. This reads the raw bytes and not the generated class.
+    private static List<int> WireFieldNumbers(byte[] message)
+    {
+        var numbers = new List<int>();
+        var input = new CodedInputStream(message);
+        uint tag;
+        while ((tag = input.ReadTag()) != 0)
+        {
+            numbers.Add(WireFormat.GetTagFieldNumber(tag));
+            input.SkipLastField();
+        }
+
+        return numbers;
     }
 
     [Fact]
@@ -214,6 +289,52 @@ public sealed class SerializationRoundTripTests : TestKit
 
         Assert.Equal(original.SourceReminderId, result.SourceReminderId);
         Assert.Equal(original.SourceBackgroundJobId, result.SourceBackgroundJobId);
+    }
+
+    [Fact]
+    public void TurnRecorded_routed_skill_mark_round_trips_as_a_plain_proto_bool()
+    {
+        // A routed-skill turn is eligible for the reminder alert but never for a retry on the main model.
+        // The mark must survive the journal, because replay rebuilds the delivery state from it.
+        var original = new TurnRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "/ops-route check" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "done" },
+            RecordedAtMs = 1_700_000_000_000,
+            SourceReminderId = new ReminderId("check-pr:1712000000000"),
+            RoutedSkill = true
+        };
+
+        var expected = NetclawProtoMapper.ToProto(original with { RoutedSkill = false });
+        expected.RoutedSkill = true;
+        Assert.Equal(expected.ToByteArray(), Serialize(original));
+
+        var result = RoundTrip(original);
+        Assert.True(result.RoutedSkill);
+        Assert.Equal(original.SourceReminderId, result.SourceReminderId);
+    }
+
+    [Fact]
+    public void TurnRecorded_from_before_the_routed_mark_reads_as_not_routed()
+    {
+        // An old journal entry has no routed field. It reads as an ordinary turn, and a turn that is not routed
+        // writes the same bytes as before the field existed.
+        // Built from an event that never sets the mark, so the proto holds no routed field.
+        var oldShape = NetclawProtoMapper.ToProto(new TurnRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "hi" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "hello" },
+            RecordedAtMs = 1_700_000_000_000,
+            SourceReminderId = new ReminderId("check-pr:1712000000000")
+        });
+
+        var restored = NetclawProtoMapper.FromProto(oldShape);
+
+        Assert.False(restored.RoutedSkill);
+        Assert.Equal(new ReminderId("check-pr:1712000000000"), restored.SourceReminderId);
+        Assert.Equal(oldShape.ToByteArray(), Serialize(restored));
     }
 
     [Fact]
@@ -816,7 +937,10 @@ public sealed class SerializationRoundTripTests : TestKit
             }
         }.ToByteArray();
 
-        Assert.Equal(expected, Serialize(wrapped));
+        Assert.Equal(expected, SerializeLegacySnapshot(wrapped));
+
+        var legacyResult = DeserializeLegacySnapshot(expected);
+        Assert.Equal(new Netclaw.Actors.Jobs.BackgroundJobId("job-55"), legacyResult.ActiveBackgroundJobs[0].JobId);
 
         var result = RoundTrip(wrapped);
         Assert.Equal(new Netclaw.Actors.Jobs.BackgroundJobId("job-55"), result.ActiveBackgroundJobs[0].JobId);
@@ -825,9 +949,7 @@ public sealed class SerializationRoundTripTests : TestKit
     [Fact]
     public void SessionSnapshot_eligible_turn_number_wrap_is_byte_identical_to_raw_primitive_proto()
     {
-        // Pass 7d wraps SessionSnapshot.EligibleDeliveryTurnNumber in the
-        // TurnNumber value object. The proto field stays a primitive int32, so
-        // the journal bytes must be identical to the pre-wrap representation.
+        // The v1 snapshot field stays a primitive int32 after the value wrap.
         var wrapped = new SessionSnapshot
         {
             TurnCount = 7,
@@ -841,7 +963,10 @@ public sealed class SerializationRoundTripTests : TestKit
             EligibleDeliveryTurnNumber = 7
         }.ToByteArray();
 
-        Assert.Equal(expected, Serialize(wrapped));
+        Assert.Equal(expected, SerializeLegacySnapshot(wrapped));
+
+        var legacyResult = DeserializeLegacySnapshot(expected);
+        Assert.Equal(new TurnNumber(7), legacyResult.EligibleDeliveryTurnNumber);
 
         var result = RoundTrip(wrapped);
         Assert.Equal(new TurnNumber(7), result.EligibleDeliveryTurnNumber);
@@ -850,8 +975,7 @@ public sealed class SerializationRoundTripTests : TestKit
     [Fact]
     public void SessionSnapshot_null_eligible_turn_number_omits_proto_field()
     {
-        // A null EligibleDeliveryTurnNumber must leave the optional proto field
-        // unset — byte-identical to the pre-wrap int? null representation.
+        // A null v1 EligibleDeliveryTurnNumber leaves the optional field unset.
         var wrapped = new SessionSnapshot
         {
             TurnCount = 3,
@@ -864,10 +988,337 @@ public sealed class SerializationRoundTripTests : TestKit
             TurnCount = 3
         }.ToByteArray();
 
-        Assert.Equal(expected, Serialize(wrapped));
+        Assert.Equal(expected, SerializeLegacySnapshot(wrapped));
+
+        Assert.Null(DeserializeLegacySnapshot(expected).EligibleDeliveryTurnNumber);
 
         var result = RoundTrip(wrapped);
         Assert.Null(result.EligibleDeliveryTurnNumber);
+    }
+
+    [Theory]
+    [InlineData(true, true, true, true)]
+    [InlineData(true, true, false, false)]
+    [InlineData(true, false, true, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, false, false, true)]
+    public void SessionSnapshot_v2_child_initial_snapshot_requires_a_complete_pair(
+        bool lifecycleNeedsSnapshot,
+        bool hasWorkingContext,
+        bool hasGit,
+        bool shouldRestore)
+    {
+        // Arrange
+        var initialSnapshot = new WorkingContextSnapshot
+        {
+            WorkingContext = WorkingContext.Empty,
+            Git = new GitWorkingContextInspection.Skipped()
+        };
+        var run = new BackgroundChildRun
+        {
+            RunId = new SubAgentRunId("run-1"),
+            ScopeId = new SubAgentScopeId("scope-1"),
+            StartKey = new ChildRunStartKey.Tool(new SessionId("session-1"), "turn-1", new ToolCallId("call-1")),
+            AgentName = new AgentName("worker"),
+            SourceOperation = "spawn_agent",
+            ArgumentsDigest = "digest-1",
+            OriginalContext = new TurnContextRecord
+            {
+                SessionId = new SessionId("session-1"),
+                TurnId = "turn-1",
+                Boundary = TrustBoundary.Public,
+                RequesterPrincipal = PrincipalClassification.UntrustedExternal
+            },
+            InitialWorkingSnapshot = initialSnapshot,
+            AcceptedAtMs = 1,
+            Lifecycle = new ChildRunLifecycle.Accepted(null),
+            SourceReminderId = null
+        };
+        var proto = NetclawProtoMapper.ToProtoV2(new SessionSnapshot { ChildRuns = [run] });
+        var child = Assert.Single(proto.ChildRuns);
+        if (!lifecycleNeedsSnapshot)
+            child.Closed = new Serialization.Proto.ChildRunClosedV2Proto
+            {
+                DeliveryCallId = "delivery-1",
+                Outcome = (int)SubAgentRunOutcome.Completed
+            };
+        if (!hasWorkingContext) child.InitialWorkingContext = null!;
+        if (!hasGit) child.InitialGit = null!;
+
+        // Act and Assert
+        if (!shouldRestore)
+        {
+            Assert.Throws<InvalidDataException>(() => NetclawProtoMapper.FromProto(proto));
+            return;
+        }
+
+        var restored = NetclawProtoMapper.FromProto(proto);
+        var restoredRun = Assert.Single(restored.ChildRuns);
+        Assert.Equal(lifecycleNeedsSnapshot, restoredRun.InitialWorkingSnapshot is not null);
+    }
+
+    [Fact]
+    public void SessionSnapshot_eligible_reminder_id_round_trips_as_an_optional_proto_string()
+    {
+        // The snapshot keeps the fire key of the reminder that started the eligible turn. A session that
+        // restores from this snapshot does not replay the TurnRecorded event, so the key must travel here.
+        var wrapped = new SessionSnapshot
+        {
+            TurnCount = 7,
+            History = [],
+            EligibleDeliveryTurnNumber = new TurnNumber(7),
+            EligibleDeliveryReminderId = new ReminderId("check-pr:1712000000000")
+        };
+
+        var expected = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 7,
+            EligibleDeliveryTurnNumber = 7,
+            EligibleDeliveryReminderId = "check-pr:1712000000000"
+        }.ToByteArray();
+
+        Assert.Equal(expected, SnapshotStateRecord(wrapped));
+
+        var result = RoundTrip(wrapped);
+        Assert.Equal(new ReminderId("check-pr:1712000000000"), result.EligibleDeliveryReminderId);
+        Assert.Equal(new TurnNumber(7), result.EligibleDeliveryTurnNumber);
+    }
+
+    [Fact]
+    public void SessionSnapshot_eligible_turn_routed_mark_round_trips_as_a_plain_proto_bool()
+    {
+        // A session that restores from a snapshot does not replay TurnRecorded, so the snapshot carries the
+        // routed mark of the eligible turn. Without it a restored session would retry a routed turn.
+        var wrapped = new SessionSnapshot
+        {
+            TurnCount = 7,
+            History = [],
+            EligibleDeliveryTurnNumber = new TurnNumber(7),
+            EligibleDeliveryReminderId = new ReminderId("check-pr:1712000000000"),
+            EligibleDeliveryTurnRoutedSkill = true
+        };
+
+        var expected = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 7,
+            EligibleDeliveryTurnNumber = 7,
+            EligibleDeliveryReminderId = "check-pr:1712000000000",
+            EligibleDeliveryTurnRoutedSkill = true
+        }.ToByteArray();
+
+        Assert.Equal(expected, SnapshotStateRecord(wrapped));
+        Assert.True(RoundTrip(wrapped).EligibleDeliveryTurnRoutedSkill);
+    }
+
+    [Fact]
+    public void SessionSnapshot_from_before_the_reminder_field_loads_with_no_reminder()
+    {
+        // Old journals hold snapshots without the delivery fields. They must load, with the eligible turn kept
+        // and no reminder. A session never invents a reminder for such a snapshot.
+        var oldShape = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 4,
+            EligibleDeliveryTurnNumber = 4
+        }.ToByteArray();
+
+        // A journal from before the delivery fields holds v1 snapshots (manifest "ss-v1").
+        var snapshot = DeserializeLegacySnapshot(oldShape);
+
+        Assert.Equal(new TurnNumber(4), snapshot.EligibleDeliveryTurnNumber);
+        Assert.Null(snapshot.EligibleDeliveryReminderId);
+        // No value is not the same as false. A snapshot without the mark was written before the delivery fields.
+        Assert.Null(RoutedMark(snapshot));
+        Assert.Equal(oldShape, SnapshotStateRecord(snapshot));
+    }
+
+    // --- Review round 3, S2: the field numbers are durable, and other branches use the low numbers ---
+    // #2464 (the coordination stack) writes TurnRecordedProto 8 (child_continuation) and SessionSnapshotProto 13 to 19,
+    // and it reserves 12. #1897 writes TurnRecordedProto 8 and 9 and SessionSnapshotProto 12. A daemon built from
+    // such a branch can hold that data. These tests fix the numbers, so a later collision fails here.
+
+    private const int TurnRecordedRoutedSkillField = 10;
+    private const int SnapshotEligibleReminderField = 20;
+    private const int SnapshotEligibleRoutedSkillField = 21;
+
+    [Fact]
+    public void The_delivery_fields_use_numbers_that_no_other_branch_uses()
+    {
+        var routed = Serialization.Proto.TurnRecordedProto.Descriptor.FindFieldByName("routed_skill");
+        var reminder = Serialization.Proto.SessionSnapshotProto.Descriptor.FindFieldByName("eligible_delivery_reminder_id");
+        var snapshotRouted = Serialization.Proto.SessionSnapshotProto.Descriptor.FindFieldByName("eligible_delivery_turn_routed_skill");
+
+        Assert.Equal(TurnRecordedRoutedSkillField, routed.FieldNumber);
+        Assert.Equal(SnapshotEligibleReminderField, reminder.FieldNumber);
+        Assert.Equal(SnapshotEligibleRoutedSkillField, snapshotRouted.FieldNumber);
+
+        // Explicit presence tells "false" from "absent". An old snapshot has no value.
+        Assert.True(snapshotRouted.HasPresence);
+        Assert.True(reminder.HasPresence);
+    }
+
+    [Fact]
+    public void TurnRecorded_reads_the_routed_mark_from_field_10_and_ignores_the_other_branches_fields()
+    {
+        var probe = new TurnRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "hi" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "hello" },
+            RecordedAtMs = 1_700_000_000_000,
+            SourceReminderId = new ReminderId("check-pr:1712000000000")
+        };
+        var oldBytes = Serialize(probe);
+
+        // A hand-built entry with the routed mark at its tag.
+        var routed = Deserialize(WithVarintField(oldBytes, TurnRecordedRoutedSkillField, true), probe);
+        Assert.True(routed.RoutedSkill);
+        Assert.Equal(probe.SourceReminderId, routed.SourceReminderId);
+
+        // Field 8 is the child continuation of the coordination stack. An entry that holds a child continuation
+        // at 8 is not a routed mark, and the routed mark at 10 does not change the continuation.
+        var continuation = new ChildContinuation(new SubAgentRunId("run-1"), new ToolCallId("call-1"));
+        var stackEntry = Deserialize(Serialize(probe with { ChildContinuation = continuation }), probe);
+        Assert.False(stackEntry.RoutedSkill);
+        Assert.Equal(continuation, stackEntry.ChildContinuation);
+        var routedStackEntry = Deserialize(
+            WithVarintField(Serialize(probe with { ChildContinuation = continuation }), TurnRecordedRoutedSkillField, true),
+            probe);
+        Assert.True(routedStackEntry.RoutedSkill);
+        Assert.Equal(continuation, routedStackEntry.ChildContinuation);
+
+        // #1897 writes a message at 9. It is not a routed mark.
+        var tuiEntry = Deserialize(WithEmptyMessageField(oldBytes, 9), probe);
+        Assert.False(tuiEntry.RoutedSkill);
+
+        // Even a varint at 8 or 9 is not the routed mark.
+        Assert.False(Deserialize(WithVarintField(oldBytes, 8, true), probe).RoutedSkill);
+        Assert.False(Deserialize(WithVarintField(oldBytes, 9, true), probe).RoutedSkill);
+    }
+
+    [Fact]
+    public void TurnRecorded_writes_the_routed_mark_at_field_10()
+    {
+        var routed = new TurnRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "hi" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "hello" },
+            RecordedAtMs = 1_700_000_000_000,
+            RoutedSkill = true
+        };
+
+        var numbers = WireFieldNumbers(Serialize(routed));
+
+        Assert.Contains(TurnRecordedRoutedSkillField, numbers);
+        Assert.DoesNotContain(8, numbers);
+        Assert.DoesNotContain(9, numbers);
+    }
+
+    [Fact]
+    public void SessionSnapshot_reads_the_delivery_fields_from_fields_20_and_21()
+    {
+        var probe = new SessionSnapshot { TurnCount = 4, History = [] };
+        var oldBytes = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 4,
+            EligibleDeliveryTurnNumber = 4
+        }.ToByteArray();
+
+        var bytes = WithVarintField(
+            WithStringField(oldBytes, SnapshotEligibleReminderField, "check-pr:1712000000000"),
+            SnapshotEligibleRoutedSkillField,
+            true);
+        var snapshot = Deserialize(AsSnapshotV2(bytes), probe);
+
+        Assert.Equal(new ReminderId("check-pr:1712000000000"), snapshot.EligibleDeliveryReminderId);
+        Assert.True(snapshot.EligibleDeliveryTurnRoutedSkill);
+        Assert.Equal(new TurnNumber(4), snapshot.EligibleDeliveryTurnNumber);
+    }
+
+    [Fact]
+    public void SessionSnapshot_reads_an_explicit_false_routed_mark_as_false_not_as_absent()
+    {
+        var probe = new SessionSnapshot { TurnCount = 4, History = [] };
+        var oldBytes = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 4,
+            EligibleDeliveryTurnNumber = 4
+        }.ToByteArray();
+
+        // The writer sets the mark for every new snapshot, so a person's turn writes an explicit false.
+        var newFormat = Deserialize(AsSnapshotV2(WithVarintField(oldBytes, SnapshotEligibleRoutedSkillField, false)), probe);
+        var oldFormat = DeserializeLegacySnapshot(oldBytes);
+
+        Assert.True(RoutedMark(newFormat) is false);
+        Assert.Null(RoutedMark(oldFormat));
+        Assert.Null(newFormat.EligibleDeliveryReminderId);
+    }
+
+    [Fact]
+    public void SessionSnapshot_writes_an_explicit_false_routed_mark()
+    {
+        var snapshot = new SessionSnapshot
+        {
+            TurnCount = 7,
+            History = [],
+            EligibleDeliveryTurnNumber = new TurnNumber(7),
+            EligibleDeliveryTurnRoutedSkill = false
+        };
+
+        var numbers = WireFieldNumbers(SnapshotStateRecord(snapshot));
+
+        // The explicit false is on the wire. An old snapshot lacks it.
+        Assert.Contains(SnapshotEligibleRoutedSkillField, numbers);
+        Assert.True(RoutedMark(RoundTrip(snapshot)) is false);
+    }
+
+    [Fact]
+    public void SessionSnapshot_writes_the_delivery_fields_at_fields_20_and_21_and_not_at_12_or_13()
+    {
+        var snapshot = new SessionSnapshot
+        {
+            TurnCount = 7,
+            History = [],
+            EligibleDeliveryTurnNumber = new TurnNumber(7),
+            EligibleDeliveryReminderId = new ReminderId("check-pr:1712000000000"),
+            EligibleDeliveryTurnRoutedSkill = true
+        };
+
+        var numbers = WireFieldNumbers(SnapshotStateRecord(snapshot));
+
+        Assert.Contains(SnapshotEligibleReminderField, numbers);
+        Assert.Contains(SnapshotEligibleRoutedSkillField, numbers);
+        Assert.DoesNotContain(12, numbers);
+        Assert.DoesNotContain(13, numbers);
+    }
+
+    [Fact]
+    public void SessionSnapshot_ignores_numbers_that_the_coordination_stack_and_1897_use()
+    {
+        var probe = new SessionSnapshot { TurnCount = 4, History = [] };
+        var oldBytes = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 4,
+            EligibleDeliveryTurnNumber = 4
+        }.ToByteArray();
+
+        // #1897 writes a message at 12 (recent_transcript). This tree reserves 12, and 13 is the loop_admission field
+        // of the coordination stack. Neither is a delivery field, and a snapshot with them must still load.
+        var bytes = WithEmptyMessageField(WithEmptyMessageField(oldBytes, 12), 13);
+        var snapshot = Deserialize(AsSnapshotV2(bytes), probe);
+
+        Assert.Null(snapshot.EligibleDeliveryReminderId);
+        Assert.Null(RoutedMark(snapshot));
+        Assert.Equal(new TurnNumber(4), snapshot.EligibleDeliveryTurnNumber);
+
+        // Even a string at 12 or a varint at 13 is not a delivery field.
+        var stringAndVarint = WithVarintField(WithStringField(oldBytes, 12, "check-pr:1712000000000"), 13, true);
+        var other = Deserialize(AsSnapshotV2(stringAndVarint), probe);
+        Assert.Null(other.EligibleDeliveryReminderId);
+        Assert.Null(RoutedMark(other));
     }
 
     [Fact]
@@ -1216,7 +1667,10 @@ public sealed class SerializationRoundTripTests : TestKit
             TurnCount = 2
         }.ToByteArray();
 
-        Assert.Equal(expected, Serialize(wrapped));
+        Assert.Equal(expected, SerializeLegacySnapshot(wrapped));
+        var codec = new Serialization.NetclawProtobufSerializer((Akka.Actor.ExtendedActorSystem)Sys);
+        Assert.Equal("ss-v2", codec.Manifest(wrapped));
+        Assert.Equal(2, RoundTrip(wrapped).TurnCount);
     }
 
     [Fact]
@@ -1292,6 +1746,122 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Empty(result.Proposals);
         Assert.Equal(0L, result.TimestampMs);
     }
+
+    // --- The reminder link of a child run: BackgroundChildRunV2Proto field 20 ---
+    // A child-delivery turn copies the link of its child run to TurnRecorded.SourceReminderId. The link must survive
+    // the acceptance event (journal replay) and the snapshot child list (snapshot restore). No open branch edits
+    // BackgroundChildRunV2Proto, and dev uses fields 1 to 19.
+
+    private const int ChildRunSourceReminderField = 20;
+    private static readonly ReminderId ChildRunFireKey = new("check-pr:1712000000000");
+
+    private static BackgroundChildRun ChildRunWithReminderLink(ReminderId? link) => new()
+    {
+        RunId = new SubAgentRunId("run-link-1"),
+        ScopeId = new SubAgentScopeId("scope-link-1"),
+        StartKey = new ChildRunStartKey.Tool(new SessionId("session-link-1"), "turn-link-1", new ToolCallId("call-link-1")),
+        AgentName = new AgentName("worker"),
+        SourceOperation = "spawn_agent",
+        ArgumentsDigest = "digest-link-1",
+        OriginalContext = new TurnContextRecord
+        {
+            SessionId = new SessionId("session-link-1"),
+            TurnId = "turn-link-1",
+            Boundary = TrustBoundary.Team,
+            RequesterPrincipal = PrincipalClassification.VerifiedAutomation
+        },
+        InitialWorkingSnapshot = new WorkingContextSnapshot
+        {
+            WorkingContext = WorkingContext.Empty,
+            Git = new GitWorkingContextInspection.Skipped()
+        },
+        AcceptedAtMs = 1,
+        Lifecycle = new ChildRunLifecycle.Accepted(null),
+        SourceReminderId = link
+    };
+
+    private static ChildRunAccepted AcceptanceOf(BackgroundChildRun run) => new()
+    {
+        SessionId = new SessionId("session-link-1"),
+        Run = run,
+        RecordedAtMs = 1
+    };
+
+    // The run record inside the acceptance event, as the journal writes it.
+    private byte[] AcceptedRunRecord(ChildRunAccepted accepted)
+        => Serialization.Proto.ChildRunAcceptedV2Proto.Parser.ParseFrom(Serialize(accepted)).Run.ToByteArray();
+
+    [Fact]
+    public void The_child_run_reminder_link_uses_field_20_with_explicit_presence()
+    {
+        var field = Serialization.Proto.BackgroundChildRunV2Proto.Descriptor.FindFieldByName("source_reminder_id");
+
+        Assert.Equal(ChildRunSourceReminderField, field.FieldNumber);
+        // Presence tells "no reminder" from an empty key.
+        Assert.True(field.HasPresence);
+    }
+
+    [Fact]
+    public void ChildRunAccepted_keeps_the_reminder_link_of_the_turn_that_started_the_child()
+    {
+        var accepted = AcceptanceOf(ChildRunWithReminderLink(ChildRunFireKey));
+
+        var result = RoundTrip(accepted);
+
+        Assert.Equal(ChildRunFireKey, result.Run.SourceReminderId);
+        Assert.Contains(ChildRunSourceReminderField, WireFieldNumbers(AcceptedRunRecord(accepted)));
+    }
+
+    [Fact]
+    public void ChildRunAccepted_of_a_person_turn_writes_no_reminder_link()
+    {
+        var accepted = AcceptanceOf(ChildRunWithReminderLink(null));
+
+        var result = RoundTrip(accepted);
+
+        Assert.Null(result.Run.SourceReminderId);
+        Assert.DoesNotContain(ChildRunSourceReminderField, WireFieldNumbers(AcceptedRunRecord(accepted)));
+    }
+
+    [Fact]
+    public void A_child_run_record_from_before_the_link_reads_as_no_link_and_a_hand_built_field_20_reads_as_the_link()
+    {
+        // A record without field 20 is what a journal from before this change holds. It reads as no reminder, so
+        // the child-delivery turn of such a child raises no alert.
+        var oldShape = AcceptanceOf(ChildRunWithReminderLink(null));
+        var oldBytes = Serialize(oldShape);
+        Assert.Null(Deserialize(oldBytes, oldShape).Run.SourceReminderId);
+
+        var proto = Serialization.Proto.ChildRunAcceptedV2Proto.Parser.ParseFrom(oldBytes);
+        proto.Run = Serialization.Proto.BackgroundChildRunV2Proto.Parser.ParseFrom(
+            WithStringField(proto.Run.ToByteArray(), ChildRunSourceReminderField, ChildRunFireKey.Value));
+
+        Assert.Equal(ChildRunFireKey, Deserialize(proto.ToByteArray(), oldShape).Run.SourceReminderId);
+    }
+
+    [Fact]
+    public void SessionSnapshot_child_run_keeps_the_reminder_link()
+    {
+        // A session that restores from a snapshot reads the child run from the snapshot, not from the
+        // acceptance event. The child-delivery turn after the restore needs the link from here.
+        var snapshot = new SessionSnapshot
+        {
+            TurnCount = 1,
+            History = [],
+            ChildRuns = [ChildRunWithReminderLink(ChildRunFireKey)]
+        };
+
+        var restored = RoundTrip(snapshot);
+
+        Assert.Equal(ChildRunFireKey, Assert.Single(restored.ChildRuns).SourceReminderId);
+    }
+
+    private byte[] SerializeLegacySnapshot(SessionSnapshot snapshot)
+        => NetclawProtoMapper.ToProto(snapshot).ToByteArray();
+
+    private SessionSnapshot DeserializeLegacySnapshot(byte[] bytes)
+        => Assert.IsType<SessionSnapshot>(new NetclawProtobufSerializer(
+            (Akka.Actor.ExtendedActorSystem)Sys).FromBinary(bytes, "ss-v1"));
 
     private static ConsentAnswer MapLegacyApprovalDecision(string selectedKey) => selectedKey switch
     {

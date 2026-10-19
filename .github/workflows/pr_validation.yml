@@ -168,16 +168,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - group: shell-analysis
-            gates: shell-command-analysis tool-authorizer-order mcp-artifact-admission
+          - group: shell-command-analysis
+            gates: shell-command-analysis
           - group: shell-assignment-and-paths
-            gates: shell-assignment shell-config-read path-access
-          - group: verb-chain-and-reminder
-            gates: exact-verb-chain reminder-execution literal-twin stream-commit-gate
-          - group: approval-and-authorization
-            gates: tool-authorization approval-directory skill-manage-guard no-program input-one-authority
+            gates: shell-assignment path-access
+          - group: config-read-and-admission
+            gates: shell-config-read tool-authorizer-order mcp-artifact-admission
+          - group: verb-chain
+            gates: exact-verb-chain
+          - group: reminder
+            gates: reminder-execution literal-twin stream-commit-gate shutdown-notice-identity
+          - group: authorization-and-directory
+            gates: tool-authorization approval-directory
+          - group: guard-and-authority
+            gates: skill-manage-guard no-program input-one-authority
+          - group: stop-proof
+            gates: stop-proof
           - group: session-reliability
-            gates: tool-batch-readiness
+            gates: tool-batch-readiness headless-stop-rule open-child-runs
+          - group: child-owner-and-report
+            gates: child-owner child-control reminder-report-once child-approval-close
 
     steps:
       - name: "Checkout"

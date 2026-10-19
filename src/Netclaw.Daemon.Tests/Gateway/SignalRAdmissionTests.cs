@@ -54,6 +54,7 @@ public sealed class SignalRAdmissionTests(ITestOutputHelper output) : TestKit(ou
         var paths = new NetclawPaths(_directory.Path);
         paths.EnsureDirectoriesExist();
         services.AddSingleton(paths);
+        services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
         services.AddSingleton(new SessionConfig { Tuning = new SessionTuning { TitleGenerationInterval = 0 } });
         services.AddSingleton(new ModelCapabilities { ModelId = "held-model", ContextWindowTokens = 128_000 });
         services.AddSingleton(new SessionServices(new SingleClientProvider(_model),

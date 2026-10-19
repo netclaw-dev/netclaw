@@ -36,6 +36,12 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
     // post while letting a follow-up (e.g. fallback) succeed and be recorded.
     public Exception? ThrowOnceOnPost { get; set; }
 
+    /// <summary>
+    /// Failures for the next posts, one per post, in order. A test uses it to give two failed posts of one turn
+    /// two different error texts. Posts after the last entry succeed.
+    /// </summary>
+    public System.Collections.Concurrent.ConcurrentQueue<Exception> ThrowInOrderOnPosts { get; } = new();
+
     public void Clear()
     {
         lock (_lock)
@@ -71,6 +77,9 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
             ThrowOnceOnPost = null;
             throw onceEx;
         }
+
+        if (ThrowInOrderOnPosts.TryDequeue(out var orderedEx))
+            throw orderedEx;
     }
 
     public Task UpdateThreadMessageAsync(

@@ -53,7 +53,7 @@ public sealed class SubAgentSpawnObservabilityTests : IDisposable
             workingContextSnapshots: new WorkingContextSnapshotProvider(
                 new GitWorkingContextInspector(TimeProvider.System),
                 NullLogger<WorkingContextSnapshotProvider>.Instance),
-            logger);
+            logger, new SessionConfig());
 
         // A context with a session id but no SpawnChildActor factory — the
         // "subagent tried to spawn but never launched" failure shape.

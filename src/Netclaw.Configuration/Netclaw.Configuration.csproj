@@ -10,6 +10,8 @@
     <InternalsVisibleTo Include="netclaw" />
     <InternalsVisibleTo Include="netclawd" />
     <InternalsVisibleTo Include="Netclaw.Actors" />
+    <InternalsVisibleTo Include="Netclaw.Actors.Tests" />
+    <InternalsVisibleTo Include="Netclaw.Actors.MutationTests" />
     <InternalsVisibleTo Include="Netclaw.Configuration.Tests" />
     <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
     <InternalsVisibleTo Include="Netclaw.Cli.Tests" />
@@ -18,8 +20,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.DataProtection" />
     <PackageReference Include="Microsoft.AspNetCore.DataProtection.Extensions" />
-    <!-- Direct reference forces the transitive System.Security.Cryptography.Xml to 10.0.6 to patch
-         CVE-2026-26171 / CVE-2026-33116 (https://github.com/advisories/GHSA-w3x6-4m5h-cxqf). -->
+    <!-- Direct reference applies the patched central XML package pin to DataProtection's transitive dependency. -->
     <PackageReference Include="System.Security.Cryptography.Xml" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />

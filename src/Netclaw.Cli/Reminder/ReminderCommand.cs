@@ -65,14 +65,14 @@ internal static class ReminderCommand
         {
             "list" => await RunListAsync(daemonApi, args, output, error),
             "create" => await RunCreateAsync(daemonApi, args),
-            "cancel" => await RunCancelAsync(daemonApi, args),
-            "delete" => await RunDeleteAsync(daemonApi, args),
+            "cancel" => await RunCancelAsync(daemonApi, args, output, error),
+            "delete" => await RunDeleteAsync(daemonApi, args, output, error),
             "disable" => await RunDisableAsync(daemonApi, args),
             "enable" => await RunEnableAsync(daemonApi, args),
             "import" => await RunImportAsync(daemonApi, args, output, error),
             "show" => await RunShowAsync(daemonApi, args, output, error),
             "history" => await RunHistoryAsync(daemonApi, args, output, error),
-            "status" => await RunStatusAsync(daemonApi, args),
+            "status" => await RunStatusAsync(daemonApi, args, output, error),
             // Program.cs opens a chat for `reminder run <id>`. Other forms are a usage error.
             "run" => WriteRunUsage(error),
             _ => WriteHelp(output)
@@ -281,29 +281,30 @@ internal static class ReminderCommand
         }
     }
 
-    private static async Task<int> RunCancelAsync(DaemonApi api, string[] args)
+    private static async Task<int> RunCancelAsync(DaemonApi api, string[] args, TextWriter output, TextWriter error)
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder cancel <id>");
+            error.WriteLine("Usage: netclaw reminder cancel <id>");
             return 1;
         }
 
-        return await RunRemoveAsync(api, args[2], permanent: false);
+        return await RunRemoveAsync(api, args[2], permanent: false, output, error);
     }
 
-    private static async Task<int> RunDeleteAsync(DaemonApi api, string[] args)
+    private static async Task<int> RunDeleteAsync(DaemonApi api, string[] args, TextWriter output, TextWriter error)
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder delete <id>");
+            error.WriteLine("Usage: netclaw reminder delete <id>");
             return 1;
         }
 
-        return await RunRemoveAsync(api, args[2], permanent: true);
+        return await RunRemoveAsync(api, args[2], permanent: true, output, error);
     }
 
-    private static async Task<int> RunRemoveAsync(DaemonApi api, string id, bool permanent)
+    private static async Task<int> RunRemoveAsync(
+        DaemonApi api, string id, bool permanent, TextWriter output, TextWriter error)
     {
         try
         {
@@ -314,21 +315,21 @@ internal static class ReminderCommand
             if (response.IsSuccessStatusCode)
             {
                 if (result.TryGetProperty("message", out var msg))
-                    Console.WriteLine(msg.GetString());
+                    output.WriteLine(msg.GetString());
                 else
-                    Console.WriteLine(json);
+                    output.WriteLine(json);
                 return 0;
             }
 
             if (result.TryGetProperty("error", out var err))
-                Console.Error.WriteLine($"[FAIL] {err.GetString()}");
+                error.WriteLine($"[FAIL] {err.GetString()}");
             else
-                Console.Error.WriteLine($"[FAIL] {json}");
+                error.WriteLine($"[FAIL] {json}");
             return 1;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
             return 1;
         }
     }
@@ -674,11 +675,11 @@ internal static class ReminderCommand
         }
     }
 
-    private static async Task<int> RunStatusAsync(DaemonApi api, string[] args)
+    private static async Task<int> RunStatusAsync(DaemonApi api, string[] args, TextWriter output, TextWriter error)
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder status <id>");
+            error.WriteLine("Usage: netclaw reminder status <id>");
             return 1;
         }
 
@@ -690,13 +691,13 @@ internal static class ReminderCommand
 
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                Console.Error.WriteLine($"[FAIL] Reminder '{id}' not found.");
+                error.WriteLine($"[FAIL] Reminder '{id}' not found.");
                 return 1;
             }
 
             if (!response.IsSuccessStatusCode)
             {
-                Console.Error.WriteLine($"[FAIL] daemon returned {(int)response.StatusCode}");
+                error.WriteLine($"[FAIL] daemon returned {(int)response.StatusCode}");
                 return 1;
             }
 
@@ -704,42 +705,56 @@ internal static class ReminderCommand
             var status = JsonSerializer.Deserialize<ReminderStatusView>(json, JsonOptions);
             if (status is null)
             {
-                Console.Error.WriteLine("[FAIL] could not parse status response.");
+                error.WriteLine("[FAIL] could not parse status response.");
                 return 1;
             }
 
-            Console.WriteLine($"Reminder:            {status.Id}");
-            Console.WriteLine($"Enabled:             {status.Enabled}");
-            Console.WriteLine($"Executing now:       {status.Executing}");
-            Console.WriteLine($"Next fire:           {status.NextFire ?? "not scheduled"}");
-            Console.WriteLine($"Consecutive fails:   {status.ConsecutiveFailures}");
-            Console.WriteLine($"Skipped occurrences: {status.SkippedDuplicates}");
-            Console.WriteLine($"Terminal outcome:    {status.TerminalOutcome ?? "none"}");
+            output.WriteLine($"Reminder:            {status.Id}");
+            output.WriteLine($"Enabled:             {status.Enabled}");
+            output.WriteLine($"Executing now:       {status.Executing}");
+            output.WriteLine($"Next fire:           {status.NextFire ?? "not scheduled"}");
+            output.WriteLine($"Consecutive fails:   {status.ConsecutiveFailures}");
+            output.WriteLine($"Skipped occurrences: {status.SkippedDuplicates}");
+
+            if (status.Ended is { } ended)
+            {
+                // The prompt of a Failed one-shot has this one read surface (design D1a).
+                output.WriteLine(
+                    $"Ended:               {ended.Outcome.ToLowerInvariant()} at {ended.EndedAt:u} (history stays until {ended.PurgeAt:u})");
+                if (!string.IsNullOrWhiteSpace(ended.LastError))
+                    output.WriteLine($"Last error:          {ended.LastError}");
+                if (!string.IsNullOrWhiteSpace(ended.Instructions))
+                    output.WriteLine($"Prompt:              {ended.Instructions}");
+            }
+            else
+            {
+                output.WriteLine($"Terminal outcome:    {status.TerminalOutcome ?? "none"}");
+            }
 
             if (status.Occurrence is { } occurrence)
             {
-                Console.WriteLine($"Occurrence status:   {occurrence.CompletionStatus}");
-                Console.WriteLine($"Occurrence attempts: {occurrence.AttemptCount}");
+                output.WriteLine($"Occurrence status:   {occurrence.CompletionStatus}");
+                output.WriteLine($"Occurrence attempts: {occurrence.AttemptCount}");
                 if (occurrence.NextAttemptAtUtc is { } nextAttemptAtUtc)
-                    Console.WriteLine($"Next retry:          {nextAttemptAtUtc:u}");
+                    output.WriteLine($"Next retry:          {nextAttemptAtUtc:u}");
                 if (!string.IsNullOrWhiteSpace(occurrence.LastFailureReason))
-                    Console.WriteLine($"Last failure:        {occurrence.LastFailureReason}");
+                    output.WriteLine($"Last failure:        {occurrence.LastFailureReason}");
             }
 
             var history = status.RecentHistory ?? [];
             if (history.Length == 0)
             {
-                Console.WriteLine("Recent history:      none");
+                output.WriteLine("Recent history:      none");
             }
             else
             {
-                Console.WriteLine("Recent history (newest first):");
+                output.WriteLine("Recent history (newest first):");
                 // History arrives oldest-first; reverse so the most recent runs
                 // (the ones an operator diagnosing a failure cares about) lead.
                 foreach (var r in history.Reverse())
                 {
                     var err = string.IsNullOrEmpty(r.ErrorMessage) ? "" : $" — {r.ErrorMessage}";
-                    Console.WriteLine($"  {r.FiredAt:u}  {r.Status}{err}");
+                    output.WriteLine($"  {r.FiredAt:u}  {r.Status}{err}");
                 }
             }
 
@@ -747,8 +762,8 @@ internal static class ReminderCommand
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
-            Console.Error.WriteLine("       fix: run `netclaw daemon start` and retry.");
+            error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            error.WriteLine("       fix: run `netclaw daemon start` and retry.");
             return 1;
         }
     }
@@ -763,7 +778,15 @@ internal static class ReminderCommand
         int SkippedDuplicates,
         string? TerminalOutcome,
         ReminderOccurrenceView? Occurrence,
-        HistoryRecord[]? RecentHistory);
+        HistoryRecord[]? RecentHistory,
+        ReminderEndedView? Ended);
+
+    private sealed record ReminderEndedView(
+        string Outcome,
+        DateTimeOffset EndedAt,
+        DateTimeOffset PurgeAt,
+        string? LastError,
+        string? Instructions);
 
     private sealed record ReminderOccurrenceView(
         DateTimeOffset DueTimeUtc,
@@ -792,7 +815,7 @@ internal static class ReminderCommand
         output.WriteLine("Subcommands:");
         output.WriteLine("  list [--json]                                 List reminders as a table (--json: raw JSON for scripts)");
         output.WriteLine("  create <id> <type> <schedule> \"<prompt>\"      Create or update a reminder");
-        output.WriteLine("  cancel <id>                                   Cancel a reminder (disables, keeps definition)");
+        output.WriteLine("  cancel <id>                                   Cancel a reminder (deletes a one-shot; disables a recurring reminder)");
         output.WriteLine("  delete <id>                                   Permanently delete a reminder and its history");
         output.WriteLine("  disable <id>                                  Disable a reminder");
         output.WriteLine("  enable <id>                                   Enable a reminder");

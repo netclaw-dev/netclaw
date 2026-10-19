@@ -232,12 +232,21 @@ public static class ReminderEndpointRouteBuilderExtensions
                 new CancelReminderCommand(reminderId, authorization),
                 TimeSpan.FromSeconds(10), ct);
 
-            return response.Found
-                ? TypedResults.Ok(new ReminderMessageResponse($"Reminder '{id}' cancelled (disabled)."))
-                : TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
+            if (response.ErrorMessage is { } failure)
+                return TypedResults.Problem(detail: failure, statusCode: StatusCodes.Status500InternalServerError);
+
+            if (response.AlreadyEnded is { } alreadyEnded)
+                return TypedResults.Ok(new ReminderMessageResponse(alreadyEnded.DescribeAlreadyEnded(reminderId)));
+
+            if (!response.Found)
+                return TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
+
+            return TypedResults.Ok(new ReminderMessageResponse(response.Deleted
+                ? $"Reminder '{id}' cancelled and deleted."
+                : $"Reminder '{id}' cancelled (disabled)."));
         })
         .WithName("DeleteReminder")
-        .WithSummary("Cancel a reminder, or permanently delete it with ?permanent=true.");
+        .WithSummary("Cancel a reminder (a one-shot is deleted, a recurring reminder is disabled), or permanently delete it with ?permanent=true.");
 
         reminders.MapPost("/{id}/disable", async ValueTask<Results<Ok<ReminderDisableResponse>, NotFound<ReminderErrorResponse>>> (
             string id,
@@ -297,7 +306,13 @@ public static class ReminderEndpointRouteBuilderExtensions
                 TimeSpan.FromSeconds(10), ct);
 
             if (response.Reminder is null)
-                return TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
+            {
+                // An ended one-shot has no definition. The 404 names the end and when its history goes.
+                return TypedResults.NotFound(new ReminderErrorResponse(
+                    response.Ended is { } ended
+                        ? ended.DescribeEnd(new ReminderId(id))
+                        : $"Reminder '{id}' not found."));
+            }
 
             var r = response.Reminder;
             return TypedResults.Ok(new ReminderDetailDto(
@@ -382,7 +397,15 @@ public static class ReminderEndpointRouteBuilderExtensions
                 SkippedDuplicates: status.SkippedDuplicates,
                 TerminalOutcome: status.TerminalOutcome?.ToString(),
                 Occurrence: status.Occurrence,
-                RecentHistory: status.RecentHistory));
+                RecentHistory: status.RecentHistory,
+                Ended: status.Ended is { } ended
+                    ? new ReminderEndedDto(
+                        Outcome: ended.Outcome.ToString(),
+                        EndedAt: ended.EndedAt,
+                        PurgeAt: ended.PurgeAt,
+                        LastError: ended.LastError,
+                        Instructions: ended.Instructions)
+                    : null));
         })
         .WithName("GetReminderStatus")
         .WithSummary("Get reminder execution, retry, failure, terminal, and history status.");
@@ -475,7 +498,19 @@ internal sealed record ReminderStatusDto(
     int SkippedDuplicates,
     string? TerminalOutcome,
     ReminderOccurrenceInfo? Occurrence,
-    IReadOnlyList<HistoryRecord> RecentHistory);
+    IReadOnlyList<HistoryRecord> RecentHistory,
+    ReminderEndedDto? Ended);
+
+/// <summary>
+/// The end of a one-shot reminder (see <see cref="ReminderEndedInfo"/>). <c>Instructions</c> is the reminder
+/// prompt. It is set only for a <c>Failed</c> one-shot, and only the status route returns it.
+/// </summary>
+internal sealed record ReminderEndedDto(
+    string Outcome,
+    DateTimeOffset EndedAt,
+    DateTimeOffset PurgeAt,
+    string? LastError,
+    string? Instructions);
 
 /// <summary>Acknowledgement carrying a human-readable message.</summary>
 internal sealed record ReminderMessageResponse(string Message);

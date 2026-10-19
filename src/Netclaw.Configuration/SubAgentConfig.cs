@@ -24,8 +24,8 @@ public sealed class SubAgentConfig
     /// model produces its first substantive token, this budget governs the call —
     /// content-free <c>prompt_progress</c> keepalives refresh it so a healthy but
     /// slow self-hosted prefill is not mistaken for a hang. Once the first
-    /// substantive delta arrives, the tighter per-agent inter-delta budget
-    /// (<see cref="SubAgentProfile.TimeoutSeconds"/>) applies. A per-agent
+    /// substantive delta arrives, the session-wide inter-delta budget
+    /// (<see cref="SessionConfig.FirstTokenTimeout"/>) applies. A per-agent
     /// definition may override this via <c>prefillTimeoutSeconds</c> frontmatter.
     /// </summary>
     public int PrefillTimeoutSeconds { get; set; } = 1800;

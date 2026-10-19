@@ -88,6 +88,7 @@ public sealed class SubAgentFrontmatter
     public string? Description { get; set; }
     public List<string>? Tools { get; set; }
     public string? ModelRole { get; set; }
+    /// <summary>Obsolete. Read only so the loader can warn that the key is ignored.</summary>
     public int? TimeoutSeconds { get; set; }
     public int? PrefillTimeoutSeconds { get; set; }
     public bool? EmitStructuredFindings { get; set; }

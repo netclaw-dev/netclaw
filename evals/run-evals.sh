@@ -65,6 +65,7 @@ EVAL_ASSET_ROOT="${NETCLAW_EVAL_ASSET_ROOT:-$REPO_ROOT}"
 RUNS="${NETCLAW_EVAL_RUNS:-5}"
 THRESHOLD="${NETCLAW_EVAL_THRESHOLD:-0.80}"
 PROMPT_TIMEOUT="${NETCLAW_EVAL_TIMEOUT:-60}"
+MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
 EVAL_PORT="${NETCLAW_EVAL_PORT:-5299}"
 EVAL_CONTAINER_NAME="netclaw-eval-$$"
 # True after seed_eval_memories seeded the store. reset_memory_store acts only then.
@@ -281,6 +282,10 @@ cleanup_eval_env() {
         kill "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
         wait "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
     fi
+    if [[ -n "${SPILL_FIXTURE_PID_SAVED:-}" ]]; then
+        kill "$SPILL_FIXTURE_PID_SAVED" 2>/dev/null || true
+        wait "$SPILL_FIXTURE_PID_SAVED" 2>/dev/null || true
+    fi
     # TMPDIR_EVAL only holds host-owned per-prompt stdout/stderr captures, so a
     # plain rm always succeeds — no force_rmrf fallback needed.
     if [[ -n "${TMPDIR_EVAL:-}" && -d "$TMPDIR_EVAL" ]]; then
@@ -341,6 +346,7 @@ archive_eval_run() {
         mkdir -p "$archive_dir/stdout"
         cp "$TMPDIR_EVAL"/stdout_*.txt "$archive_dir/stdout/" 2>/dev/null || true
         cp "$TMPDIR_EVAL"/stderr_*.txt "$archive_dir/stdout/" 2>/dev/null || true
+        cp "$TMPDIR_EVAL"/prompt_status_*.txt "$archive_dir/stdout/" 2>/dev/null || true
     fi
 
     # Write run metadata, including the immutable image identity so before/after
@@ -367,6 +373,7 @@ category:  ${FILTER_CATEGORY:-all}
 case:      ${FILTER_CASE:-all}
 seed:      $EVAL_SEED
 timeout:   ${PROMPT_TIMEOUT:-60}s
+max_case_timeout: ${MAX_PROMPT_TIMEOUT:-60}s
 runs:      ${RUNS:-5}
 threshold: ${THRESHOLD:-0.80}
 passed:    ${PASSED_CASES:-0}/${TOTAL_CASES:-0}
@@ -411,6 +418,18 @@ build_local_image() {
     echo "→ Building netclaw from source (image + CLI)..."
     "$REPO_ROOT/scripts/docker/build-image.sh"
     echo "→ Local build complete: $NETCLAW_IMAGE"
+}
+
+build_coordination_observer() {
+    if [[ -n "$FILTER_CASE" && "$FILTER_CASE" != "coordination_independent_synthesis" && "$FILTER_CASE" != "coordination_artifact_review" ]]; then
+        return 0
+    fi
+    if [[ -n "$FILTER_CATEGORY" && "${FILTER_CATEGORY,,}" != *subagent* ]]; then
+        return 0
+    fi
+
+    echo "→ Building the coordination eval observer..."
+    dotnet build "$REPO_ROOT/evals/coordination-observer/coordination-observer.csproj" --verbosity quiet
 }
 
 # ─── Eval Daemon Lifecycle ────────────────────────────────────────────────────
@@ -468,8 +487,47 @@ write_eval_reminder() {
     chmod ugo+rw "$file"
 }
 
+# Prints the epoch seconds of the latest "0 3 * * 0" fire (Sunday 03:00 UTC)
+# at or before a time. UTC has no daylight saving shift, so epoch arithmetic
+# is exact. The epoch day 0 was a Thursday, so (day + 4) % 7 is the weekday
+# with Sunday as 0.
+# Args: epoch seconds of the time (default: now)
+last_sunday_0300_utc_epoch() {
+    local now="${1:-$(date +%s)}"
+    local day=$(( now / 86400 ))
+    local fire=$(( day * 86400 + 3 * 3600 - ((day + 4) % 7) * 86400 ))
+    if (( fire > now )); then
+        fire=$(( fire - 7 * 86400 ))
+    fi
+    printf '%s\n' "$fire"
+}
+
+# Writes one successful history record for a reminder. The reminder tools read
+# the file {id}.history.jsonl next to the definition file.
+# Args: id, epoch seconds of the fire
+write_eval_reminder_history() {
+    local id="$1" fired_at="$2"
+    local file="$EVAL_HOME/data/schedules/reminders/$id.history.jsonl"
+    jq -nc --argjson fired "$fired_at" --arg id "$id" '
+        {
+            firedAt: ($fired | strftime("%Y-%m-%dT%H:%M:%SZ")),
+            success: true,
+            durationMs: 2300,
+            sessionId: ("reminder/" + $id + "/" + ($fired | tostring)),
+            errorMessage: null,
+            toolDenied: false
+        }' > "$file"
+    chmod ugo+rw "$file"
+}
+
+# The seeded reminder fires every Sunday at 03:00 UTC. It gets one successful
+# run at the latest Sunday 03:00 UTC, so the history is never empty for a job
+# that is due. Without it, a run on a Sunday after 03:00 UTC made the agent
+# think the fire was missed. It then ran `netclaw reminder status` to check.
+# The record time depends on the run day, but the schedule never looks late.
 seed_disk_cleanup_reminder() {
     write_eval_reminder "disk-cleanup-weekly" "Weekly disk space cleanup" "0 3 * * 0"
+    write_eval_reminder_history "disk-cleanup-weekly" "$(last_sunday_0300_utc_epoch)"
 }
 
 start_eval_daemon() {
@@ -768,10 +826,17 @@ seed_eval_memories() {
     # the normal headless path so the session pipeline creates netclaw.db before
     # fixture seeding runs.
     if ! docker exec "$EVAL_CONTAINER_NAME" test -f "$db_path" 2>/dev/null; then
-        NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
-        NETCLAW_HOME="$EVAL_HOME" \
+        local ts exit_code=0
+        ts="$(date +%s%N)"
+        if NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
+            NETCLAW_HOME="$EVAL_HOME" \
             timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p "Warm up memory initialization. Reply with OK only." \
-            >/dev/null 2>&1 || true
+            > "$TMPDIR_EVAL/stdout_${ts}_warmup.txt" 2> "$TMPDIR_EVAL/stderr_${ts}_warmup.txt"; then
+            :
+        else
+            exit_code=$?
+        fi
+        check_prompt_exit_status "$ts" "$exit_code" "Memory warm-up prompt"
     fi
 
     # Wait for the daemon to create the database.
@@ -1316,6 +1381,19 @@ finish_case() {
         "$CASE_PASSES" "$conclusive" "$score" "$description"
 }
 
+check_prompt_exit_status() {
+    local timestamp="$1" exit_code="$2" prompt_kind="$3"
+    printf '%s\n' "$exit_code" > "$TMPDIR_EVAL/prompt_status_${timestamp}.txt"
+    if (( exit_code != 0 )); then
+        if (( exit_code == 124 )); then
+            echo "ERROR: $prompt_kind timed out after ${PROMPT_TIMEOUT}s; the eval run stops to prevent overlapping model requests." >&2
+        else
+            echo "ERROR: $prompt_kind exited with status $exit_code; the eval run stops before another prompt." >&2
+        fi
+        exit 2
+    fi
+}
+
 # ─── Prompt Runner ────────────────────────────────────────────────────────────
 
 check_daemon_alive() {
@@ -1383,6 +1461,30 @@ run_prompt() {
 
     # Brief pause for daemon log flush
     sleep 2
+}
+
+run_coordination_observer_prompt() {
+    local prompt="$1" required_children="$2"
+    local ts
+    ts="$(date +%s%N)"
+    STDOUT_FILE="$TMPDIR_EVAL/stdout_${ts}.txt"
+    STDERR_FILE="$TMPDIR_EVAL/stderr_${ts}.txt"
+    resolve_daemon_log
+    if [[ -f "$DAEMON_LOG" ]]; then
+        DAEMON_LOG_LINES_BEFORE=$(wc -l < "$DAEMON_LOG")
+    else
+        DAEMON_LOG_LINES_BEFORE=0
+    fi
+
+    local started_at ended_at exit_code=0
+    started_at=$(iso_now)
+    timeout "$PROMPT_TIMEOUT" dotnet run --no-build \
+        --project "$REPO_ROOT/evals/coordination-observer/coordination-observer.csproj" -- \
+        "http://127.0.0.1:$EVAL_PORT" "$PROMPT_TIMEOUT" "$required_children" "$prompt" \
+        > "$STDOUT_FILE" 2> "$STDERR_FILE" || exit_code=$?
+    ended_at=$(iso_now)
+    record_cli_call "$TRIAL_RAW" "$prompt" json "$exit_code" \
+        "$started_at" "$ended_at" "$STDOUT_FILE" "$STDERR_FILE"
 }
 
 ## Runs a prompt against an existing (or new) named session via `chat -p --resume`.
@@ -1479,6 +1581,9 @@ run_multi_turn_case() {
     # Skip if category or case filter excludes this case
     if [[ "$CATEGORY_SKIPPED" == "true" ]]; then return; fi
     if [[ -n "$FILTER_CASE" && "$case_name" != "$FILTER_CASE" ]]; then return; fi
+    if (( PROMPT_TIMEOUT > MAX_PROMPT_TIMEOUT )); then
+        MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
+    fi
 
     check_daemon_alive
 
@@ -1552,6 +1657,25 @@ stdout_response_contains() {
 
 stdout_response_not_contains() {
     if grep -av '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qia "$1"; then
+        return 1
+    fi
+    return 0
+}
+
+# The parent's own text. A headless run prints the child's whole answer on one
+# "[tool:result] child_run_result" line. That text is the child's, not the
+# parent's. A pattern about the parent reply must not match it. Tool call lines
+# stay excluded as in stdout_response_contains.
+stdout_parent_text() {
+    grep -av -e '^\[tool:call\]' -e '^\[tool:result\] child_run_result ' "$STDOUT_FILE" 2>/dev/null
+}
+
+stdout_parent_text_contains() {
+    stdout_parent_text | grep -qia "$1"
+}
+
+stdout_parent_text_not_contains() {
+    if stdout_parent_text | grep -qia "$1"; then
         return 1
     fi
     return 0
@@ -1651,6 +1775,11 @@ stdout_json_tool_called() {
     jq -e --arg tool_name "$tool_name" \
         'any(.toolCalls[]?; .toolName == $tool_name)' \
         "$STDOUT_FILE" >/dev/null 2>&1
+}
+
+stdout_json_response_contains() {
+    local pattern="$1"
+    jq -r '.response // empty' "$STDOUT_FILE" | grep -qia "$pattern" 2>/dev/null
 }
 
 stdout_json_tool_call_arguments() {
@@ -2236,22 +2365,27 @@ assert_deployment_mission_sales_email() {
 assert_subagent_headless_ambiguous_task() {
     stdout_tool_called 'spawn_agent' && \
         stdout_contains '\[subagent:done\] headless-analyst (completed' && \
-        stdout_response_contains 'assumption' && \
-        stdout_response_not_contains 'which.*include' && \
-        stdout_response_not_contains 'what.*include' && \
-        stdout_response_not_contains 'please.*clarify' && \
-        stdout_response_not_contains 'need.*more.*information'
+        stdout_parent_text_contains 'assumption' && \
+        stdout_parent_text_not_contains 'which.*include' && \
+        stdout_parent_text_not_contains 'what.*include' && \
+        stdout_parent_text_not_contains 'please.*clarify' && \
+        stdout_parent_text_not_contains 'need.*more.*information'
 }
 
-# Prints the full text of each spawn_agent TOOL_RESULT entry in a CLI
-# session log. An entry continues until the next timestamped record. The
-# child log keeps only a short preview of the child's final text, so read
-# the child's answer here.
-cli_spawn_results() {
-    awk '
-        /^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[^]]*\] / { keep = ($0 ~ /\] TOOL_RESULT: spawn_agent /) }
-        keep { print }
-    ' "$1"
+# Prints the JSON body of each child_run_result TOOL_RESULT entry in a CLI
+# session log, one line for each entry. spawn_agent returns only
+# state "accepted". The child's answer arrives in a later turn as a
+# child_run_result record with the fields run_id, scope_id, source_operation,
+# outcome, reason, and output. The child log keeps only a short preview of the
+# child's final text, so read the child's answer here.
+cli_child_run_results() {
+    sed -nE 's/^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[^]]*\] TOOL_RESULT: child_run_result call_id=[^ ]+ result=//p' "$1"
+}
+
+# Prints the answer text ("output") of each child run that spawn_agent started.
+cli_child_answers() {
+    cli_child_run_results "$1" \
+        | jq -Rr 'fromjson? | select(.source_operation == "spawn_agent") | .output // empty'
 }
 
 # Prints the text of the last ASSISTANT_FINAL record in a CLI session log.
@@ -2271,7 +2405,7 @@ cli_final_reply() {
 #   - the parent did not change an agent file, by any tool or path form;
 #   - the parent returns an email that follows the deployment mission: a
 #     subject line and the mission call line.
-# The child and the parent are judged apart. The child result is a TOOL_RESULT
+# The child and the parent are judged apart. The child result is a child_run_result
 # record. The parent reply is the last ASSISTANT_FINAL record.
 #
 # This case does NOT test which one wins when the parent task and the child role
@@ -2299,18 +2433,15 @@ assert_subagent_specialization_precedence() {
         || agents_diff_rc=$?
     [[ "$agents_diff_rc" -eq 0 ]] || return "$agents_diff_rc"
 
-    # Child side: a completed child result holds text after "Summary:".
-    cli_spawn_results "$cli_log" | awk '
-        function flush() { if (inres && done && text) ok = 1 }
-        /^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[^]]*\] / {
-            flush(); inres = ($0 ~ /\] TOOL_RESULT: spawn_agent /)
-            done = 0; text = 0; insummary = 0
-        }
-        inres && /Outcome: completed/ { done = 1 }
-        inres && insummary && $0 !~ /^[[:space:]]*$/ { text = 1 }
-        inres && /^Summary:/ { insummary = 1 }
-        END { flush(); exit !ok }
-    ' || return 1
+    # Child side: a completed child_run_result holds a non-blank answer. The
+    # spawn_agent result is only "accepted" and holds no answer.
+    local completed_children
+    completed_children=$(cli_child_run_results "$cli_log" | jq -Rr '
+        fromjson?
+        | select(.source_operation == "spawn_agent" and .outcome == "completed"
+                 and ((.output // "") | test("\\S")))
+        | .run_id')
+    [[ -n "$completed_children" ]] || return 1
 
     # Parent side: the final reply holds a subject line and the mission call
     # line. Markdown emphasis such as "**Subject:**" is a subject line too.
@@ -2318,6 +2449,145 @@ assert_subagent_specialization_precedence() {
     reply=$(cli_final_reply "$cli_log")
     grep -aiqE '^[[:space:]]*(\*\*|__)?subject(\*\*|__)?[[:space:]]*:' <<<"$reply" || return 1
     grep -aFq 'Would Tuesday or Wednesday work for a 15-minute call?' <<<"$reply"
+}
+
+setup_coordination_retained_child_inspection() {
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" python3 -c '
+from pathlib import Path
+root = Path("/home/netclaw/.netclaw/workspaces/coordination-retained-inspection")
+root.mkdir(parents=True, exist_ok=True)
+lines = [f"Record {number} contains routine status data.\n" for number in range(1, 801)]
+lines[399] = "Record 400 verification phrase: cobalt-heron-4471.\n"
+(root / "records.txt").write_text("".join(lines), encoding="utf-8")
+'
+}
+
+setup_coordination_spill_hint_present() {
+    setup_coordination_retained_child_inspection
+    curl -fsS --connect-timeout 5 --max-time 10 -H 'Content-Type: application/json' \
+        -d '{"strip_child_inspection_hint":false}' \
+        "http://127.0.0.1:$SPILL_FIXTURE_PORT/control/spill-hint" >/dev/null
+}
+
+setup_coordination_spill_hint_absent() {
+    setup_coordination_retained_child_inspection
+    curl -fsS --connect-timeout 5 --max-time 10 -H 'Content-Type: application/json' \
+        -d '{"strip_child_inspection_hint":true}' \
+        "http://127.0.0.1:$SPILL_FIXTURE_PORT/control/spill-hint" >/dev/null
+}
+
+assert_coordination_spill_hint_present() {
+    assert_coordination_retained_child_inspection || return 1
+    coordination_spill_hint_evidence false
+}
+
+assert_coordination_spill_hint_absent() {
+    assert_coordination_retained_child_inspection || return 1
+    coordination_spill_hint_evidence true
+}
+
+coordination_spill_hint_evidence() {
+    local expect_removed="$1" snapshot calls spawn_count completed_count observations
+    snapshot="${STDOUT_FILE%.txt}_spill-hint.txt"
+    curl -fsS --connect-timeout 5 --max-time 10 -H 'Content-Type: application/json' -d '{}' \
+        "http://127.0.0.1:$SPILL_FIXTURE_PORT/control/snapshot" > "$snapshot" || return 1
+    observations=$(jq -c '.child_hint_observations' "$snapshot") || return 1
+    [[ $(jq 'length' <<<"$observations") -gt 0 ]] || return 1
+    if [[ "$expect_removed" == true ]]; then
+        jq -e 'all(.[]; (.call_id | length > 0) and .hint_seen and .hint_removed == 1 and .continuation_preserved and .tool_call_id_preserved)' \
+            <<<"$observations" >/dev/null || return 1
+    else
+        jq -e 'all(.[]; (.call_id | length > 0) and .hint_seen and .hint_removed == 0 and .continuation_preserved and .tool_call_id_preserved)' \
+            <<<"$observations" >/dev/null || return 1
+    fi
+    calls=$(coordination_all_tool_calls) || return 1
+    spawn_count=$(jq '[.[] | select(.toolName == "spawn_agent")] | length' <<<"$calls")
+    completed_count=$(coordination_child_completion_count) || return 1
+    jq -n --argjson observations "$observations" --argjson spawnCalls "$spawn_count" \
+        --argjson completedChildren "$completed_count" \
+        '{observations:$observations,spawnCalls:$spawnCalls,completedChildren:$completedChildren}' \
+        > "${STDOUT_FILE%.txt}_spill-hint-uptake.txt"
+}
+
+coordination_session_actor_log() {
+    local session_id sql_id log_path
+    session_id=$(jq -sr '.[-1].sessionId // empty' "$STDOUT_FILE")
+    [[ -n "$session_id" ]] || return 1
+    sql_id="${session_id//\'/\'\'}"
+    log_path=$(sqlite3 -readonly "$EVAL_HOME/data/netclaw.db" \
+        "SELECT log_path FROM sessions WHERE persistence_id = 'session-$sql_id';") || return 1
+    [[ "$log_path" == /home/netclaw/.netclaw/* ]] || return 1
+    log_path="$EVAL_HOME/data/${log_path#/home/netclaw/.netclaw/}"
+    [[ -f "$log_path" ]] || return 1
+    printf '%s\n' "$log_path"
+}
+
+coordination_child_completion_count() {
+    local parent_log
+    parent_log=$(coordination_session_actor_log) || return 1
+    grep -acF 'SubAgent completed:' "$parent_log" || true
+}
+
+coordination_response_json() {
+    jq -ser '.[-1].response | fromjson' "$STDOUT_FILE" 2>/dev/null
+}
+
+coordination_envelopes_valid() {
+    jq -se 'length > 0 and all(.[]; type == "object" and (.sessionId | type == "string" and length > 0) and (.response | type == "string") and (.toolCalls == null or (.toolCalls | type == "array")))' \
+        "$STDOUT_FILE" >/dev/null 2>&1
+}
+
+coordination_all_tool_calls() {
+    jq -sc '[.[] | .toolCalls[]?]' "$STDOUT_FILE" 2>/dev/null
+}
+
+assert_coordination_retained_child_inspection() {
+    coordination_envelopes_valid || return 1
+    coordination_response_json >/dev/null || return 1
+    coordination_response_json | jq -e \
+        '.record == 400 and .verification == "cobalt-heron-4471"' >/dev/null
+}
+
+assert_coordination_independent_synthesis() {
+    coordination_envelopes_valid || return 1
+    coordination_response_json >/dev/null || return 1
+    coordination_response_json | jq -e \
+        '.eastUnresolved == 2 and .westUnresolved == 4 and .totalUnresolved == 6 and .highestRegion == "west"' >/dev/null \
+        || return 1
+    jq -e '.coordination.initialResponse | type == "string" and length > 0' "$STDOUT_FILE" >/dev/null \
+        && jq -e '(.coordination.turnResponses | type == "array" and length >= 2) and .coordination.turnResponses[0] == .coordination.initialResponse and .coordination.activeChildrenAtFirstCompletion > 0 and .coordination.completedChildren >= 2 and .coordination.turnCompletions >= 2 and .coordination.userMessagesSent == 1 and .coordination.automaticContinuation == true' \
+            "$STDOUT_FILE" >/dev/null || return 1
+
+    local calls
+    calls=$(coordination_all_tool_calls) || return 1
+    local spawn_count completed_count
+    spawn_count=$(jq '[.[] | select(.toolName == "spawn_agent")] | length' <<<"$calls")
+    completed_count=$(coordination_child_completion_count) || return 1
+    [[ "$spawn_count" -ge 2 && "$completed_count" -ge 2 ]]
+}
+
+setup_coordination_artifact_review() {
+    local root="/home/netclaw/.netclaw/workspaces/coordination-artifact-review"
+    docker exec --user netclaw "$EVAL_CONTAINER_NAME" mkdir -p "$root"
+    printf '%s\n' 'public bool IsReady(int pendingCount) => pendingCount >= 0;' \
+        | docker exec -i --user netclaw "$EVAL_CONTAINER_NAME" tee "$root/artifact-a.cs" >/dev/null
+    printf '%s\n' 'public bool CanRun(int pendingCount) => pendingCount == 0;' \
+        | docker exec -i --user netclaw "$EVAL_CONTAINER_NAME" tee "$root/artifact-b.cs" >/dev/null
+    printf '%s\n' '{"artifactA":{"pendingCount":2,"actualResult":true},"artifactB":{"pendingCount":0,"actualResult":true}}' \
+        | docker exec -i --user netclaw "$EVAL_CONTAINER_NAME" tee "$root/observed-inputs.json" >/dev/null
+}
+
+assert_coordination_artifact_review() {
+    coordination_envelopes_valid || return 1
+    coordination_response_json >/dev/null || return 1
+    local calls
+    calls=$(coordination_all_tool_calls) || return 1
+    jq -e '[.[] | select(.toolName == "spawn_agent")] | length >= 1' \
+        <<<"$calls" >/dev/null || return 1
+    coordination_response_json | jq -e \
+        '.artifactA.verdict == "defect" and .artifactA.observedForTwoPending == true and .artifactA.expectedForTwoPending == false and .artifactB.verdict == "clean" and .artifactB.observedForZeroPending == true and .artifactB.expectedForZeroPending == true' >/dev/null \
+        || return 1
+    [[ "$(coordination_child_completion_count)" -ge 1 ]]
 }
 
 setup_subagent_project_scope_declaration() {
@@ -2524,7 +2794,9 @@ assert_subagent_session_scratch_disposable() {
     [[ "$(< "$probe")" == "$expected_temp_dir" ]] || return 1
 
     # The child answer and the parent reply must both return the probed path.
-    cli_spawn_results "$TRIAL_RAW/cli-session.log" | grep -aFq "$expected_temp_dir" || return 1
+    local child_answers
+    child_answers=$(cli_child_answers "$TRIAL_RAW/cli-session.log")
+    grep -aFq "$expected_temp_dir" <<<"$child_answers" || return 1
     jq -r '.response // ""' "$STDOUT_FILE" | grep -aFq "$expected_temp_dir"
 }
 
@@ -3498,18 +3770,29 @@ end_category() {
 
 run_case() {
     local output_format="text"
+    local observer_children=0
     if [[ "${1:-}" == "--json" ]]; then
         output_format="json"
+        shift
+    fi
+    if [[ "${1:-}" == "--coordination-observer" ]]; then
+        observer_children=2
         shift
     fi
     local case_name="$1"; shift
     local description="$1"; shift
     local -a prompts=("$@")
+    if [[ "$case_name" == "coordination_artifact_review" ]]; then
+        observer_children=1
+    fi
     local assert_fn="assert_${case_name}"
 
     # Skip if category or case filter excludes this case
     if [[ "$CATEGORY_SKIPPED" == "true" ]]; then return; fi
     if [[ -n "$FILTER_CASE" && "$case_name" != "$FILTER_CASE" ]]; then return; fi
+    if (( PROMPT_TIMEOUT > MAX_PROMPT_TIMEOUT )); then
+        MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
+    fi
 
     # Bail early if daemon died
     check_daemon_alive
@@ -3539,7 +3822,11 @@ run_case() {
         rendered_prompt="${rendered_prompt//\{\{CYCLE_PROMPT\}\}/${CYCLE_PROMPT:-}}"
         rendered_prompt="${rendered_prompt//\{\{EVAL_REMINDER_TARGET\}\}/${EVAL_REMINDER_TARGET:-}}"
         snapshot_trial_baseline
-        run_prompt "$rendered_prompt" "$output_format"
+        if [[ "$observer_children" -gt 0 ]]; then
+            run_coordination_observer_prompt "$rendered_prompt" "$observer_children"
+        else
+            run_prompt "$rendered_prompt" "$output_format"
+        fi
         finish_trial
 
         local assert_rc=0
@@ -3851,6 +4138,22 @@ run_all() {
         "Use spawn_agent with agent headless-analyst to write a prospecting email to Casey, a VP of Engineering interested in reducing operational toil. Return its final email." \
         "Delegate to headless-analyst: draft an outbound email for Jordan, a technology leader evaluating autonomous operations. Return the worker's final email."
 
+    # Child completion can exceed the default model response window.
+    local coordination_timeout="$PROMPT_TIMEOUT"
+    PROMPT_TIMEOUT=300
+
+    run_case --json coordination_retained_child_inspection "agent returns Record 400 from retained evidence" \
+        "Read /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Find Record 400. Return one raw JSON object, without Markdown fences. The record field must be the integer record number. The verification field must be the exact phrase string from that record." \
+        "Inspect /home/netclaw/.netclaw/workspaces/coordination-retained-inspection/records.txt. Return one raw JSON object, without Markdown fences. The record field must be the integer record number. The verification field must be the exact phrase string from Record 400."
+
+    run_case --json --coordination-observer coordination_independent_synthesis "two child investigations finish after an initial parent answer" \
+        "Ask for independent investigations. East has 8 failed and 6 recovered requests. West has 11 failed and 7 recovered requests. Unresolved means failed minus recovered. After you start the work, give an immediate short status and end your turn while the investigations remain active. After their results return, continue without another user message. Return one raw JSON object, without Markdown fences, with integer fields eastUnresolved, westUnresolved, and totalUnresolved. The highestRegion field must be the lowercase string east or west."
+
+    run_case --json --coordination-observer coordination_artifact_review "parent reports correct defect and clean-control outcomes after child completion" \
+        "Ask one independent reviewer to inspect /home/netclaw/.netclaw/workspaces/coordination-artifact-review/artifact-a.cs, artifact-b.cs, and observed-inputs.json. Check this contract: pendingCount is nonnegative and readiness is true only when pendingCount equals zero. Wait for the reviewer result. Return one raw JSON object, without Markdown fences. Each verdict must be defect or clean. Each observed and expected field must be a JSON Boolean. Include artifactA fields verdict, observedForTwoPending, expectedForTwoPending; and artifactB fields verdict, observedForZeroPending, expectedForZeroPending."
+
+    PROMPT_TIMEOUT="$coordination_timeout"
+
     run_multi_turn_case subagent_project_scope_declaration "subagent declares a different named project before shell inspection" \
         "Use spawn_agent with agent project-scope-analyst. Ask it to inspect /home/netclaw/.netclaw/workspaces/project-scope-target with exactly two shell_execute calls: git status --short and git diff --stat. Return the command results, project layout, and build-file summary. Keep the parent project unchanged."
 
@@ -4063,6 +4366,7 @@ run_all() {
 main() {
     check_prerequisites
     build_local_image
+    build_coordination_observer
 
     # Verify CLI binary exists (may have just been built by build_local_image).
     if [[ ! -x "$NETCLAW_BIN" ]]; then
@@ -4073,17 +4377,22 @@ main() {
     NETCLAW_VER=$("$NETCLAW_BIN" --version 2>/dev/null | head -1 || echo "unknown")
 
     local cycle_cases=false
+    local spill_cases=false
     if [[ "$FILTER_CASE" == tool_cycle_* || "${FILTER_CATEGORY,,}" == "tool cycles" ]]; then
         source "$REPO_ROOT/evals/cycle_evals.sh"
         start_cycle_fixture
         cycle_cases=true
     fi
+    if [[ "$FILTER_CASE" == coordination_spill_hint_* || "${FILTER_CATEGORY,,}" == "coordination spill hint" ]]; then
+        source "$REPO_ROOT/evals/coordination_spill_evals.sh"
+        start_coordination_spill_fixture
+        spill_cases=true
+    fi
     start_eval_daemon
     init_db
-    seed_eval_memories
-
     RUN_ID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c "import uuid; print(uuid.uuid4())")
     STARTED_AT=$(date -Iseconds)
+    seed_eval_memories
 
     echo ""
     echo "=== Netclaw Eval Suite (containerized, $RUNS runs per case, threshold: $THRESHOLD) ==="
@@ -4101,6 +4410,8 @@ main() {
 
     if [[ "$cycle_cases" == true ]]; then
         run_cycle_cases
+    elif [[ "$spill_cases" == true ]]; then
+        run_coordination_spill_hint_cases
     else
         run_all
     fi

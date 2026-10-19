@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Web;
@@ -16,12 +17,18 @@ namespace Netclaw.Tests.Utilities;
 /// <summary>
 /// One request that the listener of a <see cref="StandInDaemon"/> received.
 /// </summary>
-internal sealed record RecordedRequest(string Method, string Path, string Query)
+internal sealed record RecordedRequest(string Method, string Path, string Query, int Status = 200)
 {
     public const string ShutdownPath = "/api/lifecycle/shutdown";
 
     /// <summary>The <c>reason</c> query value, or <c>null</c> when the request has none.</summary>
     public string? Reason => HttpUtility.ParseQueryString(Query)["reason"];
+
+    /// <summary>The <c>pid</c> query value, or <c>null</c> when the request has none.</summary>
+    public string? Pid => HttpUtility.ParseQueryString(Query)["pid"];
+
+    /// <summary>The <c>home</c> query value, or <c>null</c> when the request has none.</summary>
+    public string? Home => HttpUtility.ParseQueryString(Query)["home"];
 }
 
 /// <summary>
@@ -38,6 +45,14 @@ internal sealed record RecordedRequest(string Method, string Path, string Query)
 /// helper, the notice reaches the listener of the test, and the test can assert on it.
 /// </para>
 /// <para>
+/// The listener answers a shutdown notice as the real daemon does (#2527). It replies 200 with
+/// the PID of the stand-in only when the notice names the PID of the stand-in process and the
+/// home that the stand-in serves. It replies 409 for any other PID or home, and 400 when the PID
+/// or the home is missing or malformed. A listener-only home has no process, so it refuses every
+/// notice. The 200 body holds the PID and the resolved home of the stand-in. <see cref="AnswerAsLegacyDaemon"/>
+/// makes it answer as a daemon from before #2527 does: the PID only, with no <c>home</c>.
+/// </para>
+/// <para>
 /// A source scan (<c>StandInDaemonGuardTests</c>) fails the build when a test starts a
 /// stand-in in another way.
 /// </para>
@@ -46,12 +61,20 @@ internal sealed class StandInDaemon : IDisposable
 {
     private const int BindAttempts = 5;
     private const int RealDaemonPort = 5199;
+    private static readonly TimeSpan AcceptLoopStopTimeout = TimeSpan.FromSeconds(10);
 
     private readonly Lock _gate = new();
     private readonly List<RecordedRequest> _requests = [];
     private readonly HttpListener _listener;
     private readonly Task _acceptLoop;
+    private readonly CancellationTokenSource _stopAccepting = new();
     private readonly string? _standInFolder;
+    private readonly int? _pid;
+    private int _legacyPid;
+    private int _forcedStatus;
+    private readonly Lock _answerGate = new();
+    private (int Pid, string Home)? _claimed;
+    private (int Status, string Body)? _rawAnswer;
     private bool _disposed;
 
     private StandInDaemon(string home, int port, HttpListener listener, Process? process, string? standInFolder)
@@ -60,6 +83,7 @@ internal sealed class StandInDaemon : IDisposable
         Port = port;
         _listener = listener;
         Process = process;
+        _pid = process?.Id;
         _standInFolder = standInFolder;
         _acceptLoop = Task.Run(AcceptLoopAsync);
     }
@@ -74,10 +98,59 @@ internal sealed class StandInDaemon : IDisposable
     public Process? Process { get; }
 
     /// <summary>The PID that <c>netclaw.pid</c> of <see cref="Home"/> holds.</summary>
-    public int Pid => Process?.Id
+    public int Pid => _pid
         ?? throw new InvalidOperationException("This stand-in has no process. It is a listener-only home.");
 
     public bool HasExited => Process?.HasExited ?? false;
+
+    /// <summary>
+    /// Makes the listener answer every shutdown notice with 200 and <paramref name="claimedPid"/>, as a
+    /// daemon from before #2527 does. That daemon ignores <c>pid</c> and <c>home</c> and reports its own PID.
+    /// </summary>
+    public void AnswerAsLegacyDaemon(int claimedPid) => Volatile.Write(ref _legacyPid, claimedPid);
+
+    /// <summary>
+    /// Makes the listener answer every shutdown notice with <paramref name="status"/> and no PID, whatever
+    /// the notice says. Use it to test how a caller reads an unexpected answer (a 409 from a daemon whose
+    /// process looks right, or a 500 from a daemon that is not ready).
+    /// </summary>
+    public void AnswerEveryNoticeWith(HttpStatusCode status) => Volatile.Write(ref _forcedStatus, (int)status);
+
+    /// <summary>
+    /// Makes the listener answer every shutdown notice with 200, <paramref name="claimedPid"/>, and
+    /// <paramref name="claimedHome"/> as <c>home</c>, as a daemon of that PID and home does. Use it to give a
+    /// listener-only home a daemon that confirms itself, or to test a 200 that names another home.
+    /// </summary>
+    public void AnswerAsDaemonOf(int claimedPid, string claimedHome)
+    {
+        lock (_answerGate)
+            _claimed = (claimedPid, claimedHome);
+    }
+
+    /// <summary>
+    /// Makes the listener answer every shutdown notice with <paramref name="status"/> and the exact text
+    /// <paramref name="body"/>. Use it for a body that is not a daemon answer (not JSON, or a PID that is a string).
+    /// </summary>
+    public void AnswerEveryNoticeWithBody(HttpStatusCode status, string body)
+    {
+        lock (_answerGate)
+            _rawAnswer = ((int)status, body);
+    }
+
+    /// <summary>
+    /// Closes the listener and keeps the process and the port in the config of the home. After this call
+    /// a connection to the port fails, as it does for a daemon that hangs or has not bound its port yet.
+    /// </summary>
+    public void StopListening()
+    {
+        // HttpListener.Close can leave a GetContextAsync call that began at the same moment pending for
+        // ever. The token ends the loop in that case, and the bounded wait fails the test with a message
+        // instead of a hang.
+        _stopAccepting.Cancel();
+        _listener.Close();
+        if (!_acceptLoop.Wait(AcceptLoopStopTimeout))
+            throw new TimeoutException($"The listener of the stand-in on port {Port} did not stop within {AcceptLoopStopTimeout}.");
+    }
 
     /// <summary>Waits for the stand-in process to exit. A listener-only home has no process and returns <c>false</c>.</summary>
     public bool WaitForExit(int milliseconds) => Process?.WaitForExit(milliseconds) ?? false;
@@ -101,7 +174,35 @@ internal sealed class StandInDaemon : IDisposable
     /// </summary>
     /// <param name="home">The Netclaw home. The test owns and deletes it.</param>
     /// <param name="scratchDirectory">A folder that the test owns. It holds the stand-in executable.</param>
-    public static StandInDaemon Start(string home, string scratchDirectory)
+    /// <param name="declareHome">
+    /// <c>false</c> starts the process with no <c>NETCLAW_HOME</c>, as a daemon of the default home runs.
+    /// </param>
+    public static StandInDaemon Start(string home, string scratchDirectory, bool declareHome = true)
+        => Start(home, scratchDirectory, environment =>
+        {
+            // The home this daemon serves, as the environment of a real daemon says.
+            if (declareHome)
+                environment["NETCLAW_HOME"] = home;
+            else
+                environment.Remove("NETCLAW_HOME");
+        });
+
+    /// <summary>
+    /// Starts a stand-in daemon whose process environment the test sets. Use it to give the process a
+    /// <c>NETCLAW_HOME</c> that is relative or holds a home token, a <c>HOME</c> that differs from the
+    /// <c>HOME</c> of the CLI, or no <c>HOME</c>. The PID file and the port still go to <paramref name="home"/>.
+    /// </summary>
+    /// <param name="home">The home that holds the PID file and the port config. The test owns and deletes it.</param>
+    /// <param name="scratchDirectory">A folder that the test owns. It holds the stand-in executable.</param>
+    /// <param name="configureEnvironment">
+    /// Changes the environment of the process. It starts as a copy of the environment of the test process.
+    /// </param>
+    /// <param name="workingDirectory">The working folder of the process, or <c>null</c> for the folder of the test.</param>
+    public static StandInDaemon Start(
+        string home,
+        string scratchDirectory,
+        Action<IDictionary<string, string?>> configureEnvironment,
+        string? workingDirectory = null)
     {
         var (listener, port) = BindListener();
         string? folder = null;
@@ -116,8 +217,9 @@ internal sealed class StandInDaemon : IDisposable
             SleepStandIn.Create(executable);
 
             var psi = new ProcessStartInfo(executable, "600") { UseShellExecute = false };
-            // The home this daemon serves, as the environment of a real daemon says.
-            psi.Environment["NETCLAW_HOME"] = home;
+            if (workingDirectory is not null)
+                psi.WorkingDirectory = workingDirectory;
+            configureEnvironment(psi.Environment);
             process = Process.Start(psi)
                 ?? throw new InvalidOperationException("The stand-in daemon did not start.");
 
@@ -220,11 +322,16 @@ internal sealed class StandInDaemon : IDisposable
             Process.Dispose();
         }
 
-        _listener.Close();
-        _acceptLoop.GetAwaiter().GetResult();
-
-        if (_standInFolder is not null)
-            DisposableTempDir.Delete(_standInFolder);
+        try
+        {
+            StopListening();
+        }
+        finally
+        {
+            _stopAccepting.Dispose();
+            if (_standInFolder is not null)
+                DisposableTempDir.Delete(_standInFolder);
+        }
     }
 
     private async Task AcceptLoopAsync()
@@ -234,23 +341,31 @@ internal sealed class StandInDaemon : IDisposable
             HttpListenerContext context;
             try
             {
-                context = await _listener.GetContextAsync();
+                context = await _listener.GetContextAsync().WaitAsync(_stopAccepting.Token);
             }
-            catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException or InvalidOperationException)
+            catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException or InvalidOperationException or OperationCanceledException)
             {
-                return; // the listener closed in Dispose
+                return; // the listener closed in Dispose or StopListening
             }
 
             // Record before the reply. The caller sees the reply only after the request is on the list.
             var request = context.Request;
+            var (status, body) = Reply(request);
             lock (_gate)
-                _requests.Add(new RecordedRequest(request.HttpMethod, request.Url!.AbsolutePath, request.Url.Query));
+                _requests.Add(new RecordedRequest(request.HttpMethod, request.Url!.AbsolutePath, request.Url.Query, status));
 
             // The CLI can drop the request at its own timeout on a loaded host. A failed reply must
             // not fault the loop, or Dispose throws and skips the cleanup of the other stand-ins.
             try
             {
-                context.Response.StatusCode = (int)HttpStatusCode.OK;
+                context.Response.StatusCode = status;
+                if (body.Length > 0)
+                {
+                    var bytes = Encoding.UTF8.GetBytes(body);
+                    context.Response.ContentType = "application/json";
+                    await context.Response.OutputStream.WriteAsync(bytes);
+                }
+
                 context.Response.Close();
             }
             catch (Exception ex) when (ex is IOException or HttpListenerException or ObjectDisposedException) // slopwatch-ignore: SW003 the client left; the request is already recorded
@@ -258,6 +373,93 @@ internal sealed class StandInDaemon : IDisposable
                 continue;
             }
         }
+    }
+
+    // The daemon rule of #2527: a shutdown notice is for this daemon only when the PID and the home match.
+    private (int Status, string Body) Reply(HttpListenerRequest request)
+    {
+        if (request.Url!.AbsolutePath != RecordedRequest.ShutdownPath || request.HttpMethod != "POST")
+            return ((int)HttpStatusCode.OK, string.Empty);
+
+        var query = HttpUtility.ParseQueryString(request.Url.Query);
+        var reason = query["reason"];
+        if (string.IsNullOrEmpty(reason))
+            return Error(HttpStatusCode.BadRequest, "reason query parameter is required");
+
+        var forcedStatus = Volatile.Read(ref _forcedStatus);
+        if (forcedStatus != 0)
+            return forcedStatus == (int)HttpStatusCode.Conflict
+                ? Error(HttpStatusCode.Conflict, "The stand-in is set to refuse every notice.")
+                : (forcedStatus, string.Empty);
+
+        (int Status, string Body)? raw;
+        (int Pid, string Home)? claimed;
+        lock (_answerGate)
+        {
+            raw = _rawAnswer;
+            claimed = _claimed;
+        }
+
+        if (raw is { } rawAnswer)
+            return rawAnswer;
+
+        if (claimed is { } claim)
+            return Accepted(reason, claim.Pid, claim.Home);
+
+        var legacyPid = Volatile.Read(ref _legacyPid);
+        if (legacyPid != 0)
+            return Accepted(reason, legacyPid, home: null);
+
+        if (!int.TryParse(query["pid"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid) || pid <= 0
+            || string.IsNullOrEmpty(query["home"]) || !Path.IsPathRooted(query["home"]))
+            return Error(HttpStatusCode.BadRequest, "pid and home query parameters are required");
+
+        if (_pid is { } ownPid && pid == ownPid && SameDirectory(query["home"]!, Home))
+            return Accepted(reason, ownPid, Canonical(Home));
+
+        return Error(HttpStatusCode.Conflict,
+            $"This daemon is PID {_pid?.ToString(CultureInfo.InvariantCulture) ?? "none"} for home {Home}; "
+            + $"the notice is for PID {pid} and home {query["home"]}.");
+    }
+
+    // The daemon of this PID names its resolved home in the 200 body. A daemon from before #2527 names no home.
+    private static (int Status, string Body) Accepted(string reason, int pid, string? home)
+    {
+        var body = new JsonObject { ["reason"] = reason, ["pid"] = pid };
+        if (home is not null)
+            body["home"] = home;
+        return ((int)HttpStatusCode.OK, body.ToJsonString());
+    }
+
+    private static (int Status, string Body) Error(HttpStatusCode status, string message)
+        => ((int)status, new JsonObject { ["error"] = message }.ToJsonString());
+
+    /// <summary>
+    /// Whether two paths name the same directory, with links resolved in every part of the path
+    /// (macOS keeps <c>/var</c> and <c>/tmp</c> behind links) and a trailing separator ignored.
+    /// </summary>
+    public static bool SameDirectory(string first, string second)
+        => string.Equals(
+            Canonical(first),
+            Canonical(second),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private static string Canonical(string path)
+    {
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var root = Path.GetPathRoot(full)!;
+        var current = root;
+        foreach (var part in full[root.Length..].Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            var target = new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true);
+            if (target is not null)
+                current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(target.FullName));
+        }
+
+        return current;
     }
 
     private static (HttpListener Listener, int Port) BindListener()
@@ -287,9 +489,12 @@ internal sealed class StandInDaemon : IDisposable
         return ((IPEndPoint)probe.LocalEndpoint).Port;
     }
 
-    // This rewrites the whole file with JsonNode.ToJsonString(), so it drops the comments of an
-    // existing netclaw.json. No test that uses a stand-in depends on those comments.
-    private static void WriteDaemonPort(string home, int port)
+    /// <summary>
+    /// Writes <c>Daemon.Port</c> in the config of <paramref name="home"/>. It rewrites the whole file with
+    /// <c>JsonNode.ToJsonString()</c>, so it drops the comments of an existing netclaw.json. No test
+    /// that uses a stand-in depends on those comments.
+    /// </summary>
+    public static void WriteDaemonPort(string home, int port)
     {
         var configDirectory = Path.Combine(home, "config");
         Directory.CreateDirectory(configDirectory);

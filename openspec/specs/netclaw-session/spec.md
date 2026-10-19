@@ -38,10 +38,14 @@ pass it to the tool execution pipeline. During Processing, the session actor
 SHALL route `ToolInteractionResponse` messages to the workflow. The workflow
 SHALL validate each response and return a typed outcome. For an accepted
 parent-session answer, the actor SHALL journal the resolution before the
-workflow releases the blocked call. A subagent approval wait SHALL remain
-live-only and SHALL not create a parent approval journal event. The session
-actor SHALL record a grant answer through `IToolApprovalService` with the
-selected grant scope.
+workflow releases the blocked call. For a child run with durable acceptance,
+the session actor SHALL persist the child approval request and each accepted
+resolution in the parent journal. The request SHALL retain the child's original
+authority and requester. The actor SHALL persist an accepted resolution before
+it releases the child's blocked tool call. A child approval wait without
+durable child-run acceptance SHALL remain live-only and SHALL create no parent
+approval journal event. The session actor SHALL record a grant answer through
+`IToolApprovalService` with the selected grant scope.
 An `ApproveOnce` answer SHALL let only the exact blocked call retry once. It
 SHALL create no session or persistent grant.
 
@@ -99,12 +103,22 @@ dedup set can be rebuilt via event replay).
 - **AND** the actor journals the resolution before the workflow completes the live wait
 - **AND** the blocked tool call proceeds from the accepted decision
 
-#### Scenario: Subagent approval response stays live-only
+#### Scenario: Subagent approval response stays live-only without durable acceptance
 
 - **GIVEN** a subagent has a live approval wait through its parent session
+- **AND** the child has no durable run acceptance
 - **WHEN** a valid `ToolInteractionResponse` message arrives
 - **THEN** the workflow completes that live wait
-- **AND** the actor does not journal a parent approval resolution
+- **AND** the actor journals neither a parent approval request nor a resolution
+
+#### Scenario: Durable child approval facts precede release
+
+- **GIVEN** a child run has durable acceptance with its original requester and authority
+- **AND** the parent journal contains the child's correlated approval request
+- **WHEN** the original requester sends a valid approval response
+- **THEN** the parent journal records the correlated approval resolution
+- **AND** the request retains the child's original requester and authority
+- **AND** the actor releases the blocked child tool call only after it persists the resolution
 
 #### Scenario: ToolInteractionRequest delivered as lifecycle event
 
@@ -124,6 +138,47 @@ dedup set can be rebuilt via event replay).
 - **GIVEN** the requester used `ApproveOnce` for a blocked tool call
 - **WHEN** a later call needs approval for the same candidate
 - **THEN** that later call requires a new approval
+
+### Requirement: Session input progress has a durable boundary
+
+The session SHALL keep an admitted ordinary input pending until accepted durable progress consumes it or an explicit closure event closes it. `ToolBatchStarted` SHALL consume the input into durable turn history. `TurnRecorded` SHALL complete the turn. `InputClosed` SHALL close an input explicitly.
+
+The session SHALL validate state transitions before it appends their events. A rejected transition SHALL not add an invalid event to the journal. Child results SHALL use the child-result contract and SHALL NOT enter ordinary user-input admission.
+
+#### Scenario: Tool batch start consumes its pending input
+
+- **GIVEN** an ordinary input remains pending in the durable session state
+- **WHEN** `ToolBatchStarted` records accepted turn progress
+- **THEN** the input leaves the pending queue
+- **AND** its content remains in durable turn history
+
+#### Scenario: Completed turn records its terminal event
+
+- **GIVEN** `ToolBatchStarted` consumed the input
+- **WHEN** the turn completes
+- **THEN** the session records `TurnRecorded`
+- **AND** replay reports the turn as complete
+
+#### Scenario: Explicit closure removes an unconsumed input
+
+- **GIVEN** an input remains pending and cannot proceed
+- **WHEN** the session records `InputClosed`
+- **THEN** replay reports the input as explicitly closed
+- **AND** the session does not silently discard it
+
+#### Scenario: Invalid transition does not poison the journal
+
+- **GIVEN** a proposed transition violates the current durable input order
+- **WHEN** the session validates the transition
+- **THEN** it rejects the transition before journal append
+- **AND** a later recovery can replay the journal
+
+#### Scenario: Child result bypasses ordinary input admission
+
+- **GIVEN** a child result becomes ready for its parent
+- **WHEN** the parent accepts that result
+- **THEN** the session does not persist it as an ordinary user input
+- **AND** the result follows the correlated tool-result path
 
 ### Requirement: Persisted adopted-context metadata separates truthful provenance from third-party policy
 
@@ -599,86 +654,56 @@ content budget used for tools without a smaller per-tool override.
 - **WHEN** it reaches the pipeline
 - **THEN** the pipeline stores it as-is without re-clamping
 
-### Requirement: Reminder redelivery best-effort dedup
+### Requirement: Reminder redelivery is deduplicated at admission
 
-`SessionState` SHALL maintain an in-memory
-`ImmutableHashSet<string> ProcessedReminderIds`, folded in the
-`Apply(TurnRecorded)` handler from each recovered or live event's
-`SourceReminderId` when non-null. `Apply(SessionCompacted)` SHALL preserve
-the set across compaction (similar to how `WorkingContext` is preserved).
-The set SHALL NOT be persisted to `SessionSnapshot`: on snapshot-based
-recovery the set starts empty and rebuilds from post-snapshot event replay
-via the normal `Apply(TurnRecorded)` path.
+The session SHALL deduplicate a reminder fire once, at admission, by the source
+key of the stored input. `SessionState.RecentSourceMessageKeys` holds the key,
+and `SessionSnapshot` persists it. The session SHALL NOT keep a separate
+in-memory ledger or in-flight reservation for reminder fires.
 
-`LlmSessionActor` SHALL pre-check `cmd.Source?.ReminderId` against
-`ProcessedReminderIds` at the top of both the `Ready`-phase
-`HandleIncomingUserMessage` method and the `Processing`-phase
-`Command<SendUserMessage>` buffer handler. On a dedup hit, the session
-SHALL reply `CommandAck` to the sender without modifying state,
-persisting events, or dispatching an LLM call.
+The session SHALL make the admission decision before any other side effect. On
+a duplicate, the session SHALL reply `CommandAck` to the sender without
+persisting events, dispatching an LLM call, or abandoning an open tool batch.
+The decision SHALL apply in every phase (`Ready`, `Processing`, `Compacting`).
 
-The dedup check SHALL happen *before* any audience enforcement, ACL
-evaluation, or prompt construction, so that a redelivery from
-Akka.Reminders is handled entirely in memory and cannot trigger spurious
-side effects.
+The check holds across snapshot recovery for the keys that the bounded
+`RecentSourceMessageKeys` list still holds (256 keys).
 
-**Best-effort semantics**: dedup is not guaranteed across snapshot
-recovery boundaries. A reminder processed before a snapshot and
-redelivered after a snapshot-based recovery will be processed as a fresh
-turn. This is an explicitly accepted tradeoff — the LLM itself typically
-recognizes a duplicate prompt in its recent context and responds
-appropriately, and persisting the dedup ledger to snapshot adds
-complexity without proportional value.
+#### Scenario: Redelivered reminder is a duplicate in Ready phase
 
-#### Scenario: Redelivered reminder hits dedup in Ready phase
-
-- **GIVEN** the session is in `Ready` phase with
-  `ProcessedReminderIds = { "check-pr:1712000000000" }` rebuilt from
-  post-snapshot journal replay
+- **GIVEN** the session is in `Ready` phase and its journal holds an input with
+  source key `check-pr:1712000000000`
 - **WHEN** a `SendUserMessage` arrives with
   `MessageSource.ReminderId = "check-pr:1712000000000"`
 - **THEN** the session replies `CommandAck` to the sender
-- **AND** no `TurnRecorded` event is persisted
+- **AND** it persists no event
 - **AND** the LLM is not invoked
-- **AND** a `reminder_mode_b_dedup_hit` log entry is emitted
 
-#### Scenario: Redelivered reminder hits dedup in Processing phase
+#### Scenario: Redelivered reminder is a duplicate in Processing phase
 
-- **GIVEN** the session is in `Processing` phase (LLM call in flight) with
-  a dedup set containing `"nightly-report:1712005000000"`
+- **GIVEN** the session is in `Processing` phase and runs the turn of the fire
+  `nightly-report:1712005000000`
 - **WHEN** a `SendUserMessage` redelivery arrives with the same reminder ID
 - **THEN** the session replies `CommandAck` without buffering the message
 - **AND** the in-flight turn is unaffected
 
-#### Scenario: Dedup set rebuilt from post-snapshot event replay
+#### Scenario: A duplicate survives snapshot recovery
 
-- **GIVEN** a session journal contains three `TurnRecorded` events after
-  the most recent snapshot, two with non-null `SourceReminderId` and one
-  regular user turn
-- **WHEN** the session actor recovers from the snapshot and replays
-  subsequent events
-- **THEN** `ProcessedReminderIds` contains exactly the two reminder IDs
-  from the post-snapshot events
-- **AND** subsequent redeliveries of those reminders are deduped
+- **GIVEN** the session admitted a fire and then recovered from a later snapshot
+- **WHEN** Akka.Reminders redelivers the fire
+- **THEN** the session replies `CommandAck` and stores no second input
 
-#### Scenario: Dedup set starts empty on snapshot-only recovery
+#### Scenario: A duplicate does not abandon an open tool batch
 
-- **GIVEN** a session journal where all `TurnRecorded` events are
-  older than the most recent snapshot
-- **WHEN** the session actor recovers from that snapshot
-- **THEN** `ProcessedReminderIds` starts empty (the snapshot does not
-  carry the set)
-- **AND** a subsequent redelivery of a pre-snapshot reminder (still
-  within `MaxDeliveryWindow`) is NOT deduped and is processed as a fresh
-  turn
-- **AND** the outcome is logged but not treated as an error
+- **GIVEN** a recovered session holds an interrupted tool batch
+- **WHEN** a redelivery of an admitted fire arrives
+- **THEN** the session acknowledges it
+- **AND** the journal gets no `ToolBatchAbandoned` event from it
 
-#### Scenario: Non-reminder user messages are not deduped
+#### Scenario: Non-reminder user messages are not deduped by reminder state
 
-- **GIVEN** a session with a populated `ProcessedReminderIds` set
-- **WHEN** a regular `SendUserMessage` arrives with
-  `MessageSource.ReminderId = null`
-- **THEN** the message is processed normally regardless of the dedup set
+- **GIVEN** a regular `SendUserMessage` arrives with `MessageSource.ReminderId = null`
+- **THEN** the message is processed normally
 
 ### Requirement: Persist adopted-context audit records
 
@@ -1086,3 +1111,210 @@ request.
 - **WHEN** it learns a session path
 - **THEN** the storage layout does not claim to block an operating-system file open
 - **AND** a separate containment capability must define that stronger boundary
+
+### Requirement: A failed post on a reminder turn is visible to the operator
+
+The session SHALL report a reply that it could not deliver when a reminder fire started the turn. `LlmSessionActor` owns this decision. It makes the decision in one method, `ReportReminderPostFailure`. Every phase that receives `DeliveryFailed` calls that method (see "Every phase handles a report" below). No other code raises `reminder.delivery.failed`.
+
+The session SHALL find the reminder from `TurnRecorded.SourceReminderId` of the recorded turn that `DeliveryFailed.TurnNumber` names. The session keeps this link in `DeliveryRetryHandler`, for the latest recorded turn only. This state is actor-local. The session rebuilds it from three sources:
+
+- A live turn. This includes a turn that a routed skill runs in a sub-agent.
+- The journal. Replay of each `TurnRecorded` event gives the same result as the live turn, for every kind of turn.
+- The snapshot. `SessionSnapshot.EligibleDeliveryReminderId` holds the fire key of the eligible turn while that turn has no report. `SessionSnapshot.EligibleDeliveryTurnRoutedSkill` holds the routed mark of the eligible turn (see below). A session that restores from a snapshot does not replay the `TurnRecorded` event, so the snapshot must carry both.
+
+Every snapshot that the session builds SHALL carry a value for the routed mark, `true` or `false`. A snapshot that has a value is a new-format snapshot. A snapshot that has no value was written before the delivery fields (an old-format snapshot). When the session restores a new-format snapshot that names an eligible turn, it SHALL record that turn with the reminder key (null for a person's turn or for a reported turn) and the routed mark. When the session restores an old-format snapshot, it records nothing.
+
+The session SHALL record a turn as eligible and as the latest recorded turn before it saves a snapshot for that turn. Thus a snapshot that the reminder turn itself triggers keeps both facts. A passivation snapshot keeps them too.
+
+A routed-skill turn is a turn where a sub-agent runs a skill (`HandleRoutedSkillExecutionCompleted`). The session SHALL record it as eligible, like any other turn, so a failed post on it can raise the alert. The session SHALL mark it as routed, and it SHALL NOT retry a routed-skill turn on the main model. The mark travels as follows:
+
+- `TurnRecorded.RoutedSkill` is a new `bool` on the journal event (proto3 `bool routed_skill = 10`). The session writes `true` for a routed-skill turn. A journal entry written before this field has no value. It SHALL read as `false`, so an old entry is an ordinary turn. A turn that is not routed writes the same bytes as before.
+- `DeliveryRetryHandler` keeps the mark with the latest recorded turn. `RecordTurn` takes it, and `IsRoutedSkill(turn)` returns it for the latest recorded turn only.
+- `SessionSnapshot.EligibleDeliveryTurnRoutedSkill` is a new `bool?` (`optional bool eligible_delivery_turn_routed_skill = 21`). It is `null` when the snapshot has no value. The explicit presence lets the session tell a new-format snapshot (`true` or `false`) from an old-format snapshot (`null`).
+- `SessionSnapshot.EligibleDeliveryReminderId` is `optional string eligible_delivery_reminder_id = 20`.
+
+The proto field numbers are durable data. Other open work uses the lower numbers: the coordination stack (#2464) uses `TurnRecordedProto` 8 and `SessionSnapshotProto` 13 to 19 and reserves 12, and #1897 uses `TurnRecordedProto` 8 and 9 and `SessionSnapshotProto` 12. The numbers above are free on `dev` and on every open branch that edits these messages. Another change SHALL NOT reuse 8 or 9 of `TurnRecordedProto`, or 12 to 19 of `SessionSnapshotProto`, for a delivery field. A serialization test SHALL decode a hand-built wire message with each number.
+
+When a report names a routed-skill turn, the session SHALL treat the first report as the final failure, even when the failure kind is retryable. It SHALL make no model call for it. It SHALL write a Warning, call `ReportReminderPostFailure`, and mark the turn not eligible. No retry budget applies to a routed turn. A routed-skill turn that a person started raises no alert and makes no retry.
+
+Every phase handles a report. The session SHALL handle `DeliveryFailed` in `Ready`, `Processing`, `Compacting`, and `Passivating`, and it SHALL NOT drop a report in silence in any of them:
+
+| Phase or state | The session SHALL |
+|----------------|-------------------|
+| `Ready` | Apply the stale check, the routed-skill rule, and the retry rule. On a final failure, call `ReportReminderPostFailure`. |
+| `Processing` | Make no retry, because the session works on another input. Add the nudge for a kind that is not retryable. Call `ReportReminderPostFailure`. |
+| `Compacting` | Make no retry. Add no nudge, because compaction rebuilds the history from the state that the session saved when compaction started, and the rebuild would discard the nudge. Write one Warning that contains `adds no nudge` for a kind that is not retryable. Call `ReportReminderPostFailure`. The alert and the Error log are the operator signal. |
+| `Passivating`, no restart drain pending | Abort the passivation and handle the report as in `Ready`. |
+| Any phase while a restart drain is pending | Call `ReportReminderPostFailure`. Add no nudge, make no retry, and do not abort the drain. The drain ends the session soon, and the failed post is the only trace of the lost reply. |
+
+A report that arrives during compaction is the common case after a long reminder turn: the binding reports only after it handles `TurnCompleted`, and the session compacts right after that event. `ReminderOf(N)` stays correct during compaction, because compaction records no turn.
+
+The session SHALL accept feedback only for the eligible turn. A binding SHALL send the number of the turn whose output failed to post (see `channel-binding-parity`, "A failed post reports the turn that it belongs to").
+
+The session gives up on a reply when the failure kind is not retryable, or when the retry budget is spent. A retryable failure with budget left SHALL cause a retry and SHALL NOT raise the alert. On the final failure of a turn that a reminder fire started, the session SHALL do all of the following:
+
+- Write one Error log with the reminder id, the session id, the channel, and the failure kind.
+- Emit one alert of type `reminder.delivery.failed` with severity `Warning`. The alert `Source` is the reminder id. The alert context holds `reminderId`, `sessionId`, `channel`, `failureKind`, and `error`.
+- Write no reminder history row. The reminder manager owns the history.
+- Not ask for a new fire of the reminder.
+
+The session SHALL report each recorded turn at most once. One reply can fail more than once, for example a text chunk and then a file upload. The first final failure raises the alert. A later report for the same turn raises nothing, in `Ready` and in `Processing`. A new recorded turn, such as a retry turn, starts with no report. A snapshot SHALL NOT hand the key of a reported turn back to a later incarnation of the session.
+
+The session SHALL NOT drop a report in silence. If the report names a turn that is not the latest recorded turn, the session cannot tell whether a reminder started that turn. It SHALL write one Warning that contains `cannot tell whether a reminder started turn {Turn}`. It SHALL NOT raise the alert. An old-format snapshot (it has no routed mark) causes this Warning. The session SHALL NOT invent a reminder for it. If the latest recorded turn has no reminder, the session returns quietly, because a person in the thread sees the missing reply. This holds also after a restore from a new-format snapshot: a report for a person's turn, or for a reminder turn that already has a report, SHALL NOT write the Warning.
+
+If the stored source key is not a reminder fire key (`{reminderId}:{fireTimeMs}`), the session SHALL still raise the alert, with the whole key as `Source`, and SHALL write one Warning that contains `not a reminder fire key`.
+
+The session SHALL NOT raise `reminder.delivery.failed` for a turn that no reminder fire started. `LlmSessionActor` SHALL receive its `IOperationalNotificationSink` as a required dependency. The alert reaches the operator only when the operator configured a notification webhook. Without a webhook, only the Error log shows the failure.
+
+#### Scenario: A rejected token on a reminder turn raises the alert
+
+- **GIVEN** the session recorded a turn with `SourceReminderId = "check-pr:1712000000000"`
+- **WHEN** the Mattermost binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the session writes one Error log that names `check-pr`
+- **AND** the sink receives one alert of type `reminder.delivery.failed` with `Source = "check-pr"` and the session id in its context
+- **AND** the reminder history gets no row from the session
+
+#### Scenario: A failed post on an ordinary turn raises no reminder alert
+
+- **GIVEN** the session recorded a turn that a person started, so `SourceReminderId` is empty
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives no `reminder.delivery.failed` alert
+- **AND** the session keeps its Warning log and its nudge for the next turn
+
+#### Scenario: A retry that succeeds raises no alert
+
+- **GIVEN** the session recorded a reminder turn
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected`
+- **AND** the session retries and the new reply posts
+- **THEN** the sink receives no `reminder.delivery.failed` alert
+
+#### Scenario: A spent retry budget raises the alert
+
+- **GIVEN** the session recorded a reminder turn
+- **WHEN** the binding reports `ContentRejected` for the turn and for each of its two retry turns
+- **THEN** the session gives up after the third report
+- **AND** the sink receives one `reminder.delivery.failed` alert
+
+#### Scenario: A report for the second turn of a session is not stale
+
+- **GIVEN** a person started turn 1 and a reminder fire started turn 2
+- **WHEN** the binding sends `DeliveryFailed` with `TurnNumber = 2` and `FailureKind = TransportFailure`
+- **THEN** the sink receives one `reminder.delivery.failed` alert
+
+#### Scenario: Counterexample - a report that names the previous turn raises no alert
+
+- **GIVEN** a person started turn 1 and a reminder fire started turn 2
+- **WHEN** the binding sends `DeliveryFailed` with `TurnNumber = 1`
+- **THEN** the session ignores it as stale feedback
+- **AND** the sink receives no `reminder.delivery.failed` alert
+
+#### Scenario: Two reports for one reminder turn raise one alert
+
+- **GIVEN** the session recorded a reminder turn
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` twice for that turn
+- **THEN** the sink receives exactly one `reminder.delivery.failed` alert after the session handled both reports
+
+#### Scenario: A report while the session processes another input raises no second alert
+
+- **GIVEN** the session raised the alert for turn 1, a reminder turn
+- **AND** a person's message holds the session in `Processing`
+- **WHEN** the binding sends one more `DeliveryFailed` for turn 1
+- **THEN** the sink still holds exactly one `reminder.delivery.failed` alert
+
+#### Scenario: A report for an unknown turn writes a Warning
+
+- **GIVEN** the latest recorded turn is turn 1, and the session is in `Processing`
+- **WHEN** the binding sends `DeliveryFailed` with `TurnNumber = 41`
+- **THEN** the session writes one Warning that contains `cannot tell whether a reminder started turn`
+- **AND** the sink receives no `reminder.delivery.failed` alert
+
+#### Scenario: A recovered session still finds the reminder
+
+- **GIVEN** the session recorded a reminder turn
+- **AND** the session stopped and recovered from its journal
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert with the same reminder id
+
+#### Scenario: A snapshot that the reminder turn triggers keeps the reminder
+
+- **GIVEN** the snapshot interval is 1, so the reminder turn saves a snapshot
+- **AND** the session stopped and recovered from that snapshot, without a replay of the reminder turn
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert with the same reminder id
+
+#### Scenario: A session that passivated still finds the reminder
+
+- **GIVEN** the session recorded a reminder turn, passivated, and saved its final snapshot
+- **WHEN** a new session incarnation restores from that snapshot
+- **AND** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert with the same reminder id
+
+#### Scenario: A reported turn does not alert again after passivation
+
+- **GIVEN** the session raised the alert for a reminder turn and then passivated
+- **WHEN** the new incarnation receives one more `DeliveryFailed` for that turn
+- **THEN** the sink still holds exactly one `reminder.delivery.failed` alert
+- **AND** the session writes no Warning, because the new-format snapshot names the turn and holds no unreported reminder
+
+#### Scenario: A snapshot from before the delivery fields loads
+
+- **GIVEN** a stored `SessionSnapshotProto` that has no `eligible_delivery_reminder_id` field and no routed mark
+- **WHEN** the session restores from it
+- **THEN** the snapshot loads, `EligibleDeliveryTurnNumber` keeps its value, `EligibleDeliveryReminderId` is null, and `EligibleDeliveryTurnRoutedSkill` is null
+
+#### Scenario: Counterexample - an old-format snapshot still writes the Warning
+
+- **GIVEN** the session restored from a snapshot that names an eligible turn and has no routed mark
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the session writes one Warning that contains `cannot tell whether a reminder started turn`
+- **AND** the sink receives no `reminder.delivery.failed` alert
+
+#### Scenario: A person's turn restored from a new-format snapshot returns quietly
+
+- **GIVEN** a person started the eligible turn, the session passivated, and a new incarnation restored from the final snapshot (routed mark `false`, no reminder)
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the session writes no Warning and the sink receives no `reminder.delivery.failed` alert
+
+#### Scenario: A report while the session compacts raises the alert
+
+- **GIVEN** a reminder turn crossed the compaction threshold, and the session is in `Compacting`
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the session writes one Error log that names the reminder
+- **AND** the sink receives one `reminder.delivery.failed` alert before compaction ends
+- **AND** the session adds no nudge, so the next model call holds no delivery-failure message
+
+#### Scenario: A report while a restart drain is pending raises the alert
+
+- **GIVEN** a reminder turn is recorded, and a restart drain is pending while the session is in `Processing` or `Passivating`
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert
+- **AND** the session adds no nudge, makes no model call, and does not abort the drain
+
+#### Scenario: A routed-skill reminder turn raises the alert
+
+- **GIVEN** a reminder prompt runs a routed skill (`/ops-route ...`) in a sub-agent, and the session recorded the turn with `RoutedSkill = true`
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = TransportFailure` for that turn
+- **THEN** the sink receives one `reminder.delivery.failed` alert
+- **AND** a session that replays the journal gives the same result
+
+#### Scenario: A retryable failure on a routed-skill reminder turn alerts and makes no retry
+
+- **GIVEN** the session recorded a routed-skill reminder turn
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected` once or twice for that turn
+- **THEN** the sink receives exactly one `reminder.delivery.failed` alert
+- **AND** the session makes no model call for the report
+- **AND** a session that replayed the journal, or restored from a snapshot, gives the same result
+
+#### Scenario: Counterexample - an ordinary reminder turn still retries after recovery
+
+- **GIVEN** the session recorded a reminder turn with `RoutedSkill = false`, or from a journal entry with no `routed_skill` field
+- **AND** the session recovered from its journal
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected` for that turn
+- **THEN** the session asks the model again, and it raises no alert when the retry reply posts
+
+#### Scenario: Counterexample - a routed-skill turn that a person started raises no alert and makes no retry
+
+- **GIVEN** a person ran a routed skill, so `SourceReminderId` is empty and `RoutedSkill = true`
+- **WHEN** the binding sends `DeliveryFailed` with `FailureKind = ContentRejected` for that turn, before or after recovery
+- **THEN** the sink receives no `reminder.delivery.failed` alert
+- **AND** the session makes no model call for the report

@@ -215,12 +215,12 @@ public sealed class ReminderManagerProductionRetryTests : TestKit, IAsyncDisposa
     }
 
     [Fact]
-    public async Task Failing_oneshot_ends_failed_and_is_never_pruned()
+    public async Task Failing_oneshot_ends_failed_at_the_fifth_attempt_and_its_tombstone_is_purged_after_the_retention_period()
     {
         var id = await ScheduleOneShotAsync("failing-oneshot");
 
         // A one-shot has no delivery deadline, so Akka.Reminders keeps retrying
-        // (60, 120, 240 and 480 seconds apart) until the fifth failure disables it.
+        // (60, 120, 240 and 480 seconds apart) until the fifth failure ends it.
         var elapsedSeconds = -(int)FirstFireDelay.TotalSeconds;
         foreach (var (attempt, offset) in new[] { 0, 60, 180, 420, 900 }.Select((o, i) => (i + 1, o)))
         {
@@ -229,20 +229,44 @@ public sealed class ReminderManagerProductionRetryTests : TestKit, IAsyncDisposa
             await AwaitSettledFailuresAsync(id, attempt);
         }
 
-        var definition = _definitionStore.Get(id);
-        Assert.NotNull(definition);
-        Assert.False(definition.Enabled);
-        Assert.Equal(ReminderTerminalOutcome.Failed, definition.TerminalOutcome);
+        // The definition is gone. The tombstone keeps the outcome, the last error, and the prompt.
+        Assert.Null(_definitionStore.Get(id));
+        var tombstone = _definitionStore.GetTombstone(id);
+        Assert.NotNull(tombstone);
+        Assert.Equal(ReminderTerminalOutcome.Failed, tombstone.Outcome);
+        Assert.Contains("model endpoint is not available", tombstone.LastError, StringComparison.Ordinal);
+        Assert.Equal("Check status", tombstone.Instructions);
+        Assert.Single(_notificationSink.Alerts, a =>
+            a.Category == AlertType.ReminderAutoDisabled && a.Source == id.Value);
 
-        // Well past the retention period, a prune keeps it.
-        Advance(ReminderManagerActor.TerminalRetention + TimeSpan.FromDays(1));
+        // The ended one-shot does not run again, however long the scheduler runs.
+        Advance(TimeSpan.FromHours(1));
+        await GetHealthAsync();
+        Assert.Equal(ReminderManagerActor.FailurePauseThreshold, _sessionPipeline.InvocationCount);
+
+        var historyStore = new ReminderHistoryStore(_tempDir.Paths);
         var manager = ActorRegistry.For(Sys).Get<ReminderManagerActorKey>();
-        manager.Tell(ReminderManagerActor.PruneTerminalReminders.Instance);
-        await GetHealthAsync(); // the manager handles messages one at a time, so the prune has finished
+        async Task SweepAsync()
+        {
+            manager.Tell(ReminderManagerActor.PruneTerminalReminders.Instance);
+            await GetHealthAsync(); // the manager handles messages one at a time, so the sweep has finished
+        }
 
-        var kept = _definitionStore.Get(id);
-        Assert.NotNull(kept);
-        Assert.Equal(ReminderTerminalOutcome.Failed, kept.TerminalOutcome);
+        // Inside the retention period, the sweep keeps the tombstone and the history, and status still answers.
+        Advance(ReminderManagerActor.TerminalRetention - TimeSpan.FromDays(1));
+        await SweepAsync();
+        Assert.NotNull(_definitionStore.GetTombstone(id));
+        Assert.Equal(ReminderManagerActor.FailurePauseThreshold, (await historyStore.ReadAsync(id, 50)).Count);
+        var status = await GetStatusAsync(id);
+        Assert.True(status.Found);
+        Assert.Equal(ReminderTerminalOutcome.Failed, status.Ended?.Outcome);
+
+        // Past the retention period, the sweep deletes the tombstone and the history.
+        Advance(TimeSpan.FromDays(2));
+        await SweepAsync();
+        Assert.Null(_definitionStore.GetTombstone(id));
+        Assert.Empty(await historyStore.ReadAsync(id, 50));
+        Assert.False((await GetStatusAsync(id)).Found);
     }
 
     private async Task<ReminderId> ScheduleOneShotAsync(string id)

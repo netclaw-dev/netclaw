@@ -255,8 +255,22 @@ unit's `Environment` property decides: no `NETCLAW_HOME` means the default home.
 A unit whose `NETCLAW_HOME` comes only from an `EnvironmentFile`, sampled at an
 instant when it has no main process, is therefore treated as serving the default
 home. For a home the unit does not serve, `start` and `stop` act on that home's
-own daemon process and never on the unit. A stale PID file that names another
-home's live `netclawd` is still trusted by a direct `stop`, as in 0.27.1.
+own daemon process and never on the unit.
+
+A direct `stop` sends a signal only to a PID that is shown to serve the home of
+the command (capability spec `daemon-lifecycle`, change
+`bind-daemon-stop-to-home`). `stop` posts the shutdown notice with the PID and
+the resolved home path to the local control endpoint of the home. The daemon
+answers 200 with its PID and its resolved home, or 409 for another PID or home.
+A 200 with the right PID and the right home is the proof. A daemon that does not
+answer, or answers 200 with no `home` (an older daemon), is proven on Linux only by
+its own environment: `NETCLAW_HOME`, or `<HOME>/.netclaw` with the `HOME` of that
+environment. A relative `NETCLAW_HOME`, or one with `~`, `$`, or `%`, gives no proof.
+Without proof, `stop` sends no signal, keeps the PID file, prints a two-line
+refusal on stderr, and exits with code 1. `start` and `status` use the same
+environment rule, or the held lock file where the environment cannot be read,
+and report a PID with no proof as "not shown to serve" this home. Runbook:
+`docs/runbooks/daemon-upgrade.md`, section "When a command refuses".
 
 The session journals each accepted input before it acknowledges the source.
 The record retains the text, media, source message ID, and original authority.

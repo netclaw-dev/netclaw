@@ -294,7 +294,7 @@ SHALL NOT affect routing.
 - **WHEN** the reminder fires
 - **THEN** the dispatcher uses the Mattermost gateway, conversation, and session binding
 - **AND** the response reaches the original channel and thread
-- **AND** `delivery_required = true` succeeds only after a successful post
+- **AND** the run succeeds when the session acknowledges the fire, whether or not `delivery_required` is set
 
 #### Scenario: Unsupported current-session origin is rejected before persistence
 
@@ -305,9 +305,13 @@ SHALL NOT affect routing.
 #### Scenario: A Mattermost post failure does not fail the reminder
 
 - **GIVEN** a Mattermost current-session reminder with `delivery_required = true`
-- **WHEN** the Mattermost post API rejects its response
-- **THEN** the execution records a failed outcome
-- **AND** a session acknowledgement does not count as a successful post
+- **AND** the session acknowledged the fire
+- **WHEN** the Mattermost post API later rejects the response
+- **THEN** the execution still records a successful outcome
+- **AND** the reminder system does not retry the fire
+- **AND** the session does not retry the post, because a Mattermost or Discord post failure is a `TransportFailure` and the delivery retry covers other failure kinds only
+- **AND** the binding reports `DeliveryFailed` with `TransportFailure` to the session
+- **AND** the session writes an Error log and raises a `reminder.delivery.failed` alert (see the `netclaw-session` requirement "A failed post on a reminder turn is visible to the operator")
 
 ### Requirement: Task management
 
@@ -555,7 +559,7 @@ inline. If no history exists, the tool SHALL return an empty list.
 - **THEN** the tool call is rejected by the ACL policy
 - **AND** the agent receives a permission-denied response
 
-### Requirement: Envelope-ack-gated at-least-once delivery
+### Requirement: Envelope-ack-gated delivery ends at admission
 
 The reminder manager SHALL retain each Akka.Reminders envelope until the attempt
 has a known outcome. This rule SHALL apply to every delivery kind, so `Channel`
@@ -564,38 +568,41 @@ and `None` reminders no longer get an eager acknowledgement.
 The execution actor SHALL report its outcome to the manager. It SHALL wait for
 `ReminderExecutionAccepted` before it stops.
 
-The manager SHALL acknowledge only a successful execution with all required
-delivery evidence. It SHALL negatively acknowledge a known failure.
+The manager SHALL acknowledge only a successful execution. For `Channel`
+delivery, it SHALL also require all required delivery evidence. A `CurrentSession`
+run needs no delivery evidence (see below). It SHALL negatively acknowledge a
+known failure.
 
-A `CurrentSession` reminder SHALL still use the origin gateway and
-`Ask<CommandAck>`. Required delivery SHALL also wait for
-`ReminderDeliveryResult`, which reports success and failure explicitly.
+A `CurrentSession` reminder SHALL use the origin gateway and
+`Ask<CommandAck>`. The run SHALL end when the session acknowledges the fire
+(admission). The run SHALL NOT wait for a post to the channel, whatever the
+value of `DeliveryRequired`. `DeliveryRequired` SHALL have no effect for a
+`CurrentSession` reminder. A `CommandNack` or an Ask timeout SHALL fail the run.
 
-The target session SHALL keep its best-effort reminder key check. The key SHALL
-use the stable occurrence due time.
+The target session SHALL decide alone what happens to an admitted fire. It
+SHALL use the stable key of the occurrence, which is built from the occurrence
+due time.
 
-#### Scenario: CurrentSession requires observed delivery
+#### Scenario: CurrentSession succeeds at admission
 
 - **GIVEN** a `CurrentSession` reminder has `DeliveryRequired = true`
 - **WHEN** the target session returns `CommandAck`
-- **THEN** the execution remains incomplete
-- **WHEN** a matching successful `ReminderDeliveryResult` arrives
 - **THEN** the child reports success to the manager
 - **AND** the manager acknowledges the occurrence
-
-#### Scenario: CurrentSession delivery fails
-
-- **GIVEN** a `CurrentSession` reminder awaits required delivery
-- **WHEN** the gateway rejects the turn or delivery fails
-- **THEN** the child reports a descriptive failure
-- **AND** the manager sends a negative acknowledgement
+- **AND** no delivery result is awaited
 
 #### Scenario: CurrentSession with DeliveryRequired=false acks on CommandAck alone
 
 - **GIVEN** a `CurrentSession` reminder with `DeliveryRequired = false` fires
 - **WHEN** `CommandAck` is received from the session
 - **THEN** the child reports success to the manager
-- **AND** no `ReminderDeliveryResult` wait is attempted
+
+#### Scenario: CurrentSession refusal fails the run
+
+- **GIVEN** a `CurrentSession` reminder fires
+- **WHEN** the gateway or the session replies `CommandNack`, or the Ask times out
+- **THEN** the child reports a descriptive failure
+- **AND** the manager sends a negative acknowledgement
 
 #### Scenario: Channel execution fails
 
@@ -619,25 +626,23 @@ use the stable occurrence due time.
 
 #### Scenario: Redelivered CurrentSession reminder is deduped on the target session
 
-- **GIVEN** a `CurrentSession` reminder was previously processed by the session,
-  evidenced by a `TurnRecorded` event whose `SourceReminderId` matches the
-  reminder's `{reminderId}:{fireTimestampMs}` key and is present in
-  `ProcessedReminderIds`
+- **GIVEN** a `CurrentSession` fire was admitted by the session, so its journal
+  holds the input with source key `{reminderId}:{fireTimestampMs}`
 - **WHEN** Akka.Reminders redelivers the same envelope after a transient failure
-- **THEN** the session dedup pre-check fires and `TryReplyAck()` returns
-  `CommandAck` without re-processing the turn
+- **THEN** the session acknowledges it without a second input
 - **AND** the manager settles the occurrence once, closing the redelivery loop
 
-### Requirement: Reminder delivery guarantees
+### Requirement: Reminder delivery guarantees end at admission
 
 The reminder pipeline SHALL provide at-least-once attempt delivery until the
-manager confirms execution and required delivery success.
+manager confirms execution. For a `CurrentSession` reminder, execution ends at
+admission by the session.
 
 A crash before acknowledgement SHALL leave the occurrence eligible for retry. A
 crash after acknowledgement SHALL not lose successful work.
 
-The stable occurrence identity and the session reminder key SHALL reduce
-duplicate work. Netclaw SHALL not claim exactly-once delivery.
+The stable occurrence identity and the stored source key of the admitted input
+SHALL reduce duplicate work. Netclaw SHALL not claim exactly-once delivery.
 
 #### Scenario: The daemon stops during execution
 
@@ -648,22 +653,20 @@ duplicate work. Netclaw SHALL not claim exactly-once delivery.
 
 #### Scenario: The daemon stops after acknowledgement
 
-- **GIVEN** execution and required delivery succeeded
+- **GIVEN** execution succeeded
 - **AND** the manager acknowledged the occurrence
 - **WHEN** the daemon stops before one-shot terminal state is saved
 - **THEN** durable occurrence status remains `Delivered`
 - **AND** reconciliation repairs the one-shot terminal state
 
-#### Scenario: Duplicate across snapshot recovery is accepted
+#### Scenario: Duplicate across snapshot recovery is caught
 
-- **GIVEN** a `CurrentSession` reminder was processed and `TurnRecorded` persisted
-- **AND** a subsequent `SessionSnapshot` was taken
-- **AND** the session later recovers from that snapshot, so journal replay skips
-  events before the snapshot
-- **AND** a redelivery of the original reminder arrives via Akka.Reminders
-- **WHEN** the dedup pre-check runs
-- **THEN** the set is empty and the redelivery is processed as a fresh turn
-- **AND** this outcome is an explicit accepted tradeoff
+- **GIVEN** a `CurrentSession` fire was admitted
+- **AND** a `SessionSnapshot` was taken
+- **AND** the session later recovers from that snapshot
+- **WHEN** Akka.Reminders redelivers the original fire
+- **THEN** the snapshot holds the source key of the fire
+- **AND** the session acknowledges the redelivery without a second input
 
 #### Scenario: Delivery guarantees documented in reminder-set confirmation
 
@@ -733,16 +736,18 @@ current behavior.
 
 Recurring reminders SHALL include prompt guidance telling the executing LLM to
 call `cancel_reminder` when the reminder's purpose is permanently
-fulfilled. This reuses the existing `cancel_reminder` tool (hard-delete)
+fulfilled. This reuses the existing `cancel_reminder` tool
 rather than introducing a separate completion tool — fewer tools means
-less confusion for smaller models.
+less confusion for smaller models. For a recurring reminder, `cancel_reminder`
+SHALL disable the reminder and keep its definition and history.
 
 #### Scenario: LLM self-cancels a fulfilled recurring reminder
 
 - **GIVEN** an enabled interval reminder fires and the LLM executes
 - **AND** the LLM determines the task is permanently fulfilled
 - **WHEN** the LLM calls `cancel_reminder` with the reminder's ID
-- **THEN** the reminder and its history are deleted
+- **THEN** the reminder is disabled and its schedule is cancelled
+- **AND** the definition and the history stay
 - **AND** future fires do not execute
 
 #### Scenario: Prompt guidance includes reminder ID and cancellation instructions
@@ -752,20 +757,79 @@ less confusion for smaller models.
 - **THEN** the prompt includes guidance to call `cancel_reminder`
 - **AND** the guidance includes the reminder's own ID
 
-### Requirement: Delivery observation timeout alignment
+### Requirement: A reminder has at most one waiting fire in a session
 
-The `DeliveryObservedTimeout` for Mode B (current_session) delivery MUST be aligned with the execution timeout. A delivery observation window
-shorter than the execution window causes false failures when LLM turns
-take longer than the observation timeout but complete before the execution
-timeout.
+A session SHALL keep at most one waiting fire for each reminder. A fire waits
+only while the session's in-memory input queue holds it. A turn that selects a
+fire removes it from the queue. When a newer
+fire of the same reminder arrives while an earlier fire waits, the session SHALL
+acknowledge the newer fire and SHALL NOT store it. The session SHALL log
+`reminder_fire_dropped`. The reminder system SHALL see success.
 
-#### Scenario: Delivery observation succeeds for LLM turns taking >30s
+Recovery rebuilds the queue for inputs that wait behind an open approval, so
+the rule holds after a restart or a passivation for those inputs. A stored
+input that nothing will run (a crash, a restart with several requesters, an
+expired restart reminder, or a restart message that found another turn running
+left it pending) is not waiting. It SHALL NOT block a later fire. The session
+SHALL NOT drop a fire while the earlier fire runs. The session SHALL NOT drop a fire because another
+reminder has a waiting fire. A key that is not a reminder fire key
+(`{reminderId}:{fireTimeMs}`) SHALL never be dropped and SHALL never block a fire.
 
-- **GIVEN** a Mode B reminder with `deliveryRequired = true`
-- **AND** the LLM turn takes 45 seconds to produce a delivery
-- **WHEN** the delivery is observed at t=45s
-- **THEN** the execution completes successfully
-- **AND** no failure is recorded
+The decision SHALL cause no side effect. A dropped or duplicate fire SHALL NOT
+abandon an open tool batch.
+
+#### Scenario: A newer fire is dropped while the earlier fire waits
+
+- **GIVEN** a reminder fires every 12 minutes
+- **AND** the 10:00 fire waits behind a running turn
+- **WHEN** the 10:12 fire arrives
+- **THEN** the session acknowledges it and stores no input
+- **AND** the 10:00 fire runs after the turn
+- **AND** the 10:24 fire waits again, and the session admits it
+
+#### Scenario: A fire waits behind an approval, also after a restart
+
+- **GIVEN** the 10:00 fire waits behind an open approval
+- **AND** the daemon restarted, so recovery rebuilt the waiting fire from the journal into the queue
+- **WHEN** the 10:12 fire arrives
+- **THEN** the session acknowledges it and stores no input
+
+#### Scenario: A fire that a crash left pending does not block the next fire
+
+- **GIVEN** the 10:00 fire was stored and waited behind a running turn
+- **AND** the daemon crashed, so the new session holds the 10:00 fire in its journal but not in its queue, and no restart reminder exists
+- **WHEN** the 10:12 fire arrives
+- **THEN** the session stores it as an input
+- **AND** the 10:12 fire runs
+
+#### Scenario: A key that is not a fire key is never dropped
+
+- **GIVEN** a reminder input is stored with the key `weekly:abc` (the time is not digits)
+- **WHEN** a reminder input with the key `weekly:def` arrives
+- **AND** a reminder input with the key `weekly:1700000000000` arrives
+- **THEN** the session stores both as inputs
+- **AND** it logs no `reminder_fire_dropped`
+- **AND** the stored `weekly:abc` input blocks neither key
+
+#### Scenario: A fire is admitted while the earlier fire runs
+
+- **GIVEN** a running turn was started by the 10:00 fire
+- **WHEN** the 10:12 fire arrives
+- **THEN** the session stores it as a waiting input
+- **AND** both fires run
+
+#### Scenario: Different reminders never drop each other
+
+- **GIVEN** the reminders `check-pr` and `standup` both fire during a busy turn
+- **THEN** the session stores both fires
+- **AND** a name prefix (`check` and `check-pr`) does not make two reminders equal
+
+#### Scenario: A redelivered fire is a duplicate, not a drop
+
+- **GIVEN** the session admitted the 10:00 fire
+- **WHEN** Akka.Reminders redelivers the 10:00 fire
+- **THEN** the session acknowledges it and stores no input
+- **AND** a recovered session writes no `ToolBatchAbandoned` for it
 
 ### Requirement: Reminder delivery target validation
 
@@ -1018,55 +1082,122 @@ Netclaw SHALL disable the complete reminder when the count reaches `FailurePause
 
 ### Requirement: One-shot reminders have one terminal settlement
 
-Netclaw SHALL settle each one-shot reminder exactly once.
+Netclaw SHALL settle each one-shot reminder exactly once. The settlement SHALL end the one-shot. To end a one-shot, Netclaw SHALL record a reminder tombstone (see the [engineering glossary](../../../docs/spec/GLOSSARY.md#reminder-tombstone)) and then delete the definition and its schedule.
 
-After a successful execution, Netclaw SHALL disable the one-shot, record the `Completed` terminal outcome, and retain the definition and its execution history.
+A one-shot SHALL end at the first of these events, with this outcome:
 
-When a one-shot reaches `FailurePauseThreshold`, Netclaw SHALL retain the definition, disable it, and record the `Failed` terminal outcome. The same applies to a recurring reminder that reaches the threshold.
+- a successful run: `Completed`
+- a run with a denied tool call: `Failed`, with the denial text
+- a failed run that reaches `FailurePauseThreshold`: `Failed`
+- a failed run that Akka.Reminders does not retry (the negative acknowledgement replies `Failed` or `Expired`): `Failed`
+- a fire after its `ExpiresAt`: `Expired`, and the reminder does not run
+- a cancel: `Cancelled`
+- a disabled one-shot whose fire time passed: `Cancelled`
 
-Netclaw SHALL remove a disabled one-shot with outcome `Completed`, together with its execution history, once its last update is more than 12 days old. It SHALL check at startup reconciliation and every 12 hours. Netclaw SHALL NOT prune any other reminder: recurring reminders and `Failed` one-shots are removed only by an explicit delete command.
+Below the threshold, Netclaw SHALL keep a failed one-shot enabled so Akka.Reminders can retry it. A failed run below the threshold SHALL NOT end the one-shot.
+
+A recurring reminder that reaches the threshold SHALL stay as a definition, disabled, with the `Failed` outcome. Netclaw SHALL NOT delete a recurring reminder on its own. Only an explicit delete command removes it.
+
+The tombstone SHALL hold the id, the title, the audience, the fire time of the ended occurrence, the outcome, the end time, and the last error. A tombstone with the outcome `Failed` SHALL also hold the reminder instructions (the prompt). A tombstone with any other outcome SHALL NOT hold the instructions. No tombstone SHALL hold the delivery target, the delivery instructions, or the boundary. Netclaw SHALL delete the history and then the tombstone when the end time is more than 12 days old. It SHALL check at startup reconciliation and every 12 hours.
 
 The failed count reported by `netclaw stats` SHALL count only enabled reminders with at least one consecutive failure.
 
-Creating a reminder with the id of a retained `Completed` one-shot SHALL replace it and discard its old history. Creating a reminder with the id of a `Failed` one-shot SHALL be rejected as already existing.
-
-Below that threshold, Netclaw SHALL keep a failed one-shot enabled so Akka.Reminders can retry it.
-
 #### Scenario: Successful one-shot is retained, then pruned
 
-- **GIVEN** a one-shot reminder succeeds
-- **WHEN** Netclaw completes its acknowledgement
-- **THEN** Netclaw keeps the definition, disabled with outcome `Completed`, and its history file
-- **AND** reminder history for the id remains available
-- **AND** Netclaw removes both once the retention period has passed
+- **GIVEN** a one-shot reminder `check-pr-42` fires at 10:00
+- **WHEN** its run succeeds and Netclaw settles the occurrence
+- **THEN** the definition and the schedule of `check-pr-42` no longer exist
+- **AND** a tombstone records the outcome `Completed` and the end time
+- **AND** reminder history for `check-pr-42` returns the successful record
+- **AND** Netclaw removes the history and the tombstone once the retention period has passed
 
-#### Scenario: Failed reminders are kept but stop counting in stats
+#### Scenario: A current-session one-shot ends at admission
 
-- **GIVEN** a recurring reminder or one-shot was disabled with outcome `Failed` more than 12 days ago
-- **WHEN** Netclaw prunes completed one-shots
-- **THEN** the definition and its history remain
-- **AND** the failed count in `netclaw stats` does not include it
+- **GIVEN** a one-shot reminder with `delivery_kind = current_session`
+- **WHEN** the target session acknowledges the fire
+- **THEN** the one-shot ends with the outcome `Completed`
+- **AND** the end does not wait for the session turn
+
+#### Scenario: A failed end keeps the prompt
+
+- **GIVEN** a one-shot with the instructions "Check PR 42 and tell me when CI is green"
+- **WHEN** the one-shot ends with the outcome `Failed`
+- **THEN** the tombstone holds the instructions
+- **AND** the tombstone does not hold the delivery target
+
+#### Scenario: Other ends do not keep the prompt
+
+- **GIVEN** three one-shots that end as `Completed`, `Cancelled`, and `Expired`
+- **WHEN** Netclaw writes their tombstones
+- **THEN** no tombstone holds the instructions
 
 #### Scenario: Failed one-shot remains enabled for retry
 
-- **GIVEN** a one-shot attempt fails below the poison threshold
-- **WHEN** Akka.Reminders schedules another attempt
-- **THEN** Netclaw keeps the definition enabled
+- **GIVEN** a one-shot attempt fails for the second time
+- **WHEN** Netclaw settles the failed attempt
+- **THEN** the definition stays enabled
+- **AND** no tombstone exists for the id
 - **AND** reminder status shows the durable attempt state
 
 #### Scenario: Poisoned one-shot remains inspectable
 
-- **GIVEN** a one-shot reaches `FailurePauseThreshold`
-- **WHEN** Netclaw settles the final failed attempt
-- **THEN** Netclaw disables the definition with outcome `Failed`
-- **AND** an all-reminders query returns the definition
+- **GIVEN** a one-shot has four consecutive failed attempts
+- **WHEN** the fifth attempt fails
+- **THEN** the definition and the schedule no longer exist
+- **AND** the tombstone records the outcome `Failed` and the last error
+- **AND** Netclaw emits the critical `reminder.auto_disabled` alert
+- **AND** all five failure records stay readable through reminder history
+
+#### Scenario: Akka.Reminders stops the retries
+
+- **GIVEN** a one-shot attempt fails below the threshold
+- **WHEN** the negative acknowledgement replies `Expired`
+- **THEN** the one-shot ends with the outcome `Failed`
+
+#### Scenario: A denied tool call ends the one-shot
+
+- **GIVEN** a one-shot run calls a tool that authorization denies
+- **WHEN** Netclaw settles the run
+- **THEN** Netclaw acknowledges the occurrence and does not retry it
+- **AND** the one-shot ends with the outcome `Failed` and the denial text
+- **AND** the history row has the status `denied`
+
+#### Scenario: An expired one-shot ends without a run
+
+- **GIVEN** a restart-resume one-shot whose `ExpiresAt` is in the past
+- **WHEN** its fire arrives
+- **THEN** no execution starts
+- **AND** the one-shot ends with the outcome `Expired`
+
+#### Scenario: Failed reminders are kept but stop counting in stats
+
+- **GIVEN** a cron reminder has four consecutive failed attempts
+- **WHEN** the fifth attempt fails
+- **THEN** the definition stays, disabled, with the outcome `Failed`
+- **AND** no tombstone exists for the id
+- **AND** the failed count in `netclaw stats` does not include it
 
 #### Scenario: Reconciliation uses durable occurrence state
 
-- **GIVEN** a one-shot has a past fire time
-- **WHEN** reconciliation finds no active schedule
-- **THEN** reconciliation reads the durable occurrence state
-- **AND** reconciliation selects restoration, a terminal soft delete, or retention of a delivered one-shot as `Completed`
+- **GIVEN** an enabled one-shot has a past fire time
+- **WHEN** reconciliation or the 12-hour sweep finds no active schedule
+- **THEN** the pass reads the durable occurrence state
+- **AND** a terminal state ends the one-shot with the matching outcome
+- **AND** a state that is not terminal leaves the occurrence to Akka.Reminders
+- **AND** a missing state keeps the definition enabled for operator review
+
+#### Scenario: The tombstone and the history are purged after 12 days
+
+- **GIVEN** a one-shot ended at 10:00 on 1 October
+- **WHEN** the sweep runs at 10:01 on 13 October
+- **THEN** the history file and the tombstone no longer exist
+- **AND** reminder history for the id replies "not found"
+
+#### Scenario: The tombstone is kept inside the retention period
+
+- **GIVEN** a one-shot ended at 10:00 on 1 October
+- **WHEN** the sweep runs at 09:59 on 13 October
+- **THEN** the tombstone and the history stay
 
 ### Requirement: Reminder attempts have bounded acknowledgement leases
 
@@ -1127,7 +1258,23 @@ Netclaw SHALL ignore an exact duplicate of the active occurrence. The active exe
 
 Netclaw SHALL save a failed run and its poison count before it sends a negative acknowledgement. Netclaw SHALL not advance Akka state after a local save failure.
 
-Netclaw SHALL save a successful run and reset the poison count before it sends an acknowledgement. Reconciliation SHALL repair one-shot terminal state after a post-acknowledgement process failure.
+Netclaw SHALL write the tombstone of a one-shot before every other step of its end: before the acknowledgement, the negative acknowledgement after a threshold failure, the schedule cancel, and the definition delete. The only exception is a failure that is terminal only because of the negative acknowledgement reply. Then the tombstone SHALL come right after that reply.
+
+If Netclaw cannot write the tombstone of a one-shot after a run that succeeded or had a denied tool call, it SHALL still acknowledge the occurrence. The acknowledgement records the durable status `Delivered`, so Akka.Reminders does not deliver the occurrence again, and the run does not repeat. Netclaw SHALL keep the definition, log an error, and emit the `reminder.settlement.failed` alert. The next startup reconciliation or the next 12-hour sweep, whichever comes first, SHALL end the one-shot from the durable status. A running daemon SHALL NOT need a restart. The pass SHALL finish well before Akka.Reminders deletes the completed row, which happens 12 days after the end.
+
+- A one-shot with the durable status `Delivered` ends as `Completed`, with one exception. The pass SHALL use the history row of this occurrence: the newest row, only when its `FiredAt` is not earlier than the fire time of the definition. If that row has the status `denied`, the pass SHALL end the one-shot as `Failed`. The last error SHALL be the error text of that row, and the tombstone SHALL hold the instructions (the prompt). A `denied` row of an earlier run, from before a re-arm, SHALL NOT change the outcome.
+- If the pass finds no readable history row of this occurrence (the file is damaged or has no row for it), it SHALL still end a `Delivered` one-shot as `Completed`. It SHALL log a warning that names the reminder and says that its history cannot be read, because the denial check could not run.
+- A one-shot with the durable status `Failed`, `Expired`, or `Cancelled` ends as `Failed`.
+- A one-shot with the status `Pending` or `AwaitingAck` has an active or waiting occurrence. The pass SHALL leave it alone.
+- The pass SHALL NOT query the status of a one-shot that has an active run in the manager. An active run settles itself, and the occurrence of an active run is open.
+- If the status query of a one-shot fails (an `Error` response or a failed Ask), the pass SHALL catch the failure. The manager SHALL NOT restart, because a restart stops every execution actor, and an open occurrence can then run again after the acknowledgement lease. The pass SHALL log an error that names the reminder and says "occurrence status". It SHALL emit the `reminder.status.query_failed` alert with the reminder id as the source. It SHALL leave that one-shot unchanged and go on to the next one-shot. The next pass tries again.
+- If the tombstone file of the one-shot exists but cannot be read, the pass SHALL skip that one-shot. It SHALL NOT overwrite the file and SHALL NOT end the one-shot. It SHALL log an error and emit the `reminder.tombstone.invalid` alert. The next pass tries again. The status pass runs inside the sweep, after the sweep has matched or dropped every readable tombstone of the one-shot. A tombstone file that still exists at that point therefore cannot be read. This rule depends on that order.
+
+A damaged tombstone file can hold a `Completed` record. The runbook SHALL tell the operator to read `<id>.history.jsonl` before the operator deletes the file. If the history file has an `ok` row for this fire time, the operator SHALL repair the file with `outcome: Completed` and SHALL NOT delete it. A delete inside the attempt window lets the redelivery run the one-shot again. A delete after the window ends the one-shot as `Failed` with its prompt, although the one-shot ran.
+
+If Netclaw cannot write the tombstone of any other end (a cancel, a failure at the threshold, or an expiry), it SHALL NOT acknowledge or negatively acknowledge the occurrence, cancel the schedule, or delete the definition. It SHALL emit a settlement failure alert. The acknowledgement lease SHALL stay the recovery path.
+
+A crash at any step after the tombstone SHALL NOT run the one-shot again and SHALL NOT lose its outcome. Reconciliation SHALL repair one-shot terminal state after a post-acknowledgement process failure.
 
 #### Scenario: Local failure state cannot be saved
 
@@ -1136,12 +1283,179 @@ Netclaw SHALL save a successful run and reset the poison count before it sends a
 - **THEN** Netclaw does not send a negative acknowledgement
 - **AND** the Akka.Reminders acknowledgement timeout remains the recovery path
 
+#### Scenario: The tombstone cannot be written after a successful or denied run
+
+- **GIVEN** a one-shot run succeeds, or a tool call of the run is denied
+- **WHEN** the tombstone write fails with an I/O error
+- **THEN** Netclaw acknowledges the occurrence, and the durable status is `Delivered`
+- **AND** the definition stays enabled
+- **AND** Netclaw logs an error and emits the `reminder.settlement.failed` alert
+- **AND** the one-shot does not run again, also after the acknowledgement lease time passes
+- **AND** the next startup reconciliation or the next 12-hour sweep ends the one-shot and deletes the definition
+- **AND** the end is `Completed` for a success, and `Failed` for a denied tool call (see the scenarios below)
+
+#### Scenario: The sweep ends the one-shot without a restart
+
+- **GIVEN** a one-shot run succeeded, the tombstone write failed, and Netclaw acknowledged the occurrence
+- **AND** the disk works again, and the daemon does not restart
+- **WHEN** the 12-hour sweep runs
+- **THEN** the one-shot ends as `Completed`, the tombstone exists, and the definition no longer exists
+- **AND** the one-shot does not run again, also at the next sweep
+
+#### Scenario: The sweep leaves an active run alone
+
+- **GIVEN** a one-shot run is active, and its durable status is `AwaitingAck`
+- **WHEN** the 12-hour sweep runs
+- **THEN** the definition stays, and no tombstone exists
+- **AND** when the run succeeds, the one-shot ends as `Completed`
+
+#### Scenario: A denied run ends as `Failed` after the tombstone write failed
+
+- **GIVEN** a tool call of a one-shot run was denied, the tombstone write failed, and Netclaw acknowledged the occurrence
+- **AND** the history row of this run has the status `denied`
+- **WHEN** the next startup reconciliation or the next 12-hour sweep runs
+- **THEN** the one-shot ends as `Failed`
+- **AND** the last error of the tombstone holds the denial text
+- **AND** the tombstone holds the instructions
+
+#### Scenario: A successful run still ends as `Completed` after the tombstone write failed
+
+- **GIVEN** a one-shot run succeeded, the tombstone write failed, and Netclaw acknowledged the occurrence
+- **AND** the history row of this run has the status `ok`
+- **WHEN** the next startup reconciliation or the next 12-hour sweep runs
+- **THEN** the one-shot ends as `Completed`
+- **AND** the tombstone holds no instructions and no error
+
+#### Scenario: An unreadable tombstone stops the end from the durable status
+
+- **GIVEN** a one-shot has the durable status `Delivered`, and its definition still exists
+- **AND** a tombstone file for the id exists that Netclaw cannot read
+- **WHEN** the startup reconciliation or the 12-hour sweep runs
+- **THEN** the definition and the file stay unchanged
+- **AND** Netclaw logs an error and emits the `reminder.tombstone.invalid` alert
+- **AND** the one-shot does not run
+
+#### Scenario: A delete after the attempt window ends a one-shot that never ran as `Failed`
+
+- **GIVEN** an unreadable tombstone stopped every fire of a one-shot until Akka.Reminders used its last attempt
+- **AND** the durable status is now `Failed`
+- **AND** the history file has no row for this fire time, so the one-shot never ran
+- **WHEN** the operator deletes the file and the next pass runs
+- **THEN** the one-shot ends as `Failed`, and the tombstone holds the instructions
+- **AND** the one-shot did not run
+
+#### Scenario: A delete of a tombstone that held a `Completed` record loses the outcome
+
+- **GIVEN** a one-shot ran, and its tombstone file with `outcome: Completed` was damaged afterwards
+- **AND** the history file has an `ok` row for this fire time
+- **AND** the attempt window has passed, so the durable status is `Failed`
+- **WHEN** the operator deletes the file instead of repairing it, and the next pass runs
+- **THEN** the one-shot ends as `Failed` with its prompt, although it ran
+- **AND** the runbook told the operator to read the history file before a delete
+
+#### Scenario: A repair with the `Completed` outcome keeps the outcome
+
+- **GIVEN** the same state, with the history row `ok` for this fire time
+- **WHEN** the operator repairs the file with `outcome: Completed` and the same fire time
+- **THEN** the next pass or the next fire finishes the end and deletes the definition
+- **AND** the tombstone keeps the outcome `Completed`, and the one-shot does not run again
+
+#### Scenario: A repaired tombstone lets the end from the durable status happen
+
+- **GIVEN** an unreadable tombstone stopped the end of a one-shot with the durable status `Delivered`
+- **WHEN** the operator deletes the file and the next pass runs
+- **THEN** the one-shot ends as `Completed`
+
+#### Scenario: A failed status query leaves that one-shot alone
+
+- **GIVEN** a one-shot ran, the tombstone write failed, and Netclaw acknowledged the occurrence
+- **AND** no run of the one-shot is active
+- **AND** the status query for the one-shot fails
+- **WHEN** the 12-hour sweep runs
+- **THEN** the manager does not restart
+- **AND** Netclaw logs an error that names the reminder, and emits the `reminder.status.query_failed` alert with the reminder id as the source
+- **AND** the definition stays enabled, and no tombstone is written
+- **AND** the next sweep, after the store recovers, ends the one-shot as `Completed`
+- **AND** the one-shot ran once
+
+#### Scenario: A failed status query does not stop the pass
+
+- **GIVEN** two such one-shots, and the status query for the first one fails
+- **WHEN** the sweep runs
+- **THEN** the pass ends the second one-shot in the same sweep
+- **AND** the alert names the first one-shot, and the next sweep ends it
+
+#### Scenario: A one-shot with an active run needs no status query
+
+- **GIVEN** a one-shot run is active, and every status query would fail
+- **WHEN** the 12-hour sweep runs
+- **THEN** the pass sends no status query for the one-shot
+- **AND** Netclaw emits no `reminder.status.query_failed` alert, and the manager does not restart
+- **AND** the run continues and settles once, and the one-shot does not run again after the acknowledgement lease time
+
+#### Scenario: A failed status query at startup does not stop the reconciliation
+
+- **GIVEN** an orphan schedule, a future one-shot without a schedule, an expired tombstone with its history, and a past one-shot whose status query fails
+- **WHEN** the startup reconciliation runs
+- **THEN** it cancels the orphan schedule, restores the schedule, and purges the expired tombstone and its history
+- **AND** the reconciliation replies `ReconcileCompleted`, not a failure
+- **AND** Netclaw emits the `reminder.status.query_failed` alert for the past one-shot, which stays enabled
+
+#### Scenario: A denied row of an earlier run does not fail a re-armed one-shot
+
+- **GIVEN** a denied run left no tombstone, and the agent re-armed the same id with a later fire time
+- **AND** Netclaw acknowledged the new occurrence, but the history row of the new run was not written
+- **AND** the newest history row is the `denied` row of the earlier run, and its `FiredAt` is before the new fire time
+- **WHEN** the next startup reconciliation runs
+- **THEN** the pass ignores the `denied` row
+- **AND** the one-shot ends as `Completed`, and the tombstone holds no instructions and no error
+
+#### Scenario: A damaged history file ends the one-shot from the status and logs a warning
+
+- **GIVEN** a one-shot run succeeded, the tombstone write failed, and Netclaw acknowledged the occurrence
+- **AND** the history file of the one-shot has a partial last line
+- **WHEN** the next startup reconciliation or the next 12-hour sweep runs
+- **THEN** the one-shot ends as `Completed`
+- **AND** Netclaw logs a warning that names the reminder and says that its history cannot be read
+
+#### Scenario: A readable history file logs no history warning
+
+- **GIVEN** the same state with an intact `ok` row
+- **WHEN** the next startup reconciliation or the next 12-hour sweep runs
+- **THEN** the one-shot ends as `Completed`
+- **AND** Netclaw logs no warning about the history of the reminder
+
+#### Scenario: The tombstone cannot be written for a cancel
+
+- **GIVEN** a one-shot is scheduled
+- **WHEN** a cancel cannot write the tombstone
+- **THEN** the definition and the schedule stay
+- **AND** Netclaw emits the `reminder.settlement.failed` alert
+- **AND** the one-shot is not ended
+
+#### Scenario: Process stops after the tombstone and before the acknowledgement
+
+- **GIVEN** Netclaw wrote the `Completed` tombstone of a one-shot
+- **AND** the process stopped before the acknowledgement
+- **WHEN** Akka.Reminders delivers the occurrence again
+- **THEN** no execution starts
+- **AND** Netclaw acknowledges the occurrence and deletes the definition
+
 #### Scenario: Process stops after successful acknowledgement
 
-- **GIVEN** Netclaw acknowledges a successful one-shot
-- **WHEN** the process stops before it saves the terminal outcome
-- **THEN** reconciliation reads the durable delivered state
-- **AND** reconciliation records the `Completed` outcome
+- **GIVEN** Netclaw acknowledged a terminal occurrence
+- **AND** the process stopped before it wrote the tombstone
+- **WHEN** the daemon starts, or the 12-hour sweep runs
+- **THEN** the pass reads the durable occurrence status
+- **AND** a `Delivered` status ends the one-shot as `Completed`, unless the history row of this occurrence is `denied` (then `Failed`)
+- **AND** a `Failed`, `Expired`, or `Cancelled` status ends the one-shot as `Failed`
+
+#### Scenario: Process stops after the tombstone and before the definition delete
+
+- **GIVEN** a one-shot has a tombstone with the same fire time as its definition
+- **WHEN** the daemon starts
+- **THEN** reconciliation cancels the schedule and deletes the definition
+- **AND** the tombstone stays unchanged
 
 ### Requirement: Fail-closed reminder write validation
 
@@ -1239,3 +1553,282 @@ a normal chat whose hidden first message is `/run-reminder <id>`.
 #### Scenario: CLI usage error
 - **WHEN** the operator runs `netclaw reminder run` with no ID
 - **THEN** the CLI prints `Usage: netclaw reminder run <id>` and exits non-zero
+### Requirement: A cancel deletes a one-shot reminder
+
+A cancel of a one-shot reminder SHALL end it with the outcome `Cancelled`. This applies to `cancel_reminder`, `netclaw reminder cancel`, and `DELETE /api/reminders/{id}` without `permanent`. Netclaw SHALL write the tombstone before it cancels the schedule. A cancel SHALL NOT stop a run that is active. A cancel of a recurring reminder SHALL disable it and keep it.
+
+A cancel of an ended one-shot SHALL change nothing. It SHALL report that the reminder already ended, with the outcome and the end time. The audience gate SHALL apply to the cancel of an ended one-shot. Outside the caller's audience, the reply SHALL be "not found".
+
+`netclaw reminder disable` SHALL stay a reversible pause for a one-shot. A disabled one-shot with a future fire time SHALL stay as a definition.
+
+#### Scenario: Cancel deletes a one-shot
+
+- **GIVEN** an enabled one-shot reminder `deploy-check` fires in two hours
+- **WHEN** the agent calls `cancel_reminder` with `deploy-check`
+- **THEN** the definition and the schedule no longer exist
+- **AND** the tombstone records the outcome `Cancelled`
+- **AND** the tool replies that the reminder was cancelled and deleted
+
+#### Scenario: Cancel keeps a recurring reminder
+
+- **GIVEN** an enabled interval reminder `ci-watch`
+- **WHEN** the agent calls `cancel_reminder` with `ci-watch`
+- **THEN** the definition stays, disabled
+- **AND** no tombstone exists for `ci-watch`
+
+#### Scenario: A process stop after the cancel tombstone does not run the reminder
+
+- **GIVEN** a cancel wrote the tombstone of `deploy-check`
+- **AND** the process stopped before the schedule cancel
+- **WHEN** the daemon starts, or the fire arrives first
+- **THEN** no execution starts
+- **AND** the schedule and the definition no longer exist
+
+#### Scenario: Cancel of an ended one-shot
+
+- **GIVEN** `check-pr-42` ended as `Completed` at 10:00
+- **WHEN** a caller in the same audience cancels `check-pr-42`
+- **THEN** the reply says that the reminder already ended (completed at 10:00)
+- **AND** the tombstone and the history do not change
+
+#### Scenario: Cancel of an ended one-shot outside the audience
+
+- **GIVEN** a Personal one-shot ended
+- **WHEN** a Team caller cancels it
+- **THEN** the reply is "not found", the same as for an id that never existed
+
+#### Scenario: A paused one-shot with a future fire time stays
+
+- **GIVEN** an operator ran `netclaw reminder disable` on a one-shot that fires tomorrow
+- **WHEN** the sweep runs today
+- **THEN** the definition stays, disabled
+- **AND** `netclaw reminder enable` can schedule it again
+
+#### Scenario: A paused one-shot ends when its fire time passes
+
+- **GIVEN** a disabled one-shot whose fire time was yesterday
+- **WHEN** the sweep runs
+- **THEN** the one-shot ends with the outcome `Cancelled`
+
+### Requirement: Settlement ends only the occurrence that it ran
+
+Before it ends a one-shot, Netclaw SHALL check that the current definition is the one that ran. The fire time of the definition SHALL equal the due time of the settled occurrence, at millisecond precision. If the times differ, Netclaw SHALL record the history row and settle the occurrence, and it SHALL NOT change the definition. If no definition exists, Netclaw SHALL record the history row and settle the occurrence, and it SHALL NOT replace an existing tombstone.
+
+#### Scenario: A watcher that sets itself again during its run keeps the new reminder
+
+- **GIVEN** a `channel` one-shot `ci-poll` with the fire time 10:00 runs
+- **AND** during the run, `set_reminder` replaces `ci-poll` with the fire time 10:10
+- **WHEN** the 10:00 run succeeds and Netclaw settles it
+- **THEN** the `ci-poll` definition with the fire time 10:10 stays enabled and scheduled
+- **AND** no tombstone exists for `ci-poll`
+- **AND** the history has a row for the 10:00 run
+
+#### Scenario: The settled occurrence matches the definition
+
+- **GIVEN** a one-shot with the fire time 10:00 runs
+- **AND** nothing replaces its definition
+- **WHEN** Netclaw settles the 10:00 run
+- **THEN** the one-shot ends
+
+#### Scenario: A cancel during the run wins
+
+- **GIVEN** a one-shot run is active
+- **AND** a cancel ends the one-shot as `Cancelled`
+- **WHEN** the run succeeds and Netclaw settles it
+- **THEN** the tombstone keeps the outcome `Cancelled`
+- **AND** the history has a row for the run
+
+### Requirement: A fire runs only the occurrence of the current definition
+
+Before it runs, expires, or ends a one-shot for a fire, Netclaw SHALL check that the due time of the fire equals the fire time of the current definition, at millisecond precision. If the times differ, the occurrence belongs to an earlier definition of the same id. Netclaw SHALL NOT run it. Netclaw SHALL acknowledge that occurrence and log a warning. Netclaw SHALL NOT change the definition or its tombstone, and SHALL NOT cancel the schedule of the current definition.
+
+Netclaw SHALL apply this check before every other rule for a fire. In particular, it applies before the rule for an unreadable tombstone. An occurrence of an earlier definition SHALL be acknowledged even when the tombstone file of the current definition cannot be read.
+
+#### Scenario: An occurrence of an earlier definition does not run early
+
+- **GIVEN** a one-shot `ci-poll` with the fire time 10:10
+- **AND** Akka.Reminders still holds an occurrence of an earlier `ci-poll` due at 10:00
+- **WHEN** the 10:00 occurrence fires
+- **THEN** no execution starts
+- **AND** Netclaw acknowledges the 10:00 occurrence and logs a warning
+- **AND** the `ci-poll` definition stays enabled, and its 10:10 schedule stays
+- **AND** the run starts once, at 10:10
+
+#### Scenario: An occurrence of an earlier definition is acknowledged although the tombstone is unreadable
+
+- **GIVEN** a one-shot `ci-poll` with the fire time 10:10
+- **AND** a tombstone file for `ci-poll` that Netclaw cannot read
+- **AND** Akka.Reminders still holds an occurrence of an earlier `ci-poll` due at 10:00
+- **WHEN** the 10:00 occurrence fires
+- **THEN** no execution starts
+- **AND** Netclaw acknowledges the 10:00 occurrence
+- **AND** Netclaw does not emit the `reminder.tombstone.invalid` alert for this fire
+- **AND** the file and the definition stay unchanged
+
+#### Scenario: An occurrence of the current definition runs
+
+- **GIVEN** a one-shot `ci-poll` with the fire time 10:00
+- **WHEN** the 10:00 occurrence fires
+- **THEN** the execution starts
+
+### Requirement: A tombstone that matches its definition wins
+
+A tombstone SHALL match a definition when both have the same id, the definition is a one-shot, and both fire times are equal at millisecond precision. A matching tombstone SHALL mean that the one-shot ended.
+
+- A fire for a definition with a matching tombstone SHALL NOT run. Netclaw SHALL acknowledge it, cancel the schedule, and delete the definition.
+- A tombstone that does not match its definition SHALL be stale. Netclaw SHALL keep the definition, delete the stale tombstone, and log a warning.
+- A fire for a one-shot whose tombstone file exists but cannot be read SHALL NOT run. Netclaw SHALL NOT acknowledge the occurrence. It SHALL keep the definition, the schedule, and the file. It SHALL log an error and emit the `reminder.tombstone.invalid` alert. The operator repairs or deletes the file, and the acknowledgement lease then returns the occurrence. The operator SHALL repair the file within about 12 hours. Akka.Reminders attempts the delivery ten times, with a 70-minute lease each. Then it marks the occurrence `Failed`, and the occurrence does not return. The next reconciliation or sweep then ends the one-shot as `Failed` from the durable status, once the file is readable or gone. That pass never overwrites an unreadable file (see "Settlement write order supports recovery"). A read of history or status still counts the unreadable file as absent (see `reminder-execution-history`).
+
+#### Scenario: A matching tombstone blocks the run
+
+- **GIVEN** a one-shot definition with the fire time 10:00
+- **AND** a tombstone for the same id with the fire time 10:00
+- **WHEN** the 10:00 fire arrives
+- **THEN** no execution starts
+- **AND** the definition no longer exists
+
+#### Scenario: An unreadable tombstone stops the run
+
+- **GIVEN** a one-shot definition with the fire time 10:00
+- **AND** a tombstone file for the same id that Netclaw cannot read
+- **WHEN** the 10:00 fire arrives
+- **THEN** no execution starts
+- **AND** Netclaw does not acknowledge the occurrence
+- **AND** the definition, the schedule, and the file stay
+- **AND** Netclaw logs an error and emits the `reminder.tombstone.invalid` alert
+
+#### Scenario: A repaired tombstone lets the run happen
+
+- **GIVEN** an unreadable tombstone stopped the 10:00 fire of a one-shot
+- **WHEN** the operator deletes the file and the acknowledgement lease expires
+- **THEN** Akka.Reminders delivers the occurrence again
+- **AND** the execution starts once
+
+#### Scenario: A stale tombstone does not block a newer definition
+
+- **GIVEN** a one-shot definition with the fire time 11:00
+- **AND** a tombstone for the same id with the fire time 10:00
+- **WHEN** reconciliation runs
+- **THEN** the definition stays enabled and scheduled
+- **AND** the stale tombstone no longer exists
+- **AND** Netclaw logs a warning that names the id
+
+### Requirement: An ended one-shot id can be set again
+
+A create or an update with the id of an ended one-shot SHALL start a new reminder. Netclaw SHALL first schedule the new occurrence. Then it SHALL delete the old history, delete the tombstone, and save the new definition. This applies to every write mode. If the schedule fails, the old history and the tombstone SHALL stay.
+
+A tombstone outside the caller's audience SHALL block the id. The reply SHALL be the same "not found" reply as for a definition outside the caller's audience.
+
+#### Scenario: Re-arm after the fire
+
+- **GIVEN** `check-pr-42` ended as `Completed` and has one history row
+- **WHEN** the agent calls `set_reminder` with the id `check-pr-42` and a new time
+- **THEN** a new enabled definition with the new time exists
+- **AND** the tombstone and the old history row no longer exist
+
+#### Scenario: Re-arm discards the prompt of a failed one-shot
+
+- **GIVEN** `check-pr-42` ended as `Failed` and its tombstone holds the instructions
+- **WHEN** the agent calls `set_reminder` with the id `check-pr-42`
+- **THEN** the tombstone no longer exists
+- **AND** no file on disk holds the old instructions
+
+#### Scenario: Restart recovery reuses an ended restart-resume id
+
+- **GIVEN** a restart-resume one-shot ended
+- **WHEN** restart recovery saves the same id with `CreateOnly`
+- **THEN** the save succeeds and is not a conflict
+
+#### Scenario: A tombstone outside the audience blocks the id
+
+- **GIVEN** a Personal one-shot `nightly` ended
+- **WHEN** a Team caller calls `set_reminder` with the id `nightly`
+- **THEN** the save fails with "Reminder 'nightly' was not found."
+- **AND** the tombstone and the history do not change
+
+#### Scenario: A failed schedule keeps the old data
+
+- **GIVEN** `check-pr-42` ended
+- **WHEN** a re-arm gives a fire time in the past
+- **THEN** the save fails
+- **AND** the tombstone and the history stay
+
+### Requirement: Read surfaces report an ended one-shot
+
+Inside the retention period, the read surfaces SHALL report an ended one-shot to a caller in its audience:
+
+- `list_reminders` and `netclaw reminder list` SHALL NOT show it.
+- `netclaw reminder show <id>` and `GET /api/reminders/{id}` SHALL reply "not found" (HTTP 404, CLI exit code 1). The message SHALL name the outcome, the end time, and the time until which the history stays readable.
+- `netclaw reminder status <id>` and `GET /api/reminders/{id}/status` SHALL reply with the outcome, the end time, the purge time, the last error, the durable occurrence status while it exists, and the recent history. For the outcome `Failed`, the reply SHALL also hold the reminder prompt. For the other outcomes, the reply SHALL NOT hold a prompt.
+- `netclaw reminder enable|disable <id>` SHALL reply "not found" with the ended message.
+- `run_reminder` SHALL reply with an error that says that the reminder ended.
+
+The prompt of an ended one-shot SHALL be readable only through the status surfaces, and only for a caller inside the tombstone audience. `show`, `history`, `list`, and the agent tools SHALL NOT hold it.
+
+Outside the caller's audience, every surface SHALL reply as for an id that never existed.
+
+#### Scenario: Show on an ended one-shot
+
+- **GIVEN** `check-pr-42` ended as `Completed` at 10:00 on 16 October
+- **WHEN** the operator runs `netclaw reminder show check-pr-42`
+- **THEN** the command exits with code 1
+- **AND** the message says that the reminder ended (completed) at that time and names 28 October as the end of its history
+
+#### Scenario: Status on an ended one-shot
+
+- **GIVEN** `check-pr-42` ended as `Completed`
+- **WHEN** the operator runs `netclaw reminder status check-pr-42`
+- **THEN** the output shows the outcome `Completed`, the end time, and the recent history
+
+#### Scenario: List does not show an ended one-shot
+
+- **GIVEN** one enabled interval reminder and one ended one-shot
+- **WHEN** the agent calls `list_reminders` with `filter = all`
+- **THEN** the result shows only the interval reminder
+
+#### Scenario: Status of a failed one-shot shows the prompt
+
+- **GIVEN** `check-pr-42` ended as `Failed` with the instructions "Check PR 42 and tell me when CI is green"
+- **WHEN** a caller inside the audience asks for its status
+- **THEN** the reply holds the outcome `Failed`, the last error, and the instructions
+- **AND** `netclaw reminder status check-pr-42` prints the instructions
+
+#### Scenario: Status of a completed one-shot shows no prompt
+
+- **GIVEN** `check-pr-42` ended as `Completed`
+- **WHEN** a caller inside the audience asks for its status
+- **THEN** the reply holds no instructions
+
+#### Scenario: Status outside the audience
+
+- **GIVEN** a Personal one-shot ended
+- **WHEN** a Team caller asks for its status
+- **THEN** the reply is "not found"
+
+#### Scenario: The prompt of a failed one-shot stays inside its audience
+
+- **GIVEN** a Personal one-shot ended as `Failed` and its tombstone holds the instructions
+- **WHEN** a Team caller asks for its status, its history, or its details
+- **THEN** every reply is "not found"
+- **AND** no reply holds any part of the instructions
+
+### Requirement: Reconciliation ends leftover one-shots
+
+Startup reconciliation and the 12-hour sweep SHALL end every leftover one-shot definition. A leftover is a one-shot definition with a terminal outcome, or a disabled one-shot whose fire time has passed. The end time SHALL be the last update time of a definition with a terminal outcome. For a disabled one-shot without an outcome, the end time SHALL be the later of the last update time and the fire time. A leftover without a recorded outcome SHALL end as `Cancelled`, and its last error SHALL say that the outcome was not recorded. A leftover with the outcome `Failed` SHALL keep its instructions in its tombstone. The same pass SHALL purge each tombstone whose end time is more than 12 days old. The reconciliation log SHALL report the count of ended one-shots and the count of purged tombstones. Both passes SHALL also end an enabled one-shot with a past fire time from its durable occurrence status, under the rules of "Settlement write order supports recovery". A status that Akka.Reminders no longer holds SHALL keep the definition enabled for operator review. A failed status query for one one-shot SHALL NOT stop the rest of the reconciliation or of the sweep.
+
+#### Scenario: Upgrade cleans old leftovers
+
+- **GIVEN** an install with a `Completed` one-shot last updated 20 days ago, a `Failed` one-shot last updated 2 days ago, and a disabled one-shot without an outcome whose fire time was 30 days ago
+- **WHEN** the new daemon starts
+- **THEN** none of the three definitions exists
+- **AND** the `Completed` and the disabled one-shot have no tombstone and no history
+- **AND** the `Failed` one-shot has a tombstone that holds its instructions, and its history, until its 12 days pass
+- **AND** the tombstone of a leftover that ended as `Completed` or `Cancelled` holds no instructions
+- **AND** the reconciliation log line reports `ended_oneshots=3` and `purged_tombstones=2` (the leftovers that ended and were purged in the same pass count in both)
+
+#### Scenario: Live reminders are not touched
+
+- **GIVEN** an enabled one-shot with a future fire time, a disabled interval reminder, and a cron reminder with the outcome `Failed`
+- **WHEN** reconciliation runs
+- **THEN** all three definitions stay unchanged
+- **AND** no tombstone exists for them

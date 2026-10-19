@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.4.0"
+  version: "1.6.0"
 ---
 
 # Subagent Authoring
@@ -37,7 +37,7 @@ without claiming that the child authored them.
 
 Load this when the user asks to:
 - create a new subagent
-- edit advisory tool metadata, timeout, or behavior for an existing subagent
+- edit advisory tool metadata, prefill timeout, or behavior for an existing subagent
 - diagnose why a subagent does not appear in `[available-subagents]`
 - route a slash skill through `metadata.subagent`
 
@@ -87,19 +87,46 @@ The markdown body below the closing `---` must also be non-empty.
 |------|---------|-------|
 | `tools` | `[]` | Advisory tool metadata retained for file-format compatibility. Netclaw does not use this as a runtime whitelist. |
 | `modelRole` | `Compaction` | `Main` or `Compaction` (case-insensitive). Invalid values make the file fail loud and skip loading. |
-| `timeoutSeconds` | `60` | Inter-delta inactivity budget: the max gap between streaming deltas once the model is responding, and the general tool-loop inactivity budget. The watchdog resets on each progress signal. |
-| `prefillTimeoutSeconds` | inherits `SubAgents.PrefillTimeoutSeconds` (`1800`) | Generous wait-for-first-token budget covering queue wait and cold prefill. Content-free `prompt_progress` keepalives refresh it, so a slow self-hosted prefill is not mistaken for a hang; the watchdog promotes to `timeoutSeconds` once the first real token arrives. Raise this for heavyweight agents on slow/large-context models. |
+| `prefillTimeoutSeconds` | inherits `SubAgents.PrefillTimeoutSeconds` (`1800`) | Generous wait-for-first-token budget covering queue wait and cold prefill. Content-free `prompt_progress` keepalives refresh it, so a slow self-hosted prefill is not mistaken for a hang; the inter-delta budget takes over once the first real token arrives. Raise this for heavyweight agents on slow/large-context models. |
 | `visibility` | `user-facing` | Accepts `user-facing`, `UserFacing`, `internal`, or `Internal`. Invalid values make the file fail loud and skip loading. |
 | `emitStructuredFindings` | `false` | When true, successful output is emitted as findings for parent-session review. |
 
-Unknown fields are ignored.
+Unknown fields are ignored. A file that still sets `timeoutSeconds` loads. The
+loader logs one warning for that file: the key is obsolete and ignored. Delete the
+key from the file.
 
-Beyond these per-agent budgets, every sub-agent LLM call is also bounded by a
-config-level **no-progress ceiling** (`SubAgents.NoProgressTimeoutSeconds` in
-`netclaw.json`, default `1200` = 20 min). Unlike `prefillTimeoutSeconds` and
-`timeoutSeconds`, content-free keepalives never refresh it — only real tokens do —
-so a backend that heartbeats forever without producing output is killed once it
-elapses. It is not a per-agent frontmatter field; tune it in `netclaw.json`.
+The inter-delta budget is not a per-agent setting. Every subagent uses
+`Session.FirstTokenTimeoutSeconds` (default `600`) from `netclaw.json`. A
+profile that used the old `timeoutSeconds` default of `60` now waits up to `600`
+seconds between deltas.
+
+Every sub-agent LLM call also has a config-level **no-progress ceiling**
+(`SubAgents.NoProgressTimeoutSeconds` in `netclaw.json`, default `1200` = 20 min).
+Text, tool calls, and thinking refresh it. Content-free keepalives never refresh
+it. When it elapses, the run fails with reason `no_substantive_output_timeout`.
+It is not a per-agent frontmatter field. Tune it in `netclaw.json`.
+
+Two more rules end a run with outcome `failed`:
+
+- `thinking_only_timeout`: one model call streamed only thinking, with no text
+  and no tool call, for three times the no-progress ceiling (default 60 min).
+  Thinking refreshes the ceiling, so this cap stops a model that thinks without
+  end. A text delta with visible characters or a tool-call delta restarts the
+  cap. A reasoning part never restarts it, also when its text is empty. The cap
+  counts from the start of the call, so prefill time counts.
+- `output_truncated`: the model reply stopped at its output limit and has no
+  tool call. The text is cut off, so it is not a result. The run does not retry.
+  The failure text holds a short, redacted preview of the cut-off text. A reply
+  that has a tool call still runs its tools.
+
+When a subagent fails with `output_truncated`, ask for a shorter answer. If the
+subagent has a file write tool, tell it to write long output to a file and to
+return the file path.
+
+When a subagent fails with `thinking_only_timeout`, ask for a simpler task, or
+use a model that thinks less. A larger output limit does not help. To allow
+longer thinking, raise `SubAgents.NoProgressTimeoutSeconds` in `netclaw.json`.
+The cap is three times that value.
 
 ## Example: valid subagent definition
 
@@ -107,7 +134,6 @@ elapses. It is not a per-agent frontmatter field; tune it in `netclaw.json`.
 ---
 name: notion-planner
 description: Summarizes local daily planning notes for the parent session
-timeoutSeconds: 120
 ---
 
 You are a planning assistant that reviews daily planning notes.
@@ -141,16 +167,23 @@ Parent-mediated tool approval is still allowed for concrete tool calls when the
 parent channel supports it. Treat approval as a security gate, not as a dialogue
 channel.
 
-Subagents share the same tool-loop budget strategy as parent sessions: budget
-nudges, duplicate-call nudges, and force-no-tools wrap-up. The current
-subagent budget is 30 tool iterations per run, where one LLM response with any
-number of parallel tool calls counts as one iteration.
+Parent sessions and subagents detect repeated calls from exact arguments and actual results.
+After two equal feedback rounds, the runtime refuses the next matching call and returns a correction.
+A repeat after that correction ends the turn. Use a different approach after a correction.
+Useful work can exceed the former iteration limits. Deadlines, cancellation, and tool policy still apply.
 
-The parent-facing `spawn_agent` result is an explicit terminal text envelope:
-agent name, run id, outcome (`completed`, `partial`, or `failed`), optional
-reason, diagnostics pointer, and a `Summary:` or `Error:` section. Structured
-findings, when enabled, are a separate parent-reviewed memory-candidate path;
-do not rely on them as the visible result returned to the parent model.
+`spawn_agent` and routed skills return a durable accepted run ID before child completion.
+Continue independent parent work. A ready terminal result arrives later as tool output.
+Its fresh tool call ID differs from the accepted start call ID.
+Acceptance does not prove success. The terminal result carries outcome, evidence, and authorized artifact paths.
+Use `check_agent_run` for necessary status or cancellation. Do not poll in a loop.
+The original owner retains authority. An unrelated child approval does not block parent progress.
+A cancellation acknowledgement does not mean completion. Wait for the terminal result.
+Recovery reports uncertain child loss without an automatic repeat of external work.
+A failed evidence review cannot adopt the raw child context.
+
+Use `agent-coordination` for task composition, worktree ownership, and independent review.
+Load it by canonical name. Read its optional workflow resources through `skill_read_resource`.
 
 ## Fail-loud loader behavior
 

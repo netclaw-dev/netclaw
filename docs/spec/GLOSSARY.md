@@ -70,6 +70,19 @@ model requests, tool exposure set, and ephemeral working context.
 
 **Code anchors:** `SubAgentActor`, `SubAgentSpawner`
 
+### Open child run
+
+An open child run is a child run whose result has not yet had its follow-up
+parent turn. It becomes open at durable acceptance. It closes when the parent
+records the turn that consumes its result. A failed follow-up turn also closes
+it, because the session records the failure as the decision for that result.
+The session reports its open child runs in each `TurnCompleted`.
+A headless run ends only on a completed turn that reports none. A background
+shell job is not a child run.
+
+**Code anchors:** `TurnCompleted.OpenChildRunIds`, `ChildRunLifecycle`,
+`HeadlessChannel`
+
 ### Working context
 
 The working context is actor-local state that helps later model turns. It
@@ -135,6 +148,17 @@ The token remains valid until the operator revokes the device.
 The token has no refresh flow, and pairing-code expiration does not affect it.
 
 **Code anchor:** `DeviceRegistry`
+
+### Reminder tombstone
+
+A reminder tombstone is the durable record of an ended one-shot reminder.
+The reminder manager writes it before it deletes the definition.
+It keeps the id, the title, the audience, the fire time, the outcome, the end time, and the last error.
+A tombstone with the outcome `Failed` also keeps the reminder prompt. No tombstone keeps the delivery target, and a tombstone never runs.
+The audience gates every history and status read of the ended reminder, and the read of the prompt.
+The manager deletes the history and then the tombstone 12 days after the end time.
+
+**Code anchors:** `ReminderTombstone`, `ReminderManagerActor`, `ReminderDefinitionStore`
 
 ## Tool Lifecycle Terms
 
@@ -482,8 +506,10 @@ targets, and adopted context belong to one message. They can change between
 turns of the same requester. Work that a requester starts, such as a child run,
 belongs to that requester in each later turn.
 
-The consent answer check is narrower: it compares the sender ID and the
-principal, because a prompt already belongs to one session.
+The consent answer check (`ApprovalButtonValueCodec.CanApprove`) is different.
+It compares only the sender ID of the answer with the recorded requester sender
+ID. It lets any sender answer when the requester principal is
+`VerifiedAutomation` or when the recorded requester has no sender ID.
 
 Example:
 
@@ -493,7 +519,27 @@ Alice asks for status in turn 2 (no quoted context)  -> same requester, allowed
 Bob asks for status in the same thread               -> other requester, denied
 ```
 
-**Code anchors:** `TurnContext.HasSameRequester`,
+One exception covers child status and cancel. A reminder turn (principal
+`VerifiedAutomation`, source kind `reminder`, transport authenticity
+`LocalProcess`) and any other turn of one session manage each other's child
+runs. The other turn can be a person turn or an automated turn, such as the
+delivery turn of a background job. A webhook turn can carry the source kind
+`reminder`, but it has the authenticity `Verified`, so it is not a reminder turn. When the requester or the turn that started the
+run is a reminder turn, the check ignores the sender ID and the principal
+classification. It still requires the same session, audience, trust boundary,
+and channel type.
+
+```text
+An operator starts a child in a TUI session
+A reminder fire in the same session asks for status  -> allowed
+A reminder fire starts a child; the operator asks    -> allowed
+A background job delivery turn asks for that status  -> allowed
+A reminder fire in another session asks for status   -> denied
+A webhook with the event header "reminder" asks      -> denied
+Alice starts a child; Bob asks (both people)         -> denied
+```
+
+**Code anchors:** `TurnContext.HasSameRequester`, `TurnContext.CanControlChildRunOf`,
 `ApprovalButtonValueCodec.CanApprove`
 
 ### Consent mode
@@ -775,6 +821,15 @@ itself grant access.
 
 A resolved path is a canonical path after link resolution. Do not call a
 resolved path "canonical".
+
+### Resolved home path
+
+A resolved home path is the full path of a Netclaw home with no trailing separator and every link resolved,
+one path component at a time, as `realpath(3)` does. A relative link target is joined to the folder that the
+walk already resolved, so a `..` in a target leaves that folder. A walk that follows more than 40 links fails.
+`HomeIdentity.Canonical` returns it. The daemon and the CLI compare two home paths only through this form
+(`HomeIdentity.Same`), so two different folders never compare as one home. The method name says "canonical"
+for historical reasons. By the term "Canonical path" above, this value is a resolved path, not a canonical path.
 
 ### Path relationship
 

@@ -22,8 +22,9 @@ namespace Netclaw.Cli;
 
 /// <summary>
 /// Headless channel for single-prompt mode (<c>chat -p</c>).
-/// Sends one message to the LLM session, streams all output to stdout,
-/// and exits on <see cref="TurnCompleted"/>.
+/// Sends one message to the LLM session and streams all output to stdout. The run ends on the first
+/// <see cref="TurnCompleted"/> that reports no open child run, or on a failed turn. While a child run is
+/// open, the run waits for the follow-up parent turn that delivers its result.
 /// </summary>
 public sealed class HeadlessChannel : IChannel
 {
@@ -40,11 +41,31 @@ public sealed class HeadlessChannel : IChannel
     private bool _receivedTextDeltaInCurrentTurn;
     private bool _receivedThinkingDeltaInCurrentTurn;
 
-    // JSON output accumulation
+    // JSON output accumulation. The buffer, the tool calls, and the usage belong to the turn in progress.
+    // A TurnCompleted moves them into _turns.
     private readonly StringBuilder _responseBuffer = new();
-    private readonly List<JsonToolCall> _toolCalls = [];
-    private JsonUsage? _usage;
+    private readonly List<JsonToolCall> _turnToolCalls = [];
+    private JsonUsage? _turnUsage;
+    private readonly List<JsonTurn> _turns = [];
     private string? _resolvedSessionId;
+
+    // The output pump and the signal path both end the run. _gate makes the end happen once: after _ended,
+    // the channel ignores every output, so a failed run prints one failure line and a JSON run one envelope.
+    private readonly object _gate = new();
+    private readonly TaskCompletionSource _runEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool _ended;
+
+    // True once the run thread is about to send the prompt. Only then can the hub hold output for this run.
+    // A connection state before that point does not end the run: the request that the run thread waits for
+    // fails with its own reason when the connection cannot be restored.
+    private volatile bool _promptSent;
+
+    // Set under the log lock when the run thread closes the log writer. A late write then does nothing.
+    private bool _logClosed;
+
+    // The open child runs of the most recent completed turn. Empty before the first one. The channel stores
+    // them before it prints the waiting line, so a signal that follows that line finds them.
+    private OpenRunsSnapshot _openRuns = OpenRunsSnapshot.None;
 
     // The kind of the most recent ErrorOutput in the current turn. The error that precedes a failed
     // TurnCompleted decides the reported kind; an earlier error that the turn survived must not.
@@ -58,6 +79,7 @@ public sealed class HeadlessChannel : IChannel
     /// The process exit code for this run: 1 once the session reports a failed turn
     /// (provider unreachable, timeout, tool failure, model behavior), otherwise 0.
     /// A failed run or a cancelled run also prints the <see cref="HeadlessFailure"/> token.
+    /// The channel writes it under the gate, in the same step that marks the run ended.
     /// </summary>
     internal int ExitCode { get; private set; }
 
@@ -117,20 +139,14 @@ public sealed class HeadlessChannel : IChannel
             if (SessionHubFrame.CheckText(_prompt) is { } tooLarge)
                 throw new InvalidOperationException(tooLarge);
 
-            var turnCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
             using var connectionSubscription = _daemonClient.ConnectionEvents.Subscribe(evt =>
             {
-                var lw = Volatile.Read(ref logWriter);
-                if (lw is not null)
-                    Log(lw, $"CONNECTION: {evt.Message}");
+                OnConnectionEvent(evt, Volatile.Read(ref logWriter));
             });
 
             using var subscription = _daemonClient.SessionOutput.Subscribe(output =>
             {
                 HandleOutput(output, Volatile.Read(ref logWriter));
-                if (output is TurnCompleted)
-                    turnCompleted.TrySetResult();
             });
 
             await _daemonClient.ConnectAsync(stopping);
@@ -155,48 +171,139 @@ public sealed class HeadlessChannel : IChannel
             var logPath = Path.Combine(_paths.LogsDirectory, logFileName);
             Volatile.Write(ref logWriter, new StreamWriter(logPath, append: true) { AutoFlush = true });
 
-            logWriter!.WriteLine($"[{_timeProvider.GetUtcNow():o}] Headless session started: {sessionId}");
-            logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] PROMPT: {_prompt}");
+            Log(logWriter, $"Headless session started: {sessionId}");
+            Log(logWriter, $"PROMPT: {_prompt}");
 
             _promptSentTicks = Stopwatch.GetTimestamp();
+            _promptSent = true;
 
             await _daemonClient.SendAsync(_prompt, stopping);
 
             _logger.LogInformation("Headless session started: {SessionId} (log: {LogPath})", sessionId, logPath);
 
-            await turnCompleted.Task.WaitAsync(stopping);
-            if (ExitCode != 0)
-                Environment.ExitCode = ExitCode;
-            _lifetime.StopApplication();
+            await _runEnded.Task.WaitAsync(stopping);
+            FinishRun();
         }
         catch (OperationCanceledException ex) when (stopping.IsCancellationRequested)
         {
             // SIGINT or SIGTERM. Exit 1: exit 0 with no output reads as a pass to a script.
             _logger.LogDebug(ex, "Headless channel cancelled (shutdown)");
-            WriteFailureLog("CANCELLED", ex);
-            Console.Error.WriteLine(HeadlessFailure.Cancelled.ToToken());
-            Environment.ExitCode = 1;
-            _lifetime.StopApplication();
+            if (TryBeginStop(out var openRuns))
+            {
+                WriteFailureLog("CANCELLED", ex.ToString());
+                Console.Error.WriteLine(HeadlessFailure.Cancelled.ToToken());
+                openRuns.WriteLine();
+            }
+
+            FinishRun();
         }
         catch (Exception ex)
         {
             // A cancellation that did not come from shutdown (for example a transport timeout)
             // lands here too. It is a channel failure, not a clean stop.
             _logger.LogError(ex, "Headless channel failed");
-            Console.Error.WriteLine($"[headless:error] {SingleLine(ex.Message)}");
-            Console.Error.WriteLine(HeadlessFailure.Channel.ToToken());
-            WriteFailureLog("FAILED", ex);
-            Environment.ExitCode = 1;
-            _lifetime.StopApplication();
+            if (TryBeginStop(out var openRuns))
+            {
+                Console.Error.WriteLine($"[headless:error] {SingleLine(ex.Message)}");
+                Console.Error.WriteLine(HeadlessFailure.Channel.ToToken());
+                openRuns.WriteLine();
+                WriteFailureLog("FAILED", ex.ToString());
+            }
+
+            FinishRun();
         }
         finally
         {
+            // A callback on the client pump can still write while the run thread leaves. The lock makes the
+            // close wait for a write in progress, and the flag makes a later write do nothing.
             if (logWriter is not null)
-                await logWriter.DisposeAsync();
+            {
+                lock (logWriter)
+                {
+                    _logClosed = true;
+                    logWriter.Dispose();
+                }
+            }
         }
     }
 
+    // The run ends once. A turn that ended it, or a stop that began, already holds the result. FinishRun then
+    // only passes the exit code on, whichever path ended the run.
+    private void FinishRun()
+    {
+        // Read under the gate: the thread that ended the run wrote the code under the same lock.
+        int exitCode;
+        lock (_gate)
+            exitCode = ExitCode;
+        if (exitCode != 0)
+            Environment.ExitCode = exitCode;
+        _lifetime.StopApplication();
+    }
+
+    // Marks the run ended for a signal or a channel failure, and sets exit code 1 in the same step. Every caller
+    // is a failure path, and a thread that loses the race must still see the code. Returns false when another
+    // path already ended the run: that result stands, and the caller prints nothing more.
+    private bool TryBeginStop(out OpenRunsSnapshot openRuns)
+    {
+        lock (_gate)
+        {
+            openRuns = _openRuns;
+            if (_ended)
+                return false;
+            _ended = true;
+            ExitCode = 1;
+            return true;
+        }
+    }
+
+    // The hub drops session output while no client is connected, and a reconnect does not replay it. A turn
+    // that completes in that gap is lost, so the run would wait for ever or end with incomplete output. After
+    // the prompt, both Disconnected and TransportClosed therefore end the run loudly, with or without a known
+    // open child run. The operator resumes the session with `netclaw chat --resume`.
+    //   Disconnected: the client spent its whole retry budget, or a bind failed. No more output can arrive.
+    //   TransportClosed: the client starts to reconnect, but a reconnect restores no output from the gap.
+    // Before the prompt, nothing is in flight. The request that the run thread waits for fails with its own
+    // reason, and the run thread ends the run with that reason. After the run ended, both states change
+    // nothing and write nothing: a disconnect after the final turn keeps exit 0, and the log writer may be
+    // closed. One lock holds the end check, the log write, and the mark, so the callback and the run thread
+    // cannot both end the run.
+    private void OnConnectionEvent(DaemonConnectionEvent evt, StreamWriter? log)
+    {
+        OpenRunsSnapshot openRuns;
+        lock (_gate)
+        {
+            if (_ended)
+                return;
+
+            Log(log, $"CONNECTION: {evt.Message}");
+            if (evt.State is not (DaemonConnectionState.TransportClosed or DaemonConnectionState.Disconnected)
+                || !_promptSent)
+                return;
+
+            _ended = true;
+            ExitCode = 1;
+            openRuns = _openRuns;
+        }
+
+        var detail = $"Lost the connection to the daemon before the run ended: {evt.Message}";
+        Console.Error.WriteLine($"[headless:error] {SingleLine(detail)}");
+        Console.Error.WriteLine(HeadlessFailure.Channel.ToToken());
+        openRuns.WriteLine();
+        WriteFailureLog("CONNECTION_LOST", detail);
+        EndRun(log, "CONNECTION_LOST");
+    }
+
     internal void HandleOutput(SessionOutput output, StreamWriter? log)
+    {
+        lock (_gate)
+        {
+            if (_ended)
+                return;
+            HandleOutputCore(output, log);
+        }
+    }
+
+    private void HandleOutputCore(SessionOutput output, StreamWriter? log)
     {
         switch (output)
         {
@@ -248,7 +355,7 @@ public sealed class HeadlessChannel : IChannel
             case ToolCallOutput msg:
                 if (_jsonOutput)
                 {
-                    _toolCalls.Add(new JsonToolCall
+                    _turnToolCalls.Add(new JsonToolCall
                     {
                         CallId = msg.CallId.Value,
                         ToolName = msg.ToolName.Value,
@@ -271,7 +378,7 @@ public sealed class HeadlessChannel : IChannel
             case UsageOutput msg:
                 if (_jsonOutput)
                 {
-                    _usage = new JsonUsage
+                    _turnUsage = new JsonUsage
                     {
                         InputTokens = msg.InputTokens,
                         OutputTokens = msg.OutputTokens,
@@ -303,35 +410,65 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case TurnCompleted msg:
+            {
                 // A failed turn with no ErrorOutput is Unknown, which is infra. Never guess "model".
                 HeadlessFailure? failure = msg.Outcome == TurnOutcome.Failed
                     ? HeadlessFailure.FromSession(_lastErrorKind ?? ErrorCategory.Unknown)
                     : null;
                 _lastErrorKind = null;
 
+                // An absent field (an earlier daemon) maps to an empty list, so the run ends on this turn.
+                // The channel stores the open runs before it prints the waiting line.
+                var openRuns = msg.OpenChildRunIds.Select(id => id.Value).ToArray();
+                _openRuns = new OpenRunsSnapshot(msg.SessionId.Value, openRuns);
+
                 if (failure is not null)
                     ExitCode = 1;
+                CloseJsonTurn(msg.TurnNumber.Value);
+                if (!_jsonOutput)
+                    Console.WriteLine();
+
+                _receivedTextDeltaInCurrentTurn = false;
+                _receivedThinkingDeltaInCurrentTurn = false;
+
+                if (!EndsRun(msg))
+                {
+                    Log(log, $"TURN_COMPLETED: turn={msg.TurnNumber}");
+                    var runs = string.Join(",", openRuns);
+                    if (!_jsonOutput)
+                        Console.WriteLine($"[subagent:waiting] {openRuns.Length} open: {runs}");
+                    Log(log, $"WAITING_FOR_CHILDREN: count={openRuns.Length} runs={runs}");
+                    break;
+                }
 
                 if (_jsonOutput)
-                {
                     WriteJsonEnvelope(failure);
-                }
-                else
-                {
-                    Console.WriteLine();
-                }
 
                 if (failure is { } failed)
                 {
                     Console.Error.WriteLine(failed.ToToken());
+                    _openRuns.WriteLine();
                     Log(log, $"TURN_FAILED: category={failed.CategoryName} kind={failed.Kind}");
                 }
 
                 Log(log, $"TURN_COMPLETED: turn={msg.TurnNumber}");
-                Log(log, "SESSION_ENDED");
-                _receivedTextDeltaInCurrentTurn = false;
-                _receivedThinkingDeltaInCurrentTurn = false;
+                EndRun(log, "SESSION_ENDED");
                 break;
+            }
+
+            case SessionDeactivated msg:
+            {
+                // The daemon stops this session, for example during a restart. No more turn will come, so
+                // waiting would hang. The run fails loudly and writes no envelope.
+                ExitCode = 1;
+                Console.Error.WriteLine(
+                    $"[headless:error] Session {SingleLine(msg.SessionId.Value)} stopped before the run ended.");
+                Console.Error.WriteLine(HeadlessFailure.Channel.ToToken());
+                _openRuns.WriteLine();
+                WriteFailureLog("DEACTIVATED", $"Session {msg.SessionId.Value} stopped before the run ended.");
+                EndRun(log, "SESSION_DEACTIVATED");
+                break;
+            }
 
             case FileOutput msg:
                 if (!_jsonOutput)
@@ -364,6 +501,27 @@ public sealed class HeadlessChannel : IChannel
         }
     }
 
+    /// <summary>
+    /// Whether this turn ends the run: a failed turn always does, and a turn that does not fail does when no
+    /// child run is open. An absent field from an earlier daemon maps to an empty list, so it ends the run.
+    /// </summary>
+    // <headless-stop-rule>
+    internal static bool EndsRun(TurnCompleted turn)
+    {
+        if (turn.Outcome == TurnOutcome.Failed)
+            return true;
+
+        return !turn.OpenChildRunIds.Any();
+    }
+    // </headless-stop-rule>
+
+    private void EndRun(StreamWriter? log, string record)
+    {
+        Log(log, record);
+        _ended = true;
+        _runEnded.TrySetResult();
+    }
+
     // Error text comes from tools, providers, and models. A line break in it would start a new stderr line,
     // and a forged "[turn:failed]" line would then reach a harness that takes the first match. Only the
     // token writer may start a line with the token.
@@ -371,6 +529,24 @@ public sealed class HeadlessChannel : IChannel
         => LineBreaks.Replace(text, " ");
 
     private static readonly Regex LineBreaks = new("[\r\n\u0085\u2028\u2029]+", RegexOptions.Compiled);
+
+    // Moves the finished turn into the JSON record and clears the buffers for the next turn.
+    private void CloseJsonTurn(int turnNumber)
+    {
+        if (!_jsonOutput)
+            return;
+
+        _turns.Add(new JsonTurn
+        {
+            TurnNumber = turnNumber,
+            Text = _responseBuffer.ToString(),
+            ToolCalls = _turnToolCalls.Count > 0 ? [.. _turnToolCalls] : null,
+            Usage = _turnUsage
+        });
+        _responseBuffer.Clear();
+        _turnToolCalls.Clear();
+        _turnUsage = null;
+    }
 
     private void WriteJsonEnvelope(HeadlessFailure? failure)
     {
@@ -383,12 +559,15 @@ public sealed class HeadlessChannel : IChannel
             ? Stopwatch.GetElapsedTime(_promptSentTicks, now).TotalMilliseconds
             : null;
 
+        var allToolCalls = _turns.SelectMany(turn => turn.ToolCalls ?? []).ToList();
         var envelope = new JsonEnvelope
         {
             SessionId = _resolvedSessionId!,
-            Response = _responseBuffer.ToString(),
-            ToolCalls = _toolCalls.Count > 0 ? _toolCalls : null,
-            Usage = _usage,
+            // The last turn holds the answer. Earlier turns hold the start of a child run.
+            Response = _turns[^1].Text,
+            TurnResponses = _turns,
+            ToolCalls = allToolCalls.Count > 0 ? allToolCalls : null,
+            Usage = JsonUsage.Sum(_turns.Select(turn => turn.Usage)),
             TtftMs = ttftMs.HasValue ? Math.Round(ttftMs.Value, 1) : null,
             TotalMs = totalMs.HasValue ? Math.Round(totalMs.Value, 1) : null,
             ErrorCategory = failure?.CategoryName,
@@ -398,19 +577,31 @@ public sealed class HeadlessChannel : IChannel
         Console.WriteLine(JsonSerializer.Serialize(envelope, JsonDefaults.CliOutput));
     }
 
+    // Two threads write the session log. The client pump thread runs the output and the connection callbacks
+    // (DaemonClient.EventPumpAsync reads one channel for both). The run thread writes the two start records
+    // while SessionJoined and the first outputs already arrive. A StreamWriter is not thread safe, so an
+    // unlocked write can drop a line. The run thread closes the writer under the same lock.
     private void Log(StreamWriter? log, string message)
     {
-        log?.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
+        if (log is null)
+            return;
+
+        lock (log)
+        {
+            if (_logClosed)
+                return;
+            log.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
+        }
     }
 
-    private void WriteFailureLog(string kind, Exception ex)
+    private void WriteFailureLog(string kind, string detail)
     {
         try
         {
             _paths.EnsureDirectoriesExist();
             var path = Path.Combine(_paths.LogsDirectory, "headless-errors.log");
             File.AppendAllText(path,
-                $"[{_timeProvider.GetUtcNow():o}] {kind}: {ex}\n");
+                $"[{_timeProvider.GetUtcNow():o}] {kind}: {detail}\n");
         }
         catch (Exception logEx)
         {
@@ -424,6 +615,7 @@ public sealed class HeadlessChannel : IChannel
     {
         public required string SessionId { get; init; }
         public required string Response { get; init; }
+        public required List<JsonTurn> TurnResponses { get; init; }
         public List<JsonToolCall>? ToolCalls { get; init; }
         public JsonUsage? Usage { get; init; }
         public double? TtftMs { get; init; }
@@ -432,6 +624,14 @@ public sealed class HeadlessChannel : IChannel
         // Set only for a failed turn. The eval harness reads these two keys.
         public string? ErrorCategory { get; init; }
         public string? ErrorKind { get; init; }
+    }
+
+    private sealed class JsonTurn
+    {
+        public required int TurnNumber { get; init; }
+        public required string Text { get; init; }
+        public List<JsonToolCall>? ToolCalls { get; init; }
+        public JsonUsage? Usage { get; init; }
     }
 
     private sealed class JsonToolCall
@@ -450,6 +650,48 @@ public sealed class HeadlessChannel : IChannel
         public long? ReasoningTokens { get; init; }
         public double? PromptMs { get; init; }
         public double? PredictedPerSecond { get; init; }
+
+        // The token counts add up over the turns. A rate does not add up, so the last turn that has a usage
+        // record decides promptMs and predictedPerSecond. A run with one turn gives that turn's usage.
+        public static JsonUsage? Sum(IEnumerable<JsonUsage?> perTurn)
+        {
+            var turns = perTurn.OfType<JsonUsage>().ToArray();
+            if (turns.Length == 0)
+                return null;
+
+            return new JsonUsage
+            {
+                InputTokens = SumOf(turns, usage => usage.InputTokens),
+                OutputTokens = SumOf(turns, usage => usage.OutputTokens),
+                TotalTokens = SumOf(turns, usage => usage.TotalTokens),
+                CachedInputTokens = SumOf(turns, usage => usage.CachedInputTokens),
+                ReasoningTokens = SumOf(turns, usage => usage.ReasoningTokens),
+                PromptMs = turns[^1].PromptMs,
+                PredictedPerSecond = turns[^1].PredictedPerSecond,
+            };
+        }
+
+        private static long? SumOf(JsonUsage[] turns, Func<JsonUsage, long?> field)
+        {
+            var reported = turns.Select(field).Where(value => value.HasValue).ToArray();
+            return reported.Length == 0 ? null : reported.Sum(value => value!.Value);
+        }
+    }
+
+    // The open runs of the most recent completed turn, with the session that owns them.
+    private readonly record struct OpenRunsSnapshot(string SessionId, IReadOnlyList<string> RunIds)
+    {
+        public static readonly OpenRunsSnapshot None = new(string.Empty, []);
+
+        // One line after the [turn:failed] line, on every failure or stop path that knows an open run. The
+        // session owns the runs. The operator resumes it with `netclaw chat --resume <session>`.
+        public void WriteLine()
+        {
+            if (RunIds.Count == 0)
+                return;
+            Console.Error.WriteLine(
+                $"[headless:open-runs] session={SingleLine(SessionId)} runs={SingleLine(string.Join(",", RunIds))}");
+        }
     }
 }
 

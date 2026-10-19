@@ -60,13 +60,14 @@ public sealed class ToolOutputSpillFreshSessionTests : IDisposable
         registry.RegisterCore(new SkillLoadTool(skills, scanner, new UnavailablePromptLoader()));
         registry.RegisterCore(new SkillReadResourceTool(skills, scanner));
         registry.RegisterCore(new ToolOutputReadTool());
+        registry.Register(new FakeNetclawTool("spawn_agent", "accepted"));
         registry.Register(new FakeNetclawTool(OversizedProbe, OversizedText()));
 
         // Team and Public get the probe and the continuation tool. A second Public
         // profile has the probe only, so the audience profile has an effect.
         var config = new ToolConfig();
-        config.AudienceProfiles.Team.AllowedTools = [OversizedProbe, ToolOutputReadTool.ToolName];
-        config.AudienceProfiles.Public.AllowedTools = [OversizedProbe, ToolOutputReadTool.ToolName];
+        config.AudienceProfiles.Team.AllowedTools = [OversizedProbe, ToolOutputReadTool.ToolName, "spawn_agent"];
+        config.AudienceProfiles.Public.AllowedTools = [OversizedProbe, ToolOutputReadTool.ToolName, "spawn_agent"];
         _executor = new DispatchingToolExecutor(registry, TestToolAccessPolicy.Create(config));
 
         var probeOnly = new ToolConfig();
@@ -122,6 +123,80 @@ public sealed class ToolOutputSpillFreshSessionTests : IDisposable
             _probeOnlyExecutor));
     }
 
+    [Fact]
+    public async Task Retained_spill_hints_child_inspection_only_when_the_caller_can_delegate_and_read()
+    {
+        var hinted = await ExecuteAsync(
+            "call-hinted", OversizedProbe, ToolInput.Empty(), TrustAudience.Team, _executor, canSpawnChild: true);
+        var unhinted = await ExecuteAsync(
+            "call-unhinted", OversizedProbe, ToolInput.Empty(), TrustAudience.Team, _executor);
+
+        Assert.Contains("tool_output_read using CallId='call-hinted'", hinted, StringComparison.Ordinal);
+        Assert.Contains("consider a permitted child profile", hinted, StringComparison.Ordinal);
+        Assert.DoesNotContain("consider a permitted child profile", unhinted, StringComparison.Ordinal);
+        Assert.True(ToolOutputSpillLocation.TryResolve(_sessionDirectory, "call-hinted", out _, out var spillPath));
+
+        var parentContext = TestToolExecutionContext.CreateBound(
+            "signalr/fresh-session",
+            _sessionDirectory,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Team });
+        var directResult = await ExecuteReadAsync("call-unhinted", parentContext);
+        Assert.Contains(HiddenRule, directResult, StringComparison.Ordinal);
+
+        var childStorage = SessionStoragePaths.CreateLegacy(
+            _sessionDirectory,
+            Path.Combine(_temp.Path, "sessions", "fresh-session", "logs"),
+            "parent").ForChild(new SubAgentRunId("child-run"), new SubAgentScopeId("parent/subagent/child"));
+        Assert.Equal(_sessionDirectory, childStorage.SessionDirectory.Value);
+
+        var childContext = TestToolExecutionContext.CreateBoundWithStorage(
+            "signalr/fresh-session",
+            childStorage,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Team });
+        var childResult = await ExecuteReadAsync("call-hinted", childContext);
+
+        Assert.Contains(HiddenRule, childResult, StringComparison.Ordinal);
+        Assert.True(File.Exists(spillPath));
+    }
+
+    [Theory]
+    [InlineData(false, true, true, true)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, true, false, true)]
+    [InlineData(true, true, true, false)]
+    public async Task Spill_has_no_child_hint_when_a_required_capability_is_missing_or_denied(
+        bool registerSpawn,
+        bool registerReader,
+        bool allowSpawn,
+        bool allowReader)
+    {
+        var executor = CreateHintExecutor(registerSpawn, registerReader, allowSpawn, allowReader);
+
+        var result = await ExecuteAsync(
+            "call-policy", OversizedProbe, ToolInput.Empty(), TrustAudience.Team, executor, canSpawnChild: true);
+
+        Assert.Contains("CallId='call-policy'", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("consider a permitted child profile", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Spill_has_no_child_hint_when_the_output_was_not_retained()
+    {
+        var context = TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Team,
+            SpawnChildActor = SpawnChildActor,
+        });
+        var result = await ToolOutputSpill.BoundAndSpillAsync(
+            new string('x', 400), new string('x', 400), "call-unretained", budget: 100, context.Invocation,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            TestContext.Current.CancellationToken,
+            suggestChildInspection: true);
+
+        Assert.Contains("did not keep the full output", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("consider a permitted child profile", result, StringComparison.Ordinal);
+    }
+
     private async Task AssertHiddenMiddleIsReadableAsync(
         string callId, string result, TrustAudience audience = TrustAudience.Personal)
     {
@@ -153,7 +228,8 @@ public sealed class ToolOutputSpillFreshSessionTests : IDisposable
         string toolName,
         IDictionary<string, object?> arguments,
         TrustAudience audience = TrustAudience.Personal,
-        DispatchingToolExecutor? executor = null)
+        DispatchingToolExecutor? executor = null,
+        bool canSpawnChild = false)
     {
         var callArguments = new Dictionary<string, object?>(arguments, StringComparer.Ordinal)
         {
@@ -162,9 +238,65 @@ public sealed class ToolOutputSpillFreshSessionTests : IDisposable
         var context = TestToolExecutionContext.CreateBound(
             "signalr/fresh-session",
             _sessionDirectory,
-            new TestToolExecutionContextOptions { Audience = audience });
+            new TestToolExecutionContextOptions
+            {
+                Audience = audience,
+                SpawnChildActor = canSpawnChild ? SpawnChildActor : null,
+            });
         return (executor ?? _executor).ExecuteAsync(
             new FunctionCallContent(callId, toolName, callArguments),
+            context,
+            TestContext.Current.CancellationToken);
+    }
+
+    private DispatchingToolExecutor CreateHintExecutor(
+        bool registerSpawn,
+        bool registerReader,
+        bool allowSpawn,
+        bool allowReader)
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new FakeNetclawTool(OversizedProbe, OversizedText()));
+        if (registerSpawn)
+            registry.Register(new FakeNetclawTool("spawn_agent", "accepted"));
+        if (registerReader)
+            registry.RegisterCore(new ToolOutputReadTool());
+
+        var config = new ToolConfig();
+        var tools = new List<string> { OversizedProbe };
+        if (allowSpawn && registerSpawn)
+            tools.Add("spawn_agent");
+        if (allowReader && registerReader)
+            tools.Add(ToolOutputReadTool.ToolName);
+        config.AudienceProfiles.Team.AllowedTools = tools;
+        if (registerSpawn && !allowSpawn)
+        {
+            config.AudienceProfiles.Team.ApprovalPolicy = new ToolApprovalConfig
+            {
+                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+                {
+                    ["spawn_agent"] = ToolApprovalMode.Deny,
+                },
+            };
+        }
+
+        return new DispatchingToolExecutor(registry, TestToolAccessPolicy.Create(config));
+    }
+
+    private static Task<object> SpawnChildActor(object request, string task, CancellationToken ct)
+        => Task.FromResult<object>(new object());
+
+    private Task<string> ExecuteReadAsync(string callId, ToolExecutionContext context)
+    {
+        var arguments = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["CallId"] = callId,
+            ["Start"] = _budget,
+            ["Limit"] = ToolOutputReadTool.MaximumLimit,
+            ["_rationale"] = "Read the retained output within this session scope.",
+        };
+        return _executor.ExecuteAsync(
+            new FunctionCallContent($"read-{callId}", ToolOutputReadTool.ToolName, arguments),
             context,
             TestContext.Current.CancellationToken);
     }

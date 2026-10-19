@@ -51,20 +51,34 @@ else
   fail "reminder execution: timed out waiting for $ONE_SHOT_ID"
 fi
 
-log "Verifying the completed one-shot reminder is kept as Completed and its history stays readable..."
-# Settlement runs just after the model call returns, so poll briefly for the Completed outcome.
-completed_list=""
+log "Verifying the one-shot reminder ends as completed, leaves the list, and keeps its history..."
+# A one-shot deletes itself after the run. Settlement runs just after the model call returns,
+# so poll briefly until the id leaves the list. A failed list command never counts as gone.
+remaining_list=""
+list_ok=false
 settle_deadline=$((SECONDS + 15))
 while (( SECONDS < settle_deadline )); do
-  completed_list="$(nc reminder list --json 2>/dev/null || true)"
-  [[ "$completed_list" == *'"terminalOutcome": "Completed"'* ]] && break
+  list_exit=0
+  remaining_list="$(nc reminder list --json 2>/dev/null)" || list_exit=$?
+  if [[ "$list_exit" -eq 0 && "$remaining_list" != *"$ONE_SHOT_ID"* ]]; then
+    list_ok=true
+    break
+  fi
   sleep 1
 done
-echo "$completed_list"
-if [[ "$completed_list" == *"$ONE_SHOT_ID"* && "$completed_list" == *'"terminalOutcome": "Completed"'* ]]; then
-  pass "one-shot reminder: $ONE_SHOT_ID is listed as Completed after execution"
+echo "$remaining_list"
+if [[ "$list_ok" == "true" ]]; then
+  pass "one-shot reminder: $ONE_SHOT_ID left the list after execution"
 else
-  fail "one-shot reminder: $ONE_SHOT_ID is not listed as Completed after execution"
+  fail "one-shot reminder: $ONE_SHOT_ID is still listed after execution"
+fi
+ended_status_exit=0
+ended_status="$(nc reminder status "$ONE_SHOT_ID" 2>/dev/null)" || ended_status_exit=$?
+echo "$ended_status"
+if [[ "$ended_status_exit" -eq 0 && "$ended_status" == *"Ended:               completed at"* ]]; then
+  pass "one-shot reminder: $ONE_SHOT_ID ended as completed"
+else
+  fail "one-shot reminder: expected exit 0 and 'Ended: completed at' for $ONE_SHOT_ID (exit $ended_status_exit)"
 fi
 completed_history_exit=0
 completed_history="$(nc reminder history "$ONE_SHOT_ID" 2>/dev/null)" || completed_history_exit=$?

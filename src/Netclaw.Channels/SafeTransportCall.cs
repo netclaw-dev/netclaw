@@ -12,8 +12,9 @@ namespace Netclaw.Channels;
 /// <summary>
 /// Wraps one outbound transport call in the delivery bookkeeping every channel
 /// binding actor applies to it: measure the call, record reply telemetry for
-/// the channel, and on failure log, record the failure, and tell the session
-/// that delivery did not happen.
+/// the channel, and on failure log, record the failure, and pass it to the
+/// channel's notifier. The notifier tells the session now or holds the failure
+/// until the turn completes.
 /// </summary>
 /// <remarks>
 /// The delivery-failure notifier is required and its exceptions propagate. A
@@ -29,7 +30,7 @@ public sealed class SafeTransportCall
 
     /// <param name="channelType">Telemetry category for the channel.</param>
     /// <param name="timeProvider">Clock for the call duration.</param>
-    /// <param name="notifyDeliveryFailedAsync">Tells the session that delivery failed.</param>
+    /// <param name="notifyDeliveryFailedAsync">Handles a failed delivery: tells the session or holds the failure.</param>
     public SafeTransportCall(
         ChannelType channelType,
         TimeProvider timeProvider,
@@ -42,7 +43,7 @@ public sealed class SafeTransportCall
 
     /// <summary>
     /// Runs one transport call. Returns <c>true</c> on success; on failure
-    /// returns <c>false</c> after the session has been told.
+    /// returns <c>false</c> after the notifier ran.
     /// </summary>
     /// <param name="callAsync">The transport call.</param>
     /// <param name="logFailure">

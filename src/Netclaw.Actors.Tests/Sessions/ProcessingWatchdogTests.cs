@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -31,7 +32,7 @@ public sealed class ProcessingWatchdogTests
         // the GENEROUS prefill budget, not shrink to the tighter inter-delta budget —
         // this is the regression a wedged-but-chatty prefill depends on.
         var promoted = watchdog.OnStreamProgress(
-            isSubstantive: false, alreadyPromoted: false, Prefill, InterDelta, timers);
+            StreamActivity.Keepalive, alreadyPromoted: false, Prefill, InterDelta, timers);
 
         Assert.False(promoted);
         Assert.Equal(Prefill, timers.LastSingleTimerTimeout);
@@ -43,7 +44,7 @@ public sealed class ProcessingWatchdogTests
         var (watchdog, timers) = StartedCall();
 
         var promoted = watchdog.OnStreamProgress(
-            isSubstantive: true, alreadyPromoted: false, Prefill, InterDelta, timers);
+            StreamActivity.Answer, alreadyPromoted: false, Prefill, InterDelta, timers);
 
         Assert.True(promoted);
         Assert.Equal(InterDelta, timers.LastSingleTimerTimeout);
@@ -55,7 +56,7 @@ public sealed class ProcessingWatchdogTests
         var (watchdog, timers) = StartedCall();
 
         var promoted = watchdog.OnStreamProgress(
-            isSubstantive: true, alreadyPromoted: true, Prefill, InterDelta, timers);
+            StreamActivity.Answer, alreadyPromoted: true, Prefill, InterDelta, timers);
 
         Assert.True(promoted);
         Assert.Equal(InterDelta, timers.LastSingleTimerTimeout);
@@ -68,7 +69,7 @@ public sealed class ProcessingWatchdogTests
 
         // Once promoted, even a keepalive stays on the tight inter-delta budget.
         var promoted = watchdog.OnStreamProgress(
-            isSubstantive: false, alreadyPromoted: true, Prefill, InterDelta, timers);
+            StreamActivity.Keepalive, alreadyPromoted: true, Prefill, InterDelta, timers);
 
         Assert.True(promoted);
         Assert.Equal(InterDelta, timers.LastSingleTimerTimeout);
@@ -107,7 +108,7 @@ public sealed class ProcessingWatchdogTests
         // that is exactly what lets the deadline catch a heartbeat-only wedge that
         // refreshes the liveness timer forever.
         watchdog.OnStreamProgress(
-            isSubstantive: false, alreadyPromoted: false, Prefill, InterDelta, timers);
+            StreamActivity.Keepalive, alreadyPromoted: false, Prefill, InterDelta, timers);
 
         Assert.Equal(Prefill, timers.LastLivenessTimeout);
         Assert.Null(timers.LastNoProgressTimeout);
@@ -120,10 +121,55 @@ public sealed class ProcessingWatchdogTests
 
         // Real output is the only signal that resets the deadline.
         watchdog.OnStreamProgress(
-            isSubstantive: true, alreadyPromoted: true, Prefill, InterDelta, timers);
+            StreamActivity.Answer, alreadyPromoted: true, Prefill, InterDelta, timers);
 
         Assert.Equal(InterDelta, timers.LastLivenessTimeout);
         Assert.Equal(NoProgress, timers.LastNoProgressTimeout);
+    }
+
+    [Fact]
+    public void Start_with_a_deadline_arms_the_thinking_cap_at_three_times_the_deadline()
+    {
+        var watchdog = new ProcessingWatchdog();
+        var timers = new RecordingTimerScheduler();
+
+        watchdog.Start(ProcessingWatchdog.LlmCall, Prefill, timers, NoProgress);
+
+        Assert.Equal(NoProgress * 3, timers.LastThinkingCapTimeout);
+    }
+
+    [Fact]
+    public void Start_without_a_deadline_leaves_the_thinking_cap_unarmed()
+    {
+        var watchdog = new ProcessingWatchdog();
+        var timers = new RecordingTimerScheduler();
+
+        watchdog.Start(ProcessingWatchdog.LlmCall, Prefill, timers);
+
+        Assert.Null(timers.LastThinkingCapTimeout);
+    }
+
+    [Fact]
+    public void Thinking_counts_as_progress_but_does_not_reset_the_thinking_cap()
+    {
+        var (watchdog, timers) = StartedCallWithDeadline();
+
+        watchdog.OnStreamProgress(
+            StreamActivity.Thinking, alreadyPromoted: true, Prefill, InterDelta, timers);
+
+        Assert.Equal(NoProgress, timers.LastNoProgressTimeout);
+        Assert.Null(timers.LastThinkingCapTimeout);
+    }
+
+    [Fact]
+    public void Answer_update_resets_the_thinking_cap()
+    {
+        var (watchdog, timers) = StartedCallWithDeadline();
+
+        watchdog.OnStreamProgress(
+            StreamActivity.Answer, alreadyPromoted: true, Prefill, InterDelta, timers);
+
+        Assert.Equal(NoProgress * 3, timers.LastThinkingCapTimeout);
     }
 
     private static (ProcessingWatchdog, RecordingTimerScheduler) StartedCall()
@@ -157,9 +203,11 @@ public sealed class ProcessingWatchdogTests
         public TimeSpan? LastSingleTimerTimeout { get; private set; }
         public TimeSpan? LastLivenessTimeout { get; private set; }
         public TimeSpan? LastNoProgressTimeout { get; private set; }
+        public TimeSpan? LastThinkingCapTimeout { get; private set; }
 
         public void Reset()
         {
+            LastThinkingCapTimeout = null;
             LastSingleTimerTimeout = null;
             LastLivenessTimeout = null;
             LastNoProgressTimeout = null;
@@ -167,6 +215,12 @@ public sealed class ProcessingWatchdogTests
 
         public void StartSingleTimer(object key, object msg, TimeSpan timeout)
         {
+            if (msg is ProcessingWatchdogExpired { ThinkingCap: true })
+            {
+                LastThinkingCapTimeout = timeout;
+                return;
+            }
+
             LastSingleTimerTimeout = timeout;
             if (msg is ProcessingWatchdogExpired { NoProgress: true })
                 LastNoProgressTimeout = timeout;

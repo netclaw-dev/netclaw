@@ -77,6 +77,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit, IAsyncDisposable
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_chatClient));
         services.AddSingleton(_paths);
+        services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
         services.AddSingleton<Netclaw.Actors.Jobs.BackgroundJobDefinitionStore>();
         services.AddSingleton(new ModelCapabilities
         {
@@ -608,7 +609,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit, IAsyncDisposable
             new TurnCompleted
             {
                 SessionId = new SessionId("D7/8000.1"),
-                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
+                OpenChildRunIds = []
             }
         ]);
 
@@ -671,7 +673,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit, IAsyncDisposable
             new TurnCompleted
             {
                 SessionId = new SessionId("D7/9000.1"),
-                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
+                OpenChildRunIds = []
             }
         ]);
 
@@ -1042,7 +1045,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit, IAsyncDisposable
             new TurnCompleted
             {
                 SessionId = new SessionId("D7/9100.1"),
-                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
+                OpenChildRunIds = []
             }
         ]);
 
@@ -1102,7 +1106,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit, IAsyncDisposable
             new TurnCompleted
             {
                 SessionId = new SessionId("D7/9200.1"),
-                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
+                OpenChildRunIds = []
             }
         ]);
 
@@ -1166,7 +1171,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit, IAsyncDisposable
             new TurnCompleted
             {
                 SessionId = new SessionId("D7/9300.1"),
-                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
+                OpenChildRunIds = []
             }
         ]);
 

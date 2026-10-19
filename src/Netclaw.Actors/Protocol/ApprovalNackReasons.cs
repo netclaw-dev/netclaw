@@ -28,6 +28,13 @@ public static class ApprovalNackReasons
     public const string PromptExpired = "approval_prompt_expired";
 
     /// <summary>
+    /// The prompt has a recorded answer. A later answer for the same call changes nothing.
+    /// The prompt did not expire, so channels must not tell the operator that it expired.
+    /// The session also posts an "already has an answer" notice.
+    /// </summary>
+    public const string AlreadyAnswered = "approval_already_answered";
+
+    /// <summary>
     /// The responding sender is not authorized to approve this tool action.
     /// </summary>
     public const string WrongRequester = "approval_wrong_requester";

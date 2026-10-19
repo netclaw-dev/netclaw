@@ -88,6 +88,12 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
     protected override void SetReplyClientThrowsOnce(Exception ex)
         => _replyClient.ThrowOnceOnPost = ex;
 
+    protected override void SetReplyClientThrowsInOrder(params Exception[] exceptions)
+    {
+        foreach (var exception in exceptions)
+            _replyClient.ThrowInOrderOnPosts.Enqueue(exception);
+    }
+
     protected override void ClearReplyClientThrows()
         => _replyClient.ThrowOnPost = null;
 
@@ -134,10 +140,21 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         return items;
     }
 
+    private void CarryOver(IEnumerable<Exception> pendingOrdered)
+    {
+        foreach (var exception in pendingOrdered)
+            _replyClient.ThrowInOrderOnPosts.Enqueue(exception);
+    }
+
     private void ResetReplyClient()
     {
+        // Keep both armed failures. Dropping the one-shot failure made every "fail one post" contract test
+        // pass on Slack without a failed post.
         var pendingThrow = _replyClient.ThrowOnPost;
-        _replyClient = new RecordingSlackReplyClient { ThrowOnPost = pendingThrow };
+        var pendingThrowOnce = _replyClient.ThrowOnceOnPost;
+        var pendingOrdered = _replyClient.ThrowInOrderOnPosts.ToArray();
+        _replyClient = new RecordingSlackReplyClient { ThrowOnPost = pendingThrow, ThrowOnceOnPost = pendingThrowOnce };
+        CarryOver(pendingOrdered);
     }
 
     private IActorRef CreateActorCore(
@@ -206,7 +223,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         [
             new ProcessingStateOutput(true) { SessionId = sid },
             new ProcessingStateOutput(false) { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, detector);
@@ -242,7 +259,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         [
             new ProcessingStateOutput(true) { SessionId = sid },
             new ProcessingStateOutput(false) { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, detector, channelRegistry: registry);
@@ -272,7 +289,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         [
             new ProcessingStateOutput(true) { SessionId = sid },
             new TextOutput("First turn completed; continuing with buffered input.") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, detector);
@@ -351,7 +368,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         [
             new ProcessingStateOutput(true) { SessionId = sid },
             new TextOutput("visible after status failure") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
         ]);
 
         CreateActorCore(sid, pipeline, detector, channelRegistry: registry);

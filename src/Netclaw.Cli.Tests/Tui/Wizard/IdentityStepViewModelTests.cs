@@ -13,7 +13,6 @@ namespace Netclaw.Cli.Tests.Tui.Wizard;
 
 public sealed class IdentityStepViewModelTests : WizardStepTestBase
 {
-
     [Fact]
     public void SubStepCount_IsFour()
     {
@@ -122,6 +121,93 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
         step.WriteIdentityFiles(Context.Paths);
 
         Assert.Equal(existing, File.ReadAllText(Context.Paths.AgentsPath));
+    }
+
+    [Fact]
+    public void SeedBuiltInAgents_PreservesAnExistingTaskWorkerProfile()
+    {
+        using var step = new IdentityStepViewModel();
+        var taskWorkerPath = Path.Combine(Context.Paths.AgentsDirectory, "task-worker.md");
+        const string existing = "---\nname: task-worker\n---\noperator profile\n";
+        File.WriteAllText(taskWorkerPath, existing);
+
+        step.SeedBuiltInAgents(Context.Paths);
+
+        Assert.Equal(existing, File.ReadAllText(taskWorkerPath));
+    }
+
+    [Fact]
+    public void SeedBuiltInAgents_RejectsALinkedAgentDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("Directory symlink creation needs POSIX filesystem semantics.");
+
+        using var step = new IdentityStepViewModel();
+        var agentsDirectory = Context.Paths.AgentsDirectory;
+        Directory.Delete(agentsDirectory, recursive: true);
+        var outside = Path.Combine(Context.Paths.BasePath, "agent-seed-dir-target");
+        Directory.CreateDirectory(outside);
+        Directory.CreateSymbolicLink(agentsDirectory, outside);
+        try
+        {
+            var error = Assert.Throws<IOException>(() => step.SeedBuiltInAgents(Context.Paths));
+
+            Assert.Contains("symbolic link", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(Directory.GetFiles(outside));
+        }
+        finally
+        {
+            Directory.Delete(agentsDirectory);
+        }
+    }
+
+    [Fact]
+    public void SeedBuiltInAgents_RejectsALinkedTaskWorkerTarget()
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("File symlink creation needs POSIX filesystem semantics.");
+
+        using var step = new IdentityStepViewModel();
+        var target = Path.Combine(Context.Paths.BasePath, "agent-seed-target");
+        const string existing = "operator-controlled target";
+        File.WriteAllText(target, existing);
+        var taskWorkerPath = Path.Combine(Context.Paths.AgentsDirectory, "task-worker.md");
+        File.CreateSymbolicLink(taskWorkerPath, target);
+        try
+        {
+            var error = Assert.Throws<IOException>(() => step.SeedBuiltInAgents(Context.Paths));
+
+            Assert.Contains("symbolic link", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(existing, File.ReadAllText(target));
+        }
+        finally
+        {
+            File.Delete(taskWorkerPath);
+        }
+    }
+
+    [Fact]
+    public void SeedBuiltInAgents_AllowsAnOrdinaryOperatingSystemAncestorAlias()
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("This ancestor alias case uses POSIX symbolic-link semantics.");
+
+        using var step = new IdentityStepViewModel();
+        var realRoot = Path.Combine(Context.Paths.BasePath, "agent-seed-real-root");
+        Directory.CreateDirectory(realRoot);
+        var alias = Path.Combine(Context.Paths.BasePath, "agent-seed-alias");
+        Directory.CreateSymbolicLink(alias, realRoot);
+        var paths = new NetclawPaths(Path.Combine(alias, "home"));
+        try
+        {
+            step.SeedBuiltInAgents(paths);
+
+            Assert.True(File.Exists(Path.Combine(realRoot, "home", "agents", "task-worker.md")));
+        }
+        finally
+        {
+            Directory.Delete(alias);
+        }
     }
 
     [Fact]

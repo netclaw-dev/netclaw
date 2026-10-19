@@ -39,9 +39,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     // No streaming state needed — Slack receives TextOutput only, not TextDeltaOutput.
 
     // Slack tells the session about a delivery failure at turn completion, not
-    // at post time, so it keeps the failure descriptor of the last failed post.
-    // The engine's per-turn failure flag gates every read of this field, and
-    // both turn-completion hooks clear it.
+    // at post time, so it keeps the failure descriptor of the first failed post
+    // of the turn. The engine's per-turn failure flag gates every read of this
+    // field, and the output handler clears it when a turn completes.
     private PostResult? _lastFailedPost;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
     private readonly ApprovalResponseFlow<PendingApprovalRequest, SlackEventTs> _approvalFlow;
@@ -766,6 +766,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
 
         var clearedPrompts = await _outputEngine.HandleOutputAsync(threadOutput.Output);
+        if (threadOutput.Output is TurnCompleted)
+            _lastFailedPost = null;
         if (clearedPrompts.Count > 0)
             PersistAll(clearedPrompts, ApplyPendingApprovalPromptCleared);
     }
@@ -785,13 +787,14 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     /// <summary>
     /// Posts turn output text for the shared engine. Slack keeps the failure
     /// descriptor instead of telling the session now, because it reports a
-    /// delivery failure once at turn completion.
+    /// delivery failure once at turn completion. The first failure of the turn
+    /// stays; a later failure of the same turn does not replace it.
     /// </summary>
     private async Task<bool> PostOutputTextAsync(string text)
     {
         var result = await SafePostAsync(text);
         if (!result.Success)
-            _lastFailedPost = result;
+            _lastFailedPost ??= result;
         return result.Success;
     }
 
@@ -800,42 +803,52 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     {
         var result = await SafeUploadFileAsync(file);
         if (!result.Success)
-            _lastFailedPost = result;
+            _lastFailedPost ??= result;
         return result.Success;
     }
 
-    private async Task PostEmptyTurnFallbackAsync()
+    /// <summary>
+    /// Posts the empty-turn fallback. A failed fallback post is a failed post of
+    /// the turn that the fallback answers, so it reports that turn.
+    /// </summary>
+    private async Task PostEmptyTurnFallbackAsync(TurnCompleted completed)
     {
         _lastFailedPost = null;
         _log.Warning("Turn completed without visible Slack output; posting fallback reply");
-        await SafePostAsync(EmptyTurnFallbackText);
+        var fallback = await SafePostAsync(EmptyTurnFallbackText);
+        await ReportFailedPostAsync(fallback, completed.TurnNumber);
     }
 
     /// <summary>
     /// Tells the session that the turn produced output the transport rejected.
-    /// Slack defers this report to turn completion and sends it once with the
-    /// completed turn's number. Discord and Mattermost report each failed post
-    /// inline instead, so their engine hook does nothing here.
+    /// All three channels defer this report to turn completion and send it once
+    /// with the completed turn's number.
     /// </summary>
     private async Task NotifyFailedTurnAsync(TurnCompleted completed)
     {
         var failedPost = _lastFailedPost;
         _lastFailedPost = null;
 
-        if (failedPost is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })
+        if (failedPost is { ShouldNotifySession: true })
         {
             _log.Warning(
                 "Turn completed with Slack delivery failure kind={FailureKind}; notifying session",
-                failureKind);
-            await NotifyDeliveryFailedAsync(completed.TurnNumber, failureKind, errorMessage);
+                failedPost.FailureKind);
+            await ReportFailedPostAsync(failedPost, completed.TurnNumber);
         }
         else
         {
             // Defensive: a failed post always carries a failure kind, so this
             // branch is unreachable today. Keep the empty-turn reply as the
             // safe outcome if that ever stops holding.
-            await PostEmptyTurnFallbackAsync();
+            await PostEmptyTurnFallbackAsync(completed);
         }
+    }
+
+    private async Task ReportFailedPostAsync(PostResult result, Actors.Protocol.TurnNumber turnNumber)
+    {
+        if (result is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })
+            await NotifyDeliveryFailedAsync(turnNumber, failureKind, errorMessage);
     }
 
     private Task RenderProcessingStateAsync(ProcessingStateOutput output)

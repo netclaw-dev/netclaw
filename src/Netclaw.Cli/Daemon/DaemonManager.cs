@@ -5,7 +5,9 @@
 // -----------------------------------------------------------------------
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Net;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Daemon;
@@ -67,7 +69,15 @@ public sealed partial class DaemonManager
         }
 
         if (TryGetRunningPid(out var existingPid))
+        {
+            if (existingPid != 0 && !PidServesThisHome(existingPid))
+                return new DaemonResult(
+                    false,
+                    $"Daemon was not started. {NotShownWithoutNotice(existingPid)}",
+                    IsRefusal: true);
+
             return new DaemonResult(false, $"Daemon already running (PID {existingPid}).");
+        }
 
         var binaryPath = FindDaemonBinary();
         if (binaryPath is null)
@@ -89,6 +99,10 @@ public sealed partial class DaemonManager
             RedirectStandardError = false,
             RedirectStandardInput = false,
         };
+
+        // The child serves the home of this CLI whatever NETCLAW_HOME the CLI inherited. A later stop
+        // can then show that the PID serves this home.
+        startInfo.Environment["NETCLAW_HOME"] = _paths.BasePath;
 
         var startedAt = _timeProvider.GetUtcNow();
 
@@ -117,9 +131,10 @@ public sealed partial class DaemonManager
     }
 
     /// <summary>
-    /// Stops the daemon gracefully. Posts the shutdown reason to the daemon's
-    /// lifecycle endpoint before sending SIGTERM, so the daemon can fire
-    /// webhook notifications and (in the future) drain active sessions.
+    /// Stops the daemon gracefully. Posts the shutdown reason, the PID, and the home to the
+    /// lifecycle endpoint of this home before sending SIGTERM, so the daemon can fire
+    /// webhook notifications and (in the future) drain active sessions. The PID gets no
+    /// signal until it is shown to serve this home.
     /// </summary>
     /// <param name="reason">
     /// Why the daemon is being stopped (e.g., "cli-stop", "update").
@@ -135,7 +150,8 @@ public sealed partial class DaemonManager
         if (pid == 0)
             return new DaemonResult(false,
                 "Daemon appears running (lock file held) but PID file is missing. " +
-                "The daemon will self-terminate shortly, or use 'pkill netclawd' to stop it manually.");
+                "The daemon will self-terminate shortly. If it does not, find the process that holds " +
+                $"the lock file {_paths.LockFilePath} and stop that process with 'kill <pid>'.");
 
         Process process;
         try
@@ -157,21 +173,22 @@ public sealed partial class DaemonManager
                 "Stale PID file cleaned up.");
         }
 
-        // Notify the daemon of the shutdown reason before sending the signal.
-        // Best-effort — the daemon may already be unreachable.
-        try
+        // A PID file can name the daemon of another home (a stale file, or a port that two homes
+        // share). No signal goes out until the PID is shown to serve this home. The notice does
+        // double work: it tells the daemon why it stops, and the answer is the proof.
+        // stop-proof:begin
+        var home = HomeIdentity.Canonical(_paths.BasePath);
+        var outcome = await NotifyAsync(pid, home, reason, cancellationToken);
+        var proven = outcome == NoticeOutcome.Accepted
+            || (outcome == NoticeOutcome.Unconfirmed && HomeIdentity.ProcessServesHome(pid, home));
+        if (!proven)
         {
-            var endpoint = DaemonApi.ResolveEndpoint(_paths);
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            await http.PostAsync(
-                $"{endpoint}/api/lifecycle/shutdown?reason={Uri.EscapeDataString(reason)}",
-                null,
-                cancellationToken);
+            return new DaemonResult(
+                false,
+                $"Nothing was stopped. {NotShownToServe(pid, answered: outcome == NoticeOutcome.Refused)}",
+                IsRefusal: true);
         }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && ex is (HttpRequestException or TaskCanceledException))
-        {
-            Console.Error.WriteLine($"Note: could not notify daemon of shutdown reason: {ex.Message}");
-        }
+        // stop-proof:end
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -258,6 +275,128 @@ public sealed partial class DaemonManager
             "recurs, check for stuck sessions before stopping the daemon.");
     }
 
+    private enum NoticeOutcome
+    {
+        /// <summary>A 200 whose body names the PID of the notice.</summary>
+        Accepted,
+
+        /// <summary>A 409, or a 200 for another PID. A refusal is never overruled.</summary>
+        Refused,
+
+        /// <summary>
+        /// No connection, a timeout, a status other than 200 and 409, or a 200 for the right PID with no home
+        /// (an older daemon). The environment of the process decides.
+        /// </summary>
+        Unconfirmed
+    }
+
+    private static readonly TimeSpan NoticeTimeout = TimeSpan.FromSeconds(5);
+
+    // The daemon may be hung or not bound yet, so a failed notice is a normal runtime condition and
+    // the stop falls back to the environment of the process. A cancel from the caller still ends the stop.
+    private async Task<NoticeOutcome> NotifyAsync(int pid, string home, string reason, CancellationToken cancellationToken)
+    {
+        // The notice goes to the daemon of this home, never to NETCLAW_DAEMON_ENDPOINT or a client
+        // config: those can name a remote daemon, and the signal goes to a local PID.
+        var endpoint = DaemonApi.ResolveLocalControlEndpoint(_paths);
+        using var http = new HttpClient(DaemonApi.CreateLocalControlHttpHandler()) { Timeout = NoticeTimeout };
+        try
+        {
+            return await SendNoticeAsync(http, endpoint, pid, home, reason, cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && ex is (HttpRequestException or TaskCanceledException))
+        {
+            Console.Error.WriteLine($"Note: could not notify daemon of shutdown reason: {ex.Message}");
+            return NoticeOutcome.Unconfirmed;
+        }
+    }
+
+    // stop-notice:begin
+    private static async Task<NoticeOutcome> SendNoticeAsync(
+        HttpClient http, string endpoint, int pid, string home, string reason, CancellationToken cancellationToken)
+    {
+        using var response = await http.PostAsync(
+            $"{endpoint}/api/lifecycle/shutdown?reason={Uri.EscapeDataString(reason)}&pid={pid}&home={Uri.EscapeDataString(home)}",
+            null,
+            cancellationToken);
+        if (response.StatusCode == HttpStatusCode.Conflict)
+            return NoticeOutcome.Refused;
+        if (response.StatusCode != HttpStatusCode.OK)
+            return NoticeOutcome.Unconfirmed;
+
+        // A daemon from before the identity check answers 200 for any notice and reports its own PID, so a
+        // matching PID proves the PID only. The daemon of this version also names its resolved home.
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        return ReadAnswer(body, pid, home);
+    }
+
+    // A 200 whose body is not a daemon answer (another service on the port) is a refusal.
+    private static NoticeOutcome ReadAnswer(string body, int pid, string home)
+    {
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(body);
+        }
+        catch (JsonException)
+        {
+            return NoticeOutcome.Refused;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("pid", out var answeredPid)
+                || answeredPid.ValueKind != JsonValueKind.Number
+                || !answeredPid.TryGetInt32(out var answered)
+                || answered != pid)
+                return NoticeOutcome.Refused;
+
+            if (!root.TryGetProperty("home", out var answeredHome))
+                return NoticeOutcome.Unconfirmed;
+
+            // A string that is no full path is no answer: Canonical throws for an empty string or a NUL, and
+            // resolves a relative string in the working folder of this CLI.
+            if (answeredHome.ValueKind != JsonValueKind.String)
+                return NoticeOutcome.Refused;
+
+            var claimed = answeredHome.GetString()!;
+            return HomeIdentity.IsFullPath(claimed) && HomeIdentity.Same(claimed, home)
+                ? NoticeOutcome.Accepted
+                : NoticeOutcome.Refused;
+        }
+    }
+    // stop-notice:end
+
+    // The refusal of a stop: the cause is the answer to the notice that the stop sent.
+    private string NotShownToServe(int pid, bool answered)
+    {
+        var endpoint = DaemonApi.ResolveLocalControlEndpoint(_paths);
+        return Refusal(pid, answered
+            ? $"The daemon at {endpoint} answered for another daemon or home."
+            : $"The daemon at {endpoint} did not confirm PID {pid} for this home.");
+    }
+
+    // The refusal of start and status. They send no notice, so the cause names no endpoint and no answer.
+    private string NotShownWithoutNotice(int pid)
+        => Refusal(pid, $"No daemon of this home was proven to own PID {pid}.");
+
+    // The two lines of a refusal. The second line names the cause and the recovery.
+    private string Refusal(int pid, string cause)
+    {
+        return $"PID {pid} is not shown to serve {_paths.BasePath}.\n{cause} "
+            + $"If no Netclaw daemon of this home runs, delete {_paths.PidFilePath}. "
+            + $"If PID {pid} is a daemon of this home, check it, then stop it with 'kill {pid}' (Task Manager on Windows).";
+    }
+
+    // The proof of start and status. They send no notice, so they read the environment of the process, or,
+    // where the environment cannot be read, the lock file of this home.
+    private bool PidServesThisHome(int pid)
+        => HomeIdentity.ReadProcessEnvironment(pid) is { } environment
+            ? HomeIdentity.EnvironmentServesHome(environment, HomeIdentity.Canonical(_paths.BasePath))
+            : IsLockFileHeld();
+
     /// <summary>
     /// Reports daemon status.
     /// </summary>
@@ -290,6 +429,9 @@ public sealed partial class DaemonManager
                 return new DaemonStatus(IsRunning: false, Pid: null,
                     Message: "Daemon is not running (PID file pointed to a different process).");
             }
+
+            if (!PidServesThisHome(pid))
+                return new DaemonStatus(IsRunning: true, Pid: pid, Message: NotShownWithoutNotice(pid), ServesThisHome: false);
 
             // Prefer PID file timestamp (reflects soft restarts), fall back to process start time
             TryReadPidFile(out _, out var pidFileStartedAt);
@@ -504,6 +646,7 @@ public sealed partial class DaemonManager
     private bool TryGetRunningPid(out int pid)
     {
         // Tier 1: PID file (fast path — covers normal operation)
+        // stale-pid:begin
         if (TryReadPid(out pid))
         {
             try
@@ -519,6 +662,7 @@ public sealed partial class DaemonManager
                 CleanupPidFile();
             }
         }
+        // stale-pid:end
 
         // Tier 2: Lock file probe (fast, OS-backed — covers PID file loss)
         if (IsLockFileHeld())
@@ -795,6 +939,6 @@ public sealed partial class DaemonManager
     }
 }
 
-public sealed record DaemonResult(bool Success, string Message, string? CrashLogPath = null);
+public sealed record DaemonResult(bool Success, string Message, string? CrashLogPath = null, bool IsRefusal = false);
 
-public sealed record DaemonStatus(bool IsRunning, int? Pid, string Message);
+public sealed record DaemonStatus(bool IsRunning, int? Pid, string Message, bool ServesThisHome = true);

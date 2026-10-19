@@ -66,9 +66,12 @@ on crash.
 ### Requirement: History file lifecycle
 
 The history file SHALL be created on the first execution of a reminder. When
-a reminder is deleted (via CLI or agent tool), the corresponding
-`.history.jsonl` file SHALL be deleted. If no history file exists for a
-reminder ID, read operations SHALL return an empty result rather than an error.
+a reminder is deleted with the permanent delete command (CLI or HTTP API), the
+corresponding `.history.jsonl` file SHALL be deleted. A permanent delete of an
+ended one-shot SHALL delete its history file and then its tombstone. When a
+one-shot ends, its history file SHALL stay until its tombstone is purged. If no
+history file exists for a reminder ID that has a definition or a tombstone,
+read operations SHALL return an empty result rather than an error.
 
 #### Scenario: History file absent before first execution
 
@@ -79,9 +82,23 @@ reminder ID, read operations SHALL return an empty result rather than an error.
 #### Scenario: History file deleted with reminder
 
 - **GIVEN** a reminder with a non-empty history file exists
-- **WHEN** the reminder is deleted
+- **WHEN** the reminder is permanently deleted
 - **THEN** both the `.json` definition file and the `.history.jsonl` file
-  are removed from `~/.netclaw/reminders/`
+  are removed from `~/.netclaw/schedules/reminders/`
+
+#### Scenario: Permanent delete of an ended one-shot
+
+- **GIVEN** a one-shot ended and has a tombstone and a history file
+- **WHEN** the operator runs `netclaw reminder delete <id>`
+- **THEN** the history file and the tombstone no longer exist
+- **AND** the command reports that the reminder was permanently deleted
+
+#### Scenario: The end of a one-shot keeps the history file
+
+- **GIVEN** a one-shot with three history records
+- **WHEN** the one-shot ends
+- **THEN** the definition file no longer exists
+- **AND** the history file still holds the three records
 
 ### Requirement: Persisted reminder definitions carry required trust fields
 
@@ -111,22 +128,51 @@ persisted trust context.
 - **WHEN** the reminder store deserializes it
 - **THEN** the audience and boundary are read verbatim with no error logged
 
-### Requirement: Soft deletion retains reminder history
+### Requirement: Ended one-shot history stays readable through its tombstone
 
-Netclaw SHALL retain execution history when it soft-deletes a one-shot that reached its poison threshold, and when a one-shot completes. The history file is removed with its definition: by an explicit delete command, or by pruning once a completed one-shot has been complete for more than 12 days. Failed reminders and recurring reminders are never pruned. The history of an id that never existed is reported as not found.
+Netclaw SHALL keep the execution history of an ended one-shot for 12 days after its end time, whatever its outcome. The tombstone SHALL supply the audience for every history and status read of an ended one-shot. Netclaw SHALL apply the same audience rule as for a live reminder. A read without a definition and without a tombstone SHALL reply "not found". A tombstone that Netclaw cannot read SHALL count as absent for reads only, and Netclaw SHALL log an error and raise an operational alert. It does not count as absent when a fire decides whether a one-shot runs (see `netclaw-scheduling`). Netclaw SHALL NOT expose history without an audience to check. The `Failed` tombstone also holds the reminder prompt (see `netclaw-scheduling`), and the same audience rule gates its read.
+
+Recurring reminders keep their history until an explicit delete. The history of an id that never existed is reported as not found.
 
 #### Scenario: Completed one-shot keeps its history for the retention period
 
 - **GIVEN** a one-shot has a successful execution record
-- **WHEN** Netclaw settles it as complete
+- **WHEN** Netclaw ends it as `Completed`
 - **THEN** reminder history for the id returns the record
-- **AND** Netclaw deletes the definition and the history file together after the retention period
+- **AND** Netclaw deletes the history file and then the tombstone after the retention period
 
-#### Scenario: Failed one-shot retains history
+#### Scenario: Failed one-shot keeps its history
 
 - **GIVEN** a one-shot reaches its poison threshold
-- **WHEN** Netclaw disables it with outcome `Failed`
-- **THEN** all failure records remain available through reminder history
+- **WHEN** Netclaw ends it as `Failed`
+- **THEN** all failure records stay available through reminder history for 12 days
+
+#### Scenario: History of an ended one-shot inside the audience
+
+- **GIVEN** a Team one-shot ended
+- **WHEN** a Team caller calls `get_reminder_history` for its id
+- **THEN** the tool returns the history records
+
+#### Scenario: History of an ended one-shot outside the audience
+
+- **GIVEN** a Personal one-shot ended
+- **WHEN** a Team caller calls `get_reminder_history` for its id
+- **THEN** the tool replies as for an id that never existed
+
+#### Scenario: An unreadable tombstone hides the history
+
+- **GIVEN** an ended one-shot has a history file and a tombstone file that Netclaw cannot read
+- **WHEN** a caller reads the history or the status of its id
+- **THEN** the reply is "not found" and shows no history
+- **AND** Netclaw logs an error and emits the `reminder.tombstone.invalid` alert
+- **AND** the tombstone file stays on disk
+
+#### Scenario: A history file without a definition or a tombstone
+
+- **GIVEN** a history file exists for `orphan-id`
+- **AND** no definition and no tombstone exist for `orphan-id`
+- **WHEN** an Operator runs `netclaw reminder history orphan-id`
+- **THEN** the command exits with a non-zero code and says that the reminder was not found
 
 #### Scenario: Execution actor stops before it reports an outcome
 
@@ -134,3 +180,23 @@ Netclaw SHALL retain execution history when it soft-deletes a one-shot that reac
 - **WHEN** DeathWatch reports the stop
 - **THEN** the manager appends a failed execution record
 - **AND** the failure record identifies the unexpected stop
+
+### Requirement: A current-session row records admission
+
+For a `current_session` reminder, the history row SHALL record the admission result. The row says `success = true` when the target session acknowledged the fire. The row says `success = false` when the session or the gateway refused the fire (`CommandNack`) or the acknowledgement timed out.
+
+A post failure after admission SHALL NOT change the row. The session SHALL NOT append a second row. The session reports that failure by the `reminder.delivery.failed` alert and an Error log (see `netclaw-session`, "A failed post on a reminder turn is visible to the operator"). The reminder manager is the only writer of the history.
+
+#### Scenario: A rejected post leaves the admission row unchanged
+
+- **GIVEN** a Mattermost `current_session` reminder, and the session acknowledged the fire
+- **WHEN** the Mattermost post API later rejects the reply because the bot token is bad
+- **THEN** the history holds one row with `success = true`
+- **AND** the operator sees a `reminder.delivery.failed` alert for the reminder
+
+#### Scenario: A refused fire records a failed row
+
+- **GIVEN** a `current_session` reminder fires
+- **WHEN** the gateway replies `CommandNack`
+- **THEN** the history holds one row with `success = false` and a non-null `errorMessage`
+- **AND** the session raises no `reminder.delivery.failed` alert, because no turn ran

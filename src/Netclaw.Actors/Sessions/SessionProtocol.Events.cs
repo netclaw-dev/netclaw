@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
@@ -34,7 +35,11 @@ public static partial class SessionProtocol
         /// Populated when this turn originated from a reminder firing.
         /// Format is <c>"{reminderId}:{fireTimestampMs}"</c>, matching the value
         /// placed on <see cref="Channels.MessageSource.ReminderId"/> by the
-        /// reminder dispatcher. Null for regular user turns. Used for forensics.
+        /// reminder dispatcher. Null for regular user turns. A child-delivery turn
+        /// carries the link that the child run kept from the turn that started it
+        /// (<see cref="SubAgents.BackgroundChildRun.SourceReminderId"/>), and a delivery
+        /// retry turn carries the link of the turn that it repeats. The session reads it
+        /// to report a failed post of a reminder reply.
         /// </summary>
         public ReminderId? SourceReminderId { get; init; }
 
@@ -47,6 +52,17 @@ public static partial class SessionProtocol
         public BackgroundJobId? SourceBackgroundJobId { get; init; }
 
         public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
+
+        public ChildContinuation? ChildContinuation { get; init; }
+
+        /// <summary>
+        /// True when a sub-agent ran a routed skill and produced this turn's reply, so the main model did not.
+        /// Replay needs it to treat the turn as the live session did: a failed post alerts but never retries
+        /// on the main model. It is false for the child-delivery turn that posts the result of a routed-skill child
+        /// run, because the main model writes that reply, so the turn retries like any ordinary turn. A journal
+        /// entry written before this field reads as false (an ordinary turn).
+        /// </summary>
+        public bool RoutedSkill { get; init; }
 
         public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 
@@ -62,6 +78,8 @@ public static partial class SessionProtocol
         public SessionId SessionId { get; init; }
 
         public InputId InputId { get; init; }
+
+        public BackgroundJobId? SourceBackgroundJobId { get; init; }
 
         public string? SourceMessageId { get; init; }
 
@@ -86,6 +104,12 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> InputIds { get; init; } = [];
 
+        public ChildContinuation? ChildContinuation { get; init; }
+
+        public BackgroundJobId? SourceBackgroundJobId { get; init; }
+
+        public SerializableChatMessage? RejectedJobReport { get; init; }
+
         public long ClosedAtMs { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(ClosedAtMs);
@@ -109,6 +133,8 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
 
+        public ChildContinuation? ChildContinuation { get; init; }
+
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(StartedAtMs);
     }
 
@@ -122,6 +148,8 @@ public static partial class SessionProtocol
         public SessionId SessionId { get; init; }
 
         public SerializableChatMessage ToolResult { get; init; } = new();
+
+        public ActiveJobInfo? StartedBackgroundJob { get; init; }
 
         public long RecordedAtMs { get; init; }
 
@@ -167,6 +195,10 @@ public static partial class SessionProtocol
 
     public sealed record ToolApprovalRequested : ISessionEvent
     {
+        public ToolCallId? OriginalChildCallId { get; init; }
+
+        public SubAgentRunId? SourceChildRunId { get; init; }
+
         public SessionId SessionId { get; init; }
 
         public string CallId { get; init; } = string.Empty;
@@ -217,6 +249,8 @@ public static partial class SessionProtocol
 
     public sealed record ToolApprovalResolved : ISessionEvent
     {
+        public SubAgentRunId? SourceChildRunId { get; init; }
+
         public SessionId SessionId { get; init; }
 
         public string CallId { get; init; } = string.Empty;

@@ -2,10 +2,11 @@
 
 Subagents are specialist workers that the main Netclaw agent can delegate tasks
 to. Each subagent runs autonomously with its own system prompt, inherited
-audience-scoped tool surface, and timeout — then returns a synthesized result to
-the main agent. The delegation protects the main session's context window from
-token-heavy work (deep research, broad exploration, long summarization) and lets
-the main agent stay focused on conversation and coordination.
+audience-scoped tool surface, and session-wide timeouts. It then returns a
+synthesized result to the main agent. The delegation protects the main session's
+context window from token-heavy work (deep research, broad exploration, long
+summarization) and lets the main agent stay focused on conversation and
+coordination.
 
 ## How it works
 
@@ -13,7 +14,7 @@ the main agent stay focused on conversation and coordination.
 
 On every LLM turn, the main agent's system prompt includes an
 `[available-subagents]` section that enumerates every user-facing subagent along
-with its description, inherited tool policy, and timeout:
+with its description and inherited tool policy:
 
 ```
 [available-subagents — use spawn_agent to delegate]
@@ -21,17 +22,14 @@ with its description, inherited tool policy, and timeout:
 ## research-assistant
 Deep web research with search and citation
 Tools: inherited from parent audience policy, except denied sub-agent tools
-Timeout: 120s
 
 ## code-analyst
 Analyze code, run commands, and review files
 Tools: inherited from parent audience policy, except denied sub-agent tools
-Timeout: 120s
 
 ## summarizer
 Summarize documents and content concisely
 Tools: inherited from parent audience policy, except denied sub-agent tools
-Timeout: 60s
 
 ## How to delegate
 Call `spawn_agent(agent: "<name>", task: "<specific task>", context: "<optional background>")`.
@@ -89,20 +87,71 @@ first user message is just the raw task, identical to the pre-context protocol.
    policy, then `SubAgentToolPolicy` removes tools that are statically denied to
    subagents (`spawn_agent`). Agent definition `tools:` metadata is advisory and
    does not narrow runtime authorization.
-3. A `SubAgentActor` is spawned as a **child of the session actor** (supervised,
-   lifecycle-managed — stops when the session stops).
-4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
-5. After at most 30 tool iterations, a final response, or an inactivity timeout,
-   the subagent returns a terminal run result.
-6. The main agent receives the `spawn_agent` tool result as an explicit text
-   envelope: agent name, run id, outcome (`completed`, `partial`, or `failed`),
-   optional reason, diagnostics pointer, and either a `Summary:` or `Error:`
-   section containing the subagent's final text.
+3. The session actor persists child acceptance and the accepted `spawn_agent`
+   tool result before it starts the child actor.
+4. The `spawn_agent` tool returns the durable run ID. The child runs as a
+   supervised child of the session actor and can outlive the parent model call.
+5. A final response completes the child run. An inactivity timeout or
+   cancellation can stop it. The runtime sets no fixed tool-iteration ceiling.
+6. After the session records and prepares a terminal result, it selects that
+   result at a safe parent model boundary. Ready results take priority. The
+   session delivers a paired `child_run_result` call and tool result. The result
+   holds the agent name, run id, outcome (`completed`, `partial`, or `failed`),
+   optional reason, diagnostics pointer, and the subagent's final text.
 
 Child creation is marshaled back onto the session actor thread, so supervision
-stays within Akka's actor-thread rules. If the parent tool call is cancelled or
-times out, the subagent is cancelled too. The timeout is an inactivity budget: a
+stays within Akka's actor-thread rules. After durable acceptance, the child can
+continue after the `spawn_agent` call returns. An explicit run cancellation or
+session shutdown stops the child. The timers are inactivity budgets: a
 responsive subagent is not stopped merely because wall-clock time has elapsed.
+
+Every subagent uses the same timers from `netclaw.json`. An agent file does not
+set them:
+
+| Timer | Setting | Default | Meaning |
+|-------|---------|---------|---------|
+| Prefill | `SubAgents.PrefillTimeoutSeconds` | `1800` | Max wait for the first streamed delta. Keepalives refresh it. A file may set `prefillTimeoutSeconds` to override it. |
+| Inter-delta | `Session.FirstTokenTimeoutSeconds` | `600` | Max gap between streamed deltas after the first one. |
+| No progress | `SubAgents.NoProgressTimeoutSeconds` | `1200` | Hard ceiling on time without real output. Text, tool calls, and thinking refresh it. Keepalives never refresh it. One model call that streams only thinking stops at three times this value (`thinking_only_timeout`). |
+
+Agent files no longer set a per-agent timeout. A file that still contains
+`timeoutSeconds` loads, and the loader logs one warning that names the file and
+says the key is obsolete and ignored. Remove the key from the file.
+
+Profiles that used the old `timeoutSeconds` default of `60` now use the
+inter-delta budget of `600` seconds. The no-progress timer still bounds the run.
+
+Two more rules end a run with outcome `failed`:
+
+- `output_truncated`: a model reply ended on the output limit
+  (`finishReason=length`) and made no tool call. The text is cut off, so it is
+  never a result. The run does not retry. The failure text of the run result
+  holds a redacted preview of at most 300 characters of the cut-off text. A
+  reply that has a tool call still runs its tools.
+- `thinking_only_timeout`: one model call streamed only thinking, with no text
+  and no tool call, for longer than three times `SubAgents.NoProgressTimeoutSeconds`
+  (default `1200`, so 60 minutes). Thinking counts as progress for the
+  `no_substantive_output_timeout` deadline, so only this cap stops a model that
+  thinks without end. A text delta with visible characters or a tool-call delta
+  restarts the cap. A reasoning part never restarts it, also when its text is
+  empty. The cap counts from the start of the call, so prefill time counts.
+
+The main session applies the same two rules to its own model calls:
+
+- A cut-off text reply with no tool call ends the turn with an error that says
+  the reply was truncated. The session does not post the cut-off text and does
+  not store it in history. A live viewer can see the streamed text before the
+  error arrives.
+- One call that streams only thinking ends the turn at three times
+  `Session.NoProgressTimeoutSeconds` (default `1200`, so 60 minutes). The error
+  says that the model streamed only thinking.
+- Both errors have category `ModelBehavior`. Headless output reports
+  `[turn:failed] category=model kind=ModelBehavior`. The provider worked, so do
+  not look for an infrastructure fault.
+- For a cut-off reply, ask for a shorter answer, or raise the model output limit.
+- For the thinking cap, a larger output limit does not help. Ask for a simpler
+  task, or use a model that thinks less. To allow longer thinking, raise
+  `NoProgressTimeoutSeconds`: the cap is three times that value.
 
 ### Observability
 
@@ -116,6 +165,56 @@ Subagent start/complete events are emitted as `SubAgentOutput` session events:
 The start event reports the number of tools exposed for that parent audience and
 profile. These events appear in the headless CLI output and session logs. They
 are suppressed in Slack.
+
+### Headless runs
+
+`netclaw chat -p` waits for the child result. The run ends on the first
+completed turn that reports no open child run. The session reports its open
+runs in each `TurnCompleted`. A background shell job is not a child run.
+
+- While the run waits, stdout shows `[subagent:waiting] <n> open: <run ids>`.
+  With `--json`, stdout shows no such line.
+- The delivered result prints as `[tool:result] child_run_result`, so the child
+  text reaches stdout.
+- With `--json`, stdout holds one envelope. `response` is the text of the last
+  turn. `turnResponses` holds each turn. `usage` is the sum over all turns.
+- The run has no timeout of its own. Each child has its daemon timeouts. Use an
+  outside `timeout` to bound the run.
+
+A failed turn, SIGINT, SIGTERM, a stopped session, or a lost connection ends the run with exit `1`.
+The CLI does not cancel the child runs. Stderr then names them:
+
+```
+[headless:open-runs] session=<sessionId> runs=<runId>[,<runId>...]
+```
+
+To read the result after such a stop, resume the session:
+
+```bash
+netclaw chat --resume <sessionId>
+```
+
+The session still owns the open runs. It starts a parent turn for each result.
+A drained daemon restart during the wait ends the run with `kind=ChannelFailure`.
+The runs stay open in the session, and recovery does not repeat their external work.
+
+A lost connection also ends the run with `kind=ChannelFailure`, and a
+`[headless:error]` line names it. The hub drops output while no client is
+connected, and it does not replay that output after a reconnect. A turn that
+completes during the gap is lost. So the CLI ends the run on `Disconnected` and
+on `TransportClosed` at any time after it sent the prompt, whether or not it
+knows an open child run. A short network drop therefore fails the run. Resume
+the session with `netclaw chat --resume <sessionId>`. The CLI marks the prompt
+as sent just before it sends the prompt. After such a failure, the daemon may
+still run the prompt. Check the session, for example with
+`netclaw chat --resume <sessionId>` or the session log, before you send the
+prompt again. A daemon that stops without a drain sends no stop signal, so the
+lost connection ends the run there.
+Run `chat -p` under `timeout` so that an outside limit always bounds the run.
+
+The CLI and the daemon must have the same version. A CLI from before this
+behavior exits at turn 1 against a new daemon and loses the child result. Upgrade
+the CLI with the daemon.
 
 Completion events are emitted for every finished subagent run, even when the
 subagent returns no structured findings. In that case `FindingsCount` is `0`
@@ -164,7 +263,6 @@ the managed one is skipped with a warning.
 name: research-assistant
 description: Deep web research with search and citation
 modelRole: Compaction
-timeoutSeconds: 120
 visibility: user-facing
 emitStructuredFindings: false
 ---
@@ -189,7 +287,6 @@ findings into clear, well-organized summaries.
 | `description` | Yes | — | One-line description shown in the `[available-subagents]` discovery block. |
 | `tools` | No | `[]` | Advisory tool metadata retained for file-format compatibility. It does not constrain runtime tool access. |
 | `modelRole` | No | `Compaction` | `Compaction` (cheaper/faster) or `Main` (full model). |
-| `timeoutSeconds` | No | `60` | Inactivity timeout in seconds. The watchdog resets when the subagent makes progress. |
 | `visibility` | No | `user-facing` | `user-facing` (visible to `spawn_agent`) or `internal` (platform-owned, hidden). Accepts both hyphenated and PascalCase. |
 | `emitStructuredFindings` | No | `false` | When true, successful output becomes a memory-candidate finding for parent-session review. |
 
@@ -271,13 +368,13 @@ Three agents are seeded during `netclaw init`. They are regular file-based
 definitions — you can edit or delete them.
 
 **research-assistant** — Deep web research with search and citation.
-Timeout: 120s. Tools are inherited from the parent audience/profile policy.
+Tools are inherited from the parent audience/profile policy.
 
 **code-analyst** — Analyze code and review files.
-Timeout: 120s. Tools are inherited from the parent audience/profile policy.
+Tools are inherited from the parent audience/profile policy.
 
 **summarizer** — Summarize documents and content concisely.
-Timeout: 60s. Tools are inherited from the parent audience/profile policy.
+Tools are inherited from the parent audience/profile policy.
 
 ## Creating a custom agent
 
@@ -288,7 +385,6 @@ Create a single `.md` file in `~/.netclaw/agents/`:
 name: github-reviewer
 description: Read local PR notes and summarize next steps for the parent session
 modelRole: Compaction
-timeoutSeconds: 90
 visibility: user-facing
 ---
 
@@ -318,8 +414,9 @@ known-good version.
 - Subagents are **single-turn**: they receive a task, run their tool loop, and
   return a result. They do not maintain conversation history or support
   back-and-forth interaction with the user.
-- Subagents have a **maximum of 30 tool iterations** before being forced to
-  produce a text response.
+- Subagents have no fixed maximum number of tool iterations. A final response
+  completes the run; cancellation or an inactivity timeout can stop it.
+  A recurrence refusal can settle the child turn without another model request.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.
@@ -333,3 +430,47 @@ known-good version.
   three-slot `NetclawChatClientProvider` role system, which currently resolves
   to a single configured model for most installs. Per-agent model selection
   is tracked in a follow-on issue pending a multi-model provider architecture.
+
+## Coordination journal migration and restore
+
+The compatibility reader accepts deployed child manifests `cra-v1`, `cre-v1`, and `tta-v1`.
+It translates exact old child delivery correlations before the ordinary parent recovery path.
+The current writer uses `cra-v2`, `cre-v2`, and `ss-v2` for child facts and snapshots.
+Older binaries cannot read these records. Do not downgrade a database in place.
+
+Unresolved historical evidence remains inert and visible through the owner status response.
+Recovery does not relaunch uncertain child work or convert child results into user input.
+An exact settled delivery stays settled. A ready result can resume only its original parent authority.
+
+The restore unit is a complete, consistent pre-upgrade SQLite backup.
+The backup must include the journal and snapshot tables from the same database state.
+Retain its hash, source revision, and backup procedure receipt before an upgrade.
+Restore a copied backup with the intended binary and prove actor recovery before an operational rollback.
+A serializer round-trip alone does not prove database restore or runtime recovery.
+A restore loses later journal facts and does not reverse external effects.
+
+Use the fixed-byte compatibility and actor recovery checks in `Netclaw.Actors.Tests` for candidate validation.
+Record the exact candidate, test filter, database copy, and results in the release evidence.
+No live deployment or database restore forms part of this source change.
+
+## Repeated tool work
+
+The parent and child use exact tool identities and actual results to detect repeated work.
+After two equal feedback rounds, the runtime returns a correction for each repeated call.
+A repeat after that correction ends the turn without another model request.
+In a parent session, the turn fails with the error category `ModelBehavior`. A child run ends with a partial result.
+Unrelated calls remain available. Live context compaction preserves this evidence.
+A process restart does not restore a detector checkpoint or repeat tool calls automatically.
+
+Authorized status queries for a pending background job can repeat.
+Each query repeats the normal access checks. Cancellation and inaccessible jobs receive no exception.
+
+`MaxToolIterationsPerTurn` remains readable in old configuration files. The runtime does not enforce that value.
+Useful work can exceed the former parent and child iteration limits.
+The runtime still enforces deadlines, cancellation, and authorization.
+Distinct calls can continue indefinitely if no other stop condition applies.
+
+A recurrence refusal executes no tool and grants no authority.
+The result retains the call identity, validation error, and authorization-attempt identity.
+The runtime does not request consent merely to refuse a repeated call.
+Every call that can execute still passes the normal authorization checks.

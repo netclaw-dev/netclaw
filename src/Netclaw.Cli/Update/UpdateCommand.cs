@@ -406,7 +406,7 @@ internal static class UpdateCommand
             {
                 return processStop.Success
                     ? UpdateDaemonStopResult.Succeeded(UpdateDaemonOwner.DetachedProcess, processStop.Message)
-                    : UpdateDaemonStopResult.Failed(UpdateDaemonOwner.DetachedProcess, processStop.Message);
+                    : UpdateDaemonStopResult.Failed(UpdateDaemonOwner.DetachedProcess, processStop.Message, processStop.IsRefusal);
             }
 
             return processStop.Success
@@ -767,15 +767,16 @@ internal enum UpdateDaemonOwner
 internal sealed record UpdateDaemonStopResult(
     bool Success,
     UpdateDaemonOwner Owner,
-    string Message)
+    string Message,
+    bool IsRefusal = false)
 {
     public bool ShouldRestart => Success && Owner is not UpdateDaemonOwner.None;
 
     public static UpdateDaemonStopResult Succeeded(UpdateDaemonOwner owner, string message) =>
         new(true, owner, message);
 
-    public static UpdateDaemonStopResult Failed(UpdateDaemonOwner owner, string message) =>
-        new(false, owner, message);
+    public static UpdateDaemonStopResult Failed(UpdateDaemonOwner owner, string message, bool isRefusal = false) =>
+        new(false, owner, message, isRefusal);
 
-    public DaemonResult ToDaemonResult() => new(Success, Message);
+    public DaemonResult ToDaemonResult() => new(Success, Message, IsRefusal: IsRefusal);
 }

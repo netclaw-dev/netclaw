@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Netclaw.Cli.Tests" />
+    <InternalsVisibleTo Include="Netclaw.Cli.MutationTests" />
   </ItemGroup>
 
   <ItemGroup>

@@ -6,6 +6,7 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
@@ -74,12 +75,26 @@ internal static class HeadlessRunHarness
     // A fault ceiling. A run that never stops fails here. No test orchestrates with this wait.
     private static readonly TimeSpan StopCeiling = TimeSpan.FromSeconds(30);
 
+    /// <param name="drive">
+    /// Optional script that runs while the channel runs. It waits on events (a stdout line, the stop of the
+    /// run), never on a delay. The harness awaits it after the run stops, so a failed step in it fails the test.
+    /// </param>
+    /// <param name="logger">
+    /// Optional logger for the channel. A test uses it to see or hold a point on the run thread.
+    /// </param>
+    /// <param name="timeProvider">
+    /// Optional clock for the channel. The channel reads it inside the log lock, so a test can hold a thread
+    /// at a log write.
+    /// </param>
     public static async Task<HeadlessRun> RunAsync(
         DaemonClient client,
         DisposableTempDir directory,
         bool json,
         CancellationToken stopping,
-        string prompt = "Do the task.")
+        string prompt = "Do the task.",
+        Func<HeadlessDrive, Task>? drive = null,
+        ILogger<HeadlessChannel>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         var paths = new NetclawPaths(directory.Path);
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -87,9 +102,9 @@ internal static class HeadlessRunHarness
             client,
             paths,
             new SignalingLifetime(stopped, stopping),
-            TimeProvider.System,
+            timeProvider ?? TimeProvider.System,
             new HeadlessOptions(prompt) { JsonOutput = json },
-            NullLogger<HeadlessChannel>.Instance);
+            logger ?? NullLogger<HeadlessChannel>.Instance);
 
         var stdout = new LockedCapture();
         var stderr = new LockedCapture();
@@ -101,12 +116,16 @@ internal static class HeadlessRunHarness
         try
         {
             await channel.StartAsync(TestContext.Current.CancellationToken);
+            var driver = drive is null
+                ? Task.CompletedTask
+                : Task.Run(() => drive(new HeadlessDrive(stdout, stopped.Task, paths)), CancellationToken.None);
 
             // The channel calls StopApplication as its last act on every path. It writes the console
             // output and sets the exit code first. So this signal means that the channel finished its
             // own writes. StopAsync only marks the channel as disconnected. It does not drain output.
             await stopped.Task.WaitAsync(StopCeiling, TestContext.Current.CancellationToken);
             await channel.StopAsync(CancellationToken.None);
+            await driver.WaitAsync(StopCeiling, TestContext.Current.CancellationToken);
 
             // The Akka StandardOutLogger reads Console.Out on each call, so it can write to the capture on
             // its own thread. The ASP.NET console logger keeps the Console.Out that it got before
@@ -164,6 +183,82 @@ internal static class HeadlessRunHarness
     }
 }
 
+/// <summary>What a script sees while a headless run is in progress.</summary>
+internal sealed class HeadlessDrive(LockedCapture stdout, Task stopped, NetclawPaths paths)
+{
+    /// <summary>The task that completes when the channel stops the host.</summary>
+    public Task Stopped => stopped;
+
+    /// <summary>
+    /// Waits until stdout holds <paramref name="text"/>. Returns false when the run stopped first. The
+    /// caller then ends its script, and the assertions on the finished run report the cause.
+    /// </summary>
+    public async Task<bool> StdoutShowsAsync(string text)
+    {
+        var seen = stdout.WhenContainsAsync(text);
+        return await Task.WhenAny(seen, stopped) == seen;
+    }
+
+    /// <summary>The stdout text so far.</summary>
+    public string Stdout => stdout.Snapshot();
+
+    /// <summary>
+    /// Completes once the channel closed its session log writer. The channel disposes the writer after it
+    /// stops the host, and no event signals that. An exclusive open succeeds only when no writer holds the
+    /// file, so the loop retries it until it succeeds. Each retry yields, and none waits on a timer.
+    /// The loop has a time ceiling, so that a channel that never closes the writer fails the test with a
+    /// clear message and does not spin until the test run ends.
+    /// </summary>
+    public async Task SessionLogClosedAsync()
+    {
+        var log = Assert.Single(
+            Directory.GetFiles(paths.LogsDirectory, "*.log"),
+            path => !string.Equals(Path.GetFileName(path), "headless-errors.log", StringComparison.Ordinal));
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(SessionLogCloseCeiling);
+        while (true)
+        {
+            try
+            {
+                ceiling.Token.ThrowIfCancellationRequested();
+                using var exclusive = new FileStream(log, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                return;
+            }
+            catch (IOException)
+            {
+                await Task.Yield();
+            }
+            catch (OperationCanceledException) when (!TestContext.Current.CancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"The channel did not close its session log writer within {SessionLogCloseCeiling}.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The longest wait for the channel to close its session log writer. A healthy channel closes it within
+    /// milliseconds after it stops the host.
+    /// </summary>
+    public static readonly TimeSpan SessionLogCloseCeiling = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The session id, read from the first record of the session log. The channel writes that record before
+    /// it sends the prompt.
+    /// </summary>
+    public string SessionId()
+    {
+        var log = Assert.Single(
+            Directory.GetFiles(paths.LogsDirectory, "*.log"),
+            path => !string.Equals(Path.GetFileName(path), "headless-errors.log", StringComparison.Ordinal));
+        using var stream = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        const string marker = "Headless session started: ";
+        var line = reader.ReadLine() ?? string.Empty;
+        return line[(line.IndexOf(marker, StringComparison.Ordinal) + marker.Length)..].Trim();
+    }
+}
+
 /// <summary>
 /// A <see cref="TextWriter"/> that keeps its text in a buffer. Every write and the snapshot take one lock,
 /// so a thread that reads the text never sees a write in progress. A plain <see cref="StringWriter"/> has
@@ -179,24 +274,59 @@ internal sealed class LockedCapture : TextWriter
     public override void Write(char value)
     {
         lock (_gate)
+        {
             _buffer.Append(value);
+            Notify();
+        }
     }
 
     public override void Write(char[] buffer, int index, int count)
     {
         lock (_gate)
+        {
             _buffer.Append(buffer, index, count);
+            Notify();
+        }
     }
 
     public override void Write(string? value)
     {
         lock (_gate)
+        {
             _buffer.Append(value);
+            Notify();
+        }
     }
+
+    private readonly List<(string Text, TaskCompletionSource Seen)> _waiters = [];
 
     public string Snapshot()
     {
         lock (_gate)
             return _buffer.ToString();
+    }
+
+    /// <summary>A task that completes once the text holds <paramref name="text"/>. No timer is involved.</summary>
+    public Task WhenContainsAsync(string text)
+    {
+        lock (_gate)
+        {
+            var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (_buffer.ToString().Contains(text, StringComparison.Ordinal))
+                seen.TrySetResult();
+            else
+                _waiters.Add((text, seen));
+            return seen.Task;
+        }
+    }
+
+    private void Notify()
+    {
+        // Called with the gate held.
+        if (_waiters.Count == 0)
+            return;
+        var text = _buffer.ToString();
+        _waiters.RemoveAll(waiter =>
+            text.Contains(waiter.Text, StringComparison.Ordinal) && waiter.Seen.TrySetResult());
     }
 }

@@ -688,7 +688,7 @@ Leaks today:
 | Classes | Approval part of [`LlmSessionActor`](../../src/Netclaw.Actors/Sessions/LlmSessionActor.cs), [`SessionToolWorkflow`](../../src/Netclaw.Actors/Sessions/SessionToolWorkflow.cs), [`IApprovalChannel`](../../src/Netclaw.Actors/Sessions/IApprovalChannel.cs), [`ParentSessionApprovalBridge`](../../src/Netclaw.Actors/Sessions/ParentSessionApprovalBridge.cs), [`IParentApprovalBridge`](../../src/Netclaw.Tools.Abstractions/IParentApprovalBridge.cs), the approval loop in [`SubAgentActor`](../../src/Netclaw.Actors/SubAgents/SubAgentActor.cs), [`ApprovalResponseFlow`](../../src/Netclaw.Channels/ApprovalResponseFlow.cs), [`PendingApprovalLookup`](../../src/Netclaw.Channels/PendingApprovalLookup.cs), [`ApprovalButtonValueCodec`](../../src/Netclaw.Actors/Protocol/ApprovalButtonValueCodec.cs), [`ApprovalOptionKeys`](../../src/Netclaw.Actors/Protocol/ApprovalOptionKeys.cs), the Slack, Discord, and Mattermost prompt builders |
 | Published contract | Output `ToolInteractionRequest` and input `ToolInteractionResponse` ([`SessionProtocol.Outputs.cs`](../../src/Netclaw.Actors/Sessions/SessionProtocol.Outputs.cs)). Journal events `ToolApprovalRequested` and `ToolApprovalResolved`. Option key strings such as `approve_once`. |
 | Must not know | Policy rules. It renders the options that Consent offers. |
-| Data | Durable session journal. Actor-local state for an unanswered request. A subagent request is live-only. |
+| Data | Durable session journal. Actor-local state for an unanswered request. Durable child requests use the same journal events. |
 | Rules | [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-consent-prompts-offer-only-safe-options), [TA-11](../../openspec/specs/tool-authorization/spec.md#requirement-ta-11-an-unanswered-consent-request-survives-restart), [TA-12](../../openspec/specs/tool-authorization/spec.md#requirement-ta-12-subagent-consent-goes-through-the-parent-session) |
 
 Leaks today:
@@ -707,7 +707,131 @@ The actor writes grants, persists events, and emits outputs. The lifetime owner 
 
 The workflow releases a claimed live wait only after the actor completes the required grant and journal steps.
 The journal retains durable parent-session approval requests so a UI answer can safely resume interrupted work.
-Live-only child prompts have no journal record and expire after restart.
+Durable child prompts use the same approval owner and request/resolution events.
+The run ID identifies the child. The original child call ID identifies its concrete tool action.
+The workflow retains the original requester, authority, and offered options.
+A later user turn cannot replace those facts.
+The status tool exposes the unresolved prompt count only to the original owner.
+Child prompts do not block an unrelated parent turn or another ready child result.
+The snapshot gate still accounts for all unresolved approval evidence.
+
+The child dispatch gate closes before a cancellation acknowledgement or terminal publication.
+The acknowledgement reports durable cancellation intent. It does not report terminal completion.
+Recovery settles an uncertain child as lost and does not launch a replacement actor.
+A stale answer cannot dispatch a recovered child or grant authority for another child.
+An answer for a call with no open prompt grants nothing and runs nothing.
+Owner: `SessionToolWorkflow.RejectClosedCall`, on the live route and on the idle or recovered route.
+It selects only the nack reason and the notice:
+
+- A second answer to a prompt that has an answer gets reason `approval_already_answered` and an
+  "already has an answer" notice. It does not say "expired", because the prompt did not expire.
+- During the turn, the answer is actor-local in the workflow table. After the turn ends, and after a restart,
+  the durable fact is the tool result of the call in session history.
+- A synthetic abandonment result (text starts with `ParkedToolBatchHistory.AbandonedResultPrefix`) is not an answer.
+- An answer for a call that never existed, a call that recovery removed, or a call that an abandonment
+  closed gets reason `approval_prompt_expired` and the "expired" notice.
+- After a restart, an old child prompt is expired (TA-12), because child calls are not in the parent history.
+
+A valid example: Alice denies a prompt, the turn ends, and her second click on "approve once" gets
+"already has an answer". An invalid example: a forged answer for an unknown call ID gets "expired" and grants nothing.
+
+Child ownership (status and cancel):
+
+- Owner: `LlmSessionActor.ControlChild`. It answers `check_agent_run` for status and for cancel.
+- Check: `HasSameChildRequester`, which calls `TurnContext.CanControlChildRunOf`. The instance is the
+  requesting turn. The argument is the turn that started the run.
+- Two turns that are not reminder turns must match on six facts: session, audience, boundary, channel type,
+  sender ID, and principal classification (`TurnContext.HasSameRequester`). See
+  [requester](../spec/GLOSSARY.md#requester).
+- A reminder turn is a turn with principal `VerifiedAutomation`, source kind `reminder`, and transport authenticity
+  `LocalProcess`. The reminder path sets all three in code. A webhook turn also has `VerifiedAutomation`, and the
+  webhook sender sets its source kind through the event header or the route name. The webhook path sets the
+  authenticity `Verified`, so a webhook turn is not a reminder turn.
+- When the requester or the turn that started the run is a reminder turn, the check compares four facts: session,
+  audience, boundary, and channel type. It ignores the sender ID and the principal (issue #2524, owner decisions of
+  16 and 18 October 2026). Thus a reminder turn and any other turn of one session manage each other's child runs.
+  The other turn can be a person turn or an automated turn, such as the delivery turn of a background job.
+- The check ignores the turn ID, provenance, delivery targets, adopted-context fields, and the
+  interactive approval flag. These fields describe one message, and they change between turns of one person.
+- Data: the `OriginalContext` of the run is durable in the session journal. The context of the request is call-local.
+  The check adds no durable data.
+- The child start keeps the full authority check (`HasSameChildAuthority`, `TurnContext.HasSameAuthority`)
+  for start idempotency. Approval recovery and child continuation also keep the full authority check.
+- Input batching keeps `HasSameRequester`. A reminder input never joins the turn of a person (section 3.1).
+
+| Run started by | Requester | Result |
+| --- | --- | --- |
+| Alice (person) | Alice, a later turn | allowed |
+| Alice | Bob, same session | denied |
+| person (`local`, Operator), TUI session S | reminder fire in S, same audience, boundary, and channel type | allowed |
+| reminder fire in S | person turn in S, same audience, boundary, and channel type | allowed |
+| reminder fire in S | background-job delivery turn in S, same audience, boundary, and channel type | allowed |
+| background-job delivery turn in S | reminder fire in S, same audience, boundary, and channel type | allowed |
+| reminder fire in a shared channel session S | Bob, any person of S | allowed |
+| reminder fire in S | later reminder fire in S | allowed |
+| person in session A | reminder fire in session B | denied |
+| reminder fire in session A | person turn in session B | denied |
+| person | reminder fire with another audience, boundary, or channel type | denied |
+| reminder fire | person turn with another audience, boundary, or channel type | denied |
+| person | turn with `VerifiedAutomation` and another source kind (a webhook) | denied |
+| turn with `VerifiedAutomation` and another source kind | person of another sender | denied |
+| person | webhook turn with source kind `reminder` and authenticity `Verified` | denied |
+| webhook turn with source kind `reminder` and authenticity `Verified` | person, same session | denied |
+
+A valid example: Alice starts a child in a Slack thread turn that quotes earlier messages.
+In a later turn with no quoted context, Alice asks for status and then cancels. Both calls succeed.
+A valid example: an operator starts a child in a TUI session. A `current_session` reminder of that session fires
+and calls `check_agent_run` for the run. The call returns the status.
+An invalid example: Bob asks for the status of Alice's child in the same thread.
+The check denies the request, and Bob does not see the pending approval count.
+A valid example: a reminder fire starts a child in a TUI session. The operator later asks for the status of the run
+in the same session. The call returns the status.
+An invalid example: a reminder turn of session B asks for the status of a child run of session A.
+The check denies the request, because the session differs. The same holds for a person turn of session B and a
+child run that a reminder fire started in session A.
+An invalid example: a webhook sender sends the event header `reminder`. The turn has `VerifiedAutomation` and the
+source kind `reminder`, but its authenticity is `Verified`. The check denies status and cancel for the run of a person.
+A valid example: a background job finishes and its delivery turn runs in the session where a reminder fire started
+a child. The delivery turn asks for the status of the run. The call returns the status.
+A reminder turn that cancels a run grants no tool authority. A child result never grants authority.
+
+Limits of the reminder rule (the owner accepted them on 18 October 2026):
+
+- All reminders of a session share the sender `reminder-system`. A reminder that Bob wrote in a shared channel
+  session can check or cancel a run that Alice started in the same session.
+- In the same way, any turn of a shared channel session can check or cancel a run that a reminder fire started. This
+  includes the turn of any person and the delivery turn of a background job.
+  The session is the unit of trust for a reminder. The audience, boundary, and channel type must still match.
+- Two person turns of different senders still deny each other (Alice and Bob above).
+- A reminder fire that delivers to a channel or to a new session runs in a session that has no relation to the
+  run, so it owns no run of the person's session.
+
+Two focused mutation gates guard the requester checks. `./scripts/run-child-owner-mutations.sh` covers
+`HasSameRequester`. `./scripts/run-child-control-mutations.sh` covers `CanControlChildRunOf` and the reminder turn test.
+The testable rules are the scenario "Status enforces run ownership" of the requirement "Child execution keeps the
+parent's authority", and the requirement
+"A reminder turn shares child runs with the other turns of its own session", in
+[background-subagent-runs](../../openspec/specs/background-subagent-runs/spec.md).
+
+```mermaid
+sequenceDiagram
+    participant Child
+    participant Workflow as SessionToolWorkflow
+    participant Journal
+    participant Owner
+    Child->>Workflow: Concrete call and original authority
+    Workflow->>Journal: ToolApprovalRequested with child correlation
+    Workflow->>Owner: Original options and requester
+    Owner->>Workflow: Answer for this prompt
+    Workflow->>Workflow: Validate requester, options, and live wait
+    Workflow->>Journal: ToolApprovalResolved
+    Workflow->>Child: Exact-call consent
+```
+
+A valid example is Alice's child request that Alice approves while the parent serves another turn.
+An invalid example is Bob's answer to that prompt. The workflow rejects it before consent or a grant.
+A terminal child result is tool output. It never supplies user authority through `InputAdmitted`.
+The parent retains the child's original authority through subsequent tool calls and approvals.
 
 ### 3.7 Advice (support module)
 

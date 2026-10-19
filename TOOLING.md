@@ -27,11 +27,50 @@
 | `scripts/Add-FileHeaders.ps1 -Verify` | CI: check all files have headers (exit 1 if missing) |
 | `scripts/Add-FileHeaders.ps1 -WhatIf` | Preview which files need headers |
 
+## Tool Execution Test Fixtures
+
+Tests that use `DispatchingToolExecutor` must pass the same argument validation as a model call.
+Supply `_rationale` when the test needs a valid call. Omit it only when the test checks rejection.
+Use the test's private paths in both the execution context and the access policy.
+Before testing a later effect, assert the required receipt or result from the real executor.
+An error string can expose an invalid fixture before the intended tool runs.
+A `FakeToolExecutor` result does not prove that the real executor accepts those arguments.
+
 ## Focused Mutation Tests
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
-The job has five Linux matrix groups that run in parallel with the normal test matrix.
+The job has ten Linux matrix groups that run in parallel with the normal test matrix.
 The job timeout is 25 minutes.
+Each Stryker invocation builds the test project and runs the initial test run again. That fixed cost is about 1.5 to 2 minutes per invocation.
+The mutant run itself takes under 1 minute for most spans. Group time is mostly the sum of the invocations of its gates.
+Hosted runs of 2026-10-17 and 2026-10-18 measured these gate times (minutes):
+
+| Group | Gates | Hosted time (about) |
+|-------|-------|---------------------|
+| `verb-chain` | `exact-verb-chain` (seven invocations, 53 mutants, 9 to 17.5) | 9.5 to 18 |
+| `reminder` | `reminder-execution` (4.4), `literal-twin` (2.9), `stream-commit-gate` (2.5), `shutdown-notice-identity` (18 mutants, one invocation, 3.4) | 13.7 (estimate) |
+| `authorization-and-directory` | `tool-authorization` (5.8), `approval-directory` (5.2) | 11.3 |
+| `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2) | 13.3 |
+| `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9) | 8 (estimate) |
+| `shell-command-analysis` | `shell-command-analysis` (two invocations: 303 mutants, up to 15.8, and 27 mutants, up to 4.7) | 14 to 21 |
+| `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2) | 9 to 13 |
+| `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
+| `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4) | 10 to 11 |
+| `child-owner-and-report` | `child-owner` (3.1 to 3.6), `child-control` (about 3 to 3.5), `reminder-report-once` (about 3.5 to 4), `child-approval-close` (6 mutants, about 3 to 3.5, estimate) | 13.5 to 15.5 (estimate) |
+
+The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
+The `authorization-and-directory` and `guard-and-authority` groups were one group, `approval-and-authorization`. That group took 16.5 to 24.6 minutes on the same day and ran near the timeout.
+Each gate there runs Stryker two or three times, so a Stryker run costs 2 to 3 minutes in this group.
+The first CI run of the split took 9 minutes 37 seconds for `verb-chain` and 10 minutes 16 seconds for `reminder`.
+A hosted run of 2026-10-18 put the two gates of #2527 part 2 into `verb-chain` and `guard-and-authority`. Those groups took 21 and 20 minutes.
+`shutdown-notice-identity` took 3.4 minutes and `stop-proof` took 6.9 minutes there. `stop-proof` has its own group, and `shutdown-notice-identity` runs in `reminder`.
+The `shell-analysis` group held three gates. A hosted run of 2026-10-18 took 25 minutes 18 seconds, and the job timeout cancelled it. The `shell-assignment-and-paths` group held three gates and took 21.5 minutes.
+The `session-reliability` group held five gates and took 18.7 minutes. It now holds three gates, and `child-owner-and-report` holds the other two. The `child-approval-close` gate (#2525) joined that group later.
+The `child-control` gate of #2524 runs in `child-owner-and-report` too. The group now holds four gates.
+The `shell-command-analysis` group is still the longest group. Its first invocation (303 mutants) took 15.8 minutes in the slow run. A split of that gate needs a script change and a new expected mutant count for each part. Do not add a gate to this group.
+The `reminder` group took 16.4 minutes in the same run. Do not add a gate to it.
+The hosted runner speed varies, so the time of one gate changes by up to 5 minutes between runs.
+Measure a new gate on a cold runner and update this table.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
 Add a gate to the lightest group when its measured cost fits the timeout and the Windows test duration.
 Use another group under the same job definition when no existing group has that capacity.
@@ -56,15 +95,24 @@ coverage. They do not replace positive and negative behavior tests.
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `SessionInputFlow.PrepareAdmission` drop decision (`TryFindWaitingFire`, `TryReadFireKey`) and `ReminderFireKey.TryParse` | Rule 3: a session drops a newer fire only while an earlier input of the same reminder waits (the definition id matches, the flow's own queue holds that input, and only reminder-kind inputs count; a journal row that nothing will run never blocks); text that is not a fire key is never dropped and never blocks; the parser refuses any text but `{id}:{digits}` | 21 killed | `./scripts/run-reminder-execution-mutations.sh` |
+| `ReminderManagerActor.TombstoneMatches`, `ReminderManagerActor.SettledOccurrenceIsCurrent`, and `ReminderManagerActor.TryRefuseStaleOccurrenceAsync` | A matching tombstone (a one-shot with the same fire time to the millisecond) wins over its definition, and a tombstone never matches a recurring definition; a settlement ends the definition only when its fire time equals the due time of the settled occurrence to the millisecond, so a definition that another save replaced during the run stays; a fire runs only when its due time equals the fire time of the definition, so the occurrence of an earlier definition is refused, and the fire handler returns after the refusal | 8 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `McpArtifactMaterializer.TryAdmit` | Scanner approval and verified MIME both precede MCP artifact storage | 4 killed | `./scripts/run-mcp-artifact-admission-mutations.sh` |
 | `SkillManageTool.GuardMutationTarget` and the filesystem authority link and protection results | A skill mutation cannot follow a link, write a protected path, or skip the atomic-write temp file | 5 killed | `./scripts/run-skill-manage-guard-mutations.sh` |
 | `ToolAccessPolicy.ReadOnlyOccurrences`, the read relaxation in `ToolAccessPolicy.EnforceKnownShellPaths`, `PathAccessPolicy.EvaluateShellReadPath`, `FileSystemAuthority.HoldsReadProtectedPath`, and the read-operand exemption of the `ToolPathPolicy` text screen | Decision D6: a read-only shell program (`cat`, `head`, `tail`, `wc`, `grep`, `jq`, `diff`) with bounded arguments can read one exact config file; only a write-protected path gets read protection; a redirect that writes keeps write protection; a directory operand that holds a read-protected path, a plain word that names an entry, a glob, a brace or `$'...'` word, a `..`, the config directory itself, and program text that names it in any spelling (`//`, `/./`, `name/../`, split quotes) stay denied | 58 killed | `./scripts/run-shell-config-read-mutations.sh` |
 | `ToolApprovalEntryComparer.CoversCommandWords`, `ShellPolicyCoordinator.SelectCommandWordsCorrection`, `ShellApprovalMatcher.TryResolveProgramPath`, `ShellProgramPath.MatchesLegacyRelative`, `ShellApprovalMatcher.ProjectCommandWords`, `ShellGrantFileWords.TryFindEntry`, and `ToolPathPolicy.PlainWordLinkReachesDeniedPath` | A verb grant (two or more words) covers its command words and any later words, and a program-only grant covers its word alone, so a `gh` grant does not cover `gh auth logout`; an empty grant covers nothing; the matcher and the store hygiene use this one rule; Unknown command words get a rewrite correction; a program path names its file (R1), so a `./tool` grant does not cover another file named `tool` or `mytool`; a word after the verb slot that names an existing file or directory leaves the command words and becomes a path scope, while the program word, the verb slot, a link, a word without a file, and a word that is not one entry of the directory stay; a plain word that names a link to a protected path is denied, command word or argument; the store and the doctor use the same rule | 53 detected | `./scripts/run-exact-verb-chain-mutations.sh` |
 | `ShellCommandAnalysis.IsPlainFileTarget` and `ToolAccessPolicy.ScreenNoProgramRedirects` | Owner decision (October 2026): a command that runs no program gets no prompt only when each redirect target is one plain file (`/dev/null` is the only path below `/dev/`, so `/dev/tcp` keeps a prompt); a redirect target that is not proved, an input redirect that the `file_read` rules refuse, and a `Deny` mode of the file tool deny the call | 20 killed | `./scripts/run-no-program-mutations.sh` |
 | `BashLiteralTwinSlices.Apply` and the denial check of `ToolAccessPolicy.ScreenScopedSlices` | Decision F1: the strictest literal twin result decides a call. The candidates of every twin replace the candidates of their source command, an unresolved source keeps its exact answer, twins without their source command fail loudly, and one denied twin denies the call | 9 killed | `./scripts/run-literal-twin-mutations.sh` |
+| `DeliveryRetryHandler.ReminderOf` (turn number check), `DeliveryRetryHandler.TryMarkReported`, the mark reset of `DeliveryRetryHandler.RecordTurn`, and the retry link (`RetriedTurnReminder`, its start in `RecordRetry`, and its end in `RecordTurn` and `Clear`) | A failed post of a reminder reply raises one alert for the right fire: the handler answers only for the latest recorded turn, so a report that names another turn finds an unknown turn and never a reminder; a turn is reported once, a wrong turn, a turn with no reminder, and a second report get nothing, and a new recorded turn starts with a fresh mark; a retry turn keeps the link of the turn that it repeats, and the link ends at the next recorded turn or a new input | 15 killed | `./scripts/run-reminder-report-once-mutations.sh` |
 | `SessionInputFlow.DrainBufferedBatch` (turn owner choice), `SessionInputFlow.JoinsTurn`, and the automation check of `SessionToolWorkflow.PlanNewInputAbandonment` | A turn has one requester: a drain after a turn adopts the authority of the first buffered input, a drain inside a turn keeps the turn's authority, and only inputs of that requester join the batch; automated input waits behind an open approval, and only input from a person closes it | 10 killed | `./scripts/run-input-one-authority-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
-| `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, and `SessionExecutionLifetime.ObserveReapReply` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit | 7 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
+| `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, and `SessionInputFlow.DrainBufferedBatch` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn | 8 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
+| `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run and a turn with one of two open runs each get the right decision (SPEC-004, "Waiting for child runs"). The gate does not cover the missing-field case: `SessionOutputDtoMapper.FromDto` maps a missing field to an empty list, outside the mutated span, and ordinary tests cover it | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
+| `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that is not `Closed`, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
+| `TurnContext.HasSameRequester` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it | 11 killed | `./scripts/run-child-owner-mutations.sh` |
+| `SessionToolWorkflow.CloseChildApprovals` and `SessionToolWorkflow.ExpireRecoveredChildApprovals` | Issue 2525: a cancel record or a terminal record (also the lost record that recovery writes) closes every approval entry of its run in live code. A checkpoint, a prepared result, a parent approval, and an entry of another run stay open. Recovery closes each child entry that remains. A stranded entry can block a snapshot. In live code, an entry that closes too soon drops a prompt that a person can still answer (a checkpoint, another run, or a parent call) | 6 killed | `./scripts/run-child-approval-close-mutations.sh` |
+| `TurnContext.CanControlChildRunOf` and the reminder turn test (`IsReminderTurn`) | Issue #2524: a reminder turn and any other turn of one session manage each other's child runs, and the sender and the principal do not count. The session, audience, boundary, and channel type must still match, so no turn reaches a run of another session. A turn with `VerifiedAutomation` and another source kind, a webhook turn with the reminder source kind (authenticity `Verified`), and a person turn with the reminder source kind, are not reminder turns and keep the six-fact rule | 15 killed | `./scripts/run-child-control-mutations.sh` |
+| The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
+| The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -104,7 +152,7 @@ or lets a redirect run when `file_write` has the `Deny` mode.
 fails before Stryker starts.
 
 The local run took about 4 minutes after package restore, while another build
-ran. CI runs it in the `approval-and-authorization` group of the
+ran. CI runs it in the `guard-and-authority` group of the
 `mutation-gates` job. Its report directory is `artifacts/stryker/no-program`.
 
 ### MCP Artifact Admission Gate
@@ -129,6 +177,50 @@ error in the selected span.
 
 The local run took 1 minute 40 seconds after package restore. The separate CI
 job retains a 10-minute timeout and uploads `mcp-artifact-admission-mutation-report`.
+
+### Shutdown Notice Identity Gate
+
+Run the shutdown notice identity gate:
+
+```bash
+./scripts/run-shutdown-notice-identity-mutations.sh
+```
+
+The script selects the identity block of the shutdown endpoint, between the
+markers `// shutdown-identity:begin` and `// shutdown-identity:end`. A missing
+or duplicated marker fails before Stryker starts. The tests in
+`ShutdownNoticeIdentityMutationTests` run the real endpoint in a test host and
+must kill every mutant: a mutant that accepts a wrong PID, a wrong home, a
+folder inside the home, or a missing value would send a false `daemon.stopping`
+alert or let a CLI of one home stop the daemon of another home. The gate needs
+at least 18 mutants in the span, so a span that lost its checks also fails.
+
+CI runs it in the `reminder` group of the `mutation-gates` job. It took 3.4 minutes on a hosted runner.
+
+### Stop Proof Gate
+
+Run the stop proof gate:
+
+```bash
+./scripts/run-stop-proof-mutations.sh
+```
+
+The script runs Stryker two times: on the marked spans of `DaemonManager.cs`
+(`stale-pid`, `stop-notice`, `stop-proof`) and on the `home-match` span of
+`HomeIdentity.cs`. A missing or duplicated marker fails before Stryker starts.
+`StopProofMutationTests` start a stand-in daemon (a process that shows as
+`netclawd`, a port, and a recording listener) and call `StopAsync` for real.
+They need Linux. A span must not hold an `OperatingSystem` check or a retry
+limit that no test can tell apart on the Linux runner; keep those outside the
+markers, as the HTTP timeout, the `/proc` read, and the handling of a failed
+notice are. The gate tested 32 mutants in `DaemonManager` and 49 in
+`HomeIdentity`, and detected all of them. In `HomeIdentity`, a mutant that
+removes the 40-link bound makes a link cycle spin. Stryker reports that as
+`Timeout`, and the gate counts it as detected, as the exact verb chain gate does.
+In `DaemonManager`, only `Killed` counts.
+
+CI runs it in the `stop-proof` group of the `mutation-gates` job. That group holds this gate alone.
+The gate took 6.9 minutes on a hosted runner, and it made `guard-and-authority` take 20 minutes.
 
 ### Stream Commit Gate
 
@@ -158,7 +250,7 @@ load-bearing invariant in the retry and failover clients, not a security or
 authority check.
 
 The local run took about 2 minutes after package restore. CI runs it in the
-`verb-chain-and-reminder` group of the `mutation-gates` job. Its report
+`reminder` group of the `mutation-gates` job. Its report
 directory is `artifacts/stryker/stream-commit-gate`.
 
 ### Session Reliability Gate
@@ -192,7 +284,7 @@ Stryker changes `!item.IsReplay` to `item.IsReplay`.
 The linked `SessionInputFlowTests` source kills this mutant when fresh buffered input must start a new turn.
 The linked `ProcessingWatchdogTests` source supplies the existing timer fake without an actor test host.
 The selectors reject missing or repeated source markers before Stryker starts.
-The gate requires one killed mutant in each single-expression span and two killed history mutants.
+The gate requires one killed mutant in each of six single-expression spans and two killed history mutants.
 It fails for no mutant, a survivor, or a compile error in a selected span.
 
 The combined local calibration took 1 minute 56 seconds with a warm build cache.
@@ -204,9 +296,173 @@ The seven-mutant local run took 1 minute 48 seconds with a warm build cache.
 The eight-mutant combined local run took 2 minutes 6 seconds with a warm build cache.
 Hosted run `38448179312` took 15 to 21 minutes for the four existing matrix groups.
 Its Windows test took 16 minutes 6 seconds. A target in any of those four groups would extend that critical path.
-All seven targets run in one Stryker invocation in the existing `session-reliability` group.
+All seven source spans produce eight expected mutants in one Stryker invocation in the `session-reliability` group.
 Hosted CI must measure the combined gate on a cold runner.
 Its report directory is `artifacts/stryker/tool-batch-readiness`.
+
+### Headless Stop Rule Gate
+
+Run the headless stop rule gate:
+
+```bash
+./scripts/run-headless-stop-rule-mutations.sh
+```
+
+The script selects the stop decision in `HeadlessChannel`. The source marks it with
+`// <headless-stop-rule>` and `// </headless-stop-rule>`. The selector rejects a missing or repeated
+marker before Stryker starts. The gate expects the decision in this form:
+
+```csharp
+// <headless-stop-rule>
+internal static bool EndsRun(TurnCompleted turn)
+{
+    if (turn.Outcome == TurnOutcome.Failed)
+        return true;
+
+    return !turn.OpenChildRunIds.Any();
+}
+// </headless-stop-rule>
+```
+
+Stryker makes three mutants in that form: `==` to `!=`, `true` to `false`, and the removal of `!`.
+A different form (for example one expression with `||`) gives a different mutant count, and the gate
+fails until the owner of the gate reviews the new count.
+
+`netclaw chat -p` sends one prompt, and a turn that calls `spawn_agent` returns `accepted` before the
+child finishes. A wrong stop rule has two failures. The run exits at the first turn and loses the child
+result, or it waits for a turn that never comes. The gate guards the rule with the real channel and a
+fake daemon transport. `Netclaw.Cli.MutationTests` holds the tests. They cover these cases:
+
+- an open run keeps the wait, and a turn that reports none ends the run
+- one open run of two keeps the wait
+- a failed turn ends the run even when a run is open
+- a skipped turn with an open run keeps the wait
+- a turn from an earlier daemon, without the field, ends the run (the test passes through the mapper default `dto.OpenChildRunIds is null ? [] : ...` in `SessionOutputDtoMapper.FromDto`; that default is outside the mutated span, so no `EndsRun` mutant depends on this test)
+
+A mutant that makes the run wait for ever hits the fault ceiling of the tests. Stryker reports it as a
+timeout. The gate counts a timeout as a detection. It fails for a survivor, a compile error, or a mutant
+outside the selected span.
+
+The local run took 10 minutes 30 seconds from a cold Release build. Stryker took 1 minute 59 seconds.
+Hosted CI must measure the gate on a cold runner. CI runs it in the `session-reliability` group of the
+`mutation-gates` job. Its report directory is `artifacts/stryker/headless-stop-rule`.
+
+### Open Child Runs Gate
+
+Run the open child runs gate:
+
+```bash
+./scripts/run-open-child-runs-mutations.sh
+```
+
+The script selects the producer of `TurnCompleted.OpenChildRunIds` in `SessionState.ChildRuns.cs`. The source marks
+it with `// <open-child-runs>` and `// </open-child-runs>`. The span holds `GetExecutableChildRuns` and
+`GetOpenChildRunIds`. The selector rejects a missing or repeated marker before Stryker starts.
+
+Stryker makes four mutants in the span. The gate fails for a survivor, a compile error, or a mutant outside the
+selected span. A different form of the span gives a different mutant count, and the gate fails until the owner of
+the gate reviews the new count.
+
+A headless run waits while the list is not empty. A wrong list has two failures. A run that is missing from the
+list ends the run early and loses the child result. A run that stays in the list makes the run wait for a turn that
+never comes. `OpenChildRunsMutationTests` in `Netclaw.Actors.MutationTests` builds a `SessionState` directly. It
+uses no actor, no timer, and no delay. It covers these cases:
+
+- a run in each lifecycle before `Closed` is open
+- a `Closed` run is not open
+- a run that the legacy reader quarantined is not open, and evidence that is not an unresolved child does not quarantine
+- the list keeps acceptance order, then run id order
+
+The local Stryker run took 1 minute 52 seconds. CI runs the gate in the `session-reliability` group of the
+`mutation-gates` job. That group holds three gates and takes 10 to 11 minutes on a hosted runner. The child owner
+and report-once gates run in the `child-owner-and-report` group. Its report directory is
+`artifacts/stryker/open-child-runs`.
+
+### Child Owner Gate
+
+Run the child owner gate:
+
+```bash
+./scripts/run-child-owner-mutations.sh
+```
+
+The script selects the body of `TurnContext.HasSameRequester`.
+`LlmSessionActor.ControlChild` uses this check for child status and cancel.
+Stryker inverts each of the six field comparisons and changes each of the five `&&` operators to `||`.
+The linked `TurnContextRequesterTests` source must kill all 11 mutants.
+A stranger that differs in one requester field must not own the child.
+A later turn of the owner that differs only in per-turn fields must keep the child.
+The selector rejects a missing or repeated source marker before Stryker starts.
+The gate fails for a survivor, a changed mutant count, or a compile error in the span.
+
+The span does not include the `HasSameRequester(right) &&` line in `TurnContext.HasSameAuthority` or the call in `ControlChild`.
+Unit tests and actor tests cover those two lines.
+
+The final local run killed 11 of 11 mutants in 1 minute 59 seconds with a warm build cache.
+A review run took 2 minutes 36 seconds with a cold report directory.
+A run on a machine with other builds in progress took 6 minutes 11 seconds.
+CI runs it in the `child-owner-and-report` group of the `mutation-gates` job.
+That group holds four gates (with the child control and child approval close gates) and takes about 13.5 to 15.5 minutes on a hosted runner (estimate).
+Its report directory is `artifacts/stryker/child-owner`.
+
+### Child Approval Close Gate
+
+Run the child approval close gate:
+
+```bash
+./scripts/run-child-approval-close-mutations.sh
+```
+
+The script selects the span in `SessionToolWorkflow.Children.cs` between `// <child-approval-close>` and
+`// </child-approval-close>`. The span holds `ExpireRecoveredChildApprovals` and `CloseChildApprovals`. The selector
+rejects a missing or repeated marker before Stryker starts.
+
+Stryker makes six mutants in the span. The gate fails for a survivor, a compile error, a mutant outside the span, or
+a changed mutant count. A different form of the span gives a different count, and the owner of the gate must review it.
+
+The approval table of a session holds child approvals, and `AllowsSnapshot` needs an empty table. One rule closes a
+child approval in live code: the cancel record or the terminal record of its run. The live Persist callbacks call
+`CloseChildApprovals`. Recovery calls `ExpireRecoveredChildApprovals` in `RecoveryCompleted`, and it closes every child
+entry that replay left open. `ChildApprovalCloseMutationTests` in
+`Netclaw.Actors.MutationTests` builds the table directly. It uses no actor, no timer, and no delay. It covers these cases:
+
+- a cancel record, a terminal record, and a lost terminal record close the pending and the resolved entries of the run
+- a checkpoint and a prepared result close nothing
+- a record closes only its own run (`run-1` is a prefix of `run-10`) and never a parent approval
+- a record for a run with no entry changes nothing
+- recovery closes every child entry and keeps a parent entry
+
+The local Stryker run took 2 minutes 14 seconds on a warm build cache. CI runs the gate in the `child-owner-and-report`
+group of the `mutation-gates` job. Its report directory is `artifacts/stryker/child-approval-close`.
+
+### Child Control Gate
+
+Run the child control gate:
+
+```bash
+./scripts/run-child-control-mutations.sh
+```
+
+The script selects the body of `TurnContext.CanControlChildRunOf` and the property `IsReminderTurn`, from the start of the method to the end of the property.
+`LlmSessionActor.ControlChild` uses this check for child status and cancel (issue #2524).
+The `HasSameRequester` gate does not cover it, because the input join rule also uses `HasSameRequester`.
+Stryker makes 15 mutants: the choice between the relaxed rule and the six-fact rule (two mutants), the `||` between the two sides (one), each of the four kept facts (four equality mutants and three `&&` mutants), and the three parts of the reminder test (one equality mutant for each part and two `&&` mutants).
+The linked `TurnContextChildControlTests` source must kill all 15 mutants.
+A reminder turn that differs in a kept fact must not control the run, and the same holds for a person turn and a run that a reminder turn started.
+A reminder turn must ignore the sender and the principal of the other turn.
+A webhook turn (also one with the reminder source kind and the authenticity `Verified`), a turn with no source kind, and a person turn with the reminder source kind must not get the relaxation, as requester or as run starter.
+Any other turn of the session, such as the delivery turn of a background job, gets it.
+The selector rejects a missing or repeated source marker before Stryker starts.
+The gate fails for a survivor, a changed mutant count, or a compile error in the span.
+
+The span does not include `LlmSessionActor.HasSameChildRequester`, the call in `ControlChild`, or `HasSameAuthority`.
+`ChildOwnerActorSpecs` covers the call path.
+
+The first local run killed 15 of 15 mutants. Stryker took 2 minutes 7 seconds with a warm build cache.
+CI runs it in the `child-owner-and-report` group of the `mutation-gates` job.
+That group now holds four gates.
+Its report directory is `artifacts/stryker/child-control`.
+Measure the group on a cold hosted runner and update the table.
 
 ### Tool Authorization Gate
 
@@ -268,7 +524,7 @@ The gate fails for a survivor or a changed mutant count. A mutant that becomes a
 The eight-mutant local run took 2 minutes 33 seconds with a warm build cache.
 The ten-mutant local run took 2 minutes 3 seconds on a quiet host and 4 minutes 29 seconds while other builds ran.
 The automation spans add two mutants and one linked test class. The change in run time is inside the noise between runs.
-CI runs it in the `approval-and-authorization` group of the `mutation-gates` job.
+CI runs it in the `guard-and-authority` group of the `mutation-gates` job.
 Its report directory is `artifacts/stryker/input-one-authority`.
 
 ### Tool Authorizer Order Gate
@@ -303,7 +559,7 @@ under a bounded profile, and a protected path with a grant.
 
 The tests pick the host shell and a temporary root without links, so they also
 pass in the normal Windows and macOS test jobs. The local run took about
-2 minutes after package restore. CI runs it in the `shell-analysis` group of the
+2 minutes after package restore. CI runs it in the `config-read-and-admission` group of the
 `mutation-gates` job. Its report directory is
 `artifacts/stryker/tool-authorizer-order`.
 
@@ -343,7 +599,8 @@ argument, and the program word does not count. `ExactVerbChainMutationTests` and
 duplicated span fails before Stryker starts.
 
 The local run took about 1 minute after package restore. CI runs it in the
-`verb-chain-and-reminder` group of the `mutation-gates` job. Its report
+`verb-chain` group of the `mutation-gates` job. It takes about 14.5 minutes there,
+because its seven Stryker invocations each build and run the initial tests. Its report
 directory is `artifacts/stryker/exact-verb-chain`.
 
 ### Approval Directory Gate
@@ -409,6 +666,41 @@ The separate CI job retains a 10-minute timeout and uploads `approval-directory-
 Its report directory is `artifacts/stryker/approval-directory`.
 The durable actor report is below its `actor` directory.
 
+### Reminder Report-Once Gate
+
+Run the reminder report-once gate:
+
+```bash
+./scripts/run-reminder-report-once-mutations.sh
+```
+
+The script reuses the xUnit 2 harness of `Netclaw.Actors.MutationTests` and selects eight spans of `DeliveryRetryHandler`:
+
+| Boundary | Expected mutants | Killed |
+|----------|------------------|--------|
+| `ReminderOf` turn check: the answer for a turn that is not the latest recorded turn | Reverse the turn comparison | 1 |
+| `TryMarkReported` guard: wrong turn, no reminder, or already reported | Reverse a comparison, change a logical operator, negate the guard, or return true | 6 |
+| `TryMarkReported` mark: the once-only mark | Set the mark to false, or return false | 2 |
+| `RecordTurn` mark reset: a new recorded turn starts unreported | Set the mark to true | 1 |
+| `Clear` retry-link end: a new input ends the link of a pending retry | Set the pending flag to true | 1 |
+| `RecordTurn` retry-link end: the link reaches only the retry turn | Set the pending flag to true | 1 |
+| `RecordRetry` retry-link start: a retry keeps the link of the turn that it repeats | Set the pending flag to false | 1 |
+| `RetriedTurnReminder`: the link only while a retry is pending | Replace the condition with true or with false | 2 |
+
+Each location must kill all of its mutants. The report must contain exactly 15 tested mutants.
+`DeliveryRetryHandlerReminderTests` kills all of them. The mutation project links that class, and the
+script adds no new test. The gate fails if a target is absent, ignored, survives, or cannot compile.
+The selector rejects absent or duplicate source markers before Stryker starts.
+
+This gate protects an alerting path, not an authority boundary. A mutant that makes `ReminderOf` ignore the
+turn number would let a report for another turn name the wrong fire. A mutant on the mark would raise one alert for
+each failed post of one reply, or none. A mutant on the retry link would hide the final failure of a retried
+child-delivery turn, or give a later person's turn the link of a reminder.
+CI runs it in the `child-owner-and-report` group of the `mutation-gates` job, with the child owner and child control gates.
+The gate took 2 to 4 minutes in its hosted runs. The group takes 7 to 8 minutes.
+The local run selected 15 mutants. The whole script took 114 seconds, which includes the Stryker build.
+Its report directory is `artifacts/stryker/reminder-report-once`.
+
 ### Reminder Execution Gate
 
 Run the reminder execution gate:
@@ -431,9 +723,15 @@ The script reuses the xUnit 2 harness and selects these spans:
 | Incoming key read | Skip or invert the incoming fire key read | 2 |
 | Reminder-kind check | Change the kind comparison or the parse condition of a stored input | 2 |
 | Fire key parser | Change the null, separator, or digit checks | 11 |
+| Tombstone match | Change the one-shot test, the fire-time comparison, or the operator that joins them | 3 |
+| Settled occurrence check | Change the fire-time comparison of the settlement | 1 |
+| Stale occurrence refusal | Negate the fire-path check of the due time, or flip its result | 2 |
+| Stale occurrence return | Remove the `return` after the refusal, or negate its condition | 2 |
 
-Each location must kill all of its mutants. The report must contain exactly 26 tested mutants.
-`ReminderFireDropRuleTests` and `ReminderFireKeyTests` kill the last five locations.
+Each location must kill all of its mutants. The report must contain exactly 34 tested mutants.
+`ReminderFireDropRuleTests` and `ReminderFireKeyTests` kill the five locations before the last two.
+`OneShotEndMutationTests` kills the tombstone match, the settled occurrence check, and the stale occurrence refusal.
+Each case there reads the files that the manager leaves behind, and none depends on a timer.
 The gate fails if a target is absent, ignored, survives, exceeds its time limit, or cannot compile.
 The selector rejects absent or duplicate source markers before Stryker starts.
 Unrelated compiler errors do not count as tested mutants.
@@ -467,7 +765,8 @@ Thus, the cleanup mutant targets the tracker dictionary, not the manager's `TryR
 An explicit local deletion of that call must also make the cleanup cases fail before this gate changes.
 
 The five-mutant local run took 122 seconds after package restore.
-The separate CI job retains a 10-minute timeout and uploads `reminder-execution-mutation-report`.
+The thirty-mutant local run took 132 seconds of Stryker time.
+CI runs it in the `reminder` group of the `mutation-gates` job. It takes about 4.3 minutes there.
 Its report directory is `artifacts/stryker/reminder-execution`.
 
 ### Skill Manage Guard Gate

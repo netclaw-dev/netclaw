@@ -3,14 +3,17 @@
 # Exposure Mode is a post-install Security & Access leaf, not an init-wizard
 # step. This tape exercises the configured route:
 #   netclaw config -> Security & Access -> Exposure Mode
-# verifies the reverse-proxy branch, then returns to Local.
+# verifies the reverse-proxy branch, then returns to Local. The seed is a Team
+# install, so the tape also proves that the save keeps Security and Tools.
 
 Output "/tmp/tape-config-exposure.gif"
 
-# ─── Seed minimal installed config ───────────────────────────────────
+# ─── Seed a Team install with unrelated Daemon keys ─────────────────
 Type "mkdir -p $NETCLAW_HOME/config"
 Enter
-Type "jq -n '{configVersion:1, Daemon:{Port:5299, DisableSelfUpdate:true}}' > $NETCLAW_HOME/config/netclaw.json"
+Type "export posture=Team shell=SandboxOnly channel=beta"
+Enter
+Type "jq -n '{configVersion:1, Security:{DeploymentPosture:$ENV.posture, ShellExecutionMode:$ENV.shell, StrictDefaults:true}, Tools:{ShellMode:$ENV.shell}, Daemon:{Port:5299, DisableSelfUpdate:true, UpdateChannel:$ENV.channel}}' > $NETCLAW_HOME/config/netclaw.json"
 Enter
 
 # ─── Launch config dashboard ─────────────────────────────────────────
@@ -60,7 +63,7 @@ Ctrl+Q
 Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
-Type "REVERSE_PROXY=reverse-proxy BIND_HOST=0.0.0.0 PROXY_CIDR=10.0.0.0/24 jq -e '.Daemon.ExposureMode == env.REVERSE_PROXY and .Daemon.Host == env.BIND_HOST and .Daemon.TrustedProxies[0] == env.PROXY_CIDR' $NETCLAW_HOME/config/netclaw.json"
+Type "REVERSE_PROXY=reverse-proxy BIND_HOST=0.0.0.0 PROXY_CIDR=10.0.0.0/24 jq -e '.Daemon.ExposureMode == env.REVERSE_PROXY and .Daemon.Host == env.BIND_HOST and .Daemon.TrustedProxies[0] == env.PROXY_CIDR and .Security.DeploymentPosture == env.posture and .Security.ShellExecutionMode == env.shell and .Daemon.Port == 5299 and .Daemon.UpdateChannel == env.channel' $NETCLAW_HOME/config/netclaw.json"
 Enter
 Wait+Screen@5s /true/
 Type "echo CONFIG_EXPOSURE_REVERSE_PROXY_ASSERT=$?"

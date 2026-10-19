@@ -55,7 +55,7 @@ read -r inspection_span_start inspection_span_end inspection_line inspection_col
 
 read -r history_span_start history_span_end history_line history_column history_end_column < <(
   perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
-    $marker = "userAlreadyInHistory ? closed.History : closed.History.Add(evt.UserMessage)";
+    $marker = "userAlreadyInHistory || evt.ChildContinuation is not null";
     $start = index($_, $marker);
     die "The terminal history choice marker is missing or duplicated.\n"
       if $start < 0 || index($_, $marker, $start + 1) >= 0;
