@@ -175,6 +175,65 @@ public sealed class PerCommandJudgmentMutationTests : IDisposable
         Assert.Equal(allowed, decision is AuthorizationDecision.Allowed);
     }
 
+    // A Team write profile makes a trust zone that its read profile does not
+    // reach. The shell tool needs the Personal audience, so this test calls the
+    // reviewed-safe policy directly. A known path in a write-only folder keeps
+    // the prompt, and the same command in the read roots does not.
+    [Theory]
+    [InlineData("read", true)]
+    [InlineData("write-only", false)]
+    public void A_safe_phrase_does_not_read_a_Team_write_only_folder(string folder, bool allowed)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var writeOnly = Path.Combine(_paths.BasePath, "write-only");
+        var readRoot = Path.Combine(_paths.BasePath, "read");
+        Directory.CreateDirectory(writeOnly);
+        Directory.CreateDirectory(readRoot);
+        var config = new ToolConfig();
+        config.AudienceProfiles.GlobalReadRoots = [];
+        config.AudienceProfiles.Team.ReadFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [readRoot]
+        };
+        config.AudienceProfiles.Team.WriteFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [readRoot, writeOnly]
+        };
+        var policy = new ReviewedSafeShellPolicy(
+            SafeVerbList.FromVerbs(ApprovalShell.Bash, ["cat", "whoami"]),
+            new PathAccessPolicy(
+                config,
+                _paths,
+                new ToolPathPolicy(ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux), [_paths.ConfigDirectory])));
+        var context = new ToolInvocationContext(
+            new ToolRunScope
+            {
+                Session = new ToolSessionScope.Bound("signalr/per-command-mutation", _storage),
+                Audience = TrustAudience.Team,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Team),
+                InlineOutputBudget = InlineOutputBudget.Default,
+                InteractiveApproval = new InteractiveApprovalCapability.Unavailable()
+            },
+            ToolExecutionTimeout.Default);
+        var target = folder == "read" ? readRoot : writeOnly;
+        var candidate = Assert.Single(
+            new ShellApprovalMatcher(ShellExecutionEnvironmentDefaults.Bash).AnalyzeInvocation(
+                new ToolName(ShellTool.ToolName),
+                new Dictionary<string, object?>
+                {
+                    ["Command"] = $"cat \"{readRoot}/$(whoami).txt\" {target}/notes.txt",
+                    ["WorkingDirectory"] = readRoot
+                }).CommandCandidates,
+            static candidate => candidate.Verb.StartsWith("cat ", StringComparison.Ordinal));
+        Assert.Equal(ShellUnresolvedPart.Operand, candidate.Unresolved);
+
+        Assert.Equal(allowed, policy.ShortCircuits(candidate, readRoot, context));
+    }
+
     // A source that the parser cannot split keeps one exact answer for the call.
     [Fact]
     public async Task An_unparseable_source_keeps_one_exact_answer()
