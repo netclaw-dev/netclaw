@@ -130,6 +130,31 @@ Processes share this authority only when they use the same Netclaw home and key 
 
 **Code anchor:** `LocalControlPairingProofProtector`
 
+### Operator
+
+The Operator is the person who runs a Netclaw host and answers its consent
+requests. This entry defines the person. The [Operator principal](#operator-principal)
+entry defines the value that the daemon gives to a request.
+
+### Operator principal
+
+The Operator principal is the `PrincipalClassification.Operator` value in the
+claims of an authenticated request. It states that the request has the authority
+of the [Operator](#operator). A local-trust scheme or a paired device gives the
+value. The daemon gives it to a [loopback request](#loopback-request) in `local`
+exposure mode only after the Host and Origin test passes.
+
+**Code anchor:** `PrincipalClassification.Operator`
+
+### Loopback request
+
+A loopback request reaches the daemon from a loopback source address
+(`127.0.0.0/8` or `::1`). The source address alone does not prove that the
+Operator made the request, because a web page in the Operator's browser can
+reach the same address. The daemon also checks the `Host` and `Origin` headers.
+
+**Code anchor:** `LoopbackAuthenticationHandler`
+
 ### Pairing code
 
 A pairing code is a temporary credential for one device registration.

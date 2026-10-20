@@ -43,7 +43,7 @@ The job has ten Linux matrix groups that run in parallel with the normal test ma
 The job timeout is 25 minutes.
 Each Stryker invocation builds the test project and runs the initial test run again. That fixed cost is about 1.5 to 2 minutes per invocation.
 The mutant run itself takes under 1 minute for most spans. Group time is mostly the sum of the invocations of its gates.
-Hosted runs of 2026-10-17 and 2026-10-18 measured these gate times (minutes):
+Hosted runs from 2026-10-17 through 2026-10-19 measured these gate times (minutes):
 
 | Group | Gates | Hosted time (about) |
 |-------|-------|---------------------|
@@ -56,7 +56,7 @@ Hosted runs of 2026-10-17 and 2026-10-18 measured these gate times (minutes):
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4) | 10 to 11 |
-| `child-owner-and-report` | `child-owner` (3.1 to 3.6), `child-control` (about 3 to 3.5), `reminder-report-once` (about 3.5 to 4), `child-approval-close` (6 mutants, about 3 to 3.5, estimate) | 13.5 to 15.5 (estimate) |
+| `child-owner-and-report` | `child-owner` (3.2), `child-control` (2.8), `reminder-report-once` (2.7), `child-approval-close` (2.7), `loopback-host-origin` (two invocations, 4.3) | 16.0 (one run) |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
 The `authorization-and-directory` and `guard-and-authority` groups were one group, `approval-and-authorization`. That group took 16.5 to 24.6 minutes on the same day and ran near the timeout.
@@ -66,7 +66,11 @@ A hosted run of 2026-10-18 put the two gates of #2527 part 2 into `verb-chain` a
 `shutdown-notice-identity` took 3.4 minutes and `stop-proof` took 6.9 minutes there. `stop-proof` has its own group, and `shutdown-notice-identity` runs in `reminder`.
 The `shell-analysis` group held three gates. A hosted run of 2026-10-18 took 25 minutes 18 seconds, and the job timeout cancelled it. The `shell-assignment-and-paths` group held three gates and took 21.5 minutes.
 The `session-reliability` group held five gates and took 18.7 minutes. It now holds three gates, and `child-owner-and-report` holds the other two. The `child-approval-close` gate (#2525) joined that group later.
-The `child-control` gate of #2524 runs in `child-owner-and-report` too. The group now holds four gates.
+The `child-control` gate of #2524 runs in `child-owner-and-report` too. The group holds five gates with `loopback-host-origin`.
+
+A [hosted run on 2026-10-19](https://github.com/netclaw-dev/netclaw/actions/runs/39340209966/job/118359593287) measured 15 minutes 57 seconds for that group.
+All five gates passed. The total includes checkout, tool restore, and report upload. It excludes queue time. The loopback gate took 4 minutes 15 seconds.
+
 The `shell-command-analysis` group is still the longest group. Its first invocation (303 mutants) took 15.8 minutes in the slow run. A split of that gate needs a script change and a new expected mutant count for each part. Do not add a gate to this group.
 The `reminder` group took 16.4 minutes in the same run. Do not add a gate to it.
 The hosted runner speed varies, so the time of one gate changes by up to 5 minutes between runs.
@@ -105,6 +109,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `DeliveryRetryHandler.ReminderOf` (turn number check), `DeliveryRetryHandler.TryMarkReported`, the mark reset of `DeliveryRetryHandler.RecordTurn`, and the retry link (`RetriedTurnReminder`, its start in `RecordRetry`, and its end in `RecordTurn` and `Clear`) | A failed post of a reminder reply raises one alert for the right fire: the handler answers only for the latest recorded turn, so a report that names another turn finds an unknown turn and never a reminder; a turn is reported once, a wrong turn, a turn with no reminder, and a second report get nothing, and a new recorded turn starts with a fresh mark; a retry turn keeps the link of the turn that it repeats, and the link ends at the next recorded turn or a new input | 15 killed | `./scripts/run-reminder-report-once-mutations.sh` |
 | `SessionInputFlow.DrainBufferedBatch` (turn owner choice), `SessionInputFlow.JoinsTurn`, and the automation check of `SessionToolWorkflow.PlanNewInputAbandonment` | A turn has one requester: a drain after a turn adopts the authority of the first buffered input, a drain inside a turn keeps the turn's authority, and only inputs of that requester join the batch; automated input waits behind an open approval, and only input from a person closes it | 10 killed | `./scripts/run-input-one-authority-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
+| `LoopbackHostOriginPolicy` (the Host and Origin rule and `IsEmptyOrPortSuffix`), `LoopbackHostName.IsStrictLoopback`, and the refusal call in `LoopbackAuthenticationHandler.HandleAuthenticateAsync` | Loopback operator trust needs a loopback Host name, and an `Origin` header must equal `http://` plus the Host: a foreign page cannot reach the daemon by DNS rebinding or a cross-site request | 41 killed | `./scripts/run-loopback-host-origin-mutations.sh` |
 | `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, and `SessionInputFlow.DrainBufferedBatch` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn | 8 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
 | `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run and a turn with one of two open runs each get the right decision (SPEC-004, "Waiting for child runs"). The gate does not cover the missing-field case: `SessionOutputDtoMapper.FromDto` maps a missing field to an empty list, outside the mutated span, and ordinary tests cover it | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
 | `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that is not `Closed`, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
@@ -252,6 +257,48 @@ authority check.
 The local run took about 2 minutes after package restore. CI runs it in the
 `reminder` group of the `mutation-gates` job. Its report
 directory is `artifacts/stryker/stream-commit-gate`.
+
+### Loopback Host and Origin Gate
+
+Run the loopback Host and Origin gate:
+
+```bash
+./scripts/run-loopback-host-origin-mutations.sh
+```
+
+The script runs Stryker twice. The first run selects two spans of `LoopbackAuthenticationHandler.cs`:
+
+- the call in `HandleAuthenticateAsync` that fails authentication when the policy returns a refusal
+- all of `LoopbackHostOriginPolicy`: `FindRefusal`, the loopback name test, and `IsEmptyOrPortSuffix`
+
+The second run selects all of `LoopbackHostName.cs` in `Netclaw.Configuration`. That file holds the strict name test. The policy calls it directly, and the bind validator `DaemonExposureValidator.IsLoopbackHost` builds on it. Request admission depends on the strict test, so a widening of it is a security change. `LoopbackHostCouplingGuardTests` run with the gate, so a widening of the validator that lets a DNS name reach the Host check fails the initial test run.
+
+A loopback source address does not prove that the operator made the request. A web
+page in the operator's browser sends a foreign `Host` (DNS rebinding) or a foreign
+`Origin` (cross-site request). The gate requires 41 killed mutants: 33 in the first run and 8 in the second. They cover
+these cases:
+
+- the handler fails authentication for a refusal and grants the Operator identity for an admitted request
+- a foreign Host name is refused even when the Origin matches it
+- an IP literal of `127.0.0.0/8` or `[::1]`, and `localhost`, are admitted
+- a legacy IP spelling (`127.1`, `0x7f.1`, `2130706433`), an IPv4-mapped IPv6 literal, `0.0.0.0`, a DNS name that resolves to loopback, and a half-bracketed or whitespace name are refused
+- a port suffix has one to five digits
+- a loopback Host with a foreign, `null`, `https://`, other-port, or repeated Origin is refused
+- a loopback Host with no Origin, or an Origin equal to `http://` plus the Host, is admitted
+- the refusal reason names the failed header
+
+The log write in `HandleChallengeAsync` is outside this gate. A deterministic
+test covers it (`LoopbackRefusalLogTests`), and a mutant there cannot admit a request.
+
+The selector rejects a missing or repeated source marker before Stryker starts.
+The gate fails for a survivor or a changed mutant count. A mutant that becomes a
+compile error changes the count. Stryker makes 4 such mutants in the selected
+spans (the `origin.Count` comparisons and `Sum` replacements in `FindRefusal`).
+The count of 41 excludes them.
+
+The local run took 2 to 3 minutes after package restore. CI runs it in the
+`child-owner-and-report` group of the `mutation-gates` job. Its report directory is
+`artifacts/stryker/loopback-host-origin`.
 
 ### Session Reliability Gate
 
