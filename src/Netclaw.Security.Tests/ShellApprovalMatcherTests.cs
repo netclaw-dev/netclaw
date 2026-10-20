@@ -43,6 +43,72 @@ public sealed class ShellApprovalMatcherTests
     public static bool IsPosix => !OperatingSystem.IsWindows();
     public static bool IsWindows => OperatingSystem.IsWindows();
 
+    /// <summary>
+    /// A grant for one bare program word covers only that word alone. It covers
+    /// no subcommand of the same program.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ToolApprovalEntryComparer.CoversCommandWords"/> refuses a
+    /// one-word grant against a longer call, so a click that stores <c>uv</c>
+    /// authorizes only a bare <c>uv</c>. The matcher reports the later
+    /// <c>uv run</c> call as a token near miss.
+    /// </remarks>
+    [Fact]
+    public void Single_word_program_grant_covers_no_subcommand_call()
+    {
+        var grant = ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["uv"]);
+        var subcommand = new ApprovalCandidate("uv run", Directory: null)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = ["uv", "run"],
+        };
+        var bare = new ApprovalCandidate("uv", Directory: null)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = ["uv"],
+        };
+
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(bare, "/work", [grant]));
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(subcommand, "/work", [grant]));
+
+        var evaluation = ApprovalPatternMatching.EvaluateShellApproval(
+            subcommand, "/work", [grant], maximumNearMisses: 1);
+        Assert.Null(evaluation.MatchedEntry);
+        Assert.Equal(
+            ShellApprovalNearMissReason.TokenMismatch,
+            Assert.Single(evaluation.NearMisses).Reason);
+    }
+
+    /// <summary>
+    /// The parser drops the <c>-u</c> option word, so an <c>env -u NAME</c> call
+    /// and an <c>env NAME=value</c> call give the same command words. One grant
+    /// covers both spellings.
+    /// </summary>
+    /// <remarks>
+    /// The two forms are not the same program behavior: one unsets a variable,
+    /// the other sets it. A grant for either covers both. This test records that
+    /// the matcher treats them alike, so a change to that rule is a deliberate
+    /// one.
+    /// </remarks>
+    [Theory]
+    [InlineData("env -u DOTNET_SKILLS_REPO uv run pytest -q")]
+    [InlineData("env DOTNET_SKILLS_REPO uv run pytest -q")]
+    public void Env_prefix_normalizes_both_spellings_to_one_grant(string command)
+    {
+        var analysis = _matcher.AnalyzeInvocation(new ToolName("shell_execute"), Args(command));
+
+        var candidate = Assert.Single(
+            analysis.Candidates,
+            item => item.VerbTokens is [{ }, ..] && item.VerbTokens[0] == "env");
+        Assert.Equal(
+            ["env", "DOTNET_SKILLS_REPO", "uv", "run", "pytest"],
+            candidate.VerbTokens);
+
+        var grant = ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.Bash, ["env", "DOTNET_SKILLS_REPO", "uv", "run", "pytest"]);
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(candidate, "/work", [grant]));
+    }
+
     [Theory]
     [InlineData("pwsh -NoProfile -Command 'git status'", "pwsh")]
     [InlineData("powershell.exe -File script.ps1", "powershell.exe")]

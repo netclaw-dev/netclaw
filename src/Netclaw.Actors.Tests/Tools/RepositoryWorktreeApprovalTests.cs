@@ -560,6 +560,65 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
         }
     }
 
+    /// <summary>
+    /// A repository verb grant covers a command whose redirect names the null
+    /// device. It does not cover the same command when a redirect names a file
+    /// outside the repository.
+    /// </summary>
+    /// <remarks>
+    /// The null device writes no file, so it gives the candidate no path scope
+    /// and the cwd half of the grant applies. A real file gives the candidate
+    /// that folder as its scope, and a repository grant covers only worktrees of
+    /// its own repository (TA-8). A model that sends a log or an export outside
+    /// the repository therefore re-prompts a verb it approved a minute before.
+    /// </remarks>
+    [Fact]
+    public async Task Repository_verb_grant_covers_the_null_device_but_not_an_outside_file()
+    {
+        var root = CreateTestRoot("netclaw-repository-redirect-");
+        try
+        {
+            var main = Path.Combine(root.FullName, "main");
+            var session = Directory.CreateDirectory(Path.Combine(root.FullName, "session"));
+            RunGit(root.FullName, "init", main);
+
+            await using var inside = await CreateHarnessAsync(
+                "repository-redirect-inside",
+                main,
+                main,
+                session.FullName,
+                "uv export --frozen > uv.lock.audit.txt",
+                Approvals.PersistentRepository("uv export"));
+            var insideDecision = await inside.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ToolAuthorizationOutcome.Allowed, insideDecision.Outcome);
+
+            await using var nullDevice = await CreateHarnessAsync(
+                "repository-redirect-null-device",
+                main,
+                main,
+                session.FullName,
+                "uv export --frozen 2>/dev/null",
+                Approvals.PersistentRepository("uv export"));
+            var nullDeviceDecision = await nullDevice.EvaluateDecisionAsync(
+                TestContext.Current.CancellationToken);
+            Assert.Equal(ToolAuthorizationOutcome.Allowed, nullDeviceDecision.Outcome);
+
+            await using var outside = await CreateHarnessAsync(
+                "repository-redirect-outside-file",
+                main,
+                main,
+                session.FullName,
+                $"uv export --frozen > {Path.Combine(root.FullName, "audit-reqs.txt")}",
+                Approvals.PersistentRepository("uv export"));
+            var outsideDecision = await outside.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, outsideDecision.Outcome);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
     private Task<ShellApprovalHarness> CreateHarnessAsync(
         string id,
         string project,
