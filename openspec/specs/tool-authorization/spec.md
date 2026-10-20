@@ -1172,7 +1172,11 @@ own the reviewed-safe path rule; their result is call-local.
 result is call-local. `ToolApprovalActor` holds chat grants (actor-local).
 `ToolApprovalStore` holds persistent grants (durable).
 
-For a Personal Bash call, proved file redirects inside the current run's managed temporary directory SHALL use the file-tool authority checks.
+Scratch composition SHALL apply only to a Personal Bash occurrence with resolved command candidates and proved redirects.
+The occurrence SHALL have at least one file target inside the current run's managed temporary directory.
+Every other file target SHALL stay inside that directory or name the null device.
+Every proved scratch target SHALL pass the file-tool authority checks.
+An ineligible occurrence SHALL retain its ordinary command and redirect scopes.
 The command grant SHALL still cover the occurrence directory and every ordinary operand scope.
 The redirect target SHALL remain subject to protected-path checks, file-tool admission, consent modes, and launch verification.
 A redirect through a link, an unresolved target, or a target outside that managed directory SHALL keep its ordinary scope.

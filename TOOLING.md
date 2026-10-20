@@ -1199,6 +1199,8 @@ How it works:
 
 Each line holds the outcome, reason, advice, consent request, matched grants,
 coverage trace, store lookups, and the analysis that the process may execute.
+The probe checks each temporary correction against the current run's managed directory.
+It emits the target directory and platform root explicitly, because record text omits internal properties.
 The probe replaces run-specific paths with placeholders (`{P}`, `{S}`, `{X}`,
 `{R}`, `{T}`, `{REPOSITORY}`, and the GUID of the fake Windows root). It also
 replaces the GUID in the `netclaw-approval-matrix-<GUID>` harness folder and

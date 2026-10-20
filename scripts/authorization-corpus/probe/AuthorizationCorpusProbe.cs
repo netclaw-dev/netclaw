@@ -374,6 +374,15 @@ public sealed class AuthorizationCorpusProbe(ShellApprovalMatrixFixture fixture)
     {
         var before = scope.Harness.ApprovalService.CheckCount;
         var fields = await CorpusProbeAdapter.DecideAsync(executor, call, context, ct);
+        foreach (var temporary in fields.Corrections?.OfType<ToolCorrection.ManagedTemporaryDirectorySuggested>() ?? [])
+        {
+            var storage = context.Invocation.SessionStorage
+                ?? throw new InvalidOperationException("A temporary correction has no bound session storage.");
+            var expected = Path.TrimEndingDirectorySeparator(Path.GetFullPath(storage.ManagedTemporary.Directory.Value));
+            var actual = Path.TrimEndingDirectorySeparator(Path.GetFullPath(temporary.Target.ManagedTemporaryDirectory));
+            if (!string.Equals(expected, actual, StringComparison.Ordinal))
+                throw new InvalidOperationException("A temporary correction targets another run's directory.");
+        }
         var checks = scope.Harness.ApprovalService.CheckCount - before;
         return (scope.Cleaner.Clean(Render(fields, checks), scope.Harness, scope.Root), fields.Request);
     }
@@ -479,7 +488,9 @@ public sealed class AuthorizationCorpusProbe(ShellApprovalMatrixFixture fixture)
     private static string Describe(ToolCorrection correction)
         => correction switch
         {
-            ToolCorrection.ManagedTemporaryDirectorySuggested temporary => $"temporary:{temporary.Target}",
+            // Record text omits these internal properties. The differential must compare both directory facts.
+            ToolCorrection.ManagedTemporaryDirectorySuggested temporary =>
+                $"temporary:{temporary.Target.ManagedTemporaryDirectory}|{temporary.Target.PlatformTemporaryRoot}",
             ToolCorrection.NativeToolSuggested native => $"native:{native.ToolName.Value}",
             ToolCorrection.ShellWorkingDirectorySuggested directory => $"directory:{directory.Directory}",
             // A correction kind that one revision lacks prints its record text.

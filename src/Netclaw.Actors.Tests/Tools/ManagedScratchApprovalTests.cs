@@ -38,6 +38,10 @@ public sealed class ManagedScratchApprovalTests(ShellApprovalMatrixFixture fixtu
         Assert.NotEqual(ApprovalOutcome.Allowed, externalRedirect.Outcome);
         var externalOperand = await harness.EvaluateShellAsync($"uv export '{external}' > \"$TMPDIR/reqs.txt\"", Ct, project);
         Assert.NotEqual(ApprovalOutcome.Allowed, externalOperand.Outcome);
+        var externalOption = await harness.EvaluateShellAsync($"uv export --output='{external}' > \"$TMPDIR/reqs.txt\"", Ct, project);
+        Assert.NotEqual(ApprovalOutcome.Allowed, externalOption.Outcome);
+        var qualified = await harness.EvaluateShellAsync("NC_APPROVAL_SCOPE=one uv export > \"$TMPDIR/reqs.txt\"", Ct, project);
+        Assert.NotEqual(ApprovalOutcome.Allowed, qualified.Outcome);
         var foreign = await harness.EvaluateShellAsync($"uv export > '{other.ManagedTemporaryDirectory}/reqs.txt'", Ct, project);
         Assert.NotEqual(ApprovalOutcome.Allowed, foreign.Outcome);
 

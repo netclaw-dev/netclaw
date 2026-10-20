@@ -14,5 +14,6 @@
 
 - [x] 3.1 Update the architecture document and netclaw-operations skill; verify requirement links and the skill version.
 - [x] 3.2 Add a narrow mutation target for scratch authority; verify the expected unsafe mutants fail and remain within the CI budget.
-- [ ] 3.3 Run affected test projects, Slopwatch, file-header verification, applicable smoke checks, and the skill eval suite; record actual results.
-- [ ] 3.4 Sync the approved specification deltas and verify the implementation against the change artifacts.
+- [x] 3.3 Run affected tests, Slopwatch, file-header checks, native approval smoke, and the focused skill eval; record actual results.
+- [x] 3.4 Sync the approved specification deltas and verify the implementation against the change artifacts.
+- [x] 3.5 Compare the archive through both production authorizers with the Akka.Streams runner; review every authority change and keep raw data local.

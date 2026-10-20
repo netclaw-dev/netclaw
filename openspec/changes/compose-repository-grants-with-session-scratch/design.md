@@ -19,6 +19,8 @@ Do not repair unknown-option command-word projection in this change.
 ToolAccessPolicy owns the call-local composition decision.
 It reads the managed temporary location from the existing invocation storage.
 It accepts only Personal Bash occurrences with exact, link-free file targets inside that run's managed directory.
+It requires resolved command candidates and retains ordinary scopes when any other file target lies outside that directory.
+The null device keeps its exemption.
 It reuses the matcher's occurrence projection without redirect scopes, so ordinary operand scopes and the occurrence directory retain command consent.
 An internal candidate fact selects the existing file-tool redirect checks.
 This fact is required because RunsNoProgram cannot describe a command that actually runs a program.

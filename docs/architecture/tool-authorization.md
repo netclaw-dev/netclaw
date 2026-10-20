@@ -838,6 +838,8 @@ The parent retains the child's original authority through subsequent tool calls 
 `ToolAccessPolicy.WithManagedTemporaryRedirects` owns a call-local composition decision for Personal Bash calls.
 It reads the current run's managed temporary location from `ToolInvocationContext.SessionStorage`.
 For exact, link-free scratch redirects, the matcher projects the command directory and ordinary operand scopes without the redirect scopes.
+The occurrence must have resolved command candidates, and every file target must stay in that run's managed directory or name the null device.
+An ineligible occurrence retains its ordinary command and redirect scopes.
 The candidate's transient `UsesFileToolRedirects` fact selects the existing file-tool admission, read checks, and consent rules.
 The grant actor still receives the canonical command words and ordinary scopes. Persistent grants do not change.
 
