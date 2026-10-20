@@ -29,7 +29,8 @@ internal static class SleepStandIn
     {
         if (OperatingSystem.IsLinux())
         {
-            File.CreateSymbolicLink(path, SleepPath);
+            // Ubuntu uutils rejects the alternate executable name that this fixture requires.
+            File.CreateSymbolicLink(path, File.Exists("/usr/bin/gnusleep") ? "/usr/bin/gnusleep" : SleepPath);
             return;
         }
 
