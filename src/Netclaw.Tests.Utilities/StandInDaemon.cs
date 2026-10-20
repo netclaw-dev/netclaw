@@ -220,8 +220,24 @@ internal sealed class StandInDaemon : IDisposable
             if (workingDirectory is not null)
                 psi.WorkingDirectory = workingDirectory;
             configureEnvironment(psi.Environment);
+            var expectedEnvironment = psi.Environment
+                .Where(static entry => entry.Value is not null)
+                .Select(static entry => $"{entry.Key}={entry.Value}")
+                .ToHashSet(StringComparer.Ordinal);
             process = Process.Start(psi)
                 ?? throw new InvalidOperationException("The stand-in daemon did not start.");
+
+            if (OperatingSystem.IsLinux())
+            {
+                // Process.Start can return before Linux exposes the environment of the new image.
+                // Publish the PID only after the child exposes its exact environment, even for invalid homes.
+                WaitForProcessEnvironment(
+                    expectedEnvironment,
+                    () => File.ReadAllText($"/proc/{process.Id}/environ"),
+                    () => process.HasExited,
+                    TimeProvider.System,
+                    () => Thread.Yield());
+            }
 
             // No lock file on purpose: a lock held by the test process would be released by an
             // Exited callback that can run after the CLI has already seen the process exit.
@@ -235,11 +251,37 @@ internal sealed class StandInDaemon : IDisposable
         {
             if (process is { HasExited: false })
                 process.Kill();
+            process?.WaitForExit();
             process?.Dispose();
             listener.Close();
             if (folder is not null)
                 DisposableTempDir.Delete(folder);
             throw;
+        }
+    }
+
+    internal static void WaitForProcessEnvironment(
+        HashSet<string> expectedEnvironment,
+        Func<string> readEnvironment,
+        Func<bool> hasExited,
+        TimeProvider timeProvider,
+        Action yield)
+    {
+        var startedAt = timeProvider.GetTimestamp();
+        var timeout = TimeSpan.FromSeconds(10);
+        while (true)
+        {
+            if (hasExited())
+                throw new InvalidOperationException("The stand-in daemon exited before its environment became available.");
+
+            var entries = readEnvironment().Split('\0', StringSplitOptions.RemoveEmptyEntries);
+            if (expectedEnvironment.SetEquals(entries))
+                return;
+
+            if (timeProvider.GetElapsedTime(startedAt) >= timeout)
+                throw new TimeoutException("The stand-in daemon did not expose its expected environment within 10 seconds.");
+
+            yield();
         }
     }
 
