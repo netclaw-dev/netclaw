@@ -1172,6 +1172,28 @@ own the reviewed-safe path rule; their result is call-local.
 result is call-local. `ToolApprovalActor` holds chat grants (actor-local).
 `ToolApprovalStore` holds persistent grants (durable).
 
+For a Personal Bash call, proved file redirects inside the current run's managed temporary directory SHALL use the file-tool authority checks.
+The command grant SHALL still cover the occurrence directory and every ordinary operand scope.
+The redirect target SHALL remain subject to protected-path checks, file-tool admission, consent modes, and launch verification.
+A redirect through a link, an unresolved target, or a target outside that managed directory SHALL keep its ordinary scope.
+This composition SHALL NOT change any persistent grant or extend a repository's identity.
+
+#### Scenario: Repository command writes managed scratch
+- **GIVEN** a Personal session with a repository grant for `uv export` and file-write permission for its managed temporary directory
+- **WHEN** the command runs in that repository and redirects to a proved file in that managed directory
+- **THEN** the command runs without another prompt
+- **AND** an ordinary operand outside the repository still needs its own coverage
+
+#### Scenario: Scratch composition cannot bypass file consent
+- **GIVEN** the same command and a file-write mode of `Deny`
+- **WHEN** the command redirects to its managed temporary directory
+- **THEN** Netclaw denies the call before a shell grant can cover it
+- **AND** an `Approval` file-write mode needs file-tool consent or a covering file-tool grant
+
+#### Scenario: Another run's scratch is external
+- **WHEN** a repository command redirects to another run's temporary directory or an arbitrary external file
+- **THEN** the repository grant supplies no scratch exemption
+
 #### Scenario: A command that runs no program needs no prompt
 
 - **GIVEN** an interactive Personal session on the Bash 5.2 host with no grants
@@ -1310,6 +1332,23 @@ and pass every check again.
   suppress the correction once and SHALL offer only `Once` and `Deny`.
 - The parent session and a subagent SHALL use the same corrections.
 
+A resolved Personal Bash command that runs a program in a project SHALL receive temporary-path advice for proved platform-temporary outputs outside the project.
+The advice SHALL preserve the command directory and ordinary operands.
+A command that runs no program and an output inside the project SHALL retain their ordinary file-consent behavior.
+It SHALL name the current run's managed temporary directory and require a new call.
+An input redirect, an unresolved target, or a non-temporary output target SHALL prevent this specific advice.
+Hard deny and protected-path refusal SHALL retain precedence.
+
+#### Scenario: Repository export receives temporary output advice
+- **GIVEN** a Personal session with a project directory
+- **WHEN** `uv export` redirects output to `/tmp/reqs.txt` and otherwise needs approval
+- **THEN** Netclaw suggests the current run's managed temporary directory
+- **AND** Netclaw does not run or rewrite the submitted call
+
+#### Scenario: Temporary advice preserves an external input
+- **WHEN** the command also reads through an input redirect
+- **THEN** Netclaw does not suggest relocation through this rule
+
 #### Scenario: Temporary write gets a correction, not a prompt
 
 - **GIVEN** an interactive Personal session
@@ -1408,6 +1447,21 @@ result is call-local. `ConsentAnswerCodec.AppendResultNote` owns the approval
 note line. `SessionToolExecutionPipeline` and `SubAgentActor` add the line to
 the call-local tool result. The journal keeps the consent request and the
 answer (durable).
+
+A reusable shell consent prompt SHALL explain the reach of its command words within the existing display limit.
+The full command SHALL take priority over optional explanations when both cannot fit.
+A one-word program grant SHALL state that it does not cover subcommands, except for existing reviewed policy exceptions.
+A prompt with a proved grant mismatch SHALL give a bounded explanation for the command words, assignment qualifier, shell, or directory mismatch.
+This text SHALL NOT change the grant words, saved scope, one-time identity, or offered option keys.
+
+#### Scenario: Prompt explains a program grant
+- **WHEN** a reusable prompt asks for the one-word program `uv`
+- **THEN** the prompt states that this grant does not cover subcommands
+
+#### Scenario: Prompt explains a near miss
+- **GIVEN** a stored grant whose command words do not cover the submitted call
+- **WHEN** the call needs consent
+- **THEN** the prompt explains the command-word mismatch without changing the saved grant
 
 #### Scenario: A prompt for an unknown program shows the command text
 

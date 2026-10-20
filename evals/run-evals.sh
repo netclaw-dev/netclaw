@@ -3133,6 +3133,16 @@ assert_approval_recovery_hint() {
     jq -e '.Path == "/home/netclaw/.netclaw/workspaces"' <<<"$set_call" >/dev/null
 }
 
+# The agent must distinguish command grants from managed scratch authority.
+assert_approval_scratch_scope_guidance() {
+    stdout_json_envelope_valid \
+        && daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
+        && ! stdout_json_tool_called 'shell_execute' \
+        && stdout_json_response_contains 'subcommands=separate' \
+        && stdout_json_response_contains 'scratch=managed' \
+        && stdout_json_response_contains 'cwd=preserve'
+}
+
 # One command in another directory should use the typed shell argument.
 assert_approval_shell_working_directory_argument() {
     local shell_call
@@ -4272,6 +4282,9 @@ run_all() {
 
     run_case --json approval_recovery_hint "recovers from a cwd denial outside trusted roots by calling set_working_directory" \
         "I tried a shell command in /home/netclaw/.netclaw/workspaces and received: 'Tool access denied. Call set_working_directory \"/home/netclaw/.netclaw/workspaces\" first.' Apply that correction now."
+
+    run_case --json approval_scratch_scope_guidance "uses the skill to distinguish program grants and managed scratch authority" \
+        "Load netclaw-operations and answer without executing commands. A saved grant names only uv. Does it cover uv run? For command output that needs a Bash redirect, choose shared or managed scratch. Choose whether to preserve or change the project directory. Answer with these fields: subcommands=covered|separate; scratch=shared|managed; cwd=preserve|change."
 
     run_case --json approval_shell_working_directory_argument "uses the typed WorkingDirectory argument instead of inline cd" \
         "Run pwd from /tmp with one shell_execute call. Do not change the session project directory."

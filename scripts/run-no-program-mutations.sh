@@ -64,7 +64,7 @@ run_gate Netclaw.Security.csproj "ShellCommandAnalysis.cs{$target_start..$target
 
 policy_file="$repo_root/src/Netclaw.Actors/Tools/ToolAccessPolicy.cs"
 read -r read_start read_end < <(
-  find_range $'if (!candidate.RunsNoProgram)\n                continue;' \
+  find_range $'if (!candidate.RunsNoProgram && !candidate.UsesFileToolRedirects)\n                continue;' \
   '$"this audience may not use {FileToolName(read)}, and a redirect gets the same decision");' "$policy_file")
 run_gate Netclaw.Actors.csproj "Tools/ToolAccessPolicy.cs{$read_start..$read_end}" \
-  "$output_path/redirect-checks" 15 "redirect check"
+  "$output_path/redirect-checks" 18 "redirect check"

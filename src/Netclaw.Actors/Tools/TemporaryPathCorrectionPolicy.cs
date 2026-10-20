@@ -75,19 +75,23 @@ internal sealed class TemporaryPathCorrectionPolicy
         IDictionary<string, object?>? arguments,
         ToolInvocationContext context)
     {
-        // Suggest a different directory only when the parser proves that the
-        // complete shell operation is static and every affected scope stays
-        // below one explicit platform temporary root. If any proof is missing,
-        // preserve the ordinary approval path: a correction could otherwise
-        // change the command's meaning or hide an additional path operation.
+        // Advice requires a proved temporary operation or proved temporary output from a project command.
+        // The model submits a new call. This method neither changes the source nor grants authority.
         if (!analysis.IsResolved
             || analysis.HasDynamicSyntax
-            || !TryGetManagedTemporaryDirectoryForCorrection(context, out var managedTemporaryDirectory)
-            || !TryGetExplicitTemporaryRoot(analysis, arguments, out var temporaryRoot)
-            || !AllScopesStayWithinTemporaryRoot(analysis, candidates, temporaryRoot))
-        {
+            || !TryGetManagedTemporaryDirectoryForCorrection(context, out var managedTemporaryDirectory))
             return null;
+
+        PlatformTemporaryRoot temporaryRoot;
+        if (TryGetExplicitTemporaryRoot(analysis, arguments, out temporaryRoot)
+            && AllScopesStayWithinTemporaryRoot(analysis, candidates, temporaryRoot))
+        {
+            return new ToolCorrection.ManagedTemporaryDirectorySuggested(
+                new ManagedTemporaryCorrectionTarget(managedTemporaryDirectory, temporaryRoot.Resolved.Value));
         }
+
+        if (!TryGetProjectOutputTemporaryRoot(analysis, context, out temporaryRoot))
+            return null;
 
         return new ToolCorrection.ManagedTemporaryDirectorySuggested(
             new ManagedTemporaryCorrectionTarget(
@@ -162,6 +166,78 @@ internal sealed class TemporaryPathCorrectionPolicy
         }
 
         temporaryRoot = string.Empty;
+        return false;
+    }
+
+    private bool TryGetProjectOutputTemporaryRoot(
+        ShellCommandAnalysis analysis,
+        ToolInvocationContext context,
+        out PlatformTemporaryRoot temporaryRoot)
+    {
+        temporaryRoot = default;
+        if (_environment.Grammar != ShellGrammar.Bash
+            || context.ProjectDirectory is not { } projectDirectory
+            || !CanonicalPath.TryCreate(projectDirectory, relativeBase: null, _environment.PathStyle, out var project))
+            return false;
+
+        foreach (var root in _temporaryRoots)
+        {
+            var hasOutput = false;
+            var eligible = true;
+            foreach (var command in analysis.Commands)
+            {
+                if ((analysis.RunsNoProgram(command) && command.Redirects.Count > 0)
+                    || command.WorkingDirectory is not ShellValueDomain.Exact directory
+                    || !CanonicalPath.TryCreate(directory.Value, relativeBase: null, _environment.PathStyle, out var cwd)
+                    || FileSystemAuthority.EvaluateMembership(cwd,
+                        [new PathBoundary.Folder(project, LinkRule.BelowRoot)]) != PathDecision.Allowed)
+                {
+                    eligible = false;
+                    break;
+                }
+
+                foreach (var redirect in command.Redirects)
+                {
+                    if (redirect is DescriptorDuplicateRedirectAnalysis or DescriptorMoveRedirectAnalysis
+                        or DescriptorCloseRedirectAnalysis)
+                        continue;
+                    if (redirect is not FileRedirectAnalysis { IsComplete: true, Target: ShellValueDomain.Exact exact } file
+                        || !ShellRedirectPolicyFacts.IsFileWritingMode(file.Mode)
+                        || !CanonicalPath.TryCreate(exact.Value, relativeBase: null, _environment.PathStyle, out var target))
+                    {
+                        eligible = false;
+                        break;
+                    }
+                    if (ShellRedirectPolicyFacts.IsNullDevice(target))
+                        continue;
+                    // A project file keeps its ordinary consent, even when the project itself lies under /tmp.
+                    if (project.Contains(target))
+                    {
+                        eligible = false;
+                        break;
+                    }
+                    if (context.SessionStorage is { } storage
+                        && CanonicalPath.TryCreate(storage.ManagedTemporary.Directory.Value,
+                            relativeBase: null, _environment.PathStyle, out var managed)
+                        && FileSystemAuthority.EvaluateMembership(target,
+                            [new PathBoundary.Folder(managed, LinkRule.BelowRoot)]) == PathDecision.Allowed)
+                        continue;
+                    if (!IsLinkFreeTemporaryPath(target, root))
+                    {
+                        eligible = false;
+                        break;
+                    }
+                    hasOutput = true;
+                }
+            }
+
+            if (eligible && hasOutput)
+            {
+                temporaryRoot = root;
+                return true;
+            }
+        }
+
         return false;
     }
 

@@ -79,6 +79,9 @@ public sealed record ApprovalCandidate(
     /// </summary>
     internal bool RunsNoProgram { get; init; }
 
+    /// <summary>True when file-tool policy owns the current run's proved scratch redirects.</summary>
+    internal bool UsesFileToolRedirects { get; init; }
+
     /// <summary>
     /// Parser source metadata does not change occurrence identity.
     /// </summary>
@@ -94,6 +97,7 @@ public sealed record ApprovalCandidate(
         Unresolved == other.Unresolved &&
         WordRewriteCanResolve == other.WordRewriteCanResolve &&
         RunsNoProgram == other.RunsNoProgram &&
+        UsesFileToolRedirects == other.UsesFileToolRedirects &&
         AssignmentDigest == other.AssignmentDigest &&
         Shell == other.Shell &&
         HasSameVerbTokens(other.VerbTokens);
@@ -418,7 +422,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             Environment.PathStyle,
             resolveUnknownPathsFromEffectiveValues: false,
             hostLinks,
-            fileWords: []);
+            fileWords: [],
+            includeRedirects: true);
         if (directories is null)
             return null;
 
@@ -618,6 +623,22 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         string? workingDirectory,
         bool resolveUnknownPathsFromEffectiveValues,
         LinkRule hostLinks)
+        => ExtractCandidatesForOccurrence(occurrence, workingDirectory,
+            resolveUnknownPathsFromEffectiveValues, hostLinks, includeRedirects: true);
+
+    internal IReadOnlyList<ApprovalCandidate>? ExtractCommandScopesForOccurrence(
+        CommandOccurrence occurrence,
+        string? workingDirectory)
+        => ExtractCandidatesForOccurrence(occurrence, workingDirectory,
+            resolveUnknownPathsFromEffectiveValues: false,
+            LinkRule.FromVolumeRootExceptTemporaryAlias, includeRedirects: false);
+
+    private IReadOnlyList<ApprovalCandidate>? ExtractCandidatesForOccurrence(
+        CommandOccurrence occurrence,
+        string? workingDirectory,
+        bool resolveUnknownPathsFromEffectiveValues,
+        LinkRule hostLinks,
+        bool includeRedirects)
     {
         ArgumentNullException.ThrowIfNull(occurrence);
 
@@ -652,7 +673,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             Environment.PathStyle,
             resolveUnknownPathsFromEffectiveValues,
             hostLinks,
-            commandWords.FileWords);
+            commandWords.FileWords,
+            includeRedirects);
         if (directories is null)
             return null;
 
@@ -885,7 +907,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ShellPathStyle pathStyle,
         bool resolveUnknownPathsFromEffectiveValues,
         LinkRule hostLinks,
-        IReadOnlyList<CommandFileWord> fileWords)
+        IReadOnlyList<CommandFileWord> fileWords,
+        bool includeRedirects)
     {
         var clause = occurrence.Clause;
         var directories = new List<string?>();
@@ -981,7 +1004,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             }
         }
 
-        foreach (var redirect in occurrence.Redirects)
+        foreach (var redirect in includeRedirects ? occurrence.Redirects : [])
         {
             var redirectDirectories = ResolveRedirectDirectories(
                 redirect,
@@ -992,6 +1015,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
             directories.AddRange(redirectDirectories);
         }
+
+        // Scratch composition must retain the command directory as well as every ordinary path operand.
+        if (!includeRedirects && clauseWorkingDirectory is not null)
+            directories.Add(clauseWorkingDirectory);
 
         if (directories.Count == 0)
         {
@@ -2226,7 +2253,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                     resolveUnknownPathsFromEffectiveValues: false,
                     NoProgramLinks(analysis, command, hostLinks),
                     // A file word adds a known scope. It never makes a scope unresolved.
-                    fileWords: []) is null))
+                    fileWords: [],
+                    includeRedirects: true) is null))
         {
             return true;
         }

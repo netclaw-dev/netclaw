@@ -150,9 +150,11 @@ The script runs Stryker two times. The first run selects the target check of
 `ShellCommandAnalysis.IsPlainFileTarget` (5 mutants). A mutant that drops the
 `/dev/` check lets `printf x > /dev/tcp/host/port` run with no prompt. The
 second run selects the redirect checks of
-`ToolAccessPolicy.ScreenNoProgramRedirects` (15 mutants). A mutant
+`ToolAccessPolicy.ScreenNoProgramRedirects` (18 mutants). A mutant
 there lets `: < /etc/passwd` run for an audience that may not read that path,
 or lets a redirect run when `file_write` has the `Deny` mode.
+The same gate covers the transient fact for a program with composed scratch redirects.
+It adds three mutants to the existing invocation and adds no Stryker build.
 `NoProgramMutationTests` must kill all of them. A missing or duplicated span
 fails before Stryker starts.
 

@@ -833,6 +833,40 @@ An invalid example is Bob's answer to that prompt. The workflow rejects it befor
 A terminal child result is tool output. It never supplies user authority through `InputAdmitted`.
 The parent retains the child's original authority through subsequent tool calls and approvals.
 
+### Managed scratch redirects and command consent
+
+`ToolAccessPolicy.WithManagedTemporaryRedirects` owns a call-local composition decision for Personal Bash calls.
+It reads the current run's managed temporary location from `ToolInvocationContext.SessionStorage`.
+For exact, link-free scratch redirects, the matcher projects the command directory and ordinary operand scopes without the redirect scopes.
+The candidate's transient `UsesFileToolRedirects` fact selects the existing file-tool admission, read checks, and consent rules.
+The grant actor still receives the canonical command words and ordinary scopes. Persistent grants do not change.
+
+```mermaid
+flowchart TD
+  A[Admission and hard deny] --> B[Protected paths and trusted roots]
+  B --> C[Prove current-run scratch targets]
+  C --> D[File-tool restrictions and stored file consent]
+  D --> E[Command grant and ordinary operand scopes]
+  E --> F[Launch verification]
+```
+
+A repository grant for `uv export` can cover the command in its repository with output in the current run's managed temporary directory.
+The file-write policy must also permit that output.
+The same grant supplies no scratch exemption for another run's directory, a link escape, or an arbitrary external file.
+Unknown targets retain ordinary exact-consent rules.
+An automatic shell policy does not bypass file-tool restrictions on a composed redirect.
+See [TA-8](../../openspec/specs/tool-authorization/spec.md#requirement-ta-8-every-candidate-needs-coverage).
+
+`TemporaryPathCorrectionPolicy` also recognizes proved platform-temporary outputs from a project command.
+It preserves the command directory and ordinary operands.
+It refuses this advice for input redirects, outputs inside the project, and commands that run no program.
+The model submits a new call. Advice neither changes source nor grants authority.
+See [TA-9](../../openspec/specs/tool-authorization/spec.md#requirement-ta-9-agent-correction-precedes-a-prompt-and-grants-no-authority).
+
+`ShellPolicyCoordinator` adds bounded grant-reach and validated mismatch explanations to the existing consent display text.
+This text changes no candidate words, grant scopes, option keys, or one-time identity.
+See [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-consent-prompts-offer-only-safe-options).
+
 ### 3.7 Advice (support module)
 
 | Item | Current state |

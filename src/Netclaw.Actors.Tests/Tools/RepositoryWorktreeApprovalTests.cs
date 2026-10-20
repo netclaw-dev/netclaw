@@ -560,22 +560,8 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
         }
     }
 
-    /// <summary>
-    /// Demand: a repository verb grant covers <c>uv export</c> even when the
-    /// command redirects to a scratch file outside the repository.
-    /// </summary>
-    /// <remarks>
-    /// Red by design. It reproduces the re-prompt problem from the
-    /// dotnet-skills-evals session (39 approval prompts). Today the matcher
-    /// gives the redirect target the candidate's scope, so a file outside the
-    /// repository defeats the grant the operator approved minutes before
-    /// (near miss: OutsideDirectory). The inside-repo and null-device cases
-    /// pass. A green run needs a product decision: the demand conflicts with
-    /// the TA-8 invariant in docs/architecture/tool-authorization.md, so the
-    /// spec and the docs must move with the fix.
-    /// </remarks>
     [Fact]
-    public async Task Repository_verb_grant_should_cover_a_scratch_file_outside_the_repository()
+    public async Task Repository_verb_grant_keeps_an_arbitrary_external_redirect_outside_its_scope()
     {
         var root = CreateTestRoot("netclaw-repository-redirect-");
         try
@@ -614,10 +600,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 Approvals.PersistentRepository("uv export"));
             var outsideDecision = await outside.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
 
-            // Red today: the matcher answers RequiresApproval because the
-            // redirect folder becomes the candidate scope and sits outside the
-            // repository. The operator approved this verb in this repository.
-            Assert.Equal(ToolAuthorizationOutcome.Allowed, outsideDecision.Outcome);
+            Assert.NotEqual(ToolAuthorizationOutcome.Allowed, outsideDecision.Outcome);
         }
         finally
         {

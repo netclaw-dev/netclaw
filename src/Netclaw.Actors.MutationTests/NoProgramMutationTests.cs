@@ -196,6 +196,62 @@ public sealed class NoProgramMutationTests : IDisposable
         Assert.Null(Screen($": > /dev/null", "file_write"));
     }
 
+    [Fact]
+    public void Scratch_projection_retains_command_authority()
+    {
+        var policy = CreatePolicy();
+        const string command = "uv export > \"$TMPDIR/out.txt\"";
+        var analysis = policy.ShellCommandPolicy.Analyze(command, WorkingDirectory, _storage.ManagedTemporary);
+        var approval = policy.ShellApprovalMatcher.AnalyzeInvocation(new ToolName(ShellTool.ToolName),
+            new Dictionary<string, object?> { ["Command"] = command, ["WorkingDirectory"] = WorkingDirectory }, analysis);
+        var composed = policy.WithManagedTemporaryRedirects(approval, CreateContext());
+        Assert.Equal(!OperatingSystem.IsWindows(),
+            composed.Candidates.Any(static candidate => candidate.UsesFileToolRedirects));
+        if (!OperatingSystem.IsWindows())
+            Assert.Contains(composed.Candidates, candidate => candidate.Directory == WorkingDirectory);
+    }
+
+    [Fact]
+    public void Scratch_projection_is_local_to_each_parent_or_child_run()
+    {
+        var policy = CreatePolicy();
+        var child = _storage.ForChild(new SubAgentRunId("child"), new SubAgentScopeId("parent/subagent/child"));
+        var peer = _storage.ForChild(new SubAgentRunId("peer"), new SubAgentScopeId("parent/subagent/peer"));
+        foreach (var caller in new[] { _storage, child, peer })
+        {
+            var context = new ToolExecutionContext(CreateContext().RunScope with
+            {
+                Session = new ToolSessionScope.Bound("signalr/scratch", caller)
+            }, ToolExecutionTimeout.Default);
+            foreach (var target in new[] { _storage, child, peer })
+            {
+                var command = $"uv export > '{target.ManagedTemporary.Directory.Value}/out.txt'";
+                var analysis = policy.ShellCommandPolicy.Analyze(command, WorkingDirectory, caller.ManagedTemporary);
+                var approval = policy.ShellApprovalMatcher.AnalyzeInvocation(new ToolName(ShellTool.ToolName),
+                    new Dictionary<string, object?> { ["Command"] = command, ["WorkingDirectory"] = WorkingDirectory }, analysis);
+                var composed = policy.WithManagedTemporaryRedirects(approval, context);
+                Assert.Equal(!OperatingSystem.IsWindows() && ReferenceEquals(caller, target),
+                    composed.Candidates.Any(static candidate => candidate.UsesFileToolRedirects));
+            }
+        }
+    }
+
+    [Fact]
+    public void Composed_program_redirect_obeys_file_tool_denial()
+    {
+        var policy = CreatePolicy("file_write");
+        const string command = "uv export > /work/scratch/out.txt";
+        var analysis = policy.ShellCommandPolicy.Analyze(command, WorkingDirectory);
+        var approval = policy.ShellApprovalMatcher.AnalyzeInvocation(new ToolName(ShellTool.ToolName),
+            new Dictionary<string, object?> { ["Command"] = command, ["WorkingDirectory"] = WorkingDirectory }, analysis);
+        var candidates = approval.Candidates.Select(static candidate =>
+            candidate with { UsesFileToolRedirects = true }).ToArray();
+        var facts = ShellPolicyPathFacts.Create(candidates, ShellPathStyle.Posix);
+        var denial = policy.ScreenNoProgramRedirects(
+            candidates.Select((candidate, index) => (candidate, facts[index])), CreateContext());
+        Assert.Equal("shell_redirect_file_tool_denied", denial?.DenyReason);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_paths.BasePath))

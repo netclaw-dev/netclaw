@@ -292,12 +292,23 @@ internal sealed class ToolAuthorizer
             ? call.Finish(ToolAuthorizationDecision.Allow(ToolAllowReason.ApprovalExemptShellCandidates))
             : null;
 
-    // Consent: a redirect of a command that runs no program gets the decision
-    // of its file tool, with the stored grants of that tool. This rule only
-    // records which file tool calls a grant covers. It never decides.
+    // File authority precedes Auto for composed scratch redirects. The existing file-tool grants supply consent.
     private async Task<ToolAuthorizationDecision?> FileToolGrantsAsync(ShellCall call, CancellationToken ct)
     {
-        if (_approvalService is null || call.CommandApproval is not { } approval)
+        if (call.CommandApproval is not { } approval)
+            return null;
+
+        // File-tool restrictions also precede an automatic shell allow for composed scratch redirects.
+        if (approval.Candidates.Any(static candidate => candidate.UsesFileToolRedirects))
+        {
+            var facts = ShellPolicyPathFacts.Create(approval.Candidates, _policy.ShellEnvironment.PathStyle);
+            var denial = _policy.ScreenNoProgramRedirects(
+                approval.Candidates.Select((candidate, index) => (candidate, facts[index])), call.Context);
+            if (denial is not null)
+                return call.Finish(denial);
+        }
+
+        if (_approvalService is null)
             return null;
 
         foreach (var fileCall in _policy.GetRedirectsThatNeedConsent(approval, call.Context))
@@ -554,7 +565,11 @@ internal sealed class ToolAuthorizer
         /// <summary>The file tool calls of redirects that a stored grant of the file tool covers.</summary>
         internal HashSet<FileToolCall> GrantedFileToolCalls { get; } = [];
 
-        internal ShellApprovalAnalysis? CommandApproval => DirectoryProof is { } proof
+        internal ShellApprovalAnalysis? CommandApproval => RawCommandApproval is { } approval
+            ? authorizer._policy.WithManagedTemporaryRedirects(approval, context)
+            : null;
+
+        private ShellApprovalAnalysis? RawCommandApproval => DirectoryProof is { } proof
             ? ToolAccessPolicy.WithDirectoryScopes(ParsedApproval!, proof)
             : ParsedApproval is { } parsed
                 ? WithLiteralTwins(ToolAccessPolicy.WithCommandCandidates(parsed))
@@ -586,7 +601,11 @@ internal sealed class ToolAuthorizer
                     _toolName,
                     context,
                     call.Arguments,
-                    Mode,
+                    Mode == ToolApprovalMode.Auto
+                        && Approval?.Candidates.Any(static candidate => candidate.UsesFileToolRedirects
+                            && candidate.Unresolved != ShellUnresolvedPart.None) == true
+                            ? ToolApprovalMode.Approval
+                            : Mode,
                     Approval,
                     WorkingDirectory),
                 Analysis,

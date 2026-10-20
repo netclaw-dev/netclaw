@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.119.0"
+  version: "2.120.0"
 ---
 
 # Netclaw Operations
@@ -127,6 +127,15 @@ Keep shell approval friction bounded:
 13. Reviewed diagnostics without file output do not receive temporary relocation advice. Normal approval and denial rules still apply.
 14. Write long text (PR bodies, issue bodies, commit messages, file contents) to a file first, then pass the file to the command (for example `gh pr create --body-file <file>`, `gh issue create --body-file <file>`, `git commit -F <file>`). Do not inline long text in a shell command: a command that needs approval and is longer than 900 characters gets a `shorten_shell_command` correction, not a prompt.
 15. To send fixed text on stdin, quote the heredoc delimiter (`python3 - <<'EOF'`) or use a literal here string (`<<< 'text'`). Such a call gets the same approval as the same text in an argument (`python3 -c '...'`), so a saved grant can cover it. Put each file redirect before the heredoc operator (`cat > out.txt <<'EOF'`), and put the next command on a new line after the end word. Use only literal arguments with the heredoc. An unquoted delimiter, a here string with a variable, a pipe or `&&` on the operator line, a loop variable in the command, stdin text to a shell (`bash`, `sh`), and an argument that holds a shell name (`ssh host 'bash -s'`, `grep 'run bash now'`) get a one-time prompt.
+
+For command output that needs a shell redirect, use `"$TMPDIR/result.txt"` in a Bash call.
+Keep the command's project directory unchanged.
+A repository command grant can compose with file permission for this run's managed temporary directory.
+The command still needs its own grant, and ordinary path operands retain their scopes.
+A file-tool denial or consent requirement also applies to the scratch redirect.
+A shared `/tmp` output can receive advice that names the managed directory. Submit a new call with that path.
+A program-only grant, such as `uv`, does not cover subcommands such as `uv run`.
+Read the prompt's scope and mismatch explanation before requesting a wider grant.
 
 ## Project Directory
 

@@ -79,34 +79,19 @@ public sealed class ShellApprovalMatcherTests
             Assert.Single(evaluation.NearMisses).Reason);
     }
 
-    /// <summary>
-    /// The parser drops the <c>-u</c> option word, so an <c>env -u NAME</c> call
-    /// and an <c>env NAME=value</c> call give the same command words. One grant
-    /// covers both spellings.
-    /// </summary>
-    /// <remarks>
-    /// The two forms are not the same program behavior: one unsets a variable,
-    /// the other sets it. A grant for either covers both. This test records that
-    /// the matcher treats them alike, so a change to that rule is a deliberate
-    /// one.
-    /// </remarks>
-    [Theory]
-    [InlineData("env -u DOTNET_SKILLS_REPO uv run pytest -q")]
-    [InlineData("env DOTNET_SKILLS_REPO uv run pytest -q")]
-    public void Env_prefix_normalizes_both_spellings_to_one_grant(string command)
+    [Fact]
+    public void Env_assignment_does_not_share_the_unset_command_grant()
     {
-        var analysis = _matcher.AnalyzeInvocation(new ToolName("shell_execute"), Args(command));
+        var unset = _matcher.AnalyzeInvocation(new ToolName("shell_execute"),
+            Args("env -u DOTNET_SKILLS_REPO uv run pytest -q"));
+        var assignment = _matcher.AnalyzeInvocation(new ToolName("shell_execute"),
+            Args("env DOTNET_SKILLS_REPO=/work/skills uv run pytest -q"));
+        var unsetCandidate = Assert.Single(unset.Candidates);
+        var assignmentCandidate = Assert.Single(assignment.Candidates);
+        var grant = ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, unsetCandidate.VerbTokens!);
 
-        var candidate = Assert.Single(
-            analysis.Candidates,
-            item => item.VerbTokens is [{ }, ..] && item.VerbTokens[0] == "env");
-        Assert.Equal(
-            ["env", "DOTNET_SKILLS_REPO", "uv", "run", "pytest"],
-            candidate.VerbTokens);
-
-        var grant = ApprovalEntry.CreateTokenPrefix(
-            ApprovalShell.Bash, ["env", "DOTNET_SKILLS_REPO", "uv", "run", "pytest"]);
-        Assert.True(ApprovalPatternMatching.MatchesShellApproval(candidate, "/work", [grant]));
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(unsetCandidate, "/work", [grant]));
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(assignmentCandidate, "/work", [grant]));
     }
 
     [Theory]
