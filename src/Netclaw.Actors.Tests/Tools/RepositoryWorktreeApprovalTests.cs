@@ -561,19 +561,21 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
     }
 
     /// <summary>
-    /// A repository verb grant covers a command whose redirect names the null
-    /// device. It does not cover the same command when a redirect names a file
-    /// outside the repository.
+    /// Demand: a repository verb grant covers <c>uv export</c> even when the
+    /// command redirects to a scratch file outside the repository.
     /// </summary>
     /// <remarks>
-    /// The null device writes no file, so it gives the candidate no path scope
-    /// and the cwd half of the grant applies. A real file gives the candidate
-    /// that folder as its scope, and a repository grant covers only worktrees of
-    /// its own repository (TA-8). A model that sends a log or an export outside
-    /// the repository therefore re-prompts a verb it approved a minute before.
+    /// Red by design. It reproduces the re-prompt problem from the
+    /// dotnet-skills-evals session (39 approval prompts). Today the matcher
+    /// gives the redirect target the candidate's scope, so a file outside the
+    /// repository defeats the grant the operator approved minutes before
+    /// (near miss: OutsideDirectory). The inside-repo and null-device cases
+    /// pass. A green run needs a product decision: the demand conflicts with
+    /// the TA-8 invariant in docs/architecture/tool-authorization.md, so the
+    /// spec and the docs must move with the fix.
     /// </remarks>
     [Fact]
-    public async Task Repository_verb_grant_covers_the_null_device_but_not_an_outside_file()
+    public async Task Repository_verb_grant_should_cover_a_scratch_file_outside_the_repository()
     {
         var root = CreateTestRoot("netclaw-repository-redirect-");
         try
@@ -611,7 +613,11 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 $"uv export --frozen > {Path.Combine(root.FullName, "audit-reqs.txt")}",
                 Approvals.PersistentRepository("uv export"));
             var outsideDecision = await outside.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, outsideDecision.Outcome);
+
+            // Red today: the matcher answers RequiresApproval because the
+            // redirect folder becomes the candidate scope and sits outside the
+            // repository. The operator approved this verb in this repository.
+            Assert.Equal(ToolAuthorizationOutcome.Allowed, outsideDecision.Outcome);
         }
         finally
         {
