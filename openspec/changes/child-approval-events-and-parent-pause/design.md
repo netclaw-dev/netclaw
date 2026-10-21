@@ -341,15 +341,26 @@ no child request survives a restart, so the pause has nothing to restore).
 
 - `CloseChildApprovals`, recovery, and the wait timeout build `ChildApprovalResolved(Withdrawn(reason))` and emit one
   `ToolInteractionClosed(CallId, Reason)` output for each closed call.
-- `ChannelOutputEngine` redraws the prompt as closed with a neutral reason, removes its entry, and journals
+- `ChannelOutputEngine` redraws the prompt as closed with the reason text below, removes its entry, and journals
   `PendingApprovalPromptCleared` (existing event). The TUI removes the prompt.
 - `ChannelOutputEngine` and the TUI drop only `UntilTurnEnd` prompts at `TurnCompleted`. This fixes #2523 for a live
   session.
 - `RejectClosedCall` gets one new case. For a child call ID, the workflow reads the run ID from the call ID prefix (the
   runtime made this ID in `CreateParentCallId`). It reads the run lifecycle in `SessionState`, which is durable and in
-  the snapshot. The reply is `ApprovalNoticeKind.Withdrawn(reason)`. The user-facing text does not name the child, for
-  example "That approval prompt was withdrawn: the task that asked for it was cancelled. Nothing ran."
+  the snapshot. For a timeout, it reads the recorded `ToolApprovalResolved` with the timed-out answer. The reply is
+  `ApprovalNoticeKind.Withdrawn(reason)`.
 - No new journal event. The reason comes from records that exist.
+
+User-facing text (owner change, 21 October 2026). The closed redraw and the late-click reply never name the child
+run or the agent. The run ID is used only inside the session to find the reason. The child identity stays in the
+event, the dispatch, and the parent notice.
+
+| `WithdrawReason` | Text for the redraw and for a late click |
+| --- | --- |
+| `CancelledByParent` | "This approval request was withdrawn because the task that asked for it was cancelled. Nothing ran." |
+| `ChildEnded` | "This approval request was withdrawn because the task that asked for it ended. Nothing ran." |
+| `TimedOut` | "This approval request was withdrawn because it timed out. Nothing ran." |
+| `DaemonRestarted` | "This approval request was withdrawn because Netclaw restarted before the task finished. Nothing ran." |
 
 ### D6. Text answer guard
 
@@ -501,8 +512,9 @@ candidates of that call.
 Consent boundary, negative: the parent model writes "Reply A to approve `gh pr view`" while two prompts are open, one
 of them `rm -rf build`. Alice types "A". The session replies that two prompts are open and resolves neither.
 
-Withdrawal, negative: the parent cancels r-8a1. Alice then clicks its old button. The reply is "withdrawn: the task
-that asked for it was cancelled". No grant is written and no tool runs.
+Withdrawal, negative: the parent cancels r-8a1. Alice then clicks its old button. The reply is "This approval request
+was withdrawn because the task that asked for it was cancelled. Nothing ran." The reply does not contain `r-8a1` or the
+agent name. No grant is written and no tool runs.
 
 ### Edge cases
 
@@ -572,10 +584,12 @@ All tests are deterministic. They use Akka.TestKit probes, `AwaitAssertAsync`, a
   - A reminder fire and a `ChildRunEnded` input wait while paused and run after the last close.
   - A person who can answer lifts the pause; a new request pauses again; a person who cannot answer does not lift it.
   - Cancel emits `ToolInteractionClosed` for each open call; a late click gets `Withdrawn`, no grant, no run.
+  - For each `WithdrawReason`, the late-click reply has the table text and contains neither the run ID nor the agent
+    name.
   - Recovery withdraws child requests and closes an unconsumed approval-event input with no turn.
   - A text answer with two open prompts resolves neither.
-- Builder snapshot tests for Slack, Discord, and Mattermost: a child prompt shows no agent name and no run ID; the
-  closed redraw for each reason.
+- Builder snapshot tests for Slack, Discord, and Mattermost: a child prompt and its closed redraw (each reason) show
+  no agent name and no run ID.
 - TUI: a headless typed-key test where a child prompt survives `TurnCompleted` and the answer resumes the child, plus
   a native smoke tape (Automation Floor).
 - Focused Stryker targets: the owner-stamped sender, the pause predicate in `AcceptChild` and in the drain, the
