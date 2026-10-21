@@ -498,6 +498,25 @@ public static partial class SessionProtocol
         /// True when adopted-context provenance was preserved in stored approval state.
         /// </summary>
         public bool PersistedAdoptedContext { get; init; }
+
+        /// <summary>
+        /// How long a channel keeps the prompt pending. A parent prompt lives until the turn ends. A child prompt
+        /// lives until an answer or a close. Renderers do not show it.
+        /// TEST-FIRST STUB (PR 1, task 1.10): the session does not set it yet, and no channel reads it yet (task 2.8).
+        /// </summary>
+        public ToolInteractionLifetime Lifetime { get; init; } = ToolInteractionLifetime.UntilTurnEnd;
+    }
+
+    /// <summary>
+    /// The lifetime of a pending prompt on a channel. The default is the lifetime of today's prompts.
+    /// </summary>
+    public enum ToolInteractionLifetime
+    {
+        /// <summary>The channel clears the prompt at the end of the turn or at a turn error.</summary>
+        UntilTurnEnd = 0,
+
+        /// <summary>The channel keeps the prompt until an answer or a close.</summary>
+        UntilClosed = 1
     }
 
     /// <summary>

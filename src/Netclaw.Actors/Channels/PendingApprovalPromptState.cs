@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Serialization;
+using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Channels;
@@ -50,6 +51,13 @@ public sealed record PendingApprovalPromptTracked : INetclawSerializableMessage
     /// journal entries written before this field was added.
     /// </summary>
     public string? DisplayText { get; init; }
+
+    /// <summary>
+    /// The lifetime of the tracked prompt. A row without the optional field reads as
+    /// <see cref="SessionProtocol.ToolInteractionLifetime.UntilTurnEnd"/>.
+    /// TEST-FIRST STUB (PR 1, task 1.10): the proto field and the mapper entry come with task 2.8.
+    /// </summary>
+    public SessionProtocol.ToolInteractionLifetime Lifetime { get; init; } = SessionProtocol.ToolInteractionLifetime.UntilTurnEnd;
 }
 
 /// <summary>

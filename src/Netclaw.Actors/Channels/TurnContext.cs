@@ -89,6 +89,13 @@ public sealed record TurnContext
            && Provenance.TransportAuthenticity == TransportAuthenticity.LocalProcess
            && Provenance.SourceKind?.Value == ReminderExecutionActor.ReminderSourceKind;
 
+    // Three facts together make an approval notice turn: the source kind "child-consent", the sender
+    // "child-consent", and the authenticity LocalProcess. A webhook can name its event type "child-consent", but
+    // the webhook path sets the authenticity Verified in code, so a webhook input is never a notice.
+    // TEST-FIRST STUB (PR 1, task 1.5): task 2.4 implements the check.
+    internal bool IsChildConsentNotice
+        => throw new NotImplementedException("Task 2.4 identifies an approval notice.");
+
     // Turn identity is separate: restart batches can span several turns. Use this check where one authority
     // must continue unchanged (start idempotency, approval and continuation recovery), not for ownership.
     internal bool HasSameAuthority(TurnContext right)
