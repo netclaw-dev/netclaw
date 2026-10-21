@@ -574,9 +574,16 @@ internal static class ProviderCommand
 
                 if (prop.Value.TryGetProperty("OAuthTokenExpiry", out var tokenExpiry))
                 {
-                    var expiryStr = ConfigFileHelper.DecryptIfEncrypted(paths, tokenExpiry.GetString());
-                    if (!string.IsNullOrWhiteSpace(expiryStr) && DateTimeOffset.TryParse(expiryStr, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed))
-                        entry.OAuthTokenExpiry = parsed;
+                    // A key in secrets.json wins over a retired netclaw.json key, JSON null
+                    // included. A value that is not a date fails loudly, as it does in the daemon.
+                    var location = $"secrets.json Providers:{prop.Name}:OAuthTokenExpiry";
+                    if (tokenExpiry.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                        throw new InvalidDataException($"{location} must be a string or null, not {tokenExpiry.ValueKind}.");
+
+                    var expiryStr = tokenExpiry.ValueKind == JsonValueKind.String
+                        ? ConfigFileHelper.DecryptIfEncrypted(paths, tokenExpiry.GetString())
+                        : null;
+                    entry.OAuthTokenExpiry = OAuthTokenExpiryStorage.Parse(expiryStr, location);
                 }
             }
         }

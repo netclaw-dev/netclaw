@@ -159,10 +159,18 @@ public sealed class ProviderOAuthTokenRefreshServiceTests
         Assert.Equal("refresh-new", secretProvider.GetProperty("OAuthRefreshToken").GetString());
         Assert.Equal("account-new", secretProvider.GetProperty("OAuthAccountId").GetString());
 
+        // The integrated boundary with the real protector: the tokens are ciphertext on disk, and
+        // the expiry is a plaintext date in secrets.json that the binder can read.
+        using var rawDoc = JsonDocument.Parse(rawSecrets);
+        var rawProvider = rawDoc.RootElement.GetProperty("Providers").GetProperty("openai-codex");
+        Assert.StartsWith("ENC:", rawProvider.GetProperty("OAuthAccessToken").GetString(), StringComparison.Ordinal);
+        Assert.StartsWith("ENC:", rawProvider.GetProperty("OAuthRefreshToken").GetString(), StringComparison.Ordinal);
+        Assert.Equal(now.AddHours(1), DateTimeOffset.Parse(rawProvider.GetProperty("OAuthTokenExpiry").GetString()!));
+
         using var configDoc = JsonDocument.Parse(File.ReadAllText(paths.NetclawConfigPath));
         var configProvider = configDoc.RootElement.GetProperty("Providers").GetProperty("openai-codex");
         Assert.Equal("openai", configProvider.GetProperty("Type").GetString());
-        Assert.Equal(now.AddHours(1), DateTimeOffset.Parse(configProvider.GetProperty("OAuthTokenExpiry").GetString()!));
+        Assert.False(configProvider.TryGetProperty("OAuthTokenExpiry", out _));
     }
 
     [Fact]

@@ -433,7 +433,7 @@
           },
           "OAuthTokenExpiry": {
             "type": ["string", "null"],
-            "description": "Expiry time of the OAuth access token in ISO 8601 format. Netclaw writes it to netclaw.json when you sign in with an OAuth auth method."
+            "description": "Expiry time of the OAuth access token in ISO 8601 format. Netclaw writes it to secrets.json when you sign in with an OAuth auth method. A key in netclaw.json is retired. Run netclaw doctor --fix to move it."
           },
           "VendorOptions": {
             "type": ["object", "null"],

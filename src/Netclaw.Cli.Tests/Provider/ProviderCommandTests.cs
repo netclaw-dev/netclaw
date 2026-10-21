@@ -958,6 +958,126 @@ public sealed class ProviderCommandTests : IDisposable
     }
 
     [Fact]
+    public void WriteProvider_with_oauth_writes_the_expiry_to_secrets_json_and_not_to_netclaw_json()
+    {
+        var expiry = DateTimeOffset.Parse("2026-07-01T00:00:00+00:00");
+
+        ProviderCredentialWriter.WriteProvider(
+            _paths, "my-copilot", "github-copilot", AuthMethod.OAuthDevice, endpoint: null,
+            oauthResult: new OAuthDeviceFlowResult(new SensitiveString("access"), null, expiry),
+            apiKey: null, protector: SecretsProtection.CreateProtector(_paths));
+
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        Assert.False(config.RootElement.GetProperty("Providers").GetProperty("my-copilot").TryGetProperty("OAuthTokenExpiry", out _));
+        using var secrets = ReadConfigFile(_paths.SecretsPath);
+        var secretEntry = secrets.RootElement.GetProperty("Providers").GetProperty("my-copilot");
+        Assert.Equal(expiry, DateTimeOffset.Parse(secretEntry.GetProperty("OAuthTokenExpiry").GetString()!));
+        Assert.StartsWith("ENC:", secretEntry.GetProperty("OAuthAccessToken").GetString(), StringComparison.Ordinal);
+        Assert.Equal(expiry, ProviderCommand.LoadProviders(_paths)["my-copilot"].OAuthTokenExpiry);
+    }
+
+    [Fact]
+    public void LoadProviders_prefers_the_secrets_json_expiry_and_a_null_hides_the_retired_key()
+    {
+        var stored = DateTimeOffset.Parse("2026-07-01T00:00:00+00:00");
+        var retired = new Dictionary<string, object> { ["Type"] = "github-copilot", ["OAuthTokenExpiry"] = "2026-01-01T00:00:00+00:00" };
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["has-value"] = retired,
+                ["has-null"] = retired,
+                ["has-none"] = retired,
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["has-value"] = new Dictionary<string, object> { ["OAuthAccessToken"] = "a", ["OAuthTokenExpiry"] = stored.ToString("o") },
+                ["has-null"] = new Dictionary<string, object?> { ["OAuthAccessToken"] = "a", ["OAuthTokenExpiry"] = null },
+                ["has-none"] = new Dictionary<string, object> { ["OAuthAccessToken"] = "a" },
+            }
+        });
+
+        var providers = ProviderCommand.LoadProviders(_paths);
+
+        Assert.Equal(stored, providers["has-value"].OAuthTokenExpiry);
+        Assert.Null(providers["has-null"].OAuthTokenExpiry);
+        Assert.Equal(DateTimeOffset.Parse("2026-01-01T00:00:00+00:00"), providers["has-none"].OAuthTokenExpiry);
+    }
+
+    [Fact]
+    public void LoadProviders_with_an_expiry_that_is_not_a_date_fails_loudly()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-copilot"] = new Dictionary<string, object> { ["Type"] = "github-copilot" }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-copilot"] = new Dictionary<string, object> { ["OAuthAccessToken"] = "a", ["OAuthTokenExpiry"] = "soon" }
+            }
+        });
+
+        var failure = Assert.Throws<InvalidDataException>(() => ProviderCommand.LoadProviders(_paths));
+
+        Assert.Contains("Providers:my-copilot:OAuthTokenExpiry", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WriteProvider_with_an_API_key_removes_the_old_oauth_expiry()
+    {
+        OAuthTokenPersistence.PersistTokens(
+            _paths, "main",
+            new OAuthDeviceFlowResult(new SensitiveString("access"), null, DateTimeOffset.Parse("2026-07-01T00:00:00+00:00")),
+            new NullSecretsProtector());
+
+        ProviderCredentialWriter.WriteProvider(
+            _paths, "main", "openai-compatible", AuthMethod.ApiKey, endpoint: "http://localhost:1",
+            oauthResult: null, apiKey: "key", protector: new NullSecretsProtector());
+
+        using var secrets = ReadConfigFile(_paths.SecretsPath);
+        var entry = secrets.RootElement.GetProperty("Providers").GetProperty("main");
+        Assert.False(entry.TryGetProperty("OAuthTokenExpiry", out _));
+        Assert.Equal("key", entry.GetProperty("ApiKey").GetString());
+    }
+
+    [Fact]
+    public async Task Rename_moves_the_oauth_expiry_and_Remove_deletes_it()
+    {
+        var expiry = DateTimeOffset.Parse("2026-07-01T00:00:00+00:00");
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-copilot"] = new Dictionary<string, object> { ["Type"] = "github-copilot", ["AuthMethod"] = "OAuthDevice" }
+            }
+        });
+        OAuthTokenPersistence.PersistTokens(
+            _paths, "my-copilot", new OAuthDeviceFlowResult(new SensitiveString("access"), null, expiry), new NullSecretsProtector());
+
+        var renamed = await ProviderCommand.RunAsync(["provider", "rename", "my-copilot", "work-copilot"], _paths, output: _output);
+
+        Assert.Equal(0, renamed);
+        Assert.Null(OAuthTokenPersistence.LoadTokens(_paths, "my-copilot"));
+        Assert.Equal(expiry, OAuthTokenPersistence.LoadTokens(_paths, "work-copilot")!.ExpiresAt);
+
+        var removed = await ProviderCommand.RunAsync(["provider", "remove", "work-copilot"], _paths, output: _output);
+
+        Assert.Equal(0, removed);
+        Assert.Null(OAuthTokenPersistence.LoadTokens(_paths, "work-copilot"));
+    }
+
+    [Fact]
     public async Task Rename_CascadesToModelRoles()
     {
         // End-to-end testing surfaced that the old "config-key-only" behavior
