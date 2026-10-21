@@ -170,7 +170,6 @@ public sealed class DaemonManagerInstallTests : IDisposable
 
         Assert.True(result.Success, result.Message);
         Assert.Equal(mode, File.GetUnixFileMode(_paths.DaemonEnvironmentFilePath));
-        Assert.Empty(Directory.GetFiles(_paths.ConfigDirectory, "daemon.env.tmp-*"));
     }
 
     private DaemonManager CreateManager(FakeSystemCommandRunner runner)
