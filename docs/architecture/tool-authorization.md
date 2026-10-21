@@ -595,7 +595,7 @@ is already a root.
 folders. It makes the base and the key folder with mode 0700, and it refuses
 when a folder is a symbolic link, has another owner, or has a group or other
 bit. It never uses another folder. The shell launch calls it through
-`Prepare`. `file_write` and `file_edit` call it before they make a folder
+`Prepare`. `file_write` and `file_edit` call it before each write or edit
 below the base, because a Team session has no shell. The checks are
 call-local.
 

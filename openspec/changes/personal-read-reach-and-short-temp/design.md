@@ -98,9 +98,9 @@ EnsureFolders(location, inspector):
 Prepare(startInfo, location) = EnsureFolders(location), then set TMPDIR, TMP, TEMP
 ```
 
-- The shell launch calls `Prepare`. `FileEditTool.WriteFileAsync` (used by
-  `file_write` and `file_edit`) calls `EnsureFolders` before it makes a folder
-  below the base. A Team session has no shell, so a file tool can be the first
+- The shell launch calls `Prepare`. `FileEditTool` (used by `file_write` and
+  `file_edit`) calls `EnsureFolders` before each write or edit below the base,
+  also when the target folder exists. A Team session has no shell, so a file tool can be the first
   writer (PR #2559 review item B1). There is no second folder creator.
 - The error text starts with `Error:` and names the folder. A refused launch
   sets no variable and creates no deep folder. A refused write writes nothing.

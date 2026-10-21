@@ -30,8 +30,9 @@ following a link:
 - the daemon user owns it,
 - it has no group or other permission bits.
 
-A `file_write` or `file_edit` that makes a folder below the base SHALL first
-use the same creation and checks. A Team session has no shell, so a file tool
+Each `file_write` or `file_edit` below the base SHALL first use the same
+creation and checks on the managed folders, also when the target folder
+exists. A Team session has no shell, so a file tool
 can be the first writer. A failed check SHALL refuse the write.
 
 If a check fails, the system SHALL refuse the launch with an error that names
