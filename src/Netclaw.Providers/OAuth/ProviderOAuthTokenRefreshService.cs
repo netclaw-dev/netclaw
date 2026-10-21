@@ -251,7 +251,7 @@ public sealed class ProviderOAuthTokenRefreshService(
     private SensitiveString SignedIn(string providerName, SensitiveString accessToken)
     {
         if (_authFailures.TryGetValue(providerName, out var failure)
-            && !string.Equals(failure.AccessTokenAtFailure, accessToken.Value, StringComparison.Ordinal))
+            && !string.Equals(failure.AccessTokenAtFailure.Value, accessToken.Value, StringComparison.Ordinal))
         {
             _authFailures.TryRemove(KeyValuePair.Create(providerName, failure));
         }
@@ -261,7 +261,7 @@ public sealed class ProviderOAuthTokenRefreshService(
 
     private void ReportAuthExpired(string providerName, string reason, SensitiveString accessToken)
     {
-        _authFailures[providerName] = new AuthFailure(reason, accessToken.Value);
+        _authFailures[providerName] = new AuthFailure(reason, accessToken);
         _logger.LogError(
             "Provider {Provider} needs a new OAuth sign-in. Reason: {Reason}. Run `netclaw provider` to sign in again.",
             providerName,
@@ -280,7 +280,7 @@ public sealed class ProviderOAuthTokenRefreshService(
             }));
     }
 
-    private sealed record AuthFailure(string Reason, string AccessTokenAtFailure);
+    private sealed record AuthFailure(string Reason, SensitiveString AccessTokenAtFailure);
 
     // LastStored is the refresh token that this process last read from, or wrote to, secrets.json.
     // Live is the refresh token to present next. They differ after a save of refreshed tokens fails.

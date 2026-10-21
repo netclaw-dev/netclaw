@@ -510,17 +510,8 @@ public sealed class ProviderOAuthTokenRefreshServiceTests
     };
 
     // The retry waits on the fake clock. Advance it until the call finishes.
-    private static async Task<T> DriveAsync<T>(Func<Task<T>> start, FakeTimeProvider time)
-    {
-        var task = start();
-        while (!task.IsCompleted)
-        {
-            time.Advance(TimeSpan.FromSeconds(2));
-            await Task.Yield();
-        }
-
-        return await task;
-    }
+    private static Task<T> DriveAsync<T>(Func<Task<T>> start, FakeTimeProvider time)
+        => FakeClockDriver.AdvanceUntilCompleteAsync(start(), () => time.Advance(TimeSpan.FromSeconds(2)));
 
     private static ProviderOAuthTokenRefreshService CreateService(
         NetclawPaths paths,
