@@ -10,6 +10,7 @@ using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Cli.Doctor;
 
@@ -82,6 +83,9 @@ public sealed class DoctorFixService
 
         if (TryDeleteDefaultAllowedToolsCopies(obj))
             appliedFixes.Add(LegacyAllowedToolsFixName);
+
+        if (TryRemoveRetiredOAuthExpiryKeys(obj))
+            appliedFixes.Add(RetiredOAuthExpiryFixName);
 
         if (obj["configVersion"] is null)
         {
@@ -160,6 +164,30 @@ public sealed class DoctorFixService
     }
 
     private const string LegacyAllowedToolsFixName = "remove copied default audience tool lists";
+
+    internal const string RetiredOAuthExpiryFixName = "move retired OAuthTokenExpiry keys to secrets.json";
+
+    // Applying the fix first copies each date to secrets.json (see ApplyAsync). Without an entry
+    // there, a provider has no expiry, and a Copilot token that expires then fails with HTTP 401 and no refresh.
+    // A key that holds anything other than JSON null or a date stays. The model configuration check reports it.
+    private static bool TryRemoveRetiredOAuthExpiryKeys(JsonObject config)
+    {
+        var removed = false;
+        foreach (var key in OAuthTokenExpiryStorage.FindRetired(config))
+        {
+            var removable = key.Value is null
+                || key.Value is JsonValue value
+                && value.TryGetValue<string>(out var text)
+                && OAuthTokenExpiryStorage.TryParse(text, out _);
+            if (!removable)
+                continue;
+
+            key.Entry.Remove(key.Key);
+            removed = true;
+        }
+
+        return removed;
+    }
 
     /// <summary>
     /// Deletes each Public or Team AllowedTools key that exactly matches a default list that a
@@ -350,6 +378,8 @@ public sealed class DoctorFixService
             backups.Add(NextBackupPath(fix.FilePath, "legacy-models"));
         if (fix.Description.Contains(LegacyAllowedToolsFixName, StringComparison.Ordinal))
             backups.Add(NextBackupPath(fix.FilePath, "legacy-tool-defaults"));
+        if (fix.Description.Contains(RetiredOAuthExpiryFixName, StringComparison.Ordinal))
+            backups.Add(NextBackupPath(fix.FilePath, "retired-oauth-expiry"));
         if (fix.Description.Contains(SchemaFixResolver.RemovedPropertyPrefix, StringComparison.Ordinal))
             backups.Add(NextBackupPath(fix.FilePath, "removed-keys"));
         return backups;
@@ -396,6 +426,18 @@ public sealed class DoctorFixService
                 }
 
                 continue;
+            }
+
+            // Copy the dates to secrets.json first. A crash before the netclaw.json write leaves both
+            // values, and the secrets.json value wins, so the result is the same. No secrets.json backup:
+            // a copy of the credentials file is a new secret file, and the netclaw.json backup holds the date.
+            if (string.Equals(fix.FilePath, _paths.NetclawConfigPath, StringComparison.Ordinal)
+                && fix.Description.Contains(RetiredOAuthExpiryFixName, StringComparison.Ordinal))
+            {
+                OAuthTokenExpiryStorage.MoveRetiredToSecrets(
+                    _paths,
+                    (JsonObject)JsonNode.Parse(fix.OriginalText)!,
+                    SecretsProtection.CreateProtector(_paths));
             }
 
             // Ensure the parent directory exists before writing. The daemon-PATH fix can

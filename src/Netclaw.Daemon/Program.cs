@@ -1190,7 +1190,7 @@ static IReadOnlyList<string> ConfigureDaemonServices(
 
     // Expired data is cleared by DataRetentionActor, which runs every RetentionJob registered here.
     var retentionWarnings = services.AddRetentionJobs(configuration, paths);
-    return [.. toolConfigWarnings, .. retentionWarnings];
+    return [.. toolConfigWarnings, .. retentionWarnings, .. OAuthTokenExpiryStorage.RetiredKeyWarnings(paths)];
 }
 
 static ISearchBackend? CreateSearchBackend(SearchConfig config)
