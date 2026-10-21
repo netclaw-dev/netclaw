@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from background_fixture import handler_for
-from cycle_evals import CASES, CORRECTION, CycleFixture, main, primary_receipts, verdict
+from cycle_evals import CASES, CORRECTION, CORRECTION_RECEIPT, CycleFixture, main, primary_receipts, verdict
 
 # The runtime text. The eval matches its stable markers.
 NUDGE = "\n".join((
@@ -755,7 +755,7 @@ class PrimaryReceiptTests(unittest.TestCase):
     def primary_log(self, case):
         snapshot, _, _ = evidence(case)
         success = "Exit code: 0\ncycle-stalled\n"
-        correction = CORRECTION
+        correction = CORRECTION_RECEIPT
         rejected = ("Error: Required meta argument '_rationale' must be a non-empty string. "
                     "Supply one sentence that states the tool call intent. The tool was NOT executed.")
         results = ([f"Exit code: 0\n{count}\n" for count in (1, 2, 3)] if case == "changed_result" else
@@ -795,10 +795,17 @@ class PrimaryReceiptTests(unittest.TestCase):
 
     def test_repeat_nudge_requires_a_correction_receipt_for_the_repeat(self):
         snapshot, records = self.primary_log("repeat_nudge")
-        executed = records[3].replace(CORRECTION, "Exit code: 0\ncycle-stalled\n")
+        executed = records[3].replace(CORRECTION_RECEIPT, "Exit code: 0\ncycle-stalled\n")
         for log in ("".join(records[:3]), "".join(records[:3]) + executed):
             with self.subTest(log=log):
                 self.assertFalse(primary_receipts(snapshot, log))
+
+    def test_bare_correction_without_the_runtime_next_action_line_is_not_a_receipt(self):
+        # The runtime writes CORRECTION plus the "Next action" line. This test pins that real format.
+        snapshot, records = self.primary_log("correction")
+        bare = "".join(records).replace(CORRECTION_RECEIPT, CORRECTION)
+        self.assertNotEqual("".join(records), bare)
+        self.assertFalse(primary_receipts(snapshot, bare))
 
     def test_correction_must_state_that_the_call_did_not_execute(self):
         snapshot, records = self.primary_log("correction")

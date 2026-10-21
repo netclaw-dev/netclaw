@@ -84,7 +84,8 @@ public static class UpdateCheckService
     /// <summary>
     /// Fetches the binary manifest and compares the latest version for <paramref name="channel"/>
     /// against <paramref name="currentVersion"/>. Records the result for <see cref="GetLastResult"/>.
-    /// Never throws — returns a "no update" result on any failure.
+    /// Returns a "no update" result on any failure, including a feed timeout. Throws
+    /// <see cref="OperationCanceledException"/> only when <paramref name="cancellationToken"/> is cancelled.
     /// </summary>
     public static async Task<UpdateCheckResult> CheckForUpdateAsync(
         HttpClient httpClient,
@@ -113,7 +114,7 @@ public static class UpdateCheckService
             RecordResult(result);
             return result;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             var failed = new UpdateCheckResult
             {
@@ -162,12 +163,12 @@ public static class UpdateCheckService
             response.EnsureSuccessStatusCode();
             manifestBytes = await response.Content.ReadAsByteArrayAsync(cts.Token);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             return new ManifestFetchResult
             {
                 Status = ManifestFetchStatus.NetworkFailure,
-                ErrorMessage = $"Failed to fetch manifest: {ex.Message}",
+                ErrorMessage = DescribeFetchFailure("manifest", FeedConstants.BinaryManifestUrl, ex),
             };
         }
 
@@ -179,12 +180,16 @@ public static class UpdateCheckService
             sigResponse.EnsureSuccessStatusCode();
             signatureContent = await sigResponse.Content.ReadAsStringAsync(cts.Token);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
+            // A timeout or a transport error says nothing about the manifest's authenticity, so it is
+            // a network failure. An HTTP status error (such as 404 for a missing .sig) stays a
+            // signature failure. Both abort the update; only the operator message differs.
+            var isTransportFailure = ex is OperationCanceledException or HttpRequestException { StatusCode: null };
             return new ManifestFetchResult
             {
-                Status = ManifestFetchStatus.SignatureFailure,
-                ErrorMessage = $"Failed to fetch manifest signature: {ex.Message}",
+                Status = isTransportFailure ? ManifestFetchStatus.NetworkFailure : ManifestFetchStatus.SignatureFailure,
+                ErrorMessage = DescribeFetchFailure("manifest signature", FeedConstants.BinaryManifestSignatureUrl, ex),
             };
         }
 
@@ -238,6 +243,14 @@ public static class UpdateCheckService
     }
 
     private static void RecordResult(UpdateCheckResult result) => s_lastResult = result;
+
+    // HttpClient.Timeout and the linked CancelAfter both surface as OperationCanceledException.
+    // The catch filters above treat one as a feed timeout only while the caller's own token is
+    // still live, so a real shutdown or caller deadline still propagates.
+    private static string DescribeFetchFailure(string what, string url, Exception ex)
+        => ex is OperationCanceledException
+            ? $"Timed out after {FeedConstants.BinaryFeedHttpTimeout.TotalSeconds:0}s fetching {what} from {url}"
+            : $"Failed to fetch {what}: {ex.Message}";
 
     /// <summary>
     /// Clears the recorded result. Used by tests to avoid cross-test interference.
