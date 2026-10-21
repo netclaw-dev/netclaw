@@ -209,6 +209,195 @@ public sealed class ProviderOAuthTokenRefreshServiceTests
         Assert.Equal("invalid_grant", alert.Context!["reason"]);
     }
 
+    [Theory]
+    [InlineData("refresh_token_reused")]
+    [InlineData("refresh_token_expired")]
+    [InlineData("refresh_token_invalidated")]
+    public async Task GetValidAccessTokenAsync_OpenAiErrorObjectRejection_EmitsAlertWithTheCodeAndSetsAuthFailure(string code)
+    {
+        using var dir = new DisposableTempDir();
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var sink = new RecordingNotificationSink();
+        var service = CreateService(new NetclawPaths(dir.Path), time, new FakeHttpMessageHandler(_ =>
+            FakeHttpMessageHandler.JsonResponse(
+                new { error = new { code, message = "The refresh token is no longer valid." } },
+                HttpStatusCode.Unauthorized)), sink);
+
+        var ex = await Assert.ThrowsAsync<ProviderOAuthRefreshRequiredException>(() =>
+            service.GetValidAccessTokenAsync(
+                "openai-codex", ExpiredEntry(now), OpenAiOAuth, TestContext.Current.CancellationToken));
+
+        Assert.Contains(code, ex.Message, StringComparison.Ordinal);
+        var alert = Assert.Single(sink.Alerts);
+        Assert.Equal(AlertType.ProviderAuthExpired, alert.Category);
+        Assert.Equal(code, alert.Context!["reason"]);
+        Assert.Equal([new ProviderAuthFailure("openai-codex", code)], service.GetAuthFailures());
+    }
+
+    [Fact]
+    public async Task GetAuthFailures_IsEmptyAfterAGoodRefresh()
+    {
+        using var dir = new DisposableTempDir();
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var reject = true;
+        var service = CreateService(new NetclawPaths(dir.Path), time, new FakeHttpMessageHandler(_ => reject
+            ? FakeHttpMessageHandler.JsonResponse(new { error = new { code = "refresh_token_reused" } }, HttpStatusCode.Unauthorized)
+            : FakeHttpMessageHandler.JsonResponse(new { access_token = "access-new", refresh_token = "refresh-new", expires_in = 3600 })));
+        var entry = ExpiredEntry(now);
+        await Assert.ThrowsAsync<ProviderOAuthRefreshRequiredException>(() =>
+            service.GetValidAccessTokenAsync("openai-codex", entry, OpenAiOAuth, TestContext.Current.CancellationToken));
+        Assert.NotEmpty(service.GetAuthFailures());
+
+        reject = false;
+        await service.GetValidAccessTokenAsync("openai-codex", entry, OpenAiOAuth, TestContext.Current.CancellationToken);
+
+        Assert.Empty(service.GetAuthFailures());
+    }
+
+    [Fact]
+    public async Task GetAuthFailures_IsEmptyAfterANewSignIn()
+    {
+        using var dir = new DisposableTempDir();
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var service = CreateService(new NetclawPaths(dir.Path), time, new FakeHttpMessageHandler(_ =>
+            FakeHttpMessageHandler.JsonResponse(new { error = new { code = "refresh_token_reused" } }, HttpStatusCode.Unauthorized)));
+        await Assert.ThrowsAsync<ProviderOAuthRefreshRequiredException>(() =>
+            service.GetValidAccessTokenAsync("openai-codex", ExpiredEntry(now), OpenAiOAuth, TestContext.Current.CancellationToken));
+        Assert.NotEmpty(service.GetAuthFailures());
+
+        var reSignedIn = ExpiredEntry(now);
+        reSignedIn.OAuthAccessToken = new SensitiveString("access-after-login");
+        reSignedIn.OAuthTokenExpiry = now.AddHours(1);
+        await service.GetValidAccessTokenAsync("openai-codex", reSignedIn, OpenAiOAuth, TestContext.Current.CancellationToken);
+
+        Assert.Empty(service.GetAuthFailures());
+    }
+
+    [Fact]
+    public async Task GetValidAccessTokenAsync_RejectedRefreshToken_IsNotRetried()
+    {
+        using var dir = new DisposableTempDir();
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var calls = 0;
+        var service = CreateService(new NetclawPaths(dir.Path), time, new FakeHttpMessageHandler(_ =>
+        {
+            calls++;
+            return FakeHttpMessageHandler.JsonResponse(new { error = "invalid_grant" }, HttpStatusCode.BadRequest);
+        }));
+
+        await Assert.ThrowsAsync<ProviderOAuthRefreshRequiredException>(() =>
+            service.GetValidAccessTokenAsync("openai-codex", ExpiredEntry(now), OpenAiOAuth, TestContext.Current.CancellationToken));
+
+        Assert.Equal(1, calls);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task GetValidAccessTokenAsync_TransientHttpStatus_RetriesOnceAndSucceeds(HttpStatusCode status)
+    {
+        using var dir = new DisposableTempDir();
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var calls = 0;
+        var service = CreateService(new NetclawPaths(dir.Path), time, new FakeHttpMessageHandler(_ => ++calls == 1
+            ? new HttpResponseMessage(status) { Content = new StringContent("<html>try later</html>") }
+            : FakeHttpMessageHandler.JsonResponse(new { access_token = "access-new", refresh_token = "refresh-new", expires_in = 3600 })));
+
+        var token = await DriveAsync(() => service.GetValidAccessTokenAsync(
+            "openai-codex", ExpiredEntry(now), OpenAiOAuth, TestContext.Current.CancellationToken), time);
+
+        Assert.Equal("access-new", token.Value);
+        Assert.Equal(2, calls);
+        Assert.Empty(service.GetAuthFailures());
+    }
+
+    [Fact]
+    public async Task GetValidAccessTokenAsync_NetworkErrorThenSuccess_RetriesOnce()
+    {
+        using var dir = new DisposableTempDir();
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var calls = 0;
+        var service = CreateService(new NetclawPaths(dir.Path), time, new FakeHttpMessageHandler(_ => ++calls == 1
+            ? throw new HttpRequestException("Connection reset.")
+            : FakeHttpMessageHandler.JsonResponse(new { access_token = "access-new", refresh_token = "refresh-new", expires_in = 3600 })));
+
+        var token = await DriveAsync(() => service.GetValidAccessTokenAsync(
+            "openai-codex", ExpiredEntry(now), OpenAiOAuth, TestContext.Current.CancellationToken), time);
+
+        Assert.Equal("access-new", token.Value);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task GetValidAccessTokenAsync_HttpClientTimeoutThenSuccess_RetriesOnce()
+    {
+        using var dir = new DisposableTempDir();
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var calls = 0;
+        var service = CreateService(new NetclawPaths(dir.Path), time, new FakeHttpMessageHandler(_ => ++calls == 1
+            ? throw new TaskCanceledException("The request timed out.")
+            : FakeHttpMessageHandler.JsonResponse(new { access_token = "access-new", refresh_token = "refresh-new", expires_in = 3600 })));
+
+        var token = await DriveAsync(() => service.GetValidAccessTokenAsync(
+            "openai-codex", ExpiredEntry(now), OpenAiOAuth, TestContext.Current.CancellationToken), time);
+
+        Assert.Equal("access-new", token.Value);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task GetValidAccessTokenAsync_TransientTwice_FailsAfterOneRetryWithoutAnAlert()
+    {
+        using var dir = new DisposableTempDir();
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var sink = new RecordingNotificationSink();
+        var calls = 0;
+        var service = CreateService(new NetclawPaths(dir.Path), time, new FakeHttpMessageHandler(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.BadGateway);
+        }), sink);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => DriveAsync(() => service.GetValidAccessTokenAsync(
+            "openai-codex", ExpiredEntry(now), OpenAiOAuth, TestContext.Current.CancellationToken), time));
+
+        Assert.Equal(HttpStatusCode.BadGateway, ex.StatusCode);
+        Assert.Equal(2, calls);
+        Assert.Empty(sink.Alerts);
+        Assert.Empty(service.GetAuthFailures());
+    }
+
+    [Fact]
+    public async Task GetValidAccessTokenAsync_CallerCancellation_IsNotRetried()
+    {
+        using var dir = new DisposableTempDir();
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        using var cts = new CancellationTokenSource();
+        var calls = 0;
+        var service = CreateService(new NetclawPaths(dir.Path), time, new FakeHttpMessageHandler(_ =>
+        {
+            calls++;
+            cts.Cancel();
+            throw new TaskCanceledException("The caller cancelled the request.");
+        }));
+
+        // No time advance: a retry would wait on the fake clock and this call would not finish.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.GetValidAccessTokenAsync("openai-codex", ExpiredEntry(now), OpenAiOAuth, cts.Token));
+
+        Assert.Equal(1, calls);
+    }
+
     [Fact]
     public async Task GetValidAccessTokenAsync_ExpiredTokenWithoutRefreshToken_ThrowsAndEmitsAlert()
     {
@@ -319,6 +508,19 @@ public sealed class ProviderOAuthTokenRefreshServiceTests
         OAuthTokenExpiry = now.AddMinutes(-1),
         OAuthAccountId = new SensitiveString("account-old"),
     };
+
+    // The retry waits on the fake clock. Advance it until the call finishes.
+    private static async Task<T> DriveAsync<T>(Func<Task<T>> start, FakeTimeProvider time)
+    {
+        var task = start();
+        while (!task.IsCompleted)
+        {
+            time.Advance(TimeSpan.FromSeconds(2));
+            await Task.Yield();
+        }
+
+        return await task;
+    }
 
     private static ProviderOAuthTokenRefreshService CreateService(
         NetclawPaths paths,

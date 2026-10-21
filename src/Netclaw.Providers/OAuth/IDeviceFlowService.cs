@@ -31,9 +31,9 @@ public interface IDeviceFlowService
 
     /// <summary>
     /// Exchange a refresh token for a new access token.
-    /// Returns null if the refresh token is invalid or revoked.
+    /// Throws <see cref="OAuthRefreshTokenRejectedException"/> when the token server rejects the refresh token.
     /// </summary>
-    Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
+    Task<OAuthDeviceFlowResult> RefreshTokenAsync(
         string tokenEndpoint,
         string clientId,
         SensitiveString refreshToken,
@@ -42,7 +42,7 @@ public interface IDeviceFlowService
     /// <summary>
     /// Backward-compatible overload that accepts a raw refresh token string.
     /// </summary>
-    Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
+    Task<OAuthDeviceFlowResult> RefreshTokenAsync(
         string tokenEndpoint,
         string clientId,
         string refreshToken,

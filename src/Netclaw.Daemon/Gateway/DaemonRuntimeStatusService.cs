@@ -17,6 +17,7 @@ using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Services;
+using Netclaw.Providers.OAuth;
 using Netclaw.Tools;
 using static Netclaw.Actors.Reminders.ReminderProtocol;
 
@@ -34,6 +35,7 @@ internal sealed class DaemonRuntimeStatusService(
     IChatClientProvider chatClientProvider,
     ProviderRuntimeValidation providerValidation,
     RejectedConfigState rejectedConfig,
+    ProviderOAuthTokenRefreshService oauthRefresh,
     McpClientManager? mcpClientManager = null,
     SQLiteMemoryStore? sqliteMemoryStore = null,
     MemoryEmbedderHolder? memoryEmbedderHolder = null,
@@ -49,6 +51,7 @@ internal sealed class DaemonRuntimeStatusService(
         var connectors = await BuildChannelStatusesAsync(cancellationToken);
 
         connectors.AddRange(BuildMcpStatuses());
+        connectors.AddRange(oauthRefresh.GetAuthFailures().Select(ToConnector));
 
         var degraded = chatClientProvider.IsDegraded;
         var configNotApplied = rejectedConfig.Reason;
@@ -160,6 +163,15 @@ internal sealed class DaemonRuntimeStatusService(
             .Select(x => ToConnector(x.Key, x.Value))
             .ToList();
     }
+
+    internal static DaemonRuntimeStatus.Connector ToConnector(ProviderAuthFailure failure) => new()
+    {
+        Key = $"provider:{failure.Provider}",
+        DisplayName = $"Provider/{failure.Provider}",
+        Enabled = true,
+        Status = "auth-failed",
+        Message = $"The OAuth credentials need a new sign-in ({failure.Reason}). Run `netclaw provider`.",
+    };
 
     internal static DaemonRuntimeStatus.Connector ToConnector(McpServerName name, McpServerStatus status)
     {

@@ -201,9 +201,9 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
 
     /// <summary>
     /// Exchange a refresh token for a new access token.
-    /// Returns null if the refresh token is invalid or revoked.
+    /// Throws <see cref="OAuthRefreshTokenRejectedException"/> when the token server rejects the refresh token.
     /// </summary>
-    public async Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
+    public async Task<OAuthDeviceFlowResult> RefreshTokenAsync(
         string tokenEndpoint,
         string clientId,
         SensitiveString refreshToken,
@@ -220,15 +220,8 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorJson = await response.Content.ReadAsStringAsync(ct);
-            using var errorDoc = JsonDocument.Parse(errorJson);
-            var error = errorDoc.RootElement.TryGetProperty("error", out var errProp)
-                ? errProp.GetString() : null;
-
-            if (error == "invalid_grant")
-                return null;
-
-            response.EnsureSuccessStatusCode(); // throw for other errors
+            OAuthTokenResponseParser.ThrowRefreshFailure(
+                response.StatusCode, await response.Content.ReadAsStringAsync(ct));
         }
 
         var json = await response.Content.ReadAsStringAsync(ct);
@@ -236,7 +229,7 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
         return OAuthTokenResponseParser.Parse(doc.RootElement, _timeProvider);
     }
 
-    public Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
+    public Task<OAuthDeviceFlowResult> RefreshTokenAsync(
         string tokenEndpoint,
         string clientId,
         string refreshToken,
