@@ -132,7 +132,8 @@ public sealed class ChildConsentNoticeTurnSpecs(ITestOutputHelper output) : Chil
     /// <summary>
     /// Scenario "The later fire replaces the earlier fire", notice part: the closing notice lists the reminder fire that
     /// waited for the pause, so the parent model knows why the reminder turn follows.
-    /// Planted bug: the closing notice omits the held fires.
+    /// Planted bug: the closing notice omits the held fires, words the line in another way, or puts the line after
+    /// "spawn_agent is available again.".
     /// </summary>
     [Fact]
     public async Task The_closing_notice_lists_the_held_reminder_fires()
@@ -165,6 +166,12 @@ public sealed class ChildConsentNoticeTurnSpecs(ITestOutputHelper output) : Chil
             .UserMessage.Content!;
         Assert.Contains("reminder=daily-pr-sweep", closing, StringComparison.Ordinal);
         Assert.Contains("spawn_agent is available again.", closing, StringComparison.Ordinal);
+
+        // Design D4 text: the held-fires line has the design wording, and it comes just before the last line,
+        // "spawn_agent is available again.". The fire time 1_761_055_200_000 ms is 14:00:00Z.
+        var lines = closing.Split('\n').Select(static line => line.TrimEnd('\r')).Where(static line => line.Length > 0).ToArray();
+        Assert.Equal("spawn_agent is available again.", lines[^1]);
+        Assert.Equal("Held reminder fires now run: reminder=daily-pr-sweep fired_at=14:00:00Z", lines[^2]);
     }
 
     /// <summary>

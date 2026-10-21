@@ -219,6 +219,180 @@ public sealed class ChildConsentNoticeSpecs(ITestOutputHelper output) : ChildCon
     }
 
     /// <summary>
+    /// Merge rule (design D4, Q1, N2): one digest for the session, and its text is true for the session. Three children
+    /// ask, one after the other, while a parent prompt of Alice is open. The session admits a notice at once for each
+    /// request, because the turn runs no model call. Each newer notice replaces the waiting notice: the session closes
+    /// the waiting notice with InputClosed. After the parent answer, one notice turn runs, and it states three open
+    /// requests.
+    /// Planted bug: each ready digest stays its own waiting notice, and each newer notice goes in front of the older
+    /// notices. The session then runs three notice turns in the order 3, 2, 1, and the model last reads "1 are open".
+    /// </summary>
+    [Fact]
+    public async Task Three_requests_behind_an_open_parent_prompt_give_one_notice_turn_that_states_three_open_requests()
+    {
+        // Arrange: three held children of Alice, and then an open parent prompt of Alice.
+        var sessionId = new SessionId("consent/one-pending-notice-parent-prompt");
+        var journal = await JournalAsync();
+        ScriptParent();
+        ScriptChildren();
+        var subscriber = await JoinAsync(sessionId);
+        var children = new List<(ChildRunAccepted Accepted, TaskCompletionSource Gate)>();
+        for (var index = 1; index <= 3; index++)
+            children.Add(await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), $"ask-pp{index}"));
+
+        try
+        {
+            await SendAsync(sessionId, "probe:pp", Operator(Alice));
+            var parentPrompt = await FishApprovalAsync(subscriber, "probe-pp");
+
+            // Act: each child asks in turn while the parent prompt is open. Then Alice answers the parent prompt.
+            foreach (var child in children)
+            {
+                child.Gate.TrySetResult();
+                await FishChildPromptAsync(subscriber, child.Accepted.Run.RunId);
+                await BarrierAsync(sessionId, child.Accepted);
+            }
+
+            AssertAck(await AnswerAsync(sessionId, parentPrompt.CallId, Alice));
+
+            // Assert: the journal shows one notice turn. Each other notice closed with no turn.
+            await AwaitAssertAsync(() => Assert.Contains(ConsentNotices(journal, sessionId),
+                notice => ConsumedByTurn(journal, notice.InputId) > 0), Deadline, cancellationToken: Cancellation);
+            await SettleNoticesAsync(journal, sessionId);
+            var notices = ConsentNotices(journal, sessionId);
+            var ran = Assert.Single(notices, notice => ConsumedByTurn(journal, notice.InputId) > 0);
+            Assert.Equal(1, ConsumptionCount(journal, ran.InputId));
+            var text = ran.UserMessage.Content ?? string.Empty;
+            Assert.StartsWith($"{OpenNoticeHeading} 3 are open.", text, StringComparison.Ordinal);
+            Assert.All(children, child => Assert.Contains($"run={child.Accepted.Run.RunId.Value}", text, StringComparison.Ordinal));
+            Assert.All(notices.Where(notice => notice.InputId != ran.InputId), stale =>
+            {
+                Assert.Equal(0, ConsumedByTurn(journal, stale.InputId));
+                Assert.Contains(journal.Committed.OfType<InputClosed>(), evt => evt.InputIds.Contains(stale.InputId));
+            });
+
+            // Assert: the model reads one notice, and that notice is true when it runs.
+            var noticeRequest = Assert.Single(Clients.Parent.ReceivedMessages, request => FreshUserTexts(request)
+                .Any(fresh => fresh.StartsWith(OpenNoticeHeading, StringComparison.Ordinal)));
+            Assert.Contains(FreshUserTexts(noticeRequest), fresh => fresh.StartsWith($"{OpenNoticeHeading} 3 are open.", StringComparison.Ordinal));
+            Assert.Single(NoticeTextsSeenByModel());
+        }
+        finally
+        {
+            foreach (var child in children)
+                child.Gate.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Merge rule (design D4, Q1, N2), without a parent prompt. In one turn of Alice, a child asks during the first
+    /// model call, so the open notice waits from the end of tool batch 1. Alice answers the child during the second
+    /// model call, so the closing notice comes at the end of tool batch 2. The closing notice replaces the waiting open
+    /// notice. After the turn, one notice turn runs, and it carries the closing text. No stale notice that says
+    /// "spawn_agent is refused" runs after it.
+    /// Planted bug: the closing notice goes in front of the open notice, and both run. The model reads the closing
+    /// notice, and then the stale open notice that says spawn_agent is refused.
+    /// </summary>
+    [Fact]
+    public async Task A_closing_notice_replaces_the_waiting_open_notice_of_the_same_turn()
+    {
+        // Arrange: a held child of Alice. Alice's turn makes two tool batches, and a gate holds each model call.
+        var sessionId = new SessionId("consent/one-pending-notice-two-batches");
+        var journal = await JournalAsync();
+        const string twoBatches = "Read the two project files.";
+        var projectDirectory = Path.Combine(TestPaths.WorkspacesDirectory, "project");
+        Directory.CreateDirectory(projectDirectory);
+        var fileOne = Path.Combine(projectDirectory, "one.md");
+        var fileTwo = Path.Combine(projectDirectory, "two.md");
+        await File.WriteAllTextAsync(fileOne, "File one.", Cancellation);
+        await File.WriteAllTextAsync(fileTwo, "File two.", Cancellation);
+        Clients.Parent.ResponseContentsSelector = request =>
+        {
+            if (FreshUserTexts(request).Contains(twoBatches))
+                return [ReadFile("batch-1", fileOne)];
+            if (HasResult(request, "batch-1") && !HasCall(request, "batch-2"))
+                return [ReadFile("batch-2", fileTwo)];
+            return ScriptedParentReply(request);
+        };
+        ScriptChildren();
+        var subscriber = await JoinAsync(sessionId);
+        var (accepted, gate) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-batches");
+        var holdFirst = NewGate();
+        var holdSecond = NewGate();
+        var enteredFirst = ParentGate.Arm(request => FreshUserTexts(request).Contains(twoBatches), holdFirst);
+
+        try
+        {
+            await SendAsync(sessionId, twoBatches, Operator(Alice));
+            await enteredFirst.WaitAsync(Deadline, Cancellation);
+
+            // Act 1: the child asks during model call 1. Batch 1 ends, and model call 2 waits at the gate.
+            gate.TrySetResult();
+            var childPrompt = await FishChildPromptAsync(subscriber, accepted.Run.RunId);
+            await BarrierAsync(sessionId, accepted);
+            var enteredSecond = ParentGate.Arm(request => HasResult(request, "batch-1") && !HasCall(request, "batch-2"), holdSecond);
+            holdFirst.TrySetResult();
+            await enteredSecond.WaitAsync(Deadline, Cancellation);
+            var open = Assert.Single(ConsentNotices(journal, sessionId));
+            Assert.StartsWith(OpenNoticeHeading, open.UserMessage.Content, StringComparison.Ordinal);
+
+            // Act 2: Alice answers the child during model call 2. Batch 2 ends, and the turn ends.
+            AssertAck(await AnswerAsync(sessionId, childPrompt.CallId, Alice));
+            await BarrierAsync(sessionId, accepted);
+            holdSecond.TrySetResult();
+
+            // Assert: the journal shows one notice turn, with the closing text. The open notice closed with no turn.
+            await AwaitAssertAsync(() => Assert.Contains(ConsentNotices(journal, sessionId),
+                notice => notice.UserMessage.Content!.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal)),
+                Deadline, cancellationToken: Cancellation);
+            await SettleNoticesAsync(journal, sessionId);
+            var closing = Assert.Single(ConsentNotices(journal, sessionId),
+                notice => notice.UserMessage.Content!.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal));
+            Assert.Equal(1, ConsumedByTurn(journal, closing.InputId));
+            Assert.Equal(0, ConsumedByTurn(journal, open.InputId));
+            Assert.Contains(journal.Committed.OfType<InputClosed>(), evt => evt.InputIds.Contains(open.InputId));
+            Assert.Single(ConsentNotices(journal, sessionId), notice => ConsumedByTurn(journal, notice.InputId) > 0);
+
+            // Assert: the model reads the closing notice in one turn and never reads the stale open notice.
+            Assert.DoesNotContain(Clients.Parent.ReceivedMessages, request => FreshUserTexts(request)
+                .Any(fresh => fresh.StartsWith(OpenNoticeHeading, StringComparison.Ordinal)));
+            Assert.Single(Clients.Parent.ReceivedMessages, request => FreshUserTexts(request)
+                .Any(fresh => fresh.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal)));
+            Assert.DoesNotContain(Clients.Parent.ReceivedMessages, request => request.Any(message =>
+                message.Role == Microsoft.Extensions.AI.ChatRole.User
+                && message.Text.Contains("spawn_agent is refused", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            holdFirst.TrySetResult();
+            holdSecond.TrySetResult();
+            gate.TrySetResult();
+            ParentGate.Disarm();
+        }
+    }
+
+    // How many turn events consumed the input: a tool batch or a turn record. InputClosed does not count, because a
+    // closed input never reaches the model.
+    private static int ConsumedByTurn(AcceptanceFault journal, InputId inputId)
+        => journal.Committed.ToArray().Count(evt => evt switch
+        {
+            ToolBatchStarted batch => batch.ConsumedInputIds.Contains(inputId),
+            TurnRecorded turn => turn.ConsumedInputIds.Contains(inputId),
+            _ => false
+        });
+
+    // The distinct approval notice texts that reached the parent model as user messages, in any request.
+    private IReadOnlyList<string> NoticeTextsSeenByModel()
+        => Clients.Parent.ReceivedMessages
+            .SelectMany(static request => request)
+            .Where(static message => message.Role == Microsoft.Extensions.AI.ChatRole.User)
+            .Select(static message => message.Text)
+            .Where(static text => text.StartsWith(OpenNoticeHeading, StringComparison.Ordinal)
+                                  || text.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    /// <summary>
     /// Task 1.10 (session part). A child prompt lives until it closes, and a parent prompt lives until the turn ends.
     /// The session sets the lifetime when it emits the prompt.
     /// Planted bug: the session emits every prompt with the default lifetime.

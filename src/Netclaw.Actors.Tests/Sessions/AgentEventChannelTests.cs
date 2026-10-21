@@ -200,9 +200,32 @@ public sealed class AgentEventChannelTests
         var text = AgentEventRenderer.Render(events);
 
         // Assert
-        Assert.Contains("1 are open", text, StringComparison.Ordinal);
+        Assert.Contains("Child consent requests wait for the operator. 1 is open.", text, StringComparison.Ordinal);
         Assert.Contains($"- agent=pr-reviewer run={open.Value} tool=shell_execute", text, StringComparison.Ordinal);
         Assert.DoesNotContain($"run={answered.Value} tool=shell_execute", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Design D4 text, number agreement. One open request reads in the singular, and two or more read in the plural.
+    /// The design gives only the plural form "3 are open."; the singular form "1 is open." follows the same sentence.
+    /// Planted bug: the renderer always writes "{count} are open.", so one request reads "1 are open.".
+    /// </summary>
+    [Fact]
+    public void One_open_request_reads_in_the_singular_and_two_read_in_the_plural()
+    {
+        // Arrange
+        AgentEvent[] one = [Requested(new SubAgentRunId("r-7f2"), 1)];
+        AgentEvent[] two = [Requested(new SubAgentRunId("r-7f2"), 1), Requested(new SubAgentRunId("r-8a1"), 1)];
+
+        // Act
+        var singular = AgentEventRenderer.Render(one);
+        var plural = AgentEventRenderer.Render(two);
+
+        // Assert
+        var firstLine = singular.Split('\n')[0].TrimEnd('\r');
+        Assert.Equal("Child consent requests wait for the operator. 1 is open.", firstLine);
+        Assert.DoesNotContain("1 are open", singular, StringComparison.Ordinal);
+        Assert.Equal("Child consent requests wait for the operator. 2 are open.", plural.Split('\n')[0].TrimEnd('\r'));
     }
 
     internal static AgentEvent.ChildApprovalRequested Requested(SubAgentRunId runId, int number) => new(

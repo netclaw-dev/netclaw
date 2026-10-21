@@ -22,9 +22,16 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// </summary>
 public sealed class ChildApprovalHoldsReminderTests : ChildLifetimeTestBase
 {
+    private const string PersonBarrierText = "Give me the status.";
+
     public ChildApprovalHoldsReminderTests(ITestOutputHelper output) : base(output)
     {
     }
+
+    // The ID of the one admitted input with this exact text.
+    private static InputId AdmittedInputId(IReadOnlyList<JournalEntry> events, string text)
+        => Assert.Single(events.Select(static entry => entry.Payload).OfType<InputAdmitted>(),
+            admitted => admitted.UserMessage.Content == text).InputId;
 
     [Fact]
     public async Task A_reminder_waits_for_an_open_child_approval_and_runs_after_it_closes()
@@ -57,8 +64,20 @@ public sealed class ChildApprovalHoldsReminderTests : ChildLifetimeTestBase
         // stores it, and the reminder waits.
         await SendReminderAsync(sessionId, "build-check:1700000000300");
 
-        // Assert 1
-        Assert.DoesNotContain(FakeChat.ReceivedMessages, request => LastUserText(request) == ReminderText);
+        // Barrier: a person input starts its own turn while the session is paused. A reminder turn that started at
+        // the admission ends before that person turn, so the journal shows its consumption when the person input
+        // is consumed.
+        await SendRequesterAsync(sessionId, PersonBarrierText);
+        await AwaitAssertAsync(async () =>
+        {
+            var events = await ReadJournalAsync(sessionId);
+            Assert.DoesNotContain(AdmittedInputId(events, PersonBarrierText), PendingInputIds(events));
+        }, Deadline, cancellationToken: Cancellation);
+
+        // Assert 1: the journal holds the reminder as pending input, and no model request holds its text.
+        var held = await ReadJournalAsync(sessionId);
+        Assert.Contains(AdmittedInputId(held, ReminderText), PendingInputIds(held));
+        Assert.DoesNotContain(FakeChat.ReceivedMessages, request => UserTexts(request).Contains(ReminderText));
         Assert.Equal(0, First.Runs);
 
         // Act 2: the operator answers the child approval.
