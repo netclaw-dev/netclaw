@@ -9,6 +9,7 @@ using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -150,5 +151,82 @@ public sealed class ChildNoticeSpecs(ITestOutputHelper output) : ChildNoticeTest
         {
             gate.TrySetResult();
         }
+    }
+
+    /// <summary>
+    /// Spec <c>netclaw-session</c>, "A child-delivery turn keeps the reminder link of the turn that started the child".
+    /// A notice has no reminder of its own, so a turn takes the link of the first input that has one. Two reminder fires
+    /// each start a child. Both notices wait behind a turn of a person and then run in one turn, which reads both result
+    /// files. The turn records the link of the first noticed run, also after its file_read tool batch.
+    /// Planted bug: the notice turn records the reminder of its own source, which is empty, so a failed post of the
+    /// child result raises no alert.
+    /// </summary>
+    [Fact]
+    public async Task A_turn_that_consumes_two_notices_records_the_reminder_link_of_the_first()
+    {
+        // Arrange
+        var sessionId = new SessionId("notice/reminder-link-two-inputs");
+        var journal = await JournalAsync();
+        ScriptParent();
+        var subscriber = await JoinAsync(sessionId);
+        var (first, firstGate) = await StartReminderChildAsync(journal, sessionId, "check-pr:1712000000000", "one");
+        await ExpectTurnsAsync(subscriber, 1);
+        var (second, secondGate) = await StartReminderChildAsync(journal, sessionId, "check-pr:1712000060000", "two");
+        await ExpectTurnsAsync(subscriber, 1);
+        var hold = NewGate();
+        var entered = ParentGate.Arm(request => FreshUserTexts(request).Contains("Wait here."), hold);
+
+        try
+        {
+            await SendAsync(sessionId, "Wait here.", Operator(Alice));
+            await entered.WaitAsync(Deadline, Cancellation);
+            firstGate.TrySetResult();
+            await AwaitAssertAsync(() => Assert.Single(NoticesFor(journal, first.Run.RunId)),
+                Deadline, cancellationToken: Cancellation);
+            secondGate.TrySetResult();
+            await AwaitAssertAsync(() => Assert.Single(NoticesFor(journal, second.Run.RunId)),
+                Deadline, cancellationToken: Cancellation);
+
+            // Act: the turn of the person ends, and both notices run in the next turn.
+            hold.TrySetResult();
+            await ExpectTurnsAsync(subscriber, 2);
+
+            // Assert
+            InputId[] notices = [NoticesFor(journal, first.Run.RunId)[0].InputId, NoticesFor(journal, second.Run.RunId)[0].InputId];
+            var consumer = Assert.Single(journal.Committed.OfType<ToolBatchStarted>(),
+                batch => batch.ConsumedInputIds.Intersect(notices).Any());
+            Assert.Equal(notices.ToHashSet(), consumer.ConsumedInputIds.ToHashSet());
+            var noticeTurn = journal.Committed.OfType<TurnRecorded>().Last(turn => turn.SessionId == sessionId);
+            Note($"notice turn link: {noticeTurn.SourceReminderId}");
+            Assert.Equal(new ReminderId("check-pr:1712000000000"), noticeTurn.SourceReminderId);
+            Assert.False(noticeTurn.RoutedSkill);
+        }
+        finally
+        {
+            hold.TrySetResult();
+            firstGate.TrySetResult();
+            secondGate.TrySetResult();
+            ParentGate.Disarm();
+        }
+    }
+
+    // A reminder fire whose turn starts a child. The child waits at its first model call until the caller opens the gate.
+    private async Task<(ChildRunAccepted Accepted, TaskCompletionSource Gate)> StartReminderChildAsync(
+        AcceptanceFault journal, SessionId sessionId, string fireKey, string label)
+    {
+        var gate = NewGate();
+        Clients.A.NextResponseGate = gate;
+        Clients.A.PlannedResponses.Enqueue([new TextContent($"{ChildOutput} {label}")]);
+        var before = Accepted(journal, sessionId).Count;
+        var calls = Clients.A.CallCount;
+        await SendAsync(sessionId, $"spawn:child-a:{label}", Reminder(fireKey));
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(before + 1, Accepted(journal, sessionId).Count);
+            Assert.Equal(calls + 1, Clients.A.CallCount);
+        }, Deadline, cancellationToken: Cancellation);
+        var accepted = Accepted(journal, sessionId)[before];
+        Assert.Equal(new ReminderId(fireKey), accepted.Run.SourceReminderId);
+        return (accepted, gate);
     }
 }

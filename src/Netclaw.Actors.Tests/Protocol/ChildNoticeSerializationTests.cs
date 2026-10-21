@@ -8,6 +8,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.SubAgents;
@@ -95,7 +96,9 @@ public sealed class ChildNoticeSerializationTests : TestKit
                 new ChildRunReport.Notice(new InputId("notice-input")))),
             Run("delivered-run", new ChildRunLifecycle.Reported(SubAgentRunOutcome.Failed, SubAgentOutcomeReason.ActorStopped,
                 new ChildRunReport.LegacyDelivery(callId))),
-            Run("prepared-run", new ChildRunLifecycle.Terminal(Terminal("prepared-run")) { LegacyPrepared = prepared }),
+            // A build from dev before S2 wrote the reminder link (field 20) beside the prepared pair.
+            Run("prepared-run", new ChildRunLifecycle.Terminal(Terminal("prepared-run")) { LegacyPrepared = prepared })
+                with { SourceReminderId = new ReminderId("check-pr:1712000000000") },
             Run("ended-run", new ChildRunLifecycle.Terminal(Terminal("ended-run")))
         };
         var state = SessionState.Empty with
@@ -122,6 +125,7 @@ public sealed class ChildNoticeSerializationTests : TestKit
         var kept = Assert.IsType<ChildRunLifecycle.Terminal>(restored.ChildRuns[new SubAgentRunId("prepared-run")].Lifecycle);
         Assert.Equal(callId, kept.LegacyPrepared!.Result.ToolCallId);
         Assert.Equal("/reviewed", kept.LegacyPrepared.ReviewedWorkingContext!.ProjectDirectory);
+        Assert.Equal(new ReminderId("check-pr:1712000000000"), restored.ChildRuns[new SubAgentRunId("prepared-run")].SourceReminderId);
         Assert.Null(Assert.IsType<ChildRunLifecycle.Terminal>(restored.ChildRuns[new SubAgentRunId("ended-run")].Lifecycle).LegacyPrepared);
     }
 
