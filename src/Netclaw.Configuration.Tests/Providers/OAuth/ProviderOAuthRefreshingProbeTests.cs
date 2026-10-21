@@ -7,6 +7,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -150,6 +151,7 @@ public sealed class ProviderOAuthRefreshingProbeTests
             new DeviceFlowServiceFactory(
                 new OAuthDeviceFlowService(httpClient, time),
                 new OpenAiDeviceFlowService(httpClient, time)),
+            NullLogger<ProviderOAuthTokenRefreshService>.Instance,
             timeProvider: time);
         var exchanger = new CopilotTokenExchanger(httpClient, time, refreshService);
         var descriptor = new GitHubCopilotDescriptor(httpClient, exchanger);
@@ -179,7 +181,7 @@ public sealed class ProviderOAuthRefreshingProbeTests
         var factory = new DeviceFlowServiceFactory(
             new OAuthDeviceFlowService(httpClient, time),
             new OpenAiDeviceFlowService(httpClient, time));
-        var refreshService = new ProviderOAuthTokenRefreshService(paths, factory, timeProvider: time);
+        var refreshService = new ProviderOAuthTokenRefreshService(paths, factory, NullLogger<ProviderOAuthTokenRefreshService>.Instance, timeProvider: time);
         return new ProviderOAuthRefreshingProbe(new ProviderDescriptorRegistry([descriptor]), refreshService);
     }
 

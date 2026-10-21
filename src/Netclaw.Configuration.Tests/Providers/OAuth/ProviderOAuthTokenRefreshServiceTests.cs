@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Net;
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -235,6 +236,90 @@ public sealed class ProviderOAuthTokenRefreshServiceTests
         Assert.Equal("no_refresh_token", alert.Context!["reason"]);
     }
 
+    [Fact]
+    public async Task GetValidAccessTokenAsync_AnotherProcessRefreshedTheToken_UsesTheStoredTokenWithoutRefreshing()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = NewPaths(dir);
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        StoreTokens(paths, "openai-codex", "access-stored", "refresh-stored", now.AddHours(1));
+        var service = CreateService(paths, time, new FakeHttpMessageHandler(_ =>
+            throw new InvalidOperationException("refresh should not be called")));
+        var entry = ExpiredEntry(now);
+
+        var token = await service.GetValidAccessTokenAsync(
+            "openai-codex", entry, OpenAiOAuth, TestContext.Current.CancellationToken);
+
+        Assert.Equal("access-stored", token.Value);
+        Assert.Equal("refresh-stored", entry.OAuthRefreshToken!.Value);
+        Assert.Equal(now.AddHours(1), entry.OAuthTokenExpiry);
+    }
+
+    [Fact]
+    public async Task GetValidAccessTokenAsync_StoredRefreshTokenDiffers_SpendsTheStoredRefreshToken()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = NewPaths(dir);
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        StoreTokens(paths, "openai-codex", "access-stored", "refresh-stored", now.AddMinutes(-30));
+        HttpRequestMessage? refreshRequest = null;
+        var service = CreateService(paths, time, new FakeHttpMessageHandler(request =>
+        {
+            refreshRequest = request;
+            return FakeHttpMessageHandler.JsonResponse(new { access_token = "access-new", refresh_token = "refresh-new", expires_in = 3600 });
+        }));
+
+        var token = await service.GetValidAccessTokenAsync(
+            "openai-codex", ExpiredEntry(now), OpenAiOAuth, TestContext.Current.CancellationToken);
+
+        Assert.Equal("access-new", token.Value);
+        var form = await refreshRequest!.Content!.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("refresh_token=refresh-stored", form);
+        Assert.DoesNotContain("refresh-old", form);
+    }
+
+    [Fact]
+    public async Task ForceRefreshAccessTokenAsync_AnotherProcessAlreadyReplacedTheRejectedToken_UsesTheStoredToken()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = NewPaths(dir);
+        var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        StoreTokens(paths, "openai-codex", "access-stored", "refresh-stored", now.AddHours(1));
+        var service = CreateService(paths, time, new FakeHttpMessageHandler(_ =>
+            throw new InvalidOperationException("refresh should not be called")));
+        var entry = ExpiredEntry(now);
+        entry.OAuthTokenExpiry = now.AddMinutes(30);
+
+        var token = await service.ForceRefreshAccessTokenAsync(
+            "openai-codex", entry, OpenAiOAuth, "access-old", TestContext.Current.CancellationToken);
+
+        Assert.Equal("access-stored", token.Value);
+    }
+
+    private static NetclawPaths NewPaths(DisposableTempDir dir)
+    {
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+        return paths;
+    }
+
+    private static void StoreTokens(NetclawPaths paths, string provider, string access, string refresh, DateTimeOffset expiry)
+        => OAuthTokenPersistence.PersistTokens(
+            paths, provider, new OAuthDeviceFlowResult(new SensitiveString(access), new SensitiveString(refresh), expiry), new NullSecretsProtector());
+
+    private static ProviderEntry ExpiredEntry(DateTimeOffset now) => new()
+    {
+        Type = "openai",
+        AuthMethod = AuthMethod.OAuthDevice,
+        OAuthAccessToken = new SensitiveString("access-old"),
+        OAuthRefreshToken = new SensitiveString("refresh-old"),
+        OAuthTokenExpiry = now.AddMinutes(-1),
+        OAuthAccountId = new SensitiveString("account-old"),
+    };
+
     private static ProviderOAuthTokenRefreshService CreateService(
         NetclawPaths paths,
         FakeTimeProvider time,
@@ -246,7 +331,7 @@ public sealed class ProviderOAuthTokenRefreshServiceTests
             new OAuthDeviceFlowService(httpClient, time),
             new OpenAiDeviceFlowService(httpClient, time));
 
-        return new ProviderOAuthTokenRefreshService(paths, factory, sink, time);
+        return new ProviderOAuthTokenRefreshService(paths, factory, NullLogger<ProviderOAuthTokenRefreshService>.Instance, sink, time);
     }
 
     private sealed class RecordingNotificationSink : IOperationalNotificationSink
