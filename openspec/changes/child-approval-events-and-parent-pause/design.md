@@ -9,89 +9,108 @@ one-time consent, requester, open child run.
 1. **One consent loop.** `ParentSessionApprovalBridge` is the consent loop for the session's own calls and for the
    calls of its children (`ParentSessionApprovalBridge.cs:59-65`). It builds the `ToolInteractionRequest` from the
    gate's `ToolApprovalContext` and options, without change (`:138-173`). The answer becomes a one-time consent
-   for the exact candidates (`:41-45`). A child prompt gets the call ID `{runId}/subagent-approval/{n}` (`:178-190`).
+   for the exact candidates (`:41-45`). A child prompt gets the call ID `{runId}/subagent-approval/{n}`. The bridge
+   instance counts `n` in memory (`:178-190`).
 2. **The parent actor sees every child request.** `SessionToolWorkflow.ChildApprovalCapability` gives the child a
    bridge whose emitter Tells the session actor a `ToolInteractionRequestDispatch` with `PersistApprovalState = true`,
    `SourceChildRunId`, and `ChildContext` (`SessionToolWorkflow.Children.cs:56-72`). The session builds this closure,
-   so the run ID is owner-stamped. The child cannot change it. The wait timeout is `Timeout.InfiniteTimeSpan` (`:68`).
+   so the run ID is owner-stamped. The wait timeout is `Timeout.InfiniteTimeSpan` (`:68`).
 3. **Dispatch handler.** `LlmSessionActor.HandleToolInteractionRequestDispatch` drops a request for a run that is not
    `Accepted`. Otherwise it persists `ToolApprovalRequested` with the run ID and emits the prompt output
    (`LlmSessionActor.cs:3272-3298`).
-4. **Open child requests.** `SessionToolWorkflow._calls` holds them. `ChildApprovalCount(runId)` feeds
-   `pending_approval_count` in `check_agent_run` (`SessionToolWorkflow.Children.cs:28-29`,
-   `LlmSessionActor.Children.cs:243`). The model sees this count only when it polls.
-5. **Answers.** An answer for a child call always goes to the live path (`LlmSessionActor.cs:3615-3621`,
-   `3569-3613`). `ValidateResponse` checks the requester and the option (`SessionToolWorkflow.Approvals.cs:313-337`).
-6. **Cancel and end.** `ControlChild` persists `CancellationRequested`, closes the child execution, and calls
-   `CloseChildApprovals` (`LlmSessionActor.Children.cs:216-225`). `RecordChildTerminal` does the same for a terminal
-   record (`:265-268`). `CloseChildApprovals` removes the entries and tells nobody
-   (`SessionToolWorkflow.Children.cs:43-50`). The stopped child's `finally` block Tells
-   `SubAgentApprovalWaitCompleted` to a dead actor (`SubAgentActor.cs:1660-1671`). These are the observed dead
-   letters. They are harmless.
-7. **Late click.** A click on a removed call reaches `RejectClosedCall`, which returns `Expired`
-   (`SessionToolWorkflow.Approvals.cs:223-235`). The text is "That approval prompt has expired — the session moved
-   on or restarted" (`LlmSessionActor.cs:3474-3480`). For a cancelled child this text is false.
-8. **Channels.** `ChannelOutputEngine.CompleteTurnAsync` drops all tracked prompts at `TurnCompleted`
-   (`ChannelOutputEngine.cs:280-308`). The TUI does the same (`ChatViewModel.cs:433-437`, issue #2523).
-9. **Text answers.** A text answer resolves the latest open prompt that the sender can answer
-   (`SessionToolWorkflow.Approvals.cs:131-148`). The channel takes the first match (`PendingApprovalLookup.cs:47-51`).
-   With 5 open prompts, "A" approves one prompt that the person did not choose.
-10. **Notices (#2515).** An ended child becomes one admitted input: `InputAdmitted.ChildNotice` (proto field 14). The
-    notice carries the recorded context of the run owner with a new turn ID (`LlmSessionActor.Children.cs:345-363`).
-    The kind of the input makes it automation (`SessionToolWorkflow.Recovery.cs:109-121`). A notice of the same
-    requester joins a running turn at a tool-batch boundary (`SessionInputFlow.cs:431-471`).
-11. **Automated input and parent approvals.** While a parent consent request is open, automated input waits in the
-    buffer (`NewInputPlan.WaitForApproval`). A child request does not hold parent input today
-    (`SessionToolWorkflow.Recovery.cs:167-171`).
-12. **Passivation and restart.** A live child keeps the session in memory (`LlmSessionActor.cs:376`, `1747`). A child
-    cannot resume after a restart. `RecoveryCompleted` removes child entries (`LlmSessionActor.cs:262`), and recovery
-    records each live child as lost.
-13. **Transport.** Child and parent are in one process. The child actor is a child of the session actor. The session
-    reaches clients through `SessionSubscriberManager` (pub/sub to subscribers), not through asks. No inter-agent
-    message type exists. `SubAgentToolPolicy` denies `spawn_agent` and `check_agent_run` to a child
-    (`SubAgentToolPolicy.cs:16-21`), so nesting does not exist.
+4. **Open child requests.** `SessionToolWorkflow._calls` holds them. `check_agent_run` shows
+   `pending_approval_count` (`SessionToolWorkflow.Children.cs:28-29`, `LlmSessionActor.Children.cs:243`). The model
+   sees this count only when it polls.
+5. **Answers.** An answer for a child call goes to the live path. The session claims the live wait in
+   `ApprovalChannel` (`LlmSessionActor.cs:3615-3621`, `3569-3613`). `ValidateResponse` checks the requester and the
+   option (`SessionToolWorkflow.Approvals.cs:313-337`).
+6. **Cancel and end.** `ControlChild` and `RecordChildTerminal` call `CloseChildApprovals`, which removes the entries
+   and tells nobody (`LlmSessionActor.Children.cs:216-225`, `:265-268`; `SessionToolWorkflow.Children.cs:43-50`).
+   The stopped child's `finally` block Tells `SubAgentApprovalWaitCompleted` to a dead actor
+   (`SubAgentActor.cs:1660-1671`). These are the observed dead letters. They are harmless.
+7. **Late click.** A click on a removed call gets "That approval prompt has expired — the session moved on or
+   restarted" (`SessionToolWorkflow.Approvals.cs:223-235`, `LlmSessionActor.cs:3474-3480`). For a cancelled child
+   this text is false.
+8. **Channels.** `ChannelOutputEngine.CompleteTurnAsync` and the TUI drop all prompts at `TurnCompleted`
+   (`ChannelOutputEngine.cs:280-308`, `ChatViewModel.cs:433-437`, #2523). Slack, Discord, and Mattermost bindings
+   journal `PendingApprovalPromptTracked`, so a button keeps its call ID after a restart.
+9. **Text answers.** A text answer resolves the latest or the first prompt that the sender can answer
+   (`SessionToolWorkflow.Approvals.cs:131-148`, `PendingApprovalLookup.cs:47-51`).
+10. **Notices (#2515).** An ended child becomes one admitted input, `InputAdmitted.ChildNotice` (field 14), with the
+    recorded context of the run owner (`LlmSessionActor.Children.cs:345-363`). The kind makes it automation
+    (`SessionToolWorkflow.Recovery.cs:109-121`). It joins a running turn of the same requester at a tool-batch
+    boundary (`SessionInputFlow.cs:431-471`).
+11. **Automated input.** While a parent consent request is open, automated input waits (`NewInputPlan.WaitForApproval`).
+    A child request does not hold parent input (`SessionToolWorkflow.Recovery.cs:167-171`). A reminder fire is
+    dropped when an earlier fire of the same reminder waits (`SessionInputFlow.TryFindWaitingFire`).
+12. **Child tool batch.** The child runs the calls of one model response in parallel and waits for all of them
+    (`SubAgentActor.cs:1754`, `Task.WhenAll`). A call that needs consent waits inside its own task. A sibling call can
+    finish, with its side effects, while another call waits.
+13. **Child durability.** `BackgroundChildRun` and its lifecycle are durable (`BackgroundChildRun.cs`). The checkpoint
+    holds only the round, a summary, and the file activity (`:82`). The model history, loaded tools, and the parked
+    call exist only in `SubAgentActor` memory (`SubAgentActor.cs:86-141`).
+14. **Restart.** A live child keeps the session in memory (`LlmSessionActor.cs:376`, `1747`). A drain stops the
+    children (`SessionExecutionLifetime.StopChildren`). `RecoveryCompleted` removes child approval entries
+    (`LlmSessionActor.cs:262`), and recovery records each live child as lost. A config reload restarts the actor
+    system, so it acts as a restart (#2572).
+15. **Transport.** Child and parent are in one process. The child actor is a child of the session actor. Clients get
+    session outputs through `SessionSubscriberManager` (pub/sub). `SubAgentToolPolicy` denies `spawn_agent` to a
+    child (`SubAgentToolPolicy.cs:16-21`).
 
 ### Constraints
 
-- One owner for each decision. The session actor already owns all child state and all child consent state.
+- One owner for each decision. The session actor owns all child state and all child consent state.
 - Actor boundaries stay transport-agnostic. A message holds addresses as value objects, never an `IActorRef`.
 - Persisted types are framework-owned and serialization-safe (proto, `INetclawSerializableMessage`).
-- The parent model can never give consent. Consent comes only from a channel answer that `ValidateResponse` accepts.
-- No timer is necessary for coalescing. Tests are deterministic, with no sleep.
+- The parent model can never give consent.
+- No timer is necessary. Tests are deterministic, with no sleep.
+
+### Owner decisions (21 October 2026)
+
+| ID | Decision |
+| --- | --- |
+| Q1 | An approval notice wakes an idle parent once for each ready digest. |
+| Q2 | No "approve for all" prompt. |
+| Q3 | No journal format change for approval notices. A notice is an ordinary `InputAdmitted` with a new source kind and rendered text. |
+| Q4 | No timeout. The session reaches a steady state and waits for the person. Nothing expires. |
+| Q5 | No nested children. |
+| Q6 | No lift. A person's message never ends the pause. The pause ends only when every open child request closes. |
+| P1 | The pause is session-wide. |
+| P2 | Reminder fires into a paused session wait. A later fire of the same reminder replaces the waiting one. |
+| P3 | No user-facing text names the child: not the prompt, not the closed redraw, not the late-click reply. |
+| P4 | The channel envelope is minimal now: `Sender`, `Target`, `SentAt`. |
+| P5 | #2515 child results move into `AgentEvent` in memory. Field 14 stays on disk. |
+| P6 | A child that waits for consent survives a restart and a config reload (#2572). It is the last PR of the stack. |
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Start a typed inter-agent event channel. Child consent events and child results are its first members. Messaging
-  tools come later on the same channel without a contract change.
+- Start a typed inter-agent event channel. Child consent events and child results are its first members.
 - The parent model learns of child consent requests without a poll, at most once for each model boundary.
-- The runtime, not the model, stops new autonomous work while the operator must answer.
+- The runtime stops new autonomous work while the operator must answer, and the session then waits quietly.
 - A closed prompt has no live buttons. A late click gets the true reason.
+- A child that waits for consent survives a restart. Its prompt stays valid, and the pause comes back.
 
 **Non-Goals:**
 
 - Messaging tools (`notify_parent`, `message_child`, sibling messages). Only their slot in the channel is in scope.
-- A batched "approve for all" prompt (see Q2).
-- Nested children. `spawn_agent` stays denied to a child (see Q5).
-- A TUI reopen that shows open prompts again (#2523, second acceptance item). Follow-up change.
+- An "approve for all" prompt (Q2), nested children (Q5), and a consent wait timeout (Q4).
+- A resume of a child that is not parked at consent. Such a child is still lost at a restart.
 - A shell fatigue fix for a literal `for` loop. It is a separate Shell facts change (tool-authorization.md section 8).
-- A cross-process or sharded router. The channel allows one later (see D1.6). This change does not build it.
+- A cross-process or sharded router. The channel allows one later (D1.5).
 
 ## Decisions
 
 ### D1. The agent event channel
 
-The channel is a closed, typed protocol between agents of one session. Actors exchange typed `AgentEvent` messages.
-The model never sees a typed message. It sees a notice that the runtime renders from typed messages.
+The channel is a closed, typed protocol between the agents of one session. Actors exchange typed `AgentEvent`
+messages. The model never sees a typed message. It sees a notice that the runtime renders from typed messages.
 
 #### D1.1 Types (schematic C#)
 
 ```csharp
-// New value object. IdGen short ID. No implicit conversion.
-public readonly record struct AgentEventId(string Value);
-
-// Closed set of agent addresses. Value objects only, no IActorRef.
+// Closed set of agent addresses. Value objects only, no IActorRef, no implicit conversion.
 public abstract record AgentAddress
 {
     private AgentAddress() { }
@@ -99,168 +118,141 @@ public abstract record AgentAddress
     public sealed record ChildRun(SessionId SessionId, SubAgentRunId RunId, AgentName Agent) : AgentAddress;
 }
 
-public sealed record AgentEnvelope(
-    AgentEventId EventId,
-    AgentEventId CorrelationId,        // the first event of a thread; equals EventId for a new thread
-    AgentEventId? CausationId,         // the event that caused this one, when one exists
-    AgentAddress Sender,               // stamped by the owner, never by the producer
-    AgentAddress Target,
-    DateTimeOffset SentAt);            // from the injected TimeProvider
+// Minimal envelope (P4). EventId, CorrelationId, and CausationId come with messaging.
+public sealed record AgentEnvelope(AgentAddress Sender, AgentAddress Target, DateTimeOffset SentAt);
 
-// Closed family. Immutable records. IWithSessionId routes by the target session.
+// Closed family of immutable records. IWithSessionId routes by the session that owns the target.
 public abstract record AgentEvent : IWithSessionId
 {
     private AgentEvent() { }
     public required AgentEnvelope Envelope { get; init; }
-    public SessionId SessionId => Envelope.Target switch { ... };   // the session that owns the target
+    public SessionId SessionId => ...;   // the session of Envelope.Target
 
-    public sealed record ChildApprovalRequested(
-        ToolCallId PromptCallId, ToolName Tool, AuthorizationAttemptId AttemptId) : AgentEvent;
-
-    public sealed record ChildApprovalResolved(
-        ToolCallId PromptCallId, ChildApprovalResolution Resolution) : AgentEvent;
-
-    public sealed record ChildRunEnded(
-        SubAgentRunOutcome Outcome, SubAgentOutcomeReason? Reason, ChildRunFile ResultFile,
-        WorkingContextDelta? ReviewedWorkingContext) : AgentEvent;
+    public sealed record ChildApprovalRequested(ToolCallId PromptCallId, ToolName Tool) : AgentEvent;
+    public sealed record ChildApprovalResolved(ToolCallId PromptCallId, ChildApprovalResolution Resolution) : AgentEvent;
+    public sealed record ChildRunEnded(ChildNotice Notice, SubAgentRunOutcome Outcome, string ResultFilePath) : AgentEvent;
 }
 
 public abstract record ChildApprovalResolution
 {
     private ChildApprovalResolution() { }
-    public sealed record Approved(ConsentAnswer.Grant Answer) : ChildApprovalResolution;   // once, session, always
-    public sealed record Refused(RefusalKind Kind) : ChildApprovalResolution;              // denied, timed out
+    public sealed record Approved(ConsentAnswer.Grant Answer) : ChildApprovalResolution;
+    public sealed record Refused(RefusalKind Kind) : ChildApprovalResolution;
     public sealed record Withdrawn(WithdrawReason Reason) : ChildApprovalResolution;
 }
 
-public enum WithdrawReason { CancelledByParent, ChildEnded, DaemonRestarted, TimedOut }   // string names in proto
+public enum WithdrawReason { CancelledByParent, ChildEnded, DaemonRestarted }
 ```
 
-The names `ConsentAnswer.Grant`, `RefusalKind`, `SubAgentRunOutcome`, and `ChildRunFile` stand for the existing
-types. The implementation uses the exact existing type names. If one is missing, it adds a value object with no
-implicit conversion.
-
-No payload has a free-text field. A payload holds IDs, canonical names, enums, and a file path.
+`SentAt` comes from the injected `TimeProvider`. `PromptCallId` pairs a request with its resolution. The names
+`ConsentAnswer.Grant`, `RefusalKind`, `SubAgentRunOutcome`, and `ChildNotice` are the existing types. No payload
+has free text that an agent wrote. A payload holds IDs, canonical names, enums, and a runtime-made path.
 
 #### D1.2 Routing and who may send what
 
-| Event | Sender | Target | Producer fact | Who builds the event |
+| Event | Sender | Target | Producer fact | Builder |
 | --- | --- | --- | --- | --- |
-| `ChildApprovalRequested` | `ChildRun` (the asking run) | `Session` (the owner) | `ToolInteractionRequestDispatch` from the owner-built bridge | session actor, after `ToolApprovalRequested` persists |
-| `ChildApprovalResolved` | `ChildRun` (the run that asked) | `Session` | a validated answer, a withdrawal, or a timeout | session actor, after `ToolApprovalResolved` persists or the close happens |
+| `ChildApprovalRequested` | `ChildRun` (the asking run) | `Session` | the bridge's dispatch | session actor, after `ToolApprovalRequested` persists |
+| `ChildApprovalResolved` | `ChildRun` (the run that asked) | `Session` | a validated answer or a withdrawal | `SessionToolWorkflow`, after the answer persists or the close happens |
 | `ChildRunEnded` | `ChildRun` (the ended run) | `Session` | `TerminalRecorded` and the `result.md` write | session actor, in `HandleChildResultWritten` |
 
 Authority rules:
 
 - **Owner-stamped sender.** Only the session actor that owns the run builds an `AgentEvent`. It takes the run from
-  its own records: the bridge closure (`ChildApprovalCapability`) or `SessionExecutionLifetime.FindChild(Sender)`.
-  It never takes a run ID from text or from a field that the child sets. So a child can emit only about itself.
-- **No child text reaches the model as instructions.** The payloads have no free text (D1.1). The renderer (D1.5)
-  writes only IDs, names, enums, and paths. A future event with child-authored content puts that content in a run
-  file and carries the path. The model reads it with `file_read` as data, the same as `result.md` today.
-- **The parent cannot approve.** The family has no event from `Session` to `ChildRun` that carries consent.
-  `ChildApprovalResolved` has one producer: `SessionToolWorkflow`, after `ValidateResponse` accepts a channel answer,
-  or after a withdrawal. Its constructor is internal to that owner. The parent model has no tool that makes a
-  `ToolInteractionResponse`.
-- **Same session only.** A `ChildRun` address must name a run that the target session owns. The reducer rejects an
-  event for an unknown run, a run of another session, or an input whose authority differs from the run owner.
+  its own records: the bridge closure or `SessionExecutionLifetime.FindChild(Sender)`. It never takes a run ID from
+  text or from a field that the child sets. A child can emit only about itself.
+- **No child text reaches the model as instructions.** The payloads have no free text. A future event with
+  agent-authored content puts that content in a run file and carries the path. The model reads it with `file_read`
+  as data, the same as `result.md` today.
+- **The parent cannot approve.** The family has no event from `Session` to `ChildRun` that carries consent. Consent
+  goes only through the bridge (D2).
+- **Same session only.** A `ChildRun` address must name a run that the target session owns.
 
-#### D1.3 Ordering and delivery guarantees
+#### D1.3 Ordering, guarantees, and durability
 
-- **Order.** The session mailbox defines the order. The session stamps a session-local `sequence` when it accepts a
-  producer fact. Events of one prompt keep their order: the session builds `ChildApprovalResolved` only after
-  `ChildApprovalRequested` for the same `PromptCallId`, with `CausationId` and `CorrelationId` set to the request's
-  `EventId`. Events in one notice keep `sequence` order. Notices follow admission order (existing rule).
-- **Producer to owner: at most once.** This hop is an in-process Tell to the parent of the child actor. If the
-  session stops, the child stops too. Recovery then records the run as lost, and `ChildRunEnded` reports it.
-- **`ChildRunEnded` to the model: once in effect.** The existing #2515 guards apply: one notice for each ended run
-  (reducer), and recovery admits a missing notice.
-- **Approval events to the model: at most once.** An approval event is durable after admission. A restart withdraws
-  all child prompts, so recovery closes an unconsumed approval notice with `InputClosed` and starts no turn for it.
-  The lost-run `ChildRunEnded` tells the parent the true state. A crash before admission loses the digest. That loss
-  is accepted for the same reason.
+- **Order.** The session mailbox defines the order. A resolution follows its request, because the session builds it
+  only after the request persisted. Notices follow admission order (existing rule).
+- **Producer to owner: at most once.** The hop is an in-process Tell to the parent of the child actor. If the session
+  stops, the child stops too. A lost child is reported by `ChildRunEnded`.
+- **`ChildRunEnded` to the model: once in effect** (existing #2515 guards).
+- **Approval notices to the model: at most once.** The digest is actor-local. A crash before admission loses it. The
+  approval journal still holds the true state, and the closing notice reports the end.
 
-#### D1.4 Durability split
-
-| Fact | Store | Change |
+| Fact | Store | Format change |
 | --- | --- | --- |
 | Consent request and answer of a child | `ToolApprovalRequested` / `ToolApprovalResolved` with `SourceChildRunId` | none |
-| Run cancel and end | `ChildRunEvent.CancellationRequested` / `TerminalRecorded` | none |
-| `ChildRunEnded` admitted to the model | `InputAdmitted.child_notice` (field 14) | none. The code reads it as `AgentEvent.ChildRunEnded` through an adapter. |
-| Approval events admitted to the model | `InputAdmitted.agent_events` (new field 15): `repeated AgentEventProto` (envelope plus a `oneof` payload) | new |
-| Rendered notice text | `InputAdmitted.user_message` | none. It is the text that the model saw. |
-| Digest, pause, `liftedThrough`, `sequence`, child `IActorRef` map | actor memory | rebuilt or empty after restart |
+| Child result to the model | `InputAdmitted.child_notice` (field 14), read as `AgentEvent.ChildRunEnded` (P5) | none |
+| Approval notice to the model | `InputAdmitted` with `TurnContext.SourceKind = "child-consent"` and the rendered text in `user_message` (Q3) | none |
+| Typed approval events, digest, pause | actor memory | none |
+| Parked child state (D8, PR 3) | parent journal plus a run-folder file | yes, separate from the notice path |
 
-`AgentEventProto` carries the envelope fields as strings and `int64` milliseconds. Enums use string names, so that a
-new value does not break an old row. The mapper is the only converter.
+The notice path has no format change. The source kind keeps the automation kind of a rebuilt waiting notice. The
+durable child wait (D8) needs its own journal change. That change belongs to the child run record, not to the
+notice path.
 
-**#2515 child result: adapt now, move later.** In this change, `ChildNotice` becomes `AgentEvent.ChildRunEnded` in
-memory. The writer keeps field 14, so no row changes. The adapter derives the envelope from the row: sender from
-`run_id`, target from `session_id`, `SentAt` from `admitted_at_ms`, and `EventId` from the input ID. A later change can
-write field 15 for results after field 15 is deployed. This is the smallest correct step: one type family, no
-journal migration.
-
-#### D1.5 Rendering for the model
+#### D1.4 Rendering for the model
 
 `AgentEventRenderer.Render(IReadOnlyList<AgentEvent>)` is a pure function. It is the only path from typed events to
-model text. The session stores its output in `InputAdmitted.user_message` at admission. The notice includes the
-agent name and run ID, because the parent needs them to act (owner decision of 21 October 2026). Examples are in D3.
+model text. The session stores its output in `InputAdmitted.user_message`. The notice names the agent and the run,
+because the parent needs them to act. Examples are in D4.
 
-#### D1.6 Transport and pub/sub
+#### D1.5 Transport, pub/sub, and the messaging slot
 
-- In-process `Tell` is the only transport in this change. No event holds an `IActorRef`. The session resolves a
-  `ChildRun` address to an actor through `SessionExecutionLifetime` only when it must deliver to a child.
-- `AgentEvent` implements `IWithSessionId`. A later router (for example, sharded sessions) can route by the target
-  session with the existing message-extractor pattern. The envelope does not change.
-- Clients get projections through `SessionSubscriberManager` (pub/sub): `ToolInteractionRequest`,
-  `ToolInteractionClosed`, and `SubAgentOutput` with new phases `AwaitingConsent` and `ConsentClosed`. No client asks
-  the session for child state. `AgentEvent` itself is not a client output.
+- In-process `Tell` is the only transport in this change. The session resolves a `ChildRun` address to an actor only
+  when it must deliver to a child.
+- `AgentEvent` implements `IWithSessionId`. A later router can route by session with the message-extractor pattern.
+- Clients get projections through `SessionSubscriberManager`: `ToolInteractionRequest`, `ToolInteractionClosed`, and
+  `SubAgentOutput` with the new phases `AwaitingConsent` and `ConsentClosed`. No client asks the session for child
+  state. `AgentEvent` itself is not a client output.
+- Each future messaging tool adds one subtype, one renderer case, and one tool. A message body is agent text, so it
+  goes to a run file, and the event carries the path. Messaging adds `EventId`, `CorrelationId`, and `CausationId` to
+  the envelope for replies (P4). Sibling messages route through the owning session, which checks that both runs
+  have the same requester.
 
-#### D1.7 How messaging slots in later
+### D2. Bridge vs channel
 
-Each future tool adds one `AgentEvent` subtype, one `oneof` case, one renderer case, and one tool. The envelope, the
-address set, the owner-stamped sender, the no-free-text rule, the durability split, and the digest stay the same.
+The bridge and the channel have different jobs. They do not merge.
 
-| Future tool | New event | Sender | Target | Route |
-| --- | --- | --- | --- | --- |
-| child to parent (`notify_parent`) | `ChildMessagePosted(ChildRunFile Body)` | `ChildRun` | `Session` | inbox digest, same as approval events |
-| parent to child (`message_child`) | `ParentMessagePosted(ChildRunFile Body)` | `Session` | `ChildRun` | session Tells the live child; the child renders it into its next model input |
-| sibling (later) | `SiblingMessagePosted(ChildRunFile Body)` | `ChildRun` A | `ChildRun` B | through the owning session (the hub of its runs), which checks that both runs have the same requester |
+| | Bridge (`ParentSessionApprovalBridge`) | Channel (`AgentEvent`) |
+| --- | --- | --- |
+| Job | The one consent loop | Observation and messages |
+| Shape | Request and response | Events, one direction for each event |
+| Prompt | Authoritative, rendered from the gate's options | None |
+| Result | One-time consent bound to the exact command, returned on its own awaited path | Never carries consent |
+| Durable state | `ToolApprovalRequested` / `ToolApprovalResolved` | Notices only, as admitted inputs |
 
-A body is text that an agent wrote, so it goes to a file in the run folder. The event carries the path. A reply sets
-`CorrelationId` to the first message of its thread and `CausationId` to the message that it answers.
+The bridge's dispatch is one producer of `ChildApprovalRequested`. The session builds the event after it persists
+the request. Later, the bridge can publish the event directly. That change does not change the channel contract.
+This change does not make it.
 
-### D2. The prompt shows only the command and the scope
+### D3. The prompt shows only the command and the scope (P3)
 
-Owner change of 21 October 2026: the operator's prompt does not show the agent name or the run ID. The prompt shows
-the runtime-rendered command and scope, as the gate made them. The child identity stays on the internal
-`ToolInteractionRequestDispatch` (`SourceChildRunId`, existing) and on the typed event, for routing and for the parent
-notice.
+The operator's prompt shows the runtime-rendered command and scope, as the gate made them. It does not show the
+agent name or the run ID. The child identity stays on the internal `ToolInteractionRequestDispatch`
+(`SourceChildRunId`, existing), on the typed event, and in the parent notice.
 
 `ToolInteractionRequest` gets one field that renderers do not show: `Lifetime`, with the values `UntilTurnEnd`
-(parent prompts) and `UntilClosed` (child prompts). Channels and the TUI use it to keep a child prompt after the
-parent turn ends (D5).
+(parent prompts) and `UntilClosed` (child prompts). Channels and the TUI keep an `UntilClosed` prompt after the
+parent turn ends.
 
-The consent boundary (unchanged rule, now stated): the parent model has no tool that produces a
-`ToolInteractionResponse`. Its text output is a `TextOutput`. A channel never renders buttons from model text. The
-parent can explain or cancel a child. It cannot answer, approve, or edit a prompt.
+The consent boundary: the parent model has no tool that produces a `ToolInteractionResponse`. Its text output is a
+`TextOutput`. A channel never renders buttons from model text. The parent can explain or cancel a child. It cannot
+answer, approve, or edit a prompt.
 
-### D3. Inbox digest: merge events at model boundaries
+### D4. Inbox digest: merge events at model boundaries (Q1)
 
-The session keeps one actor-local digest for each run-owner authority. `ChildApprovalRequested` and
-`ChildApprovalResolved` events go into the digest. `ChildRunEnded` keeps its own input for each run (#2515 rule).
+The session keeps one actor-local digest for each run-owner authority. Approval events go into the digest.
+`ChildRunEnded` keeps its own input for each run (#2515 rule).
 
 - The digest is ready when it holds one or more `ChildApprovalRequested` events, or when the open set of that
   requester becomes empty.
-- When the session is `Ready`, the session admits a ready digest at once as one input with field 15.
+- When the session is `Ready`, it admits a ready digest at once as one input. This wakes an idle parent once.
 - When the session is `Processing` or `Compacting`, the digest waits. The session admits it at the next tool-batch
   end or turn end, before the buffer drain. The input joins the running turn when the requester is the same.
-  Otherwise it follows the turn.
-- After admission the digest is empty. A resolution while other requests stay open waits in the digest. It goes
-  out with the next request or with the last close.
+- After admission the digest is empty. A resolution while other requests stay open waits in the digest.
 
-Result for the incident: child 1 asks and wakes the idle parent (input 1). Children 2 to 5 ask during that model
-call and go out together as input 2. The last close gives input 3. The count does not grow with more children.
+Result for the incident: child 1 asks and wakes the idle parent (input 1). Children 2 to 5 ask during that model call
+and go out together (input 2). The last close gives input 3. The count does not grow with more children.
 
 Rendered notice examples (schematic):
 
@@ -270,28 +262,25 @@ Child consent requests wait for the operator. 3 are open.
 - agent=pr-reviewer run=r-8a1 tool=shell_execute open_since=14:03:04Z
 - agent=pr-reviewer run=r-9c3 tool=shell_execute open_since=14:03:09Z
 The operator answers these prompts in the channel. You cannot answer them.
-The children are not stalled. Do not cancel a child only because it waits.
-Until the requests close, spawn_agent is refused and automated turns wait.
-You can tell the operator why a child asks, or cancel a child with check_agent_run.
+The children are not stalled. They wait for the operator, with no time limit.
+Until all requests close, spawn_agent is refused and automated turns wait.
+Tell the operator to answer the prompts, or offer to cancel a child with check_agent_run.
 ```
 
 ```text
 Child consent requests are closed. None is open.
 - agent=pr-reviewer run=r-7f2 answer=approved_once
 - agent=pr-reviewer run=r-8a1 answer=withdrawn reason=cancelled_by_parent
+Held reminder fires now run: reminder=daily-pr-sweep fired_at=15:00:00Z
 spawn_agent is available again.
 ```
 
-Alternatives considered: one input for each event (rejected: the incident gives 5 wakes); a timer window (rejected:
-one more moving part, and the model boundary already groups events); a mutable input (rejected: the journal text of
-an input must not change).
+### D5. The pause
 
-### D4. The pause: one predicate, three effects
-
-The pause is a derived, actor-local predicate in `SessionToolWorkflow`:
+The pause is a derived, actor-local predicate in `SessionToolWorkflow`, for the whole session (P1, Q6):
 
 ```text
-Paused := exists open child request r with r.sequence > liftedThrough
+Paused := exists an open child consent request in this session
 ```
 
 Effects while `Paused` (this list defines "new autonomous rounds"):
@@ -299,347 +288,433 @@ Effects while `Paused` (this list defines "new autonomous rounds"):
 | Event | Today | While paused |
 | --- | --- | --- |
 | `spawn_agent` call (`ChildRunStartKey.Tool`) | accepted | `AcceptChild` rejects with `ChildStartRejectedException(SpawnPaused)`. The spawner removes the run folder (existing path). |
-| Slash command child start (`ChildRunStartKey.Slash`) | accepted | accepted. A person typed it, and that input lifts the pause first. |
+| Slash command child start (`ChildRunStartKey.Slash`) | accepted | accepted. A person typed it. |
 | Automated input or `ChildRunEnded` input, session `Ready` | starts a turn | waits in the buffer (`NewInputPlan.WaitForApproval`, existing placement) |
 | Automated input or `ChildRunEnded` input in the buffer, tool-batch boundary | joins the turn | stays in the buffer. `DrainBufferedBatch` stops at it. |
-| Approval event input (D3) | (new) | admitted. The pause never holds it. |
-| Next model call of the running turn | runs | runs. The current turn can finish. Turn-loop governance still bounds it. |
-| Person input | starts a turn | starts a turn, and can lift the pause |
+| Current-session reminder fire | starts a turn | admitted and acknowledged as today, then waits. See below. |
+| Approval notice (D4) | (new) | admitted. The pause never holds it. |
+| Next model call of the running turn | runs | runs. The current turn can finish. |
+| Person input | starts a turn | starts a turn. The pause stays. `spawn_agent` stays refused. |
+
+The pause ends only when every open child request closes: an answer, a denial, or a withdrawal (for example the
+parent cancels the child). On that move the session admits the ready digest, then starts the waiting inputs through
+the existing `StartWaitingInputAfterApproval`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Clear
+    Clear --> Paused: a child consent request opens
+    Paused --> Paused: another opens, or one closes and others stay
+    Paused --> Clear: the last open request closes
+```
 
 What the parent model sees when `spawn_agent` is refused (tool result, schematic):
 
 ```text
 Error: spawn_agent is paused. 3 child consent requests wait for the operator
-(runs r-7f2, r-8a1, r-9c3). Wait for the operator, or cancel a child with check_agent_run.
-A notice arrives when the requests close.
+(runs r-7f2, r-8a1, r-9c3). Ask the operator to answer the prompts, or offer to cancel a child
+with check_agent_run. A notice arrives when all requests close.
 ```
 
-Lift: when the session admits a person input whose sender can answer one or more open child requests (the existing
-`CanApprovePending` check), it sets `liftedThrough` to the highest open `sequence`. A new request pauses the session
-again. A person who cannot answer the prompts does not lift the pause.
+**Reminder fires while paused (P2).** A current-session reminder fire into a paused session is admitted and
+acknowledged as today, and then it waits. When a later fire of the same reminder ID arrives, the session closes the
+waiting fire with `InputClosed` (reason `superseded`) and keeps the later fire. So at most one fire of each reminder
+waits, and at most one turn of each reminder runs when the pause clears. The closing notice lists the held fires. The
+session posts no thread message for a held fire. A reminder that runs in its own isolated session has no interactive
+channel. Its children cannot ask for consent, so that session never pauses.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Clear
-    Clear --> Paused: child request opens
-    Paused --> Paused: another opens / one closes, others stay
-    Paused --> Lifted: person who can answer speaks
-    Lifted --> Paused: a new child request opens
-    Lifted --> Lifted: one closes, others stay
-    Paused --> Clear: last open request closes
-    Lifted --> Clear: last open request closes
-```
+Owner of the replacement: `SessionInputFlow.TryFindWaitingFire`. Today it drops the later fire. While paused it
+replaces the earlier fire. The rule for a fire that waits behind a parent consent request does not change (see
+"Conflicts" in Risks).
 
-On the move to `Clear`, the session admits the ready digest (D3). Then it starts the waiting inputs through the
-existing `StartWaitingInputAfterApproval`.
+### D6. Withdrawal and an accurate late reply
 
-Alternatives considered: a model-side instruction only (rejected: the incident shows that the model guesses);
-refusing every model call (rejected: the owner allows the current turn to finish); a durable pause flag (rejected:
-no child request survives a restart, so the pause has nothing to restore).
-
-### D5. Withdrawal and an accurate late reply
-
-- `CloseChildApprovals`, recovery, and the wait timeout build `ChildApprovalResolved(Withdrawn(reason))` and emit one
+- `CloseChildApprovals` and recovery build `ChildApprovalResolved(Withdrawn(reason))` and emit one
   `ToolInteractionClosed(CallId, Reason)` output for each closed call.
-- `ChannelOutputEngine` redraws the prompt as closed with the reason text below, removes its entry, and journals
+- `ChannelOutputEngine` redraws the prompt as closed with the text below, removes its entry, and journals
   `PendingApprovalPromptCleared` (existing event). The TUI removes the prompt.
-- `ChannelOutputEngine` and the TUI drop only `UntilTurnEnd` prompts at `TurnCompleted`. This fixes #2523 for a live
-  session.
-- `RejectClosedCall` gets one new case. For a child call ID, the workflow reads the run ID from the call ID prefix (the
-  runtime made this ID in `CreateParentCallId`). It reads the run lifecycle in `SessionState`, which is durable and in
-  the snapshot. For a timeout, it reads the recorded `ToolApprovalResolved` with the timed-out answer. The reply is
-  `ApprovalNoticeKind.Withdrawn(reason)`.
+- `ChannelOutputEngine` and the TUI drop only `UntilTurnEnd` prompts at `TurnCompleted`. This fixes #2523.
+- `RejectClosedCall` gets one new case. For a child call ID, the workflow reads the run ID from the call ID prefix
+  (the runtime made the ID) and the run lifecycle in `SessionState`. The reply is `ApprovalNoticeKind.Withdrawn`.
 - No new journal event. The reason comes from records that exist.
 
-User-facing text (owner change, 21 October 2026). The closed redraw and the late-click reply never name the child
-run or the agent. The run ID is used only inside the session to find the reason. The child identity stays in the
-event, the dispatch, and the parent notice.
+User-facing text (P3). It never names the child run or the agent:
 
 | `WithdrawReason` | Text for the redraw and for a late click |
 | --- | --- |
 | `CancelledByParent` | "This approval request was withdrawn because the task that asked for it was cancelled. Nothing ran." |
 | `ChildEnded` | "This approval request was withdrawn because the task that asked for it ended. Nothing ran." |
-| `TimedOut` | "This approval request was withdrawn because it timed out. Nothing ran." |
 | `DaemonRestarted` | "This approval request was withdrawn because Netclaw restarted before the task finished. Nothing ran." |
 
-### D6. Text answer guard
+After PR 3, `DaemonRestarted` applies only to a child that was not parked at consent (D8).
+
+### D7. Text answer guard
 
 A text answer resolves a prompt only when the sender can answer exactly one open prompt. With two or more, the
 session and the channel reply "N approval prompts are open. Use the buttons on the prompt you mean." Owners:
-`SessionToolWorkflow.TryResolveTextResponse` and `PendingApprovalLookup.Resolve` (callId null). This guard closes a
-consent spoof: model text could describe a harmless command while "A" approves another prompt. Prompts do not name
-the child (D2), so this guard is the only safe way to tell parallel prompts apart.
+`SessionToolWorkflow.TryResolveTextResponse` and `PendingApprovalLookup.Resolve`. This guard closes a consent spoof:
+model text could describe a harmless command while "A" approves another prompt. Prompts do not name the child, so a
+button is the only safe way to choose among parallel prompts.
+
+### D8. Durable child wait across a restart (#2572, PR 3)
+
+A child that waits for consent becomes **parked**. A parked child is journal state with no actor. The answer starts a
+new child actor from that state. This is the same shape as the parent's own durable consent wait: the parent also
+keeps no waiting task across a restart, and an answer re-drives the parked batch.
+
+#### D8.1 The park point
+
+The bridge changes for a background child. When the gate requires consent, the bridge emits the prompt (as today) and
+returns `ConsentStep.Parked` at once. The call does not run. Its task ends with a parked marker, so
+`Task.WhenAll` of the batch ends when each sibling call has a result or a parked marker. The child is at its park
+point when the batch has one or more parked markers.
+
+At the park point the child sends `ChildParkReached(runId, state)` to the owner and waits for the acknowledgement.
+Then it stops. It makes no model call.
+
+#### D8.2 What becomes durable
+
+| Data | Today | At the park point |
+| --- | --- | --- |
+| Run authority, agent, scope, start key | `BackgroundChildRun` (durable) | unchanged |
+| Round, summary, file activity | `ChildRunCheckpoint` (durable) | unchanged |
+| Parked calls and their consent requests | `ToolApprovalRequested` with `SourceChildRunId` and `OriginalChildCallId` (durable) | unchanged |
+| Model history up to and with the assistant message of the parked batch | memory | park file |
+| Results of sibling calls of that batch that ran | memory | park file |
+| Loaded deferred tool names, project directory, active repeat nudge | memory | park file |
+| Highest prompt number `n` of the bridge | memory | park record |
+| The park itself | none | `ChildRunEvent.Parked(ChildRunPark)` in the parent journal |
+
+`ChildRunPark` holds the round, the parked prompt call IDs, the park file path, the SHA-256 of the file, and the
+highest prompt number. The run lifecycle gets one case, `Parked(ChildRunCheckpoint?, ChildRunPark)`. It is in the
+snapshot, because `BackgroundChildRun` is. The park file holds a `ChildParkStateProto` (proto, existing
+`SerializableChatMessage` for the history). Token counters, the watchdog, and the tool-cycle tracker start again at
+resume.
+
+#### D8.3 Where it is stored, and why
+
+The commit point is a small event in the parent session's journal. The large history goes to a file in the run folder,
+next to `task.md` and `result.md`. The owner writes the file with the existing atomic write, then persists `Parked`.
+
+- Not a persistent `SubAgentActor`. The session is the one durable owner of a run. A second persistence ID would need
+  its own recovery, deletion, and consistency with the parent's consent records, which are in another journal. A child
+  worker stays ephemeral (background-subagent-runs).
+- Not the full history in the parent journal. A child history with tool output can be large. Every recovery replays
+  the journal. The run folder already holds child documents.
+- The hash in the journal is the integrity check. The run folder is writable by agent file tools today (#2510). A
+  changed file fails the hash, and the run is recorded as lost.
+
+#### D8.4 Answer, resume, and idempotency
+
+The session handles every answer for a parked child on the durable path. There is no live wait to claim.
+
+```text
+on ToolApprovalResolved persisted for prompt p of parked run r:          # schematic
+    if any prompt of r.Park is still open: wait for siblings              # like RecoveredContinuation.WaitForSiblings
+    else:
+        persist ChildRunEvent.Resumed(r) then:                            # Parked -> Accepted
+            plan = redrive plan from the resolved prompts                 # existing ApprovalRedrivePlanBuilder
+            state = read park file; check SHA-256
+            child = spawner.PrepareResume(r, state, bridge seeded with Park.HighestPromptNumber)
+            child.Tell(ResumeParkedChild(state, plan))                    # runs only the parked calls
+```
+
+- A parked call has not run. It runs only after `Resumed` persists, and only once, with the one-time consent of its
+  exact candidates. The retry passes every gate check again, under the current configuration.
+- A refused answer gives the call a refusal result through the plan's decision override (existing). It does not run.
+- A crash after `Resumed` and before the next checkpoint or end leaves the run uncertain. Recovery records it as lost
+  (existing rule: no relaunch of uncertain child work).
+- A crash after the last answer and before `Resumed` is safe. Nothing ran. Recovery resumes the run.
+- The bridge of the resumed child starts its prompt numbers above `HighestPromptNumber`, so a new prompt ID never
+  repeats an old one.
+- A batch with two parked calls runs neither call until both have answers. Today the approved call runs at once. This
+  is a behavior change for live sessions too.
+
+#### D8.5 Recovery
+
+```text
+RecoveryCompleted:                                                        # schematic
+    for each child approval entry:
+        if its run is Parked and the prompt is in run.Park: keep it open  # the pause is back by derivation
+        else: withdraw with DaemonRestarted                               # existing close, new reason output
+    for each run:
+        Accepted or Cancelling           -> lost (existing)
+        Parked, all prompts open         -> nothing; the run waits with no actor
+        Parked, all prompts resolved     -> resume (D8.4)
+        Parked, file missing or bad hash -> lost, withdraw its prompts, log an error
+```
+
+- **The prompt stays live.** Slack, Discord, and Mattermost bindings journal `PendingApprovalPromptTracked`. A click
+  after the restart carries the same call ID. The session finds an open entry and takes the durable path. The TUI has
+  no journal. A new subscriber gets each open `UntilClosed` prompt again. A binding skips a call ID that it already
+  tracks, so Slack does not post twice.
+- **The pause comes back** because it derives from the open entries.
+- **The digest** is empty after recovery. The pre-restart approval notice is in the journal: consumed, or pending. A
+  pending approval notice whose requests are still open resumes like an orphan child notice. Recovery closes it only
+  when recovery withdrew all of its requests. The session does not wake the parent only to say "still waiting".
+- **Held reminder fires** are pending inputs in the journal. `RestoreWaitingInputs` rebuilds the waiting queue for
+  the pause as it does for parent consent requests.
+
+#### D8.6 Drain, passivation, and crash
+
+- **Graceful drain (restart or config reload).** A parked child has no actor, so the drain has nothing to stop. A child
+  that runs and is not parked follows today's rule: the drain stops it, and recovery records it as lost.
+- **Passivation.** A parked child is not a live child. A session whose only children are parked can passivate. A
+  click or a reminder fire activates it again, and it is still paused.
+- **Ungraceful crash.** The journal decides. `Parked` persisted: the run survives. Not persisted: the run is lost, as
+  today. A park file with no `Parked` event is ignored.
+- **Cancel of a parked run.** No actor must acknowledge. The owner persists `CancellationRequested` and then
+  `TerminalRecorded(Cancelled)`, and withdraws the prompts with `CancelledByParent`.
 
 ### Ordered flow: the channel
 
 ```mermaid
 sequenceDiagram
-    participant P as Producer (child bridge, child actor, result writer)
+    participant P as Producer (bridge dispatch, child actor, result writer)
     participant S as Session actor (owner)
     participant J as Journal
     participant Sub as Subscribers (channels, TUI, headless)
     participant I as Inbox digest
     participant M as Parent model
-    P->>S: producer fact (dispatch, terminal, answer, close)
-    S->>S: resolve run from own records, stamp envelope and sequence
+    P->>S: producer fact (dispatch, answer, close, terminal)
     S->>J: persist the fact (existing event)
+    S->>S: resolve run from own records, build AgentEvent
     S->>Sub: projection (prompt, ToolInteractionClosed, SubAgentOutput phase)
-    S->>I: add typed AgentEvent
-    S->>S: re-evaluate pause
+    S->>I: add the AgentEvent
+    S->>S: re-evaluate the pause
     I->>S: digest ready at a boundary
-    S->>J: persist InputAdmitted(agent_events, rendered text)
+    S->>J: persist InputAdmitted(source kind child-consent, rendered text)
     S->>M: rendered notice in the turn input
 ```
 
-### Ordered flow: one child consent request
+### Ordered flow: one child consent request (after PR 3)
 
 ```mermaid
 sequenceDiagram
     participant Child as SubAgentActor
     participant Bridge as ParentSessionApprovalBridge
     participant Parent as LlmSessionActor
-    participant WF as SessionToolWorkflow
     participant J as Journal
     participant Ch as Channel binding
     participant Op as Operator
     Child->>Bridge: RequestConsentAsync(exact call)
     Bridge->>Parent: Tell ToolInteractionRequestDispatch(run bound by owner)
     Parent->>J: Persist ToolApprovalRequested(run)
-    Parent->>WF: open, sequence, AgentEvent.ChildApprovalRequested
-    Parent->>Ch: ToolInteractionRequest (command and scope only, Lifetime=UntilClosed)
-    Parent->>J: digest ready -> Persist InputAdmitted(agent_events)
-    Note over Parent: Paused: spawn refused, automated input waits
+    Parent->>Ch: ToolInteractionRequest (command and scope, Lifetime=UntilClosed)
+    Bridge-->>Child: ConsentStep.Parked
+    Child->>Parent: ChildParkReached(state)
+    Parent->>Parent: write park file (atomic)
+    Parent->>J: Persist ChildRunEvent.Parked
+    Parent-->>Child: ack, then the child stops
+    Note over Parent: Paused. Notice digest. Steady state, also across restart.
     Op->>Ch: click "approve once"
     Ch->>Parent: ToolInteractionResponse
-    Parent->>WF: ValidateResponse (requester, option, live wait)
+    Parent->>Parent: ValidateResponse
     Parent->>J: Persist ToolApprovalResolved
-    WF->>Bridge: complete wait with consent answer
-    Bridge->>Child: ConsentStep (one-time consent)
-    Parent->>WF: AgentEvent.ChildApprovalResolved(Approved)
-    Parent->>J: last close -> Persist InputAdmitted(agent_events)
-    Parent->>Parent: Clear -> StartWaitingInputAfterApproval
-```
-
-Schematic pseudocode (it omits the requester check, journal failures, and the persist callback order):
-
-```text
-on ToolInteractionRequestDispatch d with d.SourceChildRunId = runId:
-    run = state.ChildRuns[runId]; if run is not Accepted: drop        # existing
-    persist ToolApprovalRequested(d) then:
-        seq = wf.Open(d.CallId, run)
-        evt = ChildApprovalRequested(envelope(sender = ChildRun(run), target = Session, new correlation), ...)
-        emit d.Request with Lifetime = UntilClosed                     # no agent name, no run ID
-        emit SubAgentOutput(run, Phase = AwaitingConsent)
-        inbox[run.OwnerAuthority].Add(evt); maybeAdmit()
-
-on child consent closed (answer | cancel | end | restart | timeout) for prompt p:
-    req = wf.Close(p)
-    evt = ChildApprovalResolved(envelope(causation = req.EventId, correlation = req.EventId), resolution)
-    if resolution is Withdrawn: emit ToolInteractionClosed(p, reason)
-    inbox[owner].Add(evt); maybeAdmit()
-    if not wf.Paused: StartWaitingInputAfterApproval()
-
-maybeAdmit():
-    for each owner with a ready digest:
-        if phase is Ready or at boundary:
-            Self.Tell(SendUserMessage(Render(digest), AgentEvents = digest, owner context))
-        else: keep                                                    # admitted at next boundary
-
-AcceptChild(start):
-    if start is Tool and wf.Paused: reject SpawnPaused(open runs)
-
-PlanNewInput(input):
-    if parent approval open and input is automated: WaitForApproval   # existing
-    if wf.Paused and input is automated and input is not approval events: WaitForApproval
-    if input is person and wf.CanAnswerAnyOpenChild(input.sender): wf.Lift()
+    Parent->>J: last prompt of the park -> Persist ChildRunEvent.Resumed
+    Parent->>Child: new actor, ResumeParkedChild(state, redrive plan)
+    Parent->>Parent: last open request closed -> Clear, closing notice, held inputs run
 ```
 
 ### Owners and data: the channel
 
 | Decision | Owner | Data |
 | --- | --- | --- |
-| Build an `AgentEvent`, stamp sender and envelope | `LlmSessionActor` (Children partial) | call-local; run identity from durable run record |
+| Build an `AgentEvent`, stamp the sender | `LlmSessionActor` (Children partial) | call-local; run identity from the durable run record |
 | Map a live child actor to its run | `SessionExecutionLifetime.FindChild` / `OwnsChild` | actor-local |
-| `sequence` and event order | `SessionToolWorkflow` | actor-local |
 | Create `ChildApprovalResolved` | `SessionToolWorkflow` only | call-local; source facts durable |
 | Digest and merge | `LlmSessionActor` (Children partial) | actor-local |
 | Render model text | `AgentEventRenderer` (pure) | call-local |
-| Notice validity (runs exist, same session, owner authority) | `SessionState.Apply(InputAdmitted)` | durable |
-| Proto mapping of `AgentEventProto` and the field 14 adapter | `NetclawProtoMapper` | durable format |
+| Notice kind (`child-consent`) | `SessionInputFlow` admission | durable in `TurnContext.SourceKind` |
+| Field 14 adapter to `ChildRunEnded` | `NetclawProtoMapper` / `SessionState` | durable format unchanged |
 | Client projections | `LlmSessionActor.EmitOutput` through `SessionSubscriberManager` | call-local |
 
-### Owners and data: consent and pause
+### Owners and data: consent, pause, and reminders
 
 | Decision | Owner | Data |
 | --- | --- | --- |
 | Prompt text, options, scope | `ParentSessionApprovalBridge` from the gate's `ToolApprovalContext` | call-local |
 | Prompt `Lifetime` | `LlmSessionActor.HandleToolInteractionRequestDispatch` | call-local |
-| Open child requests | `SessionToolWorkflow._calls` | actor-local, rebuilt from `ToolApprovalRequested` / `ToolApprovalResolved` |
-| Pause predicate and `liftedThrough` | `SessionToolWorkflow` | actor-local |
+| Open child requests | `SessionToolWorkflow._calls` | actor-local, rebuilt from the approval events |
+| Pause predicate | `SessionToolWorkflow` | actor-local, derived |
 | Spawn refusal | `LlmSessionActor.AcceptChild` | call-local decision on actor-local state |
 | Automated input waits | `SessionToolWorkflow.PlanNewInputAbandonment`, `SessionInputFlow.DrainBufferedBatch` | actor-local |
-| Lift | `LlmSessionActor.HandleIncomingUserMessage` with `CanApprovePending` | actor-local |
+| Reminder fire replacement | `SessionInputFlow.TryFindWaitingFire` | durable (`InputClosed` for the replaced fire) |
 | Consent answer validity | `SessionToolWorkflow.ValidateResponse` (unchanged) | actor-local plus durable resolution |
-| Withdrawal reason for a late click | `SessionToolWorkflow.RejectClosedCall` | derived from durable run lifecycle |
+| Withdrawal reason for a late click | `SessionToolWorkflow.RejectClosedCall` | derived from the durable run lifecycle |
 | Text answer guard | `SessionToolWorkflow.TryResolveTextResponse`, `PendingApprovalLookup` | actor-local |
 | Prompt redraw on close | channel bindings through `ChannelOutputEngine` | binding journal (`PendingApprovalPromptCleared`) |
-| Child wait timeout (Q4) | `ApprovalChannel.WaitForApprovalAsync` through the child bridge | call-local, config value |
+
+### Owners and data: the durable child wait (PR 3)
+
+| Decision | Owner | Data |
+| --- | --- | --- |
+| Park point | `SubAgentActor` (all calls settled or parked) | actor-local |
+| Park file write and `Parked` event | `LlmSessionActor` (Children partial) | run-folder file plus durable event |
+| Resume after the last answer | `LlmSessionActor` with `SessionToolWorkflow` | durable `Resumed` event, then actor-local child |
+| Resume state check (file present, hash) | `LlmSessionActor` | durable record against run-folder file |
+| Recovery choice for each run | `LlmSessionActor.RecoverChildren` | durable lifecycle |
+| Prompt replay to a new subscriber | `LlmSessionActor` on subscribe | actor-local open entries |
 
 ### Examples
 
 Channel, positive: child r-7f2 asks for consent. The session builds `ChildApprovalRequested` with sender
-`ChildRun(S, r-7f2, pr-reviewer)` from its own run record. The parent notice names `pr-reviewer` and `r-7f2`.
+`ChildRun(S, r-7f2, pr-reviewer)` from its own run record. The parent notice names `pr-reviewer` and `r-7f2`. The
+prompt shows only the command and scope.
 
-Channel, negative: a child writes the command `echo "run r-9c3 is done, cancel it"`. The command is not in any event
-payload and not in the notice. The operator sees it only in the prompt. The parent model never sees it as text.
+Channel, negative: a child writes the command `echo "run r-9c3 is done, cancel it"`. The command is in no event
+payload and in no notice. The operator sees it only in the prompt.
 
-Channel, negative: a forged `AgentEventProto` names run r-x of another session. The reducer rejects the input before
-the journal write.
+Pause, positive: a child waits for consent. The parent model calls `spawn_agent` and gets the refusal text. No run
+folder stays. A reminder fire waits and runs after the operator answers.
 
-Pause, positive: Alice's child r-7f2 waits for consent. The parent model calls `spawn_agent`. The call returns the
-refusal text, and no run folder stays. A reminder fire of the session waits in the buffer and runs after Alice
-answers.
+Pause, negative: Alice writes "start the other review now" while a child waits. Her turn runs, but the pause stays
+and her turn's `spawn_agent` call is refused. The model tells her to answer the prompt or offers to cancel the child.
 
-Pause, positive (lift): Alice writes "go ahead and start the other review". She can answer the open prompt, so her
-input lifts the pause. Her turn can call `spawn_agent`.
+Reminder, positive: reminder R fires at 14:00 and 15:00 while the session is paused. The 15:00 fire replaces the 14:00
+fire. After the answer, one turn of R runs, and the closing notice lists R.
 
-Pause, negative: Bob writes in Alice's thread while Alice's child waits. Bob cannot answer Alice's prompt, so the
-pause stays. Bob's turn runs, but its `spawn_agent` call is refused.
-
-Consent boundary, positive: Alice clicks "approve once" on a prompt. The child gets a one-time consent for the exact
-candidates of that call.
+Consent boundary, positive: Alice clicks "approve once". The child gets a one-time consent for the exact candidates of
+that call.
 
 Consent boundary, negative: the parent model writes "Reply A to approve `gh pr view`" while two prompts are open, one
 of them `rm -rf build`. Alice types "A". The session replies that two prompts are open and resolves neither.
 
-Withdrawal, negative: the parent cancels r-8a1. Alice then clicks its old button. The reply is "This approval request
-was withdrawn because the task that asked for it was cancelled. Nothing ran." The reply does not contain `r-8a1` or the
-agent name. No grant is written and no tool runs.
+Withdrawal, negative: the parent cancels r-8a1. Alice clicks its old button. The reply is "This approval request was
+withdrawn because the task that asked for it was cancelled. Nothing ran." It contains no run ID and no agent name.
+
+Durable wait, positive: a child parks. The operator adds an MCP server, and the daemon restarts. The prompt in Slack
+still works. Alice clicks "approve once". The session persists `Resumed`, starts a new child from the park file, and
+the parked call runs once.
+
+Durable wait, negative: the park file was changed after the park. At the answer, the hash check fails. The session
+records the run as lost, and the call does not run.
 
 ### Edge cases
 
 | Case | Behavior |
 | --- | --- |
-| Parent mid-turn | The digest waits for the next tool-batch end or turn end. The input joins the turn when the requester is the same. `spawn_agent` in the same turn is refused at once. |
+| Parent mid-turn | The digest waits for the next tool-batch end or turn end. `spawn_agent` in the same turn is refused at once. |
 | Parent idle | A ready digest wakes the parent once (Q1). |
-| Parent passivation | A live child keeps the session in memory (`LlmSessionActor.cs:376`). Idle passivation does not happen while a request is open. |
-| Daemon restart | Recovery withdraws each child request with `DaemonRestarted` and emits `ToolInteractionClosed`. It closes an unconsumed approval-event input with `InputClosed` and no turn. The lost-run `ChildRunEnded` reports the state. The pause starts `Clear`. |
-| Child cancel | `Withdrawn(CancelledByParent)`. The channel redraws. A late click gets the true reason. |
-| Child ends while another child waits | Its `ChildRunEnded` input waits until the pause lifts or clears. Then it runs with the closing approval input in one turn when the requester is the same. |
-| Operator answers after cancel | D5 reply. No grant, no run. |
-| Prompt expiry by timeout (Q4) | The child gets `ConsentAnswer.TimedOut`. The prompt is withdrawn with `TimedOut`. |
-| Reminder or headless turn with no interactive channel | The child gets `InteractiveApprovalCapability.Unavailable` and is denied without a prompt (existing). No event, no pause. |
-| Headless resume while a child waits (#2541) | The headless client prints the run, the agent, and "waiting for consent" from `SubAgentOutput`. Headless output is for the operator's terminal, not a prompt. Whether headless must exit stays with #2541. |
+| Child cancel | `Withdrawn(CancelledByParent)`. The channel redraws. A late click gets the table text. |
+| Child ends while another child waits | Its `ChildRunEnded` input waits until the pause clears. Then it runs with the closing notice in one turn when the requester is the same. |
+| Reminder or headless turn with no interactive channel | The child gets `InteractiveApprovalCapability.Unavailable` and is denied without a prompt (existing). No pause. |
+| Headless resume while a child waits (#2541) | The headless client prints the run, the agent, and "waiting for consent" from `SubAgentOutput`. This output is for the operator's terminal and is not a prompt. Whether headless must exit stays with #2541. |
 | TUI parent turn ends (#2523) | The `UntilClosed` prompt stays until an answer or `ToolInteractionClosed`. |
-| Parent and child requests both open | The existing parent rule holds automated input. The pause adds the spawn refusal. The text answer guard applies across both. |
-| Two requesters in one shared thread | Each run-owner authority has its own digest. The pause is session-wide. Only a person who can answer an open prompt lifts it. |
-| Nested children | Not possible today. See Q5. |
+| Parent and child requests both open | The parent rule holds automated input. The pause adds the spawn refusal. The text answer guard applies across both. |
+| Restart, child parked (PR 3) | The run waits with no actor. The prompt stays live. The pause comes back. |
+| Restart, child not parked | The run is lost. Its prompts are withdrawn with `DaemonRestarted`. |
+| Agent definition removed before the answer | The resume fails to prepare the child. The session records the run as failed. The call does not run. |
 
 ### Changes to `docs/architecture/tool-authorization.md` (same PR as the code)
 
-- Section 3.6 Consent delivery: add the `Lifetime` field and the `ToolInteractionClosed` output to the published
-  contract. Add the withdrawal reasons, the `Withdrawn` case in the `RejectClosedCall` list, and the text answer
-  guard (new rule and owner). State that the prompt shows only the command and scope. Replace the line "Child prompts
-  do not block an unrelated parent turn or the notice of another child" with the pause rule. Update the diagram.
-- Section 3.6, notices: replace the `ChildNotice` text with the agent event channel: owner-stamped sender, no free
-  text in a payload, the parent cannot approve, and the reducer checks.
-- Section 3.1 Admission: the pause is a new decision owner for input placement. Add the row for automated input while
-  paused, and the lift rule with its owner.
-- Section 7.5 Add a channel prompt: a new channel must honor `Lifetime` and handle `ToolInteractionClosed`.
-- Section 8 Future scenarios: "Inter-agent messages: Needs a contract (one `AgentEvent` subtype for each tool, D1.7)"
-  and "Batched consent for identical child requests: Not supported (Q2)".
-- The Admission note "No timer denies an unanswered request" changes if Q4 is accepted.
+- 3.6 Consent delivery: `Lifetime` and `ToolInteractionClosed` in the published contract; the prompt shows only
+  command and scope; the withdrawal reasons and texts; the `Withdrawn` case in `RejectClosedCall`; the text answer
+  guard. Replace "Child prompts do not block an unrelated parent turn or the notice of another child" with the pause
+  rule. Add the "bridge vs channel" table (D2) and the agent event channel rules (D1.2). Update the diagram.
+- 3.1 Admission: the pause is a new decision owner for input placement; the reminder fire replacement while paused.
+- 3.6 and 3.1 (PR 3): a child consent request survives a restart when the child is parked. Replace the TA-12 text
+  "After a daemon or parent restart, Netclaw SHALL reject the old child prompt as expired".
+- 7.5 Add a channel prompt: honor `Lifetime`, handle `ToolInteractionClosed`, skip a replayed call ID that is tracked.
+- 8 Future scenarios: "Inter-agent messages: Needs a contract (one `AgentEvent` subtype for each tool, D1.5)" and
+  "Batched consent: Not supported (Q2)".
 
 ### Spec deltas (written after this design is approved)
 
-- New capability `agent-event-channel`: types, envelope, owner-stamped sender, no free text, ordering, guarantees,
-  durability split, rendering.
-- `tool-authorization` TA-12: prompt shows only command and scope, parent model cannot answer, withdrawal reply, text
-  answer guard.
-- `background-subagent-runs`: approval events to the parent, pause effects and lift, withdrawal on cancel or end,
-  `ChildRunEnded` as a member of the channel.
-- `netclaw-session`: approval-event input kind; automated input waits while paused.
-- `session-resume`: recovery withdraws child prompts with a reason and closes stale approval-event inputs.
-- `channel-binding-parity`: `ToolInteractionClosed` redraw; `UntilClosed` prompts survive `TurnCompleted`.
-- `netclaw-subagents`: finite child consent wait (only if Q4 is accepted).
-- Glossary: add "agent event", "child consent pause", and "runtime notice".
+- New capability `agent-event-channel`: types, minimal envelope, owner-stamped sender, no free text, ordering,
+  guarantees, rendering, bridge vs channel.
+- `tool-authorization` TA-12: prompt shows only command and scope; parent cannot answer; withdrawal reply; text
+  answer guard; (PR 3) a parked child's prompt survives a restart.
+- `background-subagent-runs`: approval notices, the pause, withdrawal, `ChildRunEnded` in the channel; (PR 3) the
+  parked lifecycle, resume, and recovery.
+- `netclaw-session`: the `child-consent` input kind; automated input waits while paused.
+- `netclaw-scheduling`: a reminder fire into a paused session waits, and a later fire replaces it.
+- `session-resume`: (PR 3) recovery keeps parked child requests and withdraws the others with a reason.
+- `channel-binding-parity`: `ToolInteractionClosed` redraw; `UntilClosed` prompts survive `TurnCompleted`; replayed
+  prompts are not posted twice.
+- `netclaw-subagents`: (PR 3) a child parks at consent and stops; a new actor resumes it.
+- Glossary: add "agent event", "child consent pause", "parked child run", and "runtime notice".
 
 ### Test strategy
 
-All tests are deterministic. They use Akka.TestKit probes, `AwaitAssertAsync`, and a fake `TimeProvider` or
-`TestScheduler`. No test uses `Thread.Sleep` or `Task.Delay`.
+All tests are deterministic. They use Akka.TestKit probes, `AwaitAssertAsync`, and a fake `TimeProvider`. No test
+uses `Thread.Sleep` or `Task.Delay`.
 
-- Channel:
-  - The sender of each `AgentEvent` equals the run of the owner-built bridge or of `FindChild`, also when a payload
-    field names another run.
-  - `ChildApprovalResolved` has the request's `EventId` as its causation and correlation.
-  - A property test: child command text with a marker never appears in an event payload or a rendered notice.
-  - Proto round trips for `AgentEventProto` (each `oneof` case, unknown enum name) and for a field 14 row read as
-    `ChildRunEnded`.
-  - The reducer rejects an event for an unknown run, another session, or another authority.
-- Actor specs (`LlmSessionActor` with a fake child and a fake channel):
-  - Five dispatches during one model call give exactly one approval-event input at the boundary.
-  - An idle session gets one turn for the first dispatch.
-  - `spawn_agent` is refused while paused, accepted after the lift, and accepted after the last close.
-  - A reminder fire and a `ChildRunEnded` input wait while paused and run after the last close.
-  - A person who can answer lifts the pause; a new request pauses again; a person who cannot answer does not lift it.
-  - Cancel emits `ToolInteractionClosed` for each open call; a late click gets `Withdrawn`, no grant, no run.
-  - For each `WithdrawReason`, the late-click reply has the table text and contains neither the run ID nor the agent
-    name.
-  - Recovery withdraws child requests and closes an unconsumed approval-event input with no turn.
-  - A text answer with two open prompts resolves neither.
-- Builder snapshot tests for Slack, Discord, and Mattermost: a child prompt and its closed redraw (each reason) show
-  no agent name and no run ID.
-- TUI: a headless typed-key test where a child prompt survives `TurnCompleted` and the answer resumes the child, plus
-  a native smoke tape (Automation Floor).
+- Channel: the sender of each event equals the owner's run record, also when a payload names another run; a marker in
+  a child command never appears in a payload or a notice (property test); a field 14 row reads as `ChildRunEnded`; a
+  rebuilt waiting notice keeps the `child-consent` kind.
+- Pause and digest (actor specs): five dispatches in one model call give one notice; an idle session gets one turn;
+  `spawn_agent` is refused while paused and accepted after the last close; a slash start is accepted; a person input
+  does not end the pause; automated input and `ChildRunEnded` wait and run after the last close.
+- Reminders: two fires of one reminder while paused leave one pending input and run one turn; the closing notice lists
+  the fire; an isolated reminder session never pauses.
+- Withdrawal: cancel emits `ToolInteractionClosed`; for each reason, the reply has the table text and contains no run
+  ID and no agent name; a late click grants nothing and runs nothing.
+- Text answer guard: two open prompts resolve neither; one open prompt keeps the current behavior.
+- Durable wait (PR 3): park then restart, then answer, runs the call once; restart after the last answer and before
+  `Resumed` resumes; restart after `Resumed` records lost; a changed park file records lost; a batch with two parked
+  calls waits for both answers; prompt numbers after resume do not repeat; a session with only parked children
+  passivates and wakes on a click.
+- Builders and channels: a child prompt and its closed redraw show no agent name and no run ID; a replayed tracked
+  call ID is not posted twice.
+- TUI: a headless typed-key test where a child prompt survives `TurnCompleted`, plus a native smoke tape.
 - Focused Stryker targets: the owner-stamped sender, the pause predicate in `AcceptChild` and in the drain, the
-  no-free-text renderer, and the text answer guard. They join the `child-owner-and-report` group.
-- Eval cases (the `agent-coordination` skill changes): after an approval notice, the parent does not cancel or
-  respawn a waiting child.
+  text answer guard, and the resume gate (`Resumed` before any parked call runs). They join the
+  `child-owner-and-report` group.
+- Eval cases (`agent-coordination` skill): after an approval notice, the parent does not cancel or respawn a waiting
+  child, and it tells the operator to answer.
 
 ## Risks / Trade-offs
 
-- [A forgotten prompt holds reminders and job results of the session.] → Q4 bounds the wait. The notice tells the
-  parent model to tell the operator. A person who can answer lifts the pause.
-- [Merged notices still give 2 or 3 parent turns in a fan-out.] → Bounded, and it does not grow with the child count.
-- [Prompts do not name the child, so the operator cannot tell parallel prompts apart by child.] → Owner choice. The
-  parent can explain in the thread. The text answer guard forces a button for each prompt.
-- [Two encodings for child results (field 14 now, field 15 later).] → One in-memory type and one adapter. A later
-  change moves the writer.
-- [Persist callbacks reorder the admission and the drain at a boundary.] → The implementation admits the input in
-  the persist callback and drains after it. A test asserts the order.
+- [A forgotten prompt holds the session's automated work with no end (Q4).] → Owner choice: a steady state. The
+  replacement rule keeps at most one fire of each reminder. The notice tells the parent to ask the operator.
+- [Merged notices still give 2 or 3 parent turns in a fan-out.] → Bounded. The count does not grow with the children.
+- [Prompts do not name the child.] → Owner choice. The parent explains in the thread. The text answer guard forces a
+  button for each prompt.
+- [Persist callbacks reorder the admission and the drain at a boundary.] → Admit in the persist callback, then drain.
+  A test asserts the order.
 - [A channel binding is not subscribed when recovery emits `ToolInteractionClosed`.] → The buttons stay live until a
-  click. The click gets the D5 reply and the binding redraws. A cold-spawn reconcile is a follow-up.
-- [Field 15 rows cannot be read by an older binary.] → Back up `netclaw.db` before rollout. Rollout is forward-only.
-- [The pause refuses a useful `spawn_agent` call.] → The refusal text names the waiting runs and the two ways out.
+  click. The click gets the D6 reply and the binding redraws.
+- [PR 3: the park file can be large, and it is written on each park.] → One write for each park, not for each round.
+  The file is deleted with the run folder.
+- [PR 3: a resumed child uses the current configuration and model.] → The retry passes every check again. A changed
+  tool policy refuses the call safely. The history keeps the original system prompt.
+- [PR 3: state that the park file does not hold is reset (token counters, watchdog, cycle tracker, temporary
+  correction hints).] → These shape telemetry and hints only. They grant no authority.
+- [PR 3: two parked calls in one batch now both wait for both answers.] → Needed so that no call runs before the
+  durable resume. The parent's own batches already work this way.
+- [PR 3: a crash after `Resumed` loses the run.] → Same rule as today for uncertain child work. The window is short.
+- [PR 3: the journal change is forward-only.] → Back up `netclaw.db` before rollout. PRs 1 and 2 have no format change.
+
+Conflicts with current specs or code that the deltas must resolve:
+
+- `SessionInputFlow.TryFindWaitingFire` drops the later fire today. P2 replaces the earlier fire while paused. The
+  design keeps the old rule for a fire that waits behind a parent consent request. One rule for both is simpler.
+  The owner can choose it later.
+- TA-12 says that a restart expires an old child prompt, and the bridge comment says that a child cannot resume. PR 3
+  changes both.
+- background-subagent-runs says that a child worker stays ephemeral. PR 3 keeps the actor ephemeral and makes only
+  the parked state durable. The delta must say so.
+- The design first listed a TUI reopen of old prompts as a non-goal. PR 3 needs it, because a parked prompt now
+  outlives the client connection.
 
 ## Migration Plan
 
-1. Stack: (a) the channel types, proto field 15, mapper, renderer, and the field 14 adapter; (b) approval events, the
-   digest, and the pause; (c) withdrawal, `Lifetime`, channels, the TUI, and the text answer guard. Each PR carries
-   its spec deltas and doc changes.
-2. Back up `netclaw.db`. Deploy. No configuration change is required unless Q4 adds a property with a default.
-3. Rollback: a binary without field 15 cannot read new rows. Restore the backup, or roll forward.
+Three PRs, stacked. Each PR carries its spec deltas, doc changes, and skill changes.
+
+1. Channel types, the approval notice digest, the pause, and the reminder fire rule. No journal format change.
+2. Withdrawal, prompt `Lifetime`, the channel and TUI redraw, and the text answer guard. No journal format change.
+3. The durable child wait (#2572): `ChildRunEvent.Parked` and `Resumed`, the `Parked` lifecycle case, the park file,
+   resume, recovery, and prompt replay to a new subscriber. Forward-only journal change. Back up `netclaw.db`.
+
+Rollback: PRs 1 and 2 roll back with the binary. PR 3 needs the backup, or a roll forward.
 
 ## Open Questions
 
-Each question has a recommendation. The owner decides. The answers change the spec deltas, so they come before the
-specs.
+The owner decided Q1 to Q6 and P1 to P6 (see Context). These questions remain. Each has a recommendation.
 
-- **Q1. Does an approval-event input wake an idle parent?** Recommendation: yes, once for each ready digest (D3). A
-  digest is ready on a new request or on the last close, never on a single answer while others stay open.
-- **Q2. One prompt with "approve for all" for identical requests of several children?** Recommendation: no, not in
-  this change. It is a new consent surface: one click makes N one-time consents, and "identical" needs a candidate
-  comparison rule. The real fatigue fix for `for N in ...; do gh ...; done` is a Shell facts change for a literal loop.
-- **Q3. Which new facts are journaled?** Recommendation: only `InputAdmitted.agent_events` (field 15), because a
-  rebuilt waiting input must keep its automation kind and its typed events. The digest, pause, `liftedThrough`, and
-  `sequence` stay actor-local. No child request survives a restart. The withdrawal reason comes from existing run
-  records. Child results keep field 14 in this change (D1.4).
-- **Q4. Child consent wait timeout (infinite today)?** Recommendation: a finite wait, `SubAgents.ApprovalWaitTimeout`,
-  default 30 minutes, with a schema default. The timeout gives `ConsentAnswer.TimedOut` to the child and withdraws the
-  prompt with `TimedOut`. Reason: the pause holds automated input, so an infinite wait can stop a session's reminders
-  with no end. The parent's own consent requests stay infinite, because a person input abandons them.
-- **Q5. Nested children?** Recommendation: keep `spawn_agent` denied to children. If nesting comes later, the root
-  session stays the one consent loop. A `ChildRun` address then needs a parent run, and the owning session stamps it.
-- **Q6. Does the lift last until the next request, or only for one turn?** Recommendation: until the next child
-  request opens. It is simpler, and a new request pauses the session again.
+- **R1. Park always, or park only at a drain?** Recommendation: always. One resume path serves a live answer and an
+  answer after a restart, so every live answer tests the path. A waiting session can passivate. The cost is one child
+  rebuild for each answer, which is small next to a person's answer time.
+- **R2. One reminder rule for all waits?** Recommendation: yes, in a later change. Use "the later fire replaces the
+  earlier one" also behind a parent consent request.
