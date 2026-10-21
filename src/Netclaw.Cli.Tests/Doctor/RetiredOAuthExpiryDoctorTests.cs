@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
+using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -188,20 +189,11 @@ public sealed class RetiredOAuthExpiryDoctorTests : IDisposable
 
         await service.ApplyAsync(await service.BuildPlanAsync(TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
 
-        var previous = SensitiveStringTypeConverter.Protector;
-        try
-        {
-            SensitiveStringTypeConverter.Protector = SecretsProtection.CreateProtector(_paths);
-            var configuration = new ConfigurationBuilder().AddNetclawDaemonSources(_paths).Build();
-            var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
-
-            Assert.Equal(expiry, providers["codex"].OAuthTokenExpiry);
-            Assert.Equal("refresh-1", providers["codex"].OAuthRefreshToken?.Value);
-        }
-        finally
-        {
-            SensitiveStringTypeConverter.Protector = previous;
-        }
+        // The test binds the expiry only. It reads the token through LoadTokens, which decrypts with
+        // the protector of this home, so it does not set the process-wide converter protector.
+        var configuration = new ConfigurationBuilder().AddNetclawDaemonSources(_paths).Build();
+        Assert.Equal(expiry, configuration.GetSection("Providers:codex").GetValue<DateTimeOffset?>("OAuthTokenExpiry"));
+        Assert.Equal("refresh-1", OAuthTokenPersistence.LoadTokens(_paths, "codex")!.RefreshToken!.Value);
 
         Assert.DoesNotContain("OAuthTokenExpiry", File.ReadAllText(_paths.NetclawConfigPath), StringComparison.Ordinal);
         using var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));

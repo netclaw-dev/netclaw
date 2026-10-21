@@ -125,6 +125,10 @@ not write `netclaw.json`, so it does not restart the daemon.
 - An encrypted `OAuthTokenExpiry` in `secrets.json` comes from an older build. The daemon stops at
   startup with a message that names `Providers:<name>`. Sign in again with `netclaw provider`. The
   sign-in saves the date unencrypted.
+- Caution: before you run an older release, delete each `Providers.<name>.OAuthTokenExpiry` from
+  `secrets.json`. That value is plaintext, and an older daemon cannot read it. An older build
+  encrypts the leaf again on its next save or `secrets set`, and its binder then fails on the
+  encrypted date.
 
 The refresh service reads `secrets.json` before it spends a refresh token. A refresh that the CLI
 does (`netclaw provider` probes each provider) reaches a running daemon through that file.
@@ -138,6 +142,9 @@ does (`netclaw provider` probes each provider) reaches a running daemon through 
   refresh token again, so the file never keeps a spent one.
 - When a save fails after a good refresh, the daemon logs an Error that names `secrets.json`. The
   file can hold a spent refresh token until the next good save.
+
+The CLI and the daemon share no lock. A refresh at the same moment can present a token that the
+other process just spent.
 
 Older releases wrote `Providers.<name>.OAuthTokenExpiry` to `netclaw.json`. That key is retired.
 

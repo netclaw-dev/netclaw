@@ -175,11 +175,7 @@ public sealed class DoctorFixService
         var removed = false;
         foreach (var key in OAuthTokenExpiryStorage.FindRetired(config))
         {
-            var removable = key.Value is null
-                || key.Value is JsonValue value
-                && value.TryGetValue<string>(out var text)
-                && OAuthTokenExpiryStorage.TryParse(text, out _);
-            if (!removable)
+            if (!OAuthTokenExpiryStorage.IsNullOrDate(key.Value))
                 continue;
 
             key.Entry.Remove(key.Key);

@@ -148,8 +148,16 @@ public static class OAuthTokenExpiryStorage
             .ToList();
     }
 
-    /// <summary>True for a string that parses as a date. JSON null and any other kind are not dates.</summary>
-    public static bool TryGetDate(JsonNode? node, out DateTimeOffset? date)
+    /// <summary>
+    /// True for a value that the binder reads without error: a JSON null, or a string that is empty or
+    /// parses as a date. <c>netclaw doctor --fix</c> removes only such a retired key.
+    /// </summary>
+    public static bool IsNullOrDate(JsonNode? node)
+        => node is null
+           || node is JsonValue value && value.TryGetValue<string>(out var text) && TryParse(text, out _);
+
+    // A string that parses as a date. JSON null, an empty string, and any other kind are not dates.
+    private static bool TryGetDate(JsonNode? node, out DateTimeOffset? date)
     {
         date = null;
         return node is JsonValue value
