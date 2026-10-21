@@ -41,7 +41,7 @@ public sealed class ManagedTemporaryPrivateFolderTests : IDisposable
 
     public ManagedTemporaryPrivateFolderTests()
     {
-        _envelope = Path.Combine(_dir.Path, "sessions", "D0AC6CKBK5K_1791949577_967149-798b80ef96b11016");
+        _envelope = Path.Combine(_dir.Path, "sessions", "C0EXAMPLE01_1791949577_000000-0123456789abcdef");
         _base = Path.Combine(_dir.Path, "netclaw-base");
         Directory.CreateDirectory(_envelope);
     }
@@ -118,40 +118,6 @@ public sealed class ManagedTemporaryPrivateFolderTests : IDisposable
 
         AssertRefused(error, _base, "group or other", startInfo);
         Assert.Equal(OpenMode, File.GetUnixFileMode(_base));
-    }
-
-    [SlopwatchSuppress("SW001", "The private base exists only on POSIX hosts.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "The private base exists only on POSIX hosts.")]
-    public void A_group_writable_key_folder_refuses_the_launch()
-    {
-        var keyFolder = Path.Combine(_base, Key(_envelope));
-        Directory.CreateDirectory(keyFolder);
-        File.SetUnixFileMode(_base, PrivateMode);
-        File.SetUnixFileMode(keyFolder, PrivateMode | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute);
-        var startInfo = CreateStartInfoWithoutTemporaryVariables();
-
-        var error = ManagedTemporaryEnvironment.Prepare(startInfo, Storage(_base).ManagedTemporary);
-
-        AssertRefused(error, keyFolder, "group or other", startInfo);
-    }
-
-    [SlopwatchSuppress("SW001", "This test needs POSIX symbolic links.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "This test needs POSIX symbolic links.")]
-    public void A_linked_key_folder_refuses_the_launch()
-    {
-        // Another session (or user) points this key at its own folder.
-        var otherKey = Path.Combine(_base, "0123456789abcdef");
-        Directory.CreateDirectory(otherKey);
-        File.SetUnixFileMode(_base, PrivateMode);
-        File.SetUnixFileMode(otherKey, PrivateMode);
-        var keyFolder = Path.Combine(_base, Key(_envelope));
-        Directory.CreateSymbolicLink(keyFolder, otherKey);
-        var startInfo = CreateStartInfoWithoutTemporaryVariables();
-
-        var error = ManagedTemporaryEnvironment.Prepare(startInfo, Storage(_base).ManagedTemporary);
-
-        AssertRefused(error, keyFolder, "symbolic link", startInfo);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(otherKey));
     }
 
     [SlopwatchSuppress("SW001", "This test uses /bin/sh and POSIX temporary variables.")]

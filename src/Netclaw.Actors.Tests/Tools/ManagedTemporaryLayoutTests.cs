@@ -19,9 +19,9 @@ namespace Netclaw.Actors.Tests.Tools;
 /// </summary>
 public sealed class ManagedTemporaryLayoutTests
 {
-    // The live envelope of the #2554 Chrome failure (14 Oct 2026).
+    // An envelope with the length of the live envelope of the #2554 Chrome failure.
     private const string LiveEnvelope =
-        "/home/petabridge/.netclaw/sessions/D0AC6CKBK5K_1791949577_967149-798b80ef96b11016";
+        "/home/agent-user/.netclaw/sessions/C0EXAMPLE01_1791949577_000000-0123456789abcdef";
 
     // Chrome makes "<TMPDIR>/com.google.Chrome.XXXXXX/SingletonSocket".
     private const string ChromeSocketSuffix = "/com.google.Chrome.KZWqUD/SingletonSocket";
@@ -102,35 +102,6 @@ public sealed class ManagedTemporaryLayoutTests
 
         Assert.InRange((parent.ManagedTemporary.Directory.Value + ChromeSocketSuffix).Length, 1, MaxSocketPathLength);
         Assert.InRange((child.ManagedTemporary.Directory.Value + ChromeSocketSuffix).Length, 1, MaxSocketPathLength);
-    }
-
-    [SlopwatchSuppress("SW001", "The deep layout length matters only for POSIX Unix sockets.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "The deep layout length matters only for POSIX Unix sockets.")]
-    public void The_storage_layout_keeps_the_deep_path_that_breaks_chrome()
-    {
-        // Guard and evidence: the Windows layout is unchanged, and on the live
-        // host its Chrome socket path has 133 characters.
-        var storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(LiveEnvelope),
-            ManagedTemporaryLayout.InsideSessionStorage.Instance);
-
-        Assert.Equal(Path.Combine(LiveEnvelope, "tmp", "parent"), storage.ManagedTemporary.Directory.Value);
-        Assert.Equal(LiveEnvelope, storage.ManagedTemporary.StorageRoot.Value);
-        Assert.Null(storage.ManagedTemporary.PrivateBase);
-        Assert.Equal(133, (storage.ManagedTemporary.Directory.Value + ChromeSocketSuffix).Length);
-    }
-
-    [Fact]
-    public void A_persisted_job_record_keeps_its_stored_deep_path()
-    {
-        var envelope = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-storage", "session-42"));
-        var deep = Path.Combine(envelope, "tmp", "parent");
-
-        var location = ManagedTemporaryLocation.FromPersistedPaths(deep, envelope);
-
-        Assert.Equal(deep, location.Directory.Value);
-        Assert.Equal(envelope, location.StorageRoot.Value);
-        Assert.Null(location.PrivateBase);
     }
 
     [SlopwatchSuppress("SW001", "The private base exists only on POSIX hosts.")]

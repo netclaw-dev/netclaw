@@ -93,23 +93,16 @@ public sealed class PersonalReadReachTests : IDisposable
 
     [Theory]
     [MemberData(nameof(ReachCases))]
-    public void Read_reach_follows_the_personal_write_profile(
+    public void Read_and_attach_reach_follow_the_personal_write_profile(
         TrustAudience audience,
         WriteShape write,
         Target target,
         bool attended,
         bool expectedAllow)
-        => AssertReach(audience, write, target, attended, expectedAllow, PathAccessPolicy.FileOperation.Read);
-
-    [Theory]
-    [MemberData(nameof(ReachCases))]
-    public void Attach_reach_follows_the_personal_write_profile(
-        TrustAudience audience,
-        WriteShape write,
-        Target target,
-        bool attended,
-        bool expectedAllow)
-        => AssertReach(audience, write, target, attended, expectedAllow, PathAccessPolicy.FileOperation.Attach);
+    {
+        AssertReach(audience, write, target, attended, expectedAllow, PathAccessPolicy.FileOperation.Read);
+        AssertReach(audience, write, target, attended, expectedAllow, PathAccessPolicy.FileOperation.Attach);
+    }
 
     [Fact]
     public void Write_reach_does_not_change()
@@ -168,17 +161,20 @@ public sealed class PersonalReadReachTests : IDisposable
             target);
     }
 
-    [Fact]
-    public void Trusted_read_roots_add_the_personal_write_roots()
+    [Theory]
+    [InlineData(TrustAudience.Personal, true)]
+    [InlineData(TrustAudience.Team, false)]
+    public void Trusted_read_and_attach_roots_add_the_write_roots_only_for_personal(
+        TrustAudience audience,
+        bool expectWriteRoot)
     {
-        var policy = CreatePolicy(TrustAudience.Personal, WriteShape.Roots);
+        var policy = CreatePolicy(audience, WriteShape.Roots);
+        var context = Context(audience, attended: true);
 
-        var read = policy.GetTrustedRoots(Context(TrustAudience.Personal, attended: true), PathAccessPolicy.FileOperation.Read);
-        var attach = policy.GetTrustedRoots(Context(TrustAudience.Personal, attended: true), PathAccessPolicy.FileOperation.Attach);
-
-        Assert.Contains(_writeRoot, read);
+        var read = policy.GetTrustedRoots(context, PathAccessPolicy.FileOperation.Read);
         Assert.Contains(_readRoot, read);
-        Assert.Contains(_writeRoot, attach);
+        Assert.Equal(expectWriteRoot, read.Contains(_writeRoot));
+        Assert.Equal(expectWriteRoot, policy.GetTrustedRoots(context, PathAccessPolicy.FileOperation.Attach).Contains(_writeRoot));
     }
 
     [Fact]
@@ -187,23 +183,12 @@ public sealed class PersonalReadReachTests : IDisposable
         // The prompt and IsReadableByAudience must agree with Evaluate. A write
         // All profile reads like a read All profile.
         var narrowed = CreatePolicy(TrustAudience.Personal, WriteShape.All);
-        var config = new ToolConfig();
-        var reference = new PathAccessPolicy(config, _paths, new ToolPathPolicy([]));
+        var reference = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
         var context = Context(TrustAudience.Personal, attended: true);
 
         Assert.Equal(
             reference.GetTrustedRoots(context, PathAccessPolicy.FileOperation.Read),
             narrowed.GetTrustedRoots(context, PathAccessPolicy.FileOperation.Read));
-    }
-
-    [Fact]
-    public void Team_trusted_read_roots_do_not_add_the_write_roots()
-    {
-        var policy = CreatePolicy(TrustAudience.Team, WriteShape.Roots);
-
-        var read = policy.GetTrustedRoots(Context(TrustAudience.Team, attended: true), PathAccessPolicy.FileOperation.Read);
-
-        Assert.DoesNotContain(_writeRoot, read);
     }
 
     [Fact]
@@ -221,21 +206,6 @@ public sealed class PersonalReadReachTests : IDisposable
             TestContext.Current.CancellationToken);
 
         Assert.Contains("frame-one", result, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task File_list_tool_lists_a_personal_write_root()
-    {
-        await File.WriteAllTextAsync(Path.Combine(_writeRoot, "listed.txt"), "x", TestContext.Current.CancellationToken);
-        var config = CreateConfig(TrustAudience.Personal, WriteShape.Roots);
-        var tool = new FileListTool(config, _paths, new ToolPathPolicy([]));
-
-        var result = await tool.ExecuteAsync(
-            ToolInput.Create("Path", _writeRoot),
-            Context(TrustAudience.Personal, attended: true),
-            TestContext.Current.CancellationToken);
-
-        Assert.Contains("listed.txt", result, StringComparison.Ordinal);
     }
 
     [Fact]

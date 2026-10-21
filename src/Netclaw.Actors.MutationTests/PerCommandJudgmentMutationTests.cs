@@ -178,7 +178,9 @@ public sealed class PerCommandJudgmentMutationTests : IDisposable
     // A Team write profile makes a trust zone that its read profile does not
     // reach. The shell tool needs the Personal audience, so this test calls the
     // reviewed-safe policy directly. A known path in a write-only folder keeps
-    // the prompt, and the same command in the read roots does not.
+    // the prompt, and the same command in the read roots does not. Production
+    // cannot reach a Team shell today (shell_requires_personal_context), so this
+    // test guards the defense-in-depth contract of ReviewedSafeShellPolicy.
     [Theory]
     [InlineData("read", true)]
     [InlineData("write-only", false)]

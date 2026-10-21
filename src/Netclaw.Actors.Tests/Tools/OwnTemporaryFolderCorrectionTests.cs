@@ -48,36 +48,23 @@ public sealed class OwnTemporaryFolderCorrectionTests
         Assert.Null(correction);
     }
 
+    // Negative examples: a path elsewhere in /tmp, and the folder of another session, still get
+    // advice that names the own short folder.
     [SlopwatchSuppress("SW001", "The short layout and /tmp advice use POSIX paths.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "The short layout and /tmp advice use POSIX paths.")]
-    public void A_file_change_elsewhere_in_tmp_gets_advice_that_names_the_short_folder()
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The short layout and /tmp advice use POSIX paths.")]
+    [InlineData("/tmp/report.md")]
+    [InlineData(Base + "/0123456789abcdef/p/report.md")]
+    public void A_file_change_outside_the_own_folder_gets_advice_that_names_the_short_folder(string path)
     {
-        var storage = Storage();
-
         var correction = Policy().EvaluateStructuredFileChange(
             new ToolName(FileWriteTool.ToolName),
-            ToolInput.Create("Path", "/tmp/report.md"),
-            Context(storage),
+            ToolInput.Create("Path", path),
+            Context(Storage()),
             new ToolPathPolicy(ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux), []));
 
         Assert.NotNull(correction);
         Assert.Equal($"{Base}/{Key()}/p", correction.Target.ManagedTemporaryDirectory);
         Assert.Equal("/tmp", correction.Target.PlatformTemporaryRoot);
-    }
-
-    [SlopwatchSuppress("SW001", "The short layout and /tmp advice use POSIX paths.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "The short layout and /tmp advice use POSIX paths.")]
-    public void A_file_change_in_the_temporary_folder_of_another_session_gets_advice()
-    {
-        var storage = Storage();
-
-        var correction = Policy().EvaluateStructuredFileChange(
-            new ToolName(FileWriteTool.ToolName),
-            ToolInput.Create("Path", $"{Base}/0123456789abcdef/p/report.md"),
-            Context(storage),
-            new ToolPathPolicy(ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux), []));
-
-        Assert.NotNull(correction);
     }
 
     private static SessionStoragePaths Storage()
