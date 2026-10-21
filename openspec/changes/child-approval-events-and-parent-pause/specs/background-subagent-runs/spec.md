@@ -79,7 +79,7 @@ turn runs or a compaction runs, the session SHALL admit the notice at the next t
 end. A notice SHALL be ready when it holds a new request, or when no child request of the session stays open. An answer
 while other requests stay open SHALL wait for the next ready notice. The notice SHALL name the agent, the run, and the
 tool of each request, SHALL say that the operator answers in the channel, and SHALL say that `check_agent_run` does not
-work in the notice turn.
+work in the notice turn for a run that a person started.
 
 #### Scenario: A fan-out gives one notice for each boundary
 
@@ -236,6 +236,8 @@ all journal messages. The parent SHALL record the purge only after the delete su
 SHALL log an error, SHALL NOT record the purge, and SHALL try again at the next recovery. An empty child journal SHALL
 get no closing event and no delete. No conversation row SHALL stay after the purge. Whenever the session records a run
 as lost, it SHALL run the purge, also when it has no record of a child journal, so that an orphan journal is removed.
+When the purge finds an orphan journal, the session SHALL record that the run has a child journal before the delete,
+so that a failed delete is retried at the next recovery.
 Recovery SHALL purge the journal of each ended run that has a child journal and no purge record. A purge SHALL be
 idempotent. `task.md`, `result.md`, and the child log file SHALL stay.
 

@@ -272,8 +272,12 @@ notice as an ordinary automated turn with the rendered text. The notice turn gra
 
 **Text (true for the session).** A notice lists the runs of the session. The closing notice comes only when no child
 request of the session stays open, so its "spawn_agent is available again" line is always true. The closing notice
-lists the held reminder fires. The notice delivery target is the run owner's target of the first request in the
-digest.
+lists the held reminder fires.
+
+With one digest for each session, the notice turn takes the audience, the boundary, and the delivery targets of the
+owner of the first open request in the digest, and it lists the runs of every owner. This is safe, because all owners
+of one session share the same thread: the session ID fixes the channel and the thread. The notice turn is automation
+and grants no authority, so the borrowed audience and boundary only shape the reply.
 
 ```text
 Child consent requests wait for the operator. 3 are open.
@@ -283,7 +287,8 @@ Child consent requests wait for the operator. 3 are open.
 The operator answers these prompts in the channel. You cannot answer them.
 The children are not stalled. They wait for the operator, with no time limit.
 Until all requests close, spawn_agent is refused and automated turns wait.
-check_agent_run does not work in this turn. Ask the operator to answer the prompts, or to cancel a child.
+check_agent_run does not work in this turn for a run that a person started.
+Ask the operator to answer the prompts, or to cancel a child.
 ```
 
 ```text
@@ -498,7 +503,9 @@ Purge conditions (owner: the purge actor, then `LlmSessionActor`):
 
 Whenever the session records a run as lost, it runs the purge actor, also when `HasChildJournal` is false (N3). Guard
 (c) makes this free for a run with no journal. It removes an orphan journal that a stop between the child's
-`PersistAll` and the parent's `Parked` left.
+`PersistAll` and the parent's `Parked` left. When the purge actor finds `LastSequenceNr > 0` for a lost run with
+`HasChildJournal = false`, the session persists `HasChildJournal = true` with the run state before the delete. A failed
+delete then leaves a run that the next recovery purges again.
 
 The SQL journal plugin keeps the row with the highest sequence number when it deletes messages, so that the sequence
 number is not reused. The tombstone makes that kept row carry no conversation. An in-memory journal test cannot prove
