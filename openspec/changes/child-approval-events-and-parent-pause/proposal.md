@@ -38,8 +38,7 @@ Stack: (1) channel types, notice digest, pause, and reminder rule; (2) withdrawa
 
 - `background-subagent-runs`: consent notices to the parent, the pause, withdrawal, the child result as a channel member, and the parked lifecycle with resume and recovery.
 - `tool-authorization`: TA-12 adds the prompt that shows only command and scope, the consent boundary for the parent model, the text answer guard, the withdrawal reply, and a parked child's prompt that survives a restart.
-- `netclaw-session`: the `child-consent` input kind, and an input rule: an automated input waits while the pause is active.
-- `netclaw-scheduling`: a reminder fire into a paused session waits, and a later fire replaces it.
+- `netclaw-session`: the `child-consent` input kind; an automated input waits while the pause is active; a reminder fire into a paused session waits, and a later fire replaces it.
 - `netclaw-subagents`: the child journal, its persistence ID, the frozen system prompt and model, and park always.
 - `session-resume`: recovery keeps parked child requests, resumes answered parks, withdraws the others with a stated reason, and purges ended child journals.
 - `channel-binding-parity`: a prompt-closed output that each binding redraws, child prompts that stay open after a parent turn ends, and replayed prompts that are not posted twice.

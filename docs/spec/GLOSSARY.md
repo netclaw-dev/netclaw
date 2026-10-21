@@ -83,6 +83,47 @@ shell job is not a child run.
 **Code anchors:** `TurnCompleted.OpenChildRunIds`, `ChildRunLifecycle`,
 `HeadlessChannel`
 
+### Agent event
+
+An agent event is a typed fact between the agents of one session, for example
+"child approval requested". It has an envelope with a sender, a target, and a
+send time. Only the session that owns a child run builds an event about that
+run. An event never carries consent and never holds text that an agent wrote.
+The model sees a notice that the runtime renders from events. Planned in
+`child-approval-events-and-parent-pause`.
+
+**Code anchors (planned):** `AgentEvent`, `AgentEnvelope`, `AgentEventRenderer`
+
+### Child consent pause
+
+The child consent pause is the state of a session while any child consent
+request is open. The session refuses `spawn_agent`, and automated input waits.
+The current turn can finish, and a person's message starts a turn. Only the
+close of every open child request ends the pause. Planned in
+`child-approval-events-and-parent-pause`.
+
+**Code anchor (planned):** `SessionToolWorkflow`
+
+### Parked child run
+
+A parked child run is a child run that waits for consent with no actor. Its
+conversation and its parked calls are in its child journal, and the parent run
+record says that it is parked. When every parked request has an answer, the
+session recreates the child from its journal and runs only the parked calls.
+Planned in `child-approval-events-and-parent-pause`.
+
+**Code anchors (planned):** `ChildRunLifecycle.Parked`, `ChildRunEvent.Parked`
+
+### Child journal
+
+A child journal is the Akka.Persistence journal of one child run, with the
+persistence ID `subagent-{escaped session ID}/{run ID}`. Its first event
+freezes the system prompt and the model. The parent purges it after the run
+end, `result.md`, and the result notice. Planned in
+`child-approval-events-and-parent-pause`.
+
+**Code anchor (planned):** `SubAgentRunProtocol`
+
 ### Working context
 
 The working context is actor-local state that helps later model turns. It
