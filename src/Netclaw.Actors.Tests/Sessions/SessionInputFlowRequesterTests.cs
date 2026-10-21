@@ -131,7 +131,7 @@ public sealed class SessionInputFlowRequesterTests
             var recorded = new TurnRecorded { SessionId = SessionId, ConsumedInputIds = _flow.SelectedInputs.Ids };
             _state = _state.Apply(recorded, userAlreadyInHistory: true);
             _flow.TurnCommitted(recorded);
-            return _flow.AdvanceAfterTurn(restartDrainRequested: false);
+            return _flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: false);
         }
 
         public ToolBatchInputAdvance ToolBoundary()
@@ -139,15 +139,15 @@ public sealed class SessionInputFlowRequesterTests
             _state = _state.CloseInputs(_flow.SelectedInputs.Ids);
             _flow.ToolBatchCommitted();
             return _flow.AdvanceAfterToolBatch(
-                new BatchCompletion.Ready(_state, 1), compactionDue: false);
+                new BatchCompletion.Ready(_state, 1), compactionDue: false, childConsentPaused: false);
         }
 
-        public CompactionContinuation FinishCompaction() => _flow.AdvanceAfterCompaction(restartDrainRequested: false);
+        public CompactionContinuation FinishCompaction() => _flow.AdvanceAfterCompaction(restartDrainRequested: false, childConsentPaused: false);
 
         private SendUserMessage Admit(string requester, string content, InputPlacement placement)
         {
             var command = new SendUserMessage { SessionId = SessionId, Content = content, Source = Source(requester) };
-            var persist = Assert.IsType<AdmissionDecision.Persist>(_flow.PrepareAdmission(command, _state, SessionId, 1));
+            var persist = Assert.IsType<AdmissionDecision.Persist>(_flow.PrepareAdmission(command, _state, SessionId, 1, childConsentPaused: false));
             _state = _state.Apply(persist.Event);
             return _flow.AdmissionCommitted(persist.Event, command, placement);
         }

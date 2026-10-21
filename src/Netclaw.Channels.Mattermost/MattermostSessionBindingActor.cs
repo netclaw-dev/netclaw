@@ -1156,8 +1156,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             _pendingApprovalRequests,
             tracked,
             wrapPromptId: value => new MattermostPostId(value),
-            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText) =>
-                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText));
+            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, lifetime, toolName, displayText) =>
+                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, lifetime, toolName, displayText));
     }
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)

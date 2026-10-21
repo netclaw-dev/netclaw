@@ -214,7 +214,8 @@ public static class SessionOutputDtoMapper
             InteractionOptions = [.. msg.Options],
             InteractionHasAdoptedContext = msg.HasAdoptedContext,
             InteractionHasThirdPartyAdoptedContext = msg.HasThirdPartyAdoptedContext,
-            InteractionAdoptedSpeakerIds = [.. msg.AdoptedSpeakerIds]
+            InteractionAdoptedSpeakerIds = [.. msg.AdoptedSpeakerIds],
+            InteractionLifetime = msg.Lifetime.ToString()
         },
 
         _ => new SessionOutputDto
@@ -372,7 +373,8 @@ public static class SessionOutputDtoMapper
                 CandidateVerbs = dto.InteractionCandidateVerbs ?? [],
                 Cwd = dto.InteractionCwd,
                 IsMessy = dto.InteractionIsMessy ?? false,
-                Options = dto.InteractionOptions ?? []
+                Options = dto.InteractionOptions ?? [],
+                Lifetime = ParseInteractionLifetime(dto.InteractionLifetime)
             },
             _ => new ErrorOutput
             {
@@ -399,6 +401,17 @@ public static class SessionOutputDtoMapper
         => name is not null && Enum.IsDefined(typeof(ErrorCategory), name)
             ? Enum.Parse<ErrorCategory>(name)
             : ErrorCategory.Unknown;
+
+    // No name is an older daemon, whose prompts all end with the turn. An unknown name is a newer daemon. It fails the
+    // read, because a guess could drop a prompt that a child still waits on.
+    private static ToolInteractionLifetime ParseInteractionLifetime(string? name)
+    {
+        if (name is null)
+            return ToolInteractionLifetime.UntilTurnEnd;
+        return Enum.IsDefined(typeof(ToolInteractionLifetime), name)
+            ? Enum.Parse<ToolInteractionLifetime>(name)
+            : throw new InvalidDataException($"Unknown tool interaction lifetime '{name}'.");
+    }
 
     private static SubAgentOutput MapSubAgentOutput(SessionOutputDto dto, SessionId sessionId)
     {

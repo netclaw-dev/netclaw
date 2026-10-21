@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
+using System.Text;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
@@ -10,9 +12,6 @@ using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
-
-// TEST-FIRST STUBS (child-approval-events-and-parent-pause, PR 1, task 1). These shells let the PR 1 specs compile.
-// The records hold data only. Every method throws NotImplementedException. Task 2.1 to task 2.4 replace them.
 
 /// <summary>The address of one agent of a session. A value object. It never holds an actor reference.</summary>
 internal abstract record AgentAddress
@@ -29,7 +28,10 @@ internal abstract record AgentAddress
 /// <summary>The minimal envelope of an agent event.</summary>
 internal sealed record AgentEnvelope(AgentAddress Sender, AgentAddress Target, DateTimeOffset SentAt);
 
-/// <summary>The closed family of events between the agents of one session. In-process only.</summary>
+/// <summary>
+/// The closed family of events between the agents of one session. In-process only. A payload holds IDs, canonical
+/// names, enums, and runtime-made paths. It never holds text that an agent chose.
+/// </summary>
 internal abstract record AgentEvent
 {
     private AgentEvent() { }
@@ -58,6 +60,13 @@ internal abstract record ChildApprovalResolution
     public sealed record Refused(RefusalKind Kind) : ChildApprovalResolution;
 
     public sealed record Withdrawn(WithdrawReason Reason) : ChildApprovalResolution;
+
+    public static ChildApprovalResolution From(ConsentAnswer answer) => answer switch
+    {
+        ConsentAnswer.Refused refused => new Refused(refused.Kind),
+        ConsentAnswer.Once or ConsentAnswer.Grant => new Approved(answer),
+        _ => throw new InvalidOperationException($"Unknown consent answer {answer.GetType().Name}.")
+    };
 }
 
 internal enum WithdrawReason
@@ -72,21 +81,54 @@ internal enum WithdrawReason
 /// <summary>The runtime-made path of the <c>result.md</c> file of a child run.</summary>
 internal readonly record struct ChildRunResultFile(string Value);
 
+/// <summary>The fixed facts that identify an approval notice input. See <c>TurnContext.IsChildConsentNotice</c>.</summary>
+internal static class ChildConsentNotice
+{
+    /// <summary>The source kind and the sender of an approval notice.</summary>
+    public const string Kind = "child-consent";
+}
+
 /// <summary>
 /// The owner-stamped builders of agent events. Only the session that owns a run calls them, with its own run record.
+/// Security boundary: the sender comes from the run record of the owner, never from the prompt or from a field that
+/// the child sets. A fact that names another run or another session is not a fact of this run, so the builder throws
+/// and never falls back to the run that the fact names.
 /// </summary>
 internal static class AgentEventFactory
 {
     /// <summary>
-    /// Builds the event for a child consent request after <c>ToolApprovalRequested</c> persists. The sender comes
-    /// from <paramref name="run"/>, never from the prompt. The payload holds no text of the prompt.
+    /// Builds the event for a child consent request after <c>ToolApprovalRequested</c> persists. The payload holds no
+    /// text of the prompt.
     /// </summary>
     public static AgentEvent.ChildApprovalRequested ApprovalRequested(
         SessionId owner,
         BackgroundChildRun run,
         ToolInteractionRequest prompt,
         DateTimeOffset sentAt)
-        => throw new NotImplementedException("Task 2.3 builds ChildApprovalRequested.");
+        => ApprovalRequested(owner, run, prompt.CallId, prompt.ToolName, sentAt);
+
+    public static AgentEvent.ChildApprovalRequested ApprovalRequested(
+        SessionId owner,
+        BackgroundChildRun run,
+        ToolCallId promptCallId,
+        ToolName tool,
+        DateTimeOffset sentAt)
+    {
+        EnsurePromptOfRun(owner, run, promptCallId);
+        return new AgentEvent.ChildApprovalRequested(promptCallId, tool) { Envelope = Envelope(owner, run, sentAt) };
+    }
+
+    /// <summary>Builds the event for a child consent request that an answer or a withdrawal closed.</summary>
+    public static AgentEvent.ChildApprovalResolved ApprovalResolved(
+        SessionId owner,
+        BackgroundChildRun run,
+        ToolCallId promptCallId,
+        ChildApprovalResolution resolution,
+        DateTimeOffset sentAt)
+    {
+        EnsurePromptOfRun(owner, run, promptCallId);
+        return new AgentEvent.ChildApprovalResolved(promptCallId, resolution) { Envelope = Envelope(owner, run, sentAt) };
+    }
 
     /// <summary>
     /// The field 14 adapter: reads an admitted child result notice as <see cref="AgentEvent.ChildRunEnded"/>.
@@ -96,12 +138,124 @@ internal static class AgentEventFactory
         InputAdmitted admitted,
         BackgroundChildRun run,
         ChildRunResultFile resultFile)
-        => throw new NotImplementedException("Task 2.2 reads field 14 as ChildRunEnded.");
+    {
+        var owner = admitted.SessionId;
+        var notice = admitted.ChildNotice
+                     ?? throw new InvalidOperationException($"Input {admitted.InputId} is not a child result notice.");
+        if (notice.RunId != run.RunId)
+            throw new InvalidOperationException(
+                $"The notice of run {notice.RunId.Value} is not a fact of run {run.RunId.Value}.");
+        EnsureRunOfOwner(owner, run);
+        var (outcome, reason) = run.Lifecycle switch
+        {
+            ChildRunLifecycle.Terminal terminal => (terminal.Result.Result.Outcome, terminal.Result.Result.OutcomeReason),
+            ChildRunLifecycle.Reported reported => (reported.Outcome, reported.Reason),
+            _ => throw new InvalidOperationException($"Run {run.RunId.Value} has not ended.")
+        };
+        return new AgentEvent.ChildRunEnded(notice, outcome, reason, resultFile)
+        {
+            Envelope = Envelope(owner, run, admitted.Timestamp)
+        };
+    }
+
+    // The runtime makes a child prompt call ID from the run ID of the bridge closure: {runId}/subagent-approval/{n}.
+    private static void EnsurePromptOfRun(SessionId owner, BackgroundChildRun run, ToolCallId promptCallId)
+    {
+        EnsureRunOfOwner(owner, run);
+        if (!promptCallId.Value.StartsWith($"{run.RunId.Value}/subagent-approval/", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"The prompt {promptCallId.Value} is not a consent request of run {run.RunId.Value}.");
+    }
+
+    private static void EnsureRunOfOwner(SessionId owner, BackgroundChildRun run)
+    {
+        if (run.OriginalContext.SessionId != owner)
+            throw new InvalidOperationException(
+                $"Run {run.RunId.Value} belongs to another session, not to {owner.Value}.");
+    }
+
+    private static AgentEnvelope Envelope(SessionId owner, BackgroundChildRun run, DateTimeOffset sentAt)
+        => new(new AgentAddress.ChildRun(owner, run.RunId, run.AgentName), new AgentAddress.Session(owner), sentAt);
 }
 
-/// <summary>The one deterministic path from typed agent events to model text.</summary>
+/// <summary>
+/// The one deterministic path from typed approval events to model text. The text names agents, runs, tools, and
+/// answers only. It never copies a command, a scope, or a path from a prompt.
+/// </summary>
 internal static class AgentEventRenderer
 {
+    public const string OpenHeading = "Child consent requests wait for the operator.";
+    public const string ClosedHeading = "Child consent requests are closed. None is open in this session.";
+
+    /// <summary>
+    /// Renders the digest of one session. A request with no later resolution is open. With an open request the text
+    /// lists the open requests and the rules of the pause. With none open, the text lists each answer.
+    /// </summary>
     public static string Render(IReadOnlyList<AgentEvent> events)
-        => throw new NotImplementedException("Task 2.4 renders agent events.");
+    {
+        var resolved = events.OfType<AgentEvent.ChildApprovalResolved>()
+            .Select(static resolution => resolution.PromptCallId)
+            .ToHashSet();
+        var open = events.OfType<AgentEvent.ChildApprovalRequested>()
+            .Where(request => !resolved.Contains(request.PromptCallId))
+            .ToArray();
+        var text = new StringBuilder();
+        if (open.Length > 0)
+        {
+            text.AppendLine(CultureInfo.InvariantCulture, $"{OpenHeading} {open.Length} are open.");
+            foreach (var request in open)
+            {
+                text.AppendLine(CultureInfo.InvariantCulture,
+                    $"- {Sender(request)} tool={request.Tool.Value} open_since={Clock(request.Envelope.SentAt)}");
+            }
+
+            text.AppendLine("The operator answers these prompts in the channel. You cannot answer them.");
+            text.AppendLine("The children are not stalled. They wait for the operator, with no time limit.");
+            text.AppendLine("Until all requests close, spawn_agent is refused and automated turns wait.");
+            text.AppendLine("check_agent_run does not work in this turn for a run that a person started.");
+            text.AppendLine("Ask the operator to answer the prompts, or to cancel a child.");
+            return text.ToString();
+        }
+
+        text.AppendLine(ClosedHeading);
+        foreach (var resolution in events.OfType<AgentEvent.ChildApprovalResolved>())
+            text.AppendLine(CultureInfo.InvariantCulture, $"- {Sender(resolution)} answer={Answer(resolution.Resolution)}");
+        text.AppendLine("spawn_agent is available again.");
+        return text.ToString();
+    }
+
+    private static string Sender(AgentEvent evt) => evt.Envelope.Sender is AgentAddress.ChildRun child
+        ? $"agent={child.Agent.Value} run={child.RunId.Value}"
+        : throw new InvalidOperationException("A child approval event must come from a child run.");
+
+    private static string Clock(DateTimeOffset at)
+        => at.UtcDateTime.ToString("HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+
+    private static string Answer(ChildApprovalResolution resolution) => resolution switch
+    {
+        ChildApprovalResolution.Approved { Answer: ConsentAnswer.Once } => "approved_once",
+        ChildApprovalResolution.Approved { Answer: ConsentAnswer.Grant grant }
+            => $"approved_{grant.Scope.ToString().ToLowerInvariant()}",
+        ChildApprovalResolution.Refused refused => $"refused reason={Refusal(refused.Kind)}",
+        ChildApprovalResolution.Withdrawn withdrawn => $"withdrawn reason={Withdrawal(withdrawn.Reason)}",
+        _ => throw new InvalidOperationException($"Unknown child approval resolution {resolution.GetType().Name}.")
+    };
+
+    private static string Refusal(RefusalKind kind) => kind switch
+    {
+        RefusalKind.Denied => "denied",
+        RefusalKind.TimedOut => "timed_out",
+        RefusalKind.PromptUnavailable => "prompt_unavailable",
+        _ => throw new InvalidOperationException($"Unknown refusal kind {kind}.")
+    };
+
+    private static string Withdrawal(WithdrawReason reason) => reason switch
+    {
+        WithdrawReason.CancelledByParent => "cancelled_by_parent",
+        WithdrawReason.ChildEnded => "child_ended",
+        WithdrawReason.ChildLost => "child_lost",
+        WithdrawReason.DaemonRestarted => "daemon_restarted",
+        WithdrawReason.PromptUnavailable => "prompt_unavailable",
+        _ => throw new InvalidOperationException($"Unknown withdraw reason {reason}.")
+    };
 }

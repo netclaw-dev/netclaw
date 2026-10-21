@@ -90,6 +90,7 @@ public readonly record struct SubAgentOutcomeReason(string Value)
     public static readonly SubAgentOutcomeReason NoActivityTimeout = new("no_activity_timeout");
     public static readonly SubAgentOutcomeReason ActorStopped = new("actor_stopped");
     public static readonly SubAgentOutcomeReason SpawnUnavailable = new("spawn_unavailable");
+    public static readonly SubAgentOutcomeReason SpawnPaused = new("spawn_paused");
     public static readonly SubAgentOutcomeReason NoToolsAvailable = new("no_tools_available");
     public static readonly SubAgentOutcomeReason SpawnError = new("spawn_error");
     public static readonly SubAgentOutcomeReason NoResultReader = new("no_result_reader");

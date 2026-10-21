@@ -53,9 +53,8 @@ public sealed record PendingApprovalPromptTracked : INetclawSerializableMessage
     public string? DisplayText { get; init; }
 
     /// <summary>
-    /// The lifetime of the tracked prompt. A row without the optional field reads as
-    /// <see cref="SessionProtocol.ToolInteractionLifetime.UntilTurnEnd"/>.
-    /// TEST-FIRST STUB (PR 1, task 1.10): the proto field and the mapper entry come with task 2.8.
+    /// The lifetime of the tracked prompt, so a cold-spawned binding keeps a child prompt at the next turn end. A row
+    /// without the optional field reads as <see cref="SessionProtocol.ToolInteractionLifetime.UntilTurnEnd"/>.
     /// </summary>
     public SessionProtocol.ToolInteractionLifetime Lifetime { get; init; } = SessionProtocol.ToolInteractionLifetime.UntilTurnEnd;
 }

@@ -422,6 +422,9 @@ message PendingApprovalPromptTrackedProto {
   string prompt_id = 5;
   optional string tool_name = 6;
   optional string display_text = 7;
+  // ToolInteractionLifetime. Written only for a prompt that outlives the turn (UntilClosed = 1). A row without the
+  // field is a turn prompt, so an older binary reads the new row and a new binary reads an old row the same way.
+  optional int32 lifetime = 8;
 }
 
 message PendingApprovalPromptClearedProto {

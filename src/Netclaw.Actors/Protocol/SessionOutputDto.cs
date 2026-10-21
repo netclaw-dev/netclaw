@@ -129,6 +129,8 @@ public sealed record SessionOutputDto
     public bool? InteractionHasAdoptedContext { get; init; }
     public bool? InteractionHasThirdPartyAdoptedContext { get; init; }
     public List<string>? InteractionAdoptedSpeakerIds { get; init; }
+    /// <summary>The <c>ToolInteractionLifetime</c> member name. An older daemon sends none: a turn prompt.</summary>
+    public string? InteractionLifetime { get; init; }
 
     // SubAgent
     public string? AgentName { get; init; }

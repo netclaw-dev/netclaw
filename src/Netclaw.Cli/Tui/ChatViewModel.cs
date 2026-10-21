@@ -431,22 +431,33 @@ public partial class ChatViewModel : ReactiveViewModel
                 StatusMessage.Value = "Approval required";
                 break;
             case TurnCompleted:
-                _pendingInteractions.Clear();
-                RefreshApprovalOptions();
+                ClearTurnInteractions();
                 IsGenerating.Value = false;
-                StatusMessage.Value = "Ready";
+                StatusMessage.Value = HasPendingInteraction ? "Approval required" : "Ready";
                 break;
             case ErrorOutput:
-                _pendingInteractions.Clear();
-                RefreshApprovalOptions();
+                ClearTurnInteractions();
                 IsGenerating.Value = false;
                 IsInputEnabled.Value = _shutdownTask is null;
-                StatusMessage.Value = "Last request failed. Ready to retry.";
+                StatusMessage.Value = HasPendingInteraction
+                    ? "Last request failed. Approval required."
+                    : "Last request failed. Ready to retry.";
                 break;
         }
 
         _outputSubject.OnNext(output);
         RequestRedraw();
+    }
+
+    // A turn end or a turn error clears only the prompts of the turn. A child prompt stays until the person answers it,
+    // because the child keeps waiting after the parent turn ends or fails (#2523).
+    private void ClearTurnInteractions()
+    {
+        var kept = _pendingInteractions.Where(static interaction => interaction.Lifetime == ToolInteractionLifetime.UntilClosed).ToArray();
+        _pendingInteractions.Clear();
+        foreach (var interaction in kept)
+            _pendingInteractions.Enqueue(interaction);
+        RefreshApprovalOptions();
     }
 
     internal Task CancelFromInputAsync()

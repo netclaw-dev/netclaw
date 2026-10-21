@@ -34,6 +34,7 @@ public class PendingApprovalRequest<TPromptId>
         OptionKeys = request.Options.Select(option => option.Key.Value).ToArray();
         ToolName = request.ToolName.Value;
         DisplayText = request.DisplayText;
+        Lifetime = request.Lifetime;
     }
 
     public PendingApprovalRequest(
@@ -42,6 +43,7 @@ public class PendingApprovalRequest<TPromptId>
         PrincipalClassification? requesterPrincipal,
         IReadOnlyList<string> optionKeys,
         TPromptId? promptId,
+        ToolInteractionLifetime lifetime,
         string? toolName = null,
         string? displayText = null)
     {
@@ -57,6 +59,7 @@ public class PendingApprovalRequest<TPromptId>
                 ApprovalOptionKeys.LabelFor(key, isMcpTool)))
             .ToArray();
         PromptId = promptId;
+        Lifetime = lifetime;
         ToolName = toolName;
         DisplayText = displayText;
     }
@@ -84,4 +87,10 @@ public class PendingApprovalRequest<TPromptId>
     public string? DisplayText { get; }
 
     public TPromptId? PromptId { get; set; }
+
+    /// <summary>
+    /// A turn prompt ends with its turn. A child prompt stays pending until an answer or a close, also when the parent
+    /// turn ends or fails.
+    /// </summary>
+    public ToolInteractionLifetime Lifetime { get; }
 }

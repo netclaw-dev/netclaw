@@ -127,6 +127,13 @@ internal sealed partial class SessionToolWorkflow
                 nowMs));
         }
 
+        // <child-consent-hold>
+        // The child consent pause holds automated input until the last child request closes. A person input runs.
+        // An approval notice never comes here: the owner admits it on its own path.
+        if (IsChildConsentPaused && (isChildNotice || IsAutomation(inputPrincipal)))
+            return new NewInputPlan.WaitForApproval();
+        // </child-consent-hold>
+
         if (ResolvedParentCount > 0)
             return new NewInputPlan.AbandonThenActivate(CreateAbandonment(
                 state,
@@ -167,7 +174,7 @@ internal sealed partial class SessionToolWorkflow
     public bool HasPendingApprovals() => PendingParentCount > 0;
 
     // A parked batch still waits for an answer, or has an answer and no result yet. Input admitted after it waits.
-    // Only parent approvals count: a child approval belongs to the child run and must not hold the parent's input.
+    // Only parent approvals count here. The child consent pause holds automated input on its own rule.
     public bool HasParkedApprovals() => PendingParentCount > 0 || ResolvedParentCount > 0;
 
     public int PendingDiagnosticCount => PendingParentCount;

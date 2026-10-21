@@ -299,10 +299,14 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
                 await _postEmptyTurnFallbackAsync(completed);
         }
 
-        var clearedPrompts = _pendingRequests
+        // A turn end clears only the prompts of the turn. A child prompt stays until an answer or a close (#2523).
+        var turnPrompts = _pendingRequests
+            .Where(static pending => pending.Lifetime == ToolInteractionLifetime.UntilTurnEnd)
+            .ToArray();
+        var clearedPrompts = turnPrompts
             .Select(pending => new PendingApprovalPromptCleared { CallId = pending.CallId.Value })
             .ToArray();
-        _pendingRequests.Clear();
+        _pendingRequests.RemoveAll(pending => turnPrompts.Contains(pending));
         _deliveredThisTurn = false;
         _postFailedThisTurn = false;
         return clearedPrompts;
@@ -316,6 +320,7 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
             RequesterPrincipal = pending.RequesterPrincipal,
             OptionKeys = pending.OptionKeys,
             PromptId = promptId,
+            Lifetime = pending.Lifetime,
             ToolName = pending.ToolName,
             // Preserve null-vs-set semantics on the wire: Truncate returns
             // string.Empty for null input, which would round-trip as

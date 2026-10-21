@@ -734,8 +734,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _pendingApprovalRequests,
             tracked,
             wrapPromptId: value => new SlackEventTs(value),
-            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText) =>
-                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText));
+            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, lifetime, toolName, displayText) =>
+                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, lifetime, toolName, displayText));
     }
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
@@ -1236,9 +1236,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             PrincipalClassification? requesterPrincipal,
             IReadOnlyList<string> optionKeys,
             SlackEventTs? promptMessageTs,
+            ToolInteractionLifetime lifetime,
             string? toolName = null,
             string? displayText = null)
-            : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptMessageTs, toolName, displayText)
+            : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptMessageTs, lifetime, toolName, displayText)
         {
         }
     }

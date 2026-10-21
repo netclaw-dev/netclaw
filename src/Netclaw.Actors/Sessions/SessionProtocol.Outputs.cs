@@ -502,7 +502,6 @@ public static partial class SessionProtocol
         /// <summary>
         /// How long a channel keeps the prompt pending. A parent prompt lives until the turn ends. A child prompt
         /// lives until an answer or a close. Renderers do not show it.
-        /// TEST-FIRST STUB (PR 1, task 1.10): the session does not set it yet, and no channel reads it yet (task 2.8).
         /// </summary>
         public ToolInteractionLifetime Lifetime { get; init; } = ToolInteractionLifetime.UntilTurnEnd;
     }

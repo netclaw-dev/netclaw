@@ -260,6 +260,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // A child owner never survives a restart. Close the child entries that remain before a stashed command
             // runs, then log the approvals that stay open. Replay itself logs none (see ApplyToolApprovalRequested).
             _toolWorkflow.ExpireRecoveredChildApprovals();
+            CloseRecoveredConsentNotices();
             foreach (var open in _toolWorkflow.OpenApprovals())
                 LogToolApprovalRequested(open.AuthorizationAttemptId.Value, open.Request.CallId, open.Request.ToolName, recovered: true);
 
@@ -303,6 +304,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // The orphan notices must start their turn here, so a message that woke the session buffers behind them
             // and does not run first.
             ResumeOrphanNotices();
+            if (_consentDigest.IsReady)
+                ChildConsentChanged();
         });
     }
 
@@ -687,6 +690,17 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (analysis.Kind == LlmResponseKind.ToolCalls && _toolExecutor is not null)
         {
             HandleToolCallResponse(lastMessage, analysis.ToolCalls, response.Usage);
+            return;
+        }
+
+        // An approval notice turn may end with no text. The turn then ends quietly, with no empty-reply retry and no
+        // fallback post: the notice is runtime state, and the model owes the person no reply to it.
+        if (analysis.Kind is LlmResponseKind.ThinkingOnly or LlmResponseKind.Empty
+            && _input.Authority.Context is { IsChildConsentNotice: true })
+        {
+            TurnLog().Info("turn_consent_notice_quiet_end kind={Kind}", analysis.Kind);
+            RecordIntermediateUsage(response.Usage);
+            CloseActiveInputs(FinishTurnWithoutReply);
             return;
         }
 
@@ -1078,9 +1092,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         _log.Warning("RollBackCurrentTurnIntoBuffer: no User message found in history");
     }
 
+    // Compaction end: a ready approval notice is admitted first, so the drain sees it.
     private void DrainBufferOrReady()
+        => AdmitConsentNoticeThen(DrainBufferOrReadyNow);
+
+    private void DrainBufferOrReadyNow()
     {
-        var continuation = _input.AdvanceAfterCompaction(RestartDrainRequested);
+        var continuation = _input.AdvanceAfterCompaction(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (continuation.Action == InputProgressAction.Restart)
         {
             RecordRestartReminderEligibility();
@@ -1702,9 +1720,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         });
     }
 
+    // Turn end: a ready approval notice is admitted first, so the drain sees it.
     private void DrainBufferedMessagesOrBecomeReady()
+        => AdmitConsentNoticeThen(DrainBufferedMessagesOrBecomeReadyNow);
+
+    private void DrainBufferedMessagesOrBecomeReadyNow()
     {
-        var next = _input.AdvanceAfterTurn(RestartDrainRequested);
+        var next = _input.AdvanceAfterTurn(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (next.Action == InputProgressAction.Restart)
         {
             RecordRestartReminderEligibility();
@@ -2015,8 +2037,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         // Decide admission before any side effect. A duplicate, a dropped fire, or a refusal must leave the
         // session as it was, so it must not abandon an open tool batch.
-        var decision = _input.PrepareAdmission(cmd, _state, _sessionId, NowMs());
-        if (decision is not (AdmissionDecision.Existing or AdmissionDecision.Persist))
+        var decision = _input.PrepareAdmission(cmd, _state, _sessionId, NowMs(), _toolWorkflow.IsChildConsentPaused);
+        if (decision is not (AdmissionDecision.Existing or AdmissionDecision.Persist or AdmissionDecision.ReplaceWaitingFire))
         {
             SettleWithoutAdmission(decision, cmd);
             return;
@@ -2055,8 +2077,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void AdmitInput(SendUserMessage cmd, InputPlacement placement)
     {
-        var decision = _input.PrepareAdmission(cmd, _state, _sessionId, NowMs());
-        if (decision is AdmissionDecision.Existing or AdmissionDecision.Persist)
+        var decision = _input.PrepareAdmission(cmd, _state, _sessionId, NowMs(), _toolWorkflow.IsChildConsentPaused);
+        if (decision is AdmissionDecision.Existing or AdmissionDecision.Persist or AdmissionDecision.ReplaceWaitingFire)
             CommitAdmission(decision, cmd, placement);
         else
             SettleWithoutAdmission(decision, cmd);
@@ -2098,20 +2120,35 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 CompleteAcceptedInput(cmd, placement);
                 return;
             case AdmissionDecision.Persist persist:
-                Persist(persist.Event, admitted =>
+                PersistAdmission(persist.Event, cmd, placement);
+                return;
+            case AdmissionDecision.ReplaceWaitingFire replace:
+                // The waiting fire never ran, so the close consumes it with no turn. Then the newer fire waits.
+                var closed = new InputClosed { SessionId = _sessionId, InputIds = [replace.Waiting], ClosedAtMs = NowMs() };
+                _ = _state.Apply(closed);
+                Persist(closed, committed =>
                 {
-                    // The review reads the ended run, which the notice turns into a reported run.
-                    var endedRun = admitted.ChildNotice is { } notice ? _state.ChildRuns[notice.RunId] : null;
-                    _state = _state.Apply(admitted);
-                    ReviewChildFindings(endedRun);
-                    var accepted = _input.AdmissionCommitted(admitted, cmd, placement);
-                    CompleteAcceptedInput(accepted, placement);
+                    _state = _state.Apply(committed);
+                    _input.InputsClosed(committed);
+                    TurnLog().Info("reminder_fire_replaced waiting={InputId}", replace.Waiting);
+                    PersistAdmission(replace.Event, cmd, placement);
                 });
                 return;
         }
 
         throw new InvalidOperationException("Unknown input admission decision.");
     }
+
+    private void PersistAdmission(InputAdmitted evt, SendUserMessage cmd, InputPlacement placement)
+        => Persist(evt, admitted =>
+        {
+            // The review reads the ended run, which the notice turns into a reported run.
+            var endedRun = admitted.ChildNotice is { } notice ? _state.ChildRuns[notice.RunId] : null;
+            _state = _state.Apply(admitted);
+            ReviewChildFindings(endedRun);
+            var accepted = _input.AdmissionCommitted(admitted, cmd, placement);
+            CompleteAcceptedInput(accepted, placement);
+        });
 
     private void CompleteAcceptedInput(SendUserMessage command, InputPlacement placement)
     {
@@ -3271,7 +3308,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void HandleToolInteractionRequestDispatch(ToolInteractionRequestDispatch dispatch)
     {
-        var msg = dispatch.Request;
+        // A parent prompt ends with its turn. A child prompt lives until an answer or a close, because the child keeps
+        // waiting after the parent turn ends or fails (#2523).
+        var msg = dispatch.SourceChildRunId is null
+            ? dispatch.Request
+            : dispatch.Request with { Lifetime = ToolInteractionLifetime.UntilClosed };
         if (dispatch.SourceChildRunId is { } childRunId &&
             (!_state.ChildRuns.TryGetValue(childRunId, out var childRun) || childRun.Lifecycle is not ChildRunLifecycle.Accepted))
             return;
@@ -3294,6 +3335,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             ApplyToolApprovalRequested(e);
             EmitOutput(msg);
             TryStopDurableApprovalWaits();
+            if (e.SourceChildRunId is { } requestingRun)
+                ChildApprovalRequested(_state.ChildRuns[requestingRun], msg);
         });
     }
 
@@ -3598,6 +3641,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                     {
                         _toolWorkflow.ApplyResolvedResponse(evt, durable);
                         TryReplyAck();
+                        if (evt.SourceChildRunId is { } answeredRun)
+                        {
+                            var run = _state.ChildRuns[answeredRun];
+                            ChildApprovalsClosed([_toolWorkflow.CreateChildResolution(evt, run, _sessionId, _timeProvider.GetUtcNow())]);
+                        }
                     });
                     return;
                 default:
@@ -3707,7 +3755,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (_phase.Current != SessionPhase.Ready || _toolWorkflow.HasPendingApprovals())
             return;
 
-        var next = _input.AdvanceAfterTurn(RestartDrainRequested);
+        var next = _input.AdvanceAfterTurn(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (next.Action == InputProgressAction.Restart)
         {
             RecordRestartReminderEligibility();
@@ -4026,7 +4074,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
 
         _state = completion.State;
-        var advance = _input.AdvanceAfterToolBatch(completion, ShouldCompact());
+        // Tool-batch end: a ready approval notice is admitted first. It waits for its own turn and never joins this one.
+        AdmitConsentNoticeThen(() => ContinueAfterToolBatch(completion));
+    }
+
+    private void ContinueAfterToolBatch(BatchCompletion.Ready completion)
+    {
+        var advance = _input.AdvanceAfterToolBatch(completion, ShouldCompact(), _toolWorkflow.IsChildConsentPaused);
         if (advance.Batch is { } batch)
         {
             TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",

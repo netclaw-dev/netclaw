@@ -945,7 +945,21 @@ internal static partial class NetclawProtoMapper
             proto.ToolName = evt.ToolName;
         if (evt.DisplayText is not null)
             proto.DisplayText = evt.DisplayText;
+        if (evt.Lifetime != Sessions.SessionProtocol.ToolInteractionLifetime.UntilTurnEnd)
+            proto.Lifetime = (int)evt.Lifetime;
         return proto;
+    }
+
+    // An unknown lifetime number comes from a newer writer. It fails the read: a guess could clear a prompt that a
+    // child still waits on, or keep a turn prompt after its turn.
+    private static Sessions.SessionProtocol.ToolInteractionLifetime FromProtoLifetime(Proto.PendingApprovalPromptTrackedProto proto)
+    {
+        if (!proto.HasLifetime)
+            return Sessions.SessionProtocol.ToolInteractionLifetime.UntilTurnEnd;
+        var lifetime = (Sessions.SessionProtocol.ToolInteractionLifetime)proto.Lifetime;
+        return Enum.IsDefined(lifetime)
+            ? lifetime
+            : throw new InvalidDataException($"Tracked prompt {proto.CallId} has an unknown lifetime {proto.Lifetime}.");
     }
 
     internal static PendingApprovalPromptTracked FromProto(Proto.PendingApprovalPromptTrackedProto proto) => new()
@@ -958,7 +972,8 @@ internal static partial class NetclawProtoMapper
         OptionKeys = proto.OptionKeys.ToArray(),
         PromptId = proto.PromptId,
         ToolName = proto.HasToolName ? proto.ToolName : null,
-        DisplayText = proto.HasDisplayText ? proto.DisplayText : null
+        DisplayText = proto.HasDisplayText ? proto.DisplayText : null,
+        Lifetime = FromProtoLifetime(proto)
     };
 
     internal static Proto.PendingApprovalPromptClearedProto ToProto(PendingApprovalPromptCleared evt) => new()

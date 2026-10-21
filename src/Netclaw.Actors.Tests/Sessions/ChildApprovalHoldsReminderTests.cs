@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------
-// <copyright file="ChildApprovalDoesNotHoldReminderTests.cs" company="Petabridge, LLC">
+// <copyright file="ChildApprovalHoldsReminderTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
@@ -11,25 +11,26 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
-/// Executable spec (PR #2505, the requirement that a waiting input runs under its own authority): only a parent approval holds a waiting input. A child approval belongs to the
-/// child run, so it must not hold the parent's reminder.
+/// Executable spec (child-approval-events-and-parent-pause, design D5): an open child consent request pauses the
+/// session, so it holds the parent's reminder like an open parent approval does. This spec replaces the PR #2505 rule
+/// that only a parent approval holds a waiting input.
 /// <para>
-/// The child run asks for an approval while the parent turn is over. A reminder for the parent arrives. It runs as
-/// its own turn under the authority of the reminder, and the child approval stays open. The control spec shows that a
-/// recovered parent approval does hold the same reminder until the approval closes.
+/// The child run asks for an approval while the parent turn is over. A reminder for the parent arrives. It waits
+/// while the child approval is open, and it runs as its own turn under the authority of the reminder after the answer.
+/// The control spec shows that a recovered parent approval holds the same reminder until the approval closes.
 /// </para>
 /// </summary>
-public sealed class ChildApprovalDoesNotHoldReminderTests : ChildLifetimeTestBase
+public sealed class ChildApprovalHoldsReminderTests : ChildLifetimeTestBase
 {
-    public ChildApprovalDoesNotHoldReminderTests(ITestOutputHelper output) : base(output)
+    public ChildApprovalHoldsReminderTests(ITestOutputHelper output) : base(output)
     {
     }
 
     [Fact]
-    public async Task A_reminder_runs_as_its_own_turn_while_a_child_approval_is_open()
+    public async Task A_reminder_waits_for_an_open_child_approval_and_runs_after_it_closes()
     {
         // Arrange: the parent starts a child run. The child asks for an approval, and the parent turn ends.
-        var sessionId = new SessionId("boundary/child-approval-does-not-hold-reminder");
+        var sessionId = new SessionId("boundary/child-approval-holds-reminder");
         FakeChat.ToolCallsOnFirstCall = [Spawn("spawn-child", "child-a")];
         Clients.Child.ToolCallsOnFirstCall = [Probe("child-call", FirstTool)];
         var subscriber = await JoinFullAsync(sessionId);
@@ -52,19 +53,25 @@ public sealed class ChildApprovalDoesNotHoldReminderTests : ChildLifetimeTestBas
             return sawChildApproval && sawParentTurnEnd;
         }, Deadline, cancellationToken: Cancellation);
 
-        // Act
+        // Act 1: the reminder arrives while the child approval is open. The session acknowledges it after the journal
+        // stores it, and the reminder waits.
         await SendReminderAsync(sessionId, "build-check:1700000000300");
 
-        // Assert: the reminder ran as a turn, and the child approval is still open.
-        await ExpectTurnsAsync(subscriber, 1);
-        var reminderRequest = Assert.Single(FakeChat.ReceivedMessages, request => LastUserText(request) == ReminderText);
-        Assert.Contains(ReminderPromptMarker, SystemText(reminderRequest));
+        // Assert 1
+        Assert.DoesNotContain(FakeChat.ReceivedMessages, request => LastUserText(request) == ReminderText);
         Assert.Equal(0, First.Runs);
 
-        // The open child approval still takes its answer.
+        // Act 2: the operator answers the child approval.
         var reply = await ApproveAsync(sessionId, childApproval!.CallId);
         Assert.IsType<CommandAck>(reply);
+
+        // Assert 2: the child call runs, and the reminder runs once as its own turn under its own authority.
         await AwaitAssertAsync(() => Assert.Equal(1, First.Runs), Deadline, cancellationToken: Cancellation);
+        await AwaitAssertAsync(() =>
+        {
+            var reminderRequest = Assert.Single(FakeChat.ReceivedMessages, request => LastUserText(request) == ReminderText);
+            Assert.Contains(ReminderPromptMarker, SystemText(reminderRequest));
+        }, Deadline, cancellationToken: Cancellation);
     }
 
     // Control: a recovered parent approval holds the same reminder until the approval closes. The session is in

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -91,10 +92,15 @@ public sealed record TurnContext
 
     // Three facts together make an approval notice turn: the source kind "child-consent", the sender
     // "child-consent", and the authenticity LocalProcess. A webhook can name its event type "child-consent", but
-    // the webhook path sets the authenticity Verified in code, so a webhook input is never a notice.
-    // TEST-FIRST STUB (PR 1, task 1.5): task 2.4 implements the check.
+    // the webhook path sets the authenticity Verified in code, so a webhook input is never a notice. The pause lets a
+    // notice pass and recovery closes a pending notice, so a check on fewer facts lets a sender skip the pause.
+    // <child-consent-notice>
     internal bool IsChildConsentNotice
-        => throw new NotImplementedException("Task 2.4 identifies an approval notice.");
+        => RequesterPrincipal == PrincipalClassification.VerifiedAutomation
+           && Provenance.TransportAuthenticity == TransportAuthenticity.LocalProcess
+           && Provenance.SourceKind?.Value == ChildConsentNotice.Kind
+           && RequesterSenderId?.Value == ChildConsentNotice.Kind;
+    // </child-consent-notice>
 
     // Turn identity is separate: restart batches can span several turns. Use this check where one authority
     // must continue unchanged (start idempotency, approval and continuation recovery), not for ownership.

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Text.Json;
 using Akka.Actor;
 using Akka.Event;
@@ -21,6 +22,7 @@ namespace Netclaw.Actors.Sessions;
 public sealed partial class LlmSessionActor
 {
     private readonly HashSet<SubAgentRunId> _unreportableRuns = [];
+    private readonly ChildConsentDigest _consentDigest = new();
 
     private void ApplyLegacyCoordination(LegacyCoordinationEvent evt)
     {
@@ -104,6 +106,15 @@ public sealed partial class LlmSessionActor
                 replyTo.Tell(new ChildRunAcceptance(existing.RunId, existing.ScopeId));
             return;
         }
+        // Security boundary (child consent pause, design D5): while a child consent request of the session is open,
+        // the model cannot start more children. The text names only the waiting runs that the calling turn may control,
+        // and only the count of the others.
+        if (_toolWorkflow.RefusesChildStart(message.StartKey))
+        {
+            replyTo.Tell(new Status.Failure(new ChildStartRejectedException(SubAgentOutcomeReason.SpawnPaused,
+                SpawnPausedText(message.OriginalContext))));
+            return;
+        }
         var authorityIsCurrent = _input.Authority.Context is { } current &&
             current.TurnId.Value == message.StartKey.TurnId &&
             HasSameChildAuthority(current.ToRecord(), message.OriginalContext);
@@ -172,6 +183,21 @@ public sealed partial class LlmSessionActor
         });
     }
 
+    private string SpawnPausedText(TurnContextRecord caller)
+    {
+        var open = _toolWorkflow.OpenChildRequests();
+        var yours = open.Select(request => request.SourceChildRunId!.Value).Distinct()
+            .Where(runId => HasSameChildRequester(_state.ChildRuns[runId].OriginalContext, caller))
+            .Select(runId => runId.Value)
+            .ToArray();
+        var count = open.Count == 1
+            ? "1 child consent request of this session waits for the operator."
+            : $"{open.Count} child consent requests of this session wait for the operator.";
+        var owned = yours.Length == 0 ? "None of them is yours." : $"Yours: {string.Join(", ", yours)}.";
+        return $"spawn_agent is paused. {count}\n{owned} Ask the operator to answer the prompts, or to cancel a child.\n"
+               + "A notice arrives when all requests close.";
+    }
+
     // Start idempotency: a repeated start key names the same request only under the same full turn authority.
     private static bool HasSameChildAuthority(TurnContextRecord left, TurnContextRecord right)
         => CompareChildContexts(left, right, static (original, candidate) => original.HasSameAuthority(candidate));
@@ -220,8 +246,9 @@ public sealed partial class LlmSessionActor
         {
             _state = _state.Apply(committed);
             _execution.CloseChild(run.RunId);
-            _toolWorkflow.CloseChildApprovals(committed);
             replyTo.Tell(ChildStatus(_state.ChildRuns[run.RunId]));
+            ChildApprovalsClosed(_toolWorkflow.WithdrawChildApprovals(committed, _state.ChildRuns[run.RunId], _sessionId,
+                _timeProvider.GetUtcNow()));
         });
     }
 
@@ -265,7 +292,8 @@ public sealed partial class LlmSessionActor
         Persist(evt, committed =>
         {
             _state = _state.Apply(committed);
-            _toolWorkflow.CloseChildApprovals(committed);
+            var withdrawn = _toolWorkflow.WithdrawChildApprovals(committed, _state.ChildRuns[runId], _sessionId,
+                _timeProvider.GetUtcNow());
             _execution.ReleaseChild(runId);
             if (!child.Equals(ActorRefs.Nobody))
             {
@@ -280,6 +308,7 @@ public sealed partial class LlmSessionActor
                 FindingsCount = result.FindingsCount
             }, OutputFilter.ToolCalls);
             PrepareChildResult(_state.ChildRuns[runId], terminal, legacy: null);
+            ChildApprovalsClosed(withdrawn);
         });
     }
 
@@ -480,6 +509,111 @@ public sealed partial class LlmSessionActor
             StartWaitingInputAfterApproval();
     }
 
+    // ── Approval notices (design D4) ──
+
+    // A child consent request persisted. The digest is ready, and the session admits it at the next model boundary.
+    private void ChildApprovalRequested(BackgroundChildRun run, ToolInteractionRequest prompt)
+    {
+        _consentDigest.Requested(AgentEventFactory.ApprovalRequested(_sessionId, run, prompt, _timeProvider.GetUtcNow()));
+        ChildConsentChanged();
+    }
+
+    // An answer or a withdrawal closed child requests. Only the last close of the session makes the digest ready, so no
+    // text says that spawn_agent is available while another request stays open.
+    private void ChildApprovalsClosed(IReadOnlyList<AgentEvent.ChildApprovalResolved> closed)
+    {
+        if (closed.Count == 0)
+            return;
+        foreach (var resolution in closed)
+            _consentDigest.Resolved(resolution);
+        if (!_toolWorkflow.IsChildConsentPaused)
+            _consentDigest.MarkClosed();
+        ChildConsentChanged();
+    }
+
+    // An idle session admits a ready notice at once, and then starts the next input: the notice, or the held input
+    // after the last close. A running turn admits the notice at its next tool-batch end, turn end, or compaction end.
+    // A turn that waits for a parent prompt runs no model call, so the notice is admitted at once and waits for its
+    // own turn.
+    private void ChildConsentChanged()
+    {
+        if (_phase.Current == SessionPhase.Ready)
+            AdmitConsentNoticeThen(StartWaitingInputAfterApproval);
+        else if (_phase.Current == SessionPhase.Processing && _toolWorkflow.HasPendingApprovals())
+            AdmitConsentNoticeThen(static () => { });
+    }
+
+    // Persists a ready digest as one approval notice input, then runs the next step of the boundary in the journal
+    // callback. The notice waits in the queue for its own turn.
+    private void AdmitConsentNoticeThen(Action next)
+    {
+        if (!_consentDigest.IsReady || RestartDrainRequested)
+        {
+            next();
+            return;
+        }
+
+        var events = _consentDigest.Take();
+        var text = AgentEventRenderer.Render(events);
+        if (!_toolWorkflow.IsChildConsentPaused && _input.WaitingFires(_state) is { Count: > 0 } fires)
+        {
+            text += "Reminder fires that waited for the pause: "
+                    + string.Join(", ", fires.Select(fire => string.Create(CultureInfo.InvariantCulture,
+                        $"reminder={fire.DefinitionId.Value} fired_at={DateTimeOffset.FromUnixTimeMilliseconds(fire.FireTimeMs).UtcDateTime:HH:mm:ss}Z")))
+                    + "\n";
+        }
+
+        var notice = SessionInputFlow.PrepareConsentNotice(_sessionId, NoticeOwner(events).OriginalContext, text, NowMs());
+        _ = _state.Apply(notice);
+        Persist(notice, admitted =>
+        {
+            _state = _state.Apply(admitted);
+            _input.ConsentNoticeCommitted(admitted);
+            _log.Info("Admitted approval notice {InputId} ({EventCount} event(s))", admitted.InputId, events.Count);
+            next();
+        });
+    }
+
+    // With one digest for the session, the notice turn takes the context of the owner of the first open request, or
+    // of the first request when none is open. All owners of one session share its thread, and the notice turn is
+    // automation, so the borrowed audience and boundary only shape the reply.
+    private BackgroundChildRun NoticeOwner(IReadOnlyList<AgentEvent> events)
+    {
+        var resolved = events.OfType<AgentEvent.ChildApprovalResolved>().Select(static evt => evt.PromptCallId).ToHashSet();
+        var first = events.OfType<AgentEvent.ChildApprovalRequested>().FirstOrDefault(evt => !resolved.Contains(evt.PromptCallId))
+                    ?? events.First();
+        return first.Envelope.Sender is AgentAddress.ChildRun child
+            ? _state.ChildRuns[child.RunId]
+            : throw new InvalidOperationException("An approval notice requires a child run sender.");
+    }
+
+    // Approval notices reach the model at most once. A pending notice describes requests that the restart withdrew,
+    // so recovery closes it with no turn and rebuilds the digest from the open entries. Today a restart withdraws
+    // every child request first, so the rebuilt digest is empty. A rebuilt digest wakes the parent only when
+    // recovery closed a notice that the model did not see.
+    private void CloseRecoveredConsentNotices()
+    {
+        var pending = _state.PendingInputs
+            .Where(input => TurnContext.TryFromRecord(input.TurnContext, out var context, out _)
+                            && context is { IsChildConsentNotice: true })
+            .Select(static input => input.InputId)
+            .ToArray();
+        var open = _toolWorkflow.OpenChildRequests()
+            .Select(request => AgentEventFactory.ApprovalRequested(_sessionId, _state.ChildRuns[request.SourceChildRunId!.Value],
+                new ToolCallId(request.CallId), new ToolName(request.ToolName),
+                DateTimeOffset.FromUnixTimeMilliseconds(request.RequestedAtMs)))
+            .ToArray();
+        _consentDigest.Rebuild(open, ready: pending.Length > 0);
+        if (pending.Length == 0)
+            return;
+
+        var closed = new InputClosed { SessionId = _sessionId, InputIds = pending, ClosedAtMs = NowMs() };
+        // The rest of recovery must not see these inputs as pending, so the state changes now.
+        _state = _state.Apply(closed);
+        Persist(closed, committed =>
+            _log.Info("Recovery closed {Count} pending approval notice(s)", committed.InputIds.Count));
+    }
+
     // The notice is admitted input, so the findings review runs once, when the journal accepts it.
     private void ReviewChildFindings(BackgroundChildRun? run)
     {
@@ -493,5 +627,45 @@ public sealed partial class LlmSessionActor
             RunId = run.RunId, AgentName = run.AgentName, Completion = result.Completion,
             FindingsCount = result.FindingsCount, Duration = TimeSpan.Zero
         }], findings);
+    }
+}
+
+/// <summary>
+/// The one actor-local digest of approval events of a session (design D4, N2). It holds each request of the pause and
+/// each answer since the last closing notice. It is ready on a new request and on the last close of the session.
+/// </summary>
+internal sealed class ChildConsentDigest
+{
+    private readonly List<AgentEvent> _events = [];
+
+    public bool IsReady { get; private set; }
+
+    public void Requested(AgentEvent.ChildApprovalRequested request)
+    {
+        _events.Add(request);
+        IsReady = true;
+    }
+
+    public void Resolved(AgentEvent.ChildApprovalResolved resolution) => _events.Add(resolution);
+
+    public void MarkClosed() => IsReady = true;
+
+    // A notice consumes the digest. The requests of an open notice stay, so a later notice lists them again. The
+    // closing notice ends the pause and clears the digest.
+    public IReadOnlyList<AgentEvent> Take()
+    {
+        var events = _events.ToArray();
+        var resolved = events.OfType<AgentEvent.ChildApprovalResolved>().Select(static evt => evt.PromptCallId).ToHashSet();
+        if (events.OfType<AgentEvent.ChildApprovalRequested>().All(request => resolved.Contains(request.PromptCallId)))
+            _events.Clear();
+        IsReady = false;
+        return events;
+    }
+
+    public void Rebuild(IReadOnlyList<AgentEvent.ChildApprovalRequested> open, bool ready)
+    {
+        _events.Clear();
+        _events.AddRange(open);
+        IsReady = ready && open.Count > 0;
     }
 }

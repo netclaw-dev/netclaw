@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
@@ -49,6 +50,57 @@ internal sealed partial class SessionToolWorkflow
             _calls.Remove(key);
     }
     // </child-approval-close>
+
+    // A cancel or the end of a run closes its entries (CloseChildApprovals). Each entry that was still open becomes a
+    // withdrawal with the reason of the record. An entry with an answer closed already, so it gives no event.
+    public IReadOnlyList<AgentEvent.ChildApprovalResolved> WithdrawChildApprovals(
+        ChildRunEvent evt, BackgroundChildRun run, SessionId owner, DateTimeOffset at)
+    {
+        WithdrawReason reason;
+        switch (evt)
+        {
+            case ChildRunEvent.CancellationRequested:
+                reason = WithdrawReason.CancelledByParent;
+                break;
+            case ChildRunEvent.TerminalRecorded terminal:
+                reason = terminal.Terminal.Lost ? WithdrawReason.ChildLost : WithdrawReason.ChildEnded;
+                break;
+            default:
+                throw new InvalidOperationException($"A {evt.GetType().Name} record closes no child approval.");
+        }
+
+        var open = OpenChildRequests().Where(request => request.SourceChildRunId == evt.RunId)
+            .Select(static request => new ToolCallId(request.CallId))
+            .ToArray();
+        CloseChildApprovals(evt);
+        return open.Select(callId => AgentEventFactory.ApprovalResolved(owner, run, callId,
+            new ChildApprovalResolution.Withdrawn(reason), at)).ToArray();
+    }
+
+    // The answer of a child request is durable. Only the workflow turns it into the typed event, after it applied it.
+    public AgentEvent.ChildApprovalResolved CreateChildResolution(
+        ToolApprovalResolved resolution, BackgroundChildRun run, SessionId owner, DateTimeOffset at)
+        => AgentEventFactory.ApprovalResolved(owner, run, new ToolCallId(resolution.CallId),
+            ChildApprovalResolution.From(ConsentAnswerCodec.FromJournalText(resolution.Decision)), at);
+
+    // <child-consent-pause>
+    // The child consent pause (design D5): the session is paused while any child consent request of the session is
+    // open. A request with an answer is closed, also when its run did not resume yet. Actor-local and derived.
+    public bool IsChildConsentPaused
+        => _calls.Values.Any(static call => call is PendingToolApproval && call.Pending.Request.SourceChildRunId is not null);
+
+    // While paused, the model cannot start more children. A slash start is accepted, because a person typed it.
+    public bool RefusesChildStart(ChildRunStartKey startKey)
+        => startKey is ChildRunStartKey.Tool && IsChildConsentPaused;
+    // </child-consent-pause>
+
+    /// <summary>The open child consent requests of the session, in request order.</summary>
+    public IReadOnlyList<ToolApprovalRequested> OpenChildRequests()
+        => _calls.Values.OfType<PendingToolApproval>()
+            .Select(static call => call.Pending.Request)
+            .Where(static request => request.SourceChildRunId is not null)
+            .OrderBy(static request => request.RequestedAtMs)
+            .ToArray();
 
     public IReadOnlyList<PendingToolInteraction> OpenApprovals()
         => _calls.Values.OfType<PendingToolApproval>().Select(static call => call.Pending).ToArray();

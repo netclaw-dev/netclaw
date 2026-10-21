@@ -6,6 +6,7 @@
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using Netclaw.Tools;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels;
 
@@ -20,7 +21,7 @@ public static class PendingApprovalRecovery
         List<TRequest> pendingRequests,
         PendingApprovalPromptTracked tracked,
         Func<string, TPromptId> wrapPromptId,
-        Func<ToolCallId, string?, PrincipalClassification?, IReadOnlyList<string>, TPromptId?, string?, string?, TRequest> createRequest)
+        Func<ToolCallId, string?, PrincipalClassification?, IReadOnlyList<string>, TPromptId?, ToolInteractionLifetime, string?, string?, TRequest> createRequest)
         where TRequest : PendingApprovalRequest<TPromptId>
         where TPromptId : struct
     {
@@ -38,6 +39,7 @@ public static class PendingApprovalRecovery
             tracked.RequesterPrincipal,
             tracked.OptionKeys,
             promptId,
+            tracked.Lifetime,
             tracked.ToolName,
             tracked.DisplayText));
     }
