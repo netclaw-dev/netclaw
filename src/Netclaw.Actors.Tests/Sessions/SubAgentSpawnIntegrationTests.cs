@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
+using Akka.Persistence.Journal;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
@@ -23,6 +24,7 @@ using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
+using AkkaPersistence = Akka.Persistence.Persistence;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -391,10 +393,11 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         List<AIContent> Search(int round)
             => [CreateToolCall($"search-{round}", "search_tools", new Dictionary<string, object?> { ["query"] = "browser" })];
         // Request 1 starts the child. Requests 2 and 3 run. Request 4 is the first correction. Requests 5 to 7 are
-        // refused repeats 1 to 3. The child ends while request 7 is in flight. Its notice joins the loop at the next
-        // tool boundary after the runtime writes result.md: request 8 or 9. The refused call then runs again,
-        // the next request is the correction, and the later requests are repeats. The count keeps its value across
-        // the notice, so the loop reaches repeat 5. The model answers the final nudge in text.
+        // refused repeats 1 to 3. Request 7 waits at the parent gate. The child ends, and the runtime writes
+        // result.md off the actor thread. The test opens the parent gate only after the journal holds the admission
+        // of the notice, so the notice joins the loop at the next tool boundary: request 8. The refused call then runs
+        // again, the next request is the correction, and the later requests are repeats. The count keeps its value
+        // across the notice, so the loop reaches repeat 5. The model answers the final nudge in text.
         var request = 0;
         _clientProvider.Main.ResponseContentsSelector = messages =>
         {
@@ -442,6 +445,16 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 outputs.Add(message);
                 return message is SubAgentOutput { Phase: SubAgentPhase.Completed };
             }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+            // The Completed output comes before result.md and before the admission of the notice. A slow runner
+            // takes several loop rounds for that work, so the test waits for the durable admission. The session
+            // buffers the notice in the persist callback, and the callback runs before the actor reads the reply
+            // to request 7. Thus the notice is in the buffer before the loop reaches the next tool boundary.
+            var journalProbe = CreateTestProbe("child-mid-loop-journal");
+            await AwaitAssertAsync(async () => Assert.True(
+                    await HasChildNoticeAdmissionAsync(journalProbe, sessionId),
+                    "The journal holds no admission of the child notice yet."),
+                TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(7, _clientProvider.Main.CallCount);
             parentGate.TrySetResult();
             await subscriber.FishForMessageAsync<object>(message =>
             {
@@ -455,14 +468,14 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             var noticeAt = requests.ToList().FindIndex(static request => request.Any(static message =>
                 message.Role == Microsoft.Extensions.AI.ChatRole.User
                 && message.Text.StartsWith("Child run ended.", StringComparison.Ordinal)));
-            Assert.InRange(noticeAt, 7, 8);
+            Assert.Equal(7, noticeAt);
             static bool IsRepeatNudge(Microsoft.Extensions.AI.ChatMessage message)
                 => message.Role == Microsoft.Extensions.AI.ChatRole.User
                     && message.Text.StartsWith("[system: Netclaw refused your repeated call to `search_tools` again.",
                         StringComparison.Ordinal);
-            // The count does not reset at the notice. Repeat 5 gets the final nudge, and the model answers it. A notice
-            // in request 8 comes before repeat 4, so repeats 4 and 5 follow it. A notice in request 9 comes after
-            // repeat 4, so only repeat 5 follows it. A reset count would give five nudges after the notice.
+            // The count does not reset at the notice. Repeat 5 gets the final nudge, and the model answers it. The
+            // notice in request 8 comes before repeat 4, so repeats 4 and 5 follow it. A reset count would give five
+            // nudges after the notice.
             // Review Should-fix 4: count every nudge of the turn, before and after the notice. The history keeps only
             // the latest nudge, so a request sends a nudge when the nudge comes after its last assistant message. The
             // notice can follow the nudge in that tail, so the check does not read only the last message.
@@ -498,6 +511,29 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         {
             childGate.TrySetResult();
             parentGate.TrySetResult();
+        }
+    }
+
+    // True when the in-memory journal holds the admission of a child notice for the session.
+    private static async Task<bool> HasChildNoticeAdmissionAsync(Akka.TestKit.TestProbe probe, SessionId sessionId)
+    {
+        AkkaPersistence.Instance.Apply(probe.Sys).JournalFor(null).Tell(
+            new MemoryJournal.ReplayAllEvents(0, int.MaxValue, int.MaxValue, probe.Ref));
+        var found = false;
+        while (true)
+        {
+            switch (await probe.ExpectMsgAsync<object>(TimeSpan.FromSeconds(5),
+                        cancellationToken: TestContext.Current.CancellationToken))
+            {
+                case MemoryJournal.ReplayedEvent { Persistent.Payload: InputAdmitted { ChildNotice: not null } admitted }
+                    when admitted.SessionId == sessionId:
+                    found = true;
+                    break;
+                case MemoryJournal.EventReplaySuccess:
+                    return found;
+                case MemoryJournal.EventReplayFailure failure:
+                    throw new InvalidOperationException("The journal replay failed.", failure.Cause);
+            }
         }
     }
 
