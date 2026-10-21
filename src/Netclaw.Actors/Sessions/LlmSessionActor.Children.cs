@@ -474,7 +474,10 @@ public sealed partial class LlmSessionActor
             return;
 
         _log.Info("Resuming {RestoredCount} child notice(s) that the previous run left unconsumed", restored);
-        StartWaitingInputAfterApproval();
+        // A crash inside a tool batch leaves a tool_use with no result, and a provider refuses that history. Close the
+        // interrupted batch first. Its journal callback then starts the notice turn.
+        if (!AbandonInterruptedToolBatchAfterRecovery())
+            StartWaitingInputAfterApproval();
     }
 
     // The notice is admitted input, so the findings review runs once, when the journal accepts it.

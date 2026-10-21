@@ -482,9 +482,25 @@ internal sealed class SessionInputFlow
 
     private void AddNoticeRun(ChildNotice? notice)
     {
-        if (notice is not null && !_noticeRunIds.Contains(notice.RunId))
-            _noticeRunIds.Add(notice.RunId);
+        if (notice is not null)
+            AddNoticeRun(notice.RunId);
     }
+
+    private void AddNoticeRun(SubAgentRunId runId)
+    {
+        if (!_noticeRunIds.Contains(runId))
+            _noticeRunIds.Add(runId);
+    }
+
+    // Replay rebuilds the noticed runs of the open journal turn from the inputs that its tool batches consumed. An
+    // approval re-drive on a new actor instance then keeps the reminder link of the noticed run, as the live actor does.
+    public void RestoreNoticeRuns(IEnumerable<SubAgentRunId> runIds)
+    {
+        foreach (var runId in runIds)
+            AddNoticeRun(runId);
+    }
+
+    public void ClearNoticeRuns() => _noticeRunIds.Clear();
 
     public void DeriveAdoptedTrust(TrustContextDeriver? deriver)
         => _trust = _context is { } context ? deriver?.DeriveFromTurnContext(context) : null;

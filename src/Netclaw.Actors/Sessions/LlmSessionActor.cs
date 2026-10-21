@@ -220,7 +220,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Recover<ToolCallRecorded>(ApplyToolCallRecorded);
         Recover<ToolApprovalRequested>(ApplyToolApprovalRequested);
         Recover<ToolApprovalResolved>(ApplyToolApprovalResolved);
-        Recover<ToolBatchAbandoned>(ApplyToolBatchAbandoned);
+        Recover<ToolBatchAbandoned>(evt =>
+        {
+            // An abandoned batch ends its turn, so the noticed runs of that turn end too.
+            ApplyToolBatchAbandoned(evt);
+            _input.ClearNoticeRuns();
+        });
         Recover<SnapshotOffer>(offer =>
         {
             if (offer.Snapshot is SessionSnapshot snapshot)
@@ -259,6 +264,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 LogToolApprovalRequested(open.AuthorizationAttemptId.Value, open.Request.CallId, open.Request.ToolName, recovered: true);
 
             TransitionTo(SessionPhase.Ready);
+            // Only an approval re-drive continues the open journal turn. Any other next turn starts with no noticed run.
+            if (!_toolWorkflow.HasParkedApprovals())
+                _input.ClearNoticeRuns();
             RestoreWaitingInputs();
             Self.Tell(new RecoverChildRuns());
 
@@ -2152,6 +2160,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         _state = _state.Apply(evt, userAlreadyInHistory);
         _toolWorkflow.CompleteTurn();
         _input.ClearTurnContext();
+        _input.ClearNoticeRuns();
 
         // A session that recovers without a snapshot has no eligible turn. Mirror the live path so that
         // late delivery feedback for the latest turn finds the turn, the reminder that started it, and
@@ -2162,12 +2171,21 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void RecoverParentBatch(ToolBatchStarted recorded)
     {
         var evt = LegacyCoordinationReplay.TranslateParentDecision(_state, recorded);
+        // The consumed notices name the runs of this turn. RestoreConsumedInputs closes the inputs, so read them first.
+        var pendingById = _state.PendingInputs.ToDictionary(input => input.InputId);
+        _input.RestoreNoticeRuns(evt.ConsumedInputIds
+            .Select(id => pendingById.TryGetValue(id, out var input) ? input.ChildNotice?.RunId : null)
+            .OfType<SubAgentRunId>());
         RestoreConsumedInputs(evt.ConsumedInputIds, evt.UserMessage);
         ApplyToolBatchStarted(evt);
     }
 
+    // A closure ends a failed turn, or a turn with no reply.
     private void RecoverParentClosure(InputClosed recorded)
-        => _state = _state.Apply(LegacyCoordinationReplay.TranslateParentDecision(_state, recorded));
+    {
+        _state = _state.Apply(LegacyCoordinationReplay.TranslateParentDecision(_state, recorded));
+        _input.ClearNoticeRuns();
+    }
 
     private void RestoreConsumedInputs(IReadOnlyList<InputId> inputIds, SerializableChatMessage lastUserMessage)
     {
