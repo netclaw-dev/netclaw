@@ -26,6 +26,7 @@ namespace Netclaw.Actors.Tests.Tools;
 /// and the next file tool write then makes them again. The base is below the private
 /// temp folder of the test, never the <c>/tmp/netclaw-&lt;uid&gt;</c> folder of a live
 /// daemon. The test proves the defect on a host with the usual umask (0022).
+/// The negative rows make the folders before the write, with an open mode or a link.
 /// </remarks>
 [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
 public sealed class ManagedTemporaryFirstWriteTests : IDisposable
@@ -98,6 +99,107 @@ public sealed class ManagedTemporaryFirstWriteTests : IDisposable
 
         Assert.Null(ManagedTemporaryEnvironment.Prepare(new ProcessStartInfo("true"), run.ManagedTemporary));
         Assert.Null(ManagedTemporaryEnvironment.Prepare(new ProcessStartInfo("true"), _otherStorage.ManagedTemporary));
+    }
+
+    /// <summary>The unsafe shape that another local user leaves before the first write.</summary>
+    public enum ForeignFolders
+    {
+        /// <summary>The base, the key folder, and the run folder exist with mode 0777.</summary>
+        OpenModes,
+
+        /// <summary>The base is a link to a folder of mode 0700. The key and run folders are 0700.</summary>
+        LinkedBase,
+
+        /// <summary>The base is 0700. The key folder is a link to a folder of mode 0700.</summary>
+        LinkedKeyFolder,
+    }
+
+    // Negative example (PR #2559 review item B1-R): another local user can make the full
+    // path below the base before the daemon does. The folders then exist, but they are open
+    // or linked. A file tool write into temp_dir must refuse, not write into those folders.
+    // The owner check is not tested here: a test without root cannot make a folder that
+    // another user owns. Mode 0777 stands in for it, because the same guard skips both checks.
+    [SlopwatchSuppress("SW001", "The private base exists only on POSIX hosts.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The private base exists only on POSIX hosts.")]
+    [InlineData(TrustAudience.Team, FileWriteTool.ToolName, ForeignFolders.OpenModes)]
+    [InlineData(TrustAudience.Team, FileEditTool.ToolName, ForeignFolders.OpenModes)]
+    [InlineData(TrustAudience.Personal, FileWriteTool.ToolName, ForeignFolders.OpenModes)]
+    [InlineData(TrustAudience.Personal, FileEditTool.ToolName, ForeignFolders.OpenModes)]
+    [InlineData(TrustAudience.Team, FileWriteTool.ToolName, ForeignFolders.LinkedBase)]
+    [InlineData(TrustAudience.Team, FileEditTool.ToolName, ForeignFolders.LinkedBase)]
+    [InlineData(TrustAudience.Personal, FileWriteTool.ToolName, ForeignFolders.LinkedBase)]
+    [InlineData(TrustAudience.Personal, FileEditTool.ToolName, ForeignFolders.LinkedBase)]
+    [InlineData(TrustAudience.Team, FileWriteTool.ToolName, ForeignFolders.LinkedKeyFolder)]
+    [InlineData(TrustAudience.Personal, FileWriteTool.ToolName, ForeignFolders.LinkedKeyFolder)]
+    public async Task A_file_tool_write_to_temp_dir_refuses_folders_that_exist_but_are_not_private(
+        TrustAudience audience,
+        string toolName,
+        ForeignFolders shape)
+    {
+        var runFolder = _storage.ManagedTemporary.Directory.Value;
+        var keyFolder = _storage.ManagedTemporary.StorageRoot.Value;
+        var target = Path.Combine(runFolder, "notes.txt");
+        PlantForeignFolders(shape, keyFolder, runFolder);
+        Assert.True(Directory.Exists(runFolder), "The test must make the full path before the write.");
+
+        var context = Context(audience, _storage);
+        var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
+        var input = ToolInput.Create("Path", target, "Content", "notes");
+        var result = toolName == FileEditTool.ToolName
+            ? await new FileEditTool(policy).ExecuteAsync(input, context, TestContext.Current.CancellationToken)
+            : await new FileWriteTool(policy).ExecuteAsync(input, context, TestContext.Current.CancellationToken);
+
+        Assert.True(
+            context.Receipt?.Category == ToolInvocationOutcomeCategory.AccessDenied,
+            $"A {audience} {toolName} into folders of shape {shape} must be refused, got {context.Receipt?.Category}: {result}");
+        Assert.False(File.Exists(target), $"The refused write must not make '{target}'.");
+        Assert.Empty(Directory.EnumerateFileSystemEntries(runFolder));
+    }
+
+    private void PlantForeignFolders(ForeignFolders shape, string keyFolder, string runFolder)
+    {
+        const UnixFileMode open = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                                  | GroupAndOtherBits;
+        const UnixFileMode owner = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        var keyName = Path.GetRelativePath(_base, keyFolder);
+        var runName = Path.GetRelativePath(keyFolder, runFolder);
+
+        switch (shape)
+        {
+            case ForeignFolders.OpenModes:
+                Directory.CreateDirectory(runFolder);
+                // Set the mode after creation: the umask of the host masks the create mode.
+                foreach (var folder in new[] { _base, keyFolder, runFolder })
+                    File.SetUnixFileMode(folder, open);
+                break;
+
+            case ForeignFolders.LinkedBase:
+            {
+                var real = Path.Combine(_dir.Path, "planted-base");
+                var realRun = Path.Combine(real, keyName, runName);
+                Directory.CreateDirectory(realRun);
+                foreach (var folder in new[] { real, Path.Combine(real, keyName), realRun })
+                    File.SetUnixFileMode(folder, owner);
+                Directory.CreateSymbolicLink(_base, real);
+                break;
+            }
+
+            case ForeignFolders.LinkedKeyFolder:
+            {
+                Directory.CreateDirectory(_base);
+                File.SetUnixFileMode(_base, owner);
+                var real = Path.Combine(_dir.Path, "planted-key");
+                var realRun = Path.Combine(real, runName);
+                Directory.CreateDirectory(realRun);
+                foreach (var folder in new[] { real, realRun })
+                    File.SetUnixFileMode(folder, owner);
+                Directory.CreateSymbolicLink(keyFolder, real);
+                break;
+            }
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(shape), shape, null);
+        }
     }
 
     private static ToolExecutionContext Context(TrustAudience audience, SessionStoragePaths storage)

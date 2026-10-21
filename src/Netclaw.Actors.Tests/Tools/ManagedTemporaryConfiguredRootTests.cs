@@ -46,10 +46,17 @@ public sealed class ManagedTemporaryConfiguredRootTests : IDisposable
         _otherStorage = SessionStoragePaths.CreateVersion2(
             new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "personal-dm")),
             layout);
+        // The file tool checks the private folders on each write below the base. Make them
+        // the way the daemon does, so the positive write row writes into private folders.
+        // Windows has no private base: the folder check refuses it there.
+        if (!OperatingSystem.IsWindows())
+            Assert.Null(ManagedTemporaryEnvironment.EnsureFolders(_storage.ManagedTemporary));
         _ownFile = Seed(_storage.ManagedTemporary.Directory.Value, "own.txt", "own-marker");
         _otherFile = Seed(_otherStorage.ManagedTemporary.Directory.Value, "secret.env", "foreign-marker");
         _sharedFile = Seed(Path.Combine(_configuredRoot, "shared"), "notes.txt", "shared-marker");
     }
+
+    public static bool IsPosix => !OperatingSystem.IsWindows();
 
     public void Dispose() => _dir.Dispose();
 
@@ -125,12 +132,6 @@ public sealed class ManagedTemporaryConfiguredRootTests : IDisposable
             Assert.Contains(marker, read);
         }
 
-        var written = Path.Combine(_storage.ManagedTemporary.Directory.Value, "frame.txt");
-        var writeContext = Context(audience);
-        var write = await new FileWriteTool(policy).ExecuteAsync(ToolInput.Create("Path", written, "Content", "frame"), writeContext, ct);
-        AssertAllowed(writeContext, write);
-        Assert.True(File.Exists(written));
-
         var listContext = Context(audience);
         var list = await new FileListTool(policy).ExecuteAsync(
             ToolInput.Create("Path", _storage.ManagedTemporary.Directory.Value), listContext, ct);
@@ -143,6 +144,24 @@ public sealed class ManagedTemporaryConfiguredRootTests : IDisposable
         AssertAllowed(searchContext, search);
         Assert.Contains("own-marker", search);
         Assert.Contains("shared-marker", search);
+    }
+
+    // Positive example: the same root still writes into the own key folder. The private base
+    // exists only on POSIX hosts, so this row runs only there.
+    [SlopwatchSuppress("SW001", "The private base exists only on POSIX hosts.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The private base exists only on POSIX hosts.")]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Public)]
+    public async Task A_configured_root_over_the_base_writes_into_the_own_key_folder(TrustAudience audience)
+    {
+        var (_, policy) = CreatePolicy(audience, new ToolPathPolicy([]));
+        var ct = TestContext.Current.CancellationToken;
+
+        var written = Path.Combine(_storage.ManagedTemporary.Directory.Value, "frame.txt");
+        var writeContext = Context(audience);
+        var write = await new FileWriteTool(policy).ExecuteAsync(ToolInput.Create("Path", written, "Content", "frame"), writeContext, ct);
+        AssertAllowed(writeContext, write);
+        Assert.True(File.Exists(written));
     }
 
     // Protection wins over the own key folder root and over the configured root. This row
