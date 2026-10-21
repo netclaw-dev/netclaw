@@ -375,8 +375,27 @@ wiring and contents. Producer, rehydrator, and validator share
 `install`/`doctor --fix`, so after installing new tools re-run either and then
 `systemctl --user restart netclaw`.
 
+**Operator lines.** `daemon.env` is also the place for operator settings, for example
+`NETCLAW_HOME=/x/home` or `HTTP_PROXY=...`. Install and `doctor --fix` replace the first
+`PATH=` line in place, drop a later `PATH=` line, and add `PATH=` at the end when none exists.
+They keep every other line verbatim and in order. They compare only the start of a line with
+`PATH=` and never read another line. A line ending of `\r\n` stays. A rerun with the same input
+leaves the file byte-identical. Both commands write the file atomically with the mode of the
+file that they replace (`AtomicFile.CopyUnixMode`), so a rewrite never opens the file more than
+it was. A new file gets the default mode of a new file.
+
 `netclaw daemon uninstall` stops the service and removes the unit file and the
 `daemon.env` file.
+
+The install scripts honor `NETCLAW_HOME` with the `NetclawPaths` rules (`~`, `$HOME`, `${HOME}`,
+and `%USERPROFILE%` expand, a blank value is unset, a relative path resolves against the working
+directory; `install.ps1` uses the PowerShell location). Both scripts use `<home>/config`. A fresh
+`install.sh` also uses `<home>/bin` and `<home>/env`. An upgrade does not move an install. The
+order of the rules: `INSTALL_DIR` always wins. Else an install that sits in `<home>/bin` is
+upgraded there. Else, if `$HOME/.netclaw/bin` holds `netclaw` or `netclawd`, `install.sh` upgrades
+there, keeps the env script at `$HOME/.netclaw/env`, and prints the directory. Else it is a fresh
+install under `<home>`. `install.ps1` keeps its own install directory. `CONFIG_DIR` and
+`NETCLAW_CONFIG_DIR` no longer have an effect.
 
 ### Service Registration (macOS)
 

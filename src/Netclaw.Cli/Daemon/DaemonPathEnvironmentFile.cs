@@ -84,13 +84,51 @@ internal static class DaemonPathEnvironmentFile
     }
 
     /// <summary>
-    /// Renders the full environment-file content: a single <c>PATH=</c> assignment
-    /// with a trailing newline. systemd <c>EnvironmentFile=</c> parses bare
-    /// <c>KEY=VALUE</c> lines and does not perform shell expansion, so the literal
-    /// captured value is written verbatim.
+    /// Renders the environment file after an install or a <c>doctor --fix</c>. A missing file gives a
+    /// single <c>PATH=</c> assignment. systemd <c>EnvironmentFile=</c> parses bare <c>KEY=VALUE</c> lines
+    /// and does not expand text, so the captured value is written verbatim.
+    /// The first <c>PATH=</c> line changes in place, a later <c>PATH=</c> line goes, and
+    /// <c>PATH=</c> goes at the end when none exists. Every other line stays verbatim and in
+    /// order, because the operator may keep settings such as <c>NETCLAW_HOME</c> in this file.
+    /// The method keeps the line ending style of the file, and the same input gives the same output.
     /// </summary>
-    internal static string Render(string installDir, string? capturedPath)
-        => $"{PathAssignmentPrefix}{ComposePathValue(installDir, capturedPath)}\n";
+    internal static string Merge(string? existingText, string installDir, string? capturedPath)
+    {
+        var lines = string.IsNullOrEmpty(existingText)
+            ? new List<string>()
+            : existingText.Split('\n').ToList();
+        if (lines.Count > 0 && lines[^1].Length == 0)
+            lines.RemoveAt(lines.Count - 1);
+
+        var carriage = existingText is not null && existingText.Contains("\r\n", StringComparison.Ordinal)
+            ? "\r"
+            : string.Empty;
+        var pathLine = $"{PathAssignmentPrefix}{ComposePathValue(installDir, capturedPath)}{carriage}";
+
+        var output = new List<string>(lines.Count + 1);
+        var pathWritten = false;
+        foreach (var line in lines)
+        {
+            if (!line.TrimStart().StartsWith(PathAssignmentPrefix, StringComparison.Ordinal))
+            {
+                output.Add(line);
+                continue;
+            }
+
+            // systemd keeps the last assignment of a key, so a second PATH= line would win over
+            // the first. Keep one line, at the place of the first.
+            if (!pathWritten)
+            {
+                output.Add(pathLine);
+                pathWritten = true;
+            }
+        }
+
+        if (!pathWritten)
+            output.Add(pathLine);
+
+        return string.Concat(output.Select(line => line + "\n"));
+    }
 
     /// <summary>
     /// Extracts the <c>PATH</c> value from environment-file content, or <c>null</c>

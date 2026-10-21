@@ -497,7 +497,15 @@ public sealed partial class DaemonManager
         var envFilePath = _paths.DaemonEnvironmentFilePath;
         var capturedPath = DaemonPathEnvironmentFile.CaptureCurrentPath();
         Directory.CreateDirectory(Path.GetDirectoryName(envFilePath)!);
-        await File.WriteAllTextAsync(envFilePath, DaemonPathEnvironmentFile.Render(installDir, capturedPath));
+
+        // The operator may keep other settings in this file, for example NETCLAW_HOME, so only the
+        // PATH= line changes. The rewrite keeps the mode of the file: a line that the operator
+        // added may hold a sensitive value, and a mode that was owner-only must stay owner-only.
+        var existingEnvText = File.Exists(envFilePath) ? await File.ReadAllTextAsync(envFilePath) : null;
+        AtomicFile.WriteAllText(
+            envFilePath,
+            DaemonPathEnvironmentFile.Merge(existingEnvText, installDir, capturedPath),
+            temp => AtomicFile.CopyUnixMode(envFilePath, temp));
 
         var unitPath = SystemdUserUnitFilePath;
         var isUpgrade = File.Exists(unitPath);

@@ -56,7 +56,7 @@ public sealed class DaemonPathEnvironmentFileTests : IDisposable
     [Fact]
     public void Render_ThenReadPathValue_RoundTrips()
     {
-        var content = DaemonPathEnvironmentFile.Render("/opt/netclaw", "/usr/bin");
+        var content = DaemonPathEnvironmentFile.Merge(null, "/opt/netclaw", "/usr/bin");
 
         Assert.Equal("PATH=/opt/netclaw:/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin\n", content);
         Assert.Equal(
@@ -140,5 +140,71 @@ public sealed class DaemonPathEnvironmentFileTests : IDisposable
 
         // Idempotent — a second call on an already-removed file must not throw.
         manager.RemoveDaemonEnvironmentFile();
+    }
+
+    // ── Merge: operator lines survive a rewrite ──
+
+    private const string ExpectedPath = "PATH=/opt/netclaw:/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin";
+
+    private static string Merge(string? existing)
+        => DaemonPathEnvironmentFile.Merge(existing, "/opt/netclaw", "/usr/bin");
+
+    [Fact]
+    public void Merge_without_existing_text_writes_one_path_line()
+    {
+        Assert.Equal($"{ExpectedPath}\n", Merge(null));
+        Assert.Equal($"{ExpectedPath}\n", Merge(string.Empty));
+    }
+
+    [Fact]
+    public void Merge_keeps_operator_lines_comments_and_blank_lines_and_replaces_path_in_place()
+    {
+        const string existing = "NETCLAW_HOME=/x/home\n# proxy\nHTTP_PROXY=http://proxy.example:3128\n\nPATH=/old\nFOO=bar\n";
+
+        Assert.Equal(
+            $"NETCLAW_HOME=/x/home\n# proxy\nHTTP_PROXY=http://proxy.example:3128\n\n{ExpectedPath}\nFOO=bar\n",
+            Merge(existing));
+    }
+
+    [Fact]
+    public void Merge_drops_a_later_path_line()
+        => Assert.Equal(
+            $"A=1\n{ExpectedPath}\nB=2\n",
+            Merge("A=1\nPATH=/old\nB=2\n  PATH=/older\n"));
+
+    [Fact]
+    public void Merge_adds_path_at_the_end_when_none_exists()
+        => Assert.Equal($"A=1\n# c\n{ExpectedPath}\n", Merge("A=1\n# c\n"));
+
+    [Fact]
+    public void Merge_keeps_a_line_that_only_contains_path_text()
+    {
+        // A key that merely ends in PATH, and an export line, are operator lines.
+        const string existing = "MANPATH=/m\nexport PATH=/x\n";
+
+        Assert.Equal($"MANPATH=/m\nexport PATH=/x\n{ExpectedPath}\n", Merge(existing));
+    }
+
+    [Fact]
+    public void Merge_adds_a_missing_final_newline()
+        => Assert.Equal($"A=1\n{ExpectedPath}\n", Merge("A=1\nPATH=/old"));
+
+    [Fact]
+    public void Merge_keeps_crlf_endings_and_is_idempotent()
+    {
+        var crlf = Merge("A=1\r\nPATH=/old\r\nB=2\r\n");
+        var appended = Merge("A=1\r\n");
+
+        Assert.Equal($"A=1\r\n{ExpectedPath}\r\nB=2\r\n", crlf);
+        Assert.Equal($"A=1\r\n{ExpectedPath}\r\n", appended);
+        Assert.Equal(crlf, Merge(crlf));
+    }
+
+    [Fact]
+    public void Merge_is_idempotent()
+    {
+        var once = Merge("A=1\nPATH=/old\nPATH=/older");
+
+        Assert.Equal(once, Merge(once));
     }
 }

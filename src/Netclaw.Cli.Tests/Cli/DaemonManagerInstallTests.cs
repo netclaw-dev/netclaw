@@ -128,6 +128,51 @@ public sealed class DaemonManagerInstallTests : IDisposable
         Assert.False(File.Exists(_paths.DaemonEnvironmentFilePath));
     }
 
+    [SlopwatchSuppress("SW001", "Service installation is Linux-only.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Service installation is Linux-only.")]
+    public async Task Install_keeps_operator_lines_in_daemon_env()
+    {
+        File.WriteAllText(
+            _paths.DaemonEnvironmentFilePath,
+            "NETCLAW_HOME=/x/home\n# proxy for the shell tool\nHTTP_PROXY=http://proxy.example:3128\nPATH=/old\n");
+        var sut = CreateManager(new FakeSystemCommandRunner());
+
+        var first = await sut.InstallAsync();
+        var afterFirst = File.ReadAllText(_paths.DaemonEnvironmentFilePath);
+        var second = await sut.InstallAsync();
+
+        Assert.True(first.Success, first.Message);
+        Assert.True(second.Success, second.Message);
+        var lines = afterFirst.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("NETCLAW_HOME=/x/home", lines[0]);
+        Assert.Equal("# proxy for the shell tool", lines[1]);
+        Assert.Equal("HTTP_PROXY=http://proxy.example:3128", lines[2]);
+        Assert.StartsWith("PATH=", lines[3], StringComparison.Ordinal);
+        Assert.DoesNotContain("PATH=/old", afterFirst, StringComparison.Ordinal);
+        Assert.Single(lines, line => line.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.Equal(afterFirst, File.ReadAllText(_paths.DaemonEnvironmentFilePath));
+    }
+
+    // The operator lines can hold a sensitive value, so a rewrite must not open the file more.
+    [SlopwatchSuppress("SW001", "Service installation is Linux-only.")]
+    [Theory(SkipUnless = nameof(IsLinux), Skip = "Service installation is Linux-only.")]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite)]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead)]
+    public async Task Install_keeps_the_mode_of_an_existing_daemon_env(UnixFileMode mode)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        File.WriteAllText(_paths.DaemonEnvironmentFilePath, "HTTP_PROXY=http://proxy.example:3128\nPATH=/old\n");
+        File.SetUnixFileMode(_paths.DaemonEnvironmentFilePath, mode);
+
+        var result = await CreateManager(new FakeSystemCommandRunner()).InstallAsync();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(mode, File.GetUnixFileMode(_paths.DaemonEnvironmentFilePath));
+        Assert.Empty(Directory.GetFiles(_paths.ConfigDirectory, "daemon.env.tmp-*"));
+    }
+
     private DaemonManager CreateManager(FakeSystemCommandRunner runner)
         => new(_paths, TimeProvider.System, new FakeSupervisor(), runner);
 

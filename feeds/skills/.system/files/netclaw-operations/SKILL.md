@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.120.0"
+  version: "2.121.0"
 ---
 
 # Netclaw Operations
@@ -1014,6 +1014,16 @@ A web page on another origin also gets 401, also a local web app on another port
 When a protected route denies such a request, `daemon.log` has a warning, `Refused loopback request`, with the `Host` and `Origin` values.
 Fix: call the daemon as `http://127.0.0.1:<port>` or `http://localhost:<port>`, or pair the client and send a device token.
 A device token request is not checked for `Host` or `Origin`.
+
+The systemd service reads `<home>/config/daemon.env`. `netclaw daemon install` and
+`netclaw doctor --fix` change only the `PATH=` line. They keep every other line, for example
+`NETCLAW_HOME=...`, and they do not open the file mode more than it was.
+
+The install scripts (`install.sh` and `install.ps1`) read `NETCLAW_HOME` for the config directory.
+`install.sh` uses `<home>/bin` and `<home>/env` for a fresh install. When `INSTALL_DIR` is not set, it
+upgrades an install that sits in `<home>/bin`. Else, if `~/.netclaw/bin` holds `netclaw` or
+`netclawd`, it upgrades there, keeps the env script at `~/.netclaw/env`, and prints that directory.
+`CONFIG_DIR` and `NETCLAW_CONFIG_DIR` no longer work.
 
 When something is broken, start with `netclaw status`, then `netclaw doctor`. Feature
 kill switches and self-update/health are covered in the reference. Memory embeddings
