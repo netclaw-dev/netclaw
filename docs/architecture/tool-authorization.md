@@ -471,7 +471,10 @@ The child consent pause (input placement):
 - Reminder fires: while the pause applies, a later fire of a reminder replaces the waiting fire. The session closes
   the waiting fire with the existing `InputClosed` and keeps the later fire. The replacement applies also when a
   parent prompt is open at the same time. A fire that waits only behind a parent prompt keeps the drop rule
-  (`SessionInputFlow.PrepareAdmission`, `AdmissionDecision.ReplaceWaitingFire`).
+  (`SessionInputFlow.PrepareAdmission`, `AdmissionDecision.ReplaceWaitingFire`). One atomic write holds the close and
+  the newer admission (`LlmSessionActor.PersistReplacingInput`), so a crash keeps both or neither.
+- A close of a waiting input does not end the open turn, so it keeps the noticed runs of that turn. Live code and
+  replay use one rule (`SessionInputFlow.ClosesNoticedTurn`).
 - Data: the pause and the queue are actor-local. Each held input is a durable pending `InputAdmitted` record.
 - The last close of the session admits the closing notice. Then the held inputs run through
   `StartWaitingInputAfterApproval`.
@@ -864,7 +867,9 @@ The agent event channel (see [agent event](../spec/GLOSSARY.md#agent-event)):
 - Digest and notices: `LlmSessionActor` keeps one actor-local digest for the session. A new request or the last close
   of the session makes it ready. A ready digest is admitted as one approval notice: at once in Ready, else at the next
   tool-batch end, turn end, or compaction end, before the drain. A turn that waits for a parent prompt runs no model
-  call, so the notice is admitted at once and waits for its own turn. The notice turn takes the audience, boundary,
+  call, so the notice is admitted at once and waits for its own turn. At most one notice waits: a newer notice
+  closes the waiting notice with `InputClosed` in the same atomic write, and the digest still lists every open
+  request. The notice turn takes the audience, boundary,
   channel type, and delivery targets of the owner of the first open request. It lists the runs of every owner. A
   notice turn with no text ends quietly (`TurnCompleted.QuietEnd`), with no empty-reply retry.
 - At most once: recovery closes every pending approval notice with `InputClosed` and rebuilds the digest from the open

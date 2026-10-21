@@ -2124,23 +2124,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 return;
             case AdmissionDecision.ReplaceWaitingFire replace:
                 // The waiting fire never ran, so the close consumes it with no turn. Then the newer fire waits.
-                var closed = new InputClosed { SessionId = _sessionId, InputIds = [replace.Waiting], ClosedAtMs = NowMs() };
-                _ = _state.Apply(closed);
-                Persist(closed, committed =>
-                {
-                    _state = _state.Apply(committed);
-                    _input.InputsClosed(committed);
-                    TurnLog().Info("reminder_fire_replaced waiting={InputId}", replace.Waiting);
-                    PersistAdmission(replace.Event, cmd, placement);
-                });
+                TurnLog().Info("reminder_fire_replaced waiting={InputId}", replace.Waiting);
+                PersistAdmission(replace.Event, cmd, placement, replace.Waiting);
                 return;
         }
 
         throw new InvalidOperationException("Unknown input admission decision.");
     }
 
-    private void PersistAdmission(InputAdmitted evt, SendUserMessage cmd, InputPlacement placement)
-        => Persist(evt, admitted =>
+    private void PersistAdmission(InputAdmitted evt, SendUserMessage cmd, InputPlacement placement, InputId? replaces = null)
+        => PersistReplacingInput(replaces, evt, admitted =>
         {
             // The review reads the ended run, which the notice turns into a reported run.
             var endedRun = admitted.ChildNotice is { } notice ? _state.ChildRuns[notice.RunId] : null;
@@ -2149,6 +2142,36 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             var accepted = _input.AdmissionCommitted(admitted, cmd, placement);
             CompleteAcceptedInput(accepted, placement);
         });
+
+    // The replace rule of a waiting input (a reminder fire while paused, an approval notice). One atomic write holds the
+    // close of the waiting input and the admission of the newer input, so a crash keeps both or neither.
+    private void PersistReplacingInput(InputId? waiting, InputAdmitted admitted, Action<InputAdmitted> onAdmitted)
+    {
+        if (waiting is not { } waitingId)
+        {
+            Persist(admitted, onAdmitted);
+            return;
+        }
+
+        var closed = new InputClosed { SessionId = _sessionId, InputIds = [waitingId], ClosedAtMs = NowMs() };
+        _ = _state.Apply(closed);
+        PersistAll<ISessionEvent>([closed, admitted], committed =>
+        {
+            if (committed is InputClosed close)
+                ApplyInputClosed(close);
+            else
+                onAdmitted((InputAdmitted)committed);
+        });
+    }
+
+    private void ApplyInputClosed(InputClosed closed)
+    {
+        var closesNoticedTurn = SessionInputFlow.ClosesNoticedTurn(closed, _state);
+        _state = _state.Apply(closed);
+        _input.InputsClosed(closed);
+        if (closesNoticedTurn)
+            _input.ClearNoticeRuns();
+    }
 
     private void CompleteAcceptedInput(SendUserMessage command, InputPlacement placement)
     {
@@ -2217,11 +2240,15 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         ApplyToolBatchStarted(evt);
     }
 
-    // A closure ends a failed turn, or a turn with no reply.
+    // A closure ends a failed turn, or a turn with no reply. A close of a waiting input does not end the open turn, so
+    // replay keeps its noticed runs, as live code does (SessionInputFlow.ClosesNoticedTurn).
     private void RecoverParentClosure(InputClosed recorded)
     {
-        _state = _state.Apply(LegacyCoordinationReplay.TranslateParentDecision(_state, recorded));
-        _input.ClearNoticeRuns();
+        var closed = LegacyCoordinationReplay.TranslateParentDecision(_state, recorded);
+        var closesNoticedTurn = SessionInputFlow.ClosesNoticedTurn(closed, _state);
+        _state = _state.Apply(closed);
+        if (closesNoticedTurn)
+            _input.ClearNoticeRuns();
     }
 
     private void RestoreConsumedInputs(IReadOnlyList<InputId> inputIds, SerializableChatMessage lastUserMessage)
@@ -3848,8 +3875,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         _ = _state.Apply(closed);
         Persist(closed, evt =>
         {
-            _state = _state.Apply(evt);
-            _input.InputsClosed(evt);
+            ApplyInputClosed(evt);
             onClosed();
         });
     }

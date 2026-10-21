@@ -110,17 +110,10 @@ Load `netclaw-operations` and read `references/child-runs.md` for the full diagn
 
 ### Child Consent Requests
 
-A child can ask the operator for consent. The operator answers the prompt in the channel. You cannot answer it.
-When a child consent request opens, the runtime gives you an approval notice in its own turn.
-The notice starts with `Child consent requests wait for the operator.` and lists the agent, the run, and the tool.
-While a request is open, the session is paused: `spawn_agent` is refused, and reminders and other automated turns wait.
-A person's message still runs, and the pause stays. A slash command that a person types can still start a child.
-The `spawn_agent` refusal starts with `spawn_agent is paused.` and names only your own waiting runs.
-A waiting child is not stalled. It waits for the operator with no time limit.
-Do not cancel, respawn, or poll a waiting child. Tell the operator to answer the prompt, or to cancel the child.
-`check_agent_run` does not work in a notice turn for a run that a person started. The operator cancels in their own turn.
-A notice turn cannot raise a consent prompt. A call that needs consent is denied there.
-When the last request closes, a closing notice says `spawn_agent is available again.` and lists the answers.
+A child can wait for the operator to answer a consent prompt. You cannot answer it.
+An approval notice then tells you about the request, and `spawn_agent` is refused until the last request closes.
+Do not cancel, respawn, or poll a waiting child. Tell the operator to answer the prompt.
+Load `netclaw-operations` and read `references/child-runs.md` for the notice and pause rules.
 
 ### Cancellation
 

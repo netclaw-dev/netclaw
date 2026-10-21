@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Globalization;
 using System.Text.Json;
 using Akka.Actor;
 using Akka.Event;
@@ -554,18 +553,12 @@ public sealed partial class LlmSessionActor
         }
 
         var events = _consentDigest.Take();
-        var text = AgentEventRenderer.Render(events);
-        if (!_toolWorkflow.IsChildConsentPaused && _input.WaitingFires(_state) is { Count: > 0 } fires)
-        {
-            text += "Reminder fires that waited for the pause: "
-                    + string.Join(", ", fires.Select(fire => string.Create(CultureInfo.InvariantCulture,
-                        $"reminder={fire.DefinitionId.Value} fired_at={DateTimeOffset.FromUnixTimeMilliseconds(fire.FireTimeMs).UtcDateTime:HH:mm:ss}Z")))
-                    + "\n";
-        }
-
+        var text = AgentEventRenderer.Render(events, _input.WaitingFires(_state));
         var notice = SessionInputFlow.PrepareConsentNotice(_sessionId, NoticeOwner(events).OriginalContext, text, NowMs());
         _ = _state.Apply(notice);
-        Persist(notice, admitted =>
+        // At most one notice waits. The digest still holds every open request, so the newer notice replaces the
+        // waiting one, and the model never reads a stale state of the pause.
+        PersistReplacingInput(_input.WaitingConsentNotice(), notice, admitted =>
         {
             _state = _state.Apply(admitted);
             _input.ConsentNoticeCommitted(admitted);

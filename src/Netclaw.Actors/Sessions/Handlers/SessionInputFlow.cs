@@ -291,6 +291,24 @@ internal sealed class SessionInputFlow
         };
     }
 
+    // At most one approval notice waits. A newer notice replaces it (design D4: the text is true for the session).
+    public InputId? WaitingConsentNotice()
+        => _buffer.Where(static queued => !queued.IsReplay && BufferedAuthority(queued.Message).IsChildConsentNotice)
+            .Select(static queued => queued.Message.AdmittedInputId)
+            .FirstOrDefault();
+
+    // The noticed runs belong to the open turn. A close of a waiting input (a replaced reminder fire, or an approval
+    // notice that a newer notice or a recovery closed) does not end that turn, so it keeps them. A reminder turn and
+    // a notice turn never hold noticed runs, so the rule also keeps nothing wrong when such a close ends a turn. A
+    // close that names no pending input (a legacy row) clears them, as before. Live code and replay use this rule.
+    public static bool ClosesNoticedTurn(InputClosed closed, SessionState before)
+    {
+        var inputs = before.PendingInputs.Where(input => closed.InputIds.Contains(input.InputId)).ToArray();
+        return inputs.Length == 0 || !inputs.All(static input => TryReadFireKey(input, out _)
+                                                                 || (TurnContext.TryFromRecord(input.TurnContext, out var context, out _)
+                                                                     && context is { IsChildConsentNotice: true }));
+    }
+
     // An approval notice goes in front of the other waiting input, so the model reads the state of the pause before
     // a held input runs. A replay of the running turn stays first.
     public void ConsentNoticeCommitted(InputAdmitted admitted)

@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Text;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -191,7 +192,13 @@ internal static class AgentEventRenderer
     /// Renders the digest of one session. A request with no later resolution is open. With an open request the text
     /// lists the open requests and the rules of the pause. With none open, the text lists each answer.
     /// </summary>
-    public static string Render(IReadOnlyList<AgentEvent> events)
+    public static string Render(IReadOnlyList<AgentEvent> events) => Render(events, []);
+
+    /// <summary>
+    /// Renders the digest, and names in the closing notice the reminder fires that waited for the pause. An open
+    /// notice ignores <paramref name="heldFires"/>, because those fires still wait.
+    /// </summary>
+    public static string Render(IReadOnlyList<AgentEvent> events, IReadOnlyList<ReminderFireKey> heldFires)
     {
         var resolved = events.OfType<AgentEvent.ChildApprovalResolved>()
             .Select(static resolution => resolution.PromptCallId)
@@ -202,7 +209,8 @@ internal static class AgentEventRenderer
         var text = new StringBuilder();
         if (open.Length > 0)
         {
-            text.AppendLine(CultureInfo.InvariantCulture, $"{OpenHeading} {open.Length} are open.");
+            text.AppendLine(CultureInfo.InvariantCulture,
+                $"{OpenHeading} {open.Length} {(open.Length == 1 ? "is" : "are")} open.");
             foreach (var request in open)
             {
                 text.AppendLine(CultureInfo.InvariantCulture,
@@ -220,6 +228,12 @@ internal static class AgentEventRenderer
         text.AppendLine(ClosedHeading);
         foreach (var resolution in events.OfType<AgentEvent.ChildApprovalResolved>())
             text.AppendLine(CultureInfo.InvariantCulture, $"- {Sender(resolution)} answer={Answer(resolution.Resolution)}");
+        if (heldFires.Count > 0)
+        {
+            text.AppendLine("Held reminder fires now run: " + string.Join(", ", heldFires.Select(static fire =>
+                $"reminder={fire.DefinitionId.Value} fired_at={Clock(DateTimeOffset.FromUnixTimeMilliseconds(fire.FireTimeMs))}")));
+        }
+
         text.AppendLine("spawn_agent is available again.");
         return text.ToString();
     }
