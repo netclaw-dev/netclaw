@@ -2315,11 +2315,15 @@ assert_tool_background_job_api_selection() {
 
 assert_long_command_background_job() {
     # Regression for the live failure of 18 October 2026. The check reads the
-    # tool calls in the JSON envelope. long_command_evals.py has the rules.
-    local report rc=0
+    # tool calls in the JSON envelope and the result of each call in the headless
+    # log. A denied call is inconclusive, not a pass. long_command_evals.py has
+    # the rules. An unknown log path gives an empty argument and an inconclusive report.
+    local report headless_log rc=0
     report="${STDOUT_FILE%.txt}_long-command-verdict.txt"
     keep_assertion_report "$report"
-    python3 "$REPO_ROOT/evals/long_command_evals.py" check --output "$STDOUT_FILE" > "$report" || rc=$?
+    headless_log=$(stdout_json_headless_log_path) || headless_log=""
+    python3 "$REPO_ROOT/evals/long_command_evals.py" check --output "$STDOUT_FILE" \
+        --headless-log "$headless_log" > "$report" || rc=$?
     if (( rc != 0 )); then
         EVAL_ASSERTION_DETAILS=$(jq -r '.reason // "fail"' "$report" 2>/dev/null || printf 'fail')
     fi

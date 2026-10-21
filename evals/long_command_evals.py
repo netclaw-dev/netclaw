@@ -10,6 +10,11 @@ PASS requires both conditions:
 - The agent sends the same foreground command at most two times.
 - The agent uses a long-command strategy: a background job, a foreground
   timeout of 180 s or more, or the long-running-commands skill page.
+
+A denied call never counts as a pass. The runtime can deny the command before it
+runs, for example when the grant fixture lacks the program. A call that did not
+run tests nothing. Thus the check also reads the headless log. A run with a
+denied, missing, or unreadable result is INCONCLUSIVE, not PASS and not FAIL.
 """
 
 import argparse
@@ -26,6 +31,10 @@ SKILL_PAGE = "long-running-commands.md"
 # stops the command before it finishes.
 MIN_TIMEOUT_SECONDS = 180
 MAX_IDENTICAL_FOREGROUND = 2
+DENIED_PREFIX = "Tool access denied"
+# One record of the headless log: "[timestamp] TOOL_RESULT: tool call_id=ID result=TEXT".
+LOG_HEADER = re.compile(r"^\[\d{4}-\d{2}-\d{2}T[^\]\r\n]+\] ", re.MULTILINE)
+LOG_TOOL_RESULT = re.compile(r"TOOL_RESULT: (\S+) call_id=(\S+) result=([\s\S]*)")
 
 
 def normalized_key(key):
@@ -56,6 +65,65 @@ def timeout_seconds(value):
         except ValueError:
             return None
     return None
+
+
+def tool_results(headless_log):
+    """Return {call id: result text} for each TOOL_RESULT record of the headless log."""
+    headers = list(LOG_HEADER.finditer(headless_log))
+    results = {}
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(headless_log)
+        # WriteLine adds one delimiter. Keep newlines that belong to the tool result.
+        record = headless_log[header.end():end].removesuffix("\n")
+        result = LOG_TOOL_RESULT.fullmatch(record)
+        if result is not None:
+            results[result[2]] = result[3]
+    return results
+
+
+def slow_command_call_ids(output):
+    """Return the call ids of each shell_execute call that runs the slow command."""
+    ids = []
+    for call in output.get("toolCalls") or []:
+        if call.get("toolName") != "shell_execute":
+            continue
+        raw = call.get("argumentsJson")
+        arguments = json.loads(raw) if isinstance(raw, str) and raw else {}
+        command = argument(arguments, {"command"})
+        if isinstance(command, str) and COMMAND_MARKER in command:
+            ids.append(call.get("callId"))
+    return ids
+
+
+def inconclusive(reason, evidence=None):
+    return {"passed": False, "status": "inconclusive", "checks": {"slow_command_ran": False},
+            "reason": reason, "evidence": evidence or {}}
+
+
+def evaluate_run(output, headless_log):
+    """Judge one trial: the envelope rules, after proof that the slow command ran.
+
+    headless_log is the text of the headless log, or None when it is not readable.
+    """
+    report = evaluate(output)
+    if report["reason"] == "invalid_envelope":
+        return report
+    ids = slow_command_call_ids(output)
+    if not ids:
+        # The model never sent the command. That is a model result, not a missing proof.
+        return report
+    if headless_log is None:
+        return inconclusive("headless_log_unavailable")
+    results = tool_results(headless_log)
+    denied = [i for i in ids if results.get(i, "").startswith(DENIED_PREFIX)]
+    if denied:
+        return inconclusive("slow_command_denied", {"denied_call_count": len(denied), "call_count": len(ids)})
+    missing = [i for i in ids if i not in results]
+    if missing:
+        return inconclusive("slow_command_result_missing",
+                            {"missing_call_count": len(missing), "call_count": len(ids)})
+    report["checks"]["slow_command_ran"] = True
+    return report
 
 
 def parse_calls(output):
@@ -139,12 +207,18 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check")
     check.add_argument("--output", required=True)
+    # An empty path is allowed: the shell passes it when the log path is unknown.
+    check.add_argument("--headless-log", required=True)
     args = parser.parse_args(argv)
     try:
         output = json.loads(Path(args.output).read_text())
     except (OSError, ValueError):
         output = None
-    report = evaluate(output)
+    try:
+        headless_log = Path(args.headless_log).read_text() if args.headless_log else None
+    except OSError:
+        headless_log = None
+    report = evaluate_run(output, headless_log)
     print(json.dumps(report))
     return 0 if report["passed"] else 1
 
