@@ -76,6 +76,7 @@ public abstract class ChildLifetimeTestBase : ApprovalWaitTestBase
                 [SecondTool] = ToolApprovalMode.Approval
             }
         };
+        ConfigureTools(toolConfig);
         var policy = new ToolAccessPolicy(TestPaths, toolConfig,
             new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
@@ -104,6 +105,9 @@ public abstract class ChildLifetimeTestBase : ApprovalWaitTestBase
         services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(registry, policy, null,
             NullLogger<DispatchingToolExecutor>.Instance));
     }
+
+    // A spec can change the tool policy, for instance to ask for an approval in another audience.
+    protected virtual void ConfigureTools(ToolConfig toolConfig) { }
 
     protected async Task<Akka.TestKit.TestProbe> JoinFullAsync(SessionId sessionId)
     {

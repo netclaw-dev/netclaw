@@ -463,14 +463,36 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             // The count does not reset at the notice. Repeat 5 gets the final nudge, and the model answers it. A notice
             // in request 8 comes before repeat 4, so repeats 4 and 5 follow it. A notice in request 9 comes after
             // repeat 4, so only repeat 5 follows it. A reset count would give five nudges after the notice.
-            var nudges = Enumerable.Range(noticeAt, requests.Count - noticeAt)
-                .Where(index => IsRepeatNudge(requests[index][^1]))
+            // Review Should-fix 4: count every nudge of the turn, before and after the notice. The history keeps only
+            // the latest nudge, so a request sends a nudge when the nudge comes after its last assistant message. The
+            // notice can follow the nudge in that tail, so the check does not read only the last message.
+            static string? FreshNudge(IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> request)
+            {
+                var lastAssistant = -1;
+                for (var index = 0; index < request.Count; index++)
+                {
+                    if (request[index].Role == Microsoft.Extensions.AI.ChatRole.Assistant)
+                        lastAssistant = index;
+                }
+
+                return request.Skip(lastAssistant + 1).FirstOrDefault(IsRepeatNudge)?.Text;
+            }
+
+            var nudges = Enumerable.Range(0, requests.Count)
+                .Where(index => FreshNudge(requests[index]) is not null)
                 .ToArray();
-            Assert.Equal(noticeAt == 7 ? 2 : 1, nudges.Length);
-            Assert.All(nudges[..^1], index =>
-                Assert.DoesNotContain("Stop trying this action.", requests[index][^1].Text, StringComparison.Ordinal));
-            Assert.Contains("Stop trying this action.", requests[nudges[^1]][^1].Text, StringComparison.Ordinal);
-            Assert.Equal(nudges[^1] + 1, _clientProvider.Main.CallCount);
+            // A reset at the notice gives more than five nudges. A first repeat after the notice that is final gives
+            // fewer than five nudges.
+            Assert.True(nudges.Length == 5,
+                $"Expected exactly 5 repeat nudges in the turn, got {nudges.Length} "
+                + $"(requests {string.Join(", ", nudges.Select(static index => index + 1))}; notice in request {noticeAt + 1}).");
+            Assert.True(nudges[0] < noticeAt && noticeAt < nudges[4],
+                $"The count must span the notice (nudges in requests {string.Join(", ", nudges.Select(static index => index + 1))}, "
+                + $"notice in request {noticeAt + 1}).");
+            Assert.All(nudges[..4], index =>
+                Assert.DoesNotContain("Stop trying this action.", FreshNudge(requests[index]), StringComparison.Ordinal));
+            Assert.Contains("Stop trying this action.", FreshNudge(requests[nudges[4]]), StringComparison.Ordinal);
+            Assert.Equal(nudges[4] + 1, _clientProvider.Main.CallCount);
         }
         finally
         {
@@ -2084,8 +2106,16 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         return toolAcceptedRunIds;
     }
 
+    // Review Should-fix 3: a run gets exactly one notice. The set below would hide a second notice for one run, so
+    // the notices are counted before the set removes repeats.
     private static HashSet<string> FindDeliveredRunIds(IEnumerable<ChatMessage> request)
-        => NoticeTexts(request).Select(NoticeRunId).ToHashSet(StringComparer.Ordinal);
+    {
+        var noticeRunIds = NoticeTexts(request).Select(NoticeRunId).ToArray();
+        var deliveredRunIds = noticeRunIds.ToHashSet(StringComparer.Ordinal);
+        Assert.True(noticeRunIds.Length == deliveredRunIds.Count,
+            $"A run has more than one notice in one model request: {string.Join(", ", noticeRunIds)}.");
+        return deliveredRunIds;
+    }
 
     private static string? ParseAcceptedRunId(string? result)
     {

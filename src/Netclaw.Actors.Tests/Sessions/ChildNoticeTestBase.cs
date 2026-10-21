@@ -71,6 +71,9 @@ public abstract class ChildNoticeTestBase : LlmSessionTestBase
     // The audience profile of the requester. A spec can remove file_read from it.
     protected virtual void ConfigurePersonalProfile(ToolAudienceProfile profile) { }
 
+    // A spec can add a tool for the parent model, for instance a tool that holds its call open.
+    protected virtual void RegisterParentTools(ToolRegistry registry) { }
+
     // A session saves a snapshot only when this interval divides the sequence number. Zero turns snapshots off.
     protected virtual int SnapshotInterval => 0;
 
@@ -118,6 +121,7 @@ public abstract class ChildNoticeTestBase : LlmSessionTestBase
         registry.RegisterCore(new FileReadTool(toolConfig, TestPaths, new ToolPathPolicy([])));
         registry.RegisterCore(ApprovalTool);
         registry.RegisterCore(new ChangeProbeTool());
+        RegisterParentTools(registry);
         services.AddSingleton<IChatClientProvider>(new GatedParentClients(Clients, ParentGate));
         services.AddSingleton(new ModelCapabilities { ModelId = "notice-model", ContextWindowTokens = 128_000 });
         services.AddSingleton(new SessionConfig

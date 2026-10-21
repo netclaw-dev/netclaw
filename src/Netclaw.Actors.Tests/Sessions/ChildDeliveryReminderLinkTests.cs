@@ -537,3 +537,89 @@ public sealed class ChildDeliveryReminderLinkSnapshotTests : ChildDeliveryRemind
         }
     }
 }
+
+/// <summary>
+/// PR 2515 review, Should-fix 2. A reminder turn runs under the Team audience. Here the first probe tool asks for an
+/// approval in that audience too, so the notice turn of a reminder child parks on an approval.
+/// </summary>
+public sealed class ChildDeliveryReminderLinkApprovalTests : ChildDeliveryReminderLinkTestBase
+{
+    public ChildDeliveryReminderLinkApprovalTests(ITestOutputHelper output) : base(output)
+    {
+    }
+
+    protected override int SnapshotInterval => 0;
+
+    protected override void ConfigureTools(ToolConfig toolConfig)
+        => toolConfig.AudienceProfiles.Team.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode> { [FirstTool] = ToolApprovalMode.Approval }
+        };
+
+    /// <summary>
+    /// PR 2515 review, Should-fix 2. A reminder starts a child. The notice turn of the child asks for an approval and
+    /// parks. A new actor instance takes the approval: the daemon restarts, or the recovered session passivates when
+    /// idle. The re-driven notice turn must keep the reminder link of the noticed run, so a failed post of its reply
+    /// raises one alert.
+    /// Failure on 268ffc1de: the list of noticed runs is actor-local, and the re-drive does not rebuild it. The turn
+    /// records no reminder link, so the session raises no alert.
+    /// </summary>
+    [Theory]
+    [InlineData("live")]
+    [InlineData("passivate")]
+    [InlineData("restart")]
+    public async Task A_notice_turn_that_a_new_actor_re_drives_after_an_approval_keeps_the_reminder_link(string stop)
+    {
+        // Arrange: the notice turn asks for an approval of the first probe tool.
+        var sessionId = new SessionId($"boundary/child-notice-approval-redrive-{stop}");
+        const string NoticeCallId = "notice-probe";
+        var (subscriber, _, childGate) = await StartChildFromReminderAsync(sessionId);
+        FakeChat.ResponseContentsSelector = request =>
+            request[^1].Role == Microsoft.Extensions.AI.ChatRole.User
+            && request[^1].Text.StartsWith("Child run ended.", StringComparison.Ordinal)
+                ? [Probe(NoticeCallId, FirstTool)]
+                : null;
+        try
+        {
+            childGate.TrySetResult();
+            var approval = await subscriber.FishForMessageAsync<ToolInteractionRequest>(
+                request => request.CallId.Value == NoticeCallId, Deadline, cancellationToken: Cancellation);
+            Assert.Equal(0, First.Runs);
+
+            // A new actor instance holds the parked approval. A live wait keeps the actor in Processing, so an idle
+            // passivation needs a recovered actor first (the pattern of ApprovalRehydrationTests). The passivated
+            // actor then gives the approval to a third instance.
+            // Control: "live" keeps the first actor, so the same assertions pass on the live path.
+            var recovered = subscriber;
+            if (stop != "live")
+            {
+                await StopSessionAsync(sessionId);
+                recovered = await JoinFullAsync(sessionId);
+            }
+
+            if (stop == "passivate")
+            {
+                var session = await ResolveSessionAsync(sessionId);
+                var stopped = CreateTestProbe();
+                stopped.Watch(session);
+                session.Tell(Akka.Actor.ReceiveTimeout.Instance, Akka.Actor.ActorRefs.NoSender);
+                await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
+                recovered = await JoinFullAsync(sessionId);
+            }
+
+            // Act: the person approves, the notice turn ends, and the post of its reply fails.
+            Assert.IsType<CommandAck>(await ApproveAsync(sessionId, approval.CallId));
+            var delivery = await NextTurnAsync(recovered);
+            Assert.Equal(1, First.Runs);
+            SendDeliveryFailed(sessionId, delivery.TurnNumber, DeliveryFailureKind.TransportFailure);
+
+            // Assert: the notice turn kept the reminder link of the run that it reports.
+            var alert = await AwaitExactlyOneAlertAsync(sessionId, recovered);
+            Assert.Equal(ReminderSlug, alert.Source);
+        }
+        finally
+        {
+            childGate.TrySetResult();
+        }
+    }
+}
