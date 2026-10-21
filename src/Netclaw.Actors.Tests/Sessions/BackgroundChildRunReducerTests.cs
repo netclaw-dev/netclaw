@@ -63,7 +63,7 @@ public sealed class BackgroundChildRunReducerTests
     }
 
     [Fact]
-    public void Child_pair_commits_once_without_adding_an_ordinary_user_message()
+    public void Legacy_child_pair_commits_once_without_adding_an_ordinary_user_message()
     {
         var run = CreateRun(toolCallId: null);
         var accepted = SessionState.Empty.Apply(new ChildRunAccepted
@@ -117,9 +117,9 @@ public sealed class BackgroundChildRunReducerTests
         });
 
         Assert.Equal([assistantCall, toolResult, new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Done." }], committed.History);
-        var closed = Assert.IsType<ChildRunLifecycle.Closed>(committed.ChildRuns[run.RunId].Lifecycle);
-        Assert.Equal(callId, closed.DeliveryCallId);
-        Assert.Equal(SubAgentRunOutcome.Completed, closed.Outcome);
+        var reported = Assert.IsType<ChildRunLifecycle.Reported>(committed.ChildRuns[run.RunId].Lifecycle);
+        Assert.Equal(new ChildRunReport.LegacyDelivery(callId), reported.Report);
+        Assert.Equal(SubAgentRunOutcome.Completed, reported.Outcome);
         Assert.Equal("Durable finding", Assert.Single(terminal.Result.Findings).Title);
         Assert.Equal("/repo/after.cs", terminal.Result.WorkingContext?.ReadFiles.Single());
     }

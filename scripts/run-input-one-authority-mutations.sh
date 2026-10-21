@@ -9,8 +9,10 @@ set -euo pipefail
 # and SessionInputFlow.JoinsTurn.
 # The gate also selects the automation check of
 # SessionToolWorkflow.PlanNewInputAbandonment: automated input waits behind an
-# open approval, and input from a person closes it. NewInputAbandonmentPlanTests
-# must kill every mutant in that check.
+# open approval, and input from a person closes it. A child result notice is
+# automated input by its kind, although its principal is a person.
+# NewInputAbandonmentPlanTests and ChildNoticeReducerTests must kill every mutant
+# in that check.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionInputFlow.cs"
@@ -46,7 +48,7 @@ read -r owner_start owner_end owner_first owner_last < <(select_span "$owner_mar
 read -r join_start join_end join_first join_last < <(select_span "$join_marker")
 
 # The automation check: the call site in PlanNewInputAbandonment and the principal set.
-wait_marker='if (IsAutomation(inputPrincipal))'
+wait_marker='if (isChildNotice || IsAutomation(inputPrincipal))'
 automation_marker='=> principal is PrincipalClassification.VerifiedAutomation or PrincipalClassification.SystemProcess;'
 read -r wait_start wait_end wait_first wait_last < <(select_span "$wait_marker" "$recovery_file")
 read -r automation_start automation_end automation_first automation_last < <(select_span "$automation_marker" "$recovery_file")

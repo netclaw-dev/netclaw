@@ -140,8 +140,8 @@ internal sealed class DeliveryRetryHandler
 
     /// <summary>
     /// The reminder link that a retry turn keeps: the link of the latest recorded turn, from <see cref="RecordRetry"/>
-    /// until the session records the next turn. Null when no retry is pending. A child-delivery turn has no input,
-    /// so its retry turn has no input source either. Without this link, the final failure of that retry turn would
+    /// until the session records the next turn. Null when no retry is pending. A notice turn has no reminder input,
+    /// so its retry turn has no reminder source either. Without this link, the final failure of that retry turn would
     /// raise no alert.
     /// </summary>
     public ReminderId? RetriedTurnReminder => _retryPending ? _recordedTurnReminder : null;

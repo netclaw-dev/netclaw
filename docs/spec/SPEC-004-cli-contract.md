@@ -301,8 +301,9 @@ on TurnCompleted t:                       (schematic: it omits logs and JSON det
 
 - While the run waits, text mode prints one line on stdout after each turn that reports open runs:
   `[subagent:waiting] <n> open: <runId>[,<runId>...]`. JSON mode prints no such line on stdout.
-- The delivered child result prints as tool output: `[tool:result] child_run_result → <result>`. Stdout
-  therefore holds the child text, as it did when `spawn_agent` waited inside one turn.
+- The child result reaches the session as a notice input, and the notice turn is an ordinary turn. The notice
+  names `result.md` and holds no child output. Stdout holds the child text only when the model reads that file
+  with `file_read`, which prints as `[tool:result] file_read`.
 - A background shell job is not a child run. The run does not wait for it.
 - A failed turn ends the run at once, with or without open runs. Stderr holds exactly one
   `[turn:failed]` line. The CLI ignores every output that arrives after the run ends, so the failed
@@ -341,7 +342,7 @@ daemon restart during the wait sends it, and the run then ends with exit `1`. Th
 stops without a drain sends nothing. [A lost connection](#a-lost-connection) covers that case.
 
 Positive example: turn 1 starts one child and reports one open run. The child finishes. Turn 2 reports
-none. Stdout holds the status text, `[subagent:done]`, the `child_run_result` line, and the turn 2 text.
+none. Stdout holds the status text, `[subagent:done]`, and the turn 2 text.
 The exit code is `0`.
 
 Negative example: turn 1 fails with a provider error while a child runs. The CLI does not wait. It prints

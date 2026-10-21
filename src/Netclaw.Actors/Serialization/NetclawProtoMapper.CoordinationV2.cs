@@ -18,14 +18,28 @@ namespace Netclaw.Actors.Serialization;
 
 internal static partial class NetclawProtoMapper
 {
-    private static Proto.ChildContinuationProto ToProto(ChildContinuation continuation) => new()
+    // The legacy continuation is read-only data. A writer that sets it is a defect, so persistence fails loudly.
+    private static void RejectLegacyContinuation(ChildContinuation? continuation)
     {
-        RunId = continuation.RunId.Value,
-        DeliveryCallId = continuation.DeliveryCallId.Value
-    };
+        if (continuation is not null)
+            throw new InvalidDataException("A child continuation is legacy read-only data. No event can persist it.");
+    }
 
     private static ChildContinuation FromProto(Proto.ChildContinuationProto proto) => new(
         new SubAgentRunId(proto.RunId), new ToolCallId(proto.DeliveryCallId));
+
+    private static Proto.ChildNoticeProto ToProto(ChildNotice notice)
+    {
+        var proto = new Proto.ChildNoticeProto { RunId = notice.RunId.Value };
+        if (notice.ReviewedWorkingContext is not null)
+            proto.ReviewedWorkingContext = LegacyCoordinationReplay.ToLegacyWorkingDelta(notice.ReviewedWorkingContext);
+        return proto;
+    }
+
+    private static ChildNotice FromProto(Proto.ChildNoticeProto proto) => new(
+        new SubAgentRunId(proto.RunId),
+        proto.ReviewedWorkingContext is null ? null
+            : LegacyCoordinationReplay.FromLegacyWorkingDelta(proto.ReviewedWorkingContext));
 
     internal static Proto.SessionSnapshotV2Proto ToProtoV2(SessionSnapshot snapshot)
     {
@@ -77,6 +91,7 @@ internal static partial class NetclawProtoMapper
         }
 
         var rawSnapshotRetained = evidence.Any(item => item.Payload.Length > 0);
+        var activeRunIds = new HashSet<SubAgentRunId>();
         for (var index = 0; index < proto.ChildRuns.Count; index++)
         {
             var oldRun = proto.ChildRuns[index];
@@ -98,17 +113,19 @@ internal static partial class NetclawProtoMapper
             {
                 var activeParentTask = hasHistoryPair
                     && (hasPendingInput || proto.AdoptedTaskInputIds.Contains(oldRun.DeliveryInputId));
+                var terminalResult = ((ChildRunLifecycle.Terminal)run.Lifecycle).Result;
+                // A pair that the parent never read stays prepared. The recovery reports it as a notice.
                 legacyRuns[index] = run with
                 {
                     InitialWorkingSnapshot = null,
                     Lifecycle = !hasHistoryPair
-                        ? new ChildRunLifecycle.Prepared(delivery)
-                        : activeParentTask
-                            ? new ChildRunLifecycle.Consumed(delivery)
-                            : new ChildRunLifecycle.Closed(delivery.Result.ToolCallId
-                                ?? throw new InvalidDataException("A deployed child delivery has no call identity."),
-                                delivery.Terminal.Result.Outcome, delivery.Terminal.Result.OutcomeReason)
+                        ? new ChildRunLifecycle.Terminal(terminalResult) { LegacyPrepared = delivery }
+                        : new ChildRunLifecycle.Reported(terminalResult.Result.Outcome, terminalResult.Result.OutcomeReason,
+                            new ChildRunReport.LegacyDelivery(delivery.Result.ToolCallId
+                                ?? throw new InvalidDataException("A deployed child delivery has no call identity.")))
                 };
+                if (activeParentTask)
+                    activeRunIds.Add(runId);
                 if (hasHistoryPair && !activeParentTask)
                     continue;
                 evidence.Add(new LegacyCoordinationEvidence
@@ -165,7 +182,7 @@ internal static partial class NetclawProtoMapper
             });
             rawSnapshotRetained = true;
         }
-        var activeRuns = legacyRuns.Where(run => run.Lifecycle is ChildRunLifecycle.Consumed).ToArray();
+        var activeRuns = legacyRuns.Where(run => activeRunIds.Contains(run.RunId)).ToArray();
         if (activeRuns.Length > 1)
         {
             foreach (var run in activeRuns)
@@ -190,7 +207,7 @@ internal static partial class NetclawProtoMapper
 
     private static bool TryGetLegacySnapshotDelivery(SessionSnapshot snapshot,
         Proto.SessionSnapshotProto snapshotProto, Proto.BackgroundChildRunProto oldRun,
-        BackgroundChildRun run, out ChildPreparedResult delivery, out bool hasHistoryPair,
+        BackgroundChildRun run, out LegacyPreparedResult delivery, out bool hasHistoryPair,
         out bool hasPendingInput)
     {
         delivery = null!;
@@ -238,7 +255,7 @@ internal static partial class NetclawProtoMapper
                 return false;
 
             var canonicalCall = LegacyCoordinationReplay.LegacyDeliveryCall(run, callId);
-            delivery = new ChildPreparedResult(terminal.Result, canonicalCall, matchingResults[0], null);
+            delivery = new LegacyPreparedResult(canonicalCall, matchingResults[0], null);
             hasHistoryPair = true;
             hasPendingInput = pendingProto is not null;
             return true;
@@ -247,7 +264,7 @@ internal static partial class NetclawProtoMapper
         if (pendingResult?.ToolCallId is not { } preparedCallId)
             return false;
         var pendingCall = LegacyCoordinationReplay.LegacyDeliveryCall(run, preparedCallId);
-        delivery = new ChildPreparedResult(terminal.Result, pendingCall, pendingResult, null);
+        delivery = new LegacyPreparedResult(pendingCall, pendingResult, null);
         hasPendingInput = true;
         return true;
     }
@@ -329,15 +346,8 @@ internal static partial class NetclawProtoMapper
             case ChildRunEvent.TerminalRecorded terminal:
                 proto.Terminal = LegacyCoordinationReplay.ToLegacyTerminal(terminal.Terminal);
                 break;
-            case ChildRunEvent.ResultPrepared prepared:
-                proto.ResultPrepared = new Proto.ChildPreparedResultV2Proto
-                {
-                    Call = ToProto(prepared.Call),
-                    Result = ToProto(prepared.Result)
-                };
-                if (prepared.ReviewedWorkingContext is not null)
-                    proto.ResultPrepared.ReviewedWorkingContext = LegacyCoordinationReplay.ToLegacyWorkingDelta(prepared.ReviewedWorkingContext);
-                break;
+            case ChildRunEvent.ResultPrepared:
+                throw new InvalidDataException("A prepared child result is legacy read-only data. No writer persists it.");
             default:
                 throw new InvalidDataException("A v2 child event has an unsupported variant.");
         }
@@ -379,8 +389,7 @@ internal static partial class NetclawProtoMapper
 
     private static Proto.BackgroundChildRunV2Proto ToProto(BackgroundChildRun run)
     {
-        var needsInitialSnapshot = run.Lifecycle is ChildRunLifecycle.Accepted
-            or ChildRunLifecycle.Cancelling or ChildRunLifecycle.Terminal;
+        var needsInitialSnapshot = NeedsInitialSnapshot(run.Lifecycle);
         if (needsInitialSnapshot != (run.InitialWorkingSnapshot is not null))
             throw new InvalidDataException("A v2 child snapshot has an initial working snapshot that conflicts with its lifecycle.");
 
@@ -426,23 +435,27 @@ internal static partial class NetclawProtoMapper
                 if (cancelling.Checkpoint is not null)
                     proto.Cancelling.Checkpoint = ToProto(cancelling.Checkpoint);
                 break;
-            case ChildRunLifecycle.Terminal terminal:
+            case ChildRunLifecycle.Terminal { LegacyPrepared: null } terminal:
                 proto.Terminal = LegacyCoordinationReplay.ToLegacyTerminal(terminal.Result);
                 break;
-            case ChildRunLifecycle.Prepared prepared:
-                proto.Prepared = ToProto(prepared.Delivery);
+            case ChildRunLifecycle.Terminal { LegacyPrepared: { } prepared } terminal:
+                proto.Prepared = ToProto(terminal.Result, prepared);
                 break;
-            case ChildRunLifecycle.Consumed consumed:
-                proto.Consumed = ToProto(consumed.Delivery);
-                break;
-            case ChildRunLifecycle.Closed closed:
-                proto.Closed = new Proto.ChildRunClosedV2Proto
+            case ChildRunLifecycle.Reported reported:
+                proto.Closed = new Proto.ChildRunClosedV2Proto { Outcome = (int)reported.Outcome };
+                if (reported.Reason is not null)
+                    proto.Closed.Reason = reported.Reason.Value.Value;
+                switch (reported.Report)
                 {
-                    DeliveryCallId = closed.DeliveryCallId.Value,
-                    Outcome = (int)closed.Outcome
-                };
-                if (closed.Reason is not null)
-                    proto.Closed.Reason = closed.Reason.Value.Value;
+                    case ChildRunReport.Notice notice:
+                        proto.Closed.NoticeInputId = notice.NoticeInputId.Value;
+                        break;
+                    case ChildRunReport.LegacyDelivery delivery:
+                        proto.Closed.DeliveryCallId = delivery.DeliveryCallId.Value;
+                        break;
+                    default:
+                        throw new InvalidDataException("A v2 child snapshot has an unknown report.");
+                }
                 break;
             default:
                 throw new InvalidDataException("A v2 child snapshot has an unknown lifecycle.");
@@ -473,18 +486,12 @@ internal static partial class NetclawProtoMapper
                     ? null : FromLegacyCheckpoint(proto.Cancelling.Checkpoint)),
             Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Terminal =>
                 new ChildRunLifecycle.Terminal(FromLegacyTerminal(proto.Terminal)),
-            Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Prepared =>
-                new ChildRunLifecycle.Prepared(FromProto(proto.Prepared)),
-            Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Consumed =>
-                new ChildRunLifecycle.Consumed(FromProto(proto.Consumed)),
-            Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Closed =>
-                new ChildRunLifecycle.Closed(new ToolCallId(proto.Closed.DeliveryCallId),
-                    CheckedEnum<SubAgentRunOutcome>(proto.Closed.Outcome),
-                    proto.Closed.HasReason ? new SubAgentOutcomeReason(proto.Closed.Reason) : null),
+            Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Prepared => ReadPrepared(proto.Prepared),
+            Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Consumed => ReadConsumed(proto.Consumed),
+            Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Closed => ReadReported(proto.Closed),
             _ => throw new InvalidDataException("A v2 child snapshot has no lifecycle.")
         };
-        var needsInitialSnapshot = lifecycle is ChildRunLifecycle.Accepted
-            or ChildRunLifecycle.Cancelling or ChildRunLifecycle.Terminal;
+        var needsInitialSnapshot = NeedsInitialSnapshot(lifecycle);
         if (needsInitialSnapshot != (proto.InitialWorkingContext is not null && proto.InitialGit is not null)
             || (proto.InitialWorkingContext is null) != (proto.InitialGit is null))
             throw new InvalidDataException("A v2 child snapshot has an initial working snapshot that conflicts with its lifecycle.");
@@ -517,23 +524,56 @@ internal static partial class NetclawProtoMapper
         };
     }
 
-    private static Proto.ChildPreparedStateV2Proto ToProto(ChildPreparedResult delivery) => new()
+    // A run keeps its initial working snapshot until the owner can still enrich its result. A run that a deployed
+    // runtime already prepared has no snapshot, and a reported run has none either.
+    private static bool NeedsInitialSnapshot(ChildRunLifecycle lifecycle)
+        => lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling
+            or ChildRunLifecycle.Terminal { LegacyPrepared: null };
+
+    private static Proto.ChildPreparedStateV2Proto ToProto(ChildRunTerminal terminal, LegacyPreparedResult prepared) => new()
     {
-        Terminal = LegacyCoordinationReplay.ToLegacyTerminal(delivery.Terminal),
-        Call = ToProto(delivery.Call),
-        Result = ToProto(delivery.Result),
-        ReviewedWorkingContext = delivery.ReviewedWorkingContext is null ? null
-            : LegacyCoordinationReplay.ToLegacyWorkingDelta(delivery.ReviewedWorkingContext)
+        Terminal = LegacyCoordinationReplay.ToLegacyTerminal(terminal),
+        Call = ToProto(prepared.Call),
+        Result = ToProto(prepared.Result),
+        ReviewedWorkingContext = prepared.ReviewedWorkingContext is null ? null
+            : LegacyCoordinationReplay.ToLegacyWorkingDelta(prepared.ReviewedWorkingContext)
     };
 
-    private static ChildPreparedResult FromProto(Proto.ChildPreparedStateV2Proto proto)
+    private static (ChildRunTerminal Terminal, LegacyPreparedResult Prepared) ReadPreparedState(Proto.ChildPreparedStateV2Proto proto)
     {
         if (proto.Terminal is null || proto.Call is null || proto.Result is null)
             throw new InvalidDataException("A v2 prepared child result lacks its exact pair.");
-        return new ChildPreparedResult(FromLegacyTerminal(proto.Terminal),
+        return (FromLegacyTerminal(proto.Terminal), new LegacyPreparedResult(
             FromProto(proto.Call), FromProto(proto.Result), proto.ReviewedWorkingContext is null ? null
-                : LegacyCoordinationReplay.FromLegacyWorkingDelta(proto.ReviewedWorkingContext));
+                : LegacyCoordinationReplay.FromLegacyWorkingDelta(proto.ReviewedWorkingContext)));
     }
+
+    // Snapshot case 17: a result that the parent never read. The owner reports it as a notice at recovery.
+    private static ChildRunLifecycle ReadPrepared(Proto.ChildPreparedStateV2Proto proto)
+    {
+        var (terminal, prepared) = ReadPreparedState(proto);
+        return new ChildRunLifecycle.Terminal(terminal) { LegacyPrepared = prepared };
+    }
+
+    // Snapshot case 18: the pair is already in the snapshot history, so the run is reported.
+    private static ChildRunLifecycle ReadConsumed(Proto.ChildPreparedStateV2Proto proto)
+    {
+        var (terminal, prepared) = ReadPreparedState(proto);
+        return new ChildRunLifecycle.Reported(terminal.Result.Outcome, terminal.Result.OutcomeReason,
+            new ChildRunReport.LegacyDelivery(prepared.Result.ToolCallId
+                ?? throw new InvalidDataException("A v2 consumed child result has no call identity.")));
+    }
+
+    // Snapshot case 19: a deployed delivery names a call. A notice names an input.
+    private static ChildRunLifecycle ReadReported(Proto.ChildRunClosedV2Proto proto)
+        => new ChildRunLifecycle.Reported(
+            CheckedEnum<SubAgentRunOutcome>(proto.Outcome),
+            proto.HasReason ? new SubAgentOutcomeReason(proto.Reason) : null,
+            proto.HasNoticeInputId
+                ? new ChildRunReport.Notice(new InputId(proto.NoticeInputId))
+                : string.IsNullOrEmpty(proto.DeliveryCallId)
+                    ? throw new InvalidDataException("A v2 reported child result names neither a notice nor a delivery.")
+                    : new ChildRunReport.LegacyDelivery(new ToolCallId(proto.DeliveryCallId)));
 
     private static Proto.ChildRunCheckpointProto ToProto(ChildRunCheckpoint checkpoint) => new()
     {

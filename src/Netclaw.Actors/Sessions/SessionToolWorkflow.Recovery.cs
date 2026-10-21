@@ -101,19 +101,21 @@ internal sealed partial class SessionToolWorkflow
     public bool ShouldAbandonResolvedForIdle() => ResolvedParentCount > 0;
 
     // Security boundary: only a person can abandon an open approval. Automation (a reminder fire, a webhook, a
-    // background job completion) cannot answer a prompt, so it must not cancel one. Its input waits until the
-    // approval closes, and the approval stays open. Any person may still abandon the approval, as before; this
-    // check does not compare the person with the requester of the parked call.
-    // A resolved or interrupted batch has no open approval, so any input closes it before its own turn.
+    // background job completion, a child result notice) cannot answer a prompt, so it must not cancel one. Its input
+    // waits until the approval closes, and the approval stays open. Any person may still abandon the approval, as
+    // before; this check does not compare the person with the requester of the parked call.
+    // A notice carries the principal of the person who owns the child, so the kind of the input decides and not the
+    // principal. A resolved or interrupted batch has no open approval, so any input closes it before its own turn.
     public NewInputPlan PlanNewInputAbandonment(
         SessionState state,
         SessionId sessionId,
         PrincipalClassification? inputPrincipal,
+        bool isChildNotice,
         long nowMs)
     {
         if (PendingParentCount > 0)
         {
-            if (IsAutomation(inputPrincipal))
+            if (isChildNotice || IsAutomation(inputPrincipal))
                 return new NewInputPlan.WaitForApproval();
 
             MarkAbandoning();

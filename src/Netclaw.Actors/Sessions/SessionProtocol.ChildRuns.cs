@@ -30,6 +30,18 @@ public static partial class SessionProtocol
         public sealed record Checkpointed(ChildRunCheckpoint Checkpoint) : ChildRunEvent;
         public sealed record CancellationRequested : ChildRunEvent;
         public sealed record TerminalRecorded(ChildRunTerminal Terminal) : ChildRunEvent;
+
+        /// <summary>
+        /// Read-only. A deployed runtime wrote this event for the old tool-pair delivery. The reader keeps the pair
+        /// until a legacy closure puts it into the history. No writer creates this event.
+        /// </summary>
         public sealed record ResultPrepared(SerializableChatMessage Call, SerializableChatMessage Result, WorkingContextDelta? ReviewedWorkingContext) : ChildRunEvent;
     }
+
+    /// <summary>
+    /// The kind of an admitted input that reports the end of a child run to its parent. The input text names the run
+    /// and its <c>result.md</c> file and never holds the output. The input applies the working context that the owner
+    /// reviewed for the run, in the same step that marks the run as reported.
+    /// </summary>
+    public sealed record ChildNotice(SubAgentRunId RunId, WorkingContextDelta? ReviewedWorkingContext);
 }

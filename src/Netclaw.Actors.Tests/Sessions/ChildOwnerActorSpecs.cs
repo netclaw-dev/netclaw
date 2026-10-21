@@ -74,6 +74,8 @@ public sealed class ChildOwnerActorSpecs(ITestOutputHelper output) : LlmSessionT
         var spawner = new SubAgentSpawner(_clients, registry, policy, null, prompt,
             _preparation, NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
         registry.RegisterCore(new SpawnAgentTool(profiles, spawner, TestPaths));
+        // The runtime refuses a spawn when the requester cannot read the result file.
+        registry.RegisterCore(new FileReadTool(toolConfig, TestPaths, new ToolPathPolicy([])));
         registry.RegisterCore(new CheckAgentRunTool());
         registry.RegisterCore(_tool);
         services.AddSingleton<IChatClientProvider>(_clients);

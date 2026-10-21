@@ -130,7 +130,7 @@ internal sealed partial class SessionToolWorkflow
 
     public SessionState ApplyBatchStarted(SessionState state, ToolBatchStarted started)
     {
-        state = state.CommitChildContinuation(started.ChildContinuation, close: false);
+        state = state.CloseLegacyContinuation(started.ChildContinuation, close: false);
         if (started.ChildContinuation is null && state.FindLastUserMessage() != started.UserMessage)
             state = state with { History = state.History.Add(started.UserMessage) };
         if (!state.History.Contains(started.AssistantMessage))

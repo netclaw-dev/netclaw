@@ -99,12 +99,15 @@ public sealed class HeadlessAsyncChildEndToEndTests : IAsyncDisposable
         Assert.True(waiting.Success, "Stdout has no [subagent:waiting] line.");
         Assert.Contains("[subagent:start] child-a", run.Stdout, StringComparison.Ordinal);
         Assert.Contains("[subagent:done] child-a (completed", run.Stdout, StringComparison.Ordinal);
-        // The child text reaches stdout as tool output, as it did when spawn_agent waited inside one turn.
-        var resultLine = Assert.Single(
-            run.Stdout.Split(['\r', '\n']), line => line.StartsWith("[tool:result] child_run_result", StringComparison.Ordinal));
-        Assert.Contains(ChildText, resultLine, StringComparison.Ordinal);
-        Assert.Contains(waiting.Groups["run"].Value, resultLine, StringComparison.Ordinal);
+        // The notice names result.md. The parent reads it with file_read, so the child text reaches stdout as tool output.
+        // The result is the multi-line text of result.md, so it runs from its marker to the final reply.
+        Assert.Single(
+            run.Stdout.Split(['\r', '\n']), line => line.StartsWith("[tool:result] file_read", StringComparison.Ordinal));
         Assert.Contains(FinalText, run.Stdout, StringComparison.Ordinal);
+        var resultStart = run.Stdout.IndexOf("[tool:result] file_read", StringComparison.Ordinal);
+        var resultText = run.Stdout[resultStart..run.Stdout.IndexOf(FinalText, resultStart, StringComparison.Ordinal)];
+        Assert.Contains(ChildText, resultText, StringComparison.Ordinal);
+        Assert.Contains(waiting.Groups["run"].Value, resultText, StringComparison.Ordinal);
         Assert.True(
             run.Stdout.IndexOf(StartedText, StringComparison.Ordinal)
             < run.Stdout.IndexOf("[subagent:waiting]", StringComparison.Ordinal));
@@ -114,7 +117,7 @@ public sealed class HeadlessAsyncChildEndToEndTests : IAsyncDisposable
         Assert.Equal(1, CountOf(run.SessionLog, "SESSION_ENDED"));
         Assert.Equal(2, CountOf(run.SessionLog, "TURN_COMPLETED:"));
         Assert.Equal(1, CountOf(run.SessionLog, "WAITING_FOR_CHILDREN:"));
-        Assert.Equal(3, model.CallCount);
+        Assert.Equal(4, model.CallCount);
     }
 
     [Fact]
@@ -143,7 +146,7 @@ public sealed class HeadlessAsyncChildEndToEndTests : IAsyncDisposable
             .Select(call => call.GetProperty("toolName").GetString())
             .ToArray();
         Assert.Contains("spawn_agent", toolNames);
-        Assert.Contains("child_run_result", toolNames);
+        Assert.Contains("file_read", toolNames);
         Assert.False(root.TryGetProperty("errorCategory", out _));
     }
 
@@ -340,6 +343,8 @@ public sealed class HeadlessAsyncChildEndToEndTests : IAsyncDisposable
         var spawner = new SubAgentSpawner(models, registry, policy, null, prompt,
             new FixedWorkingContext(), NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
         registry.RegisterCore(new SpawnAgentTool(profiles, spawner, paths));
+        // The spawner refuses a start when the requester cannot read the result file.
+        registry.RegisterCore(new FileReadTool(new ToolConfig(), paths, new ToolPathPolicy([])));
         var storage = new TestSessionStorageResolver(paths);
 
         var builder = WebApplication.CreateBuilder();
@@ -511,6 +516,18 @@ internal sealed class ParentModel(string startedText, string finalText) : IChatC
             contents = [new TextContent(startedText)];
             AfterTurnOneText?.TrySetResult();
         }
+        else if (ResultFileToRead(messages) is { } resultFile)
+        {
+            // The notice turn reads the result file that the notice names.
+            contents =
+            [
+                new FunctionCallContent("read-result", "file_read", new Dictionary<string, object?>
+                {
+                    ["path"] = resultFile,
+                    ["_rationale"] = "Read the child result."
+                })
+            ];
+        }
         else
         {
             contents = [new TextContent(finalText)];
@@ -520,6 +537,16 @@ internal sealed class ParentModel(string startedText, string finalText) : IChatC
         {
             FinishReason = ChatFinishReason.Stop
         };
+    }
+
+    private static string? ResultFileToRead(IEnumerable<ChatMessage> messages)
+    {
+        var list = messages.ToList();
+        if (list.Any(message => message.Contents.OfType<FunctionResultContent>().Any(result => result.CallId == "read-result")))
+            return null;
+        var notice = list.LastOrDefault(message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                                                   && message.Text.Contains("result_file=", StringComparison.Ordinal));
+        return notice is null ? null : Regex.Match(notice.Text, @"result_file=(\S+)").Groups[1].Value;
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(

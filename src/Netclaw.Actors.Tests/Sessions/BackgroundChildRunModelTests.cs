@@ -184,7 +184,7 @@ public sealed class BackgroundChildRunModelTests(ITestOutputHelper output)
         Action.RecordTerminal when contract.Accepted && !contract.TerminalSeen
             => contract with { TerminalSeen = true, CancellationPending = false },
         Action.Prepare when contract.TerminalSeen && !contract.ResultReady => contract with { ResultReady = true },
-        Action.Consume when contract.ResultReady => contract with { PairCommitCount = 1 },
+        Action.Consume when contract.ResultReady => contract with { PairCommitCount = 1, ContinuationClosed = true },
         Action.Close when contract.ResultReady => contract with { PairCommitCount = 1, ContinuationClosed = true },
         Action.ParentTurn => contract with { OrdinaryTurns = contract.OrdinaryTurns + $"Ordinary-{command.UserValue};" },
         Action.RestoreSnapshot => contract,
@@ -289,11 +289,10 @@ public sealed class BackgroundChildRunModelTests(ITestOutputHelper output)
         return new Contract(
             Accepted: accepted,
             CancellationPending: lifecycle is ChildRunLifecycle.Cancelling,
-            TerminalSeen: lifecycle is ChildRunLifecycle.Terminal or ChildRunLifecycle.Prepared
-                or ChildRunLifecycle.Consumed or ChildRunLifecycle.Closed,
-            ResultReady: lifecycle is ChildRunLifecycle.Prepared or ChildRunLifecycle.Consumed or ChildRunLifecycle.Closed,
+            TerminalSeen: lifecycle is ChildRunLifecycle.Terminal or ChildRunLifecycle.Reported,
+            ResultReady: lifecycle is ChildRunLifecycle.Terminal { LegacyPrepared: not null } or ChildRunLifecycle.Reported,
             PairCommitCount: callCount,
-            ContinuationClosed: lifecycle is ChildRunLifecycle.Closed,
+            ContinuationClosed: lifecycle is ChildRunLifecycle.Reported,
             OrdinaryTurns: string.Concat(state.History.Where(message => message.Role == ChatRole.User)
                 .Select(message => message.Content + ";")));
     }

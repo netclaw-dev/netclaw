@@ -14,6 +14,7 @@ using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
+using ChildContinuationProto = Netclaw.Actors.Serialization.Proto.ChildContinuationProto;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
@@ -1178,14 +1179,18 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(probe.SourceReminderId, routed.SourceReminderId);
 
         // Field 8 is the child continuation of the coordination stack. An entry that holds a child continuation
-        // at 8 is not a routed mark, and the routed mark at 10 does not change the continuation.
+        // at 8 is not a routed mark, and the routed mark at 10 does not change the continuation. No writer sets the
+        // continuation any more, so the deployed entry is built by hand.
         var continuation = new ChildContinuation(new SubAgentRunId("run-1"), new ToolCallId("call-1"));
-        var stackEntry = Deserialize(Serialize(probe with { ChildContinuation = continuation }), probe);
+        var deployedEntry = WithField(oldBytes, output =>
+        {
+            output.WriteTag(8, WireFormat.WireType.LengthDelimited);
+            output.WriteBytes(new ChildContinuationProto { RunId = "run-1", DeliveryCallId = "call-1" }.ToByteString());
+        });
+        var stackEntry = Deserialize(deployedEntry, probe);
         Assert.False(stackEntry.RoutedSkill);
         Assert.Equal(continuation, stackEntry.ChildContinuation);
-        var routedStackEntry = Deserialize(
-            WithVarintField(Serialize(probe with { ChildContinuation = continuation }), TurnRecordedRoutedSkillField, true),
-            probe);
+        var routedStackEntry = Deserialize(WithVarintField(deployedEntry, TurnRecordedRoutedSkillField, true), probe);
         Assert.True(routedStackEntry.RoutedSkill);
         Assert.Equal(continuation, routedStackEntry.ChildContinuation);
 

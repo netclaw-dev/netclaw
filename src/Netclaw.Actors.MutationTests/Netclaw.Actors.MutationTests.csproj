@@ -37,6 +37,10 @@
              Link="Sessions/SessionInputFlowRequesterTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/NewInputAbandonmentPlanTests.cs"
              Link="Sessions/NewInputAbandonmentPlanTests.cs" />
+    <Compile Include="../Netclaw.Actors.Tests/Sessions/ChildNoticeReducerTests.cs"
+             Link="Sessions/ChildNoticeReducerTests.cs" />
+    <Compile Include="../Netclaw.Actors.Tests/Sessions/RestartResumePartitionTests.cs"
+             Link="Sessions/RestartResumePartitionTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/ProcessingWatchdogTests.cs"
              Link="Sessions/ProcessingWatchdogTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/SessionExecutionLifetimeStopIdentityTests.cs"

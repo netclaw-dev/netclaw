@@ -1,0 +1,164 @@
+// Temporary fixture capture. This source is stored as text. It exists as a test only in a checkout of the writer revision.
+// Copy it to src/Netclaw.Actors.Tests/Sessions/CoordinationV2FixtureCapture.cs in a checkout of c4ed4dcc6a2165d92d074dfd6cf603d2873bca13
+// together with ChildNoticeTestBase.cs (the base class), and run it as the README describes.
+using System.Security.Cryptography;
+using System.Text.Json;
+using Akka;
+using Akka.Actor;
+using Akka.Persistence;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Serialization;
+using Netclaw.Actors.Sessions;
+using Netclaw.Actors.SubAgents;
+using Netclaw.Configuration;
+using Xunit;
+using AkkaPersistence = Akka.Persistence.Persistence;
+using static Netclaw.Actors.Sessions.SessionProtocol;
+
+namespace Netclaw.Actors.Tests.Sessions;
+
+public sealed class CoordinationV2FixtureCapture(ITestOutputHelper output) : ChildNoticeTestBase(output)
+{
+    protected override void ConfigureSessionServices(IServiceCollection services)
+    {
+        base.ConfigureSessionServices(services);
+        services.AddSingleton(new SessionConfig
+        {
+            IdleTimeout = TimeSpan.Zero,
+            Tuning = new SessionTuning { SnapshotInterval = 1, TitleGenerationInterval = 0 }
+        });
+    }
+
+    [Fact]
+    public async Task Capture_deployed_v2_wire_fixtures()
+    {
+        var outputPath = Environment.GetEnvironmentVariable("NETCLAW_V2_FIXTURE_OUTPUT");
+        var journal = await JournalAsync();
+        var notes = Path.Combine(TestPaths.BasePath, "wake-notes.txt");
+        await File.WriteAllTextAsync(notes, "Neutral note.", Cancellation);
+        Clients.Parent.ResponseContentsSelector = request =>
+        {
+            var basic = ScriptedParentReply(request);
+            if (basic is not null)
+                return basic;
+            var wake = Calls(request).Any(call => call.Name == "child_run_result");
+            var tools = request.Any(message => message.Role == Microsoft.Extensions.AI.ChatRole.User && message.Text.Contains("spawn:child-a:tools", StringComparison.Ordinal));
+            return wake && tools && !HasCall(request, "wake-read") ? [ReadFile("wake-read", notes)] : null;
+        };
+        var serializer = new NetclawProtobufSerializer((ExtendedActorSystem)Sys);
+        var records = new List<object>();
+        var scenarios = new List<object>();
+
+        foreach (var label in new[] { "text", "tools" })
+        {
+            var id = new SessionId($"capture/delivered-{label}");
+            var subscriber = await JoinAsync(id);
+            var (accepted, gate) = await StartChildAsync(id, Alice, label);
+            await ExpectTurnsAsync(subscriber, 1);
+            gate.TrySetResult();
+            await ExpectTurnsAsync(subscriber, 1);
+            await AwaitAssertAsync(() => Assert.Contains(journal.Committed.OfType<ISessionEvent>().Where(evt => evt.SessionId == id),
+                evt => evt.GetType().GetProperty("ChildContinuation")?.GetValue(evt) is not null), Deadline, cancellationToken: Cancellation);
+            Record(serializer, journal, id, $"delivered-{label}", accepted, records, scenarios);
+        }
+
+        {
+            var id = new SessionId("capture/undelivered");
+            var subscriber = await JoinAsync(id);
+            var (accepted, gate) = await StartChildAsync(id, Alice, "undelivered");
+            await ExpectTurnsAsync(subscriber, 1);
+            var wake = NewGate();
+            Clients.Parent.NextResponseGate = wake;
+            gate.TrySetResult();
+            await AwaitAssertAsync(() => Assert.Contains(journal.Committed.OfType<ChildRunEvent>(),
+                evt => evt.RunId == accepted.Run.RunId && evt.GetType().Name == "ResultPrepared"), Deadline, cancellationToken: Cancellation);
+            await StopAsync(await ResolveSessionAsync(id));
+            Record(serializer, journal, id, "undelivered", accepted, records, scenarios);
+        }
+
+        // The in-memory snapshot store keeps the latest snapshot of a session. The real flow gives a Closed snapshot
+        // (delivered) and an Accepted snapshot (before the child ended). The reducer and the lifecycle records
+        // give the other two states that the deployed writer can persist.
+        var closedSnapshot = await LatestSnapshotAsync("capture/delivered-text");
+        var acceptedSnapshot = await LatestSnapshotAsync("capture/undelivered");
+        var deliveredEvents = journal.Committed.OfType<ISessionEvent>().Where(evt => evt.SessionId.Value == "capture/delivered-text").ToArray();
+        var undeliveredEvents = journal.Committed.OfType<ISessionEvent>().Where(evt => evt.SessionId.Value == "capture/undelivered").ToArray();
+        var terminal = deliveredEvents.OfType<ChildRunEvent.TerminalRecorded>().Single();
+        var prepared = deliveredEvents.OfType<ChildRunEvent.ResultPrepared>().Single();
+        var delivery = new ChildPreparedResult(terminal.Terminal, prepared.Call, prepared.Result, prepared.ReviewedWorkingContext);
+        var preparedSnapshot = SessionState.FromSnapshot(acceptedSnapshot)
+            .Apply(undeliveredEvents.OfType<ChildRunEvent.TerminalRecorded>().Single())
+            .Apply(undeliveredEvents.OfType<ChildRunEvent.ResultPrepared>().Single())
+            .ToSnapshot();
+        var consumedSnapshot = closedSnapshot with
+        {
+            ChildRuns = [closedSnapshot.ChildRuns.Single() with { Lifecycle = new ChildRunLifecycle.Consumed(delivery) }]
+        };
+        Assert.IsType<ChildRunLifecycle.Closed>(closedSnapshot.ChildRuns.Single().Lifecycle);
+        foreach (var (name, session, snapshot, expected) in new[]
+        {
+            ("snapshot-prepared", "capture/undelivered", preparedSnapshot, typeof(ChildRunLifecycle.Prepared)),
+            ("snapshot-consumed", "capture/delivered-text", consumedSnapshot, typeof(ChildRunLifecycle.Consumed)),
+            ("snapshot-closed", "capture/delivered-text", closedSnapshot, typeof(ChildRunLifecycle.Closed))
+        })
+        {
+            var payload = serializer.ToBinary(snapshot);
+            var manifest = serializer.Manifest(snapshot);
+            var roundTrip = (SessionSnapshot)serializer.FromBinary(payload, manifest);
+            Assert.IsType(expected, roundTrip.ChildRuns.Single().Lifecycle);
+            records.Add(new
+            {
+                name, manifest, base64 = Convert.ToBase64String(payload),
+                sha256 = Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant()
+            });
+            scenarios.Add(new
+            {
+                scenario = name, sessionId = session, runId = snapshot.ChildRuns.Single().RunId.Value, rows = new[] { name }
+            });
+        }
+
+        if (outputPath is not null)
+        {
+            await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(new
+            {
+                sourceRevision = Environment.GetEnvironmentVariable("NETCLAW_V2_SOURCE_REVISION"),
+                serializerIdentifier = serializer.Identifier,
+                records,
+                scenarios
+            }, new JsonSerializerOptions { WriteIndented = true }), Cancellation);
+        }
+    }
+
+    private async Task<SessionSnapshot> LatestSnapshotAsync(string session)
+    {
+        var probe = CreateTestProbe();
+        AkkaPersistence.Instance.Apply(Sys).SnapshotStoreFor(null).Tell(
+            new LoadSnapshot($"session-{session}", SnapshotSelectionCriteria.Latest, long.MaxValue), probe.Ref);
+        var result = await probe.ExpectMsgAsync<LoadSnapshotResult>(TimeSpan.FromSeconds(5), cancellationToken: Cancellation);
+        return (SessionSnapshot)(result.Snapshot ?? throw new InvalidOperationException($"No snapshot for {session}.")).Snapshot;
+    }
+
+    private static void Record(NetclawProtobufSerializer serializer, AcceptanceFault journal, SessionId id, string scenario,
+        ChildRunAccepted accepted, List<object> records, List<object> scenarios)
+    {
+        var names = new List<string>();
+        var events = journal.Committed.OfType<ISessionEvent>().Where(evt => evt.SessionId == id).ToArray();
+        for (var index = 0; index < events.Length; index++)
+        {
+            var payload = serializer.ToBinary(events[index]);
+            var name = $"{scenario}-{index:D2}-{events[index].GetType().Name}";
+            names.Add(name);
+            records.Add(new
+            {
+                name,
+                manifest = serializer.Manifest(events[index]),
+                base64 = Convert.ToBase64String(payload),
+                sha256 = Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant()
+            });
+        }
+
+        scenarios.Add(new { scenario, sessionId = id.Value, runId = accepted.Run.RunId.Value, rows = names });
+    }
+}

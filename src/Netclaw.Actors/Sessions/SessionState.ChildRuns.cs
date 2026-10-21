@@ -21,17 +21,28 @@ public sealed partial record SessionState
         => ChildRuns.Values.Where(run => !TryGetLegacyChildDisposition(run.RunId, out _));
 
     /// <summary>
-    /// The runs whose result has not yet had its follow-up parent turn: every run that is not <c>Closed</c>.
-    /// A failed follow-up turn closes its run, so it leaves this list. The order is stable: acceptance time,
-    /// then run id. A run that the legacy reader quarantined never gets a delivery turn, so it is not open.
+    /// The runs whose result has not yet had its follow-up parent turn: a run with no notice, and a run whose notice
+    /// input is still pending. The turn that consumes the notice, or a failed turn that closes it, ends the run here.
+    /// The order is stable: acceptance time, then run id. A run that the legacy reader quarantined never reports, so
+    /// it is not open.
     /// </summary>
     public IReadOnlyList<SubAgentRunId> GetOpenChildRunIds()
         => [.. GetExecutableChildRuns()
-            .Where(run => run.Lifecycle is not ChildRunLifecycle.Closed)
+            .Where(run => run.Lifecycle is not ChildRunLifecycle.Reported reported
+                          || (reported.Report is ChildRunReport.Notice notice
+                              && PendingInputs.Any(input => input.InputId == notice.NoticeInputId)))
             .OrderBy(run => run.AcceptedAtMs)
             .ThenBy(run => run.RunId.Value, StringComparer.Ordinal)
             .Select(run => run.RunId)];
     // </open-child-runs>
+
+    /// <summary>Runs that ended and have no notice yet. Each one still owes its parent a result.</summary>
+    public IEnumerable<BackgroundChildRun> GetUnreportedTerminalRuns()
+        => GetExecutableChildRuns().Where(run => run.Lifecycle is ChildRunLifecycle.Terminal);
+
+    /// <summary>Runs whose result the parent has not received: still running, or ended without a notice.</summary>
+    public IEnumerable<BackgroundChildRun> GetUnreportedRuns()
+        => GetExecutableChildRuns().Where(run => run.Lifecycle is not ChildRunLifecycle.Reported);
 
     public SessionState Apply(ChildRunAccepted evt)
     {
@@ -61,7 +72,8 @@ public sealed partial record SessionState
     {
         if (!ChildRuns.TryGetValue(evt.RunId, out var run) || run.OriginalContext.SessionId != evt.SessionId)
             throw new InvalidOperationException("Child event does not name an accepted run.");
-        if (run.InitialWorkingSnapshot is null && run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling or ChildRunLifecycle.Terminal)
+        if (run.InitialWorkingSnapshot is null && run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling
+            or ChildRunLifecycle.Terminal { LegacyPrepared: null })
             throw new InvalidOperationException("An unprepared child requires its initial context snapshot.");
         ChildRunLifecycle next = (run.Lifecycle, evt) switch
         {
@@ -74,10 +86,13 @@ public sealed partial record SessionState
             (ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling, ChildRunEvent.TerminalRecorded terminal)
                 when terminal.Terminal.Result.RunId == run.RunId && terminal.Terminal.Result.ScopeId == run.ScopeId
                 => new ChildRunLifecycle.Terminal(terminal.Terminal),
-            (ChildRunLifecycle.Terminal terminal, ChildRunEvent.ResultPrepared prepared)
+            (ChildRunLifecycle.Terminal { LegacyPrepared: null } terminal, ChildRunEvent.ResultPrepared prepared)
                 when IsCanonicalChildPair(run, prepared.Call, prepared.Result) &&
                      (terminal.Result.Result.Success || prepared.ReviewedWorkingContext is null)
-                => new ChildRunLifecycle.Prepared(new ChildPreparedResult(terminal.Result, prepared.Call, prepared.Result, prepared.ReviewedWorkingContext)),
+                => terminal with
+                {
+                    LegacyPrepared = new LegacyPreparedResult(prepared.Call, prepared.Result, prepared.ReviewedWorkingContext)
+                },
             _ => throw new InvalidOperationException("Child event is invalid for its current lifecycle.")
         };
         return this with
@@ -85,7 +100,7 @@ public sealed partial record SessionState
             ChildRuns = ChildRuns.SetItem(run.RunId, run with
             {
                 Lifecycle = next,
-                InitialWorkingSnapshot = next is ChildRunLifecycle.Prepared ? null : run.InitialWorkingSnapshot
+                InitialWorkingSnapshot = next is ChildRunLifecycle.Terminal { LegacyPrepared: not null } ? null : run.InitialWorkingSnapshot
             })
         };
     }
@@ -94,47 +109,86 @@ public sealed partial record SessionState
     {
         if (evt.RejectedJobReport is not null && evt.SourceBackgroundJobId is null)
             throw new InvalidDataException("A rejected job report requires its source job identity.");
-        var next = CommitChildContinuation(evt.ChildContinuation, close: true)
+        var next = CloseLegacyContinuation(evt.ChildContinuation, close: true)
             .CloseInputs(evt.InputIds).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
         return evt.RejectedJobReport is { } report ? next with { History = next.History.Add(report) } : next;
     }
 
-    internal SessionState CommitChildContinuation(ChildContinuation? continuation, bool close)
+    // Security boundary: one notice per ended run. The run state is the guard. The recent source keys are not,
+    // because a restart drops them. The notice carries the recorded authority of the run owner, never a wider one.
+    private SessionState ApplyChildNotice(InputAdmitted evt, ChildNotice notice)
+    {
+        var run = RequireNoticeRun(evt, notice);
+        var terminal = (ChildRunLifecycle.Terminal)run.Lifecycle;
+        var result = terminal.Result.Result;
+        return this with
+        {
+            ChildRuns = ChildRuns.SetItem(run.RunId, run with
+            {
+                InitialWorkingSnapshot = null,
+                Lifecycle = new ChildRunLifecycle.Reported(result.Outcome, result.OutcomeReason,
+                    new ChildRunReport.Notice(evt.InputId))
+            }),
+            WorkingContext = notice.ReviewedWorkingContext is { } reviewed
+                ? WorkingContextUpdater.MergeSuccessfulSubAgentWorkingContext(WorkingContext, new ChildRunCompletion.Completed(reviewed))
+                : WorkingContext,
+            LegacyCoordinationEvidence = WithoutChildContinuationEvidence(run.RunId)
+        };
+    }
+
+    private BackgroundChildRun RequireNoticeRun(InputAdmitted evt, ChildNotice notice)
+    {
+        var run = ChildRuns.GetValueOrDefault(notice.RunId);
+        if (run is null || run.OriginalContext.SessionId != evt.SessionId)
+            throw new InvalidOperationException("A child notice does not name an accepted run.");
+        if (run.Lifecycle is not ChildRunLifecycle.Terminal)
+            throw new InvalidOperationException("A child notice requires an ended run that has no notice yet.");
+        if (evt.UserMessage.Role != ChatRole.User || !LegacyCoordinationReplay.SameAuthority(run.OriginalContext, evt.TurnContext))
+            throw new InvalidOperationException("A child notice must carry the recorded authority of its run owner.");
+        if (notice.ReviewedWorkingContext is not null && !((ChildRunLifecycle.Terminal)run.Lifecycle).Result.Result.Success)
+            throw new InvalidOperationException("Only a successful child run can carry a reviewed working context.");
+        return run;
+    }
+
+    // The deployed reader. A deployed parent decision named the tool pair that it consumed. The closure puts the pair
+    // into the history once and marks the run as reported, so the result never returns as a notice.
+    // close: false is a tool batch that continues the turn. close: true ends the decision.
+    internal SessionState CloseLegacyContinuation(ChildContinuation? continuation, bool close)
     {
         if (continuation is null)
             return this;
         if (!ChildRuns.TryGetValue(continuation.RunId, out var run))
             throw new InvalidOperationException("A parent decision names an unknown child result.");
-        if (run.Lifecycle is ChildRunLifecycle.Closed closed && closed.DeliveryCallId == continuation.DeliveryCallId)
-            return this;
-        var delivery = run.Lifecycle switch
+        var evidence = close ? WithoutChildContinuationEvidence(run.RunId) : LegacyCoordinationEvidence;
+        switch (run.Lifecycle)
         {
-            ChildRunLifecycle.Prepared ready => ready.Delivery,
-            ChildRunLifecycle.Consumed consumed => consumed.Delivery,
-            _ => throw new InvalidOperationException("A parent decision requires a prepared child result.")
-        };
-        if (delivery.Result.ToolCallId != continuation.DeliveryCallId)
-            throw new InvalidOperationException("A parent decision names a stale child result.");
-        var history = run.Lifecycle is ChildRunLifecycle.Prepared
-            ? History.Add(delivery.Call).Add(delivery.Result)
-            : History;
-        ChildRunLifecycle next = close
-            ? new ChildRunLifecycle.Closed(continuation.DeliveryCallId,
-                delivery.Terminal.Result.Outcome, delivery.Terminal.Result.OutcomeReason)
-            : new ChildRunLifecycle.Consumed(delivery);
-        var workingContext = run.Lifecycle is ChildRunLifecycle.Prepared && delivery.ReviewedWorkingContext is { } reviewed
-            ? WorkingContextUpdater.MergeSuccessfulSubAgentWorkingContext(WorkingContext, new ChildRunCompletion.Completed(reviewed))
-            : WorkingContext;
-        return this with
-        {
-            History = history, WorkingContext = workingContext,
-            ChildRuns = ChildRuns.SetItem(run.RunId, run with { Lifecycle = next }),
-            LegacyCoordinationEvidence = close
-                ? LegacyCoordinationEvidence.RemoveAll(item => item.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation
-                    && item.ChildRunId == run.RunId)
-                : LegacyCoordinationEvidence
-        };
+            case ChildRunLifecycle.Reported { Report: ChildRunReport.LegacyDelivery delivered }
+                when delivered.DeliveryCallId == continuation.DeliveryCallId:
+                return this with { LegacyCoordinationEvidence = evidence };
+            case ChildRunLifecycle.Terminal { LegacyPrepared: { } prepared } terminal
+                when prepared.Result.ToolCallId == continuation.DeliveryCallId:
+                var result = terminal.Result.Result;
+                return this with
+                {
+                    History = History.Add(prepared.Call).Add(prepared.Result),
+                    WorkingContext = prepared.ReviewedWorkingContext is { } reviewed
+                        ? WorkingContextUpdater.MergeSuccessfulSubAgentWorkingContext(WorkingContext, new ChildRunCompletion.Completed(reviewed))
+                        : WorkingContext,
+                    ChildRuns = ChildRuns.SetItem(run.RunId, run with
+                    {
+                        Lifecycle = new ChildRunLifecycle.Reported(result.Outcome, result.OutcomeReason,
+                            new ChildRunReport.LegacyDelivery(continuation.DeliveryCallId))
+                    }),
+                    LegacyCoordinationEvidence = evidence
+                };
+            default:
+                throw new InvalidOperationException("A parent decision names a child result that no deployed delivery prepared.");
+        }
     }
+
+    private ImmutableList<LegacyCoordinationEvidence> WithoutChildContinuationEvidence(SubAgentRunId runId)
+        => LegacyCoordinationEvidence.RemoveAll(item =>
+            item.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation && item.ChildRunId == runId);
 
     private static bool IsCanonicalChildPair(BackgroundChildRun run, SerializableChatMessage call, SerializableChatMessage result)
         => call is { Role: ChatRole.Assistant, ToolCalls.Count: 1 } &&

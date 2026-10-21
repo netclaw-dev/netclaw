@@ -111,8 +111,16 @@ message InputAdmittedProto {
   optional string source_background_job_id = 10;
   int32 background_job_lineage_version = 11;
   BackgroundJobOriginProto background_job_origin = 12;
+  // Field 13 stays reserved for the legacy reader: it routes any source_child_run_id to quarantine.
   optional string source_child_run_id = 13;
+  // The input reports the end of a child run. The reducer marks the run reported and applies the reviewed context.
+  ChildNoticeProto child_notice = 14;
   reserved 7, 8;
+}
+
+message ChildNoticeProto {
+  string run_id = 1;
+  ChildWorkingContextProto reviewed_working_context = 2;
 }
 
 message BackgroundJobOriginProto { string turn_id = 1; string call_id = 2; }
@@ -501,10 +509,13 @@ message ChildPreparedStateV2Proto {
   ChildWorkingContextProto reviewed_working_context = 4;
 }
 
+// A reported child run. A notice sets notice_input_id and leaves delivery_call_id empty.
+// A deployed delivery sets delivery_call_id and leaves notice_input_id unset.
 message ChildRunClosedV2Proto {
   string delivery_call_id = 1;
   int32 outcome = 2;
   optional string reason = 3;
+  optional string notice_input_id = 4;
 }
 
 message SessionSnapshotV2Proto {

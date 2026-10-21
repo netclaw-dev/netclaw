@@ -176,8 +176,7 @@ internal static partial class NetclawProtoMapper
         if (evt.SourceBackgroundJobId is { } backgroundJobId)
             proto.SourceBackgroundJobId = backgroundJobId.Value;
         proto.ConsumedInputIds.AddRange(evt.ConsumedInputIds.Select(static id => id.Value));
-        if (evt.ChildContinuation is not null)
-            proto.ChildContinuation = ToProto(evt.ChildContinuation);
+        RejectLegacyContinuation(evt.ChildContinuation);
         return proto;
     }
 
@@ -210,6 +209,8 @@ internal static partial class NetclawProtoMapper
         if (evt.ExecutableText is not null)
             proto.ExecutableText = evt.ExecutableText;
         proto.TurnContext = ToProto(evt.TurnContext);
+        if (evt.ChildNotice is { } notice)
+            proto.ChildNotice = ToProto(notice);
         return proto;
     }
 
@@ -225,6 +226,7 @@ internal static partial class NetclawProtoMapper
         TurnContext = proto.TurnContext is null
             ? throw new InvalidDataException("An admitted input has no turn context.")
             : FromProto(proto.TurnContext),
+        ChildNotice = proto.ChildNotice is null ? null : FromProto(proto.ChildNotice),
         AdmittedAtMs = proto.AdmittedAtMs
     };
 
@@ -240,8 +242,7 @@ internal static partial class NetclawProtoMapper
             proto.SourceBackgroundJobId = sourceBackgroundJobId.Value;
         if (evt.RejectedJobReport is not null)
             proto.RejectedJobReport = ToProto(evt.RejectedJobReport);
-        if (evt.ChildContinuation is not null)
-            proto.ChildContinuation = ToProto(evt.ChildContinuation);
+        RejectLegacyContinuation(evt.ChildContinuation);
         return proto;
     }
 
@@ -310,8 +311,7 @@ internal static partial class NetclawProtoMapper
             StartedAtMs = evt.StartedAtMs
         };
         proto.ConsumedInputIds.AddRange(evt.ConsumedInputIds.Select(static id => id.Value));
-        if (evt.ChildContinuation is not null)
-            proto.ChildContinuation = ToProto(evt.ChildContinuation);
+        RejectLegacyContinuation(evt.ChildContinuation);
         return proto;
     }
 

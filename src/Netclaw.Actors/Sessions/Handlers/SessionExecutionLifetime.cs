@@ -29,7 +29,7 @@ internal enum ReminderEligibility { None, Eligible, EmittedText }
 internal enum PassivationWork { NoAction, WaitForReap, AttemptSnapshot }
 internal readonly record struct PassivationStart(long? ReapEpoch, bool RequestDistillation);
 internal sealed record FinalStopResult(IActorRef? ReplyTo, ReminderDefinition? Reminder, string? OmissionReason);
-internal sealed record RestartContextResult(TurnContext? Context, string? Reason);
+internal sealed record RestartContextResult(TurnContext? Context, string? Reason, int ResumeCount);
 
 /// <summary>
 /// Owns model and tool resources, restart drain, and passivation policy on the session actor thread.
@@ -111,6 +111,9 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     private bool _toolStopRequested;
     private IActorRef? _restartDrainReplyTo;
     private DateTimeOffset? _restartInterruptionAt;
+    // The reminder wakes a session that only owes a child result. Its pending inputs, if any, wait behind an approval
+    // and do not resume.
+    private bool _restartResumesChildrenOnly;
     private long _jobReapEpoch;
     private ReapOperation? _reap;
     private PassivationAttempt? _attempt;
@@ -196,19 +199,23 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
             : ToolStopAction.EnterPassivation;
     }
 
+    // A session with a pending input, or with a child run whose result the parent has not received, needs the restart
+    // reminder. The reminder wakes the session after the restart, and the recovery then ends the lost child.
     public ReminderEligibility MarkRestartReminderEligible(
         int pendingInputCount,
+        int unreportedChildCount,
         bool emittedText,
         int selectedInputCount,
         DateTimeOffset now)
     {
-        if (pendingInputCount == 0)
+        if (pendingInputCount == 0 && unreportedChildCount == 0)
             return ReminderEligibility.None;
 
         if (emittedText && selectedInputCount > 0)
             return ReminderEligibility.EmittedText;
 
         _restartInterruptionAt = now;
+        _restartResumesChildrenOnly = pendingInputCount == 0;
         return ReminderEligibility.Eligible;
     }
 
@@ -303,48 +310,64 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         _attempt = null;
     }
 
-    public FinalStopResult? ClaimFinalStop(SessionPhase phase, SessionId sessionId, IReadOnlyList<InputAdmitted> pending)
+    public FinalStopResult? ClaimFinalStop(
+        SessionPhase phase,
+        SessionId sessionId,
+        IReadOnlyList<InputAdmitted> pending,
+        IReadOnlyList<BackgroundChildRun> unreportedChildren)
     {
         if (phase != SessionPhase.Passivating || _attempt is null
             || _attempt.Milestone is not (AttemptMilestone.Grace or AttemptMilestone.SnapshotReady))
             return null;
 
-        var (reminder, reason) = BuildRestartReminder(sessionId, pending);
+        var (reminder, reason) = BuildRestartReminder(sessionId, pending, unreportedChildren);
         _attempt.Milestone = AttemptMilestone.FinalEffectsClaimed;
         return new FinalStopResult(_restartDrainReplyTo, reminder, reason);
     }
 
+    // One turn serves one requester. The resume takes the leading pending inputs that share the requester of the
+    // first one. The other pending inputs run in their own turns after it.
     public RestartContextResult ValidateRestartResume(IReadOnlyList<InputAdmitted> pending)
     {
         TurnContext? first = null;
-        var reason = "no pending input";
+        var count = 0;
         foreach (var input in pending)
         {
-            if (!TurnContext.TryFromRecord(input.TurnContext, out var candidate, out reason)
+            if (!TurnContext.TryFromRecord(input.TurnContext, out var candidate, out var reason)
                 || candidate is null)
-                return new RestartContextResult(null, reason);
+                return new RestartContextResult(null, reason, 0);
 
             if (first is null)
             {
                 first = candidate;
+                count = 1;
                 continue;
             }
 
-            if (!first.HasSameAuthority(candidate))
-                return new RestartContextResult(null, "pending inputs have different authority");
+            if (!first.HasSameRequester(candidate))
+                break;
+            count++;
         }
 
-        return new RestartContextResult(first, first is null ? reason : null);
+        return new RestartContextResult(first, first is null ? "no pending input" : null, count);
     }
 
     private (ReminderDefinition? Reminder, string? Reason) BuildRestartReminder(
         SessionId sessionId,
-        IReadOnlyList<InputAdmitted> pending)
+        IReadOnlyList<InputAdmitted> pending,
+        IReadOnlyList<BackgroundChildRun> unreportedChildren)
     {
-        if (_restartInterruptionAt is not { } interruptedAt || pending.Count == 0)
+        if (_restartInterruptionAt is not { } interruptedAt)
             return (null, null);
 
-        var contextResult = ValidateRestartResume(pending);
+        // With no resumable input, the oldest unreported child supplies the recorded context. Its owner is the
+        // requester whose work the restart interrupted.
+        var fromChildren = _restartResumesChildrenOnly || pending.Count == 0;
+        if (fromChildren ? unreportedChildren.Count == 0 : pending.Count == 0)
+            return (null, null);
+        var contextResult = fromChildren
+            ? ChildRestartContext(unreportedChildren)
+            : ValidateRestartResume(pending);
         if (contextResult.Context is not { } context)
             return (null, contextResult.Reason ?? "invalid stored authority");
 
@@ -371,6 +394,15 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
             UpdatedAt = interruptedAt,
             ExpiresAt = interruptedAt + RestartReminderLifetime
         }, null);
+    }
+
+    private static RestartContextResult ChildRestartContext(IReadOnlyList<BackgroundChildRun> unreportedChildren)
+    {
+        var oldest = unreportedChildren.MinBy(static run => run.AcceptedAtMs)
+            ?? throw new InvalidOperationException("A child restart context requires an unreported child run.");
+        return TurnContext.TryFromRecord(oldest.OriginalContext, out var context, out var reason) && context is not null
+            ? new RestartContextResult(context, null, 0)
+            : new RestartContextResult(null, reason, 0);
     }
 
     public long CurrentModelCallId => _modelCallId;

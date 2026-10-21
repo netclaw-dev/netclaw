@@ -68,7 +68,7 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
         {
             await _promptSent.Task;
             Push(Text("I started the child."), ToolCall("c1", "spawn_agent"), Usage(10, 4), Turn(1, "run-1"));
-            Push(ToolCall("c2", "child_run_result"), Text("The child found 42."), Usage(7, 3), Turn(2));
+            Push(ToolCall("c2", "file_read"), Text("The child found 42."), Usage(7, 3), Turn(2));
         });
 
         Assert.Equal(0, run.ExitCode);
@@ -100,7 +100,7 @@ public sealed class HeadlessWaitForChildrenTests : IAsyncDisposable
         Assert.Equal(1, turns[0].GetProperty("turnNumber").GetInt32());
         Assert.Equal(2, turns[1].GetProperty("turnNumber").GetInt32());
         Assert.Equal(
-            ["spawn_agent", "child_run_result"],
+            ["spawn_agent", "file_read"],
             root.GetProperty("toolCalls").EnumerateArray().Select(call => call.GetProperty("toolName").GetString()).ToArray());
         Assert.Equal(
             ["spawn_agent"],

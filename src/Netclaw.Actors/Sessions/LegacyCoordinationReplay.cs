@@ -82,7 +82,7 @@ public static class LegacyCoordinationReplay
         var correlations = state.LegacyCoordinationEvidence.Where(item =>
             item.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation &&
             item.ChildRunId is { } runId && !state.TryGetLegacyChildDisposition(runId, out _) &&
-            state.ChildRuns.TryGetValue(runId, out var run) && run.Lifecycle is ChildRunLifecycle.Consumed &&
+            state.ChildRuns.TryGetValue(runId, out var run) && IsLegacyDelivered(run) &&
             (inputIds.Count == 0 || item.InputIds.Any(inputIds.Contains))).ToArray();
         if (correlations.Length == 0)
             return (inputIds, null, null);
@@ -91,8 +91,9 @@ public static class LegacyCoordinationReplay
         var correlation = correlations[0];
         if (correlation.ChildRunId is not { } childId || correlation.DeliveryCallId is not { } callId ||
             correlation.InputIds.Count != 1 ||
-            state.ChildRuns[childId].Lifecycle is not ChildRunLifecycle.Consumed consumed ||
-            consumed.Delivery.Result.ToolCallId != callId)
+            state.ChildRuns[childId].Lifecycle is not ChildRunLifecycle.Reported
+                { Report: ChildRunReport.LegacyDelivery delivered } ||
+            delivered.DeliveryCallId != callId)
             throw new InvalidDataException("A parent decision has no exact active child delivery.");
         var ordinaryIds = inputIds.Where(id => !correlation.InputIds.Contains(id)).ToArray();
         var pending = state.PendingInputs.ToDictionary(input => input.InputId);
@@ -102,6 +103,10 @@ public static class LegacyCoordinationReplay
             ? pending[ordinaryIds[^1]].UserMessage : null;
         return (ordinaryIds, new ChildContinuation(childId, callId), lastOrdinary);
     }
+
+    // A deployed adoption put the tool pair into the history, and the parent decision that closes it is still to come.
+    private static bool IsLegacyDelivered(BackgroundChildRun run)
+        => run.Lifecycle is ChildRunLifecycle.Reported { Report: ChildRunReport.LegacyDelivery };
 
     public static TurnContextRecord? GetLegacyTaskContext(LegacyCoordinationEvent evt)
     {
@@ -257,21 +262,21 @@ public static class LegacyCoordinationReplay
             return quarantined;
         }
 
-        var runs = new List<(SubAgentRunId Id, ChildPreparedResult Delivery)>();
+        var runs = new List<(SubAgentRunId Id, ChildRunTerminal Terminal, LegacyPreparedResult Delivery)>();
         foreach (var inputId in inputIds)
         {
             var evidence = correlations[inputId];
             if (evidence.ChildRunId is not { } runId || evidence.DeliveryCallId is not { } callId
                 || !state.ChildRuns.TryGetValue(runId, out var run)
-                || run.Lifecycle is not ChildRunLifecycle.Prepared prepared
-                || prepared.Delivery.Result.ToolCallId != callId || !SameContext(context, run.OriginalContext))
+                || run.Lifecycle is not ChildRunLifecycle.Terminal { LegacyPrepared: { } prepared } terminal
+                || prepared.Result.ToolCallId != callId || !SameContext(context, run.OriginalContext))
                 return Quarantine(state, evt, inputIds, "The deployed child adoption differs from its prepared result or authority.");
-            runs.Add((runId, prepared.Delivery));
+            runs.Add((runId, terminal.Result, prepared));
         }
 
         var history = state.History;
         var childRuns = state.ChildRuns;
-        foreach (var (runId, delivery) in runs)
+        foreach (var (runId, terminal, delivery) in runs)
         {
             if (!HasExactPair(history, delivery))
             {
@@ -282,7 +287,8 @@ public static class LegacyCoordinationReplay
             }
             childRuns = childRuns.SetItem(runId, childRuns[runId] with
             {
-                Lifecycle = new ChildRunLifecycle.Consumed(delivery)
+                Lifecycle = new ChildRunLifecycle.Reported(terminal.Result.Outcome, terminal.Result.OutcomeReason,
+                    new ChildRunReport.LegacyDelivery(delivery.Result.ToolCallId!.Value))
             });
         }
 
@@ -438,7 +444,7 @@ public static class LegacyCoordinationReplay
     private static SessionState ApplyLegacyDelivery(SessionState state, LegacyCoordinationEvent evt,
         BackgroundChildRun run, Proto.InputAdmittedProto proto)
     {
-        if (run.Lifecycle is not ChildRunLifecycle.Terminal terminal || proto.UserMessage is null
+        if (run.Lifecycle is not ChildRunLifecycle.Terminal { LegacyPrepared: null } terminal || proto.UserMessage is null
             || proto.HasSourceChildRunId is false || proto.SourceChildRunId != run.RunId.Value)
             throw new InvalidDataException("Legacy child delivery has no matching terminal run.");
         var input = NetclawProtoMapper.FromProto(proto);
@@ -453,7 +459,7 @@ public static class LegacyCoordinationReplay
 
         var call = LegacyDeliveryCall(run, callId);
         // Deployed terminal deltas do not prove that the current review gate accepted them.
-        var delivery = new ChildPreparedResult(terminal.Result, call, input.UserMessage, null);
+        var delivery = new LegacyPreparedResult(call, input.UserMessage, null);
         if (state.History.Any(message => message.ToolCalls.Any(call => call.CallId == callId)
                                         || message.Role == ChatRole.Tool && message.ToolCallId == callId))
             throw new InvalidDataException("Legacy child delivery repeats a history call ID.");
@@ -473,7 +479,7 @@ public static class LegacyCoordinationReplay
             ChildRuns = state.ChildRuns.SetItem(run.RunId, run with
             {
                 InitialWorkingSnapshot = null,
-                Lifecycle = new ChildRunLifecycle.Prepared(delivery)
+                Lifecycle = terminal with { LegacyPrepared = delivery }
             }),
             LegacyCoordinationEvidence = state.LegacyCoordinationEvidence
                 .Where(item => item.ChildRunId != run.RunId)
@@ -812,7 +818,7 @@ public static class LegacyCoordinationReplay
            && first.Result.RunId == second.Result.RunId && first.Result.ScopeId == second.Result.ScopeId
            && first.Result.AgentName == second.Result.AgentName;
 
-    private static bool HasExactPair(IReadOnlyList<SerializableChatMessage> history, ChildPreparedResult delivery)
+    private static bool HasExactPair(IReadOnlyList<SerializableChatMessage> history, LegacyPreparedResult delivery)
     {
         var callId = delivery.Result.ToolCallId;
         var assistants = history.Where(message => message.ToolCalls.Any(call => call.CallId == callId)).ToArray();

@@ -93,11 +93,16 @@ first user message is just the raw task, identical to the pre-context protocol.
    supervised child of the session actor and can outlive the parent model call.
 5. A final response completes the child run. An inactivity timeout or
    cancellation can stop it. The runtime sets no fixed tool-iteration ceiling.
-6. After the session records and prepares a terminal result, it selects that
-   result at a safe parent model boundary. Ready results take priority. The
-   session delivers a paired `child_run_result` call and tool result. The result
-   holds the agent name, run id, outcome (`completed`, `partial`, or `failed`),
-   optional reason, diagnostics pointer, and the subagent's final text.
+6. Before the session accepts the start, the spawner writes `task.md` in the run
+   folder (`subagents/<run_id>/`). It records the agent, the requester, and the
+   brief. The spawner refuses a start when the requester cannot use `file_read`.
+7. After the session records the terminal result, it reviews the child working
+   context and writes `result.md` in the run folder. It then admits one notice
+   as an ordinary input of the requester that owns the child. The notice names
+   the agent, the run, the outcome, and the path of `result.md`. It holds no child
+   output. The notice joins a running turn of the same requester, or it waits
+   for its own turn, in admission order. The parent model reads the file with a
+   real `file_read` call.
 
 Child creation is marshaled back onto the session actor thread, so supervision
 stays within Akka's actor-thread rules. After durable acceptance, the child can
@@ -174,8 +179,8 @@ runs in each `TurnCompleted`. A background shell job is not a child run.
 
 - While the run waits, stdout shows `[subagent:waiting] <n> open: <run ids>`.
   With `--json`, stdout shows no such line.
-- The delivered result prints as `[tool:result] child_run_result`, so the child
-  text reaches stdout.
+- The child result starts a notice turn. The child text reaches stdout only
+  when the model reads `result.md` with `file_read`.
 - With `--json`, stdout holds one envelope. `response` is the text of the last
   turn. `turnResponses` holds each turn. `usage` is the sum over all turns.
 - The run has no timeout of its own. Each child has its daemon timeouts. Use an
@@ -442,11 +447,21 @@ known-good version.
 The compatibility reader accepts deployed child manifests `cra-v1`, `cre-v1`, and `tta-v1`.
 It translates exact old child delivery correlations before the ordinary parent recovery path.
 The current writer uses `cra-v2`, `cre-v2`, and `ss-v2` for child facts and snapshots.
-Older binaries cannot read these records. Do not downgrade a database in place.
+The swap that adds child notices is roll-forward only. Build 0.27.1 reads the new rows without an error, and it reads them wrongly:
+
+- It replays a notice as a plain user input.
+- It prepares the result again for a run that the new build already reported and delivers it a second time, as a `child_run_result` pair.
+
+Before the swap, stop the daemon and back up `netclaw.db`. To roll back, stop the daemon and restore that backup.
+Never start 0.27.1 on a database that the new build wrote.
 
 Unresolved historical evidence remains inert and visible through the owner status response.
-Recovery does not relaunch uncertain child work or convert child results into user input.
-An exact settled delivery stays settled. A ready result can resume only its original parent authority.
+Recovery does not relaunch uncertain child work. A result that the parent has not received becomes one notice.
+A result that a deployed build already delivered as a `child_run_result` pair stays delivered, and no notice follows.
+A notice carries only the recorded authority of the child owner.
+After a crash, a notice can wait behind an older input of a person that has no turn (issue 2516).
+Recovery then logs a Warning that names the run and says the notice waits behind an input.
+The notice stays pending, and `result.md` stays in the run folder. Read it with `file_read`.
 
 The restore unit is a complete, consistent pre-upgrade SQLite backup.
 The backup must include the journal and snapshot tables from the same database state.
