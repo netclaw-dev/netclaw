@@ -36,10 +36,6 @@ public sealed partial record SessionState
             .Select(run => run.RunId)];
     // </open-child-runs>
 
-    /// <summary>Runs that ended and have no notice yet. Each one still owes its parent a result.</summary>
-    public IEnumerable<BackgroundChildRun> GetUnreportedTerminalRuns()
-        => GetExecutableChildRuns().Where(run => run.Lifecycle is ChildRunLifecycle.Terminal);
-
     /// <summary>Runs whose result the parent has not received: still running, or ended without a notice.</summary>
     public IEnumerable<BackgroundChildRun> GetUnreportedRuns()
         => GetExecutableChildRuns().Where(run => run.Lifecycle is not ChildRunLifecycle.Reported);
