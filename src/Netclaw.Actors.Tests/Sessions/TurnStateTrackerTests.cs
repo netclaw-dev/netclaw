@@ -429,7 +429,12 @@ public sealed class TurnStateTrackerTests
                 shouldRefuse ? new[] { "candidate" } : Array.Empty<string>(),
                 decision.RefusedCallIds);
             if (shouldRefuse)
-                Assert.Equal(ToolCycleDecisionKind.Stop, tracker.EvaluateBeforeDispatch(candidate).Kind);
+            {
+                // A repeat after the correction gets the same refusal. The turn does not stop.
+                var repeat = tracker.EvaluateBeforeDispatch(candidate);
+                Assert.Equal(ToolCycleDecisionKind.Correct, repeat.Kind);
+                Assert.Equal(new[] { "candidate" }, repeat.RefusedCallIds);
+            }
             cases++;
         }, iter: 1_000, seed: RecurrenceSampleSeed, threads: 1,
             print: scenario => $"candidate={scenario.CandidateIdentity}; "
@@ -439,7 +444,7 @@ public sealed class TurnStateTrackerTests
     }
 
     [Fact]
-    public void RepeatedCall_StopsUntilItsOwnOutcomeChanges()
+    public void RepeatedCall_IsRefusedAgainUntilItsOwnOutcomeChanges()
     {
         var tracker = new TurnStateTracker();
         var repeated = Prepare(Call("call-a", "sample/a"));
@@ -453,17 +458,17 @@ public sealed class TurnStateTrackerTests
         Assert.Equal(
             ToolCycleDecisionKind.Correct,
             tracker.EvaluateBeforeDispatch(repeated).Kind);
-        Assert.Equal(
-            ToolCycleDecisionKind.Stop,
-            tracker.EvaluateBeforeDispatch(repeated).Kind);
+        var repeat = tracker.EvaluateBeforeDispatch(repeated);
+        Assert.Equal(ToolCycleDecisionKind.Correct, repeat.Kind);
+        Assert.Equal(["call-a"], repeat.RefusedCallIds);
 
         tracker.ObserveCompleted(Complete(
             other,
             ("call-b", ToolInvocationOutcomeCategory.Success, "different")));
 
-        Assert.Equal(
-            ToolCycleDecisionKind.Stop,
-            tracker.EvaluateBeforeDispatch(repeated).Kind);
+        var afterOtherWork = tracker.EvaluateBeforeDispatch(repeated);
+        Assert.Equal(ToolCycleDecisionKind.Correct, afterOtherWork.Kind);
+        Assert.Equal(["call-a"], afterOtherWork.RefusedCallIds);
 
         tracker.ObserveCompleted(Complete(
             repeated,
@@ -472,6 +477,99 @@ public sealed class TurnStateTrackerTests
         Assert.Equal(
             ToolCycleDecisionKind.Execute,
             tracker.EvaluateBeforeDispatch(repeated).Kind);
+    }
+
+    [Fact]
+    public void RepeatedRefusedCall_DoesNotBlockANewSibling()
+    {
+        // Negative example: a refused call repeats in a batch with a new call. Only the repeat is refused.
+        var tracker = new TurnStateTracker();
+        var repeated = Prepare(Call("call-a", "sample/a"));
+        var completed = Complete(
+            repeated,
+            ("call-a", ToolInvocationOutcomeCategory.Success, "same"));
+        tracker.ObserveCompleted(completed);
+        tracker.ObserveCompleted(completed);
+        Assert.Equal(ToolCycleDecisionKind.Correct, tracker.EvaluateBeforeDispatch(repeated).Kind);
+
+        var mixed = Prepare(
+            Call("repeat", "sample/a"),
+            Call("diagnostic", "sample/diagnostic", ("id", "host-1")));
+        var decision = tracker.EvaluateBeforeDispatch(mixed);
+
+        Assert.Equal(ToolCycleDecisionKind.Correct, decision.Kind);
+        Assert.Equal(["repeat"], decision.RefusedCallIds);
+    }
+
+    [Fact]
+    public void RefusedRepeats_GetTheNudgeFourTimes_TheEscalationAtTheFifth_AndTheEndAtTheSixth()
+    {
+        // Aaron's rule (18 Oct 2026): the loop gets an end, but the person never sees a Netclaw error.
+        var tracker = new TurnStateTracker();
+        var repeated = Prepare(Call("call-a", "sample/a"));
+        var completed = Complete(
+            repeated,
+            ("call-a", ToolInvocationOutcomeCategory.Success, "same"));
+        tracker.ObserveCompleted(completed);
+        tracker.ObserveCompleted(completed);
+
+        var correction = tracker.EvaluateBeforeDispatch(repeated);
+        Assert.Equal(ToolCycleDecisionKind.Correct, correction.Kind);
+        Assert.Equal(RefusedRepeatAction.None, correction.RefusedRepeat);
+
+        var actions = Enumerable.Range(0, 6)
+            .Select(_ => tracker.EvaluateBeforeDispatch(repeated))
+            .ToArray();
+
+        Assert.All(actions, static decision => Assert.Equal(["call-a"], decision.RefusedCallIds));
+        Assert.Equal(
+            [
+                RefusedRepeatAction.Nudge, RefusedRepeatAction.Nudge, RefusedRepeatAction.Nudge,
+                RefusedRepeatAction.Nudge, RefusedRepeatAction.EscalatedNudge, RefusedRepeatAction.EndTurn
+            ],
+            actions.Select(static decision => decision.RefusedRepeat));
+    }
+
+    [Fact]
+    public void RefusedRepeatCount_CoversEveryIdentityOfTheTurn_AndOnlyAnExplicitResetClearsIt()
+    {
+        var tracker = new TurnStateTracker();
+        var first = Prepare(Call("call-a", "sample/a"));
+        var second = Prepare(Call("call-b", "sample/b"));
+        var both = Prepare(Call("both-a", "sample/a"), Call("both-b", "sample/b"));
+        var unrelated = Prepare(Call("call-c", "sample/c"));
+        RefuseTwice(tracker, first, "call-a");
+        RefuseTwice(tracker, second, "call-b");
+
+        // Repeats 1 to 4. One batch with two repeated calls counts once. Other completed work does not reset the count.
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateBeforeDispatch(first).RefusedRepeat);
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateBeforeDispatch(both).RefusedRepeat);
+        tracker.ObserveCompleted(Complete(unrelated, ("call-c", ToolInvocationOutcomeCategory.Success, "new")));
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateBeforeDispatch(second).RefusedRepeat);
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateBeforeDispatch(first).RefusedRepeat);
+        // A new call is no repeat, so it does not count.
+        Assert.Equal(RefusedRepeatAction.None, tracker.EvaluateBeforeDispatch(unrelated).RefusedRepeat);
+        Assert.Equal(RefusedRepeatAction.EscalatedNudge, tracker.EvaluateBeforeDispatch(second).RefusedRepeat);
+
+        // ResetForNewTurn clears the recurrence evidence. A child result in the middle of the loop and a system
+        // input that joins an automation turn both call it, and neither may clear the count (S1 of the re-review).
+        tracker.ResetForNewTurn();
+        RefuseTwice(tracker, first, "call-a");
+        Assert.Equal(RefusedRepeatAction.EndTurn, tracker.EvaluateBeforeDispatch(first).RefusedRepeat);
+
+        // New person input, and a fresh turn, call the explicit reset. It starts a new count.
+        tracker.ResetForNewTurn();
+        tracker.ResetRefusedRepeatCount();
+        RefuseTwice(tracker, first, "call-a");
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateBeforeDispatch(first).RefusedRepeat);
+
+        static void RefuseTwice(TurnStateTracker tracker, PreparedToolCycleBatch batch, string callId)
+        {
+            var completed = Complete(batch, (callId, ToolInvocationOutcomeCategory.Success, "same"));
+            tracker.ObserveCompleted(completed);
+            tracker.ObserveCompleted(completed);
+            Assert.Equal(RefusedRepeatAction.None, tracker.EvaluateBeforeDispatch(batch).RefusedRepeat);
+        }
     }
 
     [Fact]

@@ -291,9 +291,11 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
             // "I didn't manage to produce a reply" would mislead and would
             // double up with the redelivered one. The channel tells the session
             // about the failure, with this turn's number.
+            // A quiet end is a deliberate end with no reply. The fallback is Netclaw text, and the person must see
+            // only text of the model. The end is a normal turn otherwise, so the typing indicator clears.
             if (_postFailedThisTurn)
                 await _onEmptyTurnSuppressedAsync(completed);
-            else
+            else if (!completed.QuietEnd)
                 await _postEmptyTurnFallbackAsync(completed);
         }
 

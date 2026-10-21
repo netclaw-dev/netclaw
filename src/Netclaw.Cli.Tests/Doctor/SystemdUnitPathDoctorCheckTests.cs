@@ -137,7 +137,7 @@ public sealed class SystemdUnitPathDoctorCheckTests : IDisposable
         var (unitPath, dir) = WriteUnitDir();
         const string installDir = "/home/user/.local/bin";
         var envPath = Path.Combine(dir, "daemon.env");
-        File.WriteAllText(envPath, DaemonPathEnvironmentFile.Render(installDir, "/usr/local/bin:/usr/bin"));
+        File.WriteAllText(envPath, DaemonPathEnvironmentFile.Merge(null, installDir, "/usr/local/bin:/usr/bin"));
         File.WriteAllText(unitPath, DaemonManager.BuildDaemonUnitContent(
             $"{installDir}/netclawd", $"{installDir}/netclaw", envPath));
         var check = new SystemdUnitPathDoctorCheck(unitPath, enabledOnThisPlatform: true);
@@ -154,7 +154,7 @@ public sealed class SystemdUnitPathDoctorCheckTests : IDisposable
         var (unitPath, dir) = WriteUnitDir();
         const string installDir = "/opt/netclaw";
         var envPath = Path.Combine(dir, "daemon.env");
-        File.WriteAllText(envPath, DaemonPathEnvironmentFile.Render(installDir, "/usr/bin"));
+        File.WriteAllText(envPath, DaemonPathEnvironmentFile.Merge(null, installDir, "/usr/bin"));
         // ExecStart carries an argument — install dir is still the binary's parent.
         File.WriteAllText(unitPath, $"""
             [Service]

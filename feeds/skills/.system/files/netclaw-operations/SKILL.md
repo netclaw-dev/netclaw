@@ -21,7 +21,8 @@ a reference file — load the one matching the user's intent with
 
 | User intent | Where |
 |-------------|-------|
-| Schedule reminders/cron; run background shell jobs | `skill_read_resource('netclaw-operations', 'references/scheduling.md')` |
+| Schedule reminders/cron | `skill_read_resource('netclaw-operations', 'references/scheduling.md')` |
+| A command timed out or was refused as repeated; run long work or background shell jobs | `skill_read_resource('netclaw-operations', 'references/long-running-commands.md')` |
 | How tool arguments are validated | [Tool argument validation](#tool-argument-validation) |
 | Handle very large tool output | [Large tool output](#large-tool-output) |
 | Understand approval prompts | [Approval Prompts](#approval-prompts) |
@@ -236,21 +237,28 @@ it needs first with `netclaw approvals trust-verb <verb>`, or test it with
 test runs the reminder's exact prompt in the chat, so the user can answer each
 prompt with an "Always" grant that the scheduled run reads. The CLI form is
 `netclaw reminder run <id>`. The test runs only in a chat at the reminder's
-audience, and a CLI chat is Personal (#2330). Background shell: set
-`_background: true` on `shell_execute` (max 5 concurrent; cancel servers/watchers
-when done; background jobs are killed when the session passivates).
+audience, and a CLI chat is Personal (#2330).
 
-Full detail — delivery contract, proactive channel messaging, approval scoping,
-job lifecycle — is in
+Full reminder detail — delivery contract, proactive channel messaging, approval
+scoping — is in
 `skill_read_resource('netclaw-operations', 'references/scheduling.md')`.
+
+Background shell: set `_background: true` on `shell_execute`, then use
+`check_background_job`. Netclaw runs at most 5 jobs at a time and stops them when
+the session passivates. Read
+`skill_read_resource('netclaw-operations', 'references/long-running-commands.md')`
+for the job lifecycle, the output log, and the rules.
 
 ## Repeated tool calls
 
 Two equal feedback rounds for the same tool and arguments cause a correction before the next dispatch.
-Change the approach after that correction. Another repeat ends the turn without another model request.
-The turn then fails with `kind=ModelBehavior`. A text answer after the correction completes the turn.
-Unrelated calls and context compaction do not erase this evidence.
-An authorized status query for a pending background job can repeat through the normal access checks.
+The refused call did not execute. Change the approach after that correction.
+Netclaw refuses each later identical call again and adds a nudge. The turn continues.
+The fifth refused repeat in a turn gets an escalated nudge: stop, end your turn, and tell the person what blocked you.
+A refused call after that ends the turn with your text and no error. A new message from the person starts a new count.
+A timeout change alone is the same call. A valid `_background: true` on `shell_execute` is a different call.
+For the options after a timeout or a refusal, read
+`skill_read_resource('netclaw-operations', 'references/long-running-commands.md')`.
 `MaxToolIterationsPerTurn` is a legacy config field. The runtime no longer enforces its fixed limit.
 Deadlines, cancellation, and tool policy still apply.
 
@@ -282,14 +290,12 @@ fix and re-issue once, do not retry the same shape:
 
 A repeated action-and-outcome correction means that no requested call ran.
 Choose a different action or finish the task from the available evidence.
-Do not repeat the blocked batch.
-If the same blocked call appears again, Netclaw ends the turn as a `ModelBehavior` failure.
+Do not repeat the blocked batch. Netclaw refuses it again, and the fifth repeat escalates.
 Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
 A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
-A repeat of a refused call after the correction is a `ModelBehavior` failure.
-Repeated empty replies get the same `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
+Repeated empty replies get the `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
 A text reply that ends with the finish reason `length` and has no tool call is also `ModelBehavior`. Netclaw does not post the cut-off text.
 One model call that streams only thinking for three times `Session.NoProgressTimeoutSeconds` is also `ModelBehavior`.
 An empty reply with no finish reason is `StreamFailure`. A `content_filter` reply is `ProviderFailure`. Both are `infra`.
@@ -316,9 +322,8 @@ The shell tail retains the process exit status.
   specific range with `StartLine`/`Limit` or `grep` (`StartLine` is a 1-based line
   number — line 1 is the first line). Don't `cat` a huge file through
   `shell_execute` to get around it — that just spills again.
-- **`background_job`** output goes to `~/.netclaw/jobs/{id}/output.log` (bounded);
-  `check_background_job` returns a tail, and you can `file_read`/`grep` the log for the rest.
-  Netclaw deletes a terminal job's definition and logs 24 hours after completion.
+- **Background job** output goes to a bounded log file. `check_background_job` returns a
+  tail. See `references/long-running-commands.md` for the log path and retention.
 
 Use bounded continuation before re-running a command or re-reading a whole file.
 Secret-bearing values are redacted from all tool output.
@@ -1015,6 +1020,22 @@ A web page on another origin also gets 401, also a local web app on another port
 When a protected route denies such a request, `daemon.log` has a warning, `Refused loopback request`, with the `Host` and `Origin` values.
 Fix: call the daemon as `http://127.0.0.1:<port>` or `http://localhost:<port>`, or pair the client and send a device token.
 A device token request is not checked for `Host` or `Origin`.
+
+The systemd service reads `<home>/config/daemon.env`. It also holds operator lines, for example
+`NETCLAW_HOME=...`.
+
+Caution: the file holds plain text. If a line holds a credential, run `chmod 600` on `daemon.env`.
+`netclaw daemon uninstall` deletes `daemon.env`, including the operator lines. To refresh the unit
+and keep the lines, run `netclaw daemon install` again.
+
+`netclaw daemon install` and `netclaw doctor --fix` replace the `PATH` line and remove a duplicate
+`PATH` line. They keep every other line, and they do not open the file mode more than it was.
+
+The install scripts (`install.sh` and `install.ps1`) read `NETCLAW_HOME` for the config directory.
+`install.sh` uses `<home>/bin` and `<home>/env` for a fresh install. When `INSTALL_DIR` is not set, it
+upgrades an install that sits in `<home>/bin`. Else, if `~/.netclaw/bin` holds `netclaw` or
+`netclawd`, it upgrades there, keeps the env script at `~/.netclaw/env`, and prints that directory.
+`CONFIG_DIR` and `NETCLAW_CONFIG_DIR` no longer work.
 
 When something is broken, start with `netclaw status`, then `netclaw doctor`. Feature
 kill switches and self-update/health are covered in the reference. Memory embeddings

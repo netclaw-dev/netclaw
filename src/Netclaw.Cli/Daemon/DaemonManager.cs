@@ -497,7 +497,9 @@ public sealed partial class DaemonManager
         var envFilePath = _paths.DaemonEnvironmentFilePath;
         var capturedPath = DaemonPathEnvironmentFile.CaptureCurrentPath();
         Directory.CreateDirectory(Path.GetDirectoryName(envFilePath)!);
-        await File.WriteAllTextAsync(envFilePath, DaemonPathEnvironmentFile.Render(installDir, capturedPath));
+        // Operator lines such as NETCLAW_HOME stay. The overwrite keeps the file mode.
+        var existingEnvText = await ReadEnvironmentFileOrNullAsync(envFilePath);
+        await File.WriteAllTextAsync(envFilePath, DaemonPathEnvironmentFile.Merge(existingEnvText, installDir, capturedPath));
 
         var unitPath = SystemdUserUnitFilePath;
         var isUpgrade = File.Exists(unitPath);
@@ -526,6 +528,23 @@ public sealed partial class DaemonManager
         }
 
         return new DaemonResult(true, startMessage);
+    }
+
+    // File.Exists is true for a link to a missing file or a link loop, and the read then throws.
+    // A missing file has no operator lines, and the write that follows creates the link target.
+    private static async Task<string?> ReadEnvironmentFileOrNullAsync(string envFilePath)
+    {
+        if (!File.Exists(envFilePath))
+            return null;
+
+        try
+        {
+            return await File.ReadAllTextAsync(envFilePath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

@@ -37,9 +37,9 @@ namespace Netclaw.Cli.Tests.Cli;
 /// assert what a shell script sees. The contract is in <see cref="HeadlessTurnErrorCategoryTests"/>.
 /// </summary>
 /// <remarks>
-/// The eval case <c>tool_cycle_terminal</c> needs the "ignored" rows to report <c>model</c>. Before this
-/// contract the product reported <c>ErrorCategory.ProviderFailure</c> for them, the same value as a
-/// provider outage.
+/// A repeated refused tool call is not a failure. The runtime refuses the call again, nudges the model, and
+/// continues the turn (eval case <c>tool_cycle_repeat_nudge</c>). Before that rule the product failed the turn
+/// with <c>ModelBehavior</c>.
 /// </remarks>
 [Collection(HeadlessProcessStateCollection.Name)]
 public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
@@ -57,26 +57,57 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         _directory.Dispose();
     }
 
-    // Model failures. The runtime stops the tool work. The model keeps asking for the same tools.
-    // Planted bug: the product reports ProviderFailure for these, so the harness sees infra.
+    // A repeated refused call. Aaron's rule (18 Oct 2026): refuse the call again, nudge the model, and keep
+    // the turn going. A person never sees the refusal unless the model writes about it.
+    // Planted bug: the runtime stops the turn, so the run exits 1 with [turn:failed] category=model.
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Cycle_stop_that_the_model_ignores_is_a_model_failure(bool json)
+    public async Task Repeated_refused_call_gets_a_nudge_and_the_turn_succeeds(bool json)
     {
-        // The eval case tool_cycle_terminal. The same call repeats, so the runtime corrects once and
-        // then stops the cycle. Only the cycle stop ends the turn.
-        var model = new ScriptedModel(call => ToolCall(call, query: "same"));
+        // Calls 1 and 2 run, call 3 gets the correction, and call 4 repeats it. The model obeys the nudge
+        // that follows call 4 and answers.
+        var model = new ScriptedModel(call => call.LastMessageText.StartsWith(
+                "[system: Netclaw refused your repeated call to `web_search` again.", StringComparison.Ordinal)
+            ? Text("Done.")
+            : ToolCall(call, query: "same"));
 
         var run = await RunAsync(model, json, maxToolIterations: 20);
 
-        AssertFailed(run, json, "model", "ModelBehavior");
-        Assert.Contains("Netclaw stopped this turn because the model repeated a tool call that was already refused.", run.Stderr, StringComparison.Ordinal);
-        Assert.DoesNotContain("you repeated", run.Stderr, StringComparison.Ordinal);
-        // Two executed rounds, one corrected round, and the repeat that ends the turn. The runtime asks
-        // the model nothing after the repeat.
-        Assert.Equal(4, model.CallCount);
+        AssertSucceeded(run, json);
+        Assert.DoesNotContain("Netclaw stopped this turn", run.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("Netclaw stopped this turn", run.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Netclaw refused your repeated call", run.Stdout, StringComparison.Ordinal);
+        Assert.Equal(5, model.CallCount);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Repeat_after_the_escalated_nudge_ends_the_run_quietly_with_exit_0(bool json, bool finalResponseHasText)
+    {
+        // Aaron's rule (18 Oct 2026): the loop gets an end, and the person never sees a Netclaw error.
+        // Calls 1 and 2 run, call 3 gets the correction, calls 4 to 7 are refused repeats 1 to 4, call 8 is
+        // repeat 5 and gets the escalated nudge, and call 9 is repeat 6. Call 9 ends the turn with no error.
+        // Planted bug: the runtime keeps the loop open, or it ends the turn as a failure.
+        const string FinalText = "web_search stays blocked by the repeat guard.";
+        var model = new ScriptedModel(call => finalResponseHasText
+                && call.LastMessageText.Contains("Stop trying this action.", StringComparison.Ordinal)
+            ? [new TextContent(FinalText), .. ToolCall(call, query: "same")]
+            : ToolCall(call, query: "same"));
+
+        var run = await RunAsync(model, json, maxToolIterations: 20);
+
+        AssertSucceeded(run, json, expectedResponse: finalResponseHasText ? FinalText : string.Empty);
+        Assert.Equal(9, model.CallCount);
+        Assert.DoesNotContain("Netclaw stopped", run.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("Netclaw refused your repeated call", run.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("Netclaw refused your repeated call", run.Stdout, StringComparison.Ordinal);
+        if (!json)
+            Assert.Equal(finalResponseHasText, run.Stdout.Contains(FinalText, StringComparison.Ordinal));
     }
 
     // Repeated empty replies count against the model only when the stream finished on its own terms:
@@ -227,13 +258,13 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         AssertFailed(run, json, "infra", "Timeout");
     }
 
-    // Controls. The model obeys, or it recovers, and the turn completes. Planted bug: a runtime stop
+    // Controls. The model obeys, or it recovers, and the turn completes. Planted bug: a runtime correction
     // marks the run as failed even when the model stops calling tools.
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Cycle_stop_that_the_model_obeys_is_not_a_failure(bool json)
+    public async Task Cycle_correction_that_the_model_obeys_is_not_a_failure(bool json)
     {
         // The model obeys the runtime correction: the runtime replaced the result of its last call.
         var model = new ScriptedModel(call => call.RuntimeIntervened ? Text("Done.") : ToolCall(call, query: "same"));
@@ -241,7 +272,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
         var run = await RunAsync(model, json, maxToolIterations: 20);
 
         AssertSucceeded(run, json);
-        // Proof that the run reached the cycle stop: two executed rounds, one corrected round, and the answer.
+        // Proof that the run reached the cycle correction: two executed rounds, one corrected round, and the answer.
         Assert.Equal(4, model.CallCount);
     }
 
@@ -307,7 +338,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
             Assert.Equal(kind, envelopeKind);
     }
 
-    private static void AssertSucceeded(HeadlessRun run, bool json)
+    private static void AssertSucceeded(HeadlessRun run, bool json, string expectedResponse = "Done.")
     {
         Assert.Equal(0, run.ExitCode);
         Assert.Empty(run.TurnFailedLines);
@@ -319,7 +350,7 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
 
         using var envelope = run.Envelope;
         Assert.NotNull(envelope);
-        Assert.Equal("Done.", envelope.RootElement.GetProperty("response").GetString());
+        Assert.Equal(expectedResponse, envelope.RootElement.GetProperty("response").GetString());
         Assert.False(envelope.RootElement.TryGetProperty("errorCategory", out _));
         Assert.False(envelope.RootElement.TryGetProperty("errorKind", out _));
     }
@@ -422,7 +453,11 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
 /// One call to the scripted model. <see cref="RuntimeIntervened"/> is true when the last tool result
 /// is not the text that the fixed tool returns, so the runtime replaced it (for example, a cycle correction).
 /// </summary>
-internal sealed record ModelCall(int Number, bool ToolsOffered, bool RuntimeIntervened);
+internal sealed record ModelCall(int Number, bool ToolsOffered, bool RuntimeIntervened)
+{
+    /// <summary>The text of the last message in the request, or an empty string.</summary>
+    public string LastMessageText { get; init; } = string.Empty;
+}
 
 /// <summary>
 /// A model that follows a script. It ignores the tool list. A script can read
@@ -463,7 +498,10 @@ internal sealed class ScriptedModel(
         var call = new ModelCall(
             Interlocked.Increment(ref _callCount),
             options?.Tools is { Count: > 0 },
-            lastToolResult is not null && lastToolResult.Result?.ToString() != FixedToolResult);
+            lastToolResult is not null && lastToolResult.Result?.ToString() != FixedToolResult)
+        {
+            LastMessageText = messages.LastOrDefault()?.Text ?? string.Empty
+        };
         return new ChatResponse(new ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, script(call).ToList()))
         {
             FinishReason = finishReason

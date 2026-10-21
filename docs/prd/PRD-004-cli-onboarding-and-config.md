@@ -128,7 +128,9 @@ Command ownership stays explicit:
   (`~/.config/systemd/user/netclaw.service`, no sudo). Supports
   `loginctl enable-linger` for surviving logout. Captures the operator's real
   shell `PATH` into `~/.netclaw/config/daemon.env` (loaded via `EnvironmentFile=`)
-  so the daemon's shell tool resolves the same binaries the operator can.
+  so the daemon's shell tool resolves the same binaries the operator can. The
+  command changes only the `PATH=` line and keeps every other line. The install
+  scripts read `NETCLAW_HOME` and use `<home>/config`.
 - `netclaw daemon uninstall` — remove systemd user service registration and the
   captured `daemon.env`
 

@@ -421,7 +421,13 @@ known-good version.
   back-and-forth interaction with the user.
 - Subagents have no fixed maximum number of tool iterations. A final response
   completes the run; cancellation or an inactivity timeout can stop it.
-  A recurrence refusal can settle the child turn without another model request.
+  A repeated refused call does not stop the child at once. The runtime refuses
+  the call again and adds a nudge. The child then selects another action or
+  returns its result to the parent. A child cannot start a background job, so
+  its nudge tells it to name a long command for the parent. The fifth refused
+  repeat gets an escalated nudge. A sixth refused repeat ends the run as a
+  successful `partial` result with the reason `tool_cycle_stopped` and the last
+  text of the child.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.
@@ -462,18 +468,35 @@ No live deployment or database restore forms part of this source change.
 
 The parent and child use exact tool identities and actual results to detect repeated work.
 After two equal feedback rounds, the runtime returns a correction for each repeated call.
-A repeat after that correction ends the turn without another model request.
-In a parent session, the turn fails with the error category `ModelBehavior`. A child run ends with a partial result.
+A repeat after that correction gets the same correction and a nudge. The turn continues.
+The runtime counts refused repeats in each turn. Refused repeat 5 gets an escalated nudge.
+Refused repeat 6 ends the turn quietly with the text of the model. The person sees no error.
+In a parent session, the turn completes with no `ModelBehavior` category. A child run ends with a successful partial result.
 Unrelated calls remain available. Live context compaction preserves this evidence.
 A process restart does not restore a detector checkpoint or repeat tool calls automatically.
+
+Only a new turn and new person input reset the count. This includes person input that joins a running turn.
+A child result in the middle of a turn does not reset it. An automation input that joins an automation turn does not reset it.
+Examples of an automation input: a reminder fire, a background job result, and a webhook call.
+
+A quiet end with no text posts nothing in Slack, Discord, and Mattermost. The session sets `TurnCompleted.QuietEnd`
+(wire name `quietEnd`) for this end only. The channel then skips the empty-turn warning and still clears the typing indicator.
+Any other turn with no reply keeps the warning.
+
+A reminder turn that ends quietly records success with empty output, and it sends no failure alert.
+The exception: a reminder that requires channel delivery, and whose loop never called the notify tool, records a failure in reminder history and the logs. It does not post in the thread.
+To find such an end, search the session log for `turn_refused_repeat_end`. The line shows the number of refused repeats
+and whether the last response had text.
 
 Authorized status queries for a pending background job can repeat.
 Each query repeats the normal access checks. Cancellation and inaccessible jobs receive no exception.
 
 `MaxToolIterationsPerTurn` remains readable in old configuration files. The runtime does not enforce that value.
 Useful work can exceed the former parent and child iteration limits.
-The runtime still enforces deadlines, cancellation, and authorization.
-Distinct calls can continue indefinitely if no other stop condition applies.
+The runtime still enforces authorization and the per-call tool timeouts.
+The session and the TUI have no cancel command for a running turn.
+A child has inactivity watchdogs only. Each model response resets them.
+Distinct calls can continue indefinitely if the model, the provider, or a daemon stop does not end them.
 
 A recurrence refusal executes no tool and grants no authority.
 The result retains the call identity, validation error, and authorization-attempt identity.

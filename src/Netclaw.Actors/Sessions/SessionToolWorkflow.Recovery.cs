@@ -142,7 +142,7 @@ internal sealed partial class SessionToolWorkflow
     }
 
     // An input with no source has the default principal of TurnContext.FromMessageSource (UntrustedExternal).
-    private static bool IsAutomation(PrincipalClassification? principal)
+    internal static bool IsAutomation(PrincipalClassification? principal)
         => principal is PrincipalClassification.VerifiedAutomation or PrincipalClassification.SystemProcess;
 
     public ToolBatchAbandoned? PlanFailedRunAbandonment(

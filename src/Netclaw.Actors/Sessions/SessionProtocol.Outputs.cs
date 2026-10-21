@@ -181,6 +181,14 @@ public static partial class SessionProtocol
         public ReminderId? SourceReminderId { get; init; }
 
         /// <summary>
+        /// True only when the session ended the turn on purpose with no new reply, after the model ignored the
+        /// escalated nudge for a refused repeat. A channel binding then posts no empty-turn fallback, because
+        /// that text is Netclaw text and the person must see only text of the model. Every other turn, also an
+        /// empty one, sets false. The wire field is optional: a missing field reads as false.
+        /// </summary>
+        public bool QuietEnd { get; init; }
+
+        /// <summary>
         /// The child runs whose result has not yet had its follow-up parent turn. The session assigns it
         /// from its durable state for every outcome. Empty means no open run, and a client reads an absent
         /// wire field as empty. See the "open child run" term in the engineering glossary.
@@ -225,11 +233,12 @@ public static partial class SessionProtocol
         InputCompatibility,
 
         /// <summary>
-        /// The model broke a rule that the runtime enforces: it repeated a tool call after the runtime
-        /// refused that call, it kept returning empty replies and each stream finished with Stop or
-        /// Length, it ended a text reply on the output limit (Length) with no tool call, or one call
-        /// streamed only thinking until the thinking cap. The provider worked. The model did not comply.
-        /// Empty replies from a stream with no finish reason are <see cref="StreamFailure"/>.
+        /// The model broke a rule that the runtime enforces: it kept returning empty replies and each
+        /// stream finished with Stop or Length, it ended a text reply on the output limit (Length) with
+        /// no tool call, or one call streamed only thinking until the thinking cap. The provider worked.
+        /// The model did not comply. Empty replies from a stream with no finish reason are
+        /// <see cref="StreamFailure"/>. A repeated refused tool call is not a failure: the runtime
+        /// refuses it again and nudges the model.
         /// </summary>
         /// <remarks>
         /// New members go last. The wire carries this enum by name, and an older reader maps an

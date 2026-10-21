@@ -86,6 +86,10 @@ public sealed record SessionOutputDto
     public string? TurnOutcome { get; init; }
     public string? SourceReminderId { get; init; }
 
+    // Wire name: quietEnd. Written for every TurnCompleted. Absent or null comes from an earlier daemon and reads
+    // as false, so the channel keeps the empty-turn fallback for it.
+    public bool? QuietEnd { get; init; }
+
     // Wire name: openChildRunIds. Written for every TurnCompleted, as an empty array when no run is open.
     // Absent or null comes from an earlier daemon and reads as an empty list.
     public List<string>? OpenChildRunIds { get; init; }

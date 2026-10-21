@@ -382,6 +382,18 @@ public sealed partial record SessionState
     }
 
     /// <summary>
+    /// Remove each earlier system nudge whose text starts with <paramref name="nudgeStart"/>, then add
+    /// <paramref name="nudge"/> at the end of history. The history then keeps only the latest nudge of that kind.
+    /// </summary>
+    public SessionState ReplaceSystemNudge(string nudgeStart, string nudge)
+    {
+        var earlier = $"{SystemNudgePrefix} {nudgeStart}";
+        var history = History.RemoveAll(message => IsSystemNudge(message)
+            && message.Content.StartsWith(earlier, StringComparison.Ordinal));
+        return (this with { History = history }).AddSystemNudge(nudge);
+    }
+
+    /// <summary>
     /// Insert the per-turn volatile context block (memory recall, current time,
     /// working context, skill hint, slash-command body, session overlay, turn
     /// restart notice, active background jobs) into history immediately BEFORE

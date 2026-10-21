@@ -375,8 +375,35 @@ wiring and contents. Producer, rehydrator, and validator share
 `install`/`doctor --fix`, so after installing new tools re-run either and then
 `systemctl --user restart netclaw`.
 
+**Operator lines.** `daemon.env` is also the place for operator settings, for example
+`NETCLAW_HOME=/x/home` or `HTTP_PROXY=...`.
+
+Caution: the file holds plain text. If a line holds a credential, run `chmod 600` on `daemon.env`.
+Netclaw never makes the file more open than it was, but it does not make a new file private.
+
+Install and `doctor --fix` replace the first `PATH` line in place, drop a later `PATH` line, and add
+`PATH=` at the end when none exists. A line is a `PATH` line when its key, the text before the first
+`=`, is `PATH` once trimmed. This matches systemd, so `PATH = /x` and `PATH<TAB>=/x` count.
+`export PATH=/x` does not count, because systemd reads it as another key. Both commands keep every
+other line verbatim and in order. A line ending of `\r\n` stays. A rerun with the same input leaves
+the file byte-identical. A rewrite never opens the file more than it was. Install overwrites the file
+in place, which keeps its mode and any symbolic link. `doctor --fix` writes the file atomically and
+gives the new file the mode of the file that it replaces. A new file gets the default mode of a new
+file.
+
 `netclaw daemon uninstall` stops the service and removes the unit file and the
-`daemon.env` file.
+`daemon.env` file. It removes the operator lines in that file too. To change the unit file and keep
+the operator lines, run `netclaw daemon install` again.
+
+The install scripts honor `NETCLAW_HOME` with the `NetclawPaths` rules (`~`, `$HOME`, `${HOME}`,
+and `%USERPROFILE%` expand, a blank value is unset, a relative path resolves against the working
+directory; `install.ps1` uses the PowerShell location). Both scripts use `<home>/config`. A fresh
+`install.sh` also uses `<home>/bin` and `<home>/env`. An upgrade does not move an install. The
+order of the rules: `INSTALL_DIR` always wins. Else an install that sits in `<home>/bin` is
+upgraded there. Else, if `$HOME/.netclaw/bin` holds `netclaw` or `netclawd`, `install.sh` upgrades
+there, keeps the env script at `$HOME/.netclaw/env`, and prints the directory. Else it is a fresh
+install under `<home>`. `install.ps1` keeps its own install directory. `CONFIG_DIR` and
+`NETCLAW_CONFIG_DIR` no longer have an effect.
 
 ### Service Registration (macOS)
 

@@ -296,7 +296,7 @@ public sealed class DoctorFixService
             return;
 
         var captured = DaemonPathEnvironmentFile.CaptureCurrentPath();
-        var updated = DaemonPathEnvironmentFile.Render(installDir, captured);
+        var updated = DaemonPathEnvironmentFile.Merge(existing, installDir, captured);
 
         fixes.Add(new DoctorFileFix(
             FilePath: envPath,

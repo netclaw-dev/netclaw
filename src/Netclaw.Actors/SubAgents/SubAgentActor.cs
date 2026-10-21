@@ -90,6 +90,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly MemoryPolicyEvaluator _policyEvaluator = new();
     private readonly TurnStateTracker _turnState = new();
     private PreparedToolCycleBatch? _activeCycleBatch;
+    // The repeat nudge for the active batch. The child adds it after the batch results.
+    private string? _activeRepeatNudge;
 
     // Stopwatch tracking the total wall-clock duration of the sub-agent run.
     // Used for the summary log on completion (ProcessingWatchdog is only a
@@ -622,6 +624,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             AddModelInputMediaNudge(msg.Results
                 .SelectMany(result => result.ModelInputMediaReferences)
                 .ToArray());
+            if (_activeRepeatNudge is { } repeatNudge)
+            {
+                // The latest repeat nudge replaces the earlier one, so equal nudges do not pile up.
+                _history.RemoveAll(static message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                    && message.Text.StartsWith($"[system: {ToolCycleMessages.RepeatNudgeStart}", StringComparison.Ordinal));
+                AddSystemNudge(repeatNudge);
+                _activeRepeatNudge = null;
+            }
 
             _turnState.RecordToolCompletion(msg.Results.Length);
 
@@ -636,6 +646,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 return;
             _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
             _activeCycleBatch = null;
+            _activeRepeatNudge = null;
             _log.Error(msg.Cause, "SubAgent [{AgentName}] tool execution failed", _definition.Name);
             Complete(false, $"Tool execution failed: {msg.Cause.Message}", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.ToolExecutionFailed);
         });
@@ -846,17 +857,24 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         if (cycleDecision.Kind != ToolCycleDecisionKind.Execute)
         {
             Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
-                "Subagent tool cycle decision kind={DecisionKind} refusedCalls={RefusedCalls}",
+                "Subagent tool cycle decision kind={DecisionKind} refusedCalls={RefusedCalls} repeatedCalls={RepeatedCalls}",
                 cycleDecision.Kind,
-                cycleDecision.RefusedCallIds.Count);
+                cycleDecision.RefusedCallIds.Count,
+                cycleDecision.RepeatedCallIds.Count);
         }
 
-        if (cycleDecision.Kind == ToolCycleDecisionKind.Stop)
+        if (cycleDecision.RefusedRepeat == RefusedRepeatAction.EndTurn)
         {
-            Complete(true, ToolCycleMessages.ChildStopped, SubAgentRunOutcome.Partial,
+            // The child ignored the escalated nudge (Aaron, 18 Oct 2026). The run ends with no dispatch and no
+            // model request. It is a successful partial run, so the parent gets the child text and no error.
+            Complete(true, LastChildText(assistantMessage), SubAgentRunOutcome.Partial,
                 SubAgentOutcomeReason.ToolCycleStopped);
             return;
         }
+
+        // A repeat of a refused call does not stop the child at once. The call is refused again, and the child
+        // nudge follows the batch results. The child nudge offers no background job: a child has none.
+        _activeRepeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: true);
 
         // Add assistant message (with tool calls) to history
         _history.Add(assistantMessage);
@@ -1278,6 +1296,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _definition.Name,
             projectDirectory);
     }
+
+    // The last text that the child model wrote in this run: the text of the final response, or else the latest
+    // earlier assistant text. The parent did not see the earlier text, so the child returns it. Empty when none.
+    private string LastChildText(AiChatMessage finalResponse)
+        => new[] { finalResponse }
+            .Concat(Enumerable.Reverse(_history).Where(static message => message.Role == Microsoft.Extensions.AI.ChatRole.Assistant))
+            .Select(ExtractText)
+            .FirstOrDefault(static text => text != EmptyResponseMarker && !string.IsNullOrWhiteSpace(text))
+            ?? string.Empty;
 
     private static string ExtractText(AiChatMessage message)
     {

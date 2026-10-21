@@ -32,7 +32,7 @@ public sealed class SystemdUnitPathDoctorCheck : IDoctorCheck
 
     private const string ReinstallRemediation =
         "Reinstall to migrate to the environment-file model: " +
-        "`netclaw daemon uninstall && netclaw daemon install`, then `systemctl --user restart netclaw`.";
+        "`netclaw daemon install`, then `systemctl --user restart netclaw`.";
 
     private const string RehydrateRemediation =
         "Rehydrate it: `netclaw doctor --fix`, then `systemctl --user restart netclaw`.";

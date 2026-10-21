@@ -117,6 +117,35 @@ function Invoke-DownloadWithProgress {
 $ManifestUrl = if ($env:MANIFEST_URL) { $env:MANIFEST_URL } else { "https://releases.netclaw.dev/manifest.json" }
 $DefaultInstallDir = Join-Path $env:LOCALAPPDATA "Programs\netclaw"
 
+# Mirrors how NetclawPaths resolves NETCLAW_HOME so the installer and the CLI agree on the
+# directory: trim the value, expand ~, $HOME, ${HOME}, and %USERPROFILE% (case-insensitive),
+# treat a blank value as unset, and resolve a relative path against the PowerShell location.
+function Resolve-NetclawHome {
+    $profileDir = $env:USERPROFILE
+    $value = if ($env:NETCLAW_HOME) { $env:NETCLAW_HOME.Trim() } else { "" }
+    if (-not $value) {
+        return Join-Path $profileDir ".netclaw"
+    }
+
+    if ($value.StartsWith("~")) {
+        $rest = $value.Substring(1).TrimStart('/', '\')
+        $value = if ($rest) { Join-Path $profileDir $rest } else { $profileDir }
+    }
+
+    foreach ($token in @('$HOME', '${HOME}', '%USERPROFILE%')) {
+        $value = [regex]::Replace($value, [regex]::Escape($token), { param($match) $profileDir }, 'IgnoreCase')
+    }
+
+    # GetFullPath resolves a relative path against the process directory, which PowerShell does
+    # not change with Set-Location. Anchor it to the PowerShell location first. The two-argument
+    # GetFullPath overload is not in Windows PowerShell 5.1, so join the path by hand.
+    if (-not [System.IO.Path]::IsPathRooted($value)) {
+        $value = Join-Path (Get-Location).ProviderPath $value
+    }
+
+    return [System.IO.Path]::GetFullPath($value)
+}
+
 if (-not $InstallDir) {
     $InstallDir = $DefaultInstallDir
 }
@@ -258,7 +287,7 @@ try {
     # Only runs when -Channel was explicitly passed. Without this guard a plain
     # upgrade would silently overwrite an existing beta channel to stable.
     if ($PSBoundParameters.ContainsKey('Channel')) {
-        $configDir = if ($env:NETCLAW_CONFIG_DIR) { $env:NETCLAW_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".netclaw\config" }
+        $configDir = Join-Path (Resolve-NetclawHome) "config"
         $configFile = Join-Path $configDir "netclaw.json"
         if (Test-Path $configFile) {
             try {

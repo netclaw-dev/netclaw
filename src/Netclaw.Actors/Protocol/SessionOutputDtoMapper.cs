@@ -95,6 +95,7 @@ public static class SessionOutputDtoMapper
             TurnNumber = msg.TurnNumber,
             TurnOutcome = msg.Outcome.ToString().ToLowerInvariant(),
             SourceReminderId = msg.SourceReminderId?.Value,
+            QuietEnd = msg.QuietEnd,
             // Always an array, never null: an absent field means an earlier daemon.
             OpenChildRunIds = [.. msg.OpenChildRunIds.Select(id => id.Value)]
         },
@@ -290,6 +291,7 @@ public static class SessionOutputDtoMapper
                     ? outcome
                     : TurnOutcome.Completed,
                 SourceReminderId = dto.SourceReminderId is null ? null : new ReminderId(dto.SourceReminderId),
+                QuietEnd = dto.QuietEnd ?? false,
                 OpenChildRunIds = dto.OpenChildRunIds is null
                     ? []
                     : [.. dto.OpenChildRunIds.Select(id => new SubAgentRunId(id))]

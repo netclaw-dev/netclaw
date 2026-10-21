@@ -1382,25 +1382,18 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (prepared.Decision.Kind != ToolCycleDecisionKind.Execute)
         {
             Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
-                "Tool recurrence decision kind={DecisionKind} refused={RefusedCount}",
-                prepared.Decision.Kind, prepared.Decision.RefusedCallIds.Count);
+                "Tool recurrence decision kind={DecisionKind} refused={RefusedCount} repeated={RepeatedCount}",
+                prepared.Decision.Kind, prepared.Decision.RefusedCallIds.Count, prepared.Decision.RepeatedCallIds.Count);
         }
 
-        if (prepared is PreparedFreshBatch.Stop)
+        if (prepared.Decision.RefusedRepeat == RefusedRepeatAction.EndTurn)
         {
-            // The model repeated a call after the runtime refused it. The turn fails as a model
-            // failure with no further model request, in every parent session: Slack, Discord,
-            // Mattermost, and the TUI show the text as a warning, and a headless caller sees
-            // category=model. The text is for a person, so it is not the model-facing stop text.
-            RecordIntermediateUsage(usage);
-            FailCurrentTurn(
-                ToolCycleMessages.TurnStopped,
-                new InvalidOperationException("The model repeated a tool call that the recurrence guard already refused."),
-                ErrorCategory.ModelBehavior);
+            EndTurnAfterIgnoredEscalation(lastMessage, usage);
             return;
         }
 
-        var ready = (PreparedFreshBatch.Ready)prepared;
+        // A repeat of a refused call does not stop the turn at once (Aaron, 18 Oct 2026). The pipeline refuses
+        // it again, and the batch adds a model-facing nudge after its results. No error reaches the person.
         var userMsg = _state.FindLastUserMessage() ?? new SerializableChatMessage
         {
             Role = Protocol.ChatRole.User,
@@ -1411,7 +1404,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             SessionId = _sessionId,
             UserMessage = userMsg,
-            AssistantMessage = ready.AssistantMessage,
+            AssistantMessage = prepared.AssistantMessage,
             StartedAtMs = NowMs(),
             ConsumedInputIds = _input.SelectedInputs.Ids,
             ChildContinuation = _toolWorkflow.ChildDecision(_execution.CurrentModelCallId)
@@ -1426,10 +1419,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             ReviewConsumedChildFindings(child);
             EmitAndDispatchToolBatch(
                 lastMessage,
-                ready.Calls,
+                prepared.Calls,
                 usage,
-                ready.Cycle,
-                ready.Decision);
+                prepared.Cycle,
+                prepared.Decision);
         });
     }
 
@@ -1480,7 +1473,60 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         RecordIntermediateUsage(usage);
 
-        DispatchToolBatch(toolCalls, preparedCycleBatch: preparedCycleBatch, refusedCallIds: cycleDecision.RefusedCallIds);
+        var repeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: false);
+        DispatchToolBatch(toolCalls, cycleDecision.RefusedCallIds, repeatNudge,
+            preparedCycleBatch: preparedCycleBatch);
+    }
+
+    /// <summary>
+    /// The model sent a refused call again after the escalated nudge (Aaron, 18 Oct 2026). The turn ends with no
+    /// dispatch and no further model request. No call of the response runs, also a new call next to the repeat.
+    /// No error output, error reply, or failed turn reaches the person: the person sees only text of the model.
+    /// </summary>
+    private void EndTurnAfterIgnoredEscalation(AiChatMessage lastMessage, UsageDetails? usage)
+    {
+        var withoutCalls = new AiChatMessage(lastMessage.Role,
+            lastMessage.Contents.Where(static content => content is not FunctionCallContent).ToList());
+        var hasText = withoutCalls.Contents.OfType<TextContent>()
+            .Any(static text => !string.IsNullOrWhiteSpace(text.Text));
+        TurnLog().Warning("turn_refused_repeat_end refusedRepeats={RefusedRepeats} hasText={HasText}",
+            TurnStateTracker.EscalatedRefusedRepeat + 1, hasText);
+
+        if (hasText)
+        {
+            // The normal text path records the text as the reply, sends it, and completes the turn.
+            HandleTextResponse(withoutCalls, usage, streamedText: false, streamedThinking: false);
+            return;
+        }
+
+        // No text. An empty assistant reply is not safe, because some providers reject an empty text block.
+        // So the turn records no reply. The person keeps the text that the model wrote before.
+        RecordIntermediateUsage(usage);
+        CloseActiveInputs(FinishTurnWithoutReply);
+    }
+
+    // The cleanup of a failed turn, without the error reply and the error output. The turn completes.
+    private void FinishTurnWithoutReply()
+    {
+        _input.FailedTurn();
+        _execution.ReleaseAll();
+        _deliveryRetry.Clear();
+        _toolWorkflow.ClearFailedTurn();
+        // A failed turn also counts without a journal event, so the next turn gets a new turn number.
+        _state = _state with { TurnCount = _state.TurnCount + 1 };
+
+        EmitOutput(new TurnCompleted
+        {
+            SessionId = _sessionId,
+            TurnNumber = new TurnNumber(_state.TurnCount),
+            Outcome = TurnOutcome.Completed,
+            SourceReminderId = _input.Authority.Source?.ReminderId,
+            // A channel posts nothing for this turn, not even its empty-turn fallback: that text is Netclaw text.
+            QuietEnd = true,
+            OpenChildRunIds = _state.GetOpenChildRunIds()
+        });
+
+        DrainBufferedMessagesOrBecomeReady();
     }
 
     private void RecordIntermediateUsage(UsageDetails? usage)
@@ -1502,11 +1548,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
         IReadOnlySet<string> refusedCallIds,
+        string? repeatNudge,
         ApprovalRedrivePlan? approvalPlan = null,
         PreparedToolCycleBatch? preparedCycleBatch = null,
         bool recordCompletedCycle = true)
     {
         _toolWorkflow.StartDispatch(toolCalls, preparedCycleBatch, _toolExecutor, recordCompletedCycle);
+        if (repeatNudge is not null)
+            _toolWorkflow.AddRepeatNudgeAfterBatch(repeatNudge);
 
         // The pipeline sends each result before it signals batch completion.
         TurnLog().Info("turn_tool_call_batch count={Count} tools={Tools}",
@@ -1713,6 +1762,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // A replay resumes the same turn. New input starts a fresh guard
             // window only after the prior batch or response completes.
             _turnState.ResetForNewTurn();
+            // The input clears the refusals, so the model can run a refused call again. It starts a new refused
+            // repeat count only for a new turn or for a person. Automation that joins an automation turn keeps
+            // the count: its requester is a fixed system sender, so the fire rate would otherwise set the bound.
+            if (!batch.JoinsAutomationTurn)
+                _turnState.ResetRefusedRepeatCount();
             _modelContext.ResetForNewTurn();
         }
 
@@ -1727,6 +1781,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void PrepareFreshTurnState()
     {
         _turnState.ResetForNewTurn();
+        // A new turn counts from zero, whoever starts it. A mid-loop child result and a wake for a child result
+        // clear the evidence only (they call ResetForNewTurn): they bring no new person input.
+        _turnState.ResetRefusedRepeatCount();
         _discoveredToolCache.PrepareForNewTurn(
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount,
@@ -3537,7 +3594,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                     _input.RestoreTurnAuthority(dispatch.TurnContext, _trustContextDeriver);
                     UpdateCrashContext();
                     TransitionTo(SessionPhase.Processing);
-                    DispatchToolBatch(dispatch.Calls, new HashSet<string>(), approvalPlan: dispatch.ApprovalPlan,
+                    DispatchToolBatch(dispatch.Calls, new HashSet<string>(), repeatNudge: null, approvalPlan: dispatch.ApprovalPlan,
                         recordCompletedCycle: false);
                     TryReplyAck();
                     return;
