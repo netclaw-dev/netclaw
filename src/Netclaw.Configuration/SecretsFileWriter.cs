@@ -104,9 +104,16 @@ public static class SecretsFileWriter
     /// Every other leaf, at any depth or under any other section, is encrypted.
     /// </summary>
     public static bool IsPlaintextLeaf(IReadOnlyList<string> path)
-        => path.Count == 3
-           && string.Equals(path[0], "Providers", StringComparison.OrdinalIgnoreCase)
-           && string.Equals(path[2], "OAuthTokenExpiry", StringComparison.OrdinalIgnoreCase);
+    {
+        // The count has its own statement. Stryker rolls back the whole statement when its
+        // Count() to Sum() mutant does not compile, and the length mutant would go with it.
+        var segmentCount = path.Count;
+        if (segmentCount != 3)
+            return false;
+
+        return string.Equals(path[0], "Providers", StringComparison.OrdinalIgnoreCase)
+               && string.Equals(path[2], "OAuthTokenExpiry", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool ShouldEncrypt(string value, IReadOnlyList<string> path)
         => !ISecretsProtector.IsEncrypted(value) && !IsPlaintextLeaf(path);

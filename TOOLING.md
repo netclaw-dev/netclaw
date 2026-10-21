@@ -51,7 +51,7 @@ Hosted runs from 2026-10-17 through 2026-10-19 measured these gate times (minute
 | `reminder` | `reminder-execution` (4.4), `literal-twin` (2.9), `stream-commit-gate` (2.5), `shutdown-notice-identity` (18 mutants, one invocation, 3.4) | 13.7 (estimate) |
 | `authorization-and-directory` | `tool-authorization` (5.8), `approval-directory` (5.2) | 11.3 |
 | `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2) | 13.3 |
-| `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9) | 8 (estimate) |
+| `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9), `secrets-plaintext-leaf` (8 mutants, one invocation, 2 to 3, estimate) | 10 to 11 (estimate) |
 | `shell-command-analysis` | `shell-command-analysis` (two invocations: 303 mutants, up to 15.8, and 27 mutants, up to 4.7) | 14 to 21 |
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
@@ -114,6 +114,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run and a turn with one of two open runs each get the right decision (SPEC-004, "Waiting for child runs"). The gate does not cover the missing-field case: `SessionOutputDtoMapper.FromDto` maps a missing field to an empty list, outside the mutated span, and ordinary tests cover it | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
 | `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that has no notice, or whose notice input is still pending, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
 | `TurnContext.HasSameRequester`, `SessionState.RequireNoticeRun`, and the requester loop of `SessionExecutionLifetime.ValidateRestartResume` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it; a run gets one notice, only an ended run gets one, and a notice carries the recorded authority of the run owner as a user message; a restart resume takes the leading inputs of one requester and leaves the rest waiting | 36 killed | `./scripts/run-child-owner-mutations.sh` |
+| `SecretsFileWriter.IsPlaintextLeaf` and `SecretsFileWriter.ShouldEncrypt` (`// <secrets-plaintext-leaf>`) | secrets.json encrypts every string leaf except `Providers.<name>.OAuthTokenExpiry`, a path of exactly three segments that matches without case. A mutant that encrypts the date stops the daemon at startup. A mutant that skips another leaf leaves a credential unencrypted at rest | 8 killed | `./scripts/run-secrets-plaintext-leaf-mutations.sh` |
 | `SessionToolWorkflow.CloseChildApprovals` and `SessionToolWorkflow.ExpireRecoveredChildApprovals` | Issue 2525: a cancel record or a terminal record (also the lost record that recovery writes) closes every approval entry of its run in live code. A checkpoint, a prepared result, a parent approval, and an entry of another run stay open. Recovery closes each child entry that remains. A stranded entry can block a snapshot. In live code, an entry that closes too soon drops a prompt that a person can still answer (a checkpoint, another run, or a parent call) | 6 killed | `./scripts/run-child-approval-close-mutations.sh` |
 | `TurnContext.CanControlChildRunOf` and the reminder turn test (`IsReminderTurn`) | Issue #2524: a reminder turn and any other turn of one session manage each other's child runs, and the sender and the principal do not count. The session, audience, boundary, and channel type must still match, so no turn reaches a run of another session. A turn with `VerifiedAutomation` and another source kind, a webhook turn with the reminder source kind (authenticity `Verified`), and a person turn with the reminder source kind, are not reminder turns and keep the six-fact rule | 15 killed | `./scripts/run-child-control-mutations.sh` |
 | The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
@@ -242,8 +243,40 @@ removes the 40-link bound makes a link cycle spin. Stryker reports that as
 `Timeout`, and the gate counts it as detected, as the exact verb chain gate does.
 In `DaemonManager`, only `Killed` counts.
 
-CI runs it in the `stop-proof` group of the `mutation-gates` job. That group holds this gate alone.
+CI runs it in the `stop-proof` group of the `mutation-gates` job, with the secrets plaintext leaf gate.
 The gate took 6.9 minutes on a hosted runner, and it made `guard-and-authority` take 20 minutes.
+
+### Secrets Plaintext Leaf Gate
+
+Run the secrets plaintext leaf gate:
+
+```bash
+./scripts/run-secrets-plaintext-leaf-mutations.sh
+```
+
+The script selects the policy in `SecretsFileWriter.cs` between `// <secrets-plaintext-leaf>` and
+`// </secrets-plaintext-leaf>`. The span holds `IsPlaintextLeaf` and `ShouldEncrypt`. The selector
+rejects a missing or repeated marker before Stryker starts. It runs one Stryker invocation, with
+`Netclaw.Actors.MutationTests` as the test project and `Netclaw.Configuration.csproj` as the mutated project.
+
+`SecretsFileWriter` encrypts every string leaf of secrets.json except `Providers.<name>.OAuthTokenExpiry`.
+The configuration binder reads that leaf as a date and cannot read ciphertext. The path must have exactly
+three segments, and the segments match without case. `SecretsPlaintextLeafMutationTests` cover these cases:
+
+- the leaf stays plaintext, also with other letter case, and a JSON null stays null
+- the same key name at depth one, two, or four, under another section, in an array, or as a flattened root key is encrypted
+- a sibling of the exempt leaf is encrypted
+- an `ENC:` value is neither encrypted again nor decrypted
+
+Stryker makes eight mutants in the span: the length check, the early `return false`, the `&&`, two
+string literals, the `||` in `ShouldEncrypt`, and two removals of `!`. The gate fails for a survivor, a compile
+error, or a mutant outside the span. The count test sits in its own statement. Stryker rolls back a whole
+statement when its `Count()` to `Sum()` mutant does not compile, and a count test inside one expression
+would lose the length mutant.
+
+The local run took 1 minute 33 seconds with a warm build cache. Hosted CI must measure the gate on a cold
+runner. CI runs it in the `stop-proof` group of the `mutation-gates` job. Its report directory is
+`artifacts/stryker/secrets-plaintext-leaf`.
 
 ### Stream Commit Gate
 
