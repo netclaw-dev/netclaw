@@ -21,10 +21,10 @@ The owner decided the rules on 21 October 2026. The design gives the mechanics.
 - **Withdrawal.** When a child run is cancelled or ends, or a non-parked child is lost at restart, the runtime withdraws its open prompts. The channel redraws each prompt as closed. A later click gets an accurate reply, for example "This approval request was withdrawn because the task that asked for it was cancelled."
 - **Text answer guard.** A text answer ("A", "deny") resolves a prompt only when exactly one prompt is open for that sender.
 - **TUI and headless.** A child prompt stays open in the TUI after the parent turn ends (#2523). A headless run states the reason when a child waits for consent (#2541).
-- **Durable child wait (#2572).** A child that needs consent parks: its state goes to the parent journal and a run-folder file, and its actor stops. The answer starts a new child actor at the parked call. The wait survives a restart and a config reload. The prompt stays live, and the pause comes back.
+- **Durable child wait (#2572).** A child run becomes an Akka.Persistence actor with its own persistence ID, `subagent-{escapedSessionId}/{runId}`, which stays out of the session list. Its journal holds the child conversation. Its first event freezes the exact system prompt and model. A child that needs consent persists and stops (park always). When the last parked prompt has an answer, the session recreates the child from its journal, and only the parked calls run, once each. The wait survives a restart and a config reload. The prompt stays live, and the pause comes back. A frozen model that no longer exists ends the run as lost, with an honest notice. The parent purges the child journal last: after the run end, `result.md`, and the notice.
 
 In scope: the channel contract, background child runs of one session, all channels that support interactive approval, the TUI, headless output, and the durable child wait.
-Out of scope: messaging tools, a cross-process router, nested children, an "approve for all" prompt, a consent timeout, the resume of a child that is not parked, and a fatigue fix for literal shell loops.
+Out of scope: messaging tools, a cross-process router, nested children, an "approve for all" prompt, a consent timeout, the resume of a running child after a restart (the next change; the child journal supports it), session retention (#2573), one reminder rule for every wait (deferred), and a fatigue fix for literal shell loops.
 
 Stack: (1) channel types, notice digest, pause, and reminder rule; (2) withdrawal, prompt lifetime, channel and TUI redraw, and the text answer guard; (3) the durable child wait.
 
@@ -40,15 +40,15 @@ Stack: (1) channel types, notice digest, pause, and reminder rule; (2) withdrawa
 - `tool-authorization`: TA-12 adds the prompt that shows only command and scope, the consent boundary for the parent model, the text answer guard, the withdrawal reply, and a parked child's prompt that survives a restart.
 - `netclaw-session`: the `child-consent` input kind, and an input rule: an automated input waits while the pause is active.
 - `netclaw-scheduling`: a reminder fire into a paused session waits, and a later fire replaces it.
-- `netclaw-subagents`: a child parks at consent and stops; a new actor resumes it.
-- `session-resume`: recovery keeps parked child requests and withdraws the others with a stated reason.
+- `netclaw-subagents`: the child journal, its persistence ID, the frozen system prompt and model, and park always.
+- `session-resume`: recovery keeps parked child requests, resumes answered parks, withdraws the others with a stated reason, and purges ended child journals.
 - `channel-binding-parity`: a prompt-closed output that each binding redraws, child prompts that stay open after a parent turn ends, and replayed prompts that are not posted twice.
 
 ## Impact
 
 - Code: `LlmSessionActor` and `LlmSessionActor.Children`, `SessionToolWorkflow` (`.Approvals`, `.Children`, `.Recovery`), `SessionInputFlow`, `SessionState.ChildRuns`, `BackgroundChildRun`, `ParentSessionApprovalBridge`, `SubAgentActor`, `SubAgentSpawner`, `SessionProtocol` outputs, the proto mapper, `ChannelOutputEngine`, `ApprovalResponseFlow`, `PendingApprovalLookup`, the Slack, Discord, and Mattermost prompt builders, `ChatViewModel` (TUI), and the headless channel.
-- Journal: PRs 1 and 2 have no format change. PR 3 adds `ChildRunEvent.Parked` and `Resumed` and a `Parked` lifecycle case in the snapshot. That change is forward-only. Back up `netclaw.db` before the PR 3 rollout.
-- Files: PR 3 adds a park file in each parked child's run folder.
+- Journal: PRs 1 and 2 have no format change. PR 3 adds a child journal for each child run (new `SubAgentRunProtocol` events and a snapshot type) and three parent `ChildRunEvent` cases (`Parked`, `Resumed`, `JournalPurged`) with a `Parked` lifecycle case. Each new type gets a proto message, a manifest, and a mapper entry. That change is forward-only. Back up `netclaw.db` before the PR 3 rollout.
+- Models: PR 3 adds an exact model lookup with no role fallback for a resumed child. It touches the same seam as the open change `subagent-explicit-model-selection`.
 - Configuration: none.
 - Docs: `docs/architecture/tool-authorization.md` sections 3.1, 3.6, 7.5, and 8 (see design). New glossary terms in `docs/spec/GLOSSARY.md`. The `agent-coordination` and `netclaw-operations` skills and their eval cases.
 
@@ -58,7 +58,7 @@ Security impact:
 - An event payload has no free text, and a notice carries no text that a child wrote.
 - The channel never carries consent. The parent cannot approve.
 - The text answer guard closes a consent spoof among parallel prompts.
-- A parked child's call runs only after a durable resume record, once, and it passes every gate check again. A hash in the journal guards the park file.
+- A parked child's call runs only after a durable resume record, once, and it passes every gate check again under the current policy. The model never changes silently.
 - The pause only refuses work. A fault in the pause can delay work. It cannot grant authority.
 
 Operational impact:

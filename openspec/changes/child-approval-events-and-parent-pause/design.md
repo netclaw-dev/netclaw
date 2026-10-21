@@ -81,6 +81,11 @@ one-time consent, requester, open child run.
 | P4 | The channel envelope is minimal now: `Sender`, `Target`, `SentAt`. |
 | P5 | #2515 child results move into `AgentEvent` in memory. Field 14 stays on disk. |
 | P6 | A child that waits for consent survives a restart and a config reload (#2572). It is the last PR of the stack. |
+| P7 | A child run is an Akka.Persistence actor with its own persistence ID. Its journal holds the child conversation. Its first event freezes the system prompt and the model. |
+| P8 | Park always (R1 = A). One resume path serves a live answer and an answer after a restart. |
+| P9 | The parent purges a child journal last, after the run end, `result.md`, and the notice. Recovery purges leftovers. |
+| P10 | A frozen model that no longer exists fails the resume loudly. The run ends as lost. No silent model switch. |
+| R2 | One reminder rule for every wait is deferred to a later change. |
 
 ## Goals / Non-Goals
 
@@ -96,7 +101,9 @@ one-time consent, requester, open child run.
 
 - Messaging tools (`notify_parent`, `message_child`, sibling messages). Only their slot in the channel is in scope.
 - An "approve for all" prompt (Q2), nested children (Q5), and a consent wait timeout (Q4).
-- A resume of a child that is not parked at consent. Such a child is still lost at a restart.
+- A resume of a child that is not parked at consent. Such a child is still lost at a restart. The child journal is
+  designed for that next change (see "Future scenarios").
+- Session retention and a reaper for expired sessions and their children (#2573).
 - A shell fatigue fix for a literal `for` loop. It is a separate Shell facts change (tool-authorization.md section 8).
 - A cross-process or sharded router. The channel allows one later (D1.5).
 
@@ -184,11 +191,11 @@ Authority rules:
 | Child result to the model | `InputAdmitted.child_notice` (field 14), read as `AgentEvent.ChildRunEnded` (P5) | none |
 | Approval notice to the model | `InputAdmitted` with `TurnContext.SourceKind = "child-consent"` and the rendered text in `user_message` (Q3) | none |
 | Typed approval events, digest, pause | actor memory | none |
-| Parked child state (D8, PR 3) | parent journal plus a run-folder file | yes, separate from the notice path |
+| Child conversation and park (D8, PR 3) | the child's own journal (`subagent-…` persistence ID) plus three parent `ChildRunEvent` cases | yes, separate from the notice path |
 
 The notice path has no format change. The source kind keeps the automation kind of a rebuilt waiting notice. The
-durable child wait (D8) needs its own journal change. That change belongs to the child run record, not to the
-notice path.
+durable child wait (D8) needs its own journal change: new persisted types for the child journal and the parent run
+record. That change does not touch the notice path.
 
 #### D1.4 Rendering for the model
 
@@ -358,113 +365,152 @@ button is the only safe way to choose among parallel prompts.
 
 ### D8. Durable child wait across a restart (#2572, PR 3)
 
-A child that waits for consent becomes **parked**. A parked child is journal state with no actor. The answer starts a
-new child actor from that state. This is the same shape as the parent's own durable consent wait: the parent also
-keeps no waiting task across a restart, and an answer re-drives the parked batch.
+A child run becomes an Akka.Persistence actor with its own journal (P7). When it needs consent, it persists and stops
+(P8). A parked run is journal state with no actor. The last answer makes the session recreate the child from its
+journal. Only the parked calls run, once each.
 
-#### D8.1 The park point
+#### D8.1 Persistence ID
+
+```text
+subagent-{Uri.EscapeDataString(sessionId)}/{runId}
+```
+
+- The prefix `subagent-` differs from `session-`. The session catalog reads only `session-{sessionId}` rows
+  (`SessionCatalogService`), so a child never shows in the session list.
+- The escaped session ID has no `/`. `SubAgentRunId` is 32 hex characters with no `/`. So the prefix
+  `subagent-{escapedSessionId}/` names exactly the children of one session. A reaper (#2573) can find them by prefix.
+- The channel bindings already escape the session ID in their persistence IDs. This form follows them.
+
+#### D8.2 The child journal
+
+A new entity protocol, `SubAgentRunProtocol`, follows the actor-message-protocol rules. `ISubAgentRunEvent` is rooted
+on a new `IWithSubAgentRunId` and inherits `INetclawSerializableMessage`. Each event exposes `Timestamp` from the
+injected `TimeProvider`. Each type gets a proto message, a manifest, and a mapper entry in `NetclawProtoMapper`.
+
+| Event | When | Content |
+| --- | --- | --- |
+| `ChildConversationStarted` | first event, before the first model call | session ID, run ID, agent name, the exact system prompt, the resolved model reference (provider and `ModelId`), the first user message |
+| `ChildMessagesRecorded` | at the park point, and at the end | the history messages since the last record (`SerializableChatMessage`): assistant messages with tool calls, tool results, nudges |
+| `ChildParked` | at the park point, after the messages | the parked child call IDs and their parent prompt call IDs, the highest prompt number, loaded deferred tool names, the project directory |
+| `ChildRunFinished` | the final event | the outcome |
+| snapshot `ChildRunSnapshot` | when the event count since the last snapshot passes the session snapshot interval | the full replayable state |
+
+The child writes the first event eagerly. It writes the history lazily: only at the park point and at the end. A run
+that never parks writes three events. The parked tool-call message and the settled sibling results are in
+`ChildMessagesRecorded`, so a replay never runs a sibling again.
+
+The frozen facts (P10): the system prompt and the model reference come from the first event, never from the current
+configuration. On resume, the session asks the chat client provider for that exact model reference, with no role
+fallback. If the model does not exist, the resume fails loudly (D8.5). Approval gates always use the current policy:
+the retry of a parked call passes every check again.
+
+#### D8.3 The park point
 
 The bridge changes for a background child. When the gate requires consent, the bridge emits the prompt (as today) and
-returns `ConsentStep.Parked` at once. The call does not run. Its task ends with a parked marker, so
-`Task.WhenAll` of the batch ends when each sibling call has a result or a parked marker. The child is at its park
-point when the batch has one or more parked markers.
-
-At the park point the child sends `ChildParkReached(runId, state)` to the owner and waits for the acknowledgement.
-Then it stops. It makes no model call.
-
-#### D8.2 What becomes durable
-
-| Data | Today | At the park point |
-| --- | --- | --- |
-| Run authority, agent, scope, start key | `BackgroundChildRun` (durable) | unchanged |
-| Round, summary, file activity | `ChildRunCheckpoint` (durable) | unchanged |
-| Parked calls and their consent requests | `ToolApprovalRequested` with `SourceChildRunId` and `OriginalChildCallId` (durable) | unchanged |
-| Model history up to and with the assistant message of the parked batch | memory | park file |
-| Results of sibling calls of that batch that ran | memory | park file |
-| Loaded deferred tool names, project directory, active repeat nudge | memory | park file |
-| Highest prompt number `n` of the bridge | memory | park record |
-| The park itself | none | `ChildRunEvent.Parked(ChildRunPark)` in the parent journal |
-
-`ChildRunPark` holds the round, the parked prompt call IDs, the park file path, the SHA-256 of the file, and the
-highest prompt number. The run lifecycle gets one case, `Parked(ChildRunCheckpoint?, ChildRunPark)`. It is in the
-snapshot, because `BackgroundChildRun` is. The park file holds a `ChildParkStateProto` (proto, existing
-`SerializableChatMessage` for the history). Token counters, the watchdog, and the tool-cycle tracker start again at
-resume.
-
-#### D8.3 Where it is stored, and why
-
-The commit point is a small event in the parent session's journal. The large history goes to a file in the run folder,
-next to `task.md` and `result.md`. The owner writes the file with the existing atomic write, then persists `Parked`.
-
-- Not a persistent `SubAgentActor`. The session is the one durable owner of a run. A second persistence ID would need
-  its own recovery, deletion, and consistency with the parent's consent records, which are in another journal. A child
-  worker stays ephemeral (background-subagent-runs).
-- Not the full history in the parent journal. A child history with tool output can be large. Every recovery replays
-  the journal. The run folder already holds child documents.
-- The hash in the journal is the integrity check. The run folder is writable by agent file tools today (#2510). A
-  changed file fails the hash, and the run is recorded as lost.
-
-#### D8.4 Answer, resume, and idempotency
-
-The session handles every answer for a parked child on the durable path. There is no live wait to claim.
+returns `ConsentStep.Parked` at once. The call does not run. Its task ends with a parked marker, so `Task.WhenAll` of
+the batch ends when each sibling has a result or a parked marker.
 
 ```text
-on ToolApprovalResolved persisted for prompt p of parked run r:          # schematic
-    if any prompt of r.Park is still open: wait for siblings              # like RecoveredContinuation.WaitForSiblings
+child at park point (schematic):
+    PersistAll(ChildMessagesRecorded(unrecorded), ChildParked(calls, prompts, n, tools, dir)) then:
+        Ask owner ChildParkReached(runId, prompts)
+owner on ChildParkReached:
+    check: each prompt has an open entry for this run          # else: refuse, the run is lost
+    Persist ChildRunEvent.Parked(prompts) then: ack
+child on ack: stop
+```
+
+The parent record gets the lifecycle case `Parked(ChildRunCheckpoint?, ChildRunPark)`. `ChildRunPark` holds the parked
+prompt call IDs. It is in the parent snapshot, because `BackgroundChildRun` is.
+
+#### D8.4 Answer and resume
+
+Every answer for a child prompt takes the durable path. There is no live wait to claim.
+
+```text
+on ToolApprovalResolved persisted for prompt p of parked run r (schematic):
+    if any prompt of r.Park is still open: wait                     # like RecoveredContinuation.WaitForSiblings
     else:
-        persist ChildRunEvent.Resumed(r) then:                            # Parked -> Accepted
-            plan = redrive plan from the resolved prompts                 # existing ApprovalRedrivePlanBuilder
-            state = read park file; check SHA-256
-            child = spawner.PrepareResume(r, state, bridge seeded with Park.HighestPromptNumber)
-            child.Tell(ResumeParkedChild(state, plan))                    # runs only the parked calls
+        Persist ChildRunEvent.Resumed(r) then:                      # Parked -> Accepted
+            plan  = redrive plan from the resolved prompts          # existing ApprovalRedrivePlanBuilder
+            child = spawner.PrepareResume(r)                        # same persistence ID; replays the journal
+            child.Tell(ResumeParkedChild(plan))
+child on ResumeParkedChild after replay:
+    client = provider.GetExact(frozenModel)                         # missing: report FrozenModelUnavailable, stop
+    run only the parked calls with the plan                         # one-time consent of the exact candidates
+    continue the model loop with the frozen system prompt
 ```
 
-- A parked call has not run. It runs only after `Resumed` persists, and only once, with the one-time consent of its
-  exact candidates. The retry passes every gate check again, under the current configuration.
+- A parked call has not run. It runs only after the parent persisted `Resumed`, and only once.
 - A refused answer gives the call a refusal result through the plan's decision override (existing). It does not run.
-- A crash after `Resumed` and before the next checkpoint or end leaves the run uncertain. Recovery records it as lost
-  (existing rule: no relaunch of uncertain child work).
-- A crash after the last answer and before `Resumed` is safe. Nothing ran. Recovery resumes the run.
-- The bridge of the resumed child starts its prompt numbers above `HighestPromptNumber`, so a new prompt ID never
-  repeats an old one.
-- A batch with two parked calls runs neither call until both have answers. Today the approved call runs at once. This
-  is a behavior change for live sessions too.
+- The resumed bridge starts prompt numbers above the highest recorded number, so a new prompt ID never repeats.
+- A batch with two parked calls runs neither call until both have answers. Today the approved call runs at once.
 
-#### D8.5 Recovery
+#### D8.5 End and purge (P9)
+
+The parent owns the purge and does it last:
+
+1. The child persists `ChildMessagesRecorded` (if any are unrecorded) and `ChildRunFinished`, then returns the result.
+2. The parent persists `TerminalRecorded`, writes `result.md`, and admits the #2515 notice.
+3. When the notice input is admitted, the parent purges the child journal and its snapshots. It uses a short-lived
+   purge actor with the child's persistence ID (`Recovery.None`, `DeleteMessages` and `DeleteSnapshots` to the
+   maximum). After the purge succeeds, the parent persists `ChildRunEvent.JournalPurged`.
+
+`task.md`, `result.md`, and `logs/session.log` stay in the run folder. A lost run (recovery, a failed resume, or a lost
+actor) goes through the same three steps. The parent writes the terminal record, so step 1 is skipped when the child
+cannot write.
+
+Frozen model missing at resume: the child stops with the reason `frozen_model_unavailable`. The parent records the run
+as lost. The notice says honestly: "The child could not resume because its model `{model}` is no longer configured.
+The parked call did not run." The purge follows.
+
+#### D8.6 Recovery
 
 ```text
-RecoveryCompleted:                                                        # schematic
+RecoveryCompleted (schematic):
     for each child approval entry:
-        if its run is Parked and the prompt is in run.Park: keep it open  # the pause is back by derivation
-        else: withdraw with DaemonRestarted                               # existing close, new reason output
+        if its run is Parked and the prompt is in run.Park: keep it open      # the pause comes back by derivation
+        else: withdraw with DaemonRestarted
     for each run:
-        Accepted or Cancelling           -> lost (existing)
-        Parked, all prompts open         -> nothing; the run waits with no actor
-        Parked, all prompts resolved     -> resume (D8.4)
-        Parked, file missing or bad hash -> lost, withdraw its prompts, log an error
+        Accepted or Cancelling                    -> lost (existing), then purge
+        Parked, a prompt still open               -> nothing; the run waits with no actor
+        Parked, all prompts resolved              -> resume (D8.4); nothing ran before the crash
+        Reported, no JournalPurged                -> purge again (idempotent)
 ```
 
-- **The prompt stays live.** Slack, Discord, and Mattermost bindings journal `PendingApprovalPromptTracked`. A click
-  after the restart carries the same call ID. The session finds an open entry and takes the durable path. The TUI has
-  no journal. A new subscriber gets each open `UntilClosed` prompt again. A binding skips a call ID that it already
-  tracks, so Slack does not post twice.
-- **The pause comes back** because it derives from the open entries.
-- **The digest** is empty after recovery. The pre-restart approval notice is in the journal: consumed, or pending. A
-  pending approval notice whose requests are still open resumes like an orphan child notice. Recovery closes it only
-  when recovery withdrew all of its requests. The session does not wake the parent only to say "still waiting".
-- **Held reminder fires** are pending inputs in the journal. `RestoreWaitingInputs` rebuilds the waiting queue for
-  the pause as it does for parent consent requests.
+- **The prompt stays live.** Slack, Discord, and Mattermost bindings journal `PendingApprovalPromptTracked`, so a click
+  after the restart carries the same call ID. The TUI has no journal. A new subscriber gets each open `UntilClosed`
+  prompt again. A binding skips a call ID that it already tracks, so Slack does not post twice.
+- **The digest** is empty after recovery. A pending approval notice whose requests are still open resumes like an
+  orphan child notice. Recovery closes it only when recovery withdrew all of its requests.
+- **Held reminder fires** are pending inputs. `RestoreWaitingInputs` rebuilds the waiting queue for the pause.
 
-#### D8.6 Drain, passivation, and crash
+#### D8.7 Drain, passivation, and crash
 
-- **Graceful drain (restart or config reload).** A parked child has no actor, so the drain has nothing to stop. A child
-  that runs and is not parked follows today's rule: the drain stops it, and recovery records it as lost.
-- **Passivation.** A parked child is not a live child. A session whose only children are parked can passivate. A
-  click or a reminder fire activates it again, and it is still paused.
-- **Ungraceful crash.** The journal decides. `Parked` persisted: the run survives. Not persisted: the run is lost, as
-  today. A park file with no `Parked` event is ignored.
-- **Cancel of a parked run.** No actor must acknowledge. The owner persists `CancellationRequested` and then
-  `TerminalRecorded(Cancelled)`, and withdraws the prompts with `CancelledByParent`.
+- **Graceful drain (restart or config reload).** A parked run has no actor. A running child follows today's rule: the
+  drain stops it, and recovery records it as lost and purges it.
+- **Passivation.** A parked run is not a live child. A session whose only children are parked can passivate.
+- **Crash windows.**
+
+| Crash after | Journal state | Recovery |
+| --- | --- | --- |
+| child `ChildParked`, before parent `Parked` | parent: `Accepted` | lost, then purge. Nothing ran. |
+| parent `Parked` | parent: `Parked` | the run waits |
+| last answer, before `Resumed` | parent: `Parked`, all prompts resolved | resume. Nothing ran. |
+| `Resumed`, before the next checkpoint or end | parent: `Accepted` | lost (uncertain work, existing rule), then purge |
+| `TerminalRecorded`, before the notice | parent: `Terminal` | existing #2515 repair, then purge |
+| the notice, before `JournalPurged` | parent: `Reported` | purge again |
+
+- **Cancel of a parked run.** No actor must acknowledge. The parent persists `CancellationRequested` and
+  `TerminalRecorded(Cancelled)`, withdraws the prompts with `CancelledByParent`, admits the notice, and purges.
+
+#### D8.8 Why a child journal, not the parent journal
+
+- The owner chose a child journal (P7). It keeps the child conversation out of every parent replay.
+- The session stays the owner of the run record and of the decisions: park, resume, end, purge. The child journal
+  holds only the conversation. The parent record decides which conversation is valid.
+- The child actor stays ephemeral in the sense of background-subagent-runs: no relaunch of uncertain work. Only a
+  parked run, where nothing ran, is recreated.
 
 ### Ordered flow: the channel
 
@@ -491,29 +537,34 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Child as SubAgentActor
+    participant Child as SubAgentActor (persistent)
+    participant CJ as Child journal
     participant Bridge as ParentSessionApprovalBridge
     participant Parent as LlmSessionActor
-    participant J as Journal
+    participant PJ as Parent journal
     participant Ch as Channel binding
     participant Op as Operator
     Child->>Bridge: RequestConsentAsync(exact call)
     Bridge->>Parent: Tell ToolInteractionRequestDispatch(run bound by owner)
-    Parent->>J: Persist ToolApprovalRequested(run)
+    Parent->>PJ: Persist ToolApprovalRequested(run)
     Parent->>Ch: ToolInteractionRequest (command and scope, Lifetime=UntilClosed)
     Bridge-->>Child: ConsentStep.Parked
-    Child->>Parent: ChildParkReached(state)
-    Parent->>Parent: write park file (atomic)
-    Parent->>J: Persist ChildRunEvent.Parked
+    Child->>CJ: Persist ChildMessagesRecorded, ChildParked
+    Child->>Parent: ChildParkReached
+    Parent->>PJ: Persist ChildRunEvent.Parked
     Parent-->>Child: ack, then the child stops
     Note over Parent: Paused. Notice digest. Steady state, also across restart.
     Op->>Ch: click "approve once"
     Ch->>Parent: ToolInteractionResponse
     Parent->>Parent: ValidateResponse
-    Parent->>J: Persist ToolApprovalResolved
-    Parent->>J: last prompt of the park -> Persist ChildRunEvent.Resumed
-    Parent->>Child: new actor, ResumeParkedChild(state, redrive plan)
+    Parent->>PJ: Persist ToolApprovalResolved
+    Parent->>PJ: last prompt of the park -> Persist ChildRunEvent.Resumed
+    Parent->>Child: new actor (replays CJ), ResumeParkedChild(plan)
     Parent->>Parent: last open request closed -> Clear, closing notice, held inputs run
+    Child->>CJ: later: Persist ChildRunFinished
+    Parent->>PJ: TerminalRecorded, result.md, notice
+    Parent->>CJ: purge (DeleteMessages, DeleteSnapshots)
+    Parent->>PJ: Persist ChildRunEvent.JournalPurged
 ```
 
 ### Owners and data: the channel
@@ -549,11 +600,14 @@ sequenceDiagram
 
 | Decision | Owner | Data |
 | --- | --- | --- |
-| Park point | `SubAgentActor` (all calls settled or parked) | actor-local |
-| Park file write and `Parked` event | `LlmSessionActor` (Children partial) | run-folder file plus durable event |
-| Resume after the last answer | `LlmSessionActor` with `SessionToolWorkflow` | durable `Resumed` event, then actor-local child |
-| Resume state check (file present, hash) | `LlmSessionActor` | durable record against run-folder file |
-| Recovery choice for each run | `LlmSessionActor.RecoverChildren` | durable lifecycle |
+| Child conversation, frozen prompt and model | `SubAgentActor` (persistent) | durable, child journal |
+| Park point | `SubAgentActor` | durable, child journal (`ChildParked`) |
+| Accept a park | `LlmSessionActor` (Children partial) | durable, parent journal (`ChildRunEvent.Parked`) |
+| Resume after the last answer | `LlmSessionActor` with `SessionToolWorkflow` | durable `Resumed`, then actor-local child |
+| Frozen model check | `SubAgentActor` on resume, through the chat client provider | call-local |
+| End and purge order | `LlmSessionActor` | durable (`TerminalRecorded`, `InputAdmitted`, `JournalPurged`) |
+| Purge execution | purge actor (child of the session) | durable delete in the child journal |
+| Recovery choice for each run | `LlmSessionActor.RecoverChildren` | durable parent lifecycle |
 | Prompt replay to a new subscriber | `LlmSessionActor` on subscribe | actor-local open entries |
 
 ### Examples
@@ -584,11 +638,15 @@ Withdrawal, negative: the parent cancels r-8a1. Alice clicks its old button. The
 withdrawn because the task that asked for it was cancelled. Nothing ran." It contains no run ID and no agent name.
 
 Durable wait, positive: a child parks. The operator adds an MCP server, and the daemon restarts. The prompt in Slack
-still works. Alice clicks "approve once". The session persists `Resumed`, starts a new child from the park file, and
-the parked call runs once.
+still works. Alice clicks "approve once". The session persists `Resumed`, recreates the child from its journal with
+the frozen system prompt and model, and the parked call runs once.
 
-Durable wait, negative: the park file was changed after the park. At the answer, the hash check fails. The session
-records the run as lost, and the call does not run.
+Durable wait, negative: the operator removed the child's model from the configuration before the answer. The resume
+fails. The parent records the run as lost with the reason `frozen_model_unavailable`, the notice says so, and the
+parked call does not run. The session does not use another model.
+
+Durable wait, negative: the daemon crashes after `Resumed` and before the child records the call result. Recovery
+records the run as lost. The call is not run again.
 
 ### Edge cases
 
@@ -603,8 +661,22 @@ records the run as lost, and the call does not run.
 | TUI parent turn ends (#2523) | The `UntilClosed` prompt stays until an answer or `ToolInteractionClosed`. |
 | Parent and child requests both open | The parent rule holds automated input. The pause adds the spawn refusal. The text answer guard applies across both. |
 | Restart, child parked (PR 3) | The run waits with no actor. The prompt stays live. The pause comes back. |
-| Restart, child not parked | The run is lost. Its prompts are withdrawn with `DaemonRestarted`. |
-| Agent definition removed before the answer | The resume fails to prepare the child. The session records the run as failed. The call does not run. |
+| Restart, child not parked | The run is lost and purged. Its prompts are withdrawn with `DaemonRestarted`. |
+| Agent definition removed before the answer | The frozen prompt and model do not depend on the definition. The resume runs if the model exists. |
+| Frozen model removed before the answer | The resume fails loudly. The run is lost with `frozen_model_unavailable`. |
+| Session expires (#2573) | Out of scope. A reaper finds the children by the `subagent-{escapedSessionId}/` prefix. |
+
+### Future scenarios
+
+- **Rehydrate running children after a graceful restart (next change, not this stack).** The drain asks each running
+  child to persist at its next round boundary: after its tool results are recorded. A tool still in flight finishes,
+  or the child records it as interrupted with a synthetic result. A call is never run again blindly. The child
+  persists `ChildMessagesRecorded` and a new `ChildSuspended` event, and the parent persists a new
+  `ChildRunEvent.Suspended`. The restart reminder wakes the parent, which replays its suspended children and continues
+  their model loops. The journal of this change supports it: `ChildMessagesRecorded` is an append-only batch, the
+  first event freezes the prompt and model, and the parent record decides which runs resume.
+- **Inter-agent messages.** One `AgentEvent` subtype for each tool (D1.5).
+- **Session retention (#2573).** Reap expired sessions and their child journals by persistence ID prefix.
 
 ### Changes to `docs/architecture/tool-authorization.md` (same PR as the code)
 
@@ -613,54 +685,58 @@ records the run as lost, and the call does not run.
   guard. Replace "Child prompts do not block an unrelated parent turn or the notice of another child" with the pause
   rule. Add the "bridge vs channel" table (D2) and the agent event channel rules (D1.2). Update the diagram.
 - 3.1 Admission: the pause is a new decision owner for input placement; the reminder fire replacement while paused.
-- 3.6 and 3.1 (PR 3): a child consent request survives a restart when the child is parked. Replace the TA-12 text
-  "After a daemon or parent restart, Netclaw SHALL reject the old child prompt as expired".
+- 3.6 (PR 3): a parked child's consent request survives a restart. Every answer for a child prompt takes the durable
+  path. Replace the TA-12 text "After a daemon or parent restart, Netclaw SHALL reject the old child prompt as
+  expired". State that the gates use the current policy on resume.
 - 7.5 Add a channel prompt: honor `Lifetime`, handle `ToolInteractionClosed`, skip a replayed call ID that is tracked.
-- 8 Future scenarios: "Inter-agent messages: Needs a contract (one `AgentEvent` subtype for each tool, D1.5)" and
-  "Batched consent: Not supported (Q2)".
+- 8 Future scenarios: inter-agent messages (Needs a contract), batched consent (Not supported, Q2), rehydrate running
+  children (Needs a contract, next change).
 
-### Spec deltas (written after this design is approved)
+### Spec deltas
 
 - New capability `agent-event-channel`: types, minimal envelope, owner-stamped sender, no free text, ordering,
   guarantees, rendering, bridge vs channel.
 - `tool-authorization` TA-12: prompt shows only command and scope; parent cannot answer; withdrawal reply; text
   answer guard; (PR 3) a parked child's prompt survives a restart.
 - `background-subagent-runs`: approval notices, the pause, withdrawal, `ChildRunEnded` in the channel; (PR 3) the
-  parked lifecycle, resume, and recovery.
-- `netclaw-session`: the `child-consent` input kind; automated input waits while paused.
-- `netclaw-scheduling`: a reminder fire into a paused session waits, and a later fire replaces it.
-- `session-resume`: (PR 3) recovery keeps parked child requests and withdraws the others with a reason.
+  parked lifecycle, resume, frozen model, purge, and recovery.
+- `netclaw-session`: the `child-consent` input kind; automated input waits while paused; reminder fire replacement.
+- `session-resume`: (PR 3) recovery keeps parked child requests, resumes answered parks, withdraws the others, and
+  purges ended child journals.
 - `channel-binding-parity`: `ToolInteractionClosed` redraw; `UntilClosed` prompts survive `TurnCompleted`; replayed
   prompts are not posted twice.
-- `netclaw-subagents`: (PR 3) a child parks at consent and stops; a new actor resumes it.
-- Glossary: add "agent event", "child consent pause", "parked child run", and "runtime notice".
+- `netclaw-subagents`: (PR 3) the child journal, its persistence ID, the frozen prompt and model, and park always.
+- Glossary (`docs/spec/GLOSSARY.md`): "agent event", "child consent pause", "parked child run", "child journal".
 
 ### Test strategy
 
-All tests are deterministic. They use Akka.TestKit probes, `AwaitAssertAsync`, and a fake `TimeProvider`. No test
-uses `Thread.Sleep` or `Task.Delay`.
+All tests are deterministic. They use Akka.TestKit probes, `AwaitAssertAsync`, an in-memory journal, and a fake
+`TimeProvider`. No test uses `Thread.Sleep` or `Task.Delay`. Each PR writes its failing tests first.
 
 - Channel: the sender of each event equals the owner's run record, also when a payload names another run; a marker in
   a child command never appears in a payload or a notice (property test); a field 14 row reads as `ChildRunEnded`; a
   rebuilt waiting notice keeps the `child-consent` kind.
-- Pause and digest (actor specs): five dispatches in one model call give one notice; an idle session gets one turn;
-  `spawn_agent` is refused while paused and accepted after the last close; a slash start is accepted; a person input
-  does not end the pause; automated input and `ChildRunEnded` wait and run after the last close.
+- Pause and digest: five dispatches in one model call give one notice; an idle session gets one turn; `spawn_agent` is
+  refused while paused and accepted after the last close; a slash start is accepted; a person input does not end the
+  pause; automated input and `ChildRunEnded` wait and run after the last close.
 - Reminders: two fires of one reminder while paused leave one pending input and run one turn; the closing notice lists
   the fire; an isolated reminder session never pauses.
 - Withdrawal: cancel emits `ToolInteractionClosed`; for each reason, the reply has the table text and contains no run
   ID and no agent name; a late click grants nothing and runs nothing.
 - Text answer guard: two open prompts resolve neither; one open prompt keeps the current behavior.
-- Durable wait (PR 3): park then restart, then answer, runs the call once; restart after the last answer and before
-  `Resumed` resumes; restart after `Resumed` records lost; a changed park file records lost; a batch with two parked
-  calls waits for both answers; prompt numbers after resume do not repeat; a session with only parked children
-  passivates and wakes on a click.
+- Durable wait (PR 3): each crash window in D8.7 gives its row's result; the parked call runs exactly once; a batch
+  with two parked calls waits for both answers; prompt numbers after resume do not repeat; the resumed child uses the
+  frozen prompt and model; a missing model ends the run as lost with no other model call; the purge happens only after
+  the notice is admitted; recovery purges a reported run with no `JournalPurged`; the persistence ID never appears in
+  the session catalog; a session with only parked children passivates and wakes on a click.
+- Serialization: a round trip for each new child event, the snapshot, and the three new `ChildRunEvent` cases; each
+  new type has a manifest and a mapper entry.
 - Builders and channels: a child prompt and its closed redraw show no agent name and no run ID; a replayed tracked
   call ID is not posted twice.
 - TUI: a headless typed-key test where a child prompt survives `TurnCompleted`, plus a native smoke tape.
-- Focused Stryker targets: the owner-stamped sender, the pause predicate in `AcceptChild` and in the drain, the
-  text answer guard, and the resume gate (`Resumed` before any parked call runs). They join the
-  `child-owner-and-report` group.
+- Focused Stryker targets: the owner-stamped sender; the pause predicate in `AcceptChild` and in the drain; the text
+  answer guard; the resume gate (`Resumed` before any parked call runs); the purge order (no purge before the notice).
+  They join the `child-owner-and-report` group.
 - Eval cases (`agent-coordination` skill): after an approval notice, the parent does not cancel or respawn a waiting
   child, and it tells the operator to answer.
 
@@ -675,28 +751,35 @@ uses `Thread.Sleep` or `Task.Delay`.
   A test asserts the order.
 - [A channel binding is not subscribed when recovery emits `ToolInteractionClosed`.] → The buttons stay live until a
   click. The click gets the D6 reply and the binding redraws.
-- [PR 3: the park file can be large, and it is written on each park.] → One write for each park, not for each round.
-  The file is deleted with the run folder.
-- [PR 3: a resumed child uses the current configuration and model.] → The retry passes every check again. A changed
-  tool policy refuses the call safely. The history keeps the original system prompt.
-- [PR 3: state that the park file does not hold is reset (token counters, watchdog, cycle tracker, temporary
-  correction hints).] → These shape telemetry and hints only. They grant no authority.
+- [PR 3: journal growth. A parked child's history with tool output can be large, and one database holds all
+  journals.] → The history is written only at a park and at the end. Snapshots bound replay. The purge removes the
+  journal at the end. Expired sessions wait for #2573.
+- [PR 3: purge order. An early purge loses the conversation before the parent has the result.] → The parent purges
+  only after the notice is admitted. A Stryker target guards the order. Recovery purges leftovers, so a late purge is
+  only extra storage.
+- [PR 3: replay cost at each resume.] → One replay for each answer batch, bounded by snapshots. It is small next to a
+  person's answer time.
+- [PR 3: frozen-model loss. A model removed from the configuration ends a parked run.] → Owner choice: no silent model
+  switch. The notice states the reason, and the parked call does not run.
+- [PR 3: forward-only rollout of new persisted types.] → New proto messages, manifests, and mapper entries for the
+  child events, the child snapshot, and three `ChildRunEvent` cases. An older binary cannot read them. Back up
+  `netclaw.db` before rollout. PRs 1 and 2 have no format change.
+- [PR 3: a crash after `Resumed` loses the run.] → Same rule as today for uncertain child work. The window is short.
 - [PR 3: two parked calls in one batch now both wait for both answers.] → Needed so that no call runs before the
   durable resume. The parent's own batches already work this way.
-- [PR 3: a crash after `Resumed` loses the run.] → Same rule as today for uncertain child work. The window is short.
-- [PR 3: the journal change is forward-only.] → Back up `netclaw.db` before rollout. PRs 1 and 2 have no format change.
+- [PR 3: the frozen model needs an exact lookup.] → `IChatClientProvider` resolves by role with a fallback to Main
+  today. PR 3 adds an exact lookup with no fallback. The open change `subagent-explicit-model-selection` touches the
+  same seam, so the PRs must agree.
 
-Conflicts with current specs or code that the deltas must resolve:
+Conflicts with current specs or code that the deltas resolve:
 
-- `SessionInputFlow.TryFindWaitingFire` drops the later fire today. P2 replaces the earlier fire while paused. The
-  design keeps the old rule for a fire that waits behind a parent consent request. One rule for both is simpler.
-  The owner can choose it later.
+- `SessionInputFlow.TryFindWaitingFire` drops the later fire today. P2 replaces the earlier fire while paused. The rule
+  for a fire that waits behind a parent consent request stays. One rule for both is deferred (R2).
 - TA-12 says that a restart expires an old child prompt, and the bridge comment says that a child cannot resume. PR 3
   changes both.
-- background-subagent-runs says that a child worker stays ephemeral. PR 3 keeps the actor ephemeral and makes only
-  the parked state durable. The delta must say so.
-- The design first listed a TUI reopen of old prompts as a non-goal. PR 3 needs it, because a parked prompt now
-  outlives the client connection.
+- background-subagent-runs says that a child worker stays ephemeral. PR 3 keeps "no relaunch of uncertain work" and
+  recreates only a parked run, where nothing ran.
+- A TUI reopen of old prompts was a non-goal. PR 3 needs it, because a parked prompt now outlives the client connection.
 
 ## Migration Plan
 
@@ -704,17 +787,12 @@ Three PRs, stacked. Each PR carries its spec deltas, doc changes, and skill chan
 
 1. Channel types, the approval notice digest, the pause, and the reminder fire rule. No journal format change.
 2. Withdrawal, prompt `Lifetime`, the channel and TUI redraw, and the text answer guard. No journal format change.
-3. The durable child wait (#2572): `ChildRunEvent.Parked` and `Resumed`, the `Parked` lifecycle case, the park file,
-   resume, recovery, and prompt replay to a new subscriber. Forward-only journal change. Back up `netclaw.db`.
+3. The durable child wait (#2572): the persistent child, its journal and snapshot, the parent `Parked`, `Resumed`, and
+   `JournalPurged` cases, resume, purge, recovery, and prompt replay to a new subscriber. Forward-only. Back up
+   `netclaw.db`.
 
 Rollback: PRs 1 and 2 roll back with the binary. PR 3 needs the backup, or a roll forward.
 
 ## Open Questions
 
-The owner decided Q1 to Q6 and P1 to P6 (see Context). These questions remain. Each has a recommendation.
-
-- **R1. Park always, or park only at a drain?** Recommendation: always. One resume path serves a live answer and an
-  answer after a restart, so every live answer tests the path. A waiting session can passivate. The cost is one child
-  rebuild for each answer, which is small next to a person's answer time.
-- **R2. One reminder rule for all waits?** Recommendation: yes, in a later change. Use "the later fire replaces the
-  earlier one" also behind a parent consent request.
+None for this stack. The owner decided Q1 to Q6, P1 to P10, R1, and R2.
