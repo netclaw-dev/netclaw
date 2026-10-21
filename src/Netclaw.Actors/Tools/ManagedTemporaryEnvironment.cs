@@ -164,13 +164,13 @@ internal static class ManagedTemporaryEnvironment
             return $"Error: The managed temporary folder '{folder}' does not exist after it was created.";
 
         if (facts.IsSymbolicLink)
-            return $"Error: The managed temporary folder '{folder}' is a symbolic link. The shell did not start.";
+            return $"Error: The managed temporary folder '{folder}' is a symbolic link. The operation was refused.";
 
         if (facts.OwnerUserId != inspector.EffectiveUserId)
-            return $"Error: The managed temporary folder '{folder}' is owned by user {facts.OwnerUserId}, not by the daemon user {inspector.EffectiveUserId}. The shell did not start.";
+            return $"Error: The managed temporary folder '{folder}' is owned by user {facts.OwnerUserId}, not by the daemon user {inspector.EffectiveUserId}. The operation was refused.";
 
         if ((facts.Mode & GroupAndOtherBits) != 0)
-            return $"Error: The managed temporary folder '{folder}' allows group or other access. The shell did not start.";
+            return $"Error: The managed temporary folder '{folder}' allows group or other access. The operation was refused.";
 
         return null; // the folder passed every check
     }

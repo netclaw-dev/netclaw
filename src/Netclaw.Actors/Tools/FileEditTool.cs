@@ -89,21 +89,13 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>, IMa
         try
         {
             var directory = System.IO.Path.GetDirectoryName(authorizedPath);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            if (!string.IsNullOrEmpty(directory))
             {
-                // SECURITY (issue #2554): a write can be the first to make a folder below the
-                // private temporary base, for example in a Team session, which has no shell. The
-                // write uses the folder creator of the shell launch first: it makes and checks the
-                // base, the key folder, and the run folder, so no folder gets group or other access.
-                // A failed check refuses the write.
-                if (context.SessionStorage?.ManagedTemporary is { PrivateBase: { } privateBase } temporary
-                    && CanonicalPath.IsWithin(directory, privateBase.Value, CanonicalPath.HostStyle, ignoreCase: true)
-                    && ManagedTemporaryEnvironment.EnsureFolders(temporary) is { } refusal)
-                {
-                    return context.AccessDenied(refusal);
-                }
+                if (RefuseUnsafeManagedFolders(directory, context) is { } refused)
+                    return refused;
 
-                Directory.CreateDirectory(directory);
+                if (!Directory.Exists(directory))
+                    Directory.CreateDirectory(directory);
             }
 
             var bytes = Encoding.UTF8.GetBytes(content);
@@ -138,6 +130,12 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>, IMa
             return context.PathAccessFailure(denied.Error, denied.Failure);
 
         var authorizedPath = access.GetAllowedPath();
+
+        if (System.IO.Path.GetDirectoryName(authorizedPath) is { Length: > 0 } directory
+            && RefuseUnsafeManagedFolders(directory, context) is { } refused)
+        {
+            return refused;
+        }
 
         if (!File.Exists(authorizedPath))
             return context.NotFound($"Error: File not found: {authorizedPath}");
@@ -205,6 +203,24 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>, IMa
         {
             return context.TransientFailure($"Error editing file: {ex.Message}");
         }
+    }
+
+    // SECURITY (issues #2554, #2559 B1-R): a file tool can be the first writer below the private
+    // temporary base, for example in a Team session, which has no shell. Another local user can
+    // also make the folders first. Each read-modify-write or write below the base therefore runs
+    // the folder creator and checks of the shell launch on the base and the key folder, also when
+    // the target folder exists. A failed check refuses the call, and a missing folder is made
+    // only after the check passes. There is no second folder creator.
+    private static string? RefuseUnsafeManagedFolders(string directory, ToolInvocationContext context)
+    {
+        if (context.SessionStorage?.ManagedTemporary is { PrivateBase: { } privateBase } temporary
+            && CanonicalPath.IsWithin(directory, privateBase.Value, CanonicalPath.HostStyle, ignoreCase: true)
+            && ManagedTemporaryEnvironment.EnsureFolders(temporary) is { } refusal)
+        {
+            return context.AccessDenied(refusal);
+        }
+
+        return null;
     }
 
     private static int CountOccurrences(string content, string search)
