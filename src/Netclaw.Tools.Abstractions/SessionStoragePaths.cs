@@ -165,7 +165,7 @@ public readonly record struct ManagedTemporaryLocation
     /// <c>null</c> for a location inside session storage (Windows) and for a persisted record.
     /// </summary>
     /// <remarks>
-    /// <c>ManagedTemporaryEnvironment.Prepare</c> runs the private-folder checks (mode 0700, owner,
+    /// <c>ManagedTemporaryEnvironment.EnsureFolders</c> runs the private-folder checks (mode 0700, owner,
     /// no link) on this base and on <see cref="StorageRoot"/> when the value is present.
     /// </remarks>
     public ManagedTemporaryBase? PrivateBase { get; }

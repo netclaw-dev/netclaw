@@ -73,6 +73,22 @@ read -r key_start key_end < <(
   ' "$source_file"
 )
 
+# Review item S1 of PR #2559: a configured Team or Public root over the base does not reach the
+# key folder of another session. The span holds the audience check and the three path checks.
+read -r other_start other_end < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $start_marker = "=> context.Audience != TrustAudience.Personal";
+    $end_marker = "temporary.StorageRoot.Value, path.Style, ignoreCase: false);";
+    $start = index($_, $start_marker);
+    die "The other-key start marker is missing or duplicated.\n"
+      if $start < 0 || index($_, $start_marker, $start + 1) >= 0;
+    $end_start = index($_, $end_marker, $start);
+    die "The other-key end marker is missing or duplicated.\n"
+      if $end_start < 0 || index($_, $end_marker, $end_start + 1) >= 0;
+    print "$start ", $end_start + length($end_marker), "\n";
+  ' "$source_file"
+)
+
 # Issue #2554, Fix B: the folder checks of the managed temporary base and key folder (a missing
 # folder, a link, a foreign owner, a group or other bit).
 read -r folder_start folder_end < <(
@@ -97,6 +113,7 @@ read -r folder_start folder_end < <(
     --mutate "Tools/PathAccessPolicy.cs{$read_start..$read_end}" \
     --mutate "Tools/PathAccessPolicy.cs{$reach_start..$reach_end}" \
     --mutate "Tools/PathAccessPolicy.cs{$key_start..$key_end}" \
+    --mutate "Tools/PathAccessPolicy.cs{$other_start..$other_end}" \
     --mutate "Tools/ManagedTemporaryEnvironment.cs{$folder_start..$folder_end}" \
     --output "$output_path" \
     --skip-version-check
@@ -108,7 +125,7 @@ tested_count="$(
 )"
 killed_count="$(jq '[.files[].mutants[] | select(.status == "Killed")] | length' "$report")"
 
-if [[ "$tested_count" -ne 24 || "$killed_count" -ne 24 ]]; then
-  echo "Expected 24 killed path-access mutants. Found $killed_count killed from $tested_count tested." >&2
+if [[ "$tested_count" -ne 30 || "$killed_count" -ne 30 ]]; then
+  echo "Expected 30 killed path-access mutants. Found $killed_count killed from $tested_count tested." >&2
   exit 1
 fi

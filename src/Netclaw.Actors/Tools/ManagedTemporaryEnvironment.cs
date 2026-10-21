@@ -25,10 +25,8 @@ internal static class ManagedTemporaryEnvironment
         => Prepare(startInfo, location, HostManagedTemporaryFolderInspector.Instance);
 
     /// <summary>
-    /// Prepares the directory with an explicit folder inspector. For a location with a
-    /// <see cref="ManagedTemporaryLocation.PrivateBase"/>, the base and the key folder must
-    /// each be a folder that is not a link, that the daemon user owns, and that has no
-    /// group or other permission bits. A failed check refuses the launch (issue #2554).
+    /// Prepares the directory with an explicit folder inspector, then sets the temporary
+    /// variables on the child process.
     /// </summary>
     internal static string? Prepare(
         ProcessStartInfo startInfo,
@@ -36,12 +34,38 @@ internal static class ManagedTemporaryEnvironment
         IManagedTemporaryFolderInspector inspector)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
+        if (EnsureFolders(location, inspector) is { } refusal)
+            return refusal;
+
+        // The shell parser resolves these variables from the same values (ShellExecutionEnvironment.CreateLaunchEnvironment).
+        ShellExecutionEnvironment.ApplyTemporaryVariables(startInfo.Environment, location);
+        return null;
+    }
+
+    /// <summary>
+    /// Creates and checks the folders of one location. The shell launch and each file tool
+    /// write below the private base use this one path, so the first writer cannot leave a
+    /// folder with group or other access (issue #2554).
+    /// </summary>
+    /// <remarks>
+    /// For a location with a <see cref="ManagedTemporaryLocation.PrivateBase"/>, the base and the
+    /// key folder must each be a folder that is not a link, that the daemon user owns, and that
+    /// has no group or other permission bits. A failed check refuses the operation.
+    /// </remarks>
+    /// <returns><c>null</c> on success; otherwise, a stable error that refuses the operation.</returns>
+    internal static string? EnsureFolders(ManagedTemporaryLocation location)
+        => EnsureFolders(location, HostManagedTemporaryFolderInspector.Instance);
+
+    private static string? EnsureFolders(
+        ManagedTemporaryLocation location,
+        IManagedTemporaryFolderInspector inspector)
+    {
         ArgumentNullException.ThrowIfNull(inspector);
 
         try
         {
-            // The private folders come first: an unsafe base or key folder refuses the launch before
-            // anything else is created or set. There is no fallback to another directory.
+            // The private folders come first: an unsafe base or key folder refuses the operation
+            // before anything else is created. There is no fallback to another directory.
             if (location.PrivateBase is { } privateBase
                 && CheckPrivateFolders(privateBase, location, inspector) is { } refusal)
             {
@@ -67,8 +91,6 @@ internal static class ManagedTemporaryEnvironment
             if (FileSystemAuthority.EvaluateMembership(temporary, storage) is not PathDecision.Allowed)
                 return "Error: The managed temporary directory contains an unsafe filesystem link.";
 
-            // The shell parser resolves these variables from the same values (ShellExecutionEnvironment.CreateLaunchEnvironment).
-            ShellExecutionEnvironment.ApplyTemporaryVariables(startInfo.Environment, location);
             return null;
         }
         catch (Exception ex) when (ex is ArgumentException
@@ -109,7 +131,7 @@ internal static class ManagedTemporaryEnvironment
     /// first, or plant a link there. A folder that already exists is never changed (no chmod, no
     /// chown): a changed foreign folder would hide the problem. The checks are call-local and no
     /// sandbox against a concurrent change; the link check after creation in
-    /// <see cref="Prepare(ProcessStartInfo, ManagedTemporaryLocation, IManagedTemporaryFolderInspector)"/>
+    /// <see cref="EnsureFolders(ManagedTemporaryLocation, IManagedTemporaryFolderInspector)"/>
     /// stays. A native error from the inspector throws, and the caller reports it as a refusal.
     /// </remarks>
     /// <returns><c>null</c> when both folders pass; otherwise the error that refuses the launch.</returns>
@@ -313,7 +335,7 @@ internal sealed partial class HostManagedTemporaryFolderInspector : IManagedTemp
     private static IOException NativeFailure(string call, string path, int errno)
         => new($"The call {call} failed for '{path}': {Marshal.GetPInvokeErrorMessage(errno)} (errno {errno}).");
 
-    // glibc 2.28 and musl 1.2 export statx.
+    // glibc 2.28 and musl 1.2.5 export statx.
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial int statx(int dirfd, string path, int flags, uint mask, Span<byte> buffer);
 

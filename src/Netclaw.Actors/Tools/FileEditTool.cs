@@ -7,6 +7,7 @@ using System.ComponentModel;
 using System.Text;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 
 using PathAccessDecision = Netclaw.Actors.Tools.PathAccessPolicy.PathAccessDecision;
@@ -88,8 +89,22 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>, IMa
         try
         {
             var directory = System.IO.Path.GetDirectoryName(authorizedPath);
-            if (!string.IsNullOrEmpty(directory))
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                // SECURITY (issue #2554): a write can be the first to make a folder below the
+                // private temporary base, for example in a Team session, which has no shell. The
+                // write uses the folder creator of the shell launch first: it makes and checks the
+                // base, the key folder, and the run folder, so no folder gets group or other access.
+                // A failed check refuses the write.
+                if (context.SessionStorage?.ManagedTemporary is { PrivateBase: { } privateBase } temporary
+                    && CanonicalPath.IsWithin(directory, privateBase.Value, CanonicalPath.HostStyle, ignoreCase: true)
+                    && ManagedTemporaryEnvironment.EnsureFolders(temporary) is { } refusal)
+                {
+                    return context.AccessDenied(refusal);
+                }
+
                 Directory.CreateDirectory(directory);
+            }
 
             var bytes = Encoding.UTF8.GetBytes(content);
 

@@ -25,6 +25,9 @@ public sealed class SessionStorageResolverTests : IDisposable
         Path.GetTempPath(),
         $"netclaw-session-storage-{Guid.NewGuid():N}");
 
+    // These tests do not need the /tmp base, so the folder stays in the session envelope.
+    private static readonly ManagedTemporaryLayout Deep = ManagedTemporaryLayout.InsideSessionStorage.Instance;
+
     public void Dispose()
     {
         SqliteTestPools.Clear(new NetclawPaths(_basePath));
@@ -37,7 +40,7 @@ public sealed class SessionStorageResolverTests : IDisposable
     {
         var paths = CreatePaths();
         await MigrateAsync(paths, paths.SqliteDbPath);
-        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider());
+        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep);
         var sessionId = new SessionId("signalr/new-session");
         using var ready = new CountdownEvent(16);
         using var start = new ManualResetEventSlim();
@@ -77,7 +80,7 @@ public sealed class SessionStorageResolverTests : IDisposable
         }
         pooledConnection.Close();
 
-        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider())
+        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep)
             .Resolve(new SessionId("signalr/isolated-connection"));
 
         Assert.NotNull(storage.Binding);
@@ -113,11 +116,13 @@ public sealed class SessionStorageResolverTests : IDisposable
         var first = new SqliteSessionStorageResolver(
             paths,
             new FakeTimeProvider(),
-            Path.Combine(_basePath, "candidate-a"));
+            Path.Combine(_basePath, "candidate-a"),
+            Deep);
         var second = new SqliteSessionStorageResolver(
             paths,
             new FakeTimeProvider(),
-            Path.Combine(_basePath, "candidate-b"));
+            Path.Combine(_basePath, "candidate-b"),
+            Deep);
         using var ready = new CountdownEvent(2);
         using var start = new ManualResetEventSlim();
 
@@ -136,7 +141,7 @@ public sealed class SessionStorageResolverTests : IDisposable
     {
         var paths = CreatePaths();
         await MigrateAsync(paths, paths.SqliteDbPath);
-        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider());
+        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep);
         var sessionId = new SessionId("signalr/stable-session");
         var first = resolver.Resolve(sessionId);
         Directory.CreateDirectory(first.Binding!.EnvelopeRoot.Value);
@@ -145,7 +150,8 @@ public sealed class SessionStorageResolverTests : IDisposable
         var second = new SqliteSessionStorageResolver(
             paths,
             new FakeTimeProvider(),
-            alternateSessionsRoot).Resolve(sessionId);
+            alternateSessionsRoot,
+            Deep).Resolve(sessionId);
 
         Assert.Equal(
             Path.Combine(alternateSessionsRoot, Path.GetFileName(first.Binding.EnvelopeRoot.Value)),
@@ -163,7 +169,7 @@ public sealed class SessionStorageResolverTests : IDisposable
         {
             await MigrateAsync(oldPaths, oldPaths.SqliteDbPath);
             var sessionId = new SessionId("signalr/restored-session");
-            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider()).Resolve(sessionId);
+            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider(), Deep).Resolve(sessionId);
             var envelopeName = Path.GetFileName(original.Binding!.EnvelopeRoot.Value);
             Directory.CreateDirectory(original.SessionDirectory.Value);
             File.WriteAllText(Path.Combine(original.SessionDirectory.Value, "notes.txt"), "kept");
@@ -175,7 +181,7 @@ public sealed class SessionStorageResolverTests : IDisposable
             Directory.Move(oldPaths.SessionsDirectory, newPaths.SessionsDirectory);
             Directory.Delete(oldHome, recursive: true);
 
-            var restored = new SqliteSessionStorageResolver(newPaths, new FakeTimeProvider()).Resolve(sessionId);
+            var restored = new SqliteSessionStorageResolver(newPaths, new FakeTimeProvider(), Deep).Resolve(sessionId);
 
             Assert.Equal(Path.Combine(newPaths.SessionsDirectory, envelopeName), restored.Binding!.EnvelopeRoot.Value);
             Assert.Equal("kept", File.ReadAllText(Path.Combine(restored.SessionDirectory.Value, "notes.txt")));
@@ -254,7 +260,7 @@ public sealed class SessionStorageResolverTests : IDisposable
         {
             await MigrateAsync(oldPaths, oldPaths.SqliteDbPath);
             var sessionId = new SessionId("signalr/copied-home");
-            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider()).Resolve(sessionId);
+            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider(), Deep).Resolve(sessionId);
             Directory.CreateDirectory(original.SessionDirectory.Value);
             File.WriteAllText(Path.Combine(original.SessionDirectory.Value, "notes.txt"), "original");
             SqliteTestPools.Clear(oldPaths);
@@ -264,7 +270,7 @@ public sealed class SessionStorageResolverTests : IDisposable
             File.WriteAllText(Path.Combine(currentEnvelope, "workspace", "notes.txt"), "copy");
 
             var log = new CapturingLogger();
-            var resolved = new SqliteSessionStorageResolver(currentPaths, new FakeTimeProvider(), log).Resolve(sessionId);
+            var resolved = new SqliteSessionStorageResolver(currentPaths, new FakeTimeProvider(), Deep, log).Resolve(sessionId);
 
             Assert.Equal(currentEnvelope, resolved.Binding!.EnvelopeRoot.Value);
             Assert.Equal("copy", File.ReadAllText(Path.Combine(resolved.SessionDirectory.Value, "notes.txt")));
@@ -292,14 +298,14 @@ public sealed class SessionStorageResolverTests : IDisposable
         {
             await MigrateAsync(oldPaths, oldPaths.SqliteDbPath);
             var sessionId = new SessionId("signalr/recreated-old-path");
-            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider()).Resolve(sessionId);
+            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider(), Deep).Resolve(sessionId);
             Directory.CreateDirectory(original.SessionDirectory.Value);
             File.WriteAllText(Path.Combine(original.SessionDirectory.Value, "notes.txt"), "stranded");
             SqliteTestPools.Clear(oldPaths);
             File.Copy(oldPaths.SqliteDbPath, currentPaths.SqliteDbPath);
 
             var log = new CapturingLogger();
-            var resolver = new SqliteSessionStorageResolver(currentPaths, new FakeTimeProvider(), log);
+            var resolver = new SqliteSessionStorageResolver(currentPaths, new FakeTimeProvider(), Deep, log);
             var resolved = resolver.Resolve(sessionId);
             resolver.Resolve(sessionId);
 
@@ -331,10 +337,10 @@ public sealed class SessionStorageResolverTests : IDisposable
         {
             await MigrateAsync(oldPaths, oldPaths.SqliteDbPath);
             var sessionId = new SessionId("signalr/moved-spill");
-            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider()).Resolve(sessionId);
+            var original = new SqliteSessionStorageResolver(oldPaths, new FakeTimeProvider(), Deep).Resolve(sessionId);
             SqliteTestPools.Clear(oldPaths);
             File.Copy(oldPaths.SqliteDbPath, currentPaths.SqliteDbPath);
-            var resolved = new SqliteSessionStorageResolver(currentPaths, new FakeTimeProvider()).Resolve(sessionId);
+            var resolved = new SqliteSessionStorageResolver(currentPaths, new FakeTimeProvider(), Deep).Resolve(sessionId);
             Assert.False(Directory.Exists(resolved.SessionDirectory.Value));
             var options = new TestToolExecutionContextOptions { Audience = TrustAudience.Personal };
 
@@ -383,7 +389,7 @@ public sealed class SessionStorageResolverTests : IDisposable
         }
 
         var log = new CapturingLogger();
-        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), log);
+        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep, log);
         using var ready = new CountdownEvent(16);
         using var start = new ManualResetEventSlim();
         var tasks = Enumerable.Range(0, 16)
@@ -406,10 +412,10 @@ public sealed class SessionStorageResolverTests : IDisposable
         var paths = CreatePaths();
         await MigrateAsync(paths, paths.SqliteDbPath);
         var log = new CapturingLogger();
-        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), log);
+        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep, log);
         var sessionId = new SessionId("signalr/unmoved");
         resolver.Resolve(sessionId);
-        new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), log).Resolve(sessionId);
+        new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep, log).Resolve(sessionId);
 
         Assert.Empty(log.Warnings);
     }
@@ -424,7 +430,7 @@ public sealed class SessionStorageResolverTests : IDisposable
         Directory.CreateDirectory(legacyDirectory);
         File.WriteAllText(Path.Combine(legacyDirectory, "existing.txt"), "keep");
 
-        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider()).Resolve(sessionId);
+        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep).Resolve(sessionId);
 
         Assert.Null(storage.Binding);
         Assert.Equal(legacyDirectory, storage.SessionDirectory.Value);
@@ -437,7 +443,7 @@ public sealed class SessionStorageResolverTests : IDisposable
     {
         var paths = CreatePaths();
         await MigrateAsync(paths, paths.SqliteDbPath);
-        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider());
+        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep);
 
         var first = resolver.Resolve(new SessionId("channel/a_b"));
         var second = resolver.Resolve(new SessionId("channel/a/b"));
@@ -465,7 +471,7 @@ public sealed class SessionStorageResolverTests : IDisposable
             command.ExecuteNonQuery();
         }
 
-        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider()).Resolve(sessionId);
+        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep).Resolve(sessionId);
 
         Assert.Null(storage.Binding);
         Assert.Equal(
@@ -505,7 +511,7 @@ public sealed class SessionStorageResolverTests : IDisposable
             command.ExecuteNonQuery();
         }
 
-        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider()).Resolve(sessionId);
+        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep).Resolve(sessionId);
 
         Assert.Null(storage.Binding);
         Assert.Equal(0, CountBindings(paths));
@@ -516,7 +522,7 @@ public sealed class SessionStorageResolverTests : IDisposable
     {
         var paths = CreatePaths();
         await MigrateAsync(paths, paths.SqliteDbPath);
-        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider());
+        var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep);
         var sessionId = new SessionId("signalr/cached-session");
 
         var first = resolver.Resolve(sessionId);
@@ -546,7 +552,7 @@ public sealed class SessionStorageResolverTests : IDisposable
             command.ExecuteNonQuery();
         }
 
-        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider()).Resolve(sessionId);
+        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider(), Deep).Resolve(sessionId);
 
         Assert.Null(storage.Binding);
         Assert.Equal(0, CountBindings(paths));

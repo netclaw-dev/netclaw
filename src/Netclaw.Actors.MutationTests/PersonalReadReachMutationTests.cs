@@ -21,8 +21,9 @@ namespace Netclaw.Actors.MutationTests;
 /// <item>Fix A, the write mode check: <see cref="Personal_read_reaches_everywhere_only_for_write_all"/>.</item>
 /// <item>Fix A, the root union: <see cref="Personal_read_and_attach_add_the_write_roots"/>.</item>
 /// <item>Fix B, key folder versus base: <see cref="Key_folder_is_a_root_and_the_base_is_not"/>.</item>
+/// <item>Review item S1, a configured root over the base: <see cref="A_root_over_the_base_does_not_reach_another_key_folder"/>.</item>
 /// </list>
-/// The folder checks of <c>ManagedTemporaryEnvironment.Prepare</c> are in the
+/// The folder checks of <c>ManagedTemporaryEnvironment.EnsureFolders</c> are in the
 /// linked <c>ManagedTemporaryFolderCheckTests</c>.
 /// </summary>
 public sealed class PersonalReadReachMutationTests : IDisposable
@@ -133,6 +134,40 @@ public sealed class PersonalReadReachMutationTests : IDisposable
         Assert.True(Allowed(policy, context, Path.Combine(own.ManagedTemporary.Directory.Value, "x"), PathAccessPolicy.FileOperation.Write));
         Assert.False(Allowed(policy, context, Path.Combine(other.ManagedTemporary.Directory.Value, "x"), PathAccessPolicy.FileOperation.Read));
         Assert.False(Allowed(policy, context, Path.Combine(temporaryBase, "x"), PathAccessPolicy.FileOperation.Read));
+    }
+
+    // Review item S1: a configured root over the base reaches the base and the own key folder,
+    // never the key folder of another session. The deny compares without case and the own key
+    // folder compares with case, so a case variant fails closed.
+    [Theory]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Public)]
+    public void A_root_over_the_base_does_not_reach_another_key_folder(TrustAudience audience)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var temporaryBase = Path.Combine(_basePath, "netclaw-base");
+        var layout = new ManagedTemporaryLayout.PrivateBase(new ManagedTemporaryBase(temporaryBase));
+        var own = SessionStoragePaths.CreateVersion2(
+            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "a")), layout);
+        var other = SessionStoragePaths.CreateVersion2(
+            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "b")), layout);
+        var config = new ToolConfig();
+        var profile = audience == TrustAudience.Team ? config.AudienceProfiles.Team : config.AudienceProfiles.Public;
+        profile.ReadFiles = Roots(_basePath);
+        var policy = new PathAccessPolicy(config, _paths, new ToolPathPolicy([]));
+        var context = Context(audience, own);
+        var read = PathAccessPolicy.FileOperation.Read;
+        var ownKey = Path.GetFileName(own.ManagedTemporary.StorageRoot.Value);
+        var otherKey = Path.GetFileName(other.ManagedTemporary.StorageRoot.Value);
+
+        Assert.True(Allowed(policy, context, Path.Combine(own.ManagedTemporary.Directory.Value, "x"), read));
+        Assert.True(Allowed(policy, context, temporaryBase, read));
+        Assert.True(Allowed(policy, context, Path.Combine(_basePath, "NETCLAW-BASE"), read));
+        Assert.False(Allowed(policy, context, Path.Combine(other.ManagedTemporary.Directory.Value, "x"), read));
+        Assert.False(Allowed(policy, context, Path.Combine(_basePath, "NETCLAW-BASE", otherKey, "p", "x"), read));
+        Assert.False(Allowed(policy, context, Path.Combine(temporaryBase, ownKey.ToUpperInvariant(), "p", "x"), read));
     }
 
     private SessionStoragePaths Deep()

@@ -149,8 +149,8 @@ internal sealed class TemporaryPathCorrectionPolicy
     // On POSIX the managed temporary folder is itself below /tmp (issue #2554). Advice that
     // sends the agent from its own folder to the same folder would be noise. Only the folder of
     // this call is exempt: the folder of another session is a different path and still gets advice.
-    // A shell call needs no such check. Its advice starts only when the working directory is the
-    // platform temporary root itself, and the own folder is a child of that root.
+    // The shell routes have their own skip: the project-output route (#2563) skips a redirect into
+    // the own folder, and the working-directory route starts only at the platform temporary root.
     private bool IsInsideOwnManagedTemporaryDirectory(string path, string managedTemporaryDirectory)
         => TryNormalizePath(path, out var target)
            && TryNormalizePath(managedTemporaryDirectory, out var own)

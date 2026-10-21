@@ -58,26 +58,6 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
     {
     }
 
-    // The next two constructors keep the managed temporary folder inside the session envelope.
-    // Tests use them for a fixture that does not need the /tmp base. They are not public, so the
-    // dependency injection container cannot choose them.
-    internal SqliteSessionStorageResolver(
-        NetclawPaths paths,
-        TimeProvider timeProvider,
-        ILogger<SqliteSessionStorageResolver>? logger = null)
-        : this(paths, timeProvider, paths.SessionsDirectory, ManagedTemporaryLayout.InsideSessionStorage.Instance, logger)
-    {
-    }
-
-    internal SqliteSessionStorageResolver(
-        NetclawPaths paths,
-        TimeProvider timeProvider,
-        string sessionsDirectory,
-        ILogger<SqliteSessionStorageResolver>? logger = null)
-        : this(paths, timeProvider, sessionsDirectory, ManagedTemporaryLayout.InsideSessionStorage.Instance, logger)
-    {
-    }
-
     internal SqliteSessionStorageResolver(
         NetclawPaths paths,
         TimeProvider timeProvider,
@@ -85,11 +65,11 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
         ManagedTemporaryLayout temporaryLayout,
         ILogger<SqliteSessionStorageResolver>? logger = null)
     {
-        ArgumentNullException.ThrowIfNull(temporaryLayout);
-        _temporaryLayout = temporaryLayout;
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionsDirectory);
+        ArgumentNullException.ThrowIfNull(temporaryLayout);
+        _temporaryLayout = temporaryLayout;
 
         _connectionString = new SqliteConnectionStringBuilder
         {

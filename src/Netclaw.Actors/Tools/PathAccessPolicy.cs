@@ -200,6 +200,14 @@ internal sealed class PathAccessPolicy
         if (stoppedAtUnusableRoot && decision is PathDecision.Outside)
             decision = PathDecision.Unverifiable;
 
+        if (decision is PathDecision.Allowed && IsInOtherTemporaryKeyFolder(path, context))
+        {
+            return PathAccessDecision.Deny(
+                $"Error: {label} trust context may not access the managed temporary folder of another session.",
+                PathAccessFailure.AccessDenied,
+                fullPath);
+        }
+
         return decision switch
         {
             PathDecision.Allowed => PathAccessDecision.Allow(fullPath),
@@ -716,6 +724,26 @@ internal sealed class PathAccessPolicy
         if (!string.IsNullOrWhiteSpace(context.SessionDirectory))
             roots.Add(context.SessionDirectory);
     }
+
+    /// <summary>
+    /// Returns true when a Team or Public path is below the private temporary base and outside
+    /// the own key folder.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY (issue #2554): the base holds the key folder of each session. A configured Team or
+    /// Public root can cover the base, for example <c>/tmp</c>. Below the base, only the own key
+    /// folder stays reachable. The base itself stays reachable, so a list or a search can walk to
+    /// the own key folder; each entry below it gets this check. Personal reaches every session, as
+    /// it does in the sessions folder. The check is lexical: a bounded root refuses a link below
+    /// it, and a protected path still wins in the own key folder.
+    /// </remarks>
+    private static bool IsInOtherTemporaryKeyFolder(CanonicalPath path, ToolInvocationContext context)
+        => context.Audience != TrustAudience.Personal
+           && context.SessionStorage?.ManagedTemporary is { PrivateBase: { } privateBase } temporary
+           && CanonicalPath.IsWithin(path.Value, privateBase.Value, path.Style, ignoreCase: true)
+           // Not the base itself: the path is below the base, so only an equal path contains the base.
+           && !CanonicalPath.IsWithin(privateBase.Value, path.Value, path.Style, ignoreCase: true)
+           && !CanonicalPath.IsWithin(path.Value, temporary.StorageRoot.Value, path.Style, ignoreCase: false);
 
     /// <summary>Builds the held boundaries for a file path from its trusted roots.</summary>
     private List<PathBoundary> CreateRootBoundaries(
