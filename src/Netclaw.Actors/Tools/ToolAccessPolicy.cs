@@ -738,16 +738,15 @@ public sealed class ToolAccessPolicy
     }
 
     /// <summary>
-    /// Keeps a prompt for a command that runs no program when the file tool of
-    /// one of its redirects needs consent and no grant of that tool covers it.
+    /// Retains exact consent for redirects that need a file-tool grant.
     /// </summary>
     /// <remarks>
     /// SECURITY: a redirect is a file write (or a read) without the file tool.
     /// When the operator set <c>file_write</c> or <c>file_read</c> to
-    /// <c>Approval</c>, the redirect must not skip that consent. The candidate
-    /// becomes exact: its name lists each write and read that needs consent,
-    /// the prompt shows the full command, and it offers only "Once" and
-    /// "Deny". The candidate keeps its mark, so
+    /// <c>Approval</c>, each file operation retains its own exact candidate.
+    /// A composed redirect also retains an exact command candidate.
+    /// The prompt shows the full command and offers only "Once" and "Deny".
+    /// Each candidate keeps its mark, so
     /// <see cref="ScreenNoProgramRedirects"/> still judges each redirect of
     /// the command before the prompt.
     /// </remarks>
@@ -764,23 +763,29 @@ public sealed class ToolAccessPolicy
 
         var facts = ShellPolicyPathFacts.Create(approval.Candidates, ShellEnvironment.PathStyle);
         var candidates = approval.Candidates
-            .Select((candidate, index) =>
+            .SelectMany((candidate, index) =>
             {
                 if (!candidate.RunsNoProgram && !candidate.UsesFileToolRedirects)
-                    return candidate;
+                    return new[] { candidate };
 
                 var names = RedirectsThatNeedConsent(facts[index], context)
                     .Where(call => !granted.Contains(call))
                     .Select(static call => $"{(call.Tool == FileReadTool.ToolName ? "read" : "write")} {call.Path}")
                     .ToArray();
-                return names.Length == 0
-                    ? candidate
-                    : candidate with
-                    {
-                        Verb = string.Join(", ", names),
-                        VerbTokens = null,
-                        Unresolved = ShellUnresolvedPart.Command
-                    };
+                if (names.Length == 0)
+                    return new[] { candidate };
+
+                var fileCandidates = names.Select(name => candidate with
+                {
+                    Verb = name,
+                    VerbTokens = null,
+                    Unresolved = ShellUnresolvedPart.Command
+                });
+                // A Once answer must bind the command as well as its file operations, even with a stored command grant.
+                if (!candidate.UsesFileToolRedirects)
+                    return fileCandidates;
+
+                return fileCandidates.Prepend(candidate with { VerbTokens = null, Unresolved = ShellUnresolvedPart.Command });
             })
             .ToArray();
         return approval with { Candidates = Array.AsReadOnly(candidates) };

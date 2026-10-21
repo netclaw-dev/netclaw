@@ -34,8 +34,8 @@ SHALL be:
   `shell_redirect_unproved`, `shell_redirect_file_tool_denied`). Each redirect
   of the command SHALL get these checks before any prompt. With an `Approval`
   mode of the file tool, a stored grant of that tool SHALL cover the redirect.
-  With no such grant, one exact candidate SHALL name each write and read that
-  needs consent, with `Once` and `Deny` only. Otherwise the candidate
+  With no such grant, each file operation that needs consent SHALL have its own exact candidate.
+  The prompt SHALL offer `Once` and `Deny` only. Otherwise the candidate
   SHALL NOT ask for a stored grant, and an answer SHALL NOT save one. Such a
   command SHALL get no managed temporary directory advice. A Bash source that
   parses with no command (an assignment, a comment, an empty `case`, an
@@ -131,6 +131,13 @@ This composition SHALL NOT change any persistent grant or extend a repository's 
 - **WHEN** the command redirects to its managed temporary directory
 - **THEN** Netclaw denies the call before a shell grant can cover it
 - **AND** an `Approval` file-write mode needs file-tool consent or a covering file-tool grant
+
+#### Scenario: Exact scratch consent preserves command and file identities
+- **GIVEN** a scratch redirect that needs file consent
+- **WHEN** the operator selects `Once`
+- **THEN** the unchanged retry is allowed
+- **AND** a different command or file-operation set still needs consent
+- **AND** punctuation in one filename cannot authorize two different targets
 
 #### Scenario: Another run's scratch is external
 - **WHEN** a repository command redirects to another run's temporary directory or an arbitrary external file

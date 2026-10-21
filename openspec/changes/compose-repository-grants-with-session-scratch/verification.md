@@ -3,9 +3,11 @@
 ## Scope
 
 The implementation follows the three approved policy changes.
-The production source commit is `837b1ab91`.
+The original production source commit is `837b1ab91`.
 The primary checkout retains its existing untracked files.
-The change has no remote publication or deployment.
+PR #2563 contains the implementation and the original verification evidence.
+The post-review section below describes the consent correction.
+This change includes no deployment.
 
 ## Requirement evidence
 
@@ -116,7 +118,7 @@ The run has 2,905 baseline records and 2,901 candidate records.
 Its 17 differences match the full archive's 13 primary changes and four removed Once retries.
 The supplementary run takes two minutes and 30 seconds.
 
-The production implementation remains unchanged after `837b1ab91`.
+The archive comparison uses the production implementation at `837b1ab91`.
 The final validation changes strengthen the test and the probe, and clarify the documented eligibility conditions.
 The archive review finds no unexpected authority change.
 
@@ -125,3 +127,68 @@ The archive review finds no unexpected authority change.
 Aggregate evidence is in `artifacts/authorization-corpus-scratch-archive/semantic-summary.json` and `authority-review-summary.json`.
 Raw corpus data and decision records remain private and stay outside Git.
 The target-specific evidence is in `artifacts/authorization-corpus-scratch-targets/`.
+
+## Post-review consent correction
+
+The adversarial self-review of `76c06f09d` found a Once-answer collision.
+File consent replaced the command identity with the file-operation identity.
+A Once answer for `uv export` also permitted `uv sync` with the same scratch target.
+The original probe uses the production authorization path and executes no shell command.
+
+`WithFileToolConsent` now retains an exact candidate for each file operation.
+A composed redirect also retains an exact command candidate.
+This removes a second collision between one filename with `, write ` and two separate output targets.
+The existing Once-key code binds both candidates, their scopes, and their assignment digests.
+The correction adds no candidate property, grant format, configuration value, or decision owner.
+The architecture document describes the exact-consent representation.
+The approved TA-8 consent contract requires this correction and needs no new policy decision.
+
+The new regression fails twice before the correction, under shell Approval and shell Auto.
+After the correction, a changed command, target, or assignment still needs approval.
+The unchanged retry succeeds with `OneTimeApproval`.
+The original adversarial probe also confirms those four results after the correction.
+
+### Platform fixture corrections
+
+Hosted run `39513493570` passes Linux tests and all ten mutation jobs.
+Its Windows and macOS test jobs fail in the new fixtures.
+The Windows redirect test uses Bash with native Windows paths.
+The macOS fixtures pass temporary aliases to checks that require physical paths.
+
+The redirect test now selects the native shell through the existing host selector.
+Its inside-repository and external-file checks still run on Windows.
+The POSIX null-device assertion remains specific to POSIX hosts.
+The scratch fixtures resolve their temporary roots before they construct repository and session paths.
+The production filesystem policy retains its link restrictions.
+
+Both fixture sets pass through a linked temporary root on Linux.
+The scratch class passes all 13 cases. The mutation-support class passes all 31 cases.
+These host simulations do not establish native Windows or macOS acceptance.
+The next hosted run must supply that evidence.
+
+The full model eval suite remains stopped.
+The archive comparison remains prior evidence for `837b1ab91`; this correction does not repeat it.
+Independent review remains separate from the author agent's self-review.
+
+### Post-review local checks
+
+| Check | Result |
+| --- | --- |
+| Scratch, repository, no-program consent, approval boundary, literal-twin, and causal-directory classes | 148 passed; four skipped. |
+| Mutation-support class | 31 passed. |
+| Focused Stryker gate | All five plain-target and all 19 redirect/consent mutants were killed. |
+| Linked temporary root: scratch class | 13 passed. |
+| Linked temporary root: mutation-support class | 31 passed. |
+| Original command and file-list probes | Changed calls require approval; unchanged retries are allowed. |
+| Native approval smoke with the updated binary | Passed; process exit status zero. |
+| Slopwatch | Zero issues. |
+| Copyright headers | Passed. |
+| OpenSpec strict validation, whitespace, and Bash syntax | Passed. |
+
+The mutation fixture includes the final prompt conversion before it creates the Once keys.
+The new mutation target negates the condition that preserves the command candidate.
+The gate requires that mutant to run and die, alongside the existing redirect mutants.
+The final run meets that requirement and adds no Stryker build.
+A narrow initial span missed the target. A later run exposed the incomplete prompt fixture.
+The final span and fixture correct both gaps without a threshold change.
+These checks do not repeat the full model suite or the archive comparison.

@@ -35,12 +35,14 @@ find_range() {
 # Runs Stryker on one project span and requires every tested mutant to be killed.
 run_gate() {
   local project="$1" mutate="$2" output="$3" expected="$4" name="$5"
+  shift 5
   (
     cd "$test_project"
     dotnet stryker \
       --config-file stryker-config.json \
       --project "$project" \
       --mutate "$mutate" \
+      "$@" \
       --output "$output" \
       --skip-version-check
   )
@@ -66,5 +68,9 @@ policy_file="$repo_root/src/Netclaw.Actors/Tools/ToolAccessPolicy.cs"
 read -r read_start read_end < <(
   find_range $'if (!candidate.RunsNoProgram && !candidate.UsesFileToolRedirects)\n                continue;' \
   '$"this audience may not use {FileToolName(read)}, and a redirect gets the same decision");' "$policy_file")
+read -r consent_start consent_end < <(
+  find_range 'if (!candidate.UsesFileToolRedirects)' \
+  'if (!candidate.UsesFileToolRedirects)' "$policy_file")
 run_gate Netclaw.Actors.csproj "Tools/ToolAccessPolicy.cs{$read_start..$read_end}" \
-  "$output_path/redirect-checks" 18 "redirect check"
+  "$output_path/redirect-checks" 19 "redirect and exact consent check" \
+  --mutate "Tools/ToolAccessPolicy.cs{$consent_start..$consent_end}"

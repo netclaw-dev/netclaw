@@ -842,6 +842,9 @@ The occurrence must have resolved command candidates, and every file target must
 An ineligible occurrence retains its ordinary command and redirect scopes.
 The candidate's transient `UsesFileToolRedirects` fact selects the existing file-tool admission, read checks, and consent rules.
 The grant actor still receives the canonical command words and ordinary scopes. Persistent grants do not change.
+Each file operation that needs consent has its own exact candidate.
+A composed redirect also retains an exact command candidate.
+The Once answer binds both candidates, their scopes, and their assignment digests.
 
 ```mermaid
 flowchart TD

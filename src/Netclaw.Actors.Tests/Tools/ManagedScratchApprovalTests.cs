@@ -6,6 +6,7 @@
 using System.Diagnostics;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -76,6 +77,65 @@ public sealed class ManagedScratchApprovalTests(ShellApprovalMatrixFixture fixtu
     }
 
     [SlopwatchSuppress("SW001", "Scratch composition currently supports Personal Bash calls on POSIX hosts.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "This case requires POSIX Bash paths.")]
+    [InlineData(ToolApprovalMode.Approval)]
+    [InlineData(ToolApprovalMode.Auto)]
+    public async Task Scratch_once_answer_binds_the_command_and_file_operations(ToolApprovalMode shellMode)
+    {
+        using var root = new DisposableTempDir();
+        var project = InitializeRepository(root.Path);
+        await using var harness = await CreateHarnessAsync(
+            root.Path, project, "once", ToolApprovalMode.Approval, shellMode);
+        harness.AddStoredShellEntry(TrustAudience.Personal,
+            ApprovalEntry.CreateRepositoryTokenPrefix(ApprovalShell.Bash, ["uv", "sync"], Path.Combine(project, ".git")));
+        Directory.CreateDirectory(harness.ManagedTemporaryDirectory);
+
+        const string command = "uv export > \"$TMPDIR/reqs.txt\"";
+        var prompt = await harness.EvaluateShellAsync(command, Ct, project);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, prompt.Outcome);
+        harness.SeedOneTimeApproval(prompt.Prompt!);
+
+        foreach (var changed in new[]
+        {
+            "uv sync > \"$TMPDIR/reqs.txt\"",
+            "uv export > \"$TMPDIR/other.txt\"",
+            "NC_APPROVAL_SCOPE=one uv export > \"$TMPDIR/reqs.txt\""
+        })
+        {
+            var refused = await harness.EvaluateShellAsync(changed, Ct, project);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, refused.Outcome);
+        }
+
+        var retry = await harness.EvaluateShellAsync(command, Ct, project);
+        Assert.Equal(ApprovalOutcome.Allowed, retry.Outcome);
+        Assert.Equal(ApprovalAllowReason.OneTimeApproval, retry.AllowReason);
+    }
+
+    [SlopwatchSuppress("SW001", "Scratch composition currently supports Personal Bash calls on POSIX hosts.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "This case requires POSIX Bash paths.")]
+    [InlineData("uv export")]
+    [InlineData(":")]
+    public async Task Once_answer_cannot_split_one_filename_into_two_targets(string program)
+    {
+        using var root = new DisposableTempDir();
+        var project = InitializeRepository(root.Path);
+        await using var harness = await CreateHarnessAsync(
+            root.Path, project, "file-list", ToolApprovalMode.Approval, ToolApprovalMode.Approval);
+        var managed = harness.ManagedTemporaryDirectory;
+        var collision = $"{managed}/first, write {managed}/second";
+        Directory.CreateDirectory(Path.GetDirectoryName(collision)!);
+        var command = $"{program} > \"{collision}\"";
+        var prompt = await harness.EvaluateShellAsync(command, Ct, project);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, prompt.Outcome);
+        harness.SeedOneTimeApproval(prompt.Prompt!);
+
+        var split = await harness.EvaluateShellAsync($"{program} > \"$TMPDIR/first\" 2> \"$TMPDIR/second\"", Ct, project);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, split.Outcome);
+        var retry = await harness.EvaluateShellAsync(command, Ct, project);
+        Assert.Equal(ApprovalOutcome.Allowed, retry.Outcome);
+    }
+
+    [SlopwatchSuppress("SW001", "Scratch composition currently supports Personal Bash calls on POSIX hosts.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "This case requires POSIX Bash paths.")]
     public async Task Project_output_gets_advice_and_the_replacement_passes_the_full_gate()
     {
@@ -128,21 +188,25 @@ public sealed class ManagedScratchApprovalTests(ShellApprovalMatrixFixture fixtu
     private Task<ShellApprovalHarness> CreateHarnessAsync(
         string root, string project, string id, ToolApprovalMode fileMode,
         ToolApprovalMode shellMode)
-        => ShellApprovalHarness.CreateAsync(id,
+    {
+        FileSystemAuthority.TryResolveLinks(root, out var physicalRoot);
+        return ShellApprovalHarness.CreateAsync(id,
             new ShellApprovalInvocation("uv export", ApprovalDirectoryShape.Project, Host: ShellApprovalHost.Bash52),
             Approvals.PersistentRepository("uv export"), fixture.ActorSystem, Ct,
             scope: new ShellApprovalHarnessScope(project,
-                Directory.CreateDirectory(Path.Combine(root, id)).FullName, $"signalr/{id}", [])
+                Directory.CreateDirectory(Path.Combine(physicalRoot, id)).FullName, $"signalr/{id}", [])
                 { RepositoryGrantWorktree = project },
             shellApprovalMode: shellMode,
             policy: new ShellApprovalHarnessPolicy
             {
                 PersonalApprovalOverrides = new Dictionary<string, ToolApprovalMode> { [FileWriteTool.ToolName] = fileMode }
             });
+    }
 
     private static string InitializeRepository(string root)
     {
         var project = Directory.CreateDirectory(Path.Combine(root, "repo")).FullName;
+        FileSystemAuthority.TryResolveLinks(project, out project);
         var start = new ProcessStartInfo("git") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         start.ArgumentList.Add("init");
         start.ArgumentList.Add(project);

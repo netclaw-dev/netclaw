@@ -185,14 +185,14 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
     // the full command, and offers only "Once" and "Deny".
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
-    [InlineData("file_write", "echo x > out.txt", "write {P}/out.txt")]
-    [InlineData("file_write", "> out.txt", "write {P}/out.txt")]
-    [InlineData("file_write", "printf a > a.txt 2> b.txt", "write {P}/a.txt, write {P}/b.txt")]
-    [InlineData("file_read", ": < notes.txt", "read {P}/notes.txt")]
+    [InlineData("file_write", "echo x > out.txt", new[] { "write {P}/out.txt" })]
+    [InlineData("file_write", "> out.txt", new[] { "write {P}/out.txt" })]
+    [InlineData("file_write", "printf a > a.txt 2> b.txt", new[] { "write {P}/a.txt", "write {P}/b.txt" })]
+    [InlineData("file_read", ": < notes.txt", new[] { "read {P}/notes.txt" })]
     public async Task File_tool_with_approval_mode_keeps_a_prompt_that_names_the_file(
         string tool,
         string command,
-        string expected)
+        string[] expected)
     {
         await using var scope = await CreateHarnessAsync(attended: true, fileToolModes: new() { [tool] = ToolApprovalMode.Approval });
         var harness = scope.Harness;
@@ -200,7 +200,7 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
         var initial = await harness.EvaluateShellAsync(command, Ct);
 
         Assert.Equal(ApprovalOutcome.RequiresApproval, initial.Outcome);
-        Assert.Equal([Expand(harness, expected)], initial.Prompt!.CandidateVerbs);
+        Assert.Equal(expected.Select(name => Expand(harness, name)), initial.Prompt!.CandidateVerbs);
         Assert.Equal(command, initial.Prompt.DisplayText);
         Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], initial.Prompt.OptionKeys);
 
@@ -261,9 +261,9 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
         var observed = await harness.EvaluateShellAsync(": < notes.txt > out.txt", Ct);
 
         Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
-        var name = Assert.Single(observed.Prompt!.CandidateVerbs);
-        Assert.Contains(Expand(harness, "read {P}/notes.txt"), name, StringComparison.Ordinal);
-        Assert.Contains(Expand(harness, "write {P}/out.txt"), name, StringComparison.Ordinal);
+        Assert.Equal(
+            [Expand(harness, "read {P}/notes.txt"), Expand(harness, "write {P}/out.txt")],
+            observed.Prompt!.CandidateVerbs);
         Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], observed.Prompt.OptionKeys);
     }
 

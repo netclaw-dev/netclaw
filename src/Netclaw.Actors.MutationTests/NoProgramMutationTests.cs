@@ -27,14 +27,16 @@ public sealed class NoProgramMutationTests : IDisposable
 
     private const string WorkingDirectory = "/work/project";
 
-    private readonly NetclawPaths _paths = new(Path.Combine(
-        Path.GetTempPath(), "netclaw-no-program-mutations", Guid.NewGuid().ToString("N")));
+    private readonly NetclawPaths _paths;
     private readonly SessionStoragePaths _storage;
     private readonly string _readRoot;
     private readonly string _outside;
 
     public NoProgramMutationTests()
     {
+        FileSystemAuthority.TryResolveLinks(Path.Combine(
+            Path.GetTempPath(), "netclaw-no-program-mutations", Guid.NewGuid().ToString("N")), out var root);
+        _paths = new NetclawPaths(root);
         _paths.EnsureDirectoriesExist();
         _storage = SessionStoragePaths.CreateVersion2(
             new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")));
@@ -137,7 +139,7 @@ public sealed class NoProgramMutationTests : IDisposable
             new ShellPolicyResolvedPathView(scope, [unresolved]),
             Intent: null);
 
-        var denied = CreatePolicy().ScreenNoProgramRedirects([(candidate, facts)], CreateContext());
+        var denied = CreatePolicy(null, ToolApprovalMode.Auto).ScreenNoProgramRedirects([(candidate, facts)], CreateContext());
 
         Assert.Equal("shell_redirect_unproved", denied?.DenyReason);
         Assert.Contains("cannot prove the redirect target", denied!.DenyMessage, StringComparison.Ordinal);
@@ -164,7 +166,7 @@ public sealed class NoProgramMutationTests : IDisposable
             new ShellPolicyResolvedPathView(scope, [unresolved]),
             Intent: null);
 
-        var denied = CreatePolicy().ScreenNoProgramRedirects([(candidate, facts)], CreateContext());
+        var denied = CreatePolicy(null, ToolApprovalMode.Auto).ScreenNoProgramRedirects([(candidate, facts)], CreateContext());
 
         Assert.Equal("shell_redirect_unproved", denied?.DenyReason);
         Assert.Contains("cannot prove the redirect target", denied!.DenyMessage, StringComparison.Ordinal);
@@ -199,7 +201,7 @@ public sealed class NoProgramMutationTests : IDisposable
     [Fact]
     public void Scratch_projection_retains_command_authority()
     {
-        var policy = CreatePolicy();
+        var policy = CreatePolicy(null, ToolApprovalMode.Auto);
         const string command = "uv export > \"$TMPDIR/out.txt\"";
         var analysis = policy.ShellCommandPolicy.Analyze(command, WorkingDirectory, _storage.ManagedTemporary);
         var approval = policy.ShellApprovalMatcher.AnalyzeInvocation(new ToolName(ShellTool.ToolName),
@@ -214,7 +216,7 @@ public sealed class NoProgramMutationTests : IDisposable
     [Fact]
     public void Scratch_projection_is_local_to_each_parent_or_child_run()
     {
-        var policy = CreatePolicy();
+        var policy = CreatePolicy(null, ToolApprovalMode.Auto);
         var child = _storage.ForChild(new SubAgentRunId("child"), new SubAgentScopeId("parent/subagent/child"));
         var peer = _storage.ForChild(new SubAgentRunId("peer"), new SubAgentScopeId("parent/subagent/peer"));
         foreach (var caller in new[] { _storage, child, peer })
@@ -239,7 +241,7 @@ public sealed class NoProgramMutationTests : IDisposable
     [Fact]
     public void Composed_program_redirect_obeys_file_tool_denial()
     {
-        var policy = CreatePolicy("file_write");
+        var policy = CreatePolicy("file_write", ToolApprovalMode.Deny);
         const string command = "uv export > /work/scratch/out.txt";
         var analysis = policy.ShellCommandPolicy.Analyze(command, WorkingDirectory);
         var approval = policy.ShellApprovalMatcher.AnalyzeInvocation(new ToolName(ShellTool.ToolName),
@@ -252,6 +254,37 @@ public sealed class NoProgramMutationTests : IDisposable
         Assert.Equal("shell_redirect_file_tool_denied", denial?.DenyReason);
     }
 
+    [Theory]
+    [InlineData("uv export > /work/scratch/out.txt", "uv export > /work/scratch/out.txt", true)]
+    [InlineData("uv export > /work/scratch/out.txt", "uv sync > /work/scratch/out.txt", false)]
+    [InlineData("uv export > /work/scratch/out.txt", "uv export > /work/scratch/other.txt", false)]
+    [InlineData("uv export > /work/scratch/out.txt", "NC_APPROVAL_SCOPE=one uv export > /work/scratch/out.txt", false)]
+    [InlineData("uv export > '/work/scratch/out.txt, write /work/scratch/other.txt'", "uv export > /work/scratch/out.txt 2> /work/scratch/other.txt", false)]
+    [InlineData(": > '/work/scratch/out.txt, write /work/scratch/other.txt'", ": > /work/scratch/out.txt 2> /work/scratch/other.txt", false)]
+    public void File_consent_keeps_the_command_and_targets_in_the_once_key(string original, string retry, bool covered)
+    {
+        var policy = CreatePolicy("file_write", ToolApprovalMode.Approval);
+        var context = CreateContext();
+        var request = Request(original);
+        var consent = OneTimeApprovalKeys.CreateConsent(ShellTool.ToolName, request);
+        Assert.Equal(covered, OneTimeApprovalKeys.Matches(consent, ShellTool.ToolName, Request(retry)));
+
+        ToolApprovalContext Request(string command)
+        {
+            var arguments = new Dictionary<string, object?> { ["Command"] = command, ["WorkingDirectory"] = WorkingDirectory };
+            var analysis = policy.ShellCommandPolicy.Analyze(command, WorkingDirectory);
+            var approval = policy.ShellApprovalMatcher.AnalyzeInvocation(new ToolName(ShellTool.ToolName), arguments, analysis);
+            var composed = approval with
+            {
+                Candidates = approval.Candidates.Select(static candidate => candidate with { UsesFileToolRedirects = !candidate.RunsNoProgram }).ToArray()
+            };
+            var exact = policy.WithFileToolConsent(composed, context, new HashSet<FileToolCall>());
+            var prompt = policy.AuthorizeShellApproval(new ToolName(ShellTool.ToolName), context, arguments,
+                ToolApprovalMode.Approval, exact, WorkingDirectory).ApprovalContext!;
+            return ToolAccessPolicy.NarrowShellApprovalContext(prompt, exact.Candidates, [], ShellPathStyle.Posix);
+        }
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_paths.BasePath))
@@ -260,7 +293,7 @@ public sealed class NoProgramMutationTests : IDisposable
 
     private ToolAuthorizationDecision? Screen(string command, string? deniedTool = null)
     {
-        var policy = CreatePolicy(deniedTool);
+        var policy = CreatePolicy(deniedTool, ToolApprovalMode.Deny);
         var analysis = policy.ShellCommandPolicy.Analyze(command, _readRoot);
         var approval = policy.ShellApprovalMatcher.AnalyzeInvocation(
             new ToolName(ShellTool.ToolName),
@@ -273,14 +306,14 @@ public sealed class NoProgramMutationTests : IDisposable
             CreateContext());
     }
 
-    private ToolAccessPolicy CreatePolicy(string? deniedTool = null)
+    private ToolAccessPolicy CreatePolicy(string? fileTool, ToolApprovalMode mode)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        if (deniedTool is not null)
+        if (fileTool is not null)
         {
             config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
             {
-                ToolOverrides = new() { [deniedTool] = ToolApprovalMode.Deny }
+                ToolOverrides = new() { [fileTool] = mode }
             };
         }
 
