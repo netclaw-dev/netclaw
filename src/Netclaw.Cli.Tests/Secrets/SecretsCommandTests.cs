@@ -29,6 +29,36 @@ public sealed class SecretsCommandTests : IDisposable
         _dir.Dispose();
     }
 
+    [Fact]
+    public void Set_a_provider_token_expiry_stores_it_unencrypted_and_says_so()
+    {
+        using var output = new StringWriter();
+
+        var exitCode = SecretsCommand.Run(
+            ["secrets", "set", "Providers.copilot.OAuthTokenExpiry", "2026-06-01T01:00:00+00:00"], _paths, output);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("not encrypted", output.ToString(), StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
+        Assert.Equal("2026-06-01T01:00:00+00:00",
+            document.RootElement.GetProperty("Providers").GetProperty("copilot").GetProperty("OAuthTokenExpiry").GetString());
+    }
+
+    [Fact]
+    public void Set_a_provider_token_expiry_that_is_not_a_date_leaves_secrets_json_unchanged()
+    {
+        File.WriteAllText(_paths.SecretsPath, """{"Slack":{"BotToken":"xoxb-1"}}""");
+        var before = File.ReadAllBytes(_paths.SecretsPath);
+        using var output = new StringWriter();
+
+        var exitCode = SecretsCommand.Run(
+            ["secrets", "set", "Providers.copilot.OAuthTokenExpiry", "soon"], _paths, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("must be an ISO 8601 date", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllBytes(_paths.SecretsPath));
+    }
+
     [Theory]
     [InlineData("set")]
     [InlineData("add")]
