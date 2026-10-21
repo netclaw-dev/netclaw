@@ -57,16 +57,6 @@ This change supports PRD-002 (gateway security envelope: default deny, no
 silent fallback) and PRD-006 (tool authority comes from the path access
 decision).
 
-In scope:
-
-- `PathAccessPolicy` (`Evaluate`, `GetTrustedRoots`, `AddSessionRoots`)
-- `SessionStoragePaths`, `ManagedTemporaryLocation`, the new
-  `ManagedTemporaryLayout` and `ManagedTemporaryBase`
-- `ManagedTemporaryEnvironment.Prepare` and a folder inspector
-- `TemporaryPathCorrectionPolicy`
-- `ToolAudienceProfilesDoctorCheck`
-- `SqliteSessionStorageResolver` and the daemon wiring
-
 Out of scope:
 
 - Team and Public read reach
@@ -80,8 +70,14 @@ Out of scope:
 - Personal file tools can read each path that the shell can write. This is the
   #1770 guarantee. Protected paths stay denied for read.
 - A local user can create `/tmp/netclaw-<uid>` first, or put a link there. The
-  launch then fails with a clear error. The operator must remove the folder.
+  launch then fails with a clear error. Only root can remove a folder that
+  another user owns.
+- A file tool write that makes the first folder below the base uses the same
+  creation and checks as the shell launch.
+- A Team or Public root that covers the base does not reach the key folder of
+  another session.
 - The OS can delete `/tmp` content. The folder is disposable. Netclaw creates
   it again before each launch.
 - Release notes: a host with an explicit Personal `ReadFiles.Mode = Roots`
-  gets wider Personal read reach after the upgrade.
+  gets wider Personal read reach after the upgrade. Unattended Personal runs
+  (reminders, webhooks) get the same reach with no prompt.

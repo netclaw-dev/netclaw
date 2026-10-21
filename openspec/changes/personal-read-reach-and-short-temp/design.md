@@ -1,23 +1,6 @@
 ## Context
 
-See `proposal.md` (Why). The investigation of issue #2554 found two faults
-from #2090. The deciding components are:
-
-- `PathAccessPolicy.Evaluate` and `GetTrustedRoots`. `GetAccessProfile`
-  selects `ReadFiles` for a read and never looks at `WriteFiles`.
-- `ToolAccessPolicy.IsShellPathAllowed`. The shell checks each path with
-  `FileOperation.Write`, so the shell trust zone is the write profile.
-- `SessionStoragePaths` and `ManagedTemporaryLocation`. They put the managed
-  temporary folder at `<envelope>/tmp/parent` (92 characters on the live
-  host).
-- `ManagedTemporaryEnvironment.Prepare`. It creates the folder, checks links,
-  and sets `TMPDIR`, `TMP`, and `TEMP`.
-- `TemporaryPathCorrectionPolicy`. It sends a `/tmp` target to the managed
-  folder.
-- `ToolAudienceProfilesDoctorCheck`.
-
-The owner decisions of 18 Oct 2026 are fixed. This design does not reopen
-them.
+See `proposal.md` (Why). The owner decisions of 18 Oct 2026 are fixed.
 
 ## Goals / Non-Goals
 
@@ -99,44 +82,45 @@ Alternatives:
 - A random key per run: rejected. A resumed session and its children must find
   the same folder, and the roots must name it without a lookup.
 
-### D3. Fix B: checks in `ManagedTemporaryEnvironment.Prepare`
+### D3. Fix B: one folder creator, `ManagedTemporaryEnvironment.EnsureFolders`
 
 ```text
 // schematic
-Prepare(startInfo, location, inspector):
-    if location.PrivateBase is null: existing link check, set variables, return
-    for folder in [base, key folder]:
-        Directory.CreateDirectory(folder, mode 0700)   // no change to an existing folder
-        if !inspector.TryInspect(folder, out facts): refuse
-        if facts.IsSymbolicLink:                       refuse "is a symbolic link"
-        if facts.OwnerUserId != inspector.EffectiveUserId: refuse "is owned by"
-        if facts.Mode & (group | other) != 0:          refuse "allows group or other access"
-    create the run folder, existing link check with StorageRoot = key folder
-    set TMPDIR, TMP, TEMP
+EnsureFolders(location, inspector):
+    if location.PrivateBase is not null:
+        for folder in [base, key folder]:
+            Directory.CreateDirectory(folder, mode 0700)   // no change to an existing folder
+            if !inspector.TryInspect(folder, out facts): refuse
+            if facts.IsSymbolicLink:                       refuse "is a symbolic link"
+            if facts.OwnerUserId != inspector.EffectiveUserId: refuse "is owned by"
+            if facts.Mode & (group | other) != 0:          refuse "allows group or other access"
+    create the run folder (0700 below a private base), link check with StorageRoot
+Prepare(startInfo, location) = EnsureFolders(location), then set TMPDIR, TMP, TEMP
 ```
 
-- The error text starts with `Error:` and names the folder.
-- A refused launch sets no variable and creates no deep folder.
+- The shell launch calls `Prepare`. `FileEditTool.WriteFileAsync` (used by
+  `file_write` and `file_edit`) calls `EnsureFolders` before it makes a folder
+  below the base. A Team session has no shell, so a file tool can be the first
+  writer (PR #2559 review item B1). There is no second folder creator.
+- The error text starts with `Error:` and names the folder. A refused launch
+  sets no variable and creates no deep folder. A refused write writes nothing.
 - `IManagedTemporaryFolderInspector` reads `lstat` facts and `geteuid()`. The
   host version needs a P/Invoke. Linux `statx` has one struct layout on every
   architecture. macOS `lstat` has a stable 64-bit layout. The fake inspector in
   tests forces each failure, because a test cannot make a folder that another
   user owns.
 - The checks are call-local. They are not a sandbox against a concurrent
-  change. The existing link re-check after creation stays.
+  change. The existing link re-check after creation stays. The checks assume
+  that `/tmp` has the sticky bit, as on each supported host.
 
-### D4. Fix B: the key folder is a session root
+### D4. Fix B: the key folder is a session root, and other key folders stay closed
 
-`PathAccessPolicy.AddSessionRoots` adds `SessionStorage.ManagedTemporary.StorageRoot`
-for every audience. For a deep location this root is the envelope or the
-session directory, which is already a root. The base is never added.
-
-### D5. Correction advice skips the own folder
-
-`TemporaryPathCorrectionPolicy` returns no advice when every affected path is
-inside `SessionStorage.ManagedTemporary.Directory` of the call (structured
-`file_write` and `file_edit`, and the shell scopes). A sibling key folder
-still gets the advice.
+`PathAccessPolicy.AddSessionRoots` adds the key folder for every audience. The
+base is never a root. A configured Team or Public root can still cover the
+base (for example `/tmp`). `PathAccessPolicy.Evaluate` then denies a path
+below the base that is outside the own key folder (PR #2559 review item S1).
+The protected-path sets cannot carry this rule: they are process-wide and
+audience-blind, and protection wins over the own key folder too.
 
 ### D6. Doctor warning
 
@@ -166,17 +150,6 @@ the configured text. `{session_dir}` compares as text. There is no fix in
   roots for such hosts] → The default Personal profile already does this.
 - [Hash collision of two 16-hex keys] → 64 bits. A collision gives two
   sessions one folder. The risk is accepted.
-
-## Migration Plan
-
-- No data migration. A session resolves its new temp folder at the next
-  resolve. An old background-job record keeps its stored deep path through
-  `ManagedTemporaryLocation.FromPersistedPaths`.
-- A managed-temp retry stored in the session journal names the old deep
-  folder. It stays valid, because the old folder is still inside the
-  envelope root.
-- Rollback: revert the change. The deep folder layout comes back. Files in
-  `/tmp/netclaw-<uid>` stay until the OS deletes them.
 
 ## Actor and persistence notes
 

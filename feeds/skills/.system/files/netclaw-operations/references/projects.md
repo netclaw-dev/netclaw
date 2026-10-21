@@ -72,13 +72,15 @@ For a Git worktree, choose a destination below `worktree_dir`. Use
 ## Temporary Folder
 
 On Linux and macOS, `temp_dir` is a short folder: `/tmp/netclaw-<uid>/<key>/p` for a
-parent run, and `/tmp/netclaw-<uid>/<key>/c<id>` for a child run. A Unix socket path
-below it fits the socket limit of 107 characters. Chrome, Playwright, and `ssh`
-control sockets work there. On Windows, `temp_dir` stays inside the session folder.
+parent run, and `/tmp/netclaw-<uid>/<key>/c<id>` for a child run. On macOS the folder
+is `/private/tmp/netclaw-<uid>/...`. A Unix socket path below it fits the socket limit
+(107 characters on Linux, 103 on macOS). Chrome, Playwright, and `ssh` control sockets
+work there. On Windows, `temp_dir` stays inside the session folder.
 
 - Netclaw sets `TMPDIR`, `TMP`, and `TEMP` for each shell process. Do not set them in a
   shell command. Do not make your own folder in `/tmp`.
-- Only this session can use `temp_dir`. The file tools can read and write it.
+- The file tools can read and write `temp_dir`. A Team or Public session cannot reach the
+  `temp_dir` of another session. A Personal session can, as it can reach each session folder.
 - If a program fails with `Socket path too long`, report a Netclaw defect. Do not work
   around it with `TMPDIR=/tmp/...`.
 - If a shell call fails with `The managed temporary folder ... is a symbolic link`,

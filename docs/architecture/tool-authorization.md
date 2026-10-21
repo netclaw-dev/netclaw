@@ -579,18 +579,30 @@ The managed temporary key folder comes from
 `SessionStorage.ManagedTemporary.StorageRoot`. On POSIX it is
 `/tmp/netclaw-<uid>/<key>` (see
 [session-cwd](../../openspec/specs/session-cwd/spec.md#requirement-managed-temporary-directory-is-the-private-temporary-location)).
-The shared base `/tmp/netclaw-<uid>` is never a root. Thus a session cannot
-read the key folder of another session. On Windows the storage root is the
-session envelope, which is already a root.
+The shared base `/tmp/netclaw-<uid>` is never a root. A configured Team or
+Public root can still cover the base, for example a root `/tmp`. For a Team or
+Public call, `PathAccessPolicy.Evaluate` therefore denies each path below the
+base that is outside the own key folder. The base itself stays reachable
+through such a root. Personal reaches every key folder, as it reaches every
+session directory. On Windows the storage root is the session envelope, which
+is already a root.
 
 - Valid: a Team session reads `/tmp/netclaw-1000/<own key>/p/frame.png`.
-- Invalid: a Team session reads `/tmp/netclaw-1000/<other key>/p/frame.png`
-  or `/tmp/netclaw-1000/planted.txt`. The decision is `Denied`.
+- Invalid: a Team session with a configured root `/tmp` reads or writes
+  `/tmp/netclaw-1000/<other key>/p/frame.png`. The decision is `Denied`.
 
-`ManagedTemporaryEnvironment.Prepare` creates the base and the key folder with
-mode 0700 before each shell launch. It refuses the launch when a folder is a
-symbolic link, has another owner, or has a group or other bit. It never uses
-another folder. These checks are call-local.
+`ManagedTemporaryEnvironment.EnsureFolders` is the one creator of these
+folders. It makes the base and the key folder with mode 0700, and it refuses
+when a folder is a symbolic link, has another owner, or has a group or other
+bit. It never uses another folder. The shell launch calls it through
+`Prepare`. `file_write` and `file_edit` call it before they make a folder
+below the base, because a Team session has no shell. The checks are
+call-local.
+
+The file tools use the key folder as their root. The
+[scratch redirect composition](#managed-scratch-redirects-and-command-consent)
+uses only the run folder (`.../p` or `.../c<h>`). That rule is narrower and
+fails closed.
 
 #### The Personal read rule
 
@@ -616,12 +628,8 @@ call-local.
 
 - Valid: Personal, `ReadFiles = Roots [~/repositories]`, `WriteFiles = All`.
   `file_read /tmp/gifcheck/a.png` is allowed.
-- Valid: Personal, `ReadFiles = Roots [A]`, `WriteFiles = Roots [B]`.
-  `file_read B/x` and `attach_file B/x` are allowed.
 - Invalid: Personal, `WriteFiles = All`. `file_read <config>/secrets.json` is
   denied, because protection wins.
-- Invalid: Personal, `WriteFiles = All`. `set_working_directory /tmp/x` stays
-  inside the trusted roots.
 - Invalid: Team, `ReadFiles = Roots [{session_dir}]`,
   `WriteFiles = Roots [{session_dir}, D]`. `file_read D/x` is denied. A Team
   write-only folder stays write-only.
@@ -904,6 +912,7 @@ The parent retains the child's original authority through subsequent tool calls 
 
 `ToolAccessPolicy.WithManagedTemporaryRedirects` owns a call-local composition decision for Personal Bash calls.
 It reads the current run's managed temporary location from `ToolInvocationContext.SessionStorage`.
+See [Root sources](#root-sources) for the folder layout and the key-folder root of the file tools.
 For exact, link-free scratch redirects, the matcher projects the command directory and ordinary operand scopes without the redirect scopes.
 The occurrence must have resolved command candidates, and every file target must stay in that run's managed directory or name the null device.
 An ineligible occurrence retains its ordinary command and redirect scopes.
@@ -950,9 +959,13 @@ See [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-co
 | Data | Call-local. The managed-temp retry key is call-local state in `ToolApprovalAttempt`. |
 | Rules | [TA-9](../../openspec/specs/tool-authorization/spec.md#requirement-ta-9-agent-correction-precedes-a-prompt-and-grants-no-authority) |
 
-The advice never fires for a path inside the managed temporary folder of the
-call. On POSIX that folder is below `/tmp` (issue #2554), so without this rule
-the advice would send the agent from its own folder to the same folder.
+On POSIX the managed temporary folder is below `/tmp` (issue #2554). Each
+advice route skips the own folder of the call, so the advice never sends the
+agent from its own folder to the same folder:
+
+- the `file_write` and `file_edit` route skips a path inside the run folder;
+- the project-output route (#2563) skips a redirect into the run folder;
+- the working-directory route starts only at the platform temporary root.
 
 Leak today: `IsEligiblePlatformTemporaryPath` is also an authority input for
 causal intent. **Planned:** move that rule into Filesystem authority as a named

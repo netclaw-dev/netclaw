@@ -9,8 +9,8 @@ filesystem entry.
 
 `file_list` SHALL be gated by the audience profile `AllowedTools` allowlist.
 It SHALL authorize its target through the shared `Read` path access decision.
-The read reach SHALL follow the Personal read rule of the `File read tool`
-requirement. User approval SHALL NOT widen a file profile.
+The read reach SHALL follow the Personal read rule of TA-6 in
+`tool-authorization`. User approval SHALL NOT widen a file profile.
 
 #### Scenario: Team session lists a directory within its read roots
 
@@ -25,13 +25,6 @@ requirement. User approval SHALL NOT widen a file profile.
 - **WHEN** the agent invokes `file_list` outside its permitted read roots
 - **THEN** the invocation is denied
 - **AND** the denial message does not disclose configured root paths
-
-#### Scenario: Personal file_list reaches the write roots
-
-- **GIVEN** a Personal profile with `ReadFiles` mode `Roots` `[A]` and
-  `WriteFiles` mode `Roots` `[B]`
-- **WHEN** the agent invokes `file_list` on a folder below `B`
-- **THEN** the tool returns the entries of that folder
 
 #### Scenario: Counterexample - approval cannot widen explicit read roots
 
@@ -54,23 +47,13 @@ The system SHALL provide a `file_read` first-party tool that authorizes the
 requested path through the shared `Read` path access decision before inspecting
 or reading bytes.
 
-Personal read rule (issue #2554, owner decision 18 Oct 2026): for the
-`Personal` audience only, the read reach of a file tool (`file_read`,
-`file_list`, `file_search`) SHALL be at least the write reach of the same
-profile. The write reach is the shell trust zone. Thus a file that the shell
-can write, a file tool can read.
-
-- A `WriteFiles` mode `All` SHALL give the read decision mode `All`.
-- A `WriteFiles` mode `Roots` SHALL add the write roots to the read roots.
-- A `WriteFiles` mode `None` SHALL leave the read profile unchanged.
-- The protected-path read deny list SHALL still apply.
-- The rule SHALL apply attended and unattended alike (decision D2).
-- The rule SHALL NOT apply to `Team` or `Public`. For those audiences an
-  explicit `Roots` or `None` read profile SHALL remain authoritative, also when
-  the write profile is wider.
-
-Shell settings and user approval SHALL NOT widen a read profile. Only the
-profile itself, with the Personal read rule, gives read authority.
+For `Personal`, the read reach of `file_read`, `file_list`, and `file_search`
+SHALL follow the Personal read rule of TA-6 in `tool-authorization` (issue
+#2554): a file that the shell can write, a file tool can read. The
+protected-path read deny list SHALL still apply. For `Team` and `Public`, an
+explicit `Roots` or `None` read profile SHALL remain authoritative, also when
+the write profile is wider. Shell settings and user approval SHALL NOT widen a
+read profile.
 
 Text-like files SHALL return decoded text for UTF-8,
 UTF-16/UTF-32
@@ -105,25 +88,10 @@ be built into `file_read`.
 - **WHEN** the agent invokes `file_read` on `/tmp/gifcheck/inline_01.png`
 - **THEN** the path access decision allows the read
 
-#### Scenario: Example - Personal read adds the write roots
-
-- **GIVEN** a Personal profile with `ReadFiles` mode `Roots` `[A]` and
-  `WriteFiles` mode `Roots` `[B]`
-- **WHEN** the agent invokes `file_read` on `B/x` and on `C/x`
-- **THEN** the read of `B/x` is allowed
-- **AND** the read of `C/x` is denied
-
 #### Scenario: Counterexample - a protected path stays denied
 
 - **GIVEN** a Personal profile with `WriteFiles` mode `All`
 - **WHEN** the agent invokes `file_read` on `<config dir>/secrets.json`
-- **THEN** file protection denies the invocation
-
-#### Scenario: Counterexample - Team keeps a write-only folder
-
-- **GIVEN** a Team profile with `ReadFiles` mode `Roots` `[{session_dir}]` and
-  `WriteFiles` mode `Roots` `[{session_dir}, D]`
-- **WHEN** the agent invokes `file_read` on `D/x`
 - **THEN** file protection denies the invocation
 
 #### Scenario: Counterexample - approval cannot widen explicit read policy
@@ -181,10 +149,8 @@ All audiences SHALL apply the `ToolPathPolicy` read-deny check to attachment sou
 
 The system SHALL provide an `attach_file` first-party tool that sends a file to
 the user. It SHALL authorize the source with the shared `Attach` path access
-decision. For the `Personal` audience, the attach reach SHALL be at least the
-write reach of the same profile, by the Personal read rule of the `File read
-tool` requirement: a `WriteFiles` mode `All` gives attach mode `All`, and a
-`WriteFiles` mode `Roots` adds the write roots to the attach roots. For `Team`
+decision. For `Personal`, the attach reach SHALL follow the Personal read rule
+of TA-6 in `tool-authorization`. For `Team`
 and `Public`, an explicit `Roots` or `None` attach profile SHALL remain
 authoritative in every interaction mode. A Personal attach profile with mode
 `All` MAY attach an external file after the protected-path checks pass. The tool SHALL

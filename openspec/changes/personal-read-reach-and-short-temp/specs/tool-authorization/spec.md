@@ -17,8 +17,12 @@ the link check, then protection.
   global read roots (`{skills_dir}`, `{identity_dir}`, `{workspaces_dir}`) for
   `Read` only and never for `Public`.
 - The managed temporary key folder SHALL be a session root for every
-  audience. The shared base (`/tmp/netclaw-<uid>`) SHALL NOT be a root, so a
-  session cannot reach the key folder of another session.
+  audience. The shared base (`/tmp/netclaw-<uid>`) SHALL NOT be a root.
+- A `Team` or `Public` decision SHALL deny a path below the base that is
+  outside the own key folder, also when a configured root covers the base.
+  The base itself stays reachable through such a root. `Personal` reaches
+  every key folder, as it reaches every session directory.
+  `PathAccessPolicy` owns the check. Its data is call-local.
 - Only `Personal` SHALL get the shared Netclaw sessions root and the legacy
   logs root. `Team` and `Public` SHALL get only their own session envelope
   and session directory. A child run SHALL inherit the audience and workspace
@@ -291,6 +295,10 @@ process-local. No state of these checks is durable.
 - **GIVEN** a Team session with the key folder `<base>/<key>`
 - **WHEN** the model calls `file_read` on `<base>/<other key>/p/x` or `<base>/x`
 - **THEN** the path access decision denies the read
+- **AND** with a Team read and write root `/tmp` over the base, a read, write,
+  list, or search of `<base>/<other key>` is denied
+- **AND** with the same root, `<base>/<key>/p/x` and `/tmp/shared/x` stay
+  readable, and a protected path in `<base>/<key>` stays denied
 
 #### Scenario: Personal session keeps cross-session read access
 
@@ -428,8 +436,8 @@ SHALL be:
   `shell_redirect_unproved`, `shell_redirect_file_tool_denied`). Each redirect
   of the command SHALL get these checks before any prompt. With an `Approval`
   mode of the file tool, a stored grant of that tool SHALL cover the redirect.
-  With no such grant, one exact candidate SHALL name each write and read that
-  needs consent, with `Once` and `Deny` only. Otherwise the candidate
+  With no such grant, each file operation that needs consent SHALL have its own exact candidate.
+  The prompt SHALL offer `Once` and `Deny` only. Otherwise the candidate
   SHALL NOT ask for a stored grant, and an answer SHALL NOT save one. Such a
   command SHALL get no managed temporary directory advice. A Bash source that
   parses with no command (an assignment, a comment, an empty `case`, an
@@ -503,6 +511,39 @@ own the reviewed-safe path rule; their result is call-local.
 `ApprovalPatternMatching` owns the grant match, including the legacy rule; its
 result is call-local. `ToolApprovalActor` holds chat grants (actor-local).
 `ToolApprovalStore` holds persistent grants (durable).
+
+Scratch composition SHALL apply only to a Personal Bash occurrence with resolved command candidates and proved redirects.
+The occurrence SHALL have at least one file target inside the current run's managed temporary directory.
+Every other file target SHALL stay inside that directory or name the null device.
+Every proved scratch target SHALL pass the file-tool authority checks.
+An ineligible occurrence SHALL retain its ordinary command and redirect scopes.
+The command grant SHALL still cover the occurrence directory and every ordinary operand scope.
+The redirect target SHALL remain subject to protected-path checks, file-tool admission, consent modes, and launch verification.
+A redirect through a link, an unresolved target, or a target outside that managed directory SHALL keep its ordinary scope.
+This composition SHALL NOT change any persistent grant or extend a repository's identity.
+
+#### Scenario: Repository command writes managed scratch
+- **GIVEN** a Personal session with a repository grant for `uv export` and file-write permission for its managed temporary directory
+- **WHEN** the command runs in that repository and redirects to a proved file in that managed directory
+- **THEN** the command runs without another prompt
+- **AND** an ordinary operand outside the repository still needs its own coverage
+
+#### Scenario: Scratch composition cannot bypass file consent
+- **GIVEN** the same command and a file-write mode of `Deny`
+- **WHEN** the command redirects to its managed temporary directory
+- **THEN** Netclaw denies the call before a shell grant can cover it
+- **AND** an `Approval` file-write mode needs file-tool consent or a covering file-tool grant
+
+#### Scenario: Exact scratch consent preserves command and file identities
+- **GIVEN** a scratch redirect that needs file consent
+- **WHEN** the operator selects `Once`
+- **THEN** the unchanged retry is allowed
+- **AND** a different command or file-operation set still needs consent
+- **AND** punctuation in one filename cannot authorize two different targets
+
+#### Scenario: Another run's scratch is external
+- **WHEN** a repository command redirects to another run's temporary directory or an arbitrary external file
+- **THEN** the repository grant supplies no scratch exemption
 
 #### Scenario: A command that runs no program needs no prompt
 

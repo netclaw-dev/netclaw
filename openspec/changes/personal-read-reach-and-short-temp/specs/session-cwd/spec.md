@@ -30,6 +30,10 @@ following a link:
 - the daemon user owns it,
 - it has no group or other permission bits.
 
+A `file_write` or `file_edit` that makes a folder below the base SHALL first
+use the same creation and checks. A Team session has no shell, so a file tool
+can be the first writer. A failed check SHALL refuse the write.
+
 If a check fails, the system SHALL refuse the launch with an error that names
 the folder and the failed check. It SHALL NOT set `TMPDIR`, and it SHALL NOT
 use another directory. These checks are call-local. Netclaw SHALL NOT change
@@ -93,6 +97,14 @@ temporary-directory cleanup occurs as part of this behavior.
 - **WHEN** the agent invokes `shell_execute`
 - **THEN** the launch fails with an error that names the folder and the cause
 - **AND** the process does not start, and Netclaw does not use the deep path
+
+#### Scenario: Example - a first file write keeps the folders private
+
+- **GIVEN** `/tmp/netclaw-<uid>` does not exist and the umask is 0022
+- **WHEN** a Team session calls `file_write` on `<temp_dir>/notes.txt`
+- **THEN** the base, the key folder, and the run folder have mode 0700
+- **AND** a later shell launch of this session or another session passes the
+  checks
 
 #### Scenario: Counterexample - own temporary folder gets no platform-temp advice
 

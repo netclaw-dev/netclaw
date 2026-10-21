@@ -695,22 +695,24 @@ A session storage envelope is the one physical directory that contains all
 session-owned files for a new-layout session. Its path is fixed when the
 session binds its versioned storage binding. Its contents are mutable.
 
-The envelope contains distinct working, artifact, temporary, worktree, log,
-and child-run areas. Netclaw supplies the current envelope as an implicit
-trusted root. It is not a project scope, the default shell cwd, or an
-unconditional shell grant.
+The envelope contains distinct working, artifact, worktree, log, and child-run
+areas. On Windows it also contains the temporary areas. On Linux and macOS the
+[managed temporary directory](#managed-temporary-directory) is outside the
+envelope. Netclaw supplies the current envelope as an implicit trusted root.
+It is not a project scope, the default shell cwd, or an unconditional shell
+grant.
 
 ```text
 <session-envelope>/
 ├── attachment-staging/        # untrusted inbound bytes before admission
 ├── workspace/                 # default no-project working directory
 ├── artifacts/                 # retained parent outputs
-├── tmp/parent/                # disposable parent files
+├── tmp/parent/                # disposable parent files (Windows only)
 ├── worktrees/                 # managed source worktrees
 ├── logs/session.log           # raw parent log
 └── subagents/<run-id>/
     ├── artifacts/
-    ├── tmp/
+    ├── tmp/                   # Windows only
     └── logs/session.log       # raw child log
 ```
 
@@ -772,11 +774,19 @@ use a separate activity projection or log-specific redaction layer.
 ### Managed temporary directory
 
 A managed temporary directory contains disposable files for one parent or
-subagent run. Netclaw places it inside the session storage envelope. Each run
-receives a different directory.
+subagent run. Each run receives a different directory.
+
+- On Linux and macOS it is `<base>/<key>/p` for a parent and `<base>/<key>/c<h>`
+  for a child. The base is `/tmp/netclaw-<uid>` (`/private/tmp/...` on macOS).
+  All runs of one session share the key folder `<base>/<key>`.
+- On Windows it is inside the session storage envelope.
 
 Netclaw sets `TMPDIR`, `TMP`, and `TEMP` to this directory for child processes.
-The managed temporary directory is not a project scope or an authority grant.
+The directory is not a project scope. Its key folder is an implicit trusted root
+of its session for every audience. The base is not a root.
+
+**Code anchors:** `ManagedTemporaryLocation`, `ManagedTemporaryLayout`,
+`ManagedTemporaryEnvironment`
 
 ### Artifact directory
 

@@ -106,7 +106,7 @@ When available, use `shell_execute` for local search, VCS, builds, tests, proces
 Do not substitute shell commands when a listed first-party tool satisfies the task.
 Do not delegate a known file operation that an available file tool can complete.
 After a successful file tool result, do not use shell only to verify it unless the user requests shell behavior.
-For disposable text, use `file_write` in `temp_dir`, then use `file_read`; do not attempt a shell redirect first.
+For disposable text that you write, use `file_write` in `temp_dir`, then use `file_read`; do not attempt a shell redirect first. For command output, redirect to `"$TMPDIR/<name>"` (see the scratch redirect rules below).
 Standard temporary APIs use `temp_dir` in each shell process. Do not set `TMPDIR`, `TMP`, or `TEMP` in a shell command.
 Use `load_tool` directly for a known exact tool name.
 Use `search_tools` when the capability is known but its exact tool name is not.
@@ -175,7 +175,7 @@ A denied child-directory call does not permit a project change.
 The `[session]` block separates five paths:
 
 - `session_dir` is the workspace and the relative-path fallback.
-- `temp_dir` is run-local storage for disposable files. On Linux and macOS it is `/tmp/netclaw-<uid>/<key>/p`.
+- `temp_dir` is run-local storage for disposable files. On Linux it is `/tmp/netclaw-<uid>/<key>/p`; on macOS it is below `/private/tmp`.
 - `artifact_dir` is the run-owned output area.
 - `worktree_dir` is the session area for Git worktrees.
 - `log_path` is the exact raw audit log for the current run.
