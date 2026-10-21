@@ -156,6 +156,38 @@ public sealed class ManagedTemporaryFirstWriteTests : IDisposable
         Assert.Empty(Directory.EnumerateFileSystemEntries(runFolder));
     }
 
+    // Negative example: a targeted edit must refuse the same folders. The test seeds the file;
+    // it stands in for a file that another local user planted in the open or linked folders.
+    [SlopwatchSuppress("SW001", "The private base exists only on POSIX hosts.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The private base exists only on POSIX hosts.")]
+    [InlineData(TrustAudience.Team, ForeignFolders.OpenModes)]
+    [InlineData(TrustAudience.Personal, ForeignFolders.OpenModes)]
+    [InlineData(TrustAudience.Team, ForeignFolders.LinkedBase)]
+    [InlineData(TrustAudience.Personal, ForeignFolders.LinkedBase)]
+    public async Task A_targeted_file_edit_in_temp_dir_refuses_folders_that_exist_but_are_not_private(
+        TrustAudience audience,
+        ForeignFolders shape)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var runFolder = _storage.ManagedTemporary.Directory.Value;
+        var keyFolder = _storage.ManagedTemporary.StorageRoot.Value;
+        var target = Path.Combine(runFolder, "notes.txt");
+        PlantForeignFolders(shape, keyFolder, runFolder);
+        await File.WriteAllTextAsync(target, "planted-marker", ct);
+
+        var context = Context(audience, _storage);
+        var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
+        var result = await new FileEditTool(policy).ExecuteAsync(
+            ToolInput.Create("Path", target, "OldString", "planted-marker", "NewString", "edited"),
+            context,
+            ct);
+
+        Assert.True(
+            context.Receipt?.Category == ToolInvocationOutcomeCategory.AccessDenied,
+            $"A {audience} targeted file_edit in folders of shape {shape} must be refused, got {context.Receipt?.Category}: {result}");
+        Assert.Equal("planted-marker", await File.ReadAllTextAsync(target, ct));
+    }
+
     private void PlantForeignFolders(ForeignFolders shape, string keyFolder, string runFolder)
     {
         const UnixFileMode open = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
