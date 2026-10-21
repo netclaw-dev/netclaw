@@ -146,9 +146,22 @@ and trusted proxies later once the proxy topology is known.
 Config files: `~/.netclaw/config/netclaw.json` (daemon-owned base config,
 including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),
 `~/.netclaw/client/config.json` (local CLI endpoint state),
-`~/.netclaw/config/secrets.json` (credentials — never display API keys), and
+`~/.netclaw/config/secrets.json` (credentials — never display API keys; it also
+holds the OAuth token expiry of each provider, the one value there that is not
+encrypted), and
 `~/.netclaw/config/editor-state.json` (passive config-editor state for dormant
 mode-specific values).
+
+An OAuth token refresh writes `secrets.json` only. It does not change
+`netclaw.json` and does not restart the daemon. An older release wrote
+`Providers.<name>.OAuthTokenExpiry` to `netclaw.json`. `netclaw doctor` reports
+that key as information and does not change its exit code. `netclaw doctor --fix`
+copies the file to `netclaw.json.retired-oauth-expiry.bak`, copies each date to
+an existing provider entry in `secrets.json`, and removes the key. When
+`netclaw.json` has comments, `doctor --fix` changes nothing, so remove the key by
+hand. An encrypted `OAuthTokenExpiry` in `secrets.json` comes from an older
+build. The daemon stops at startup with an error that names `Providers:<name>`.
+Run `netclaw provider` and sign in again. The sign-in saves the date unencrypted.
 
 ## Feature Kill Switches
 

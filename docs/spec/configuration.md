@@ -99,7 +99,62 @@ keys used by model references.
 | `Type` | string | `"ollama"` | Provider SDK to use. Supported: `ollama`, `openai-compatible`, `openrouter`, `openai`, `anthropic`, `github-copilot`, `veniceai`. |
 | `Endpoint` | string | `"http://localhost:11434"` | Base URL for the provider API. |
 | `ApiKey` | string? | `null` | API key. Should go in `secrets.json` or an environment variable. |
+| `OAuthTokenExpiry` | string? | `null` | Written by Netclaw to `secrets.json`, beside the OAuth tokens. It is the one `secrets.json` value that Netclaw does not encrypt, because the configuration binder cannot read an encrypted date. A key in `netclaw.json` is retired. See [OAuth token expiry](#oauth-token-expiry). |
 | `VendorOptions` | object? | `null` | Provider-owned non-secret options. For `github-copilot`, `GitHubHost` and `GitHubApiBase` select the GitHub Enterprise host used for OAuth and Copilot token exchange; the Copilot API base remains `Endpoint`. |
+
+### OAuth token expiry
+
+Netclaw keeps the OAuth access token, the refresh token, the ChatGPT account ID, and the token
+expiry of a provider in `secrets.json`. One refresh writes all of them in one save. A refresh does
+not write `netclaw.json`, so it does not restart the daemon.
+
+```json
+{ "Providers": { "my-codex": { "OAuthAccessToken": "ENC:...", "OAuthTokenExpiry": "2026-06-01T01:00:00.0000000+00:00" } } }
+```
+
+- `secrets.json` encrypts every string value except `Providers.<name>.OAuthTokenExpiry`. The path
+  has exactly three segments, and the names match without regard to case. The daemon reads the
+  expiry as a date through the configuration binder, and the binder cannot read ciphertext. The
+  expiry is refresh timing and not a credential. A value in another place is encrypted, even with
+  the same key name.
+- A refresh without an expiry writes a JSON `null`. The `null` hides a retired `netclaw.json` key.
+- `netclaw secrets set Providers.<name>.OAuthTokenExpiry <date>` stores the date unencrypted. It
+  rejects a value that is not an ISO 8601 date and changes nothing.
+- A value that is not a date stops the daemon at startup with a message that names the provider.
+  `netclaw provider` and the refresh service reject it too.
+- An encrypted `OAuthTokenExpiry` in `secrets.json` comes from an older build. The daemon stops at
+  startup with a message that names `Providers:<name>`. Sign in again with `netclaw provider`. The
+  sign-in saves the date unencrypted.
+
+The refresh service reads `secrets.json` before it spends a refresh token. A refresh that the CLI
+does (`netclaw provider` probes each provider) reaches a running daemon through that file.
+
+- The daemon takes the stored refresh token only when it differs from the last token that the
+  daemon read from or wrote to `secrets.json`. After a failed save, `secrets.json` holds a spent
+  token, so the daemon keeps the live token in memory and never presents the spent one.
+- The daemon remembers each refresh token that it exchanged for another one. When an older copy of
+  `secrets.json` brings such a token back, the daemon keeps its in-memory tokens and logs a warning.
+- A server that sends no new refresh token keeps the old one valid. The daemon writes the live
+  refresh token again, so the file never keeps a spent one.
+- When a save fails after a good refresh, the daemon logs an Error that names `secrets.json`. The
+  file can hold a spent refresh token until the next good save.
+
+Older releases wrote `Providers.<name>.OAuthTokenExpiry` to `netclaw.json`. That key is retired.
+
+- The daemon still binds the key. A value in `secrets.json`, a JSON `null` included, takes
+  precedence. After the first token refresh the `secrets.json` value wins.
+- The daemon logs a startup warning for each retired key that holds a value.
+- `netclaw doctor` reports each retired key as information. The report does not change the exit
+  code.
+- `netclaw doctor --fix` copies `netclaw.json` to `netclaw.json.retired-oauth-expiry.bak`, or to the
+  next free `netclaw.json.retired-oauth-expiry.N.bak`. Then it copies each date to an existing
+  `secrets.json` provider entry that has no expiry, and it removes the key from `netclaw.json`. It
+  does not create a provider entry, and it keeps a key whose value is not a date. It writes
+  `secrets.json` first, so a crash between the two writes leaves both values, and the `secrets.json`
+  value wins. It makes no `secrets.json` backup, because the backup of `netclaw.json` holds the date.
+- When `netclaw.json` has comments, `doctor --fix` changes nothing, because the CLI would drop the
+  comments. The report and the startup warning stay. Remove the key by hand. The daemon works
+  meanwhile, because the `secrets.json` value wins after the first refresh.
 
 ### Models
 

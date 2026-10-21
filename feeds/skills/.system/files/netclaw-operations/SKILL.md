@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.123.0"
+  version: "2.124.0"
 ---
 
 # Netclaw Operations
@@ -973,6 +973,11 @@ add to it. This applies to `AllowedTools`, `ReadFiles`/`WriteFiles`/`AttachFiles
   `Security.StrictDefaults` is `false`. The daemon and the `netclaw config` screens use
   the same rule.
 - The daemon reads `netclaw.json`, `secrets.json`, and `NETCLAW_*` variables.
+  The OAuth token expiry of a provider is in `secrets.json`, unencrypted, beside the encrypted
+  tokens. An OAuth token refresh does not change `netclaw.json` and does not restart the daemon.
+  A `Providers.<name>.OAuthTokenExpiry` key in `netclaw.json` is retired. It binds only until
+  `secrets.json` holds a value. `netclaw doctor` reports the key, and `netclaw doctor --fix`
+  moves the date to `secrets.json` and removes the key after a backup.
   `netclaw doctor`, `netclaw mcp permissions`, `netclaw mcp tools`, and the
   `netclaw config` screens read only `netclaw.json`, so they can show a different value.
 - `netclaw init` writes only the posture (`Security.DeploymentPosture`,
