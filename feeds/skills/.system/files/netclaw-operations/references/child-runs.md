@@ -12,8 +12,23 @@ The original owner authority applies to status, cancellation, and downstream con
 One exception covers status and cancellation: a reminder turn and any other turn of one session manage each other's child runs, when the audience, boundary, and channel type match.
 The error `This child run is not available to the requester` means that the run is not yours, is in another session, or does not exist. It does not mean that the run was lost.
 Status includes the lifecycle state and `pending_approval_count`.
-A child can wait for human consent while the parent continues other work.
 A later ordinary parent message does not cancel the child.
+
+## Child Consent Requests
+
+A child can ask the operator for consent. The operator answers the prompt in the channel. You cannot answer it.
+When a child consent request opens, the runtime gives you an approval notice in its own turn.
+The notice starts with `Child consent requests wait for the operator.` and lists the agent, the run, and the tool.
+While a request is open, the session is paused: `spawn_agent` is refused, and reminders and other automated turns wait.
+A person's message still runs, and the pause stays. A slash command that a person types can still start a child.
+The `spawn_agent` refusal starts with `spawn_agent is paused.` and names only your own waiting runs.
+A waiting child is not stalled. It waits for the operator with no time limit.
+Do not cancel, respawn, or poll a waiting child. Tell the operator to answer the prompt, or to cancel the child.
+`check_agent_run` does not work in a notice turn for a run that a person started. The operator cancels in their own turn.
+A notice turn cannot raise a consent prompt. A call that needs consent is denied there.
+When the last request closes, a closing notice says `spawn_agent is available again.` and lists the answers.
+A child prompt stays in the channel and in the TUI after the parent turn ends or fails. It stays until an answer.
+A restart withdraws every child consent request today. The child run is then lost, and its prompt is expired.
 
 Use `Cancel: true` to request cancellation.
 The acknowledgement records intent. Wait for the notice and read `result.md` before you report completion.

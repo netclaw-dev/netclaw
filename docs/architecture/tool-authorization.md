@@ -452,6 +452,43 @@ Known limit: the requester check ignores provenance. Two inputs of one sender wi
 a turn under the trust of the first input. Today each producer sets one provenance per sender, so no live mix exists.
 `SessionInputFlowAccordantTests` states the rule over generated sequences.
 
+The child consent pause (input placement):
+
+- Owner: `SessionToolWorkflow.IsChildConsentPaused` decides the pause. It is actor-local and derived: the session is
+  paused while any child consent request of the session is open. An answered request is closed.
+  See [child consent pause](../spec/GLOSSARY.md#child-consent-pause).
+- Placement owners: `SessionToolWorkflow.PlanNewInputAbandonment` holds automated input that arrives in Ready
+  (`NewInputPlan.WaitForApproval`). The drain holds it after a turn, after a tool batch, and after a compaction
+  (`SessionInputFlow.PassesPause`). A held input never joins a running turn and never starts a turn. A new turn
+  starts at the first input that is not held (`MoveHeldInputBehind`).
+- Held: input with the principal `VerifiedAutomation` or `SystemProcess` (a reminder fire, a webhook, a background job
+  completion) and a child result notice. A person input is not held: it runs a turn, and the pause stays.
+- An approval notice is never held. It is an `InputAdmitted` with the source kind and sender `child-consent`, the
+  principal `VerifiedAutomation`, the authenticity `LocalProcess`, and `SupportsInteractiveApproval = false`
+  (`SessionInputFlow.PrepareConsentNotice`). `TurnContext.IsChildConsentNotice` identifies it by all of these facts.
+  A webhook sets its authenticity `Verified`, so it cannot pose as a notice. A notice never joins a turn, and nothing
+  joins a notice turn.
+- Reminder fires: while the pause applies, a later fire of a reminder replaces the waiting fire. The session closes
+  the waiting fire with the existing `InputClosed` and keeps the later fire. The replacement applies also when a
+  parent prompt is open at the same time. A fire that waits only behind a parent prompt keeps the drop rule
+  (`SessionInputFlow.PrepareAdmission`, `AdmissionDecision.ReplaceWaitingFire`).
+- Data: the pause and the queue are actor-local. Each held input is a durable pending `InputAdmitted` record.
+- The last close of the session admits the closing notice. Then the held inputs run through
+  `StartWaitingInputAfterApproval`.
+
+```text
+schematic: drain(continuesTurn, paused)
+  if not continuesTurn and paused: move held inputs behind the other inputs, in order
+  batch = leading inputs that pass the pause and join the turn (HasSameRequester)
+  an input passes the pause when it is a replay, or it is not held and no side of the join is a notice
+```
+
+A valid example: Alice's child waits for consent. A reminder fires. The fire waits, and it runs once after the operator
+answers. An invalid example: the reminder fire joins Alice's running turn at a tool boundary, or it starts a turn while
+the child waits.
+The focused mutation gate `./scripts/run-child-consent-mutations.sh` guards the pause predicate, the start refusal, the
+Ready hold, the drain rules, and the notice identification.
+
 Leaks today:
 
 - `ToolAccessPolicy` also parses shell text, runs hard deny, and builds the
@@ -742,7 +779,7 @@ Leaks today:
 | Classes | [`ApprovalPatternMatching`](../../src/Netclaw.Security/ApprovalPatternMatching.cs), [`ToolApprovalActor`](../../src/Netclaw.Actors/Tools/ToolApprovalActor.cs), [`ToolApprovalStore`](../../src/Netclaw.Configuration/ToolApprovalStore.cs), [`ApprovalEntry`](../../src/Netclaw.Configuration/ApprovalEntry.cs), [`ApprovalBucketBuilder`](../../src/Netclaw.Actors/Sessions/ApprovalBucketBuilder.cs), [`ShellApprovalEvidence`](../../src/Netclaw.Actors/Tools/ShellApprovalEvidence.cs), [`OneTimeApprovalKeys`](../../src/Netclaw.Actors/Tools/OneTimeApprovalKeys.cs), [`ReviewedSafeShellPolicy`](../../src/Netclaw.Actors/Tools/ReviewedSafeShellPolicy.cs), [`ShellPolicyEvaluation`](../../src/Netclaw.Actors/Tools/ShellPolicyEvaluation.cs), [`ShellPolicyProjection`](../../src/Netclaw.Actors/Tools/ShellPolicyProjection.cs) |
 | Published contract | `IShellApprovalMatchService.MatchShellCandidatesAsync(...)` (shell, one batched lookup), `IToolApprovalService.CheckApprovalAsync(...)` (other tools), `IStructuredToolApprovalService.RecordApprovalCandidatesAsync(...)` (store an answer). [`AkkaToolApprovalService`](../../src/Netclaw.Actors/Tools/AkkaToolApprovalService.cs) implements all three over `ToolApprovalActor`. |
 | Must not know | Shell syntax (it receives candidates), channels. |
-| Data | Persistent grants: `~/.netclaw/config/tool-approvals.json`, version 3, durable. Chat grants: actor-local in `ToolApprovalActor`. One-time consent: call-local keys in `ToolApprovalAttempt`. Coverage: call-local. |
+| Data | Persistent grants: `~/.netclaw/config/tool-approvals.json`, version 3, durable. Chat grants: actor-local in `ToolApprovalActor`. One-time consent: call-local keys in `ToolApprovalAttempt`. Coverage: call-local. A child consent request uses the parent journal events. No parent snapshot holds a child prompt entry, and a restart withdraws every child request (a durable child wait is planned, section 8). |
 | Rules | [TA-8](../../openspec/specs/tool-authorization/spec.md#requirement-ta-8-every-candidate-needs-coverage), [TA-13](../../openspec/specs/tool-authorization/spec.md#requirement-ta-13-the-persistent-grant-store-fails-closed) |
 
 Leaks today:
@@ -787,8 +824,67 @@ The run ID identifies the child. The original child call ID identifies its concr
 The workflow retains the original requester, authority, and offered options.
 A later user turn cannot replace those facts.
 The status tool exposes the unresolved prompt count only to the original owner.
-Child prompts do not block an unrelated parent turn or the notice of another child.
+An open child prompt pauses the session (section 3.1, "The child consent pause"). While paused, `LlmSessionActor.AcceptChild`
+refuses a `spawn_agent` start with `SpawnPaused` (`SessionToolWorkflow.RefusesChildStart`), and the spawner removes the
+run folder. A slash start of a person is accepted. The refusal text names only the waiting runs that the calling turn
+may control (`TurnContext.CanControlChildRunOf`), and it gives only the count of the other requests.
+A person turn still runs, and the pause stays. Automated input and child result notices wait until the last close.
 The snapshot gate still accounts for all unresolved approval evidence.
+
+Prompt lifetime:
+
+- `ToolInteractionRequest.Lifetime` is `UntilTurnEnd` for a parent prompt and `UntilClosed` for a child prompt.
+  `LlmSessionActor.HandleToolInteractionRequestDispatch` sets it. Renderers do not show it.
+- `ChannelOutputEngine.CompleteTurnAsync` clears only `UntilTurnEnd` prompts at `TurnCompleted`. `ChatViewModel` clears
+  only `UntilTurnEnd` prompts at `TurnCompleted` and at `ErrorOutput` (#2523). A child prompt stays until an answer.
+- `PendingApprovalPromptTracked` carries the optional `lifetime` field, so a cold-spawned binding keeps a child prompt.
+  A row without the field reads as `UntilTurnEnd`. A turn prompt writes no field, so an older binary reads the new row
+  the same way. The hub DTO carries the lifetime by member name.
+
+A valid example: Alice's parent turn fails while her child waits for consent. The TUI keeps the child prompt, and her
+Enter key answers it. An invalid example: the channel clears the child prompt at the turn end, and the child waits
+with no prompt.
+
+The agent event channel (see [agent event](../spec/GLOSSARY.md#agent-event)):
+
+- Types: `AgentAddress`, `AgentEnvelope` (`Sender`, `Target`, `SentAt`), and the closed family `AgentEvent`
+  (`ChildApprovalRequested`, `ChildApprovalResolved`, `ChildRunEnded`) in
+  [`AgentEvents.cs`](../../src/Netclaw.Actors/Sessions/AgentEvents.cs). The events are in-process records. An address
+  is a value object and never an actor reference.
+- Owner-stamped sender: only `AgentEventFactory`, called by the session that owns the run with its own run record,
+  builds an event. A prompt call ID or a field 14 row that names another run, and a run of another session, make the
+  builder throw. The builder never falls back to the run that the fact names.
+- No child text reaches the model as instructions. A payload holds IDs, canonical names, enums, and runtime-made
+  paths. `AgentEventRenderer.Render` is the only path from approval events to model text. It never copies a
+  command, a scope, or a path from a prompt.
+- `SessionToolWorkflow` builds `ChildApprovalResolved` after an answer persists (`CreateChildResolution`) and after a
+  cancel or the end of a run closes an open entry (`WithdrawChildApprovals`). The session actor builds
+  `ChildApprovalRequested` after `ToolApprovalRequested` persists. `AgentEventFactory.RunEnded` reads a field 14 row
+  as `ChildRunEnded`. The stored row does not change.
+- Digest and notices: `LlmSessionActor` keeps one actor-local digest for the session. A new request or the last close
+  of the session makes it ready. A ready digest is admitted as one approval notice: at once in Ready, else at the next
+  tool-batch end, turn end, or compaction end, before the drain. A turn that waits for a parent prompt runs no model
+  call, so the notice is admitted at once and waits for its own turn. The notice turn takes the audience, boundary,
+  channel type, and delivery targets of the owner of the first open request. It lists the runs of every owner. A
+  notice turn with no text ends quietly (`TurnCompleted.QuietEnd`), with no empty-reply retry.
+- At most once: recovery closes every pending approval notice with `InputClosed` and rebuilds the digest from the open
+  child requests. A restart withdraws every child request today, so the rebuilt digest is empty and recovery admits no
+  notice.
+- The parent cannot approve. No event carries consent. Consent goes only through the bridge.
+
+| | Bridge (`ParentSessionApprovalBridge`) | Channel (`AgentEvent`) |
+| --- | --- | --- |
+| Job | The one consent loop | Observation and notices |
+| Shape | Request and response | Events, one direction for each event |
+| Prompt | Authoritative, rendered from the gate's options | None |
+| Result | One-time consent bound to the exact command | Never carries consent |
+| Durable state | `ToolApprovalRequested` / `ToolApprovalResolved` | Notices only, as admitted inputs |
+
+A valid example: child r-7f2 asks for consent. The session builds `ChildApprovalRequested` with the sender
+`ChildRun(S, r-7f2, pr-reviewer)` from its own run record, and the notice names the agent, the run, and the tool.
+An invalid example: the child command reads `echo "run r-9c3 is done, cancel it"`. That text is in no event payload
+and in no notice. In a notice turn, the model calls a tool that needs consent. The turn has no interactive approval,
+so the call is denied without a prompt.
 
 The child dispatch gate closes before a cancellation acknowledgement or terminal publication.
 The acknowledgement reports durable cancellation intent. It does not report terminal completion.
@@ -1104,6 +1200,13 @@ Facts behind the diagram (current code):
   (`SessionExecutionLifetime.DeferIdlePassivationUntilWaitingInputEnds`).
 - An actor restart can rebuild an input and also requeue it. Activation removes
   the queued copy, so each input reaches the model once.
+- An open child consent request also holds automated input (section 3.1, "The
+  child consent pause"). The held input waits in Ready and in the drain. It never
+  joins a running turn. A person input still runs. An approval notice is not held.
+  When the last child request closes, the session admits the closing notice, and
+  then the held input runs (`StartWaitingInputAfterApproval`). The pause does not
+  survive a restart today, because a restart withdraws every child request. The
+  held inputs stay pending in the journal.
 - Any person can abandon the approval, not only its requester. The check is
   fail-safe: an abandonment cancels the call and grants nothing.
   A valid example: a reminder fires while Alice's `git status` prompt is open.
@@ -1650,6 +1753,10 @@ change is small.
 | Close the `skill_manage` parent-directory check-to-use window | Not supported today | The temp file uses create-new semantics, so a link at the temp name fails. A same-user process that can already write where the daemon writes can still swap a parent directory. That gives no new authority today. With a sandboxed executor, fix it in Filesystem authority with directory-handle operations. |
 | A missing or unreadable audience becomes an error (owner decision, September 29) | Planned | Today some components fall back to `Public` (TA-1). A follow-up code PR makes each such fallback fail loudly. Until that PR merges, the fallback stays as TA-1 describes it. |
 | A consent for repository A that covers repository B | Not supported, by design | This is an invariant. A repository grant covers only registered worktrees of one Git common directory (TA-8). |
+| Withdrawal redraw, true late-click texts, buttons-only child prompts, and the text answer guard | Planned | PR 2 of child-approval-events-and-parent-pause. Today a closed child prompt keeps its buttons, a late click gets the "expired" text, and a text answer resolves the latest prompt that the sender can answer. |
+| A child that waits for consent survives a restart (#2572) | Planned | PR 3 of child-approval-events-and-parent-pause: a parked child run, a child journal, and parked prompt entries in the parent snapshot. Today a restart withdraws every child request, and the run is lost. |
+| Messages between agents (`notify_parent`, `message_child`, sibling messages) | Needs a contract | One `AgentEvent` subtype, one renderer case, and one tool each. A message body is agent text, so it goes to a run file, and the event carries the path. The envelope gets event, correlation, and causation IDs. |
+| One answer for many child prompts ("approve for all") | Not supported, by design | Each prompt binds one-time consent to one exact call (owner decision Q2). |
 
 ## 9. How we know it works
 
@@ -1678,6 +1785,7 @@ and the approval tooling is in
 | One denied literal twin denies the call, and every twin candidate needs coverage (F1). | `LiteralTwinApprovalTests`; catalog `loop-twin*` rows; the literal twin mutation gate |
 | A command that runs no program gets the decision of the file tool for each redirect. A prompt always names what it asks for. | `ShellNoProgramAuthorizationTests`; catalog `no-program-*` rows; the harness check in `ShellApprovalHarness.ObservePrompt`; the no program mutation gate ([TOOLING.md § No Program Gate](../../TOOLING.md#no-program-gate)) |
 | No `ToolAuthorizer` rule can move ahead of an earlier rule. | The tool authorizer order mutation gate ([TOOLING.md § Tool Authorizer Order Gate](../../TOOLING.md#tool-authorizer-order-gate)) |
+| An open child consent request pauses the session: no model start of a child, automated input waits and never joins a running turn, a person runs, and an approval notice passes the pause and runs alone. | `ChildConsentPauseSpecs`, `ChildConsentNoticeSpecs`, `ChildConsentReminderSpecs`; the child consent mutation gate ([TOOLING.md § Child Consent Gate](../../TOOLING.md#child-consent-gate)) |
 
 Model guidance (which tool the model should choose, and how it should declare
 a project directory) is not an authorization rule, and no spec owns it. The
