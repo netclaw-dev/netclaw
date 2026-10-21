@@ -185,6 +185,29 @@ public sealed class DaemonPathEnvironmentFileTests : IDisposable
         Assert.Equal($"MANPATH=/m\nexport PATH=/x\n{ExpectedPath}\n", Merge(existing));
     }
 
+    // systemd trims the key before the first '=', so these lines assign PATH.
+    [Fact]
+    public void Merge_replaces_a_path_line_with_whitespace_around_the_key_in_place()
+    {
+        Assert.Equal($"A=1\n{ExpectedPath}\nB=2\n", Merge("A=1\nPATH = /old\nB=2\n"));
+        Assert.Equal($"A=1\n{ExpectedPath}\nB=2\n", Merge("A=1\nPATH\t=/old\nB=2\n"));
+        Assert.Equal($"A=1\n{ExpectedPath}\nB=2\n", Merge("A=1\n  PATH=/old\nB=2\n"));
+    }
+
+    [Fact]
+    public void Merge_drops_a_later_path_line_with_whitespace_around_the_key()
+        => Assert.Equal(
+            $"{ExpectedPath}\nB=2\n",
+            Merge("PATH=/old\nB=2\nPATH = /older\nPATH\t=/oldest\n"));
+
+    [Fact]
+    public void ReadPathValue_reads_a_path_line_with_whitespace_around_the_key()
+    {
+        Assert.Equal("/x", DaemonPathEnvironmentFile.ReadPathValue("A=1\nPATH = /x\n"));
+        Assert.Equal("/x", DaemonPathEnvironmentFile.ReadPathValue("PATH\t=/x\r\n"));
+        Assert.Null(DaemonPathEnvironmentFile.ReadPathValue("export PATH=/x\nMANPATH=/m\n"));
+    }
+
     [Fact]
     public void Merge_adds_a_missing_final_newline()
         => Assert.Equal($"A=1\n{ExpectedPath}\n", Merge("A=1\nPATH=/old"));

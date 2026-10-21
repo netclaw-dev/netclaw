@@ -1015,9 +1015,15 @@ When a protected route denies such a request, `daemon.log` has a warning, `Refus
 Fix: call the daemon as `http://127.0.0.1:<port>` or `http://localhost:<port>`, or pair the client and send a device token.
 A device token request is not checked for `Host` or `Origin`.
 
-The systemd service reads `<home>/config/daemon.env`. `netclaw daemon install` and
-`netclaw doctor --fix` change only the `PATH=` line. They keep every other line, for example
-`NETCLAW_HOME=...`, and they do not open the file mode more than it was.
+The systemd service reads `<home>/config/daemon.env`. It also holds operator lines, for example
+`NETCLAW_HOME=...`.
+
+Caution: the file holds plain text. If a line holds a credential, run `chmod 600` on `daemon.env`.
+`netclaw daemon uninstall` deletes `daemon.env`, including the operator lines. To refresh the unit
+and keep the lines, run `netclaw daemon install` again.
+
+`netclaw daemon install` and `netclaw doctor --fix` replace the `PATH` line and remove a duplicate
+`PATH` line. They keep every other line, and they do not open the file mode more than it was.
 
 The install scripts (`install.sh` and `install.ps1`) read `NETCLAW_HOME` for the config directory.
 `install.sh` uses `<home>/bin` and `<home>/env` for a fresh install. When `INSTALL_DIR` is not set, it
