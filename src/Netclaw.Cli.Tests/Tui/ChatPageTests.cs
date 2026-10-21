@@ -318,6 +318,67 @@ public sealed class ChatPageTests
         Assert.Equal("Last request failed. Ready to retry.", vm.StatusMessage.Value);
     }
 
+    // child-approval-events-and-parent-pause, PR 1, task 1.10 (TUI part). A child consent prompt has the lifetime
+    // "until closed". The parent turn can end or fail while the child waits. The TUI keeps the child prompt and drops
+    // only the parent prompt, whose lifetime is the turn (#2523).
+    // Planted bug: the view model clears every pending prompt at TurnCompleted and at ErrorOutput, as it does today.
+    [Fact]
+    public void ChildPrompt_SurvivesTurnCompletedAndErrorOutput_ParentPromptDoesNot()
+    {
+        var vm = new TestChatViewModel(seed: null);
+        vm.ProcessOutputForTesting(ChildApproval("r-7f2/subagent-approval/1"));
+        vm.ProcessOutputForTesting(BuildApproval("git push origin main") with
+        {
+            CallId = new Netclaw.Tools.ToolCallId("parent-call"),
+            Lifetime = ToolInteractionLifetime.UntilTurnEnd
+        });
+
+        vm.ProcessOutputForTesting(new TurnCompleted
+        {
+            SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1), OpenChildRunIds = []
+        });
+
+        Assert.True(vm.HasPendingInteraction);
+        Assert.Equal("r-7f2/subagent-approval/1", vm.CurrentInteraction!.CallId.Value);
+        Assert.NotEmpty(vm.ApprovalOptions);
+
+        vm.ProcessOutputForTesting(new ErrorOutput { SessionId = new SessionId("tui/test"), Message = "Provider failed." });
+
+        Assert.True(vm.HasPendingInteraction);
+        Assert.Equal("r-7f2/subagent-approval/1", vm.CurrentInteraction!.CallId.Value);
+        Assert.NotEmpty(vm.ApprovalOptions);
+    }
+
+    // Task 1.11, headless typed-key coverage for #2523. The parent turn completes and then a later parent turn fails
+    // while a child prompt waits. The operator presses Enter on the prompt. The TUI submits "approve once" for the
+    // child call ID, which is the answer that resumes the child.
+    // Planted bug: the TUI drops the child prompt at the turn end, so Enter has no prompt to answer.
+    [Fact]
+    public async Task ChildPrompt_AfterTurnCompletedAndErrorOutput_EnterAnswersTheChild()
+    {
+        var (_, app, vm) = CreateHeadlessApp(null, out var input, replay:
+        [
+            ChildApproval("r-7f2/subagent-approval/1"),
+            new TurnCompleted { SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1), OpenChildRunIds = [] },
+            new ErrorOutput { SessionId = new SessionId("tui/test"), Message = "Provider failed." }
+        ]);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(new[] { $"submit:{ApprovalOptionKeys.ApproveOnce}", "shutdown" }, vm.LifecycleEvents);
+        Assert.Equal("r-7f2/subagent-approval/1", vm.LastSubmittedInteractionCallId);
+    }
+
+    private static ToolInteractionRequest ChildApproval(string callId)
+        => BuildApproval("gh pr view 12") with
+        {
+            CallId = new Netclaw.Tools.ToolCallId(callId),
+            Lifetime = ToolInteractionLifetime.UntilClosed
+        };
+
     // What web_fetch hands back for a large page: a multi-line summary whose
     // preview carries converted markdown and, for raw fetches, HTML.
     private const string WebFetchSummary =
@@ -1235,9 +1296,13 @@ public sealed class ChatPageTests
             return base.DenyPendingInteractionAsync();
         }
 
+        /// <summary>The call ID of the prompt that the submitted key answers.</summary>
+        public string? LastSubmittedInteractionCallId { get; private set; }
+
         protected override Task SubmitInteractionSelectionAsync(string selectedKey)
         {
             LastSubmittedInteractionKey = selectedKey;
+            LastSubmittedInteractionCallId = CurrentInteraction?.CallId.Value;
             LifecycleEvents.Add($"submit:{selectedKey}");
             return Task.CompletedTask;
         }

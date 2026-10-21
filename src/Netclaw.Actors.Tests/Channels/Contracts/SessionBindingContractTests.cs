@@ -822,6 +822,95 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
     }
 
+    // --- Child prompt lifetime (child-approval-events-and-parent-pause, PR 1, task 1.10) ---
+
+    // A child consent prompt has the lifetime "until closed". The parent turn can end or fail while the child waits,
+    // and the prompt must stay pending on Slack, Discord, and Mattermost (#2523). A text answer resolves a prompt
+    // that the binding still holds, so a local ToolInteractionResponse proves that the turn end kept the prompt. A
+    // binding that dropped the prompt forwards the text on the cold path as a ToolInteractionTextResponse.
+    // Planted bug: the engine clears every prompt at TurnCompleted, as it does today.
+    [Fact]
+    public async Task Child_prompt_stays_pending_after_the_parent_turn_completes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-child-prompt-outlives-turn");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            ChildPrompt(sid, "r-7f2/subagent-approval/1"),
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
+        ]);
+
+        var actor = CreateBindingActor(sid, pipeline, detector);
+        await AwaitAssertAsync(() => Assert.Contains(GetPostedTexts(), IsEmptyTurnFallback), cancellationToken: ct);
+
+        actor.Tell(CreateInboundMessage("A", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Empty(pipeline.RecordedFeedback.OfType<ToolInteractionTextResponse>());
+            var answer = Assert.Single(pipeline.RecordedFeedback.OfType<ToolInteractionResponse>());
+            Assert.Equal("r-7f2/subagent-approval/1", answer.CallId.Value);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, answer.SelectedKey.Value);
+        }, cancellationToken: ct);
+    }
+
+    // A cold-spawned binding rebuilds its pending prompts from PendingApprovalPromptTracked. The record carries the
+    // lifetime, so the next turn end keeps the child prompt.
+    // Planted bug: the journal drops the lifetime, and the recovered prompt reads as a turn prompt.
+    [Fact]
+    public async Task Cold_spawned_binding_keeps_a_child_prompt_at_turn_end()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-child-prompt-cold-spawn");
+        var firstPipeline = new RecordingSessionPipeline(_ => [ChildPrompt(sid, "r-7f2/subagent-approval/1")]);
+
+        var first = CreateBindingActor(sid, firstPipeline, detector);
+        await AwaitAssertAsync(() => Assert.Contains(GetPostedTexts(),
+            text => text.Contains("shell_execute", StringComparison.Ordinal)), cancellationToken: ct);
+        var stopped = CreateTestProbe("child-prompt-cold-spawn-stop");
+        stopped.Watch(first);
+        Sys.Stop(first);
+        await stopped.ExpectTerminatedAsync(first, cancellationToken: ct);
+
+        var recoveredPipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), OpenChildRunIds = [] }
+        ]);
+        var recovered = CreateBindingActor(sid, recoveredPipeline, detector);
+        await AwaitAssertAsync(() => Assert.Contains(GetPostedTexts(), IsEmptyTurnFallback), cancellationToken: ct);
+
+        recovered.Tell(CreateInboundMessage("A", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Empty(recoveredPipeline.RecordedFeedback.OfType<ToolInteractionTextResponse>());
+            var answer = Assert.Single(recoveredPipeline.RecordedFeedback.OfType<ToolInteractionResponse>());
+            Assert.Equal("r-7f2/subagent-approval/1", answer.CallId.Value);
+        }, cancellationToken: ct);
+    }
+
+    private static bool IsEmptyTurnFallback(string text)
+        => text.Contains("didn't manage to produce a reply", StringComparison.OrdinalIgnoreCase)
+           || text.Contains("warning", StringComparison.OrdinalIgnoreCase);
+
+    private static ToolInteractionRequest ChildPrompt(SessionId sid, string callId) => new()
+    {
+        SessionId = sid,
+        Kind = "approval",
+        CallId = new Netclaw.Tools.ToolCallId(callId),
+        ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+        DisplayText = "gh pr view 12",
+        RequesterSenderId = new SenderId("user-1"),
+        Lifetime = ToolInteractionLifetime.UntilClosed,
+        Options =
+        [
+            new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+            new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+        ]
+    };
+
     // --- Failure Notification ---
 
     [Fact]
