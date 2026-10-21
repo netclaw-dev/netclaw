@@ -59,6 +59,9 @@
              Link="Channels/TurnContextRequesterTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Channels/TurnContextChildControlTests.cs"
              Link="Channels/TurnContextChildControlTests.cs" />
+    <!-- child-approval-events-and-parent-pause: the identification of an approval notice (child-consent gate). -->
+    <Compile Include="../Netclaw.Actors.Tests/Channels/TurnContextChildConsentNoticeTests.cs"
+             Link="Channels/TurnContextChildConsentNoticeTests.cs" />
     <!-- Issue #2554: the private-folder checks of the managed temporary folder (path-access gate). -->
     <Compile Include="../Netclaw.Actors.Tests/Tools/ManagedTemporaryFolderCheckTests.cs"
              Link="Tools/ManagedTemporaryFolderCheckTests.cs" />
