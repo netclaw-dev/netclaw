@@ -391,27 +391,26 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         List<AIContent> Search(int round)
             => [CreateToolCall($"search-{round}", "search_tools", new Dictionary<string, object?> { ["query"] = "browser" })];
         // Request 1 starts the child. Requests 2 and 3 run. Request 4 is the first correction. Requests 5 to 7 are
-        // refused repeats 1 to 3. The child result arrives while request 7 is in flight, so request 8 delivers
-        // it. Requests 8 and 9 run again, request 10 is the correction, and requests 11 and 12 are repeats.
-        // The count stays at 3 across the delivery, so request 11 is repeat 4 and request 12 is repeat 5.
-        List<AIContent>[] script =
-        [
-            [CreateToolCall("call-spawn", "spawn_agent", new Dictionary<string, object?>
-            {
-                ["agent"] = "summarizer",
-                ["task"] = "Summarize src/README.md"
-            })],
-            .. Enumerable.Range(2, 11).Select(Search),
-            [new TextContent("The search stays blocked.")]
-        ];
+        // refused repeats 1 to 3. The child ends while request 7 is in flight. Its notice joins the loop at the next
+        // tool boundary after the runtime writes result.md: request 8 or 9. The refused call then runs again,
+        // the next request is the correction, and the later requests are repeats. The count keeps its value across
+        // the notice, so the loop reaches repeat 5. The model answers the final nudge in text.
         var request = 0;
-        _clientProvider.Main.ResponseContentsSelector = _ =>
+        _clientProvider.Main.ResponseContentsSelector = messages =>
         {
             var number = Interlocked.Increment(ref request);
             // The next request waits at the gate, so the child can finish while the parent loop runs.
             if (number == 6)
                 _clientProvider.Main.NextResponseGate = parentGate;
-            return number <= script.Length ? script[number - 1] : null;
+            if (number == 1)
+                return [CreateToolCall("call-spawn", "spawn_agent", new Dictionary<string, object?>
+                {
+                    ["agent"] = "summarizer",
+                    ["task"] = "Summarize src/README.md"
+                })];
+            return messages[^1].Text.Contains("Stop trying this action.", StringComparison.Ordinal)
+                ? [new TextContent("The search stays blocked.")]
+                : Search(number);
         };
 
         try
@@ -451,19 +450,27 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             }, TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.DoesNotContain(outputs, static output => output is ErrorOutput);
-            Assert.Equal(13, _clientProvider.Main.CallCount);
             var requests = _clientProvider.Main.ReceivedMessages;
-            // The delivery pair is in the history of request 8, and the evidence is clear: request 8 runs.
-            Assert.Contains(requests[7].SelectMany(static message => message.Contents.OfType<FunctionCallContent>()),
-                static call => call.Name == "child_run_result");
+            // The notice is in the history from request N on, and the evidence is clear: request N runs.
+            var noticeAt = requests.ToList().FindIndex(static request => request.Any(static message =>
+                message.Role == Microsoft.Extensions.AI.ChatRole.User
+                && message.Text.StartsWith("Child run ended.", StringComparison.Ordinal)));
+            Assert.InRange(noticeAt, 7, 8);
             static bool IsRepeatNudge(Microsoft.Extensions.AI.ChatMessage message)
                 => message.Role == Microsoft.Extensions.AI.ChatRole.User
                     && message.Text.StartsWith("[system: Netclaw refused your repeated call to `search_tools` again.",
                         StringComparison.Ordinal);
-            Assert.True(IsRepeatNudge(requests[11][^1]), $"The last message was: {requests[11][^1].Text}");
-            Assert.DoesNotContain("Stop trying this action.", requests[11][^1].Text, StringComparison.Ordinal);
-            Assert.True(IsRepeatNudge(requests[12][^1]), $"The last message was: {requests[12][^1].Text}");
-            Assert.Contains("Stop trying this action.", requests[12][^1].Text, StringComparison.Ordinal);
+            // The count does not reset at the notice. Repeat 5 gets the final nudge, and the model answers it. A notice
+            // in request 8 comes before repeat 4, so repeats 4 and 5 follow it. A notice in request 9 comes after
+            // repeat 4, so only repeat 5 follows it. A reset count would give five nudges after the notice.
+            var nudges = Enumerable.Range(noticeAt, requests.Count - noticeAt)
+                .Where(index => IsRepeatNudge(requests[index][^1]))
+                .ToArray();
+            Assert.Equal(noticeAt == 7 ? 2 : 1, nudges.Length);
+            Assert.All(nudges[..^1], index =>
+                Assert.DoesNotContain("Stop trying this action.", requests[index][^1].Text, StringComparison.Ordinal));
+            Assert.Contains("Stop trying this action.", requests[nudges[^1]][^1].Text, StringComparison.Ordinal);
+            Assert.Equal(nudges[^1] + 1, _clientProvider.Main.CallCount);
         }
         finally
         {

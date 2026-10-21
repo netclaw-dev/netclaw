@@ -69,7 +69,7 @@ read -r automation_start automation_end automation_first automation_last < <(sel
 report="$output_path/reports/mutation-report.json"
 expected_owner_count=5
 expected_join_count=3
-expected_wait_count=1
+expected_wait_count=2
 expected_automation_count=1
 
 # A compile error does not count as a tested mutant. The "or" to "and" pattern mutant of the principal set

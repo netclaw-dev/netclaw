@@ -572,9 +572,9 @@ The second span is the join rule in `JoinsTurn`.
 Stryker makes five mutants in the first span and three mutants in the second span.
 The linked `SessionInputFlowRequesterTests` source must kill all eight mutants.
 A follow-up turn must serve one requester, a running turn must admit only its own requester, and a replay must continue its turn.
-The script also selects two spans in `SessionToolWorkflow.Recovery.cs`: the call `IsAutomation(inputPrincipal, isChildNotice)` in
+The script also selects two spans in `SessionToolWorkflow.Recovery.cs`: the check `isChildNotice || IsAutomation(inputPrincipal)` in
 `PlanNewInputAbandonment`, and the automation test in `IsAutomation`.
-Stryker makes one mutant in the first span and two in the second. The linked `NewInputAbandonmentPlanTests` and
+Stryker makes two mutants in the first span and one in the second. The linked `NewInputAbandonmentPlanTests` and
 `ChildNoticeReducerTests` sources must kill all three.
 Automated input (`VerifiedAutomation`, `SystemProcess`) must wait, and a person or a null principal must close the approval.
 A child result notice is automated input by its kind: it waits whatever its principal is, because it carries the principal of the person who owns the child.
