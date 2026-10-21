@@ -3,9 +3,12 @@
 ### Requirement: An approval notice is a runtime input of kind child-consent
 
 The session SHALL admit an approval notice as an ordinary input with source kind `child-consent`, sender
-`child-consent`, principal `VerifiedAutomation`, the session, audience, boundary, and channel type of the run owner,
-a new turn ID, and the rendered notice text. The input SHALL be automated input and SHALL grant no authority. It SHALL
-NOT join a turn of a person. The stored input format SHALL NOT change.
+`child-consent`, principal `VerifiedAutomation`, authenticity `LocalProcess`, the session, audience, boundary, channel
+type, and delivery targets of the run owner, a new turn ID, interactive approval support set to false, and the rendered
+notice text. The session SHALL identify a notice by its source kind, sender, and authenticity together. The input SHALL
+be automated input and SHALL grant no authority. It SHALL NOT join a turn of a person. A call in a notice turn that
+needs consent SHALL be denied without a prompt. A notice turn that ends with no text SHALL end quietly, with no
+empty-turn fallback post. The stored input format SHALL NOT change.
 
 #### Scenario: Approval notice waits for its own turn
 
@@ -13,6 +16,13 @@ NOT join a turn of a person. The stored input format SHALL NOT change.
 - **WHEN** the tool batch of Alice's turn ends
 - **THEN** the approval notice does not join Alice's turn
 - **AND** it runs in its own turn after Alice's turn ends
+
+#### Scenario: Notice turn cannot raise a consent request
+
+- **GIVEN** an approval notice turn runs
+- **WHEN** the model calls `shell_execute` with an uncovered command
+- **THEN** the call is denied without a prompt
+- **AND** no consent request uses the run owner's requester
 
 #### Scenario: Notice turn cannot cancel a person's run
 

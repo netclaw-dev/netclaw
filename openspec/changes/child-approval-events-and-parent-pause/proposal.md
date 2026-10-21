@@ -14,7 +14,7 @@ The owner and the coordinator decided the rules on 21 October 2026. The design g
 
 - **Agent event channel.** A typed inter-agent event channel: a closed family of immutable `AgentEvent` records with a minimal envelope (`Sender`, `Target`, `SentAt`). The first members are `ChildApprovalRequested`, `ChildApprovalResolved` (approved, refused, or withdrawn with a reason), and `ChildRunEnded` (the #2515 child result, moved in memory; field 14 stays on disk). Messaging tools come later as new members of the same family.
 - **Bridge vs channel.** The approval bridge stays the one consent loop. The channel carries observation and messages, never consent.
-- **Parent notice.** When child consent requests of a run owner open or all close, the parent gets a runtime notice that the runtime renders from the typed events. The session merges the events of a fan-out into one notice for each model boundary. An idle parent wakes once for each notice. The notice is an ordinary admitted input with source kind `child-consent` and principal `VerifiedAutomation`. The journal format does not change. Each notice lists only the runs of one owner and states the session state truly.
+- **Parent notice.** When child consent requests open, or when all requests of the session close, the parent gets a runtime notice that the runtime renders from the typed events. The session keeps one digest and merges the events of a fan-out into one notice for each model boundary. An idle parent wakes once for each notice. The notice is an ordinary admitted input with source kind and sender `child-consent`, principal `VerifiedAutomation`, and authenticity `LocalProcess`. The journal format does not change. The notice turn cannot raise a consent request, and it cannot check or cancel a person's run.
 - **Runtime pause.** While any child consent request is open, the whole session pauses autonomous work. The current turn can finish. The session refuses `spawn_agent`, and an automated input does not start or join a turn. A person's message does not end the pause. The pause ends only when every open request closes. No request expires.
 - **Reminders while paused.** A current-session reminder fire waits. A later fire of the same reminder replaces it. When the pause ends, at most one turn of each reminder runs.
 - **No child identity in user-facing text.** The prompt shows only the command and the scope, with buttons only. The closed redraw, the late-click reply, and headless output do not name the child. The parent notice names the agent and the run.
@@ -68,7 +68,7 @@ Security impact:
 - The channel never carries consent. The parent cannot approve.
 - The text answer guard closes a consent spoof among parallel prompts.
 - A parked child's call runs only after a durable resume record, once, under the authority of the run record, and it passes every gate check again under the current policy. The model and the tool set never change silently.
-- The notice turn is automation. It cannot check or cancel a person's run. A consent request that it raises can be answered by any channel member, the same as a reminder turn.
+- The notice turn is automation. It cannot check or cancel a person's run, and a call in it that needs consent is denied without a prompt. A webhook that claims the `child-consent` kind is not a notice, because its authenticity is not `LocalProcess`.
 - The pause only refuses work. A fault in the pause can delay work. It cannot grant authority.
 
 Operational impact:

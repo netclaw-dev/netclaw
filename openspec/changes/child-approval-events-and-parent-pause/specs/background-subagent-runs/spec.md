@@ -72,13 +72,14 @@ The system SHALL persist cancellation intent before it acknowledges the intent. 
 
 ### Requirement: The parent learns of child consent requests without a poll
 
-When a child consent request opens, or when the last open request of a run owner closes, the parent session SHALL get
-one approval notice for that owner. The session SHALL merge the events of one model boundary into one notice for each
-run owner. When the session is idle, it SHALL admit a ready notice at once, and the notice SHALL start one turn. When a
+When a child consent request opens, or when the last open child request of the session closes, the parent session
+SHALL get one approval notice. The session SHALL keep one digest and SHALL merge the events of one model boundary into
+one notice. When the session is idle, it SHALL admit a ready notice at once, and the notice SHALL start one turn. When a
 turn runs or a compaction runs, the session SHALL admit the notice at the next tool-batch end, turn end, or compaction
-end. A notice SHALL be ready when it holds a new request, or when no request of that owner stays open. An answer while
-other requests of the owner stay open SHALL wait for the next ready notice. The notice SHALL name the agent, the run,
-and the tool of each request of that owner only, and SHALL say that the operator answers in the channel.
+end. A notice SHALL be ready when it holds a new request, or when no child request of the session stays open. An answer
+while other requests stay open SHALL wait for the next ready notice. The notice SHALL name the agent, the run, and the
+tool of each request, SHALL say that the operator answers in the channel, and SHALL say that `check_agent_run` does not
+work in the notice turn.
 
 #### Scenario: A fan-out gives one notice for each boundary
 
@@ -95,7 +96,7 @@ and the tool of each request of that owner only, and SHALL say that the operator
 
 #### Scenario: The last close gives a closing notice
 
-- **GIVEN** two open child consent requests of Alice
+- **GIVEN** two open child consent requests
 - **WHEN** the operator answers the first
 - **THEN** no notice is admitted
 - **WHEN** the operator answers the second
@@ -183,11 +184,12 @@ run has an answer, the parent SHALL record the resume, recreate the child from i
 calls, each once. A refused call SHALL get a refusal result and SHALL NOT run. The parent SHALL NOT resume a run while a
 restart drain is pending, and SHALL NOT start a new child incarnation before the old one stopped.
 
-The resumed child SHALL use the frozen system prompt, provider, model, tool set, project instructions, operating
-rules, and findings flag of its first journal event. If the frozen provider or model or the agent definition no longer
+The resumed child SHALL use the frozen system prompt, provider, model, project instructions, operating rules, and
+findings flag of its first journal event. Its tools SHALL be the frozen tool set, intersected with the current agent
+definition and the current audience policy. It SHALL start in the project directory of its last park. If the frozen provider or model or the agent definition no longer
 exists, the run SHALL end as lost with its reason, the parent notice SHALL state the reason, and the parked calls SHALL
-NOT run. The session SHALL NOT use another model or provider. A frozen tool that no longer exists SHALL give an
-explicit error result when the child calls it.
+NOT run. The session SHALL NOT use another model or provider. A tool that left the intersected set SHALL give the
+explicit "tool unavailable" result when the child calls it.
 
 #### Scenario: A live answer resumes the parked call once
 
@@ -229,10 +231,13 @@ explicit error result when the child calls it.
 
 A run that never parked SHALL have no child journal. For a run with a child journal, the system SHALL keep this order:
 the child records its final event; the parent records the run end, writes `result.md`, and admits the result notice;
-the child actor stops; then the parent writes a small closing event to the child journal, deletes all journal
-messages, and records the purge. No conversation row SHALL stay after the purge. A lost run SHALL follow the same order
-without the child's final event. Recovery SHALL purge the journal of each ended run that has a child journal and no
-purge record. A purge SHALL be idempotent. `task.md`, `result.md`, and the child log file SHALL stay.
+the child actor stops; then the purge writes a small closing event to the child journal and, after that write, deletes
+all journal messages. The parent SHALL record the purge only after the delete succeeds. On a failed delete, the session
+SHALL log an error, SHALL NOT record the purge, and SHALL try again at the next recovery. An empty child journal SHALL
+get no closing event and no delete. No conversation row SHALL stay after the purge. Whenever the session records a run
+as lost, it SHALL run the purge, also when it has no record of a child journal, so that an orphan journal is removed.
+Recovery SHALL purge the journal of each ended run that has a child journal and no purge record. A purge SHALL be
+idempotent. `task.md`, `result.md`, and the child log file SHALL stay.
 
 #### Scenario: No purge before the notice
 
@@ -245,6 +250,19 @@ purge record. A purge SHALL be idempotent. `task.md`, `result.md`, and the child
 - **GIVEN** a child run with a child journal on the SQLite journal
 - **WHEN** the purge completes
 - **THEN** the only row that stays for the child persistence ID is the closing event
+
+#### Scenario: A failed delete is retried
+
+- **GIVEN** the delete of a child journal fails
+- **WHEN** the purge ends
+- **THEN** the session logs an error and records no purge
+- **AND** the next recovery purges the journal again
+
+#### Scenario: An orphan journal is removed
+
+- **GIVEN** a child persisted its park, and a graceful drain stopped it before the parent recorded the park
+- **WHEN** the session recovers and records the run as lost
+- **THEN** the purge removes the child journal
 
 #### Scenario: Recovery purges a leftover journal
 

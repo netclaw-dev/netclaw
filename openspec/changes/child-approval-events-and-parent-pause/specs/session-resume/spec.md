@@ -2,9 +2,10 @@
 
 ### Requirement: Recovery keeps parked child consent requests
 
-The parent snapshot SHALL hold the open consent request of each parked child call: requester, options, candidates,
-working directory, child context, and authorization attempt. Parked child requests SHALL NOT block a routine snapshot
-or a compaction snapshot. At recovery, the session SHALL decide each child run from the parent run record:
+Until a parked run resumes, the parent snapshot SHALL hold every consent request of the run, open or answered:
+requester, options, candidates, working directory, child context, authorization attempt, and the answer when one
+exists. The session SHALL clear these entries when the run resumes. Parked child requests SHALL NOT block a routine
+snapshot or a compaction snapshot. At recovery, the session SHALL decide each child run from the parent run record:
 
 - a parked run with an open consent request SHALL keep its requests open and SHALL have no actor;
 - a parked run whose consent requests all have answers and that has no resume record SHALL resume (nothing ran);
@@ -12,7 +13,7 @@ or a compaction snapshot. At recovery, the session SHALL decide each child run f
   reason "daemon restarted";
 - an ended run that has a child journal and no purge record SHALL have its child journal purged.
 
-Recovery SHALL close every pending approval notice and SHALL rebuild the notice digests from the open requests. The
+Recovery SHALL close every pending approval notice and SHALL rebuild the notice digest from the open requests. The
 pause SHALL come back while a parked request is open. A new output subscriber SHALL receive each open child prompt
 again. A session whose only child runs are parked SHALL be able to passivate.
 
@@ -30,6 +31,15 @@ again. A session whose only child runs are parked SHALL be able to passivate.
 - **WHEN** the session compacts, saves a snapshot, and deletes the journal rows before it
 - **AND** the daemon restarts
 - **THEN** a click on the old prompt resumes the parked call once
+
+#### Scenario: Compaction keeps an answer of a parked run
+
+- **GIVEN** a child parked at two consent requests p1 and p2
+- **WHEN** the operator approves p1
+- **AND** the session compacts, saves a snapshot, and deletes the journal rows before it
+- **AND** the daemon restarts
+- **AND** the operator approves p2
+- **THEN** the resume runs both parked calls, each once
 
 #### Scenario: Crash after the last answer and before the resume record
 

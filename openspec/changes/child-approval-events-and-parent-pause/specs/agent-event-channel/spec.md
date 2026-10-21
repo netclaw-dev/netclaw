@@ -79,7 +79,7 @@ child approval requested events.
 The session SHALL deliver agent events to its model in the order in which it accepted the producer facts. A
 resolution SHALL follow its request. A child run ended event SHALL reach the model once in effect. Child approval
 events SHALL reach the model at most once. At recovery the session SHALL close every pending approval notice and SHALL
-rebuild its digests from the open consent requests. If recovery closed a pending notice, the rebuilt digest SHALL be
+rebuild its digest from the open consent requests. If recovery closed a pending notice, the rebuilt digest SHALL be
 ready, so that the model learns the true open set.
 
 #### Scenario: Resolution follows request
@@ -99,9 +99,10 @@ ready, so that the model learns the true open set.
 
 The runtime SHALL render agent events into notice text with one deterministic renderer. The model SHALL see only
 the rendered text. The session SHALL store the rendered text with the admitted input. An approval notice SHALL be an
-ordinary admitted input with source kind `child-consent`, sender `child-consent`, and principal `VerifiedAutomation`.
-The stored input format SHALL NOT change for approval notices. A notice SHALL list only the runs of one run owner, and
-it SHALL state that `spawn_agent` is available only when no child consent request of the session stays open.
+ordinary admitted input with source kind `child-consent`, sender `child-consent`, principal `VerifiedAutomation`, and
+authenticity `LocalProcess`. The session SHALL identify a notice by all three of source kind, sender, and
+authenticity. The stored input format SHALL NOT change for approval notices. The session SHALL keep one digest. The
+closing notice SHALL come only when no child consent request of the session stays open.
 
 #### Scenario: An older binary treats a notice as automation
 
@@ -109,9 +110,17 @@ it SHALL state that `spawn_agent` is available only when no child consent reques
 - **WHEN** the old binary reads the input
 - **THEN** it classifies the input as automated input by its principal
 
-#### Scenario: A notice is true for its owner
+#### Scenario: No closing notice while a request stays open
 
 - **GIVEN** Alice's child and Bob's child both wait for consent
 - **WHEN** the operator answers Alice's request
-- **THEN** Alice's closing notice lists only Alice's run
-- **AND** it says that other requests of the session stay open and that `spawn_agent` stays paused
+- **THEN** no closing notice is admitted
+- **WHEN** the operator answers Bob's request
+- **THEN** one closing notice lists both answers and says that `spawn_agent` is available again
+
+#### Scenario: A webhook cannot pose as a notice
+
+- **GIVEN** a webhook event with event type `child-consent`
+- **WHEN** the session admits it while paused
+- **THEN** the session treats it as ordinary automated input, because its authenticity is not `LocalProcess`
+- **AND** it waits behind the pause, and recovery does not close it as a notice

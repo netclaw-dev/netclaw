@@ -99,6 +99,9 @@ one-time consent, requester, open child run, agent event, child consent pause, p
 | B4 | PR 1 holds the prompt lifetime and the TUI and channel turn-end change, so PR 1 and PR 2 each ship alone. |
 | S5 | An approval notice has principal `VerifiedAutomation`. |
 | S7 | A child prompt has buttons only. A failed post withdraws the request. |
+| N1 | A notice turn cannot raise a consent request: its context has `SupportsInteractiveApproval = false`. |
+| N2 | One digest for each session, not for each owner. |
+| N3 | Whenever the session records a run as lost, it runs the purge actor, which does nothing for an empty journal. |
 | Cuts | The child journal is written at the first park only. No child snapshot. No new `SubAgentOutput` phases. No orphan resume of approval notices. No owner-stamped-sender Stryker target. No routing hook on `AgentEvent`. |
 
 ## Goals / Non-Goals
@@ -241,26 +244,36 @@ without a change to the channel contract. This change does not make that change.
 
 - source kind `child-consent`, sender `child-consent`, principal `VerifiedAutomation`, authenticity `LocalProcess`;
 - the session, audience, boundary, and channel type of the run owner, and a new turn ID;
+- the run owner's default and requested delivery targets, so the reply goes to the same thread;
+- `SupportsInteractiveApproval = false`;
 - the rendered text in `user_message`. No new field.
 
+The session identifies a notice input by all three facts: source kind `child-consent`, authenticity `LocalProcess`, and
+sender `child-consent` (the `TurnContext.IsReminderTurn` pattern). A webhook with event type `child-consent` has
+authenticity `Verified`, so it is not a notice: it cannot pass the pause, and recovery does not close it.
+
 The principal makes an older binary classify the input as automation. After a rollback, an old binary runs a pending
-notice as an ordinary automated turn with the rendered text. The notice turn grants no authority. Under the six-fact
-rule it cannot check or cancel a person's run, so the notice text tells the model to ask the operator, who can cancel
-in their own turn. A consent request that the notice turn itself raises has an automation requester, so any channel
-member may answer it, the same as a reminder turn.
+notice as an ordinary automated turn with the rendered text. The notice turn grants no authority:
 
-**Merge rule (Q1).** The session keeps one actor-local digest for each run owner (the requester facts of
-`run.OriginalContext`).
+- Under the six-fact rule it cannot check or cancel a person's run. The notice text says so and tells the model to ask
+  the operator to cancel. The operator cancels in their own turn.
+- Its context has `SupportsInteractiveApproval = false`, so a call that needs consent is denied without a prompt
+  (existing path, `SessionToolExecutionPipeline.CanRequestInteractiveApproval`, `:1167-1168`). The session never
+  borrows the run owner's requester for consent.
+- A notice turn that ends with no text ends quietly (`QuietEnd`), so the channel posts no empty-turn fallback.
 
-- The digest is ready when it holds a new `ChildApprovalRequested`, or when no request of that owner stays open.
+**Merge rule (Q1, N2).** The session keeps one actor-local digest.
+
+- The digest is ready when it holds a new `ChildApprovalRequested`, or when no child request of the session stays open.
 - When the session is `Ready`, it admits a ready digest at once. This wakes an idle parent once.
 - When the session is `Processing` or `Compacting`, the digest waits until the next tool-batch end, turn end, or
   compaction end. The notice then waits for its own turn, because its requester is automation.
-- An answer while other requests of that owner stay open waits in the digest.
+- An answer while other requests of the session stay open waits in the digest.
 
-**Text (per owner, true).** A notice lists only the runs of one owner. It says "spawn_agent is available again" only
-when no child request of the session stays open. Otherwise it says that other requests of the session stay open. The
-session-clear notice lists the held reminder fires.
+**Text (true for the session).** A notice lists the runs of the session. The closing notice comes only when no child
+request of the session stays open, so its "spawn_agent is available again" line is always true. The closing notice
+lists the held reminder fires. The notice delivery target is the run owner's target of the first request in the
+digest.
 
 ```text
 Child consent requests wait for the operator. 3 are open.
@@ -270,18 +283,18 @@ Child consent requests wait for the operator. 3 are open.
 The operator answers these prompts in the channel. You cannot answer them.
 The children are not stalled. They wait for the operator, with no time limit.
 Until all requests close, spawn_agent is refused and automated turns wait.
-Ask the operator to answer the prompts, or to cancel a child.
+check_agent_run does not work in this turn. Ask the operator to answer the prompts, or to cancel a child.
 ```
 
 ```text
-Child consent requests are closed. None of this session is open.
+Child consent requests are closed. None is open in this session.
 - agent=pr-reviewer run=r-7f2 answer=approved_once
 - agent=pr-reviewer run=r-8a1 answer=withdrawn reason=cancelled_by_parent
 Held reminder fires now run: reminder=daily-pr-sweep fired_at=15:00:00Z
 spawn_agent is available again.
 ```
 
-**Recovery (PR 1, Cut 4).** Recovery closes every pending approval notice with `InputClosed`. It rebuilds each digest
+**Recovery (PR 1, Cut 4).** Recovery closes every pending approval notice with `InputClosed`. It rebuilds the digest
 from the open entries. If recovery closed one or more notices, the rebuilt digest is ready, because the model did not
 see those requests. If not, the rebuilt digest is a baseline that does not wake the parent. In PR 1 and PR 2 a restart
 withdraws all child requests, so the rebuilt digest is empty.
@@ -304,7 +317,7 @@ Paused := exists an open child consent request in this session        # P1, Q6; 
 | Person input | starts a turn | starts a turn. The pause stays. `spawn_agent` stays refused. |
 
 The pause ends only when every open child request closes: an answer, a refusal, or a withdrawal. On that move the
-session admits the ready digests, then starts the waiting inputs through `StartWaitingInputAfterApproval`.
+session admits the ready digest, then starts the waiting inputs through `StartWaitingInputAfterApproval`.
 
 ```mermaid
 stateDiagram-v2
@@ -446,8 +459,10 @@ child after replay:
   candidates. The gate checks the call under the current policy at call time.
 - A refused answer gives the call a refusal result through the plan's decision override. It does not run.
 - The resumed bridge starts prompt numbers above the highest recorded number.
-- A frozen tool that no longer exists in the registry gives an explicit "tool unavailable" result when the child calls
-  it. The child never gets a substitute tool.
+- The resumed child's tools are the frozen tool set, intersected with the current agent definition and the current
+  audience policy. A tool that left that set gives the existing explicit "tool unavailable" result when the child
+  calls it. The child never gets a substitute tool.
+- The resumed child starts in the project directory that the last `ChildParked` recorded.
 - No silent fallback: a missing agent definition, provider, or model ends the run as lost with its reason. The notice
   says: "The child could not resume because its model `{model}` from provider `{provider}` is no longer configured.
   The parked calls did not run." (or the provider or agent text).
@@ -470,21 +485,35 @@ For a run that has a child journal (`BackgroundChildRun.HasChildJournal`, set by
 1. The child persists `ChildMessagesRecorded` (if any are unrecorded) and `ChildRunFinished`, then returns the result.
 2. The parent persists `TerminalRecorded`, writes `result.md`, and admits the #2515 notice.
 3. After the notice is admitted and the child is `Terminated`, a short-lived purge actor with the child's persistence
-   ID (`Recovery.None`) persists `ChildJournalClosed`, then calls `DeleteMessages(long.MaxValue)`. The parent then
-   persists `ChildRunEvent.JournalPurged`, which clears `HasChildJournal`.
+   ID runs. It recovers only the sequence number, not the events.
+
+Purge conditions (owner: the purge actor, then `LlmSessionActor`):
+
+- (a) The purge actor calls `DeleteMessages(long.MaxValue)` inside the persist callback of `ChildJournalClosed`.
+- (b) The parent persists `ChildRunEvent.JournalPurged` (which clears `HasChildJournal`) only after
+  `DeleteMessagesSuccess`. On `DeleteMessagesFailure`, the session logs an error and persists no `JournalPurged`. The
+  next recovery tries again.
+- (c) When `LastSequenceNr == 0`, the journal is empty. The actor writes no tombstone, deletes nothing, and reports
+  success.
+
+Whenever the session records a run as lost, it runs the purge actor, also when `HasChildJournal` is false (N3). Guard
+(c) makes this free for a run with no journal. It removes an orphan journal that a stop between the child's
+`PersistAll` and the parent's `Parked` left.
 
 The SQL journal plugin keeps the row with the highest sequence number when it deletes messages, so that the sequence
 number is not reused. The tombstone makes that kept row carry no conversation. An in-memory journal test cannot prove
 this. A SQLite-backed test must check that no conversation row stays.
 
-A lost run (recovery, a failed resume, or a lost actor) follows steps 2 and 3. `task.md`, `result.md`, and
+A lost run (recovery, a failed resume, or a lost actor) follows steps 2 and 3, always with the purge actor. `task.md`, `result.md`, and
 `logs/session.log` stay.
 
 #### D8.7 Parent snapshot (B2)
 
-The open entry of each parked child prompt (the full `ToolApprovalRequested` facts: requester, options, candidates,
-working directory, child context, and authorization attempt) goes into `SessionSnapshotProto`. `AllowsSnapshot` lets
-parked child entries pass. A routine snapshot and a compaction snapshot keep them, and the journal delete after a
+Until the run's `Resumed`, every entry of a parked run goes into `SessionSnapshotProto`: the open entries (the full
+`ToolApprovalRequested` facts: requester, options, candidates, working directory, child context, and authorization
+attempt) and the answered entries (the same facts and the recorded answer). Without the answered entries, compaction
+would delete their `ToolApprovalResolved` rows, and the resume would lose an answer. The session clears the entries of
+a run at its `Resumed`. `AllowsSnapshot` lets parked child entries pass. A routine snapshot and a compaction snapshot keep them, and the journal delete after a
 snapshot does not lose them. Entries of non-parked children stay out of the snapshot, as today. This is a format change
 in PR 3.
 
@@ -497,11 +526,11 @@ RecoveryCompleted (schematic):
         if its run is Parked and the prompt is in run.Park: keep it open       # the pause comes back
         else: withdraw with DaemonRestarted
     for each run:
-        Accepted or Cancelling                     -> lost (existing); purge if HasChildJournal
+        Accepted or Cancelling                     -> lost (existing); run the purge actor (guard c)
         Parked, a prompt still open                -> nothing; the run waits with no actor
         Parked, all prompts resolved, no Resumed   -> resume (D8.4); nothing ran
         Reported and HasChildJournal               -> purge (idempotent)
-    close every pending approval notice; rebuild digests (D4)
+    close every pending approval notice; rebuild the digest (D4)
 ```
 
 - **The prompt stays live.** Bindings journal `PendingApprovalPromptTracked`. A click after the restart carries the
@@ -518,7 +547,7 @@ RecoveryCompleted (schematic):
 
 | Crash after | Parent state | Recovery |
 | --- | --- | --- |
-| child `ChildParked`, before parent `Parked` | `Accepted` | lost. Nothing ran. The child journal exists but `HasChildJournal` is false. See risks. |
+| child `ChildParked`, before parent `Parked` (also a graceful drain or a config reload) | `Accepted` | lost. Nothing ran. The purge actor removes the orphan journal. |
 | parent `Parked` | `Parked` | the run waits |
 | last answer, before `Resumed` | `Parked`, all prompts resolved | resume. Nothing ran. |
 | `Resumed`, before the next checkpoint or end | `Accepted` | lost (uncertain work, existing rule), then purge |
@@ -598,7 +627,7 @@ sequenceDiagram
 | Create `ChildApprovalResolved` | `SessionToolWorkflow` only | call-local; source facts durable |
 | Digest, merge, and rebuild | `LlmSessionActor` (Children partial) | actor-local |
 | Render model text | `AgentEventRenderer` (pure) | call-local |
-| Notice kind and principal | `SessionInputFlow` admission | durable in `TurnContext` (source kind, principal) |
+| Notice kind, principal, and identification (source kind, authenticity, sender) | `SessionInputFlow` admission; `TurnContext` | durable in `TurnContext` |
 | Field 14 adapter to `ChildRunEnded` | `NetclawProtoMapper` / `SessionState` | durable format unchanged |
 | Prompt text, options, scope | `ParentSessionApprovalBridge` from the gate's `ToolApprovalContext` | call-local |
 | Prompt `Lifetime` | `LlmSessionActor.HandleToolInteractionRequestDispatch`; binding journal optional field | call-local; binding durable |
@@ -612,7 +641,7 @@ sequenceDiagram
 | Child conversation and frozen facts | `SubAgentActor` (persistent) | durable, child journal |
 | Accept a park, resume, end, purge order | `LlmSessionActor` (Children partial) | durable parent journal and snapshot |
 | Purge execution | purge actor (child of the session) | durable child journal |
-| Parked prompt entries in the snapshot | `SessionToolWorkflow` with `BuildSnapshot` | durable parent snapshot |
+| Parked prompt entries (open and answered) in the snapshot until `Resumed` | `SessionToolWorkflow` with `BuildSnapshot` | durable parent snapshot |
 | Recovery choice for each run | `LlmSessionActor.RecoverChildren` | durable parent lifecycle |
 
 ### Examples
@@ -630,8 +659,14 @@ runs. No run folder stays. A reminder fire waits and runs after the operator ans
 Pause, negative: Alice writes "start the other review now" while a child waits. Her turn runs, the pause stays, and
 her turn's `spawn_agent` call is refused.
 
-Notice, negative: Bob's child and Alice's child both wait. Alice's notice lists only Alice's run, and its text does not
-say that `spawn_agent` is available while Bob's request stays open.
+Notice, negative: Bob's child and Alice's child both wait. The operator answers Alice's request. No closing notice
+comes while Bob's request stays open, so no text says that `spawn_agent` is available.
+
+Notice, negative: a webhook sends an event with type `child-consent`. Its authenticity is `Verified`, so it is not a
+notice. It waits behind the pause like other automated input.
+
+Notice turn, negative: in a notice turn, the model calls `shell_execute` with an uncovered command. The context has
+`SupportsInteractiveApproval = false`, so the call is denied without a prompt.
 
 Reminder, positive: reminder R fires at 14:00 and 15:00 while the session is paused. The 15:00 fire replaces the 14:00
 fire. After the answers, one turn of R runs, and the session-clear notice lists R.
@@ -646,6 +681,10 @@ Durable wait, positive: a child parks. The session compacts, and the snapshot de
 operator adds an MCP server, and the daemon restarts. Alice clicks "approve once". The session restores the entry from
 the snapshot, persists `Resumed`, recreates the child with the frozen prompt, tools, and model, and the parked call
 runs once.
+
+Durable wait, positive (snapshot): a child batch has two parked calls p1 and p2. Alice approves p1. The session
+compacts, and the snapshot deletes the old journal rows. The daemon restarts. Alice approves p2. The snapshot kept the
+answer of p1, so the resume runs both parked calls once.
 
 Durable wait, positive (B1): a child batch has a parked call A and a slow sibling B. Alice approves A while B runs.
 When B ends, the park reaches the owner with A answered. The owner persists `Parked` and `Resumed` together, and A runs
@@ -747,9 +786,11 @@ measured time after the first hosted run.
 - [Merged notices still give 2 or 3 parent turns in a fan-out.] → Bounded. The count does not grow with the children.
 - [Prompts do not name the child.] → Owner choice. The parent explains in the thread. The text answer guard forces a
   button for each prompt.
-- [The notice turn is automation (S5).] → It cannot check or cancel a person's run, and a consent request that it
-  raises can be answered by any channel member, as for a reminder turn. The notice tells the model to ask the
-  operator.
+- [The notice turn is automation (S5).] → It cannot check or cancel a person's run, and it cannot raise a consent
+  request (N1). The notice tells the model to ask the operator.
+- [Held inputs block routine snapshots.] → `SaveSnapshotIfSafe` skips a snapshot while a durable input is pending, and
+  held reminder fires and child result notices are pending during the pause. The journal grows until the pause ends.
+  Compaction still saves its snapshot. The replacement rule keeps at most one fire of each reminder.
 - [The notice no longer joins a running person turn.] → The parent sees the notice in its own turn right after the
   running turn. `spawn_agent` is refused at once in the running turn, with the refusal text.
 - [Persist callbacks reorder the admission and the drain at a boundary.] → Admit in the persist callback, then drain.
@@ -759,8 +800,11 @@ measured time after the first hosted run.
   #2573.
 - [PR 3: purge order.] → The parent purges only after the notice and `Terminated`. A Stryker target guards the order.
 - [PR 3: the SQL plugin keeps the highest row.] → The tombstone is the kept row. A SQLite-backed test checks it.
-- [PR 3: a crash between the child `ChildParked` and the parent `Parked` leaves a child journal that the parent does
-  not know.] → The run is lost and nothing ran. The orphan journal waits for the #2573 reaper (prefix scan).
+- [PR 3: a stop between the child `PersistAll` and the parent `Parked` leaves a child journal that the parent does not
+  know. A crash, a graceful drain, or a config reload can cause it.] → The run is lost and nothing ran. The purge actor
+  runs for every lost run and removes the orphan journal (N3).
+- [PR 3: a failed delete leaves the conversation in the journal.] → No `JournalPurged`, an error log, and a retry at the
+  next recovery.
 - [PR 3: replay cost at each resume.] → One replay for each answer batch. No child snapshot (Cut 2), so a long run
   replays its whole parked history. The journal holds only parked runs.
 - [PR 3: frozen facts age.] → A removed model, provider, or agent ends a parked run loudly. A removed tool gives an
@@ -797,6 +841,6 @@ Conflicts with open changes (resolved in task 10.1, before sync):
 
 ## Open Questions
 
-None for this stack. The owner and the coordinator decided all questions (see Context). Two interpretations need a
+None for this stack. The owner and the coordinator decided all questions (see Context). One interpretation needs a
 check in review: "the prompt ID on `ToolInteractionClosed`" is the prompt's call ID (the binding owns the transport
-locator); and the notice turn cannot cancel a person's run (S5 with the six-fact rule).
+locator).

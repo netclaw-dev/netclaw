@@ -9,8 +9,9 @@ A child policy denial SHALL produce the same `access_denied` receipt category as
 A schema loaded by a child SHALL remain available for later model iterations in
 that same child run. It SHALL be discarded when the child completes or fails.
 When a child parks, its child journal SHALL record the tool set of the run and
-its loaded deferred tool names, and a resumed child SHALL expose that recorded
-set. It SHALL NOT evict or replace the recorded set at resume. Child exposure
+its loaded deferred tool names. A resumed child SHALL expose that recorded set,
+intersected with the current agent definition and the current audience policy.
+It SHALL NOT add a tool at resume. Child exposure
 does not use the main session's configurable user-turn lease because a child run
 has no independent sequence of user turns.
 
