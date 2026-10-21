@@ -182,6 +182,13 @@ public sealed class ApprovalContractGuardTests(ShellApprovalMatrixFixture fixtur
                         Mode = ToolFilesystemMode.Roots,
                         Roots = []
                     };
+                    // Personal read reach includes its write reach (#2554), so the write profile
+                    // must not reach the project either.
+                    config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
+                    {
+                        Mode = ToolFilesystemMode.Roots,
+                        Roots = []
+                    };
                 }
             });
         var project = Path.Combine(interactive.ProjectDirectory, "a.txt");
