@@ -371,6 +371,157 @@ public sealed class ChildConsentNoticeSpecs(ITestOutputHelper output) : ChildCon
         }
     }
 
+    /// <summary>
+    /// Merge rule (design D4, Q1), review blocker. A replacing notice keeps the answers of the notice that it replaces.
+    /// A parent prompt of Alice is open, so each notice waits. Child A asks: open notice N1 waits. The operator denies
+    /// A. That is the last close, so closing notice N2 replaces N1 with the answer of A. Child B asks before N2 runs,
+    /// so open notice N3 replaces N2. One notice turn runs. Its text lists B as the one open request, and it gives the
+    /// answer of A under "Answers since the last notice:".
+    /// Planted bug: the closing notice clears the digest when the session takes it. The replacing open notice then
+    /// holds only B, and the model never reads that the operator denied A.
+    /// </summary>
+    [Fact]
+    public async Task A_replacing_open_notice_keeps_the_answers_of_the_closing_notice_that_it_replaces()
+    {
+        // Arrange: two held children of Alice, and then an open parent prompt of Alice.
+        var sessionId = new SessionId("consent/replacing-notice-keeps-answers");
+        var journal = await JournalAsync();
+        ScriptParent();
+        ScriptChildren();
+        var subscriber = await JoinAsync(sessionId);
+        var (childA, gateA) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-ra");
+        var (childB, gateB) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-rb");
+
+        try
+        {
+            await SendAsync(sessionId, "probe:pr", Operator(Alice));
+            var parentPrompt = await FishApprovalAsync(subscriber, "probe-pr");
+
+            // Act 1: child A asks, and the operator denies A. The closing notice waits behind the parent prompt.
+            gateA.TrySetResult();
+            var promptA = await FishChildPromptAsync(subscriber, childA.Run.RunId);
+            await BarrierAsync(sessionId, childA);
+            AssertAck(await DenyAsync(sessionId, promptA, Alice));
+            await AwaitAssertAsync(() => Assert.Contains(ConsentNotices(journal, sessionId),
+                notice => notice.UserMessage.Content!.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal)),
+                Deadline, cancellationToken: Cancellation);
+
+            // Act 2: child B asks before the closing notice runs. Then Alice answers the parent prompt.
+            gateB.TrySetResult();
+            await FishChildPromptAsync(subscriber, childB.Run.RunId);
+            await BarrierAsync(sessionId, childB);
+            AssertAck(await AnswerAsync(sessionId, parentPrompt.CallId, Alice));
+
+            // Assert: one notice turn runs. Each other notice closed with no turn.
+            await AwaitAssertAsync(() => Assert.Contains(ConsentNotices(journal, sessionId),
+                notice => ConsumedByTurn(journal, notice.InputId) > 0), Deadline, cancellationToken: Cancellation);
+            await SettleNoticesAsync(journal, sessionId);
+            var notices = ConsentNotices(journal, sessionId);
+            var ran = Assert.Single(notices, notice => ConsumedByTurn(journal, notice.InputId) > 0);
+            Assert.All(notices.Where(notice => notice.InputId != ran.InputId), stale =>
+                Assert.Contains(journal.Committed.OfType<InputClosed>(), evt => evt.InputIds.Contains(stale.InputId)));
+
+            // Assert: the notice that runs lists B as open and gives the answer of A.
+            var lines = Lines(ran.UserMessage.Content);
+            Assert.Equal($"{OpenNoticeHeading} 1 is open.", lines[0]);
+            Assert.Contains(lines, line => line.StartsWith($"- agent=child-a run={childB.Run.RunId.Value} tool=", StringComparison.Ordinal));
+            var answers = Array.IndexOf(lines, AnswersHeading);
+            Assert.True(answers > 0, $"The notice has no line \"{AnswersHeading}\":\n{ran.UserMessage.Content}");
+            Assert.Equal($"- agent=child-a run={childA.Run.RunId.Value} answer=refused reason=denied", lines[answers + 1]);
+            Assert.Single(NoticeTextsSeenByModel());
+        }
+        finally
+        {
+            gateA.TrySetResult();
+            gateB.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Merge rule (design D4), at most once. An answer that a notice turn already gave to the model does not come
+    /// again. The session is idle, so each notice runs at once. A and B ask. The operator denies A while B stays open,
+    /// so no notice comes. C asks: the open notice N3 lists B and C, and it gives the answer of A under "Answers since
+    /// the last notice:". N3 runs. The operator then approves B and C. The closing notice gives only the answers of B
+    /// and C.
+    /// Planted bug: an open notice keeps its answers in the digest after it runs, so the closing notice repeats the
+    /// answer of A.
+    /// </summary>
+    [Fact]
+    public async Task An_answer_that_a_notice_turn_gave_does_not_come_again_in_the_next_notice()
+    {
+        // Arrange: three held children of Alice.
+        var sessionId = new SessionId("consent/answers-once");
+        var journal = await JournalAsync();
+        ScriptParent();
+        ScriptChildren();
+        var subscriber = await JoinAsync(sessionId);
+        var (childA, gateA) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-oa");
+        var (childB, gateB) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-ob");
+        var (childC, gateC) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-oc");
+
+        try
+        {
+            gateA.TrySetResult();
+            var promptA = await FishChildPromptAsync(subscriber, childA.Run.RunId);
+            await SettleAfterRequestAsync(journal, sessionId, childA);
+            gateB.TrySetResult();
+            var promptB = await FishChildPromptAsync(subscriber, childB.Run.RunId);
+            await SettleAfterRequestAsync(journal, sessionId, childB);
+
+            // Act 1: the operator denies A while B stays open. Then C asks, and its notice runs.
+            AssertAck(await DenyAsync(sessionId, promptA, Alice));
+            await BarrierAsync(sessionId, childB);
+            gateC.TrySetResult();
+            var promptC = await FishChildPromptAsync(subscriber, childC.Run.RunId);
+            await SettleAfterRequestAsync(journal, sessionId, childC);
+            var withAnswer = ConsentNotices(journal, sessionId)[^1];
+
+            // Act 2: the operator approves B, and then C. The last close gives the closing notice.
+            AssertAck(await AnswerAsync(sessionId, promptB.CallId, Alice));
+            await BarrierAsync(sessionId, childC);
+            AssertAck(await AnswerAsync(sessionId, promptC.CallId, Alice));
+            await AwaitAssertAsync(() => Assert.Contains(ConsentNotices(journal, sessionId),
+                notice => notice.UserMessage.Content!.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal)),
+                Deadline, cancellationToken: Cancellation);
+            await SettleNoticesAsync(journal, sessionId);
+
+            // Assert: the closing notice gives B and C, and it does not repeat the answer of A.
+            var closing = ConsentNotices(journal, sessionId)[^1].UserMessage.Content ?? string.Empty;
+            Assert.StartsWith(ClosingNoticeHeading, closing, StringComparison.Ordinal);
+            Assert.Contains($"run={childB.Run.RunId.Value} answer=approved_once", closing, StringComparison.Ordinal);
+            Assert.Contains($"run={childC.Run.RunId.Value} answer=approved_once", closing, StringComparison.Ordinal);
+            Assert.DoesNotContain($"run={childA.Run.RunId.Value} answer=", closing, StringComparison.Ordinal);
+
+            // Assert: the open notice that ran gave the answer of A once, under the answers heading.
+            Assert.True(ConsumedByTurn(journal, withAnswer.InputId) > 0, "The notice of C must run a turn.");
+            var lines = Lines(withAnswer.UserMessage.Content);
+            Assert.Equal($"{OpenNoticeHeading} 2 are open.", lines[0]);
+            var answers = Array.IndexOf(lines, AnswersHeading);
+            Assert.True(answers > 0, $"The notice has no line \"{AnswersHeading}\":\n{withAnswer.UserMessage.Content}");
+            Assert.Equal($"- agent=child-a run={childA.Run.RunId.Value} answer=refused reason=denied", lines[answers + 1]);
+        }
+        finally
+        {
+            gateA.TrySetResult();
+            gateB.TrySetResult();
+            gateC.TrySetResult();
+        }
+    }
+
+    // The review proposed this heading for the answers in an open notice. Design D4 gives no text for it.
+    private const string AnswersHeading = "Answers since the last notice:";
+
+    private static string[] Lines(string? text)
+        => (text ?? string.Empty).Split('\n').Select(static line => line.TrimEnd('\r')).Where(static line => line.Length > 0).ToArray();
+
+    private Task<ISessionResponse> DenyAsync(SessionId sessionId, ToolInteractionRequest prompt, string sender)
+        => AskManagerAsync<ISessionResponse>(new ToolInteractionResponse
+        {
+            SessionId = sessionId, CallId = prompt.CallId,
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
+            SenderId = new SenderId(sender)
+        });
+
     // How many turn events consumed the input: a tool batch or a turn record. InputClosed does not count, because a
     // closed input never reaches the model.
     private static int ConsumedByTurn(AcceptanceFault journal, InputId inputId)
