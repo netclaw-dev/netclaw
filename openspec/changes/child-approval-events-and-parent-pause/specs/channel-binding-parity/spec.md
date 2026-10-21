@@ -38,7 +38,7 @@ The system SHALL implement text-approval parsing, cold-spawn approval forwarding
 
 ### Requirement: Shared output-completion bookkeeping
 
-The system SHALL implement turn-completion bookkeeping (cursor advance, turn-in-flight state, reminder delivery settlement, empty-turn fallback, pending-prompt clearing) in a single engine. Persistence calls SHALL remain in the actor: the engine SHALL return the events to persist and SHALL NOT invoke Akka persistence. A channel-specific output hook SHALL handle output types that only some channels support. A pipeline reinitialize abandons the turn in flight, so the engine SHALL discard the pending cursor on every reinitialize, on every channel. At turn completion the engine SHALL clear only prompts whose lifetime is the turn. A prompt whose lifetime is "until closed" SHALL stay pending until an answer or a prompt-closed output.
+The system SHALL implement turn-completion bookkeeping (cursor advance, turn-in-flight state, reminder delivery settlement, empty-turn fallback, pending-prompt clearing) in a single engine. Persistence calls SHALL remain in the actor: the engine SHALL return the events to persist and SHALL NOT invoke Akka persistence. A channel-specific output hook SHALL handle output types that only some channels support. A pipeline reinitialize abandons the turn in flight, so the engine SHALL discard the pending cursor on every reinitialize, on every channel. At turn completion and at a turn error, the engine and the TUI SHALL clear only prompts whose lifetime is the turn. A prompt whose lifetime is "until closed" SHALL stay pending until an answer or a prompt-closed output. A tracked prompt record SHALL carry the lifetime in an optional field. A record without the field SHALL read as a turn prompt.
 
 #### Scenario: Channel-specific outputs go through the hook
 
@@ -57,18 +57,38 @@ The system SHALL implement turn-completion bookkeeping (cursor advance, turn-in-
 #### Scenario: A child prompt outlives the parent turn
 
 - **GIVEN** a child consent prompt with lifetime "until closed" is pending
-- **WHEN** the parent turn completes
+- **WHEN** the parent turn completes or fails
 - **THEN** Slack, Discord, Mattermost, and the TUI keep the prompt pending
-- **AND** a text or button answer still resolves it
+- **AND** a button answer still resolves it
+
+#### Scenario: A cold-spawned binding keeps a child prompt
+
+- **GIVEN** a binding journaled a child prompt with lifetime "until closed"
+- **WHEN** the binding is cold-spawned and a turn completes
+- **THEN** the binding keeps the prompt pending
 
 ## ADDED Requirements
 
+### Requirement: Child prompts have buttons only
+
+A child consent prompt SHALL show buttons only. It SHALL NOT include "reply with" text, and the channel SHALL NOT post
+a text-only fallback for it. When the channel cannot post the buttons, the binding SHALL report the prompt as
+unavailable, and the session SHALL withdraw the request.
+
+#### Scenario: Failed button post withdraws the child request
+
+- **GIVEN** a Slack binding fails to post the buttons of a child prompt
+- **WHEN** it reports the prompt as unavailable
+- **THEN** no text prompt is posted
+- **AND** the session withdraws the request with the reason that Netclaw could not show it
+
 ### Requirement: Closed and replayed prompts
 
-When the session emits a prompt-closed output, each channel SHALL redraw the prompt as closed with the reason text,
-SHALL remove its pending entry, and SHALL record that the prompt is cleared. The TUI SHALL remove the prompt. The
-redraw SHALL NOT name the child run or the agent. When the session sends a prompt again to a new subscriber, a channel
-that already tracks the call ID SHALL NOT post it again.
+When the session emits a prompt-closed output, each channel SHALL find the prompt by its call ID, redraw it as closed
+with the reason text, remove its pending entry, and record that the prompt is cleared. The TUI SHALL remove the prompt.
+The redraw SHALL NOT name the child run or the agent. When the session sends a prompt again to a new subscriber,
+Slack, Discord, Mattermost, and the TUI SHALL NOT show a call ID that they already track a second time. Headless output
+SHALL print a prompt and its close with no child identity.
 
 #### Scenario: Cancelled child prompt is redrawn as closed
 
@@ -77,8 +97,8 @@ that already tracks the call ID SHALL NOT post it again.
 - **THEN** the prompt shows "This approval request was withdrawn because the task that asked for it was cancelled. Nothing ran."
 - **AND** the prompt has no buttons
 
-#### Scenario: Replayed prompt is not posted twice
+#### Scenario: Replayed prompt is not shown twice
 
-- **GIVEN** a Slack binding tracks a pending child prompt
-- **WHEN** the session restarts and sends the open prompt to the binding again
-- **THEN** the binding does not post a second prompt
+- **GIVEN** a Slack binding and a TUI client each track a pending child prompt
+- **WHEN** the session restarts and sends the open prompt again
+- **THEN** neither shows a second prompt

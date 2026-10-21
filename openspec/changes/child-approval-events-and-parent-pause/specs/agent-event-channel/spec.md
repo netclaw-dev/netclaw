@@ -11,10 +11,10 @@ who may send what to whom, delivery guarantees, and how the runtime renders even
 The system SHALL exchange inter-agent facts as agent events. The set of agent event types SHALL be closed and
 immutable. Each agent event SHALL carry an envelope with a sender address, a target address, and a send time from the
 injected time source. An address SHALL be the main agent of a session (session ID) or a child run (session ID, run
-ID, agent name). An address SHALL be a value object and SHALL NOT hold an actor reference. The first event types SHALL
-be: child approval requested, child approval resolved (approved, refused, or withdrawn with a reason), and child run
-ended. A child run ended event SHALL represent the existing child result notice. The stored form of that notice SHALL
-NOT change.
+ID, agent name). Addresses and payload fields SHALL be value objects, canonical names, enums, or runtime-made paths.
+An event SHALL NOT hold an actor reference. The first event types SHALL be: child approval requested, child approval
+resolved (approved, refused, or withdrawn with a reason), and child run ended. A child run ended event SHALL represent
+the existing child result notice. The stored form of that notice SHALL NOT change.
 
 #### Scenario: A child result reads as a child run ended event
 
@@ -48,11 +48,10 @@ does not own SHALL be rejected.
 - **THEN** the sender is r-7f2
 - **AND** no event about r-9c3 is built
 
-### Requirement: An event payload carries no agent-written text
+### Requirement: An event payload carries no agent-chosen text
 
-An agent event payload SHALL NOT contain free text that an agent wrote. A payload SHALL hold IDs, canonical names,
-enums, and runtime-made paths. Agent-written content SHALL go to a file in the run folder, and the event SHALL carry
-the path. The model SHALL read such a file with a real file read, as data.
+An agent event payload SHALL NOT contain free text that an agent chose. Agent-written content SHALL go to a file in the
+run folder, and the event SHALL carry the path. The model SHALL read such a file with a real file read, as data.
 
 #### Scenario: Child command text does not reach the parent model
 
@@ -79,8 +78,9 @@ child approval requested events.
 
 The session SHALL deliver agent events to its model in the order in which it accepted the producer facts. A
 resolution SHALL follow its request. A child run ended event SHALL reach the model once in effect. Child approval
-events SHALL reach the model at most once. When the session stops, events that it did not yet admit MAY be lost. The
-approval journal SHALL still hold the true state of each consent request.
+events SHALL reach the model at most once. At recovery the session SHALL close every pending approval notice and SHALL
+rebuild its digests from the open consent requests. If recovery closed a pending notice, the rebuilt digest SHALL be
+ready, so that the model learns the true open set.
 
 #### Scenario: Resolution follows request
 
@@ -88,16 +88,30 @@ approval journal SHALL still hold the true state of each consent request.
 - **WHEN** the parent model receives notices that contain both
 - **THEN** the request appears before the resolution
 
+#### Scenario: Recovery replaces a pending notice with the true state
+
+- **GIVEN** an approval notice is admitted and not yet consumed
+- **WHEN** the session recovers
+- **THEN** the session closes that notice without a turn
+- **AND** it admits one notice with the requests that are still open, or none if no request is open
+
 ### Requirement: The model sees rendered notices, not typed events
 
 The runtime SHALL render agent events into notice text with one deterministic renderer. The model SHALL see only
 the rendered text. The session SHALL store the rendered text with the admitted input. An approval notice SHALL be an
-ordinary admitted input with source kind `child-consent`. The stored input format SHALL NOT change for approval
-notices.
+ordinary admitted input with source kind `child-consent`, sender `child-consent`, and principal `VerifiedAutomation`.
+The stored input format SHALL NOT change for approval notices. A notice SHALL list only the runs of one run owner, and
+it SHALL state that `spawn_agent` is available only when no child consent request of the session stays open.
 
-#### Scenario: Rebuilt approval notice keeps its kind
+#### Scenario: An older binary treats a notice as automation
 
-- **GIVEN** an approval notice is admitted and not yet consumed
-- **WHEN** the session restarts and rebuilds its waiting inputs
-- **THEN** the input keeps source kind `child-consent`
-- **AND** the session treats it as automated input
+- **GIVEN** a pending approval notice and a rollback to a binary without this change
+- **WHEN** the old binary reads the input
+- **THEN** it classifies the input as automated input by its principal
+
+#### Scenario: A notice is true for its owner
+
+- **GIVEN** Alice's child and Bob's child both wait for consent
+- **WHEN** the operator answers Alice's request
+- **THEN** Alice's closing notice lists only Alice's run
+- **AND** it says that other requests of the session stay open and that `spawn_agent` stays paused

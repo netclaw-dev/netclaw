@@ -96,11 +96,12 @@ The model sees a notice that the runtime renders from events. Planned in
 
 ### Child consent pause
 
-The child consent pause is the state of a session while any child consent
-request is open. The session refuses `spawn_agent`, and automated input waits.
-The current turn can finish, and a person's message starts a turn. Only the
-close of every open child request ends the pause. Planned in
-`child-approval-events-and-parent-pause`.
+The child consent pause is the state of a whole session while any child
+consent request of the session is open. The session refuses `spawn_agent`, and
+automated input waits. The current turn can finish. A person's message starts a
+turn, but it does not end the pause. No request expires. Only the close of
+every open child request (an answer, a refusal, or a withdrawal) ends the pause.
+Planned in `child-approval-events-and-parent-pause`.
 
 **Code anchor (planned):** `SessionToolWorkflow`
 
@@ -108,18 +109,23 @@ close of every open child request ends the pause. Planned in
 
 A parked child run is a child run that waits for consent with no actor. Its
 conversation and its parked calls are in its child journal, and the parent run
-record says that it is parked. When every parked request has an answer, the
-session recreates the child from its journal and runs only the parked calls.
-Planned in `child-approval-events-and-parent-pause`.
+record says that it is parked. The parent snapshot keeps its open requests.
+When every parked request has an answer, the session recreates the child from
+its journal, under the authority of the run record, and runs only the parked
+calls, each once. Planned in `child-approval-events-and-parent-pause`.
 
 **Code anchors (planned):** `ChildRunLifecycle.Parked`, `ChildRunEvent.Parked`
 
 ### Child journal
 
 A child journal is the Akka.Persistence journal of one child run, with the
-persistence ID `subagent-{escaped session ID}/{run ID}`. Its first event
-freezes the system prompt and the model. The parent purges it after the run
-end, `result.md`, and the result notice. Planned in
+persistence ID `subagent-{escaped session ID}/{run ID}`. A run writes it at its
+first park only, so a run that never parks has none. Its first event freezes
+the system prompt, the resolved provider and model, the tool set, the project
+instructions, the operating rules, and the findings flag. The parent purges it
+last: after the run end, `result.md`, and the result notice, with a closing
+event and then a delete of all messages. Match the prefix of one session with
+an ordinal comparison, because the escaped ID can hold `%`. Planned in
 `child-approval-events-and-parent-pause`.
 
 **Code anchor (planned):** `SubAgentRunProtocol`

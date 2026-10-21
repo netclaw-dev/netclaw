@@ -12,22 +12,25 @@ parent.
   with its original run, concrete call, requester, and authority.
 - The parent SHALL preserve those facts while it serves another user turn.
 - The prompt SHALL show only the runtime-rendered command and scope from the
-  gate. No user-facing text SHALL name the child run or the agent: not the
-  prompt, not the closed prompt, and not the reply to an answer. The parent
-  model SHALL receive the agent name and the run ID in its notice.
+  gate, with buttons only. No user-facing text SHALL name the child run or the
+  agent: not the prompt, not the closed prompt, not the reply to an answer, and
+  not headless output. The parent model SHALL receive the agent name and the
+  run ID in its notice.
 - The parent model SHALL NOT answer, approve, or change a consent request.
   Only an operator answer that the requester check accepts SHALL resolve it.
 - A text answer SHALL resolve a prompt only when the sender can answer exactly
   one open prompt. With two or more, the session SHALL resolve none and SHALL
   tell the sender to use the buttons.
-- When a child run is cancelled or ends, or a child run that is not parked is
-  lost at restart, Netclaw SHALL withdraw its open prompts. An answer to a
-  withdrawn prompt SHALL run nothing and grant nothing. The reply SHALL state
-  the reason without the child identity.
+- When a child run is cancelled, ends, or is lost, when a child prompt cannot
+  be posted, or when a child run that is not parked is lost at restart,
+  Netclaw SHALL withdraw its open prompts. An answer to a withdrawn prompt
+  SHALL run nothing and grant nothing. The reply SHALL state the true reason
+  without the child identity.
 - A child run that is parked at consent SHALL keep its consent requests open
-  across a daemon restart or a configuration reload. An answer after the
-  restart SHALL resume the parked call once. The gate SHALL check the call
-  again under the current policy.
+  across a daemon restart, a configuration reload, and a parent snapshot. An
+  answer after the restart SHALL resume the parked call once, under the
+  authority of the run record. The gate SHALL check the call again under the
+  current policy.
 - After a daemon or parent restart, Netclaw SHALL withdraw the consent requests
   of a child run that is not parked. Recovery SHALL report uncertain child work
   without a new child dispatch. The accepted start result SHALL remain distinct
@@ -42,12 +45,13 @@ parent.
 - **GIVEN** a subagent spawned in an interactive Personal session
 - **WHEN** the subagent calls `shell_execute` with an uncovered command
 - **THEN** the parent channel shows a consent request for the parent requester
-- **AND** the prompt shows the command and scope and does not name the agent or the run
+- **AND** the prompt shows the command and scope with buttons and does not name the agent or the run
 - **AND** the subagent resumes after the answer
 
 #### Scenario: Parked subagent prompt survives a restart
 
 - **GIVEN** a subagent parked at an unanswered consent request
+- **AND** a parent snapshot that deleted the old journal rows
 - **AND** a daemon restart or a configuration reload
 - **WHEN** the requester answers the old prompt with "approve once"
 - **THEN** the parked call runs once with consent for its exact candidates
@@ -68,6 +72,13 @@ parent.
 - **THEN** Netclaw replies "This approval request was withdrawn because the task that asked for it was cancelled. Nothing ran."
 - **AND** the reply contains no run ID and no agent name
 - **AND** no grant is written and no tool runs
+
+#### Scenario: Child prompt that cannot be posted
+
+- **GIVEN** a channel cannot post the buttons of a child prompt
+- **WHEN** the binding reports that the prompt is unavailable
+- **THEN** the session withdraws the request with the reason that Netclaw could not show it
+- **AND** no "reply with" text prompt is posted for it
 
 #### Scenario: Text answer with two open prompts
 
