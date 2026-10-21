@@ -156,6 +156,13 @@ internal sealed record ShellApprovalHarnessPolicy
     /// <summary>Changes other <c>Tools</c> configuration values before the registration reads them.</summary>
     public Action<ToolConfig>? ConfigureTools { get; init; }
 
+    /// <summary>
+    /// Changes <c>Tools</c> values that need the case project directory, such as a
+    /// Personal write root. Issue #2554: Personal reads reach the write profile, so a
+    /// case that confines reads must also confine writes.
+    /// </summary>
+    public Action<ToolConfig, string>? ConfigureToolsForProject { get; init; }
+
     /// <summary>A custom workspaces directory, as <c>NetclawPaths</c> accepts from the operator.</summary>
     public string? WorkspacesDirectory { get; init; }
 
@@ -170,6 +177,12 @@ internal sealed record ShellApprovalHarnessScope(
     IReadOnlyList<string> OneTimeApprovalKeys)
 {
     internal string? RepositoryGrantWorktree { get; init; }
+
+    /// <summary>
+    /// The managed temporary layout of the session. When it is not set, the session uses the
+    /// deep layout inside its session directory, as before issue #2554.
+    /// </summary>
+    internal ManagedTemporaryLayout? TemporaryLayout { get; init; }
 }
 
 /// <summary>
@@ -339,7 +352,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         var services = CreateServices(
             paths,
             environment,
-            CreateConfig(shellApprovalMode, policy),
+            CreateConfig(shellApprovalMode, policy, approvalProjectDirectory),
             CreateProtectedPathPolicy(paths, environment, deniedPaths),
             safeVerbs ?? SafeVerbLoader.Load(environment.Platform == ShellPlatform.Windows),
             timeProvider ?? TimeProvider.System,
@@ -414,10 +427,19 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         {
             var context = policy?.Sessionless == true
                 ? TestToolExecutionContext.CreateUnbound(contextOptions)
-                : TestToolExecutionContext.CreateBound(
-                    scope?.InvocationSessionId ?? InvocationSessionId,
-                    approvalSessionDirectory,
-                    contextOptions);
+                : scope?.TemporaryLayout is { } temporaryLayout
+                    ? TestToolExecutionContext.CreateBoundWithStorage(
+                        scope.InvocationSessionId,
+                        SessionStoragePaths.CreateLegacy(
+                            approvalSessionDirectory,
+                            Path.Combine(rootDirectory, "session-logs"),
+                            "test-session",
+                            temporaryLayout),
+                        contextOptions)
+                    : TestToolExecutionContext.CreateBound(
+                        scope?.InvocationSessionId ?? InvocationSessionId,
+                        approvalSessionDirectory,
+                        contextOptions);
             if (scope?.OneTimeApprovalKeys is { Count: > 0 } oneTimeApprovalKeys)
             {
                 context.Approval.SeedOneTimeConsent(new OneTimeConsent(
@@ -928,7 +950,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
     private static ToolConfig CreateConfig(
         ToolApprovalMode? shellApprovalMode,
-        ShellApprovalHarnessPolicy? policy)
+        ShellApprovalHarnessPolicy? policy,
+        string projectDirectory)
     {
         var config = new ToolConfig
         {
@@ -947,6 +970,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             foreach (var (key, value) in policy.PersonalApprovalOverrides)
                 config.AudienceProfiles.Personal.ApprovalPolicy!.ToolOverrides[key] = value;
             policy.ConfigureTools?.Invoke(config);
+            policy.ConfigureToolsForProject?.Invoke(config, projectDirectory);
         }
 
         return config;

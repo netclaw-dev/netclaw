@@ -38,7 +38,7 @@ public sealed class LiteralTwinMutationTests : IDisposable
     {
         _paths.EnsureDirectoriesExist();
         _storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")));
+            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         Directory.CreateDirectory(_storage.SessionDirectory.Value);
     }
 

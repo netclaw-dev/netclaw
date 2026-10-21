@@ -58,6 +58,6 @@ public sealed class ChildRunFilePathTests
 
     // Both layouts answer the same question.
     private static SessionStoragePaths Storage(string layout) => layout == "envelope"
-        ? SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(Envelope))
-        : SessionStoragePaths.CreateLegacy(LegacySession, Path.Combine(Root, "logs"), "legacy-1");
+        ? SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(Envelope), ManagedTemporaryLayout.InsideSessionStorage.Instance)
+        : SessionStoragePaths.CreateLegacy(LegacySession, Path.Combine(Root, "logs"), "legacy-1", ManagedTemporaryLayout.InsideSessionStorage.Instance);
 }

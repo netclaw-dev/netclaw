@@ -98,7 +98,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
                 Storage = SessionStoragePaths.CreateLegacy(
                     Path.GetTempPath(),
                     Path.Combine(Path.GetTempPath(), "netclaw-test-session-logs"),
-                    "test-session"),
+                    "test-session", ManagedTemporaryLayout.InsideSessionStorage.Instance),
                 InlineOutputBudget = new InlineOutputBudget(4096),
                 SpawnChildActor = static (_, _, _) => Task.FromResult<object>(new object())
             })

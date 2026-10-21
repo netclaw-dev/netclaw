@@ -39,7 +39,7 @@ public sealed class NoProgramMutationTests : IDisposable
         _paths = new NetclawPaths(root);
         _paths.EnsureDirectoriesExist();
         _storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")));
+            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         Directory.CreateDirectory(_storage.SessionDirectory.Value);
         // A macOS temporary root has links. The file rules need the physical path.
         FileSystemAuthority.TryResolveLinks(
@@ -319,6 +319,13 @@ public sealed class NoProgramMutationTests : IDisposable
 
         config.AudienceProfiles.GlobalReadRoots = [];
         config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [_readRoot]
+        };
+        // Issue #2554: Personal reads reach the write profile. Bound it too, so
+        // that the read check has a path that it refuses.
+        config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
         {
             Mode = ToolFilesystemMode.Roots,
             Roots = [_readRoot]

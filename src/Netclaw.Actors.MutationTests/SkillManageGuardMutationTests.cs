@@ -138,7 +138,7 @@ public sealed class SkillManageGuardMutationTests : IDisposable
                 Session = new ToolSessionScope.Bound(
                     "signalr/current",
                     SessionStoragePaths.CreateVersion2(
-                        new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")))),
+                        new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")), ManagedTemporaryLayout.InsideSessionStorage.Instance)),
                 Audience = TrustAudience.Personal,
                 Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
                 InlineOutputBudget = InlineOutputBudget.Default,

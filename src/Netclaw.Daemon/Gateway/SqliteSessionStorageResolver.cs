@@ -33,6 +33,7 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
     private readonly string _sessionsDirectory;
     private readonly string _sessionLogsDirectory;
     private readonly TimeProvider _timeProvider;
+    private readonly ManagedTemporaryLayout _temporaryLayout;
     private readonly ILogger<SqliteSessionStorageResolver> _logger;
     // GetOrAdd can run the resolve factory twice for one session; this keeps the re-root warning to once.
     private readonly ConcurrentDictionary<string, byte> _reRootedSessions = new(StringComparer.Ordinal);
@@ -42,11 +43,18 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
     /// <summary>Creates a resolver that stores bindings in the Netclaw database.</summary>
     /// <param name="paths">The Netclaw filesystem paths.</param>
     /// <param name="timeProvider">The clock used for binding timestamps.</param>
+    /// <param name="temporaryLayout">Where the managed temporary folder of each run lives.</param>
+    /// <param name="logger">The logger.</param>
+    /// <remarks>
+    /// The daemon registers <see cref="ManagedTemporaryLayout.ForHost"/>, so the layout is a required
+    /// dependency (issue #2554).
+    /// </remarks>
     public SqliteSessionStorageResolver(
         NetclawPaths paths,
         TimeProvider timeProvider,
+        ManagedTemporaryLayout temporaryLayout,
         ILogger<SqliteSessionStorageResolver>? logger = null)
-        : this(paths, timeProvider, paths.SessionsDirectory, logger)
+        : this(paths, timeProvider, paths.SessionsDirectory, temporaryLayout, logger)
     {
     }
 
@@ -54,11 +62,14 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
         NetclawPaths paths,
         TimeProvider timeProvider,
         string sessionsDirectory,
+        ManagedTemporaryLayout temporaryLayout,
         ILogger<SqliteSessionStorageResolver>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionsDirectory);
+        ArgumentNullException.ThrowIfNull(temporaryLayout);
+        _temporaryLayout = temporaryLayout;
 
         _connectionString = new SqliteConnectionStringBuilder
         {
@@ -112,20 +123,21 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
                         Directory.Exists(resolvedRoot) ? string.Empty : " (that folder does not exist yet, so the session starts with an empty workspace)");
                 }
 
-                storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(resolvedRoot));
+                storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(resolvedRoot), _temporaryLayout);
                 break;
             case SessionStorageDatabaseState.Legacy:
                 storage = SessionStoragePaths.CreateLegacy(
                     legacySessionDirectory,
                     _sessionLogsDirectory,
-                    sanitizedSessionId);
+                    sanitizedSessionId,
+                    _temporaryLayout);
                 break;
             case SessionStorageDatabaseState.New:
                 var envelopeRoot = new SessionStorageEnvelopeRoot(
                     Path.Combine(_sessionsDirectory, CreateEnvelopeDirectoryName(sessionId, sanitizedSessionId)));
                 var newBinding = new SessionStorageBinding(SessionStorageLayoutVersion.Version2, envelopeRoot);
                 InsertBinding(connection, transaction, sessionId, newBinding);
-                storage = SessionStoragePaths.CreateVersion2(envelopeRoot);
+                storage = SessionStoragePaths.CreateVersion2(envelopeRoot, _temporaryLayout);
                 break;
             default:
                 throw new InvalidOperationException("The session storage database returned an invalid state.");

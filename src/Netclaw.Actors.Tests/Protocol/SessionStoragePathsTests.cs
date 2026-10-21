@@ -14,7 +14,7 @@ public sealed class SessionStoragePathsTests
     public void Version_2_paths_share_one_envelope()
     {
         var envelope = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-storage", "session-42"));
-        var storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(envelope));
+        var storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(envelope), ManagedTemporaryLayout.InsideSessionStorage.Instance);
 
         Assert.Equal(SessionStorageLayoutVersion.Version2, storage.Binding?.LayoutVersion);
         Assert.Equal(Path.Combine(envelope, "workspace"), storage.SessionDirectory.Value);
@@ -31,7 +31,7 @@ public sealed class SessionStoragePathsTests
     public void Child_paths_use_the_run_identifier_and_keep_parent_workspace()
     {
         var envelope = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-storage", "session-42"));
-        var parent = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(envelope));
+        var parent = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(envelope), ManagedTemporaryLayout.InsideSessionStorage.Instance);
 
         var child = parent.ForChild(
             new SubAgentRunId("run-7"),
@@ -70,7 +70,7 @@ public sealed class SessionStoragePathsTests
     public void Parent_and_child_contexts_share_the_same_storage_guidance()
     {
         var envelope = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-storage", "session-42"));
-        var storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(envelope));
+        var storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(envelope), ManagedTemporaryLayout.InsideSessionStorage.Instance);
 
         var parentContext = SessionContextFormatter.Format(storage, "session-42");
         var childContext = SessionContextFormatter.Format(storage);
@@ -97,7 +97,7 @@ public sealed class SessionStoragePathsTests
         var storage = SessionStoragePaths.CreateLegacy(
             sessionDirectory,
             logBase,
-            "signalr_example");
+            "signalr_example", ManagedTemporaryLayout.InsideSessionStorage.Instance);
 
         Assert.Null(storage.Binding);
         Assert.Equal(sessionDirectory, storage.SessionDirectory.Value);

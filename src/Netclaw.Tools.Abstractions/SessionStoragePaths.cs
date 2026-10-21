@@ -85,21 +85,23 @@ public readonly record struct ManagedTemporaryLocation
     /// <summary>Creates the parent temporary location below a versioned session envelope.</summary>
     /// <param name="parent">The parent session envelope.</param>
     public ManagedTemporaryLocation(SessionStorageEnvelopeRoot parent)
-        : this(new ManagedTemporaryDirectory(parent), new ManagedTemporaryStorageRoot(parent))
+        : this(new ManagedTemporaryDirectory(parent), new ManagedTemporaryStorageRoot(parent), null)
     {
     }
 
     internal ManagedTemporaryLocation(SubAgentRunStorageRoot parent)
-        : this(new ManagedTemporaryDirectory(parent), new ManagedTemporaryStorageRoot(parent.EnvelopeRoot))
+        : this(new ManagedTemporaryDirectory(parent), new ManagedTemporaryStorageRoot(parent.EnvelopeRoot), null)
     {
     }
 
     private ManagedTemporaryLocation(
         ManagedTemporaryDirectory directory,
-        ManagedTemporaryStorageRoot storageRoot)
+        ManagedTemporaryStorageRoot storageRoot,
+        ManagedTemporaryBase? privateBase)
     {
         Directory = directory;
         StorageRoot = storageRoot;
+        PrivateBase = privateBase;
 
         var relative = Path.GetRelativePath(StorageRoot.Value, Directory.Value);
         if (relative == "."
@@ -116,13 +118,57 @@ public readonly record struct ManagedTemporaryLocation
     internal static ManagedTemporaryLocation FromPersistedPaths(string directory, string storageRoot) =>
         new(
             ManagedTemporaryDirectory.FromPersistedPath(directory),
-            ManagedTemporaryStorageRoot.FromPersistedPath(storageRoot));
+            ManagedTemporaryStorageRoot.FromPersistedPath(storageRoot),
+            null);
+
+    /// <summary>
+    /// Creates the parent location <c>&lt;base&gt;/&lt;key&gt;/p</c>. The key is the first 16
+    /// lowercase hex characters of the SHA-256 hash of the UTF-8 storage root text.
+    /// </summary>
+    /// <param name="temporaryBase">The per-user base.</param>
+    /// <param name="storageRootText">The envelope root, or the legacy session directory.</param>
+    internal static ManagedTemporaryLocation CreatePrivateParent(ManagedTemporaryBase temporaryBase, string storageRootText)
+    {
+        var keyFolder = Path.Combine(temporaryBase.Value, HashHex(storageRootText, 16));
+        return new ManagedTemporaryLocation(
+            ManagedTemporaryDirectory.FromPersistedPath(Path.Combine(keyFolder, "p")),
+            ManagedTemporaryStorageRoot.FromPersistedPath(keyFolder),
+            temporaryBase);
+    }
+
+    /// <summary>
+    /// Creates the child location <c>&lt;base&gt;/&lt;key&gt;/c&lt;h&gt;</c> in the key folder of this
+    /// private location. <c>h</c> is the first 8 lowercase hex characters of the SHA-256 hash of the run ID.
+    /// </summary>
+    internal ManagedTemporaryLocation CreatePrivateChild(SubAgentRunId runId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId.Value);
+        var temporaryBase = PrivateBase
+            ?? throw new InvalidOperationException("Only a private temporary location has private child runs.");
+        return new ManagedTemporaryLocation(
+            ManagedTemporaryDirectory.FromPersistedPath(Path.Combine(StorageRoot.Value, "c" + HashHex(runId.Value, 8))),
+            StorageRoot,
+            temporaryBase);
+    }
+
+    private static string HashHex(string text, int length)
+        => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)))[..length];
 
     /// <summary>Gets the process-specific temporary directory.</summary>
     public ManagedTemporaryDirectory Directory { get; }
 
     /// <summary>Gets the storage root that contains <see cref="Directory"/>.</summary>
     public ManagedTemporaryStorageRoot StorageRoot { get; }
+
+    /// <summary>
+    /// Gets the per-user base of a <see cref="ManagedTemporaryLayout.PrivateBase"/> location. It is
+    /// <c>null</c> for a location inside session storage (Windows) and for a persisted record.
+    /// </summary>
+    /// <remarks>
+    /// <c>ManagedTemporaryEnvironment.EnsureFolders</c> runs the private-folder checks (mode 0700, owner,
+    /// no link) on this base and on <see cref="StorageRoot"/> when the value is present.
+    /// </remarks>
+    public ManagedTemporaryBase? PrivateBase { get; }
 }
 
 /// <summary>
@@ -197,15 +243,25 @@ public sealed record SessionStoragePaths
 
     /// <summary>Creates the version-2 parent layout below one persisted envelope.</summary>
     /// <param name="envelopeRoot">The persisted envelope root.</param>
+    /// <param name="temporaryLayout">Where the managed temporary folder of each run lives.</param>
     /// <returns>The resolved parent paths.</returns>
-    public static SessionStoragePaths CreateVersion2(SessionStorageEnvelopeRoot envelopeRoot)
+    public static SessionStoragePaths CreateVersion2(
+        SessionStorageEnvelopeRoot envelopeRoot,
+        ManagedTemporaryLayout temporaryLayout)
     {
+        ArgumentNullException.ThrowIfNull(temporaryLayout);
         return new SessionStoragePaths(
             new SessionStorageBinding(SessionStorageLayoutVersion.Version2, envelopeRoot),
             new SessionWorkspaceDirectory(envelopeRoot),
             new AttachmentStagingDirectory(envelopeRoot),
             new ArtifactDirectory(envelopeRoot),
-            new ManagedTemporaryLocation(envelopeRoot),
+            temporaryLayout switch
+            {
+                ManagedTemporaryLayout.PrivateBase privateLayout =>
+                    ManagedTemporaryLocation.CreatePrivateParent(privateLayout.Base, envelopeRoot.Value),
+                ManagedTemporaryLayout.InsideSessionStorage => new ManagedTemporaryLocation(envelopeRoot),
+                _ => throw new ArgumentException("Unknown managed temporary layout.", nameof(temporaryLayout))
+            },
             new WorktreeDirectory(envelopeRoot),
             new SessionLogPath(envelopeRoot),
             null,
@@ -216,12 +272,15 @@ public sealed record SessionStoragePaths
     /// <param name="sessionDirectory">The established session directory.</param>
     /// <param name="sessionLogsBasePath">The established session-log base.</param>
     /// <param name="sanitizedSessionId">The legacy path segment for the session.</param>
+    /// <param name="temporaryLayout">Where the managed temporary folder of each run lives.</param>
     /// <returns>The unchanged legacy paths.</returns>
     public static SessionStoragePaths CreateLegacy(
         string sessionDirectory,
         string sessionLogsBasePath,
-        string sanitizedSessionId)
+        string sanitizedSessionId,
+        ManagedTemporaryLayout temporaryLayout)
     {
+        ArgumentNullException.ThrowIfNull(temporaryLayout);
         ArgumentException.ThrowIfNullOrWhiteSpace(sanitizedSessionId);
         var normalizedSessionDirectory = SessionWorkspaceDirectory.FromLegacyPath(sessionDirectory);
         var normalizedLogsBase = new LegacySessionLogsDirectory(sessionLogsBasePath);
@@ -234,9 +293,15 @@ public sealed record SessionStoragePaths
                 ".attachment-staging",
                 sanitizedSessionId)),
             ArtifactDirectory.FromLegacyPath(Path.Combine(normalizedSessionDirectory.Value, "artifacts")),
-            ManagedTemporaryLocation.FromPersistedPaths(
-                Path.Combine(normalizedSessionDirectory.Value, "tmp", "parent"),
-                normalizedSessionDirectory.Value),
+            temporaryLayout switch
+            {
+                ManagedTemporaryLayout.PrivateBase privateLayout =>
+                    ManagedTemporaryLocation.CreatePrivateParent(privateLayout.Base, normalizedSessionDirectory.Value),
+                ManagedTemporaryLayout.InsideSessionStorage => ManagedTemporaryLocation.FromPersistedPaths(
+                    Path.Combine(normalizedSessionDirectory.Value, "tmp", "parent"),
+                    normalizedSessionDirectory.Value),
+                _ => throw new ArgumentException("Unknown managed temporary layout.", nameof(temporaryLayout))
+            },
             WorktreeDirectory.FromLegacyPath(Path.Combine(normalizedSessionDirectory.Value, "worktrees")),
             SessionLogPath.FromLegacyPath(Path.Combine(normalizedLogsBase.Value, sanitizedSessionId, "session.log")),
             normalizedLogsBase,
@@ -260,7 +325,9 @@ public sealed record SessionStoragePaths
                 SessionDirectory,
                 AttachmentStagingDirectory,
                 new ArtifactDirectory(childRoot),
-                new ManagedTemporaryLocation(childRoot),
+                ManagedTemporary.PrivateBase is null
+                    ? new ManagedTemporaryLocation(childRoot)
+                    : ManagedTemporary.CreatePrivateChild(runId),
                 WorktreeDirectory,
                 new SessionLogPath(childRoot),
                 null,
@@ -274,9 +341,11 @@ public sealed record SessionStoragePaths
             SessionDirectory,
             AttachmentStagingDirectory,
             ArtifactDirectory.FromLegacyPath(Path.Combine(childRootLegacy, "artifacts")),
-            ManagedTemporaryLocation.FromPersistedPaths(
-                Path.Combine(childRootLegacy, "tmp"),
-                SessionDirectory.Value),
+            ManagedTemporary.PrivateBase is null
+                ? ManagedTemporaryLocation.FromPersistedPaths(
+                    Path.Combine(childRootLegacy, "tmp"),
+                    SessionDirectory.Value)
+                : ManagedTemporary.CreatePrivateChild(runId),
             WorktreeDirectory,
             SessionLogPath.FromLegacyPath(Path.Combine(
                 LegacyLogsBasePath?.Value

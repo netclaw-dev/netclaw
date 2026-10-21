@@ -86,6 +86,12 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
             Mode = ToolFilesystemMode.Roots,
             Roots = []
         };
+        // Issue #2554: Personal reads reach the write profile, so bound it too.
+        config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = []
+        };
         return new(safeVerbs, new PathAccessPolicy(config, _paths, new ToolPathPolicy([])));
     }
 
@@ -234,7 +240,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     public void Reviewed_verb_in_session_worktree_directory_uses_shared_session_trusted_root()
     {
         var storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.GetFullPath(_sessionDir)));
+            new SessionStorageEnvelopeRoot(Path.GetFullPath(_sessionDir)), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         Directory.CreateDirectory(storage.WorktreeDirectory.Value);
         var context = TestToolExecutionContext.CreateBoundWithStorage(
             "session-1",
@@ -249,7 +255,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     public void Git_worktree_creation_uses_normal_shell_authorization()
     {
         var storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.GetFullPath(_sessionDir)));
+            new SessionStorageEnvelopeRoot(Path.GetFullPath(_sessionDir)), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         var context = TestToolExecutionContext.CreateBoundWithStorage(
             "session-1",
             storage,
@@ -668,6 +674,12 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
         if (reach == ReadReach.ProjectRootOnly)
         {
             config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+            {
+                Mode = ToolFilesystemMode.Roots,
+                Roots = [_projectDir]
+            };
+            // Issue #2554: Personal reads reach the write profile, so bound it too.
+            config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
             {
                 Mode = ToolFilesystemMode.Roots,
                 Roots = [_projectDir]

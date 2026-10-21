@@ -562,6 +562,81 @@ This rule requires a successful `set_working_directory` receipt with a declared 
 Within the tool-result journal callback, the actor applies the accepted context and refreshes the prompt when the directory changes.
 `PathAccessPolicy` continues to decide path access for each later call.
 
+#### Root sources
+
+`PathAccessPolicy` builds the root list of one call from these sources:
+
+| Source | Audiences | Operations |
+| --- | --- | --- |
+| Audience profile (`ReadFiles`, `WriteFiles`, `AttachFiles`) | all | the profile of the operation, with the Personal read rule below |
+| Shared sessions root and legacy logs root | Personal | all |
+| Session envelope and session directory | all | all |
+| Managed temporary key folder `<base>/<key>` (issue #2554) | all | all |
+| Global read roots (`{skills_dir}`, `{identity_dir}`, `{workspaces_dir}`) | Personal, Team | `Read` |
+| Declared project directory, and `{workspaces_dir}` for a write | the trusted-root list of a mode `All` profile and of a project declaration | all |
+
+The managed temporary key folder comes from
+`SessionStorage.ManagedTemporary.StorageRoot`. On POSIX it is
+`/tmp/netclaw-<uid>/<key>` (see
+[session-cwd](../../openspec/specs/session-cwd/spec.md#requirement-managed-temporary-directory-is-the-private-temporary-location)).
+The shared base `/tmp/netclaw-<uid>` is never a root. A configured Team or
+Public root can still cover the base, for example a root `/tmp`. For a Team or
+Public call, `PathAccessPolicy.Evaluate` therefore denies each path below the
+base that is outside the own key folder. The base itself stays reachable
+through such a root. Personal reaches every key folder, as it reaches every
+session directory. On Windows the storage root is the session envelope, which
+is already a root.
+
+- Valid: a Team session reads `/tmp/netclaw-1000/<own key>/p/frame.png`.
+- Invalid: a Team session with a configured root `/tmp` reads or writes
+  `/tmp/netclaw-1000/<other key>/p/frame.png`. The decision is `Denied`.
+
+`ManagedTemporaryEnvironment.EnsureFolders` is the one creator of these
+folders. It makes the base and the key folder with mode 0700, and it refuses
+when a folder is a symbolic link, has another owner, or has a group or other
+bit. It never uses another folder. The shell launch calls it through
+`Prepare`. `file_write` and `file_edit` call it before each write or edit
+below the base, because a Team session has no shell. The checks are
+call-local.
+
+The file tools use the key folder as their root. The
+[scratch redirect composition](#managed-scratch-redirects-and-command-consent)
+uses only the run folder (`.../p` or `.../c<h>`). That rule is narrower and
+fails closed.
+
+#### The Personal read rule
+
+Issue #2554 (owner decision, 18 Oct 2026) restored the #1770 guarantee in a
+form that agrees with D2: a Personal file tool reads each path that the
+Personal shell can write. The shell checks each path with the `Write`
+operation, so the shell trust zone is the `WriteFiles` profile.
+
+```text
+// schematic: protection runs later and does not change
+effective profile (audience, operation, profile):
+    access = profile of the operation
+    if audience is not Personal, or operation is not Read or Attach:
+        return access                    // Write and DeclareProjectScope keep their profile
+    if WriteFiles.Mode == All:   return All
+    if WriteFiles.Mode == Roots: return Roots(access roots + write roots)
+    return access                        // WriteFiles.Mode == None
+```
+
+`Evaluate` and `GetTrustedRoots` use the same effective profile, so the
+prompt, the reviewed-safe read check, and the decision agree. The data is
+call-local.
+
+- Valid: Personal, `ReadFiles = Roots [~/repositories]`, `WriteFiles = All`.
+  `file_read /tmp/gifcheck/a.png` is allowed.
+- Invalid: Personal, `WriteFiles = All`. `file_read <config>/secrets.json` is
+  denied, because protection wins.
+- Invalid: Team, `ReadFiles = Roots [{session_dir}]`,
+  `WriteFiles = Roots [{session_dir}, D]`. `file_read D/x` is denied. A Team
+  write-only folder stays write-only.
+
+`netclaw doctor` warns when a profile can write wider than it can read
+(`ToolAudienceProfilesDoctorCheck`, TA-16). It does not fix the profile.
+
 Leaks today:
 
 - More than 11 places check for a link, 3 functions normalize Windows paths,
@@ -855,6 +930,7 @@ The notice waits for its own turn, and Bob's tool calls keep Bob's authority.
 
 `ToolAccessPolicy.WithManagedTemporaryRedirects` owns a call-local composition decision for Personal Bash calls.
 It reads the current run's managed temporary location from `ToolInvocationContext.SessionStorage`.
+See [Root sources](#root-sources) for the folder layout and the key-folder root of the file tools.
 For exact, link-free scratch redirects, the matcher projects the command directory and ordinary operand scopes without the redirect scopes.
 The occurrence must have resolved command candidates, and every file target must stay in that run's managed directory or name the null device.
 An ineligible occurrence retains its ordinary command and redirect scopes.
@@ -900,6 +976,14 @@ See [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-co
 | Must not know | It must not be an input to authority. |
 | Data | Call-local. The managed-temp retry key is call-local state in `ToolApprovalAttempt`. |
 | Rules | [TA-9](../../openspec/specs/tool-authorization/spec.md#requirement-ta-9-agent-correction-precedes-a-prompt-and-grants-no-authority) |
+
+On POSIX the managed temporary folder is below `/tmp` (issue #2554). Each
+advice route skips the own folder of the call, so the advice never sends the
+agent from its own folder to the same folder:
+
+- the `file_write` and `file_edit` route skips a path inside the run folder;
+- the project-output route (#2563) skips a redirect into the run folder;
+- the working-directory route starts only at the platform temporary root.
 
 Leak today: `IsEligiblePlatformTemporaryPath` is also an authority input for
 causal intent. **Planned:** move that rule into Filesystem authority as a named
@@ -1496,10 +1580,14 @@ B), a store round trip in `ToolApprovalActorTests`, a rehydration case in
 
 1. Filesystem authority: add the root source to the catalog in
    `PathAccessPolicy` (`ResolveAndMergeRoots` or the session roots). State which
-   audiences get it.
+   audiences get it, and add a row to the root-source table in section 3.3.
+   Example: the managed temporary key folder (issue #2554) is a session root
+   for every audience. Its shared parent is not a root.
 2. Choose the link rule on purpose: links below the root, links at or below the
    root, or links from the filesystem root.
 3. Protected paths still win.
+4. Check the Personal read rule (section 3.3). A new write root source widens
+   Personal reads too. A new read-only root source does not widen writes.
 
 Tests: `UnattendedPathAccessTests` (attended and unattended reach are equal)
 and `PublicAudienceFileAccessPolicyTests` style cases for each audience, a link escape case, a protected path case, and a

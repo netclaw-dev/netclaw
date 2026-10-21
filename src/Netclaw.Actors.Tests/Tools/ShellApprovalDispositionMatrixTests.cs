@@ -37,13 +37,20 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             TestContext.Current.CancellationToken,
             policy: new ShellApprovalHarnessPolicy
             {
-                ConfigureTools = config =>
+                // Issue #2554: Personal reads reach the write profile, so the
+                // writes are confined to the project too.
+                ConfigureToolsForProject = (config, project) =>
                 {
                     config.AudienceProfiles.GlobalReadRoots = [];
                     config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
                     {
                         Mode = ToolFilesystemMode.Roots,
                         Roots = []
+                    };
+                    config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
+                    {
+                        Mode = ToolFilesystemMode.Roots,
+                        Roots = [project]
                     };
                 }
             });
@@ -804,14 +811,21 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
         var retry = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ApprovalOutcome.RequiresApproval, retry.Outcome);
-        Assert.Equal(["cat", "git push"], retry.Prompt!.CandidateVerbs);
+        // Issue #2554: the write profile is confined to the project, so the
+        // link out of the project is now outside the shell trust zone. The
+        // retry rechecks the candidate and refuses it.
+        Assert.Equal(ApprovalOutcome.Denied, retry.Outcome);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The project-scope correction defines Bash path behavior.")]
-    public async Task Unavailable_registry_scope_preserves_ordinary_approval()
+    public async Task Reviewed_safe_read_in_an_external_cwd_follows_the_personal_write_profile()
     {
+        // Issue #2554: before Fix A, a Personal profile with confined reads and
+        // the default write profile (All) needed ordinary approval here. Personal
+        // reads now reach the write profile, so the reviewed-safe read needs no
+        // prompt. A folder that the Personal shell can write but a file tool
+        // cannot read no longer exists.
         var testCase = new ShellApprovalCase(
             "reviewed-safe-external-cwd-suggests-project-scope",
             new ShellApprovalInvocation(
@@ -819,14 +833,30 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                 ApprovalDirectoryShape.External),
             Approvals.None,
             ExpectedApproval.Require(["head"]));
-        await using var harness = await CreateWithConfinedReadsAsync(testCase);
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            testCase.Id,
+            testCase.Invocation,
+            testCase.Approvals,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken,
+            policy: new ShellApprovalHarnessPolicy
+            {
+                ConfigureTools = config =>
+                {
+                    config.AudienceProfiles.GlobalReadRoots = [];
+                    config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+                    {
+                        Mode = ToolFilesystemMode.Roots,
+                        Roots = []
+                    };
+                }
+            });
 
         var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
-        var context = Assert.IsType<ApprovalPromptObservation>(decision.Prompt);
 
-        Assert.True(decision.NeedsApproval);
+        Assert.False(decision.NeedsApproval);
+        Assert.Equal(ApprovalOutcome.Allowed, decision.Outcome);
         Assert.Null(decision.AgentCorrection);
-        Assert.NotNull(context.Cwd);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]

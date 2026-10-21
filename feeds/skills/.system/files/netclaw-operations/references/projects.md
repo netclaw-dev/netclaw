@@ -68,3 +68,35 @@ the project root.
 
 For a Git worktree, choose a destination below `worktree_dir`. Use
 `shell_execute` to run Git. Use `set_working_directory` only after Git succeeds.
+
+## Temporary Folder
+
+On Linux and macOS, `temp_dir` is a short folder: `/tmp/netclaw-<uid>/<key>/p` for a
+parent run, and `/tmp/netclaw-<uid>/<key>/c<id>` for a child run. On macOS the folder
+is `/private/tmp/netclaw-<uid>/...`. A Unix socket path below it fits the socket limit
+(107 characters on Linux, 103 on macOS). Chrome, Playwright, and `ssh` control sockets
+work there. On Windows, `temp_dir` stays inside the session folder.
+
+- Netclaw sets `TMPDIR`, `TMP`, and `TEMP` for each shell process. Do not set them in a
+  shell command. Do not make your own folder in `/tmp`.
+- The file tools can read and write `temp_dir`. A Team or Public session cannot reach the
+  `temp_dir` of another session. A Personal session can, as it can reach each session folder.
+- If a program fails with `Socket path too long`, report a Netclaw defect. Do not work
+  around it with `TMPDIR=/tmp/...`.
+- If a shell call fails with `The managed temporary folder ... is a symbolic link`,
+  `is owned by`, or `allows group or other access`, tell the operator. Do not retry with
+  another temporary folder. The operator fixes or removes the named folder. Netclaw does
+  not change a folder that exists.
+- The OS can delete files in `/tmp`. Netclaw does not clean `temp_dir`.
+
+## File Reach of the Personal Audience
+
+The shell trust zone follows the `WriteFiles` profile. For the Personal audience,
+`file_read`, `file_list`, `file_search`, and `attach_file` reach each path in `WriteFiles`.
+
+- `WriteFiles` mode `All` lets these tools reach each path that is not protected.
+- `WriteFiles` mode `Roots` adds its roots to the read and attach roots.
+- Protected paths stay denied. `set_working_directory` stays inside the read roots.
+- Team and Public do not change.
+- `netclaw doctor` warns when a profile can write wider than it can read. The warning
+  has no auto-fix. Tell the operator to narrow `WriteFiles` or widen `ReadFiles`.

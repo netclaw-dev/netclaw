@@ -842,7 +842,7 @@ public class WebFetchToolTests : IDisposable
         Directory.CreateDirectory(outside);
         if (linked)
             Directory.CreateSymbolicLink(output, outside);
-        var storage = SessionStoragePaths.CreateLegacy(output, Path.Combine(_dir.Path, "logs"), "probe");
+        var storage = SessionStoragePaths.CreateLegacy(output, Path.Combine(_dir.Path, "logs"), "probe", ManagedTemporaryLayout.InsideSessionStorage.Instance);
         using var client = new HttpClient(new FakeHttpHandler("response marker", binary ? "application/pdf" : "text/plain"));
         var tool = CreateTool(new ToolConfig(), client, output);
         var context = sessionless
@@ -875,7 +875,7 @@ public class WebFetchToolTests : IDisposable
     public async Task ReviewRegression_Fetch_rejects_protected_output(bool sessionless, bool binary)
     {
         var output = Path.Combine(_dir.Path, "protected-output");
-        var storage = SessionStoragePaths.CreateLegacy(output, Path.Combine(_dir.Path, "logs"), "probe");
+        var storage = SessionStoragePaths.CreateLegacy(output, Path.Combine(_dir.Path, "logs"), "probe", ManagedTemporaryLayout.InsideSessionStorage.Instance);
         using var client = new HttpClient(new FakeHttpHandler("response marker", binary ? "application/pdf" : "text/plain"));
         var tool = CreateTool(httpClient: client, fetchDirectory: output, protectedPaths: new ToolPathPolicy([output]));
         var context = sessionless ? TestToolExecutionContext.CreateUnbound()

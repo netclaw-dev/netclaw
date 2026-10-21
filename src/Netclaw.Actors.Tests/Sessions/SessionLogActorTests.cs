@@ -237,7 +237,7 @@ public sealed class SessionLogActorTests : TestKit
         var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-08-28T00:00:00Z"));
         var sessionId = new SessionId("signalr/session-1");
         var storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(
-            Path.GetFullPath(Path.Combine(basePath, "sessions", "session-1"))));
+            Path.GetFullPath(Path.Combine(basePath, "sessions", "session-1"))), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         var childScope = new SubAgentScopeId("signalr/session-1/subagent/test/run-1");
         var child = storage.ForChild(new SubAgentRunId("run-1"), childScope);
 

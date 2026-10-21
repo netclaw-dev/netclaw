@@ -112,7 +112,7 @@ internal static class TestToolExecutionContext
         var storage = SessionStoragePaths.CreateLegacy(
             resolvedSessionDirectory,
             Path.Combine(AppContext.BaseDirectory, "netclaw-test-session-logs"),
-            "test-session");
+            "test-session", ManagedTemporaryLayout.InsideSessionStorage.Instance);
         return new ToolSessionScope.Bound(sessionId, storage);
     }
 }

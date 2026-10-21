@@ -111,7 +111,7 @@ public sealed class ResultBoundaryTests
         Assert.Throws<ArgumentNullException>(() => new EnrichedChildRunResult.OtherRun(null!));
         var actorResponse = new SubAgentResult { Completion = completion, Output = "result", AgentName = new AgentName("helper") };
         var storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(
-            Path.GetFullPath(Path.Combine(Path.GetTempPath(), "child-result-fixture"))));
+            Path.GetFullPath(Path.Combine(Path.GetTempPath(), "child-result-fixture"))), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         var locations = new EnrichedChildRunResult.RunLocations(storage.LogPath, storage.ArtifactDirectory);
         Assert.Throws<ArgumentNullException>(() => new EnrichedChildRunResult.RunLocations(default, storage.ArtifactDirectory));
         EnrichedChildRunResult enriched = completion.Success

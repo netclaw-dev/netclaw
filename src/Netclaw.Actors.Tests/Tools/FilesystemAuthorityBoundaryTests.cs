@@ -32,10 +32,19 @@ public sealed class FilesystemAuthorityBoundaryTests(ShellApprovalMatrixFixture 
             Ct,
             policy: new ShellApprovalHarnessPolicy
             {
-                ConfigureTools = tools => tools.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+                ConfigureTools = tools =>
                 {
-                    Mode = ToolFilesystemMode.Roots,
-                    Roots = [ToolAudienceProfileDefaults.SessionDirectoryToken]
+                    tools.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+                    {
+                        Mode = ToolFilesystemMode.Roots,
+                        Roots = [ToolAudienceProfileDefaults.SessionDirectoryToken]
+                    };
+                    // Issue #2554: Personal reads reach the write profile, so bound it too.
+                    tools.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
+                    {
+                        Mode = ToolFilesystemMode.Roots,
+                        Roots = [ToolAudienceProfileDefaults.SessionDirectoryToken]
+                    };
                 }
             });
         var outside = Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt");

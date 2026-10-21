@@ -149,7 +149,7 @@ internal sealed class PathAccessPolicy
             return PathAccessDecision.Deny(error, failure, fullPath);
 
         var protectionOperation = ToProtectionOperation(operation);
-        var access = GetAccessProfile(_profileResolver.ResolveProfile(context), operation);
+        var access = GetEffectiveAccess(_profileResolver.ResolveProfile(context), context.Audience, operation);
         var label = GetAudienceLabel(context.Audience);
         // An attended and an unattended run get the same file reach (decision
         // D2). Only a project-scope declaration stays inside the trusted roots.
@@ -199,6 +199,14 @@ internal sealed class PathAccessPolicy
         var decision = _fileSystem.Evaluate(path, ToAuthorityOperation(protectionOperation), boundaries);
         if (stoppedAtUnusableRoot && decision is PathDecision.Outside)
             decision = PathDecision.Unverifiable;
+
+        if (decision is PathDecision.Allowed && IsInOtherTemporaryKeyFolder(path, context))
+        {
+            return PathAccessDecision.Deny(
+                $"Error: {label} trust context may not access the managed temporary folder of another session.",
+                PathAccessFailure.AccessDenied,
+                fullPath);
+        }
 
         return decision switch
         {
@@ -395,7 +403,7 @@ internal sealed class PathAccessPolicy
     public IReadOnlyList<string> GetTrustedRoots(ToolInvocationContext context, FileOperation accessKind)
     {
         var profile = _profileResolver.ResolveProfile(context);
-        var access = GetAccessProfile(profile, accessKind);
+        var access = GetEffectiveAccess(profile, context.Audience, accessKind);
         if (access.Mode == ToolFilesystemMode.None)
             return [];
 
@@ -508,7 +516,7 @@ internal sealed class PathAccessPolicy
         ToolInvocationContext context,
         FileOperation operation)
         => operation != FileOperation.DeclareProjectScope
-           && GetAccessProfile(_profileResolver.ResolveProfile(context), operation).Mode
+           && GetEffectiveAccess(_profileResolver.ResolveProfile(context), context.Audience, operation).Mode
            == ToolFilesystemMode.All;
 
     // A project base must derive from authority that existed before the
@@ -519,7 +527,12 @@ internal sealed class PathAccessPolicy
         AddSessionRoots(roots, context);
 
         var profile = _profileResolver.ResolveProfile(context);
-        roots.AddRange(_profileResolver.ResolveRoots(profile.ReadFiles, context));
+        // A Personal read or attach base follows the same effective profile as the decision.
+        // A project declaration and a write keep the configured read roots.
+        var baseAccess = accessKind is FileOperation.Read or FileOperation.Attach
+            ? GetEffectiveAccess(profile, context.Audience, FileOperation.Read)
+            : profile.ReadFiles;
+        roots.AddRange(_profileResolver.ResolveRoots(baseAccess, context));
         roots.AddRange(_cachedGlobalReadRoots.Value);
         if (ToProtectionOperation(accessKind) != FileOperation.Read
             && _cachedWorkspacesRoot.Value is { } workspacesRoot)
@@ -594,6 +607,45 @@ internal sealed class PathAccessPolicy
         };
 
     /// <summary>
+    /// Gets the profile that decides one operation. For the Personal audience, read and attach
+    /// reach at least as far as the write profile, because the shell trust zone is the write
+    /// profile (issue #2554). Other audiences, project declarations, and writes use the
+    /// configured profile for the operation.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: the protected-path check runs after this choice and still wins. The rule is
+    /// one-way: a write never follows the read profile.
+    /// </remarks>
+    private static ToolFilesystemAccessProfile GetEffectiveAccess(
+        ToolAudienceProfile profile,
+        TrustAudience audience,
+        FileOperation operation)
+    {
+        var access = GetAccessProfile(profile, operation);
+        if (audience != TrustAudience.Personal
+            || operation is not (FileOperation.Read or FileOperation.Attach))
+        {
+            return access;
+        }
+
+        var write = profile.WriteFiles;
+        return write.Mode switch
+        {
+            ToolFilesystemMode.All => new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
+            ToolFilesystemMode.Roots when access.Mode != ToolFilesystemMode.All => new ToolFilesystemAccessProfile
+            {
+                Mode = ToolFilesystemMode.Roots,
+                Roots = BoundedRoots(access).Concat(BoundedRoots(write)).ToList()
+            },
+            _ => access
+        };
+    }
+
+    // A mode None profile ignores a leftover Roots list, as ToolAudienceProfileResolver.ResolveRoots does.
+    private static IEnumerable<string> BoundedRoots(ToolFilesystemAccessProfile access)
+        => access.Mode == ToolFilesystemMode.Roots ? access.Roots : [];
+
+    /// <summary>
     /// Resolves profile roots and merges global read roots for read access.
     /// Single source of truth for root resolution — used by both
     /// <see cref="GetTrustedRoots"/> and <see cref="Evaluate"/>.
@@ -658,11 +710,40 @@ internal sealed class PathAccessPolicy
         if (context.SessionStorage?.Binding is { } binding)
             roots.Add(binding.EnvelopeRoot.Value);
 
+        // The managed temporary key folder is a root of this session for every audience.
+        // SECURITY: add the key folder (the storage root) and never the shared per-user base.
+        // The base holds the key folders of other sessions. For a deep location the storage
+        // root is the envelope or the session directory, which are already roots.
+        if (context.SessionStorage is { } sessionStorage)
+        {
+            roots.Add(sessionStorage.ManagedTemporary.StorageRoot.Value);
+        }
+
         // Preserve access for legacy and already-running sessions whose bound
         // directory predates the shared session-root layout.
         if (!string.IsNullOrWhiteSpace(context.SessionDirectory))
             roots.Add(context.SessionDirectory);
     }
+
+    /// <summary>
+    /// Returns true when a Team or Public path is below the private temporary base and outside
+    /// the own key folder.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY (issue #2554): the base holds the key folder of each session. A configured Team or
+    /// Public root can cover the base, for example <c>/tmp</c>. Below the base, only the own key
+    /// folder stays reachable. The base itself stays reachable, so a list or a search can walk to
+    /// the own key folder; each entry below it gets this check. Personal reaches every session, as
+    /// it does in the sessions folder. The check is lexical: a bounded root refuses a link below
+    /// it, and a protected path still wins in the own key folder.
+    /// </remarks>
+    private static bool IsInOtherTemporaryKeyFolder(CanonicalPath path, ToolInvocationContext context)
+        => context.Audience != TrustAudience.Personal
+           && context.SessionStorage?.ManagedTemporary is { PrivateBase: { } privateBase } temporary
+           && CanonicalPath.IsWithin(path.Value, privateBase.Value, path.Style, ignoreCase: true)
+           // Not the base itself: the path is below the base, so only an equal path contains the base.
+           && !CanonicalPath.IsWithin(privateBase.Value, path.Value, path.Style, ignoreCase: true)
+           && !CanonicalPath.IsWithin(path.Value, temporary.StorageRoot.Value, path.Style, ignoreCase: false);
 
     /// <summary>Builds the held boundaries for a file path from its trusted roots.</summary>
     private List<PathBoundary> CreateRootBoundaries(
