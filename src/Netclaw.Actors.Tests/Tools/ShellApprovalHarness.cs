@@ -177,6 +177,12 @@ internal sealed record ShellApprovalHarnessScope(
     IReadOnlyList<string> OneTimeApprovalKeys)
 {
     internal string? RepositoryGrantWorktree { get; init; }
+
+    /// <summary>
+    /// The managed temporary layout of the session. When it is not set, the session uses the
+    /// deep layout inside its session directory, as before issue #2554.
+    /// </summary>
+    internal ManagedTemporaryLayout? TemporaryLayout { get; init; }
 }
 
 /// <summary>
@@ -421,10 +427,19 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         {
             var context = policy?.Sessionless == true
                 ? TestToolExecutionContext.CreateUnbound(contextOptions)
-                : TestToolExecutionContext.CreateBound(
-                    scope?.InvocationSessionId ?? InvocationSessionId,
-                    approvalSessionDirectory,
-                    contextOptions);
+                : scope?.TemporaryLayout is { } temporaryLayout
+                    ? TestToolExecutionContext.CreateBoundWithStorage(
+                        scope.InvocationSessionId,
+                        SessionStoragePaths.CreateLegacy(
+                            approvalSessionDirectory,
+                            Path.Combine(rootDirectory, "session-logs"),
+                            "test-session",
+                            temporaryLayout),
+                        contextOptions)
+                    : TestToolExecutionContext.CreateBound(
+                        scope?.InvocationSessionId ?? InvocationSessionId,
+                        approvalSessionDirectory,
+                        contextOptions);
             if (scope?.OneTimeApprovalKeys is { Count: > 0 } oneTimeApprovalKeys)
             {
                 context.Approval.SeedOneTimeConsent(new OneTimeConsent(

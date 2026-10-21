@@ -619,6 +619,54 @@ public sealed class SessionStorageResolverTests : IDisposable
             PathAccessPolicy.FileOperation.Read));
     }
 
+    /// <summary>
+    /// PR #2559 review item S3. The managed temporary layout is a security-relevant
+    /// dependency, so no resolver constructor may supply a hidden default (the old deep
+    /// layout in the session envelope). The test builds the resolver through each
+    /// constructor with the arguments that the daemon has (the paths, the clock, the
+    /// sessions folder, and the host layout). Each resolver must emit the short layout of
+    /// the given base. A constructor that cannot take the layout fails the test.
+    /// </summary>
+    [Fact]
+    public async Task Each_resolver_constructor_emits_the_short_layout_of_the_given_base()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var paths = CreatePaths();
+        await MigrateAsync(paths, paths.SqliteDbPath);
+        var temporaryBase = new ManagedTemporaryBase(Path.Combine(_basePath, "netclaw-base"));
+        var layout = new ManagedTemporaryLayout.PrivateBase(temporaryBase);
+        var constructors = typeof(SqliteSessionStorageResolver).GetConstructors(
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.NotEmpty(constructors);
+
+        var number = 0;
+        foreach (var constructor in constructors)
+        {
+            var arguments = constructor.GetParameters()
+                .Select(parameter => parameter.ParameterType switch
+                {
+                    var type when type == typeof(NetclawPaths) => (object?)paths,
+                    var type when type == typeof(TimeProvider) => new FakeTimeProvider(),
+                    var type when type == typeof(string) => paths.SessionsDirectory,
+                    var type when type == typeof(ManagedTemporaryLayout) => layout,
+                    var type when type == typeof(ILogger<SqliteSessionStorageResolver>) => NullLogger<SqliteSessionStorageResolver>.Instance,
+                    var type => throw new InvalidOperationException($"The test has no value for a parameter of type {type}.")
+                })
+                .ToArray();
+            var resolver = (SqliteSessionStorageResolver)constructor.Invoke(arguments);
+            var signature = string.Join(", ", constructor.GetParameters().Select(parameter => parameter.ParameterType.Name));
+
+            var storage = resolver.Resolve(new SessionId($"signalr/constructor-{number++}"));
+
+            Assert.True(
+                storage.ManagedTemporary.PrivateBase == temporaryBase,
+                $"The constructor ({signature}) put the managed temporary folder at '{storage.ManagedTemporary.Directory.Value}', not below '{temporaryBase.Value}'.");
+            Assert.StartsWith(temporaryBase.Value + Path.DirectorySeparatorChar, storage.ManagedTemporary.Directory.Value);
+        }
+    }
+
     private NetclawPaths CreatePaths()
     {
         var paths = new NetclawPaths(_basePath);
