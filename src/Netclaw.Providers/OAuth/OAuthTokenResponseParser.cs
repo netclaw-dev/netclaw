@@ -52,16 +52,19 @@ internal static class OAuthTokenResponseParser
                 };
             }
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            // Handled below: a body that is not JSON has no code.
+            throw new HttpRequestException(
+                $"The token server answered HTTP {(int)status} with a body that is empty or is not JSON, so it holds no OAuth error code.",
+                ex,
+                status);
         }
 
         if (string.IsNullOrEmpty(code))
         {
             throw new HttpRequestException(
                 $"The token server answered HTTP {(int)status} with a body that holds no OAuth error code. "
-                + "The body is empty, is not JSON, or has no \"error\" string or \"error.code\" string.",
+                + "The body has no \"error\" string or \"error.code\" string.",
                 null,
                 status);
         }
