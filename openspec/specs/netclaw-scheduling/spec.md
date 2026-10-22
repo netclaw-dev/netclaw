@@ -786,7 +786,13 @@ restart or a passivation for those inputs:
   requester and queues the other pending inputs. This rule applies also when
   the first input is a slash command. When the slash command keeps the session
   in `Ready` phase, the session starts the next queued input after it closes
-  the slash command input.
+  the slash command input. In this slash resume, the session logs each
+  damaged waiting input after the first input of another requester and keeps
+  it pending. It queues the valid inputs and replies with an ack. Issue #2576
+  owns the rule for a damaged input in the plain resume path.
+- A live slash command that the session rejects in `Ready` phase also starts
+  the next queued input, for example a fire that waited behind a parked
+  approval that the command closed.
 - A restart reminder in `Processing` or `Compacting` phase queues each pending
   input that no turn selected. It replies `RestartResumeNotNeeded`.
 

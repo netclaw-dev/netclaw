@@ -2434,7 +2434,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // it and keeps it pending in the journal.
             var (valid, damaged) = SessionInputFlow.SplitByAuthority(waiting);
             foreach (var input in damaged)
-                _log.Error("Pending input {InputId} has a damaged authority", input.InputId);
+                _log.Error("Restart reminder {ReminderId}: pending input {InputId} has a damaged authority",
+                    cmd.Source?.ReminderId, input.InputId);
             _input.RestoreWaitingInputs(valid, _sessionId);
             return true;
         }
@@ -3101,9 +3102,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 OpenChildRunIds = _state.GetOpenChildRunIds()
             });
             TryReplyAck();
-            // A restart resume queues the inputs behind the slash command, and the session stays in Ready (#2587).
-            // Start the next queued input after the close, as a turn end does.
-            StartWaitingInputAfterApproval();
+            // A rejected command ends no turn, so no turn end starts the queue (#2587). Two paths leave queued input
+            // here in Ready: a restart resume queues the inputs behind the slash command, and a live command closes
+            // a parked approval (AbandonThenActivate) while a fire waits behind it. Start the next queued input as a
+            // turn end does, and admit a ready consent notice first.
+            AdmitConsentNoticeThen(inOpenTurn: false, StartWaitingInputAfterApproval);
         }
 
         CloseActiveInputs(Reply);
