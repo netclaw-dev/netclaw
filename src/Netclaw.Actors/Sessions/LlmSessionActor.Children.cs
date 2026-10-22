@@ -25,6 +25,10 @@ public sealed partial class LlmSessionActor
     private IReadOnlyList<ToolInteractionClosed> _restartWithdrawals = [];
     private readonly ChildConsentDigest _consentDigest = new();
     private bool _noticeAdmissionInOpenTurn;
+    // durable-child-consent-wait PR 1: the park of each run that waits for consent, and the prompt counter of each run.
+    // Both are actor-local. A restart loses a park, and recovery records its run as lost (existing rule).
+    private readonly Dictionary<SubAgentRunId, ChildRunPark> _parks = [];
+    private readonly Dictionary<SubAgentRunId, int> _promptsIssued = [];
 
     private void ApplyLegacyCoordination(LegacyCoordinationEvent evt)
     {
@@ -90,6 +94,9 @@ public sealed partial class LlmSessionActor
             RecordChildTerminal(message.RunId, message.Result, lost: false, warning: null, Sender);
         });
         Command<ChildResultWritten>(HandleChildResultWritten);
+        Command<ChildParkReached>(AcceptChildPark);
+        Command<ChildEventRejected>(message => EndParkedRun(message.RunId, SubAgentOutcomeReason.ToolExecutionFailed,
+            "The journal rejected a consent request of the child.", ActorRefs.Nobody));
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
         Command<RecoverChildRuns>(_ => RecoverChildren());
         Command<StartHeldInputs>(_ => StartInputsHeldByThePause());
@@ -157,34 +164,163 @@ public sealed partial class LlmSessionActor
         {
             _state = _state.Apply(committed);
             replyTo.Tell(accepted);
-            try
-            {
-                var child = Context.ActorOf(prepared.Props, prepared.ActorName);
-                Context.Watch(child);
-                var execution = _execution.TrackChild(run.RunId, child);
-                var scope = prepared.Execution.Scope with
-                {
-                    Authority = prepared.Execution.Scope.Authority with
-                    { InteractiveApproval = _toolWorkflow.ChildApprovalCapability(run, Self) }
-                };
-                child.Tell(prepared.Execution with { Scope = scope, OwnedRun = execution, Cancellation = execution.Token }, Self);
-                EmitOutput(new SubAgentOutput
-                {
-                    SessionId = _sessionId, AgentName = run.AgentName, Phase = SubAgentPhase.Started,
-                    TimestampMs = NowMs(), ToolCount = prepared.ToolCount
-                }, OutputFilter.ToolCalls);
-            }
-            catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
-            {
-                _log.Error(error, "Accepted child failed to start for {RunId}", run.RunId);
-                RecordChildTerminal(run.RunId, new SubAgentResult
-                {
-                    AgentName = run.AgentName, Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnError),
-                    Output = $"The accepted child could not start: {error.Message}"
-                }, lost: false, warning: "No child relaunch will occur.", ActorRefs.Nobody);
-            }
+            StartChildActor(run, prepared);
         });
     }
+
+    // Starts one incarnation of an accepted run: the first start, or a resume of a park.
+    private void StartChildActor(BackgroundChildRun run, PreparedChildStart prepared)
+    {
+        try
+        {
+            var child = Context.ActorOf(prepared.Props, prepared.ActorName);
+            Context.Watch(child);
+            var execution = _execution.TrackChild(run.RunId, child);
+            var scope = prepared.Execution.Scope with
+            {
+                Authority = prepared.Execution.Scope.Authority with
+                { InteractiveApproval = _toolWorkflow.ChildApprovalCapability(run) }
+            };
+            child.Tell(prepared.Execution with { Scope = scope, OwnedRun = execution, Cancellation = execution.Token }, Self);
+            EmitOutput(new SubAgentOutput
+            {
+                SessionId = _sessionId, AgentName = run.AgentName, Phase = SubAgentPhase.Started,
+                TimestampMs = NowMs(), ToolCount = prepared.ToolCount
+            }, OutputFilter.ToolCalls);
+        }
+        catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
+        {
+            _log.Error(error, "Accepted child failed to start for {RunId}", run.RunId);
+            RecordChildTerminal(run.RunId, new SubAgentResult
+            {
+                AgentName = run.AgentName, Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnError),
+                Output = $"The accepted child could not start: {error.Message}"
+            }, lost: false, warning: "No child relaunch will occur.", ActorRefs.Nobody);
+        }
+    }
+
+    // Design D1 and D3: the owner keeps the park actor-local, releases the child, and asks the run requester once for
+    // each parked call. Each prompt shows after its request is in the journal.
+    private void AcceptChildPark(ChildParkReached message)
+    {
+        var child = Sender;
+        _state.ChildRuns.TryGetValue(message.RunId, out var run);
+        switch (ChildParkRules.AcceptPark(_execution.OwnsChild(message.RunId, child), run?.Lifecycle))
+        {
+            case ChildParkDecision.StopSender:
+                child.Tell(new ChildTerminalCommitted());
+                return;
+            case ChildParkDecision.EndCancelled:
+                RecordChildTerminal(message.RunId, CancelledParkResult(run!), lost: false, warning: null, child);
+                return;
+        }
+        // Security boundary: the prompts bind to the requester of the run record (ForChildCall checks it), never to
+        // the requester of the current turn.
+        if (!TurnContext.TryFromRecord(run!.OriginalContext, out var authority, out _) ||
+            authority is not { SupportsInteractiveApproval: true })
+        {
+            EndParkedRun(run.RunId, SubAgentOutcomeReason.ToolExecutionFailed,
+                "The requester of the run cannot answer a consent request.", child);
+            return;
+        }
+        var requests = new ApprovalRequestBuilder(authority.SessionId, authority.RequesterSenderId,
+            authority.RequesterPrincipal, authority.HasAdoptedContext, authority.HasThirdPartyAdoptedContext,
+            authority.AdoptedSpeakerIds);
+        var issued = _promptsIssued.GetValueOrDefault(run.RunId);
+        var dispatches = new List<ToolInteractionRequestDispatch>();
+        try
+        {
+            foreach (var request in message.Park.Requests)
+            {
+                dispatches.Add(requests.ForChildCall(ChildApprovalPrompt.CreateCallId(run.RunId.Value, ++issued), request) with
+                {
+                    PersistApprovalState = true, SourceChildRunId = run.RunId, ChildContext = authority
+                });
+            }
+        }
+        catch (ParentApprovalUnavailableException error)
+        {
+            EndParkedRun(run.RunId, SubAgentOutcomeReason.ToolExecutionFailed, error.Message, child);
+            return;
+        }
+        _promptsIssued[run.RunId] = issued;
+        _parks[run.RunId] = message.Park;
+        Context.Unwatch(child);
+        _execution.ReleaseChild(run.RunId);
+        child.Tell(new ChildTerminalCommitted());
+        foreach (var dispatch in dispatches)
+            HandleToolInteractionRequestDispatch(dispatch);
+    }
+
+    // Design D3, the resume gate. It runs after the journal holds an answer of a parked request.
+    private void TryResumeParkedRun(SubAgentRunId runId)
+    {
+        var hasPark = _parks.TryGetValue(runId, out var park);
+        if (ChildParkRules.ResumeGate(hasPark, _toolWorkflow.ChildApprovalCount(runId), RestartDrainRequested)
+            != ChildResumeDecision.Resume)
+            return;
+        _parks.Remove(runId);
+        var run = _state.ChildRuns[runId];
+        var resume = new ChildRunResume(park!, _toolWorkflow.TakeParkedAnswers(runId));
+        PreparedChildStart prepared;
+        try
+        {
+            prepared = PrepareResume(run, resume);
+        }
+        catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
+        {
+            _log.Warning("Parked child run {RunId} cannot resume: {Reason}", runId, error.Message);
+            EndParkedRun(runId, error is ChildStartRejectedException rejected ? rejected.Reason : SubAgentOutcomeReason.SpawnError,
+                error.Message, ActorRefs.Nobody);
+            return;
+        }
+        // The prompt counter makes each incarnation name new, so it never meets an old actor that still stops.
+        StartChildActor(run, prepared with { ActorName = $"{prepared.ActorName}-{_promptsIssued[runId]}" });
+    }
+
+    // Design D4: a resume is a spawn from the park. Security boundary: the authority comes only from the run record,
+    // never from the current turn or the current parent directory.
+    private PreparedChildStart PrepareResume(BackgroundChildRun run, ChildRunResume resume)
+    {
+        if (_subAgentSpawner is null || _subAgentRegistry is null ||
+            !TurnContext.TryFromRecord(run.OriginalContext, out var authority, out _) || authority is null)
+            throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable, "The session cannot start a child.");
+        _subAgentLoader?.SyncInto(_subAgentRegistry);
+        var scope = new ToolRunScope
+        {
+            Session = new ToolSessionScope.Bound(_sessionId.Value, _sessionStorage),
+            Audience = authority.Audience, Boundary = authority.Boundary, ChannelType = authority.ChannelType?.ToWireValue(),
+            DefaultDeliveryTarget = authority.DefaultDeliveryTarget, RequestedDeliveryTarget = authority.RequestedDeliveryTarget,
+            InlineOutputBudget = new InlineOutputBudget(_config.Tuning.MaxInlineToolResultChars),
+            InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
+            ModelInputModalities = _model.InputModalities,
+            ProjectDirectory = resume.Park.ScopeDirectories?.ProjectDirectory,
+            RecentFiles = run.InitialWorkingSnapshot?.WorkingContext.RecentFiles ?? []
+        };
+        var profile = _subAgentRegistry.TryGetByName(run.AgentName.Value);
+        return _subAgentSpawner.PrepareResume(run, resume, profile is { Visibility: SubAgentVisibility.UserFacing } ? profile : null,
+            new ToolExecutionContext(scope, new ToolExecutionTimeout(_config.ToolExecutionTimeout)).Invocation);
+    }
+
+    // The one refusal path of a park (cut plan): the run ends as failed, and no parked call runs. A second call for an
+    // ended run does nothing (RecordChildTerminal), so two rejected requests of one park record one end.
+    private void EndParkedRun(SubAgentRunId runId, SubAgentOutcomeReason reason, string text, IActorRef child)
+    {
+        _parks.Remove(runId);
+        if (!_state.ChildRuns.TryGetValue(runId, out var run))
+            return;
+        RecordChildTerminal(runId, new SubAgentResult
+        {
+            AgentName = run.AgentName, Completion = new ChildRunCompletion.Failed(reason),
+            Output = $"The child could not wait for consent: {text} The calls that needed consent did not run."
+        }, lost: false, warning: null, child);
+    }
+
+    private static SubAgentResult CancelledParkResult(BackgroundChildRun run) => new()
+    {
+        AgentName = run.AgentName, Completion = new ChildRunCompletion.Cancelled(SubAgentOutcomeReason.CancelledByParent),
+        Output = "The parent cancelled the child. The calls that needed consent did not run."
+    };
 
     private string SpawnPausedText(TurnContextRecord caller)
     {
@@ -235,6 +371,13 @@ public sealed partial class LlmSessionActor
         if (!_state.ChildRuns.TryGetValue(command.RunId, out var run) || !HasSameChildRequester(run.OriginalContext, command.Requester))
         {
             replyTo.Tell("Error: This child run is not available to the requester.");
+            return;
+        }
+        if (command.Cancel && run.Lifecycle is ChildRunLifecycle.Accepted && _parks.Remove(run.RunId))
+        {
+            // Design D7: a parked run has no actor, so the cancel records the end at once.
+            RecordChildTerminal(run.RunId, CancelledParkResult(run), lost: false, warning: null, ActorRefs.Nobody);
+            DeferAsync(run.RunId, runId => replyTo.Tell(ChildStatus(_state.ChildRuns[runId])));
             return;
         }
         if (!command.Cancel || run.Lifecycle is not ChildRunLifecycle.Accepted)

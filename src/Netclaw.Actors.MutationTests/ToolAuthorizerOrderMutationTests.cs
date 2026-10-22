@@ -585,9 +585,6 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
         return current;
     }
 
-    private sealed class UnexpectedApprovalBridge : IParentConsentBridge
-    {
-        public Task<ConsentStep> RequestConsentAsync(ParentApprovalRequest request, CancellationToken ct) =>
-            throw new InvalidOperationException("The authorizer must not request consent.");
-    }
+    // Only the capability matters: the authorizer throws ToolApprovalRequiredException and never asks a bridge.
+    private sealed class UnexpectedApprovalBridge : IParentApprovalBridge;
 }

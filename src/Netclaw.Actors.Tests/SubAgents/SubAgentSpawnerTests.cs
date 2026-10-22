@@ -163,7 +163,7 @@ public sealed class SubAgentSpawnerTests : TestKit, IAsyncDisposable
     public async Task Spawn_async_preserves_approval_bridge_for_interactive_parent()
     {
         var childProbe = CreateTestProbe("interactive-approval-child");
-        var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance);
+        var approvalBridge = new ConsentCapableBridge();
         var spawner = CreateSpawner();
         var context = TestToolExecutionContext.CreateBound(
             "interactive/subagent-parent",

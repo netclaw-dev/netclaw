@@ -16,15 +16,14 @@ Base: PR #2583 and PR #2584 (`child-approval-events-and-parent-pause` PR 1 and P
 - **Park always.** A child call that needs consent does not wait in memory. The child finishes the other calls of the
   batch, applies their effects, sends its park to the session, and stops. The live wait for child consent goes away.
 - **The park holds what the child cannot get again.** The conversation, the deferred parts of the open batch, the
-  working directories, the loop guard, the skill overlay, the model ID for the log, and the consent requests.
+  working directories, the loop guard, the skill overlay, and the consent requests.
 - **The run record holds the park (PR 2).** The session journals `ChildRunEvent.Parked` in the run record, which is in
   the session journal and snapshot already. No new persistence ID, no child journal, and no purge.
 - **One resume path.** When every request of a park has an answer, the session journals `ChildRunEvent.Resumed` and
   starts a new `SubAgentActor` from the park. Only the parked calls run, each at most once. A live answer and an answer
   after a restart use the same path.
-- **Resume is a spawn from a recorded conversation.** The authority comes from the run record, and the audience is
-  the narrower of the recorded and the current trust. The model, the tools, the profile, the rules, and the project
-  instructions resolve again.
+- **Resume is a spawn from a recorded conversation.** The authority comes from the run record, as for the first
+  spawn. The model, the tools, the profile, the rules, and the project instructions resolve again.
 - **Recovery keeps parked runs.** A restart keeps the prompts of a parked run open, and the pause comes back. The
   channel bindings restore their tracked prompts. A running child is lost, as today.
 - **Supersedes.** This change replaces PR 3 (design D8) of `child-approval-events-and-parent-pause`.
@@ -58,7 +57,7 @@ None.
 - `netclaw-subagents`: the live approval wait and its watchdog pause are removed; consent outcomes settle once, at
   resume.
 - `tool-authorization`: TA-12 keeps the prompt of a parked child valid after a restart; the resumed call runs once,
-  under the recorded authority and the narrower current trust, and passes every gate again.
+  under the recorded authority, and passes every gate again.
 - `session-resume`: recovery keeps parked child runs, resumes an answered park, brings the pause back, and keeps one
   run of each held reminder.
 
@@ -97,5 +96,5 @@ Operational impact:
 - A TUI that starts again after a restart shows no open child prompt, as for a parent prompt today. A crash between
   the park and the prompt post hides the prompt; the parent notice and `check_agent_run` still show the request.
 - A child prompt appears after the other calls of its batch finish.
-- A park above 4 MiB ends the run with `park_too_large`.
+- A park above 4 MiB ends the run with `park_too_large` (PR 2).
 - An older binary cannot recover a session that holds a park. The release notes say so.

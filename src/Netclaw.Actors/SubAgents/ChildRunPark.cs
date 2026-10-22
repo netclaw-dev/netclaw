@@ -12,9 +12,6 @@ using Netclaw.Tools;
 
 namespace Netclaw.Actors.SubAgents;
 
-// STUB (durable-child-consent-wait, PR 1 tests first, task 3.1). These types let the PR 1 tests compile. The PR 1
-// implementer gives them their behavior. The members have no "required" modifier, because a test makes an empty park.
-
 /// <summary>
 /// The state of a child run that waits for consent (design D2). The child builds it when its batch ends. PR 1 keeps it
 /// actor-local in the owning session.
@@ -78,10 +75,21 @@ internal enum ChildResumeDecision
 /// <summary>The two pure decisions of the park owner. They are the Stryker targets of child-resume-gate.</summary>
 internal static class ChildParkRules
 {
-    // STUB: the implementer replaces both bodies.
-    public static ChildParkDecision AcceptPark(bool ownedSender, ChildRunLifecycle? lifecycle)
-        => ChildParkDecision.Accept;
+    // <child-resume-gate>
+    // Security boundary: only the owned child of an Accepted run can open prompts. Any other sender gets the stop
+    // signal, so a stale actor or a stranger cannot make the owner ask the requester.
+    public static ChildParkDecision AcceptPark(bool ownedSender, ChildRunLifecycle? lifecycle) => (ownedSender, lifecycle) switch
+    {
+        (true, ChildRunLifecycle.Accepted) => ChildParkDecision.Accept,
+        (true, ChildRunLifecycle.Cancelling) => ChildParkDecision.EndCancelled,
+        _ => ChildParkDecision.StopSender
+    };
 
+    // Guard 1: a batch with two parked calls waits for both answers. Guard 2: during a restart drain nothing runs; in
+    // PR 1 the restart then records the run as lost.
     public static ChildResumeDecision ResumeGate(bool hasPark, int openRequests, bool drainPending)
-        => ChildResumeDecision.Wait;
+        => !hasPark ? ChildResumeDecision.Nothing
+            : openRequests > 0 || drainPending ? ChildResumeDecision.Wait
+            : ChildResumeDecision.Resume;
+    // </child-resume-gate>
 }

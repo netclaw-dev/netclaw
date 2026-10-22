@@ -406,26 +406,14 @@ internal sealed partial class SessionToolWorkflow
 
         public void Add(string callId, ResolvedToolApproval resolved)
         {
-            var request = resolved.Pending.Request;
-            _authorizationAttemptIds[callId] = resolved.Pending.AuthorizationAttemptId;
-
-            if (resolved.Answer is not ConsentAnswer.Refused refusal)
-            {
-                // The re-drive seeds these keys as a one-time consent for the
-                // tool name of the re-driven call.
-                _preSeed[callId] = OneTimeApprovalKeys.Create(
-                    request.Patterns,
-                    request.Candidates,
-                    request.Cwd);
-                return;
-            }
-
-            _decisionOverride[callId] = refusal.Kind;
-            if (refusal.Kind == RefusalKind.Denied
-                && request.ManagedTemporaryDirectory is { Length: > 0 } managedTemporaryDirectory)
-            {
+            var entry = ApprovalRedriveEntry.From(resolved);
+            _authorizationAttemptIds[callId] = entry.AuthorizationAttemptId;
+            if (entry.ApprovedConsentKeys is { } keys)
+                _preSeed[callId] = keys;
+            if (entry.Refusal is { } refusal)
+                _decisionOverride[callId] = refusal;
+            if (entry.ManagedTemporaryDenialDirectory is { } managedTemporaryDirectory)
                 _managedTemporaryDenialDirectories[callId] = managedTemporaryDirectory;
-            }
         }
 
         public ApprovalRedrivePlan Build()

@@ -837,7 +837,7 @@ Leaks today:
 | Classes | [`ApprovalPatternMatching`](../../src/Netclaw.Security/ApprovalPatternMatching.cs), [`ToolApprovalActor`](../../src/Netclaw.Actors/Tools/ToolApprovalActor.cs), [`ToolApprovalStore`](../../src/Netclaw.Configuration/ToolApprovalStore.cs), [`ApprovalEntry`](../../src/Netclaw.Configuration/ApprovalEntry.cs), [`ApprovalBucketBuilder`](../../src/Netclaw.Actors/Sessions/ApprovalBucketBuilder.cs), [`ShellApprovalEvidence`](../../src/Netclaw.Actors/Tools/ShellApprovalEvidence.cs), [`OneTimeApprovalKeys`](../../src/Netclaw.Actors/Tools/OneTimeApprovalKeys.cs), [`ReviewedSafeShellPolicy`](../../src/Netclaw.Actors/Tools/ReviewedSafeShellPolicy.cs), [`ShellPolicyEvaluation`](../../src/Netclaw.Actors/Tools/ShellPolicyEvaluation.cs), [`ShellPolicyProjection`](../../src/Netclaw.Actors/Tools/ShellPolicyProjection.cs) |
 | Published contract | `IShellApprovalMatchService.MatchShellCandidatesAsync(...)` (shell, one batched lookup), `IToolApprovalService.CheckApprovalAsync(...)` (other tools), `IStructuredToolApprovalService.RecordApprovalCandidatesAsync(...)` (store an answer). [`AkkaToolApprovalService`](../../src/Netclaw.Actors/Tools/AkkaToolApprovalService.cs) implements all three over `ToolApprovalActor`. |
 | Must not know | Shell syntax (it receives candidates), channels. |
-| Data | Persistent grants: `~/.netclaw/config/tool-approvals.json`, version 3, durable. Chat grants: actor-local in `ToolApprovalActor`. One-time consent: call-local keys in `ToolApprovalAttempt`. Coverage: call-local. A child consent request uses the parent journal events. No parent snapshot holds a child prompt entry, and a restart withdraws every child request (a durable child wait is planned, section 8). |
+| Data | Persistent grants: `~/.netclaw/config/tool-approvals.json`, version 3, durable. Chat grants: actor-local in `ToolApprovalActor`. One-time consent: call-local keys in `ToolApprovalAttempt`. Coverage: call-local. A child consent request uses the parent journal events. The park of a child that waits for consent is actor-local in the owning session. No parent snapshot holds a child prompt entry, and a restart withdraws every child request (a durable park is planned, section 8). |
 | Rules | [TA-8](../../openspec/specs/tool-authorization/spec.md#requirement-ta-8-every-candidate-needs-coverage), [TA-13](../../openspec/specs/tool-authorization/spec.md#requirement-ta-13-the-persistent-grant-store-fails-closed) |
 
 Leaks today:
@@ -855,7 +855,7 @@ Leaks today:
 | Item | Current state |
 | --- | --- |
 | Question | How does the operator see a request and answer it, now or after a restart? |
-| Classes | Approval part of [`LlmSessionActor`](../../src/Netclaw.Actors/Sessions/LlmSessionActor.cs), [`SessionToolWorkflow`](../../src/Netclaw.Actors/Sessions/SessionToolWorkflow.cs), [`IApprovalChannel`](../../src/Netclaw.Actors/Sessions/IApprovalChannel.cs), [`ParentSessionApprovalBridge`](../../src/Netclaw.Actors/Sessions/ParentSessionApprovalBridge.cs), [`IParentApprovalBridge`](../../src/Netclaw.Tools.Abstractions/IParentApprovalBridge.cs), the approval loop in [`SubAgentActor`](../../src/Netclaw.Actors/SubAgents/SubAgentActor.cs), [`ApprovalResponseFlow`](../../src/Netclaw.Channels/ApprovalResponseFlow.cs), [`PendingApprovalLookup`](../../src/Netclaw.Channels/PendingApprovalLookup.cs), [`ApprovalButtonValueCodec`](../../src/Netclaw.Actors/Protocol/ApprovalButtonValueCodec.cs), [`ApprovalOptionKeys`](../../src/Netclaw.Actors/Protocol/ApprovalOptionKeys.cs), the Slack, Discord, and Mattermost prompt builders |
+| Classes | Approval part of [`LlmSessionActor`](../../src/Netclaw.Actors/Sessions/LlmSessionActor.cs), [`SessionToolWorkflow`](../../src/Netclaw.Actors/Sessions/SessionToolWorkflow.cs), [`IApprovalChannel`](../../src/Netclaw.Actors/Sessions/IApprovalChannel.cs), [`ParentSessionApprovalBridge`](../../src/Netclaw.Actors/Sessions/ParentSessionApprovalBridge.cs), [`IParentApprovalBridge`](../../src/Netclaw.Tools.Abstractions/IParentApprovalBridge.cs), the park in [`SubAgentActor`](../../src/Netclaw.Actors/SubAgents/SubAgentActor.cs), [`ChildParkRules`](../../src/Netclaw.Actors/SubAgents/ChildRunPark.cs), the park owner in [`LlmSessionActor.Children`](../../src/Netclaw.Actors/Sessions/LlmSessionActor.Children.cs), [`ApprovalResponseFlow`](../../src/Netclaw.Channels/ApprovalResponseFlow.cs), [`PendingApprovalLookup`](../../src/Netclaw.Channels/PendingApprovalLookup.cs), [`ApprovalButtonValueCodec`](../../src/Netclaw.Actors/Protocol/ApprovalButtonValueCodec.cs), [`ApprovalOptionKeys`](../../src/Netclaw.Actors/Protocol/ApprovalOptionKeys.cs), the Slack, Discord, and Mattermost prompt builders |
 | Published contract | Outputs `ToolInteractionRequest` and `ToolInteractionClosed(CallId, Reason)` (not persisted), and input `ToolInteractionResponse` ([`SessionProtocol.Outputs.cs`](../../src/Netclaw.Actors/Sessions/SessionProtocol.Outputs.cs)). Journal events `ToolApprovalRequested` and `ToolApprovalResolved`. Option key strings such as `approve_once`. Nack reasons in [`ApprovalNackReasons`](../../src/Netclaw.Actors/Protocol/ApprovalNackReasons.cs), with `approval_withdrawn` and `approval_use_buttons`. |
 | Must not know | Policy rules. It renders the options that Consent offers. |
 | Data | Durable session journal. Actor-local state for an unanswered request. Durable child requests use the same journal events. |
@@ -898,6 +898,31 @@ run folder. A slash start of a person is accepted. The refusal text names only t
 may control (`TurnContext.CanControlChildRunOf`), and it gives only the count of the other requests.
 A person turn still runs, and the pause stays. Automated input and child result notices wait until the last close.
 The snapshot gate still accounts for all unresolved approval evidence.
+
+Parked child prompts (PR 1 of durable-child-consent-wait, design D1 to D4):
+
+- A child call that needs consent does not wait. The child lets the other calls of its batch end, sends
+  `ChildParkReached` with its park (transcript, loop guard, directories of the batch, skill overlay, requests), and
+  stops after `ChildTerminalCommitted`. The child bridge only says that consent is available. No child asks a bridge.
+- Owner of the park decision: `LlmSessionActor.AcceptChildPark` through `ChildParkRules.AcceptPark`. Only the owned
+  child of an `Accepted` run opens prompts. A park of a cancelling run ends the run as cancelled. Any other sender gets
+  the stop signal, and the session records nothing. The park is actor-local.
+- The owner builds each prompt with `ApprovalRequestBuilder.ForChildCall` for the requester of the run record, never
+  for the requester of the current turn. The run prompt counter numbers the call IDs. The session journals each
+  request before it shows the prompt. A rejected request ends the run as failed, and the `OnPersistRejected` branch
+  for it runs first, so it never fails the parent turn.
+- A child answer has no live wait. It goes to the idle answer handler in every phase. After the journal holds the
+  answer, `TryResumeParkedRun` asks `ChildParkRules.ResumeGate`: the run waits for every answer and for the end of a
+  restart drain.
+- The resume is a spawn: `SubAgentSpawner.PrepareResume` applies the spawn rules again under `run.OriginalContext`
+  and the directories of the park. The new child runs only the parked calls, each once, through
+  `ApprovalRedriveEntry`, and the gate checks each call again. A failed spawn rule ends the run as failed, and no
+  parked call runs. A cancel of a parked run records the end at once.
+
+A valid example: Alice's child parks on one call while Bob's turn runs. Alice approves. The call runs once under
+Alice's recorded authority and in the recorded directory. An invalid example: Bob clicks Alice's prompt first.
+`ValidateResponse` rejects him with `approval_wrong_requester`, and nothing runs. Another invalid example: an actor
+that the session does not own sends a park. It gets `ChildTerminalCommitted`, and no prompt appears.
 
 Prompt lifetime:
 
@@ -989,8 +1014,8 @@ A valid example: Alice denies a prompt, the turn ends, and her second click on "
 Close of a child prompt (design D6 of child-approval-events-and-parent-pause):
 
 - Owner of the close: `SessionToolWorkflow`. `WithdrawChildApprovals` closes the open entries of a run at a cancel
-  record (`CancelledByParent`) and at a terminal record (`ChildEnded`, or `ChildLost` when the live child actor
-  stopped with no result). `WithdrawRecoveredChildApprovals` closes the entries that replay left open, with the
+  record (`CancelledByParent`) and at a terminal record (`ChildEnded`, `CancelledByParent` for the cancel of a parked
+  run, or `ChildLost` when the live child actor stopped with no result). `WithdrawRecoveredChildApprovals` closes the entries that replay left open, with the
   reason from the run lifecycle: a run that was live at the restart gives `DaemonRestarted`, a cancelled run gives
   `CancelledByParent`, and a run that ended before the restart gives `ChildEnded`. A `prompt_unavailable` answer for
   a child prompt is a withdrawal with `PromptUnavailable`: the call is refused, and nothing runs.
@@ -1323,9 +1348,9 @@ Facts behind the diagram (current code):
 - An unanswered request does not keep the session in memory. An answer
   rehydrates the session and re-drives the parked batch
   (`HandleToolInteractionResponseWhenIdle` and `SessionToolWorkflow.PlanRecoveredContinuation`).
-- No timer denies an unanswered request. The session and its subagents ask
-  through one prompt, `ParentSessionApprovalBridge`, which waits with the
-  session's approval timeout. The daemon sets that timeout to infinite. The
+- No timer denies an unanswered request. The session asks through
+  `ParentSessionApprovalBridge`, which waits with the session's approval
+  timeout. A subagent does not wait: it parks (section 3.6). The daemon sets that timeout to infinite. The
   request waits until the operator answers, the run is cancelled, or a new
   message from a person abandons the parked batch.
 - Automated input never abandons an open approval
@@ -1363,8 +1388,10 @@ Facts behind the diagram (current code):
   Alice approves, the command runs once, and then the reminder turn runs.
   An invalid example: the reminder fire closes Alice's prompt with the
   "superseded by a new message" result. The session must not do this.
-- A subagent request goes to the parent through `ParentSessionApprovalBridge`.
-  It is live-only. A restart withdraws the old prompt with `DaemonRestarted`, and a late click gets that text.
+- A subagent request goes to the parent as a park. The owner keeps the park
+  actor-local and keeps the session in memory. A restart withdraws the old
+  prompt with `DaemonRestarted` and records the run as lost, and a late click
+  gets that text.
   A subagent without a parent bridge cannot ask. Its whole run fails with
   `ToolExecutionFailed`; it does not return a per-tool denial.
 - A channel that cannot post a prompt sends `prompt_unavailable` for that call
@@ -1905,7 +1932,7 @@ change is small.
 | Close the `skill_manage` parent-directory check-to-use window | Not supported today | The temp file uses create-new semantics, so a link at the temp name fails. A same-user process that can already write where the daemon writes can still swap a parent directory. That gives no new authority today. With a sandboxed executor, fix it in Filesystem authority with directory-handle operations. |
 | A missing or unreadable audience becomes an error (owner decision, September 29) | Planned | Today some components fall back to `Public` (TA-1). A follow-up code PR makes each such fallback fail loudly. Until that PR merges, the fallback stays as TA-1 describes it. |
 | A consent for repository A that covers repository B | Not supported, by design | This is an invariant. A repository grant covers only registered worktrees of one Git common directory (TA-8). |
-| A child that waits for consent survives a restart (#2572) | Planned | PR 3 of child-approval-events-and-parent-pause: a parked child run, a child journal, and parked prompt entries in the parent snapshot. Today a restart withdraws every child request, and the run is lost. |
+| A child that waits for consent survives a restart (#2572) | Planned | PR 2 of durable-child-consent-wait: the park moves into the run record (`ChildRunEvent.Parked`). Today the park is actor-local, a restart withdraws every child request, and the run is lost. |
 | Messages between agents (`notify_parent`, `message_child`, sibling messages) | Needs a contract | One `AgentEvent` subtype, one renderer case, and one tool each. A message body is agent text, so it goes to a run file, and the event carries the path. The envelope gets event, correlation, and causation IDs. |
 | One answer for many child prompts ("approve for all") | Not supported, by design | Each prompt binds one-time consent to one exact call (owner decision Q2). |
 
@@ -1938,6 +1965,7 @@ and the approval tooling is in
 | No `ToolAuthorizer` rule can move ahead of an earlier rule. | The tool authorizer order mutation gate ([TOOLING.md § Tool Authorizer Order Gate](../../TOOLING.md#tool-authorizer-order-gate)) |
 | An open child consent request pauses the session: no model start of a child, automated input waits and never joins a running turn, a person runs, and an approval notice passes the pause and runs alone. | `ChildConsentPauseSpecs`, `ChildConsentNoticeSpecs`, `ChildConsentReminderSpecs`; the child consent mutation gate ([TOOLING.md § Child Consent Gate](../../TOOLING.md#child-consent-gate)) |
 | A text answer resolves no prompt when a child prompt is among two or more prompts that the sender can answer. | `ChildApprovalWithdrawalSpecs`, `PendingApprovalLookupTests`, the channel contract tests; the text answer guard mutation gate ([TOOLING.md § Text Answer Guard Gate](../../TOOLING.md#text-answer-guard-gate)) |
+| A parked child resumes once, only after every answer, under the run authority and the recorded directory, and the gate checks each parked call again. | `ChildParkSpecs`, `SubAgentActorParkTests`, `ChildParkRulesTests`; the child resume gate ([TOOLING.md § Child Resume Gate](../../TOOLING.md#child-resume-gate)) |
 | A closed child prompt closes on every surface with its true reason (answered or withdrawn), and a late click gets that reason with no child identity. | `ChildApprovalWithdrawalSpecs`, `RecoveredApprovalLogTests`, the channel contract tests, `ChatPageTests`, `HeadlessChildPromptTests` |
 
 Model guidance (which tool the model should choose, and how it should declare
