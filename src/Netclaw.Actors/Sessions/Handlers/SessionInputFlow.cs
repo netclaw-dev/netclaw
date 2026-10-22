@@ -534,16 +534,23 @@ internal sealed class SessionInputFlow
             MoveHeldInputBehind(childConsentPaused);
         var adoptsAuthority = !continuesTurn && !_buffer[0].IsReplay;
         var owner = adoptsAuthority ? BufferedAuthority(_buffer[0].Message) : _context;
+        // Security boundary (design D5): an approval notice never joins a turn, so it waits first for its own turn. A
+        // continued turn scans past it, so input of the turn owner still joins. PassesPause and JoinsTurn still apply.
+        var start = continuesTurn
+            ? _buffer.FindIndex(static queued => queued.IsReplay || !BufferedAuthority(queued.Message).IsChildConsentNotice)
+            : 0;
+        if (start < 0)
+            return null;
         var count = 0;
-        while (count < _buffer.Count
-               && PassesPause(_buffer[count], owner, startsTurn: adoptsAuthority && count == 0, childConsentPaused)
-               && JoinsTurn(_buffer[count], owner))
+        while (start + count < _buffer.Count
+               && PassesPause(_buffer[start + count], owner, startsTurn: adoptsAuthority && count == 0, childConsentPaused)
+               && JoinsTurn(_buffer[start + count], owner))
             count++;
         if (count == 0)
             return null;
 
-        var drained = _buffer.GetRange(0, count);
-        _buffer.RemoveRange(0, count);
+        var drained = _buffer.GetRange(start, count);
+        _buffer.RemoveRange(start, count);
 
         // Fresh input resets the turn limits; overflow replay keeps the current limits.
         var startsNewTurn = drained.Any(static item => !item.IsReplay);
