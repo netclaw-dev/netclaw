@@ -449,10 +449,11 @@ public sealed partial class LlmSessionActor
             Output = (checkpoint, restarted) switch
             {
                 (null, true) => $"{ChildRunDocuments.RestartLoss} Its external effects are uncertain.",
-                (null, false) => "The child owner was lost. External effects are uncertain; the child will not restart.",
+                (null, false) => "The child stopped before it sent a final answer. External effects are uncertain. The runtime does not start the child again.",
                 ({ } last, true) => $"{ChildRunDocuments.RestartLoss} The last checkpoint is round {last.CompletedRound}. {last.Summary} "
                                     + "External effects after the last checkpoint are uncertain.",
-                ({ } last, false) => $"The child owner was lost after round {last.CompletedRound}. {last.Summary} External effects after that checkpoint are uncertain."
+                ({ } last, false) => $"The child stopped before it sent a final answer. The last checkpoint is round {last.CompletedRound}. {last.Summary} "
+                                     + "External effects after the last checkpoint are uncertain."
             }
         };
     }

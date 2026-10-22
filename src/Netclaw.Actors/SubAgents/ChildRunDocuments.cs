@@ -59,7 +59,7 @@ internal static class ChildRunDocuments
         if (result.OutcomeReason is { } reason)
             text.AppendLine($"- reason: {reason.Value}");
         if (terminal.Lost)
-            text.AppendLine("- lost: the child owner stopped before the child sent a final answer");
+            text.AppendLine("- lost: the child stopped before it sent a final answer");
         text.AppendLine($"- log: {storage.LogPath.Value}");
         text.AppendLine($"- artifacts: {storage.ArtifactDirectory.Value}");
         if (!string.IsNullOrWhiteSpace(warning))
@@ -157,7 +157,7 @@ internal static class ChildRunDocuments
 
     /// <summary>The words that tell the parent model why a child run with the reason owner_restarted ended.</summary>
     public const string RestartLoss =
-        "The session of the child restarted (for example, a daemon restart). The child did not survive. The runtime does not start the child again.";
+        "The parent session restarted (for example, a daemon restart). The child did not survive. The runtime does not start the child again.";
 
     private static string OutcomeWord(SubAgentResult result) => result.Outcome.ToString().ToLowerInvariant();
 }
