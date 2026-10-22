@@ -57,7 +57,7 @@ public class SubAgentRealShellTests : SubAgentActorTestBase
     public async Task Subagent_interactive_reviewed_phrase_in_readable_worktree_needs_no_prompt()
     {
         const string callId = "call-project-scope-approval";
-        var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance);
+        var approvalBridge = new ConsentCapableBridge();
         var scenario = await RunProjectScopeScenarioAsync(
             CreateShellTool(),
             callId,
@@ -65,7 +65,6 @@ public class SubAgentRealShellTests : SubAgentActorTestBase
             approvalBridge);
 
         Assert.True(scenario.Result.Success, scenario.Result.Output);
-        Assert.Equal(0, approvalBridge.RequestCount);
         Assert.Contains(
             scenario.Worktree,
             GetLastToolResult(scenario.Client, callId),
@@ -111,7 +110,7 @@ public class SubAgentRealShellTests : SubAgentActorTestBase
                 TestShellEnvironment.PrintWorkingDirectoryCommand)
         ]);
         var approvalBridge = supportsApproval
-            ? new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance)
+            ? new ConsentCapableBridge()
             : null;
         var actor = Sys.ActorOf(SubAgentActor.CreatePropsWithProjectInstructionProvider(
             CreateDefinition([shell, setWorkingDirectory]),
@@ -137,7 +136,6 @@ public class SubAgentRealShellTests : SubAgentActorTestBase
             worktree,
             GetLastToolResult(client.LastReceivedMessages, retryCallId),
             StringComparison.Ordinal);
-        Assert.Equal(0, approvalBridge?.RequestCount ?? 0);
         Assert.Contains(
             projectGuidance,
             client.LastReceivedMessages!.Single(message => message.Role == ChatRole.System).Text,

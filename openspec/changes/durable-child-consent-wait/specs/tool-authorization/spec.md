@@ -17,9 +17,6 @@ parent.
 - The resumed call SHALL run under the requester, boundary, channel, and
   delivery targets of the run record, and in the working directories that its
   batch ran with. It SHALL NOT take them from the current turn or the current parent.
-- The audience of the resumed call SHALL be the narrower of the recorded
-  audience and the audience that the session derives at resume for the
-  recorded requester and channel. A resume SHALL NOT widen trust.
 - The resumed call SHALL pass every gate check again under the current policy
   at call time. A deny rule that applies at resume SHALL win over the answer.
   The answer SHALL stay bound to the exact tool name and candidate keys of the
@@ -63,14 +60,6 @@ parent.
 - **AND** the operator adds `gh pr merge` to the shell deny list and reloads
 - **WHEN** the requester approves the parked call
 - **THEN** the gate denies the call and the command does not run
-
-#### Scenario: A resume never widens trust
-
-- **GIVEN** Alice's parked child with an operator audience
-- **AND** the operator removes Alice from the operator list before she answers
-- **WHEN** Alice approves the parked call
-- **THEN** the resumed call runs with the narrower audience
-- **AND** a tool that only the operator audience may use does not run
 
 #### Scenario: Another parent turn does not replace child approval authority
 

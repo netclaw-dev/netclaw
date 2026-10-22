@@ -1817,7 +1817,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     // A live child, or an ended child whose notice is still to come. The notice needs this actor, and a passivated
     // session would not admit it until the next join.
-    private bool HasUnreportedChildren => _execution.HasLiveChildren || UnreportedRuns().Any(run => run.Lifecycle is ChildRunLifecycle.Terminal);
+    // A park lives only in this actor in PR 1, so a parked run keeps the session in memory.
+    private bool HasUnreportedChildren => _execution.HasLiveChildren || _parks.Count > 0
+        || UnreportedRuns().Any(run => run.Lifecycle is ChildRunLifecycle.Terminal);
 
     private void ApplyBufferedBatch(BufferedInputBatch batch)
     {
@@ -2777,6 +2779,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _log.Error(cause, "The journal rejected the continuation input of the stopped turn of session {SessionId}.",
                 _sessionId.Value);
             stop(0);
+            base.OnPersistRejected(cause, @event, sequenceNr);
+            return;
+        }
+
+        // A rejected consent request of a parked child ends that run, never the parent turn (durable-child-consent-wait,
+        // design D3). This branch runs before the turn failure below.
+        if (@event is ToolApprovalRequested { SourceChildRunId: { } rejectedRun })
+        {
+            _log.Error(cause, "The journal rejected a consent request of child run {RunId}", rejectedRun);
+            Self.Tell(new ChildEventRejected(rejectedRun));
             base.OnPersistRejected(cause, @event, sequenceNr);
             return;
         }
@@ -3819,6 +3831,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private async Task HandleProcessingApprovalResponseAsync(ToolInteractionResponse msg)
     {
+        // A child answer has no live wait and never belongs to the parent turn (design D3).
+        if (_toolWorkflow.IsChildApproval(msg.CallId))
+        {
+            await HandleToolInteractionResponseWhenIdle(msg);
+            return;
+        }
         var response = _toolWorkflow.PrepareLiveResponse(msg, _state.History);
         if (response is ApprovalResponseResult.Rejected rejection)
         {
@@ -3849,14 +3867,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                     {
                         _toolWorkflow.ApplyResolvedResponse(evt, durable);
                         TryReplyAck();
-                        if (evt.SourceChildRunId is { } answeredRun)
-                        {
-                            var run = _state.ChildRuns[answeredRun];
-                            IReadOnlyList<AgentEvent.ChildApprovalResolved> closed =
-                                [_toolWorkflow.CreateChildResolution(evt, run, _sessionId, _timeProvider.GetUtcNow())];
-                            EmitClosedPrompts(closed);
-                            ChildApprovalsClosed(closed);
-                        }
                     });
                     return;
                 default:
@@ -3873,11 +3883,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private async Task HandleToolInteractionResponseWhenIdle(ToolInteractionResponse msg)
     {
-        if (_toolWorkflow.IsChildApproval(msg.CallId))
-        {
-            await HandleProcessingApprovalResponseAsync(msg);
-            return;
-        }
         var response = _toolWorkflow.PrepareRecoveredResponse(msg, _state);
         if (response is ApprovalResponseResult.Rejected rejection)
         {
@@ -3915,6 +3920,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Persist(resolution, evt =>
         {
             _toolWorkflow.ApplyResolvedResponse(evt);
+            if (evt.SourceChildRunId is { } answeredRun)
+            {
+                TryReplyAck();
+                IReadOnlyList<AgentEvent.ChildApprovalResolved> closed =
+                    [_toolWorkflow.CreateChildResolution(evt, _state.ChildRuns[answeredRun], _sessionId, _timeProvider.GetUtcNow())];
+                EmitClosedPrompts(closed);
+                ChildApprovalsClosed(closed);
+                TryResumeParkedRun(answeredRun);
+                return;
+            }
             var next = _toolWorkflow.PlanRecoveredContinuation(_state, msg.CallId.Value, _sessionId, NowMs());
             switch (next)
             {

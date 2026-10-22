@@ -37,12 +37,9 @@ public sealed class ParentApprovalUnavailableException : InvalidOperationExcepti
 }
 
 /// <summary>
-/// A parent interactive session that can ask its operator for consent on behalf
-/// of a sub-agent. At this layer it is an opaque handle, so that
-/// <see cref="ToolRunScope"/> can carry the capability. The consent request
-/// carries candidate and option types that live in <c>Netclaw.Actors</c>, so the
-/// request contract (<c>IParentConsentBridge</c>) is declared there. A sub-agent
-/// fails loudly when its handle does not implement that contract.
+/// An opaque handle that says that an interactive requester can answer a consent request, so that
+/// <see cref="ToolRunScope"/> can carry the capability. A session call asks through it. A child run parks at a
+/// consent need, and its owning session asks the run requester.
 /// </summary>
 public interface IParentApprovalBridge
 {

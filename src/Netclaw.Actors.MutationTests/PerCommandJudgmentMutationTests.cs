@@ -413,9 +413,6 @@ public sealed class PerCommandJudgmentMutationTests : IDisposable
             => throw new InvalidOperationException("The authorizer must not run the tool.");
     }
 
-    private sealed class UnexpectedConsentBridge : IParentConsentBridge
-    {
-        public Task<ConsentStep> RequestConsentAsync(ParentApprovalRequest request, CancellationToken ct) =>
-            throw new InvalidOperationException("The authorizer must not request consent.");
-    }
+    // Only the capability matters: the authorizer throws ToolApprovalRequiredException and never asks a bridge.
+    private sealed class UnexpectedConsentBridge : IParentApprovalBridge;
 }

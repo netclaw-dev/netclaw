@@ -7,8 +7,10 @@ using Akka.Actor;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
+using FunctionCallContent = Microsoft.Extensions.AI.FunctionCallContent;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
@@ -65,7 +67,11 @@ internal sealed partial class SessionToolWorkflow
                 reason = WithdrawReason.CancelledByParent;
                 break;
             case ChildRunEvent.TerminalRecorded terminal:
-                reason = terminal.Terminal.Lost ? WithdrawReason.ChildLost : WithdrawReason.ChildEnded;
+                // A parent cancel of a parked run writes only the terminal record (design D7).
+                reason = terminal.Terminal.Lost ? WithdrawReason.ChildLost
+                    : terminal.Terminal.Result.OutcomeReason == SubAgentOutcomeReason.CancelledByParent
+                        ? WithdrawReason.CancelledByParent
+                        : WithdrawReason.ChildEnded;
                 break;
             default:
                 throw new InvalidOperationException($"A {evt.GetType().Name} record closes no child approval.");
@@ -168,21 +174,67 @@ internal sealed partial class SessionToolWorkflow
     public IReadOnlyList<PendingToolInteraction> OpenApprovals()
         => _calls.Values.OfType<PendingToolApproval>().Select(static call => call.Pending).ToArray();
 
-    public InteractiveApprovalCapability ChildApprovalCapability(BackgroundChildRun run, IActorRef owner)
+    // A child gets only the fact that consent is available: it parks at a consent need (design D1), and the owner
+    // builds each prompt for the run requester when the park arrives.
+    public InteractiveApprovalCapability ChildApprovalCapability(BackgroundChildRun run)
     {
         if (!TurnContext.TryFromRecord(run.OriginalContext, out var context, out var reason) || context is null)
             throw new InvalidOperationException($"Child authority is invalid: {reason}");
-        if (!context.SupportsInteractiveApproval)
-            return new InteractiveApprovalCapability.Unavailable();
-        var bridge = new ParentSessionApprovalBridge(_approvalChannel,
-            dispatch => owner.Tell(dispatch with
-            {
-                PersistApprovalState = true,
-                SourceChildRunId = run.RunId,
-                ChildContext = context
-            }), new ToolExecutionTimeout(Timeout.InfiniteTimeSpan), context.SessionId, run.RunId.Value,
-            context.RequesterSenderId, context.RequesterPrincipal, context.HasAdoptedContext,
-            context.HasThirdPartyAdoptedContext, context.AdoptedSpeakerIds);
-        return new InteractiveApprovalCapability.Available(bridge);
+        return context.SupportsInteractiveApproval
+            ? new InteractiveApprovalCapability.Available(ChildConsentAvailable.Instance)
+            : new InteractiveApprovalCapability.Unavailable();
+    }
+
+    private sealed class ChildConsentAvailable : IParentApprovalBridge
+    {
+        public static readonly ChildConsentAvailable Instance = new();
+    }
+
+    /// <summary>
+    /// Takes the recorded answers of a parked run, keyed by the child call ID, for its resume (design D3 and D4). The
+    /// entries close, so a later click on a prompt of the park gets "already answered".
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The park does not hold the original call of an approved shell request, so no consent can bind its source.
+    /// </exception>
+    public IReadOnlyDictionary<string, ApprovalRedriveEntry> TakeParkedAnswers(SubAgentRunId runId, ChildRunPark park)
+    {
+        var answered = _calls.Where(pair => pair.Value is ResolvedToolApproval && pair.Value.Pending.Request.SourceChildRunId == runId)
+            .ToArray();
+        foreach (var pair in answered)
+            _calls.Remove(pair.Key);
+        RememberClosedChildCalls(answered, static _ => throw new InvalidOperationException("A parked run has an open request."));
+        var parkedCalls = ReadParkedCalls(park);
+        var answers = new Dictionary<string, ApprovalRedriveEntry>(StringComparer.Ordinal);
+        foreach (var pair in answered)
+        {
+            var resolved = (ResolvedToolApproval)pair.Value;
+            var childCallId = resolved.Pending.Request.OriginalChildCallId?.Value
+                              ?? throw new InvalidOperationException("A parked request has no child call ID.");
+            // The resumed child runs the call of the park transcript, so its shell source key binds the consent.
+            var shellSourceKey = GetShellSourceKey(childCallId, resolved, parkedCalls, out var failure);
+            if (failure is not null)
+                throw new InvalidOperationException($"The parked call {childCallId} cannot resume: {failure}.");
+            answers.Add(childCallId, ApprovalRedriveEntry.From(resolved, shellSourceKey));
+        }
+
+        return answers;
+    }
+
+    // The resumed child runs the calls of the last assistant message of the transcript (SubAgentActor.ResumeFromPark).
+    private static Dictionary<string, FunctionCallContent> ReadParkedCalls(ChildRunPark park)
+    {
+        var calls = new Dictionary<string, FunctionCallContent>(StringComparer.Ordinal);
+        var assistant = park.Transcript.LastOrDefault(static message => message.Role == ChatRole.Assistant);
+        if (assistant is null)
+            return calls;
+
+        foreach (var call in ChatMessageConverter.ToAiMessage(assistant, reinjectMeta: true).Contents.OfType<FunctionCallContent>())
+        {
+            if (!calls.TryAdd(call.CallId, call))
+                throw new InvalidOperationException("The parked tool call IDs are ambiguous.");
+        }
+
+        return calls;
     }
 }

@@ -34,7 +34,7 @@ result from the stopped child SHALL NOT change that reason.
 
 - **GIVEN** a child that sends its park
 - **WHEN** the journal rejects the park
-- **THEN** the run ends as failed with the reason `park_not_recorded`
+- **THEN** the run ends as failed with the reason `tool_execution_failed`
 - **AND** no prompt appears and the parked call does not run
 
 #### Scenario: A park above the size limit ends the run
@@ -61,10 +61,8 @@ the round count of the park, so its next checkpoint round is above the recorded 
 
 The resumed child SHALL take its requester, boundary, channel, and delivery targets from the run record, and its
 working directories from the park, never from the current turn or the current parent. Its audience SHALL be the
-narrower of the recorded audience and the audience that the session derives now for the recorded requester and
-channel. It SHALL resolve its model, its tools, its agent profile, its operating rules, and its project instructions
-under the current configuration and policy, as a new spawn does, and the session SHALL log the recorded and the new
-model.
+recorded audience. It SHALL resolve its model, its tools, its agent profile, its operating rules, and its project
+instructions under the current configuration and policy, as a new spawn does.
 
 When a spawn rule fails at resume (no spawner, subagents disabled, a `Public` audience, a deleted agent profile, no
 child tool, no result reader, or no usable model provider), the run SHALL end as failed with that reason, the result
@@ -120,26 +118,18 @@ notice SHALL state the reason, and the parked calls SHALL NOT run.
 - **WHEN** Alice approves the parked request
 - **THEN** the resumed child runs under Alice's recorded authority and audience
 
-#### Scenario: A narrower trust narrows the resume
-
-- **GIVEN** Alice's child is parked with an operator audience
-- **AND** the operator then removes Alice from the operator list
-- **WHEN** Alice approves the parked request
-- **THEN** the resumed child runs with the narrower audience
-- **AND** a parked call to a tool that only the operator audience may use does not run
-
 #### Scenario: A deleted agent profile ends the run
 
 - **GIVEN** a parked child whose agent profile the operator deleted
 - **WHEN** the requester approves the parked request
-- **THEN** the run ends as failed with the reason `agent_definition_unavailable`
+- **THEN** the run ends as failed with the reason `spawn_unavailable`
 - **AND** the parked call does not run
 
 #### Scenario: No usable model at resume
 
-- **GIVEN** a parked child, and the model provider is no longer usable
+- **GIVEN** a parked child, and the model provider can no longer give a client
 - **WHEN** the requester approves the parked request
-- **THEN** the run ends as failed with the reason `model_unavailable`
+- **THEN** the run ends as failed with the reason `spawn_error`
 - **AND** the parked call does not run
 
 #### Scenario: A rejected resume record ends the run

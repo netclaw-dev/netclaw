@@ -1125,7 +1125,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.True(_clientProvider.Compaction.ReceivedToolNames.Count >= 4);
         Assert.DoesNotContain(deferredToolName, _clientProvider.Compaction.ReceivedToolNames[0]);
         Assert.Contains(deferredToolName, _clientProvider.Compaction.ReceivedToolNames[1]);
-        Assert.Contains(deferredToolName, _clientProvider.Compaction.ReceivedToolNames[2]);
+        // The call to the deferred tool parks, and a new incarnation resumes after the answer. A park does not keep
+        // the loaded deferred tools (durable-child-consent-wait, PR 1 cut plan), so the resumed call does not show it.
+        Assert.DoesNotContain(deferredToolName, _clientProvider.Compaction.ReceivedToolNames[2]);
         Assert.DoesNotContain(deferredToolName, _clientProvider.Compaction.ReceivedToolNames[^1]);
         Assert.False(shellProbe.WasCalled);
         Assert.NotNull(_recordingApprovalTool);

@@ -68,6 +68,9 @@
     <!-- child-approval-events-and-parent-pause: the text answer guard of the channel lookup (text-answer-guard gate). -->
     <Compile Include="../Netclaw.Actors.Tests/Channels/PendingApprovalLookupTests.cs"
              Link="Channels/PendingApprovalLookupTests.cs" />
+    <!-- durable-child-consent-wait PR 1: park acceptance and the resume gate (child-resume-gate gate). -->
+    <Compile Include="../Netclaw.Actors.Tests/SubAgents/ChildParkRulesTests.cs"
+             Link="SubAgents/ChildParkRulesTests.cs" />
     <!-- Issue #2554: the private-folder checks of the managed temporary folder (path-access gate). -->
     <Compile Include="../Netclaw.Actors.Tests/Tools/ManagedTemporaryFolderCheckTests.cs"
              Link="Tools/ManagedTemporaryFolderCheckTests.cs" />

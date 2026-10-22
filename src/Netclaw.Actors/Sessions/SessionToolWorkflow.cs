@@ -387,38 +387,55 @@ internal sealed partial class SessionToolWorkflow
         {
             if (TryGetResolved(callId, out var resolved))
             {
-                string? shellSourceKey = null;
-                if (resolved.Answer is not ConsentAnswer.Refused
-                    && string.Equals(resolved.Pending.Request.ToolName, "shell_execute", StringComparison.Ordinal))
-                {
-                    if (!originalCalls.TryGetValue(callId, out var originalCall))
-                    {
-                        failure = "original shell call is missing from history";
-                        return builder.Build();
-                    }
-                    if (!string.Equals(
-                            originalCall.Name,
-                            resolved.Pending.Request.ToolName,
-                            StringComparison.Ordinal))
-                    {
-                        failure = "original shell tool name does not match the recovered approval";
-                        return builder.Build();
-                    }
-
-                    var command = ToolAccessPolicy.ExtractShellCommand(originalCall.Arguments);
-                    shellSourceKey = OneTimeApprovalKeys.CreateShellSourceKey(command);
-                    if (shellSourceKey is null)
-                    {
-                        failure = "original shell command is missing from history";
-                        return builder.Build();
-                    }
-                }
+                var shellSourceKey = GetShellSourceKey(callId, resolved, originalCalls, out failure);
+                if (failure is not null)
+                    return builder.Build();
 
                 builder.Add(callId, resolved, shellSourceKey);
             }
         }
 
         return builder.Build();
+    }
+
+    /// <summary>
+    /// Gets the shell source key of an approved shell call from the original call that the re-drive runs again. The
+    /// key is null for a refused call and for another tool. The session re-drive and the child resume use this rule.
+    /// </summary>
+    /// <remarks>
+    /// Security boundary: one-time consent for a shell call binds the exact shell source. A missing or different
+    /// original call sets <paramref name="failure"/>, and the caller must not seed consent.
+    /// </remarks>
+    internal static string? GetShellSourceKey(
+        string callId,
+        ResolvedToolApproval resolved,
+        IReadOnlyDictionary<string, FunctionCallContent> originalCalls,
+        out string? failure)
+    {
+        failure = null;
+        if (resolved.Answer is ConsentAnswer.Refused
+            || !string.Equals(resolved.Pending.Request.ToolName, "shell_execute", StringComparison.Ordinal))
+            return null;
+
+        if (!originalCalls.TryGetValue(callId, out var originalCall))
+        {
+            failure = "original shell call is missing from history";
+            return null;
+        }
+        if (!string.Equals(
+                originalCall.Name,
+                resolved.Pending.Request.ToolName,
+                StringComparison.Ordinal))
+        {
+            failure = "original shell tool name does not match the recovered approval";
+            return null;
+        }
+
+        var command = ToolAccessPolicy.ExtractShellCommand(originalCall.Arguments);
+        var shellSourceKey = OneTimeApprovalKeys.CreateShellSourceKey(command);
+        if (shellSourceKey is null)
+            failure = "original shell command is missing from history";
+        return shellSourceKey;
     }
 
     private void ClearCalls()
@@ -439,27 +456,14 @@ internal sealed partial class SessionToolWorkflow
 
         public void Add(string callId, ResolvedToolApproval resolved, string? shellSourceKey)
         {
-            var request = resolved.Pending.Request;
-            _authorizationAttemptIds[callId] = resolved.Pending.AuthorizationAttemptId;
-
-            if (resolved.Answer is not ConsentAnswer.Refused refusal)
-            {
-                // The re-drive seeds these keys as a one-time consent for the
-                // tool name of the re-driven call.
-                _preSeed[callId] = OneTimeApprovalKeys.Create(
-                    request.Patterns,
-                    request.Candidates,
-                    request.Cwd,
-                    shellSourceKey);
-                return;
-            }
-
-            _decisionOverride[callId] = refusal.Kind;
-            if (refusal.Kind == RefusalKind.Denied
-                && request.ManagedTemporaryDirectory is { Length: > 0 } managedTemporaryDirectory)
-            {
+            var entry = ApprovalRedriveEntry.From(resolved, shellSourceKey);
+            _authorizationAttemptIds[callId] = entry.AuthorizationAttemptId;
+            if (entry.ApprovedConsentKeys is { } keys)
+                _preSeed[callId] = keys;
+            if (entry.Refusal is { } refusal)
+                _decisionOverride[callId] = refusal;
+            if (entry.ManagedTemporaryDenialDirectory is { } managedTemporaryDirectory)
                 _managedTemporaryDenialDirectories[callId] = managedTemporaryDirectory;
-            }
         }
 
         public ApprovalRedrivePlan Build()

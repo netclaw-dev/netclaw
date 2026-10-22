@@ -299,6 +299,24 @@ internal sealed record ApprovalRedriveEntry(
                 ? denialDirectory
                 : null);
 
+    /// <summary>Makes the entry of one recorded answer. A parent re-drive and a child resume use the same rule.</summary>
+    /// <param name="resolved">The recorded answer.</param>
+    /// <param name="shellSourceKey">
+    /// The key of the exact shell source for an approved shell call (SessionToolWorkflow.GetShellSourceKey), else null.
+    /// </param>
+    public static ApprovalRedriveEntry From(ResolvedToolApproval resolved, string? shellSourceKey)
+    {
+        var request = resolved.Pending.Request;
+        return resolved.Answer is ConsentAnswer.Refused refusal
+            ? new(resolved.Pending.AuthorizationAttemptId, null, refusal.Kind,
+                refusal.Kind == RefusalKind.Denied && request.ManagedTemporaryDirectory is { Length: > 0 } directory
+                    ? directory
+                    : null)
+            // The resume seeds these keys as a one-time consent for the tool name of the call.
+            : new(resolved.Pending.AuthorizationAttemptId,
+                OneTimeApprovalKeys.Create(request.Patterns, request.Candidates, request.Cwd, shellSourceKey), null, null);
+    }
+
     /// <summary>
     /// Restores the recorded authorization attempt ID and, for an approved call, seeds the one-time consent.
     /// </summary>
@@ -556,7 +574,6 @@ internal sealed class SessionToolExecutionPipeline
                 batch.ApprovalRequests.EmitRequest,
                 batch.ApprovalRequests.Timeout,
                 batch.SessionId,
-                tc.CallId,
                 batch.TurnContext.RequesterSenderId,
                 batch.TurnContext.RequesterPrincipal,
                 batch.TurnContext.HasAdoptedContext,
