@@ -143,6 +143,69 @@ public sealed class SubAgentObservabilityTests : TestKit
     }
 
     [Fact]
+    public async Task Sub_agent_tool_call_logs_redacted_arguments_and_rationale()
+    {
+        // Issue #2589: a sub-agent tool call writes the same args line as a
+        // session tool call, through the same redaction helper.
+        const string rationale = "Greet the user for the observability test.";
+        const string apiKey = "subagent-raw-key-61";
+        var fakeTool = new FakeNetclawTool("greet", "Hello from tool!");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-args", "greet",
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "World",
+                        ["api_key"] = apiKey,
+                        ["_rationale"] = rationale
+                    })
+            ]
+        };
+        var diagnostics = CreateTestProbe();
+        Sys.EventStream.Subscribe(diagnostics.Ref, typeof(Akka.Event.Info));
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient, PermissivePolicy()));
+
+        await EventFilter.Info(contains: "Invoking tool [greet] (call=call-args)").ExpectAsync(1, async () =>
+        {
+            await agent.Ask<SubAgentResult>(
+                NewRun("Greet the user", "console/C123/subagent/test-agent/run-args"),
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+
+        var started = await FishPropertiesAsync(diagnostics, "SubAgent [test-agent] authorization attempt started");
+        var invokedMessage = await FishMessageAsync(diagnostics, "Invoking tool [greet]");
+        var invoked = invokedMessage.GetProperties();
+        var args = invoked["Args"]?.ToString();
+        Assert.NotNull(args);
+        Assert.Contains("World", args, StringComparison.Ordinal);
+        Assert.Contains("***REDACTED***", args, StringComparison.Ordinal);
+        Assert.DoesNotContain(apiKey, invokedMessage.ToString(), StringComparison.Ordinal);
+        Assert.Equal(rationale, invoked["Rationale"]?.ToString());
+        Assert.Equal("call-args", invoked["CallId"]?.ToString());
+        Assert.Equal(started["AuthorizationAttemptId"]?.ToString(), invoked["AuthorizationAttemptId"]?.ToString());
+        Assert.Equal(started["SessionId"]?.ToString(), invoked["SessionId"]?.ToString());
+    }
+
+    private static async Task<IReadOnlyDictionary<string, object?>> FishPropertiesAsync(
+        Akka.TestKit.TestProbe diagnostics,
+        string prefix)
+        => (await FishMessageAsync(diagnostics, prefix)).GetProperties();
+
+    private static async Task<Akka.Event.LogMessage> FishMessageAsync(
+        Akka.TestKit.TestProbe diagnostics,
+        string prefix)
+    {
+        var info = await diagnostics.FishForMessageAsync<Akka.Event.Info>(
+            message => message.Message.ToString()!.StartsWith(prefix, StringComparison.Ordinal),
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        return Assert.IsAssignableFrom<Akka.Event.LogMessage>(info.Message);
+    }
+
+    [Fact]
     public async Task Tool_dispatch_emits_only_the_bounded_outcome_category()
     {
         var fakeTool = new FakeNetclawTool("greet", "private-result-marker");
