@@ -288,6 +288,13 @@ Other rules:
   at recovery (only withdrawn requests), the existing `StartHeldInputs` path stays.
 - **Restart reminder (M2).** `UnreportedRuns()` does not count a parked run with an open request: no turn can run for
   it, and a click wakes the session. A parked run with all answers counts, because recovery must resume it.
+- **Snapshots and the journal delete.** After `SaveSnapshotSuccess`, the session deletes the journal rows up to the
+  snapshot (`LlmSessionActor.cs:2649`). The snapshot is then the only copy of a park. Recovery rebuilds the park from
+  the snapshot. The snapshot holds the park in the run record: the `parked` lifecycle case (field 21 of
+  `BackgroundChildRunV2Proto`) carries the whole park, and its `requests` carry each request with its answer. The next
+  snapshot after `Resumed` no longer holds the park, so the delete after that snapshot removes the old `Parked` rows.
+  A mapper that stops writing one park field would lose that field with no error, so two guards protect the mapper:
+  an exhaustive round-trip test (task 8.10) and the mapper span of the Stryker target `child-park-recovery`.
 - **Snapshots (M8).** `AllowsSnapshot` ignores child entries, because the run record holds them. The pause still
   blocks the routine snapshot when it holds a pending input, because `SaveSnapshotIfSafe` skips while any durable
   input is pending (`LlmSessionActor.cs:3509`). Then the journal keeps every park event until the pause ends or a
@@ -336,6 +343,7 @@ Other rules:
 | `BackgroundChildRunV2Proto` | `lifecycle` oneof: `ChildRunParkedStateV2Proto parked`; field 20 (`source_reminder_id`) is not in the oneof, so the oneof skips it | 21 |
 | `BackgroundChildRunV2Proto` | `int32 prompts_issued` | 22 |
 | `ToolApprovalRequestedProto` | `optional string display_text`, `optional bool is_messy`, `optional string managed_temporary_retry_target`, `optional string tool_fingerprint` | 25, 26, 27, 28 |
+| `ChildRunParkedStateV2Proto` | `ChildRunParkProto park`; `ChildRunParkProto` has `repeated ChildRunApprovalProto requests` (request and answer) and `int32` and message fields for the other park fields | 1 (park); field numbers of `ChildRunParkProto` are set in PR 2 |
 | new | `ChildRunParkProto`, `ChildRunParkedStateV2Proto`, `ChildParkSettledResultProto`, `ChildParkScopeProto`, `ChildLoopGuardProto`, `ChildSpawnFactsProto` | new messages, each with a manifest and a mapper entry |
 
 The existing `managed_temporary_directory` (21) holds the denial directory. No snapshot field is new. No persistence ID
@@ -491,8 +499,11 @@ review fixes. Most of their lines are tests: each fact of the park needs a test 
 - Stryker target `child-resume-gate` (PR 1a, `child-consent` group, about 3 minutes). Spans with boolean guards only:
   the open-request check and the drain check of `TryResumeParkedRun`, the refusal branch of the plan-entry helper,
   the rule that a park is accepted only for an owned `Accepted` run, and the checkpoint seed.
-- Stryker target `child-park-recovery` (PR 2, same group, about 3 minutes): the decision in `RecoverChildren` for each
-  lifecycle, and the child-entry rule of `AllowsSnapshot`. The group then takes about 14 minutes, under the 25-minute
+- Stryker target `child-park-recovery` (PR 2, same group, about 4 minutes): the decision in `RecoverChildren` for each
+  lifecycle, the child-entry rule of `AllowsSnapshot`, and the park lines of the snapshot mapper in both directions
+  (`NetclawProtoMapper.CoordinationV2`, `ToProto` and `FromProto` of the park). The mapper span covers the field
+  assignments, so a dropped assignment is a surviving mutant, and CI fails. The exhaustive round-trip test kills
+  these mutants. The group then takes about 15 minutes, under the 25-minute
   job timeout.
 - The security tests, not Stryker, guard the authority source and the order "persist `Resumed`, then spawn". A mutant
   there changes an object or a call order, which a boolean-guard span does not cover well.

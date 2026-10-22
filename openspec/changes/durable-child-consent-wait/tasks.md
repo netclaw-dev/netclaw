@@ -82,10 +82,11 @@ recording tool. Each test class that owns a temp folder deletes it (`DisposableT
 - [ ] 8.7 (PR 2) Add `ChildPromptReplaySpecs.A_prompt_that_was_never_shown_appears_at_the_next_join` (M3), `A_new_subscriber_gets_each_open_parked_prompt_once_with_no_child_identity`, and `A_rejoin_gets_no_replay`. Verify they fail.
 - [ ] 8.8 (PR 2) Add `ChannelOutputEngineTests.A_replayed_prompt_with_a_tracked_call_id_is_not_posted_again` and binding tests for Slack, Mattermost, and Discord: `A_replayed_prompt_that_fails_to_post_logs_and_sends_no_prompt_unavailable` (M4). Verify they fail.
 - [ ] 8.9 (PR 2) Add `ChildParkSqliteRecoveryTests.A_parked_run_survives_a_SQLite_journal_and_snapshot_restart`. Verify it fails.
+- [ ] 8.10 (PR 2) Add `ChildRunParkSnapshotMapperTests.Every_park_field_survives_the_snapshot_mapper`: build a run record in the `parked` state with a non-default value in each park field (the transcript, the settled results with their receipt facts, the pre-batch scope, the checkpoint, the loop guard, the loaded tools, the managed temporary state, the spawn facts, the requests with their answers, and `prompts_issued`); map it to `SessionSnapshotV2Proto` and back; assert that the result equals the input. Add `Every_park_field_is_in_the_round_trip_builder`: count the properties of `ChildRunPark` and its nested records by reflection and compare the count with the fields that the builder sets, so a new park field fails the test until the mapper and the builder map it. Verify both fail on PR 1b.
 
 ## 9. PR 2 implementation
 
-- [ ] 9.1 (PR 2) Add `ChildRunEvent.Parked`, `ChildRunEvent.Resumed`, `ChildRunLifecycle.Parked`, `PromptsIssued`, the new messages and fields with the numbers of the design, manifests, and mapper entries; apply `ToolApprovalResolved` of a parked run to its park. Verify task 8.1 passes.
+- [ ] 9.1 (PR 2) Add `ChildRunEvent.Parked`, `ChildRunEvent.Resumed`, `ChildRunLifecycle.Parked`, `PromptsIssued`, the new messages and fields with the numbers of the design, manifests, and mapper entries; apply `ToolApprovalResolved` of a parked run to its park. Verify tasks 8.1 and 8.10 pass.
 - [ ] 9.2 (PR 2) Persist `Parked` in place of the actor-local park; persist `Resumed` before the spawn; on a `Resumed` rejection end the run with `resume_not_recorded`. Verify task 8.4 (write part) pass.
 - [ ] 9.3 (PR 2) Apply the parked requests on replay; add `HydrateParkedChildApprovals`; withdraw only non-parked entries; add the `Parked` cases to `RecoverChildren` and `LostChildResult`; restore held inputs inside `RecoveryCompleted` when the pause holds. Verify tasks 8.2 to 8.5 pass.
 - [ ] 9.4 (PR 2) Change `AllowsSnapshot`, `HasUnreportedChildren`, and the restart-reminder count for parked runs. Verify tasks 8.3, 8.6, and 8.9 pass.
@@ -94,7 +95,7 @@ recording tool. Each test class that owns a temp folder deletes it (`DisposableT
 ## 10. PR 2 docs and gates
 
 - [ ] 10.1 (PR 2) Update `docs/architecture/tool-authorization.md` 3.6, 4, and 7.5 (a parked prompt survives a restart; replay and skip). Verify the doc links resolve.
-- [ ] 10.2 (PR 2) Add the `child-park-recovery` Stryker target (the `RecoverChildren` decision and the child-entry rule of `AllowsSnapshot`) to the `child-consent` group with a `TOOLING.md` row. Verify all mutants are killed and the group stays under the job timeout.
+- [ ] 10.2 (PR 2) Add the `child-park-recovery` Stryker target (the `RecoverChildren` decision, the child-entry rule of `AllowsSnapshot`, and the park field assignments of the snapshot mapper in `ToProto` and `FromProto`) to the `child-consent` group with a `TOOLING.md` row. Verify all mutants are killed and the group stays under the job timeout.
 - [ ] 10.3 (PR 2) Add the downgrade text of the design to the release notes draft, and update the `netclaw-operations` skill (bump `metadata.version`). Verify `./evals/run-evals.sh` passes.
 - [ ] 10.4 (PR 2) Run slopwatch and the header check. Verify both pass.
 

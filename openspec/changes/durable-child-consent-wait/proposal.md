@@ -78,8 +78,8 @@ None.
   28); six new messages. No new snapshot field. No new persistence ID.
 - Data: child transcripts go into `netclaw.db`, in the same data class as the parent transcript.
 - Configuration: none.
-- CI: two Stryker targets in the `child-consent` group, `child-resume-gate` (PR 1a) and `child-park-recovery` (PR 2),
-  about 3 minutes each.
+- CI: two Stryker targets in the `child-consent` group: `child-resume-gate` (PR 1a, about 3 minutes) and
+  `child-park-recovery` (PR 2, about 4 minutes; it also covers the park lines of the snapshot mapper).
 - Docs: `docs/architecture/tool-authorization.md` sections 3.5, 3.6, 4, 7.5, 8, and 9; `docs/spec/GLOSSARY.md`; the
   `netclaw-operations` skill; release-note text for the downgrade.
 - Prerequisite: #2587 before PR 2.
