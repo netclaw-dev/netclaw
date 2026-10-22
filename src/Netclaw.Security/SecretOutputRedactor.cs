@@ -186,28 +186,41 @@ public static partial class SecretOutputRedactor
     }
 
     // Prose names a secret word and then goes on: "--token must be a PAT", "Token: required for
-    // all calls", "token: expired, please refresh". A value of lower-case letters is prose only
-    // when it ends with ',', '.', ';' or ':', or when a function word comes after it. Other words
-    // after it are more arguments: in "mysql --password changeme mydb", "changeme" is a password.
+    // all calls", "token: expired, please refresh". A value is prose when it is a ProseWords
+    // word. A value of at most 12 lower-case letters is also prose when it ends with ',', '.' or
+    // ':', or when a ProseWords word comes after it. Other words after it are more arguments: in
+    // "mysql --password changeme mydb", "changeme" is a password. ';' ends a shell command.
     private static bool IsProse(ReadOnlySpan<char> value, ReadOnlySpan<char> nextWord)
     {
-        var word = value.TrimEnd(".,;:");
-        if (word.IsEmpty || word.ContainsAnyExceptInRange('a', 'z'))
+        var word = value.TrimEnd(".,:");
+        if (word.IsEmpty || word.Length > MaxProseWordChars)
             return false;
 
-        return word.Length < value.Length || FunctionWordLookup.Contains(nextWord);
+        if (ProseWordLookup.Contains(word))
+            return true;
+
+        return !word.ContainsAnyExceptInRange('a', 'z')
+               && (word.Length < value.Length || ProseWordLookup.Contains(nextWord));
     }
 
-    private static readonly HashSet<string> FunctionWords = new(
-        ["a", "an", "the", "be", "is", "are", "it", "to", "for", "of", "in", "on", "with", "and", "or", "please"],
-        StringComparer.Ordinal);
+    private const int MaxProseWordChars = 12;
 
-    private static readonly HashSet<string>.AlternateLookup<ReadOnlySpan<char>> FunctionWordLookup =
-        FunctionWords.GetAlternateLookup<ReadOnlySpan<char>>();
+    // Function words, sentence verbs, and the value types that cobra and other CLI help
+    // generators print ("--token string   Bearer token for ...").
+    private static readonly HashSet<string> ProseWords = new(
+    [
+        "a", "an", "the", "be", "is", "are", "was", "were", "has", "it", "to", "for", "of", "in", "on",
+        "with", "from", "and", "or", "if", "as", "when", "then", "so", "but", "not", "over", "instead",
+        "please", "should", "can", "will", "must", "takes", "flag", "option", "argument", "parameter",
+        "switch", "value", "string", "strings", "stringArray", "int", "bool", "duration", "file", "path"
+    ], StringComparer.Ordinal);
 
-    // The lower-case word after a match, after spaces and tabs. It reads at most eight letters,
-    // which is more than the longest function word. A scan to the end of the line for each match
-    // is quadratic on a long line with many matches.
+    private static readonly HashSet<string>.AlternateLookup<ReadOnlySpan<char>> ProseWordLookup =
+        ProseWords.GetAlternateLookup<ReadOnlySpan<char>>();
+
+    // The lower-case word after a match, after spaces and tabs. It reads at most one letter more
+    // than MaxProseWordChars, so a longer word is not a ProseWords word. A scan to the end of the
+    // line for each match is quadratic on a long line with many matches.
     private static ReadOnlySpan<char> NextWord(string text, Match m)
     {
         var rest = text.AsSpan(m.Index + m.Length);
@@ -215,30 +228,32 @@ public static partial class SecretOutputRedactor
         if (skip < 0)
             return ReadOnlySpan<char>.Empty;
 
-        rest = rest.Slice(skip, Math.Min(8, rest.Length - skip));
+        rest = rest.Slice(skip, Math.Min(MaxProseWordChars + 1, rest.Length - skip));
         var end = rest.IndexOfAnyExceptInRange('a', 'z');
         return end < 0 ? rest : rest[..end];
     }
 
-    // The segments of a name, split at '_', '-', '.', a space, and a change from a lower-case
-    // letter or a digit to an upper-case letter: next_page_token, nextPageToken, Next-Page-Token.
-    private static List<string> NameSegments(string name)
+    // The last segment of a name, and the text before it. Segments are split at '_', '-', '.', a
+    // space, and a change from a lower-case letter or a digit to an upper-case letter:
+    // next_page_token, nextPageToken, Next-Page-Token. It reads from the end, so a long name
+    // costs only its last segments.
+    private static ReadOnlySpan<char> LastSegment(ReadOnlySpan<char> name, out ReadOnlySpan<char> before)
     {
-        var segments = new List<string>();
-        var start = 0;
-        for (var i = 0; i <= name.Length; i++)
-        {
-            var split = i == name.Length || name[i] is '_' or '-' or '.' or ' '
-                || (i > start && char.IsAsciiLetterUpper(name[i]) && (char.IsAsciiLetterLower(name[i - 1]) || char.IsAsciiDigit(name[i - 1])));
-            if (!split)
-                continue;
+        var end = name.Length;
+        while (end > 0 && name[end - 1] is '_' or '-' or '.' or ' ')
+            end--;
 
-            if (i > start)
-                segments.Add(name[start..i]);
-            start = name.Length > i && char.IsAsciiLetterUpper(name[i]) ? i : i + 1;
+        var start = end;
+        while (start > 0
+               && name[start - 1] is not ('_' or '-' or '.' or ' ')
+               && !(start < end && char.IsAsciiLetterUpper(name[start])
+                    && (char.IsAsciiLetterLower(name[start - 1]) || char.IsAsciiDigit(name[start - 1]))))
+        {
+            start--;
         }
 
-        return segments;
+        before = name[..start];
+        return name[start..end];
     }
 
     // A pagination cursor is not a secret: next_token, next_page_token, --starting-token. The
@@ -247,15 +262,11 @@ public static partial class SecretOutputRedactor
     private static readonly HashSet<string> PaginationNames =
         new([.. PaginationWords.Split('|'), "starting"], StringComparer.OrdinalIgnoreCase);
 
-    // Only a name with a segment before a last "token" can be a cursor. The header and option
-    // rules call this for each match, so the check splits only such a name.
     private static bool IsPaginationName(string name)
     {
-        if (name.Length <= "token".Length || !name.EndsWith("token", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        var segments = NameSegments(name);
-        return segments.Count > 1 && PaginationNames.Contains(segments[^2]);
+        var last = LastSegment(name, out var before);
+        return last.Equals("token", StringComparison.OrdinalIgnoreCase)
+               && PaginationNames.GetAlternateLookup<ReadOnlySpan<char>>().Contains(LastSegment(before, out _));
     }
 
     // The last segment of a pair name that names a thing about the secret, not the secret:
@@ -281,12 +292,11 @@ public static partial class SecretOutputRedactor
         if (name.Length > MaxSecretKeyChars)
             return true;
 
-        var segments = NameSegments(name);
-        var last = segments[^1];
-        var previous = segments.Count > 1 ? segments[^2] : "";
-        return !PairDescriptorWords.Contains(last)
-               && !(last.Equals("token", StringComparison.OrdinalIgnoreCase) && PaginationNames.Contains(previous))
-               && !(last.Equals("tokens", StringComparison.OrdinalIgnoreCase) && CounterWords.Contains(previous));
+        var last = LastSegment(name, out var before);
+        var previous = LastSegment(before, out _);
+        return !PairDescriptorWords.GetAlternateLookup<ReadOnlySpan<char>>().Contains(last)
+               && !(last.Equals("token", StringComparison.OrdinalIgnoreCase) && PaginationNames.GetAlternateLookup<ReadOnlySpan<char>>().Contains(previous))
+               && !(last.Equals("tokens", StringComparison.OrdinalIgnoreCase) && CounterWords.GetAlternateLookup<ReadOnlySpan<char>>().Contains(previous));
     }
 
     // A header value is masked except in these cases:
@@ -325,19 +335,6 @@ public static partial class SecretOutputRedactor
     private static bool IsShortNumber(ReadOnlySpan<char> value)
         => value.Length <= 5 && !value.ContainsAnyExcept("0123456789");
 
-    // Prose and help text name an option and then continue: "the --password option",
-    // "--token string   Bearer token for ...". The next word is then not a value. The type words
-    // are the value types that cobra and other CLI help generators print.
-    private static readonly HashSet<string> ProseWords = new(
-    [
-        "a", "an", "the", "to", "and", "or", "for", "with", "from", "if", "is", "as", "in", "on", "of",
-        "when", "then", "so", "but", "not", "instead", "flag", "option", "argument", "parameter", "switch", "value",
-        "string", "strings", "stringArray", "int", "bool", "duration", "file", "path"
-    ], StringComparer.Ordinal);
-
-    private static readonly HashSet<string>.AlternateLookup<ReadOnlySpan<char>> ProseWordLookup =
-        ProseWords.GetAlternateLookup<ReadOnlySpan<char>>();
-
     // The option word list is in SecretOptionValueRegex. "--no-password" is a flag with no
     // value, and a pagination cursor (--next-token, --starting-token) is not a secret.
     private static string RedactOptionValue(string text, Match m)
@@ -363,9 +360,7 @@ public static partial class SecretOutputRedactor
         }
 
         // "--token (or GH_TOKEN)", "| --password | ... |" and "--token `<your token>`" have no value.
-        if (core[0] is '(' or '|' or '`'
-            || ProseWordLookup.Contains(core.TrimEnd(".,;:)"))
-            || IsProse(core, NextWord(text, m)))
+        if (core[0] is '(' or '|' or '`' || IsProse(core, NextWord(text, m)))
         {
             return m.Value;
         }
@@ -530,7 +525,9 @@ public static partial class SecretOutputRedactor
     // The header names that carry a credential. The header-line rule and the JSON key rule
     // use this one list. A token or key name must end with the secret word, so
     // "X-RateLimit-Remaining" and "Token-Count" do not match.
-    private const string SecretTokenHeaderNames = "(?:[A-Za-z0-9]+-)*(?:api-?key|auth-key|subscription-key|client-secret|token)";
+    // A name has at most eight segments before the secret word. Thus a huge hyphen chain does
+    // not match, and Redact does not copy it.
+    private const string SecretTokenHeaderNames = "(?:[A-Za-z0-9]+-){0,8}(?:api-?key|auth-key|subscription-key|client-secret|token)";
     private const string AuthorizationHeaderNames = "(?:Proxy-)?Authorization";
     private const string CookieHeaderNames = "(?:Set-)?Cookie";
     private const string SecretHeaderNames = SecretTokenHeaderNames + "|" + AuthorizationHeaderNames + "|" + CookieHeaderNames;
@@ -568,9 +565,10 @@ public static partial class SecretOutputRedactor
     // A secret option and its value after a space: --password x, --api-key x, --client-secret x.
     // The option name must end with the secret word, so --password-file and --password-stdin do
     // not match. A bare "--secret" names a secret spec for some tools (docker build), so "secret"
-    // must have a word before it. The value cannot cross a line end and cannot start with '-'.
+    // must have a word before it. As in the header names, at most eight words come before the
+    // secret word. The value cannot cross a line end and cannot start with '-'.
     // "-p" is not covered: it is a port, a path flag, or a database name for many tools.
     private static readonly Regex SecretOptionValueRegex = LinearRegex(
-        "--(?<name>(?:[A-Za-z0-9]+-)*(?:password|passwd|passphrase|token|api-?key)|(?:[A-Za-z0-9]+-)+secret)[ \\t]+"
+        "--(?<name>(?:[A-Za-z0-9]+-){0,8}(?:password|passwd|passphrase|token|api-?key)|(?:[A-Za-z0-9]+-){1,8}secret)[ \\t]+"
         + "(?<value>\"[^\"\\r\\n]*\"|'[^'\\r\\n]*'|[^\\s\"'-][^\\s]*)");
 }
