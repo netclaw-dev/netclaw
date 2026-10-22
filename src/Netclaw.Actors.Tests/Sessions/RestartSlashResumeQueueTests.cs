@@ -15,6 +15,7 @@ using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
 using Xunit;
+using AkkaError = Akka.Event.Error;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -44,6 +45,8 @@ public sealed class RestartSlashResumeQueueTests : ApprovalWaitTestBase
     private const string SkillTask = "do the resumed skill task";
     private const string AliceLaterText = "Alice later work after the slash command.";
     private const string BobText = "Bob work after the slash command.";
+    private const string Carol = "U-carol";
+    private const string CarolDamagedText = "Carol work with a damaged authority.";
     private const string TeamPromptMarker = ReminderPromptMarker;
     private const string InvalidAuthorityReason = "The interrupted input authority is invalid.";
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(10);
@@ -238,6 +241,88 @@ public sealed class RestartSlashResumeQueueTests : ApprovalWaitTestBase
     }
 
     /// <summary>
+    /// Case 6 (review finding 2). The pending order is the slash command of Alice, a valid input of Bob, and then an
+    /// input of Carol with a damaged authority record. The restart resume validates only the leading inputs of Alice,
+    /// so it does not see the damaged input before the slash command runs. The restart resume splits the waiting
+    /// inputs with SessionInputFlow.SplitByAuthority, as StartInputsHeldByThePause does:
+    /// <list type="bullet">
+    /// <item>the input of Bob runs once, under the authority of Bob;</item>
+    /// <item>the session logs the damaged input and keeps it pending in the journal;</item>
+    /// <item>the session does not throw, so the actor does not restart or stop.</item>
+    /// </list>
+    /// Bug on dev: no turn runs the input of Bob. A fix that passes the damaged input to
+    /// SessionInputFlow.RestoreWaitingInputs throws inside the actor.
+    /// </summary>
+    [Fact]
+    public async Task A_damaged_input_behind_another_requester_stays_pending_and_the_valid_input_runs()
+    {
+        // Arrange
+        var sessionId = new SessionId("test-channel/restart-slash-ready-damaged-behind-other");
+        var slash = Admitted(sessionId, "slash", UnknownSlash, PersonSource(Alice, TrustAudience.Personal), executableText: UnknownSlash);
+        var bob = Admitted(sessionId, "bob", BobText, PersonSource(Bob, TrustAudience.Team));
+        var carol = Admitted(sessionId, "carol", CarolDamagedText, PersonSource(Carol, TrustAudience.Team));
+        var damaged = carol with { TurnContext = carol.TurnContext with { TurnId = string.Empty } };
+        await SeedJournalAsync(sessionId, slash, bob, damaged);
+        var subscriber = await JoinNewSubscriberAsync(sessionId);
+        var session = await ResolveSessionAsync(sessionId);
+        var lifecycle = CreateTestProbe("session-lifecycle");
+        lifecycle.Watch(session);
+
+        // A restart of the session actor logs its exception as an Error event with a cause. The expected log line
+        // for the damaged input has no cause.
+        var errors = CreateTestProbe("session-errors");
+        Sys.EventStream.Subscribe(errors.Ref, typeof(AkkaError));
+        var crashes = new List<AkkaError>();
+        try
+        {
+            // Act: a probe takes the reply, so a session that throws before it replies gives a clear failure.
+            var replies = CreateTestProbe("restart-replies");
+            SessionManager.Tell(RestartResumeMessage(sessionId, TrustAudience.Personal), replies.Ref);
+
+            // Assert
+            await AwaitAssertAsync(
+                () =>
+                {
+                    while (errors.HasMessages)
+                    {
+                        if (errors.ReceiveOne(TimeSpan.Zero, TestContext.Current.CancellationToken) is AkkaError { Cause: not null } error
+                            && error.LogSource.Contains("restart-slash-ready-damaged-behind-other", StringComparison.Ordinal))
+                            crashes.Add(error);
+                    }
+
+                    Assert.True(crashes.Count == 0,
+                        $"The session must not throw for a damaged pending input. It threw: {crashes.FirstOrDefault()?.Cause}");
+                    Assert.False(lifecycle.HasMessages, "The session actor must not stop for a damaged pending input.");
+                    Assert.True(replies.HasMessages, "The restart message got no reply.");
+                },
+                Deadline, cancellationToken: TestContext.Current.CancellationToken);
+            Assert.IsAssignableFrom<CommandAck>(replies.ReceiveOne(TimeSpan.Zero, TestContext.Current.CancellationToken));
+            await ExpectSkippedTurnAsync(subscriber);
+            await AwaitAssertAsync(
+                () =>
+                {
+                    Assert.True(
+                        FakeChat.ReceivedMessages.Any(request => LastUserText(request) == BobText),
+                        "The valid input of Bob must run after the slash command. No model call carried it.");
+                },
+                Deadline, cancellationToken: TestContext.Current.CancellationToken);
+            await ExpectTurnsAsync(subscriber, 1);
+
+            var bobRequest = Assert.Single(FakeChat.ReceivedMessages, request => LastUserText(request) == BobText);
+            Assert.Contains(TeamPromptMarker, SystemText(bobRequest));
+            Assert.DoesNotContain(FakeChat.ReceivedMessages,
+                request => request.Any(message => message.Text.Contains(CarolDamagedText, StringComparison.Ordinal)));
+            await AssertConsumedByTurnAsync(sessionId, bob.InputId);
+            Assert.Equal(new[] { damaged.InputId }, PendingInputIds(await ReadJournalAsync(sessionId)));
+            Assert.False(lifecycle.HasMessages, "The session actor must not stop for a damaged pending input.");
+        }
+        finally
+        {
+            Sys.EventStream.Unsubscribe(errors.Ref, typeof(AkkaError));
+        }
+    }
+
+    /// <summary>
     /// Case 4, guard. The input after the slash command has a damaged authority record. The restart resume validates
     /// the inputs before it runs the slash command. It answers with a CommandNack, runs no command and no model call,
     /// and the journal keeps both inputs pending. Dev passes this spec.
@@ -296,9 +381,13 @@ public sealed class RestartSlashResumeQueueTests : ApprovalWaitTestBase
 
     // The restart reminder is not an input. The session knows it by its id prefix and its fixed instruction.
     private Task<ISessionResponse> SendRestartResumeAsync(SessionId sessionId, TrustAudience audience)
+        => SessionManager.Ask<ISessionResponse>(
+            RestartResumeMessage(sessionId, audience), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+    private static SendUserMessage RestartResumeMessage(SessionId sessionId, TrustAudience audience)
     {
         var reminderId = $"{ReminderIdGenerator.Generate("restart resume").Value}:1";
-        return SessionManager.Ask<ISessionResponse>(new SendUserMessage
+        return new SendUserMessage
         {
             SessionId = sessionId,
             Content = SessionExecutionLifetime.RestartReminderInstruction,
@@ -315,7 +404,7 @@ public sealed class RestartSlashResumeQueueTests : ApprovalWaitTestBase
                 ReceivedAt = new DateTimeOffset(2026, 5, 17, 12, 0, 0, TimeSpan.Zero),
                 ReminderId = new ReminderId(reminderId)
             }
-        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        };
     }
 
     private static async Task ExpectSkippedTurnAsync(Akka.TestKit.TestProbe subscriber)
