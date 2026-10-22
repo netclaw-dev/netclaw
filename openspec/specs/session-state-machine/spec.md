@@ -182,17 +182,18 @@ the legal phase-transition rules: re-driving a tool batch transitions
 ### Requirement: Restart-drain passivation is non-interruptible
 
 When a coordinated daemon restart requests session drain, the actor SHALL reject
-new work, allow the current in-flight turn or compaction to finish, and then
-enter `Passivating`. Once restart-drain mode reaches `Passivating`, shutdown is
+new work, stop the turn at the next safe point, and then enter `Passivating`.
+A safe point is a live model call after the 2-second grace period, the end of a
+tool batch, or the end of a compaction. Once restart-drain mode reaches `Passivating`, shutdown is
 non-interruptible: inbound user messages and tool-interaction responses SHALL
 NOT abort passivation.
 
-#### Scenario: Restart drain finishes current turn before passivating
+#### Scenario: Restart drain stops the turn at the next safe point before passivating
 
 - **GIVEN** the session actor is in `Processing` or `Compacting`
 - **WHEN** restart drain is requested
 - **THEN** the actor rejects new work
-- **AND** allows the current in-flight work to finish
+- **AND** stops the turn at the next safe point
 - **AND** only then transitions to `Passivating`
 
 #### Scenario: Restart-drain passivation rejects racing inbound work

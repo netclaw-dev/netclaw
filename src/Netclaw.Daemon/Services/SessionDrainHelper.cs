@@ -101,7 +101,7 @@ internal static class SessionDrainHelper
         else
         {
             logger.LogWarning(
-                "Drain completed with {DrainedCount} session(s) drained and {TimedOutCount} timed out ({TimedOutSessionIds}); the restart stopped the turns of the timed-out sessions, and no restart reminder resumes them.",
+                "Drain completed with {DrainedCount} session(s) drained and {TimedOutCount} timed out ({TimedOutSessionIds}); the restart or stop interrupted the turns of the timed-out sessions, and no restart reminder resumes them.",
                 drained.Length,
                 timedOut.Length,
                 string.Join(", ", timedOut.Select(static id => id.Value)));

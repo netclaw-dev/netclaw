@@ -720,6 +720,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             var truncated = response.FinishReason == ChatFinishReason.Length;
             switch (_turnState.EvaluateEmptyResponse(analysis.Kind, truncated))
             {
+                case EmptyResponseAction.Retry when RestartDrainRequested:
+                    StopTurnForRestart();
+                    return;
                 case EmptyResponseAction.Retry retry:
                     _log.Warning("LLM produced {Kind} response ({ThinkingChars} chars, truncated={Truncated}) — retrying with nudge",
                         analysis.Kind, analysis.ThinkingChars, truncated);
@@ -1111,15 +1114,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void DrainBufferOrReadyNow()
     {
-        // Read this flag before AdvanceAfterCompaction resets it. A tool batch closed the inputs of a tool loop, so a
-        // drain at this point stops a turn that no reminder resumes. A compaction at a turn end stops no turn.
-        var stopsToolLoop = _input.ResumesToolLoopAfterCompaction;
+        // Read these facts before AdvanceAfterCompaction resets them. A drain after a tool-loop or replay compaction
+        // stops an open turn. A compaction at a turn end stops no turn, so it posts no notice.
+        var stopsTurn = _input.ResumesToolLoopAfterCompaction || _input.StartsWithReplay;
+        var selected = _input.SelectedCount;
         var continuation = _input.AdvanceAfterCompaction(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (continuation.Action == InputProgressAction.Restart)
         {
-            RecordRestartReminderEligibility();
-            if (stopsToolLoop)
-                EmitRestartStoppedTurnNotice();
+            var eligibility = RecordRestartReminderEligibility();
+            if (stopsTurn)
+                EmitRestartStoppedTurnNotice(eligibility, selected);
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Ready);
             TransitionTo(SessionPhase.Passivating);
@@ -2499,7 +2503,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         // Every phase accepts a late reap reply. The epoch gate protects a newer stop attempt.
         Command<JobReapResolved>(HandleJobReapResolved);
-        Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
+        Command<PrepareForDaemonRestart>(RequestRestartDrain);
         Command<ToolPipelineStoppedForRestart>(HandleToolPipelineStoppedForRestart);
         Command<RestartModelGraceExpired>(HandleRestartModelGraceExpired);
         Command<ModelStoppedForRestart>(HandleModelStoppedForRestart);
@@ -2934,6 +2938,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void ApplyPreparedModelRequest(PreparedModelRequest request)
     {
+        // A drain request arrived while the session prepared the call. The call does not start.
+        if (RestartDrainRequested)
+        {
+            _execution.ReleaseAll();
+            StopTurnForRestart();
+            return;
+        }
+
         _state = request.State;
         if (request.Exposure is { } exposure)
             TurnLog().Info(
@@ -4351,10 +4363,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         return log;
     }
 
-    private void RequestRestartDrain()
+    private void RequestRestartDrain(PrepareForDaemonRestart request)
     {
         var action = _execution.RequestRestart(
             Sender,
+            request.Reason,
             _phase.Current,
             _input.HasBufferedContinuation,
             _toolWorkflow.CanParkForRestart());
@@ -4406,28 +4419,24 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     }
 
     // The drain stopped the turn before its end. The turn resumes only when a reminder replays its own selected
-    // inputs. A tool batch or a text close clears them. A reminder that only reports a child, or that only runs a
-    // buffered input as a new turn, does not resume this turn. Then the session tells the person (#2601).
+    // inputs. A tool batch or a text close clears them, so read the count before the eligibility record (#2601).
     private void StopTurnForRestart()
     {
-        var hasSelectedInputs = _input.SelectedCount > 0;
-        if (RecordRestartReminderEligibility() != ReminderEligibility.Eligible || !hasSelectedInputs)
-            EmitRestartStoppedTurnNotice();
-
+        var selected = _input.SelectedCount;
+        EmitRestartStoppedTurnNotice(RecordRestartReminderEligibility(), selected);
         ClearBufferedMessagesForRestartDrain();
         TransitionTo(SessionPhase.Passivating);
     }
 
-    private void EmitRestartStoppedTurnNotice()
+    private void EmitRestartStoppedTurnNotice(ReminderEligibility eligibility, int pendingTurnInputCount)
     {
+        if (SessionExecutionLifetime.RestartStoppedTurnNotice(
+                eligibility, pendingTurnInputCount, _execution.RestartDrainReason) is not { } notice)
+            return;
+
         _log.Info("Restart drain stopped the turn of session {SessionId}, and no restart reminder resumes that turn.",
             _sessionId.Value);
-        EmitOutput(new TextOutput(
-            "The daemon restarted during this turn. The work stopped after the last completed step. "
-            + "Nothing resumes the work automatically. Send a message to continue.")
-        {
-            SessionId = _sessionId
-        }, OutputFilter.Text);
+        EmitOutput(new TextOutput(notice) { SessionId = _sessionId }, OutputFilter.Text);
     }
 
     private ReminderEligibility RecordRestartReminderEligibility()

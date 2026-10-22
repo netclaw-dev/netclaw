@@ -280,7 +280,7 @@ The session SHALL create a restart reminder only after an eligible model task st
 
 ### Requirement: Graceful drain stops a tool loop
 
-The session SHALL apply the 2-second model grace period to each live model call of a turn. This rule applies also after a tool batch closed the inputs of the turn. After a drain request, the session SHALL start no model call and no tool batch. It SHALL keep the reminder rule of the requirement above. When the drain stops a turn and no restart reminder resumes it, the session SHALL post one text notice in its channel before it stops. The shutdown alert SHALL name each session whose drain timed out.
+The session SHALL apply the 2-second model grace period to each live model call of a turn. This rule applies also after a tool batch closed the inputs of the turn. After a drain request, the session SHALL start no model call and no tool batch. It SHALL keep the reminder rule of the requirement above. When the drain stops a turn and no restart reminder replays an input of that turn, the session SHALL post one text notice in its channel before it stops. A reminder that only reports a child run, or only runs a waiting input, does not resume the stopped turn. The shutdown alert SHALL name each session whose drain timed out.
 
 #### Scenario: The model call after a tool batch stops after the grace period
 
@@ -314,7 +314,7 @@ The session SHALL apply the 2-second model grace period to each live model call 
 #### Scenario: A stopped turn without a reminder posts a notice
 
 - **GIVEN** graceful drain stops a turn after a tool batch
-- **AND** no restart reminder resumes the turn
+- **AND** no restart reminder replays an input of the turn
 - **WHEN** the session passivates
 - **THEN** the session posts one text notice in its channel before it stops
 - **AND** the notice tells the person to send a message to continue
