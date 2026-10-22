@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
@@ -60,6 +61,7 @@ public sealed class SessionToolExposureWithoutTrustContextTests : LlmSessionTest
         services.AddSingleton(toolAccessPolicy);
         services.AddSingleton<IToolExecutor>(new FakeToolExecutor());
         // Deliberately no TrustContextDeriver: this is the defect under test.
+        services.RemoveAll<TrustContextDeriver>();
     }
 
     [Fact]

@@ -1668,9 +1668,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var toolExecutionCt = _execution.BeginTool();
         var turnContext = _input.Authority.Context
             ?? throw new InvalidOperationException("Tool batch dispatch requires admitted turn authority.");
+        var trust = _input.Authority.Trust
+            ?? throw new InvalidOperationException("Tool batch dispatch requires the effective trust context.");
         var runEnvironment = new SessionToolRunEnvironment
         {
             Storage = _sessionStorage,
+            EffectiveAudience = trust.EffectiveAudience,
             InlineOutputBudget = new InlineOutputBudget(_config.Tuning.MaxInlineToolResultChars),
             ModelInputModalities = _model.InputModalities,
             SpawnChildActor = spawnChildActor,
@@ -3221,10 +3224,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return RejectSlashCommand($"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted.");
         }
 
-        if (ResolveTurnAuthorityAudience(_input.Authority.Context, _input.Authority.Source) is not { } routedAudience)
+        // The routed child gets the posture-narrowed audience, as a child that spawn_agent starts does.
+        if (_input.Authority.Trust?.EffectiveAudience is not { } routedAudience)
         {
             _log.Error(
-                "Routed slash command /{SkillName} refused reason={Reason}: the session has no turn context and no turn source",
+                "Routed slash command /{SkillName} refused reason={Reason}: the session has no effective trust context",
                 skill.Name,
                 SecurityPolicyDefaults.AudienceUnresolvedReason);
             return RejectSlashCommand(
@@ -3294,8 +3298,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             var context = new ToolExecutionContext(new ToolRunScope
             {
                 Session = new ToolSessionScope.Bound(_sessionId.Value, _sessionStorage),
-                // The caller resolved this audience from the turn authority and
-                // refused the command when no authority existed.
+                // The caller resolved this audience from the effective trust context and
+                // refused the command when no trust context existed.
                 Audience = audience,
                 InlineOutputBudget = new InlineOutputBudget(_config.Tuning.MaxInlineToolResultChars),
                 Boundary = _input.Authority.Context?.Boundary ?? _input.Authority.Source?.Boundary,

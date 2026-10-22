@@ -335,9 +335,9 @@ public sealed class HeadlessAsyncChildEndToEndTests : IAsyncDisposable
             EmitStructuredFindings = false,
             Visibility = SubAgentVisibility.UserFacing
         });
-        var policy = new ToolAccessPolicy(paths, new ToolConfig(),
-            new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
-                ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
+        var defaults = new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
+            ShellExecutionMode.HostAllowed, UsedStrictFallback: false);
+        var policy = new ToolAccessPolicy(paths, new ToolConfig(), defaults,
             new ShellCommandPolicy(), new ToolPathPolicy([]));
         var prompt = new StaticSystemPromptProvider("You are a test assistant with subagents.");
         var spawner = new SubAgentSpawner(models, registry, policy, null, prompt,
@@ -373,7 +373,7 @@ public sealed class HeadlessAsyncChildEndToEndTests : IAsyncDisposable
             storage));
         builder.Services.AddSingleton(new SessionToolServices(
             new DispatchingToolExecutor(registry, policy, null, NullLogger<DispatchingToolExecutor>.Instance),
-            registry, null, null, null, null, profiles, spawner, null));
+            registry, null, new TrustContextDeriver(defaults), null, null, profiles, spawner, null));
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<ClaimsPrincipalMapper>();
         builder.Services.AddSingleton<SessionIngressGate>();

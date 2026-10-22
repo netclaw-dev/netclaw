@@ -140,6 +140,11 @@ public abstract class LlmSessionTestBase : TestKit, IAsyncDisposable
         services.AddSingleton<IReminderChannelNotifier>(NullReminderChannelNotifier.Instance);
         services.AddSingleton<SessionPipeline>();
         services.AddSingleton<ISessionPipeline>(sp => sp.GetRequiredService<SessionPipeline>());
+        // The daemon always registers a trust deriver, and a tool batch requires the effective trust context.
+        // A Personal posture narrows nothing, so each turn keeps the audience of its source. A derived class can
+        // register another deriver, or remove this one to test a session without a trust context.
+        services.AddSingleton(new TrustContextDeriver(new EffectivePolicyDefaults(DeploymentPosture.Personal,
+            TrustAudience.Personal, ShellExecutionMode.HostAllowed, UsedStrictFallback: false)));
         ConfigureSessionServices(services);
         services.AddLlmSessionCompositeRecords();
     }

@@ -400,7 +400,10 @@ public sealed class HeadlessTurnErrorCategoryEndToEndTests : IAsyncDisposable
             TimeProvider.System,
             paths,
             storage));
-        builder.Services.AddSingleton(new SessionToolServices(new FixedToolExecutor(), registry, null, null, null));
+        // A tool batch needs the effective trust context of the turn. A Personal posture narrows nothing.
+        var trust = new TrustContextDeriver(new EffectivePolicyDefaults(DeploymentPosture.Personal,
+            TrustAudience.Personal, ShellExecutionMode.HostAllowed, UsedStrictFallback: false));
+        builder.Services.AddSingleton(new SessionToolServices(new FixedToolExecutor(), registry, null, trust, null));
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<ClaimsPrincipalMapper>();
         builder.Services.AddSingleton<SessionIngressGate>();

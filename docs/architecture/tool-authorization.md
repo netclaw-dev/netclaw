@@ -416,6 +416,27 @@ After the journal callback, the owner restores that stored context for the live 
 The actor sends the acknowledgment after the callback. The journal retains the original authority.
 Schema exposure grants no execution authority. The tool execution path still applies its authorization checks.
 
+Effective audience of the run scope:
+
+- Owner: `LlmSessionActor`. It reads `EffectiveTrustContext.EffectiveAudience` when it builds the
+  `SessionToolRunEnvironment` of a tool batch, and when it starts a routed skill.
+- The deployment posture narrows the source audience (TA-1). `SessionToolBatch` puts the narrowed value in
+  `ToolRunScope.Audience`. The admission gate, the shell check, the consent mode, the filesystem roots,
+  `search_tools`, and `load_tool` read that value.
+- A child that `spawn_agent` or a routed skill starts copies `ToolRunScope.Audience`. Thus the tool set and the run
+  scope of the child use the effective audience
+  ([netclaw-subagents](../../openspec/specs/netclaw-subagents/spec.md#requirement-sub-agent-tool-exposure-inherits-parent-audience-policy)).
+- The journal keeps the source audience in `InputAdmitted.TurnContext`. The actor derives the effective audience again
+  for each turn.
+- A tool batch without a trust context is a wiring defect. The actor throws. A routed skill without a trust context
+  is refused with `audience_unresolved`. Neither path uses the source audience in place of the effective audience.
+- Data: the trust context is actor-local. The run scope is call-local.
+
+| Example | Source audience | Posture | Run-scope audience | Result |
+| --- | --- | --- | --- | --- |
+| Positive | `Personal` | `Personal` | `Personal` | `set_webhook` runs. A child gets `set_webhook`. |
+| Negative | `Personal` | `Team` | `Team` | The gate denies `set_webhook` by name. A child does not get it. |
+
 One authority per turn (buffered input):
 
 - Owner: `SessionInputFlow.DrainBufferedBatch`. The actor calls it after a turn, after a tool batch,

@@ -121,6 +121,11 @@ internal sealed class SessionToolRunEnvironment
     private IReadOnlyList<string> _recentFiles = [];
 
     public required SessionStoragePaths Storage { get; init; }
+    /// <summary>
+    /// The posture-narrowed audience of the turn. The run scope, the tool gate, and each child use this value.
+    /// The recorded turn context keeps the source audience.
+    /// </summary>
+    public required TrustAudience EffectiveAudience { get; init; }
     public required InlineOutputBudget InlineOutputBudget { get; init; }
     public required Func<object, string, CancellationToken, Task<object>> SpawnChildActor { get; init; }
     public ModelModality ModelInputModalities { get; init; } = ModelModality.Text;
@@ -166,7 +171,7 @@ internal sealed class SessionToolBatch
         RunScope = new ToolRunScope
         {
             Session = new ToolSessionScope.Bound(turnContext.SessionId.Value, environment.Storage),
-            Audience = turnContext.Audience,
+            Audience = environment.EffectiveAudience,
             Boundary = turnContext.Boundary,
             ChannelType = turnContext.ChannelType?.ToWireValue(),
             DefaultDeliveryTarget = turnContext.DefaultDeliveryTarget,

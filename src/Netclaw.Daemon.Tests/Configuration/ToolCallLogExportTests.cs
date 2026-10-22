@@ -135,6 +135,7 @@ public sealed class ToolCallLogExportTests
                 sessionDirectory,
                 Path.Combine(sessionDirectory, "logs"),
                 "otel-tool-args", ManagedTemporaryLayout.InsideSessionStorage.Instance),
+            EffectiveAudience = turnContext.Audience,
             InlineOutputBudget = new InlineOutputBudget(4096),
             ModelInputModalities = ModelModality.Text,
             SpawnChildActor = static (_, _, _) => Task.FromResult<object>(new object())
