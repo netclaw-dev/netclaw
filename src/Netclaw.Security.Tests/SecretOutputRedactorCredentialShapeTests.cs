@@ -323,6 +323,62 @@ public sealed class SecretOutputRedactorCredentialShapeTests
     [InlineData("https://bob:{{password}}@host/x")]
     public void Redact_leaves_references_and_placeholders_in_the_new_rules_alone(string input)
         => AssertUnchanged(input);
+
+    // ── Re-review findings for the second fix (#2595) ──
+
+    // A weak password is often one lower-case word. Words after it are more arguments, not a
+    // sentence, so the value is masked. The prose cases above must still stay unchanged.
+    [Theory]
+    [InlineData("mysql -u root --password changeme mydb", "changeme", "mysql -u root --password|mydb")]
+    [InlineData("docker login --password secret registry.example.com", "secret registry", "docker login --password|registry.example.com")]
+    [InlineData("mysqladmin --password secret status", "secret status", "mysqladmin --password|status")]
+    [InlineData("helm repo add --password hunter myrepo https://charts.example.com", "hunter", "--password|myrepo https://charts.example.com")]
+    [InlineData("kubectl --token abcdefghij get pods", "abcdefghij", "kubectl --token|get pods")]
+    public void Redact_masks_a_weak_option_password_that_looks_like_a_word(string input, string secrets, string kept)
+        => AssertMasked(input, secrets, kept);
+
+    // A lower-case header value with words after it is still a value. A JSON value under a
+    // secret header key is never prose: a passphrase can hold spaces.
+    // "token: expired, please refresh" and "Token: required for all calls" stay unchanged (above).
+    [Theory]
+    [InlineData("X-Api-Key: abcdefghijkl sent upstream", "abcdefghijkl", "X-Api-Key|sent upstream")]
+    [InlineData("X-Auth-Token: hunter retry later", "hunter", "X-Auth-Token|retry later")]
+    [InlineData("token: abcdefgh more text", "abcdefgh", "token|more text")]
+    [InlineData("""{"X-Auth-Token": "correct horse battery staple"}""", "correct|horse|battery|staple", "\"X-Auth-Token\"")]
+    public void Redact_masks_a_lower_case_header_value_that_words_follow(string input, string secrets, string kept)
+        => AssertMasked(input, secrets, kept);
+
+    // The descriptor check compares whole name segments (split at '_', '-', and a case change).
+    // "secret_account" ends in the segment "account", not "count". "secretname" is one segment.
+    // A plural is a credential list unless a counter word comes before it (max_tokens).
+    // An Authorization header held under a "...Header" name is the header value.
+    [Theory]
+    [InlineData("""{"name":"AuthorizationHeader","value":"Bearer abc123"}""", "abc123", "\"AuthorizationHeader\"")]
+    [InlineData("""{"name":"api_tokens","value":"abc123"}""", "abc123", "\"api_tokens\"")]
+    [InlineData("""{"name":"refresh_tokens","value":"abc123"}""", "abc123", "\"refresh_tokens\"")]
+    [InlineData("""{"name":"secret_account","value":"abc123"}""", "abc123", "\"secret_account\"")]
+    [InlineData("""{"name":"secretname","value":"abc123"}""", "abc123", "\"secretname\"")]
+    public void Redact_masks_pairs_whose_name_is_secret_by_segment(string input, string secrets, string kept)
+        => AssertMasked(input, secrets, kept);
+
+    // A last segment that is a descriptor, or a plural after a counter word, is not a secret.
+    [Theory]
+    [InlineData("""{"name":"secret_name","value":"prod/jwt"}""")]
+    [InlineData("""{"name":"SecretName","value":"prod/jwt"}""")]
+    [InlineData("""{"name":"next_page_token","value":"CAESBwoF"}""")]
+    [InlineData("""{"name":"prompt_tokens","value":"1000"}""")]
+    [InlineData("""{"name":"completion_tokens","value":"234"}""")]
+    public void Redact_leaves_pairs_whose_last_segment_is_a_descriptor_or_a_count_alone(string input)
+        => AssertUnchanged(input);
+
+    // The old redactor masked these names: "starting" was not a pagination word. The superset
+    // rule (SecretOutputRedactorLinearTimeTests) keeps all old masks. The option form
+    // "--starting-token x" stays unchanged (above).
+    [Theory]
+    [InlineData("STARTING_TOKEN=abc123", "abc123", "STARTING_TOKEN=")]
+    [InlineData("AWS_STARTING_TOKEN=abc123", "abc123", "AWS_STARTING_TOKEN=")]
+    public void Redact_masks_starting_token_env_values_as_the_old_redactor_did(string input, string secrets, string kept)
+        => AssertMasked(input, secrets, kept);
 }
 
 /// <summary>
@@ -358,6 +414,10 @@ public sealed class SecretOutputRedactorCredentialShapeLinearTimeTests
         yield return ("dense json header keys", () => "{" + Rep("\"X-Api-Key\": \"a\", "));
         yield return ("json header key then an open value", () => "{\"X-Api-Key\": \"" + new string('a', AdversarialChars));
         yield return ("long hyphenated json key", () => "{\"" + Rep("a-"));
+        yield return ("closed json header value of words", () => "{\"X-Auth-Token\": \"" + Rep("a ") + "\"}");
+        yield return ("closed json header value of one word", () => "{\"X-Auth-Token\": \"" + new string('a', AdversarialChars) + "\"}");
+        yield return ("closed pair value of words", () => "{\"name\":\"api_key\",\"value\":\"" + Rep("a ") + "\"}");
+        yield return ("closed pair value of one word", () => "{\"name\":\"api_key\",\"value\":\"" + new string('a', AdversarialChars) + "\"}");
     }
 
     public static TheoryData<string> ShapeNames()
