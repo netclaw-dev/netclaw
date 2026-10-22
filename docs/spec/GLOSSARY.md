@@ -89,10 +89,11 @@ An agent event is a typed fact between the agents of one session, for example
 "child approval requested". It has an envelope with a sender, a target, and a
 send time. Only the session that owns a child run builds an event about that
 run. An event never carries consent and never holds text that an agent wrote.
-The model sees a notice that the runtime renders from events. Planned in
-`child-approval-events-and-parent-pause`.
+The model sees a notice that the runtime renders from events. Added by
+`child-approval-events-and-parent-pause` (#2583).
 
-**Code anchors (planned):** `AgentEvent`, `AgentEnvelope`, `AgentEventRenderer`
+**Code anchors:** `AgentEvent`, `AgentEnvelope`, `AgentAddress`,
+`AgentEventFactory`, `AgentEventRenderer` (`src/Netclaw.Actors/Sessions/AgentEvents.cs`)
 
 ### Child consent pause
 
@@ -113,7 +114,8 @@ conversation and its parked calls are in its child journal, and the parent run
 record says that it is parked. The parent snapshot keeps its open requests.
 When every parked request has an answer, the session recreates the child from
 its journal, under the authority of the run record, and runs only the parked
-calls, each once. Planned in `child-approval-events-and-parent-pause`.
+calls, each once. Planned in PR 3 of `child-approval-events-and-parent-pause`
+(#2572). This part is not on `dev` yet.
 
 **Code anchors (planned):** `ChildRunLifecycle.Parked`, `ChildRunEvent.Parked`
 
@@ -126,8 +128,8 @@ the system prompt, the resolved provider and model, the tool set, the project
 instructions, the operating rules, and the findings flag. The parent purges it
 last: after the run end, `result.md`, and the result notice, with a closing
 event and then a delete of all messages. Match the prefix of one session with
-an ordinal comparison, because the escaped ID can hold `%`. Planned in
-`child-approval-events-and-parent-pause`.
+an ordinal comparison, because the escaped ID can hold `%`. Planned in PR 3 of
+`child-approval-events-and-parent-pause` (#2572). This part is not on `dev` yet.
 
 **Code anchor (planned):** `SubAgentRunProtocol`
 
