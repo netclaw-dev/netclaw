@@ -79,8 +79,8 @@ child approval requested events.
 The session SHALL deliver agent events to its model in the order in which it accepted the producer facts. A
 resolution SHALL follow its request. A child run ended event SHALL reach the model once in effect. Child approval
 events SHALL reach the model at most once. At recovery the session SHALL close every pending approval notice and SHALL
-rebuild its digest from the open consent requests. If recovery closed a pending notice, the rebuilt digest SHALL be
-ready, so that the model learns the true open set.
+rebuild its digest from the open consent requests. If recovery closed a pending notice and a request stays open, the
+rebuilt digest SHALL be ready, so that the model learns the true open set.
 
 #### Scenario: Resolution follows request
 
@@ -124,3 +124,133 @@ closing notice SHALL come only when no child consent request of the session stay
 - **WHEN** the session admits it while paused
 - **THEN** the session treats it as ordinary automated input, because its authenticity is not `LocalProcess`
 - **AND** it waits behind the pause, and recovery does not close it as a notice
+
+### Requirement: At most one approval notice waits
+
+At most one approval notice of a session SHALL wait for its turn. When a digest is ready while a notice waits, the
+session SHALL close the waiting notice with `InputClosed` and SHALL admit the new notice. One atomic journal write
+(`PersistReplacingInput`) SHALL hold the close and the admission, so a crash keeps both or neither. The close SHALL set
+`KeepsTurn`. A notice whose turn started SHALL NOT be replaced. The new notice then waits for its own turn. The new
+notice SHALL list every open request of the session.
+
+#### Scenario: A newer notice replaces the waiting notice
+
+- **GIVEN** a parent prompt of Alice is open, so each approval notice waits
+- **WHEN** three children ask for consent, one after the other
+- **THEN** each newer notice closes the waiting notice with `InputClosed` in the same write as its admission
+- **AND** after the parent answer, one notice turn runs, and its text says "3 are open."
+
+#### Scenario: A closing notice replaces a stale open notice
+
+- **GIVEN** an open notice waits from the end of tool batch 1 of Alice's turn
+- **WHEN** the last child request closes during tool batch 2
+- **THEN** the closing notice replaces the open notice
+- **AND** one notice turn runs with the closing text, and no notice that says "spawn_agent is refused" runs after it
+
+#### Scenario: A notice whose turn started is not replaced
+
+- **GIVEN** the turn of approval notice N1 runs
+- **WHEN** a new child request makes the digest ready
+- **THEN** the session does not close N1
+- **AND** the new notice waits for its own turn after the turn of N1
+
+### Requirement: A notice gives each answer once
+
+The digest SHALL keep each answer that no notice turn gave to the model. When a new notice replaces a waiting notice,
+the new notice SHALL give the answers of the replaced notice again, because the model did not read them. An open
+notice SHALL give these answers under the heading "Answers since the last notice:", in the same line form as the
+closing notice. An answer that a notice turn already gave SHALL NOT appear in a later notice.
+
+#### Scenario: A replacing notice keeps the unread answers
+
+- **GIVEN** a parent prompt of Alice is open, so each approval notice waits
+- **AND** child A asks, and the operator denies A, so a closing notice waits
+- **WHEN** child B asks before the closing notice runs
+- **THEN** the new open notice replaces the closing notice
+- **AND** its text lists B as the one open request
+- **AND** it gives `agent=<agent> run=<A> answer=refused reason=denied` under "Answers since the last notice:"
+
+#### Scenario: A given answer does not come again
+
+- **GIVEN** an idle session, where each approval notice runs at once
+- **AND** children A and B ask, and the operator denies A while B stays open
+- **WHEN** child C asks, and the open notice that gives the answer of A runs
+- **AND** the operator then approves B and C
+- **THEN** the closing notice gives only the answers of B and C
+- **AND** it does not give the answer of A
+
+### Requirement: A failed notice turn counts as given
+
+An approval notice SHALL reach the model at most once. When the turn of a notice starts, the session SHALL count the
+answers of that notice as given, also when the turn fails. The session SHALL NOT run a failed notice again. A later
+notice SHALL NOT repeat the answers of the failed notice.
+
+#### Scenario: A failed notice turn does not repeat its answers
+
+- **GIVEN** an approval notice that gives the answer of child A starts its turn
+- **WHEN** the turn fails
+- **AND** a later request and its answer make a new notice ready
+- **THEN** the new notice does not give the answer of A
+
+#### Scenario: A notice that never started does not count as given
+
+- **GIVEN** an approval notice that gives the answer of child A waits, and its turn has not started
+- **WHEN** a new notice replaces it
+- **THEN** the session does not count the answer of A as given
+- **AND** the new notice gives the answer of A
+
+### Requirement: A rejected notice admission stops the session
+
+When the journal rejects the admission of an approval notice, the session SHALL log an error and SHALL stop. This
+SHALL apply in every session phase, as after a persist failure. The session SHALL NOT post a failure for a turn that
+it recorded as complete. At the next recovery, the session SHALL withdraw the child requests, close the pending
+notices, and run the held automated input and child result notices in admission order.
+
+#### Scenario: A rejected notice at a turn end stops the session
+
+- **GIVEN** a child of Alice asks for consent while Alice's model call runs
+- **WHEN** the turn ends and the journal rejects the notice that the turn end admits
+- **THEN** the session stops
+- **AND** it posts no failure for the turn that ended
+
+#### Scenario: A rejected notice in an idle paused session does not leave the pause
+
+- **GIVEN** an idle session that is paused, and a reminder fire that waits for the pause
+- **WHEN** child B asks, and the journal rejects its notice
+- **THEN** the session stops, and it does not keep a pause with no notice
+- **AND** the next recovery withdraws the child requests, and the held fire runs
+
+#### Scenario: A rejected admission of other input does not stop the session
+
+- **GIVEN** a session in `Ready`
+- **WHEN** the journal rejects the admission of an input that is not an approval notice
+- **THEN** the session sends a negative acknowledgement for that input
+- **AND** the session does not stop
+
+### Requirement: Approval notice text forms
+
+`AgentEventRenderer` SHALL make all approval notice text. The count line SHALL read "1 is open." for one open request
+and "N are open." for more. The closing notice SHALL put the held-fires line just before "spawn_agent is available
+again.". The held-fires line SHALL have the form `Held reminder fires now run: reminder=<name> fired_at=<HH:mm:ssZ>`.
+Several fires SHALL be joined with ", ", in admission order. An open notice SHALL NOT have a held-fires line, because
+those fires still wait.
+
+#### Scenario: One open request reads in the singular
+
+- **GIVEN** one child consent request is open
+- **WHEN** the session renders the notice
+- **THEN** the text says "Child consent requests wait for the operator. 1 is open."
+
+#### Scenario: Two held fires come before the spawn line
+
+- **GIVEN** reminder fires of `daily-pr-sweep` at 15:00:00Z and of `nightly-audit` at 15:30:00Z wait for the pause
+- **WHEN** the last child request closes
+- **THEN** the closing notice has the line
+  `Held reminder fires now run: reminder=daily-pr-sweep fired_at=15:00:00Z, reminder=nightly-audit fired_at=15:30:00Z`
+- **AND** the next line is "spawn_agent is available again."
+
+#### Scenario: An open notice does not name the held fires
+
+- **GIVEN** a reminder fire waits for the pause, and a child consent request stays open
+- **WHEN** the session renders the open notice
+- **THEN** the text has no "Held reminder fires now run:" line

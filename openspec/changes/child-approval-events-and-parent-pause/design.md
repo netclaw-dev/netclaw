@@ -195,8 +195,10 @@ Authority rules:
 - **Order.** The session mailbox defines the order. A resolution follows its request.
 - **Producer to owner: at most once.** The hop is an in-process Tell to the parent of the child actor.
 - **`ChildRunEnded` to the model: once in effect** (existing #2515 guards).
-- **Approval notices to the model: at most once.** The digest is actor-local. Recovery closes every pending approval
-  notice and rebuilds the digest from the open entries (D4). The approval journal holds the true state.
+- **Approval notices to the model: at most once.** The digest is actor-local. At most one notice waits, and a newer
+  notice replaces it (D4). A notice turn that starts gives its answers, also when the turn fails. Recovery closes every
+  pending approval notice and rebuilds the digest from the open entries (D4). The approval journal holds the true
+  state.
 
 #### D1.4 Rendering for the model
 
@@ -270,6 +272,43 @@ notice as an ordinary automated turn with the rendered text. The notice turn gra
   compaction end. The notice then waits for its own turn, because its requester is automation.
 - An answer while other requests of the session stay open waits in the digest.
 
+**At most one waiting notice (review of PR 1).** A notice waits from its admission until its turn takes it from the
+queue (`SessionInputFlow.WaitingConsentNotice`).
+
+- When a digest is ready while a notice waits, the session closes the waiting notice and admits the new notice. One
+  atomic write (`LlmSessionActor.PersistReplacingInput`, `PersistAll`) holds the `InputClosed` with
+  `KeepsTurn = true` and the new `InputAdmitted`. A crash keeps both or neither.
+- A notice whose turn started is not in the queue. A newer notice does not close it. The newer notice waits for its
+  own turn.
+- The new notice goes in front of other waiting input (`ConsentNoticeCommitted`). A replay of the running turn stays
+  first.
+
+**Answers (at most once).** The digest (`ChildConsentDigest`) holds the open requests, the answers that no notice gave
+yet, and the answers of the waiting notice.
+
+- A notice lists every open request.
+- When the new notice replaces a waiting notice, the model did not read the waiting notice. The new notice gives the
+  answers of the waiting notice again, and then the newer answers.
+- When no notice waits, each earlier notice turn started. Its answers count as given, also when that turn failed. The
+  new notice does not give them again.
+- An open notice gives its answers under the heading "Answers since the last notice:". Each answer has the same line
+  form as in the closing notice.
+
+```text
+Child consent requests wait for the operator. 1 is open.
+- agent=pr-reviewer run=r-9c3 tool=shell_execute open_since=14:05:12Z
+Answers since the last notice:
+- agent=pr-reviewer run=r-7f2 answer=refused reason=denied
+The operator answers these prompts in the channel. You cannot answer them.
+...
+```
+
+**Rejected admission.** When the journal rejects the admission of a notice, the session logs an error and stops
+(`LlmSessionActor.OnPersistRejected`). This applies in every phase, as after a persist failure. The boundary that
+admitted the notice cannot continue, and a pause with no notice would hold automated input with no end. The session
+posts no failure for a turn that it recorded as complete. Recovery then withdraws the child requests, closes the
+pending notices, and runs the held input (see "Recovery" below).
+
 **Text (true for the session).** A notice lists the runs of the session. The closing notice comes only when no child
 request of the session stays open, so its "spawn_agent is available again" line is always true. The closing notice
 lists the held reminder fires.
@@ -299,10 +338,26 @@ Held reminder fires now run: reminder=daily-pr-sweep fired_at=15:00:00Z
 spawn_agent is available again.
 ```
 
-**Recovery (PR 1, Cut 4).** Recovery closes every pending approval notice with `InputClosed`. It rebuilds the digest
-from the open entries. If recovery closed one or more notices, the rebuilt digest is ready, because the model did not
-see those requests. If not, the rebuilt digest is a baseline that does not wake the parent. In PR 1 and PR 2 a restart
-withdraws all child requests, so the rebuilt digest is empty.
+`AgentEventRenderer` owns all notice text. The text rules:
+
+- The count line uses the singular for one request: "1 is open.". It uses the plural for more: "3 are open.".
+- The closing notice puts the held-fires line just before "spawn_agent is available again.". The line has the form
+  `Held reminder fires now run: reminder=<name> fired_at=<HH:mm:ssZ>`. The session joins several fires with ", ", in
+  admission order. With no held fire, the line does not appear.
+- An open notice has no held-fires line, because those fires still wait.
+
+**Recovery (PR 1, Cut 4).** Recovery runs in this order:
+
+1. It withdraws the child requests that remain (`ExpireRecoveredChildApprovals`).
+2. It closes every pending approval notice with one `InputClosed` (`KeepsTurn = true`).
+3. It rebuilds the digest from the open entries. If recovery closed one or more notices and a request stays open, the
+   rebuilt digest is ready, because the model did not see those requests. If not, the rebuilt digest is a baseline
+   that does not wake the parent. In PR 1 and PR 2 a restart withdraws all child requests, so the rebuilt digest is
+   empty, and recovery admits no notice.
+4. It resumes the orphan child result notices (`ResumeOrphanNotices`). When the previous run was paused, it also
+   restores each input that the pause held: automated input and child result notices. They run in admission order,
+   because the restart withdrew every child request and the pause ended. A pending input of a person is not part of
+   this step (issue 2516). Behind a parked parent approval, this step does nothing.
 
 ### D5. The pause (PR 1)
 
@@ -343,8 +398,9 @@ A notice arrives when all requests close.
 
 **Reminder fires while paused (P2).** A current-session reminder fire is admitted and acknowledged, and then it waits.
 When a later fire of the same reminder ID arrives while an earlier fire waits, the session closes the earlier fire with
-the existing `InputClosed` (no new reason field) and keeps the later fire. The rule applies while the child pause
-applies, also when a parent prompt is open at the same time. A fire that waits only behind a parent prompt keeps the
+`InputClosed` (no new reason field, `KeepsTurn = true`) and keeps the later fire. One atomic write
+(`PersistReplacingInput`) holds the close and the admission of the later fire, as for a notice replacement (D4). The
+rule applies while the child pause applies, also when a parent prompt is open at the same time. A fire that waits only behind a parent prompt keeps the
 current rule. At most one turn of each reminder runs when the pause clears. The session posts no thread message for a
 held fire. An isolated reminder session has no interactive channel, so it never pauses. The open change
 `d2-reminders-end-at-admission` drops the later fire in all cases. Whichever change syncs second merges the two rules:
@@ -632,7 +688,9 @@ sequenceDiagram
 | --- | --- | --- |
 | Build an `AgentEvent`, stamp the sender | `LlmSessionActor` (Children partial) | call-local; run identity from the durable run record |
 | Create `ChildApprovalResolved` | `SessionToolWorkflow` only | call-local; source facts durable |
-| Digest, merge, and rebuild | `LlmSessionActor` (Children partial) | actor-local |
+| Digest, merge, and rebuild | `LlmSessionActor` (Children partial), `ChildConsentDigest` | actor-local |
+| Replace a waiting notice or fire (one atomic write) | `LlmSessionActor.PersistReplacingInput`; `SessionInputFlow.WaitingConsentNotice` | durable `InputClosed` (`KeepsTurn`) and `InputAdmitted` |
+| Stop on a rejected notice admission | `LlmSessionActor.OnPersistRejected` | durable journal is the recovery source |
 | Render model text | `AgentEventRenderer` (pure) | call-local |
 | Notice kind, principal, and identification (source kind, authenticity, sender) | `SessionInputFlow` admission; `TurnContext` | durable in `TurnContext` |
 | Field 14 adapter to `ChildRunEnded` | `NetclawProtoMapper` / `SessionState` | durable format unchanged |
@@ -722,6 +780,7 @@ lost with `frozen_model_unavailable`, and the parked calls do not run. No other 
 | PR | Change | Compatibility |
 | --- | --- | --- |
 | PR 1 | `PendingApprovalPromptTracked` gets an optional `lifetime` field | Backward-readable: an old binary ignores the field. A row without it reads as `UntilTurnEnd`. |
+| PR 1 | `InputClosedProto` gets `optional bool keeps_turn = 8`. The session sets it only for a replacing close (`PersistReplacingInput`: a notice or a reminder fire) and for the recovery close of pending notices. The mapper writes it only when true. Replay clears the noticed runs of the open turn at each close without the flag (`RecoverParentClosure`). | Backward-readable: a row without the field reads false, as a close that ends the turn. An old binary ignores the field. |
 | PR 1 | Approval notice: existing `InputAdmitted` fields (source kind, principal, text) | None |
 | PR 2 | `ToolInteractionClosed` is an output, not persisted | None |
 | PR 3 | Child journal types (five events, new manifests) | New types. Forward-only. |
